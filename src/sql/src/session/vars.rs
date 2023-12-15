@@ -245,49 +245,46 @@ pub const SERVER_PATCH_VERSION: u8 = 0;
 /// The name of the default database that Materialize uses.
 pub const DEFAULT_DATABASE_NAME: &str = "materialize";
 
-pub static DEFAULT_APPLICATION_NAME: Lazy<String> = Lazy::new(|| "".to_string());
 pub static APPLICATION_NAME: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("application_name"),
-    value: &DEFAULT_APPLICATION_NAME,
+    value: "".to_string(),
     description: "Sets the application name to be reported in statistics and logs (PostgreSQL).",
     internal: false,
 });
 
 pub static CLIENT_ENCODING: ServerVar<ClientEncoding> = ServerVar {
     name: UncasedStr::new("client_encoding"),
-    value: &ClientEncoding::Utf8,
+    value: ClientEncoding::Utf8,
     description: "Sets the client's character set encoding (PostgreSQL).",
     internal: false,
 };
 
 const CLIENT_MIN_MESSAGES: ServerVar<ClientSeverity> = ServerVar {
     name: UncasedStr::new("client_min_messages"),
-    value: &ClientSeverity::Notice,
+    value: ClientSeverity::Notice,
     description: "Sets the message levels that are sent to the client (PostgreSQL).",
     internal: false,
 };
 
 pub const CLUSTER_VAR_NAME: &UncasedStr = UncasedStr::new("cluster");
-pub static DEFAULT_CLUSTER: Lazy<String> = Lazy::new(|| "default".to_string());
 pub static CLUSTER: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     name: CLUSTER_VAR_NAME,
-    value: &DEFAULT_CLUSTER,
+    value: "default".to_string(),
     description: "Sets the current cluster (Materialize).",
     internal: false,
 });
 
 const CLUSTER_REPLICA: ServerVar<Option<String>> = ServerVar {
     name: UncasedStr::new("cluster_replica"),
-    value: &None,
+    value: None,
     description: "Sets a target cluster replica for SELECT queries (Materialize).",
     internal: false,
 };
 
 pub const DATABASE_VAR_NAME: &UncasedStr = UncasedStr::new("database");
-pub static DEFAULT_DATABASE: Lazy<String> = Lazy::new(|| DEFAULT_DATABASE_NAME.to_string());
 pub static DATABASE: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     name: DATABASE_VAR_NAME,
-    value: &DEFAULT_DATABASE,
+    value: DEFAULT_DATABASE_NAME.to_string(),
     description: "Sets the current database (CockroachDB).",
     internal: false,
 });
@@ -295,28 +292,28 @@ pub static DATABASE: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
 static DATE_STYLE: ServerVar<DateStyle> = ServerVar {
     // DateStyle has nonstandard capitalization for historical reasons.
     name: UncasedStr::new("DateStyle"),
-    value: &DEFAULT_DATE_STYLE,
+    value: DEFAULT_DATE_STYLE,
     description: "Sets the display format for date and time values (PostgreSQL).",
     internal: false,
 };
 
 const EXTRA_FLOAT_DIGITS: ServerVar<i32> = ServerVar {
     name: UncasedStr::new("extra_float_digits"),
-    value: &3,
+    value: 3,
     description: "Adjusts the number of digits displayed for floating-point values (PostgreSQL).",
     internal: false,
 };
 
 const FAILPOINTS: ServerVar<Failpoints> = ServerVar {
     name: UncasedStr::new("failpoints"),
-    value: &Failpoints,
+    value: Failpoints,
     description: "Allows failpoints to be dynamically activated.",
     internal: false,
 };
 
 const INTEGER_DATETIMES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("integer_datetimes"),
-    value: &true,
+    value: true,
     description: "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL).",
     internal: false,
 };
@@ -324,7 +321,7 @@ const INTEGER_DATETIMES: ServerVar<bool> = ServerVar {
 pub static INTERVAL_STYLE: ServerVar<IntervalStyle> = ServerVar {
     // IntervalStyle has nonstandard capitalization for historical reasons.
     name: UncasedStr::new("IntervalStyle"),
-    value: &IntervalStyle::Postgres,
+    value: IntervalStyle::Postgres,
     description: "Sets the display format for interval values (PostgreSQL).",
     internal: false,
 };
@@ -334,10 +331,9 @@ const IS_SUPERUSER_NAME: &UncasedStr = UncasedStr::new("is_superuser");
 
 // Schema can be used an alias for a search path with a single element.
 pub const SCHEMA_ALIAS: &UncasedStr = UncasedStr::new("schema");
-static DEFAULT_SEARCH_PATH: Lazy<Vec<Ident>> = Lazy::new(|| vec![ident!(DEFAULT_SCHEMA)]);
 static SEARCH_PATH: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("search_path"),
-    value: &*DEFAULT_SEARCH_PATH,
+    value: vec![ident!(DEFAULT_SCHEMA)],
     description:
         "Sets the schema search order for names that are not schema-qualified (PostgreSQL).",
     internal: false,
@@ -345,7 +341,7 @@ static SEARCH_PATH: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(|| ServerVar {
 
 const STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("statement_timeout"),
-    value: &Duration::from_secs(10),
+    value: Duration::from_secs(10),
     description:
         "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations. \
         If this value is specified without units, it is taken as milliseconds.",
@@ -354,7 +350,7 @@ const STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
 
 const IDLE_IN_TRANSACTION_SESSION_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("idle_in_transaction_session_timeout"),
-    value: &Duration::from_secs(60 * 2),
+    value: Duration::from_secs(60 * 2),
     description:
         "Sets the maximum allowed duration that a session can sit idle in a transaction before \
          being terminated. If this value is specified without units, it is taken as milliseconds. \
@@ -362,23 +358,19 @@ const IDLE_IN_TRANSACTION_SESSION_TIMEOUT: ServerVar<Duration> = ServerVar {
     internal: false,
 };
 
-pub static SERVER_VERSION_VALUE: Lazy<String> = Lazy::new(|| {
-    format!(
-        "{}.{}.{}",
-        SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION, SERVER_PATCH_VERSION
-    )
-});
-
 pub static SERVER_VERSION: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("server_version"),
-    value: &SERVER_VERSION_VALUE,
+    value: format!(
+        "{}.{}.{}",
+        SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION, SERVER_PATCH_VERSION
+    ),
     description: "Shows the PostgreSQL compatible server version (PostgreSQL).",
     internal: false,
 });
 
 const SERVER_VERSION_NUM: ServerVar<i32> = ServerVar {
     name: UncasedStr::new("server_version_num"),
-    value: &((cast::u8_to_i32(SERVER_MAJOR_VERSION) * 10_000)
+    value: ((cast::u8_to_i32(SERVER_MAJOR_VERSION) * 10_000)
         + (cast::u8_to_i32(SERVER_MINOR_VERSION) * 100)
         + cast::u8_to_i32(SERVER_PATCH_VERSION)),
     description: "Shows the PostgreSQL compatible server version as an integer (PostgreSQL).",
@@ -387,14 +379,14 @@ const SERVER_VERSION_NUM: ServerVar<i32> = ServerVar {
 
 const SQL_SAFE_UPDATES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("sql_safe_updates"),
-    value: &false,
+    value: false,
     description: "Prohibits SQL statements that may be overly destructive (CockroachDB).",
     internal: false,
 };
 
 const STANDARD_CONFORMING_STRINGS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("standard_conforming_strings"),
-    value: &true,
+    value: true,
     description: "Causes '...' strings to treat backslashes literally (PostgreSQL).",
     internal: false,
 };
@@ -402,7 +394,7 @@ const STANDARD_CONFORMING_STRINGS: ServerVar<bool> = ServerVar {
 const TIMEZONE: ServerVar<TimeZone> = ServerVar {
     // TimeZone has nonstandard capitalization for historical reasons.
     name: UncasedStr::new("TimeZone"),
-    value: &TimeZone::UTC,
+    value: TimeZone::UTC,
     description: "Sets the time zone for displaying and interpreting time stamps (PostgreSQL).",
     internal: false,
 };
@@ -410,14 +402,14 @@ const TIMEZONE: ServerVar<TimeZone> = ServerVar {
 pub const TRANSACTION_ISOLATION_VAR_NAME: &UncasedStr = UncasedStr::new("transaction_isolation");
 const TRANSACTION_ISOLATION: ServerVar<IsolationLevel> = ServerVar {
     name: TRANSACTION_ISOLATION_VAR_NAME,
-    value: &IsolationLevel::StrictSerializable,
+    value: IsolationLevel::StrictSerializable,
     description: "Sets the current transaction's isolation level (PostgreSQL).",
     internal: false,
 };
 
 pub const MAX_KAFKA_CONNECTIONS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_kafka_connections"),
-    value: &1000,
+    value: 1000,
     description:
         "The maximum number of Kafka connections in the region, across all schemas (Materialize).",
     internal: false,
@@ -425,42 +417,42 @@ pub const MAX_KAFKA_CONNECTIONS: ServerVar<u32> = ServerVar {
 
 pub const MAX_POSTGRES_CONNECTIONS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_postgres_connections"),
-    value: &1000,
+    value: 1000,
     description: "The maximum number of PostgreSQL connections in the region, across all schemas (Materialize).",
     internal: false
 };
 
 pub const MAX_AWS_PRIVATELINK_CONNECTIONS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_aws_privatelink_connections"),
-    value: &0,
+    value: 0,
     description: "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).",
     internal: false
 };
 
 pub const MAX_TABLES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_tables"),
-    value: &25,
+    value: 25,
     description: "The maximum number of tables in the region, across all schemas (Materialize).",
     internal: false,
 };
 
 pub const MAX_SOURCES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_sources"),
-    value: &25,
+    value: 25,
     description: "The maximum number of sources in the region, across all schemas (Materialize).",
     internal: false,
 };
 
 pub const MAX_SINKS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_sinks"),
-    value: &25,
+    value: 25,
     description: "The maximum number of sinks in the region, across all schemas (Materialize).",
     internal: false,
 };
 
 pub const MAX_MATERIALIZED_VIEWS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_materialized_views"),
-    value: &100,
+    value: 100,
     description:
         "The maximum number of materialized views in the region, across all schemas (Materialize).",
     internal: false,
@@ -468,23 +460,22 @@ pub const MAX_MATERIALIZED_VIEWS: ServerVar<u32> = ServerVar {
 
 pub const MAX_CLUSTERS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_clusters"),
-    value: &10,
+    value: 10,
     description: "The maximum number of clusters in the region (Materialize).",
     internal: false,
 };
 
 pub const MAX_REPLICAS_PER_CLUSTER: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_replicas_per_cluster"),
-    value: &5,
+    value: 5,
     description: "The maximum number of replicas of a single cluster (Materialize).",
     internal: false,
 };
 
-static DEFAULT_MAX_CREDIT_CONSUMPTION_RATE: Lazy<Numeric> = Lazy::new(|| 1024.into());
 pub static MAX_CREDIT_CONSUMPTION_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| {
     ServerVar {
         name: UncasedStr::new("max_credit_consumption_rate"),
-        value: &DEFAULT_MAX_CREDIT_CONSUMPTION_RATE,
+        value: 1024.into(),
         description: "The maximum rate of credit consumption in a region. Credits are consumed based on the size of cluster replicas in use (Materialize).",
         internal: false
     }
@@ -492,35 +483,35 @@ pub static MAX_CREDIT_CONSUMPTION_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| 
 
 pub const MAX_DATABASES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_databases"),
-    value: &1000,
+    value: 1000,
     description: "The maximum number of databases in the region (Materialize).",
     internal: false,
 };
 
 pub const MAX_SCHEMAS_PER_DATABASE: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_schemas_per_database"),
-    value: &1000,
+    value: 1000,
     description: "The maximum number of schemas in a database (Materialize).",
     internal: false,
 };
 
 pub const MAX_OBJECTS_PER_SCHEMA: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_objects_per_schema"),
-    value: &1000,
+    value: 1000,
     description: "The maximum number of objects in a schema (Materialize).",
     internal: false,
 };
 
 pub const MAX_SECRETS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_secrets"),
-    value: &100,
+    value: 100,
     description: "The maximum number of secrets in the region, across all schemas (Materialize).",
     internal: false,
 };
 
 pub const MAX_ROLES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_roles"),
-    value: &1000,
+    value: 1000,
     description: "The maximum number of roles in the region (Materialize).",
     internal: false,
 };
@@ -531,7 +522,7 @@ pub const MAX_ROLES: ServerVar<u32> = ServerVar {
 pub const MAX_RESULT_SIZE: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_result_size"),
     // 1 GiB
-    value: &1_073_741_824,
+    value: 1_073_741_824,
     description: "The maximum size in bytes for an internal query result (Materialize).",
     internal: false,
 };
@@ -539,7 +530,7 @@ pub const MAX_RESULT_SIZE: ServerVar<u32> = ServerVar {
 pub const MAX_QUERY_RESULT_SIZE: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_query_result_size"),
     // 1 GiB
-    value: &1_073_741_824,
+    value: 1_073_741_824,
     description: "The maximum size in bytes for a single query's result (Materialize).",
     internal: false,
 };
@@ -547,21 +538,21 @@ pub const MAX_QUERY_RESULT_SIZE: ServerVar<u32> = ServerVar {
 pub const MAX_COPY_FROM_SIZE: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_copy_from_size"),
     // 1 GiB, this limit is noted in the docs, if you change it make sure to update our docs.
-    value: &1_073_741_824,
+    value: 1_073_741_824,
     description: "The maximum size in bytes we buffer for COPY FROM statements (Materialize).",
     internal: false,
 };
 
 pub const MAX_IDENTIFIER_LENGTH: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("max_identifier_length"),
-    value: &mz_sql_lexer::lexer::MAX_IDENTIFIER_LENGTH,
+    value: mz_sql_lexer::lexer::MAX_IDENTIFIER_LENGTH,
     description: "The maximum length of object identifiers in bytes (PostgreSQL).",
     internal: false,
 };
 
 pub const WELCOME_MESSAGE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("welcome_message"),
-    value: &true,
+    value: true,
     description: "Whether to send a notice with a welcome message after a successful connection (Materialize).",
     internal: false,
 };
@@ -574,15 +565,14 @@ pub const WELCOME_MESSAGE: ServerVar<bool> = ServerVar {
 pub const METRICS_RETENTION: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("metrics_retention"),
     // 30 days
-    value: &Duration::from_secs(30 * 24 * 60 * 60),
+    value: Duration::from_secs(30 * 24 * 60 * 60),
     description: "The time to retain cluster utilization metrics (Materialize).",
     internal: true,
 };
 
-static DEFAULT_ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<Vec<Ident>> = Lazy::new(Vec::new);
 static ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("allowed_cluster_replica_sizes"),
-    value: &DEFAULT_ALLOWED_CLUSTER_REPLICA_SIZES,
+    value: Vec::new(),
     description: "The allowed sizes when creating a new cluster replica (Materialize).",
     internal: false,
 });
@@ -590,7 +580,7 @@ static ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(||
 /// Controls [`mz_persist_client::cfg::DynamicConfig::blob_target_size`].
 const PERSIST_BLOB_TARGET_SIZE: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_blob_target_size"),
-    value: &PersistConfig::DEFAULT_BLOB_TARGET_SIZE,
+    value: PersistConfig::DEFAULT_BLOB_TARGET_SIZE,
     description: "A target maximum size of persist blob payloads in bytes (Materialize).",
     internal: true,
 };
@@ -598,7 +588,7 @@ const PERSIST_BLOB_TARGET_SIZE: ServerVar<usize> = ServerVar {
 /// Controls [`mz_persist_client::cfg::DynamicConfig::blob_cache_mem_limit_bytes`].
 const PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_blob_cache_mem_limit_bytes"),
-    value: &PersistConfig::DEFAULT_BLOB_CACHE_MEM_LIMIT_BYTES,
+    value: PersistConfig::DEFAULT_BLOB_CACHE_MEM_LIMIT_BYTES,
     description:
         "Capacity of in-mem blob cache in bytes. Only takes effect on restart (Materialize).",
     internal: true,
@@ -607,7 +597,7 @@ const PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES: ServerVar<usize> = ServerVar {
 /// Controls [`mz_persist_client::cfg::DynamicConfig::compaction_minimum_timeout`].
 const PERSIST_COMPACTION_MINIMUM_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("persist_compaction_minimum_timeout"),
-    value: &PersistConfig::DEFAULT_COMPACTION_MINIMUM_TIMEOUT,
+    value: PersistConfig::DEFAULT_COMPACTION_MINIMUM_TIMEOUT,
     description: "The minimum amount of time to allow a persist compaction request to run before \
                   timing it out (Materialize).",
     internal: true,
@@ -616,7 +606,7 @@ const PERSIST_COMPACTION_MINIMUM_TIMEOUT: ServerVar<Duration> = ServerVar {
 /// Controls [`mz_persist_client::cfg::DynamicConfig::consensus_connection_pool_ttl`].
 const PERSIST_CONSENSUS_CONNECTION_POOL_TTL: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("persist_consensus_connection_pool_ttl"),
-    value: &PersistConfig::DEFAULT_CONSENSUS_CONNPOOL_TTL,
+    value: PersistConfig::DEFAULT_CONSENSUS_CONNPOOL_TTL,
     description: "The minimum TTL of a Consensus connection to Postgres/CRDB before it is proactively terminated",
     internal: true,
 };
@@ -624,7 +614,7 @@ const PERSIST_CONSENSUS_CONNECTION_POOL_TTL: ServerVar<Duration> = ServerVar {
 /// Controls [`mz_persist_client::cfg::DynamicConfig::consensus_connection_pool_ttl`].
 const PERSIST_READER_LEASE_DURATION: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("persist_reader_lease_duration"),
-    value: &PersistConfig::DEFAULT_READ_LEASE_DURATION,
+    value: PersistConfig::DEFAULT_READ_LEASE_DURATION,
     description: "The time after which we'll clean up stale read leases",
     internal: true,
 };
@@ -632,7 +622,7 @@ const PERSIST_READER_LEASE_DURATION: ServerVar<Duration> = ServerVar {
 /// Controls [`mz_persist_client::cfg::DynamicConfig::consensus_connection_pool_ttl_stagger`].
 const PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("persist_consensus_connection_pool_ttl_stagger"),
-    value: &PersistConfig::DEFAULT_CONSENSUS_CONNPOOL_TTL_STAGGER,
+    value: PersistConfig::DEFAULT_CONSENSUS_CONNPOOL_TTL_STAGGER,
     description: "The minimum time between TTLing Consensus connections to Postgres/CRDB.",
     internal: true,
 };
@@ -640,7 +630,7 @@ const PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER: ServerVar<Duration> = Serve
 /// Controls initial backoff of [`mz_persist_client::cfg::DynamicConfig::next_listen_batch_retry_params`].
 const PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("persist_next_listen_batch_retryer_initial_backoff"),
-    value: &PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.initial_backoff,
+    value: PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.initial_backoff,
     description: "The initial backoff when polling for new batches from a Listen or Subscribe.",
     internal: true,
 };
@@ -648,7 +638,7 @@ const PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF: ServerVar<Duration> = S
 /// Controls backoff multiplier of [`mz_persist_client::cfg::DynamicConfig::next_listen_batch_retry_params`].
 const PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("persist_next_listen_batch_retryer_multiplier"),
-    value: &PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.multiplier,
+    value: PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.multiplier,
     description: "The backoff multiplier when polling for new batches from a Listen or Subscribe.",
     internal: true,
 };
@@ -656,7 +646,7 @@ const PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER: ServerVar<u32> = ServerVar {
 /// Controls backoff clamp of [`mz_persist_client::cfg::DynamicConfig::next_listen_batch_retry_params`].
 const PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("persist_next_listen_batch_retryer_clamp"),
-    value: &PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.clamp,
+    value: PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.clamp,
     description:
         "The backoff clamp duration when polling for new batches from a Listen or Subscribe.",
     internal: true,
@@ -665,7 +655,7 @@ const PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
 /// Controls initial backoff of [`mz_persist_client::cfg::DynamicConfig::txns_data_shard_retry_params`].
 const PERSIST_TXNS_DATA_SHARD_RETRYER_INITIAL_BACKOFF: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("persist_txns_data_shard_retryer_initial_backoff"),
-    value: &PersistConfig::DEFAULT_TXNS_DATA_SHARD_RETRYER.initial_backoff,
+    value: PersistConfig::DEFAULT_TXNS_DATA_SHARD_RETRYER.initial_backoff,
     description:
         "The initial backoff when polling for new batches from a txns data shard persist_source.",
     internal: true,
@@ -674,7 +664,7 @@ const PERSIST_TXNS_DATA_SHARD_RETRYER_INITIAL_BACKOFF: ServerVar<Duration> = Ser
 /// Controls backoff multiplier of [`mz_persist_client::cfg::DynamicConfig::txns_data_shard_retry_params`].
 const PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("persist_txns_data_shard_retryer_multiplier"),
-    value: &PersistConfig::DEFAULT_TXNS_DATA_SHARD_RETRYER.multiplier,
+    value: PersistConfig::DEFAULT_TXNS_DATA_SHARD_RETRYER.multiplier,
     description:
         "The backoff multiplier when polling for new batches from a txns data shard persist_source.",
     internal: true,
@@ -683,7 +673,7 @@ const PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER: ServerVar<u32> = ServerVar {
 /// Controls backoff clamp of [`mz_persist_client::cfg::DynamicConfig::txns_data_shard_retry_params`].
 const PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("persist_txns_data_shard_retryer_clamp"),
-    value: &PersistConfig::DEFAULT_TXNS_DATA_SHARD_RETRYER.clamp,
+    value: PersistConfig::DEFAULT_TXNS_DATA_SHARD_RETRYER.clamp,
     description:
         "The backoff clamp duration when polling for new batches from a txns data shard persist_source.",
     internal: true,
@@ -691,7 +681,7 @@ const PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
 
 const PERSIST_FAST_PATH_LIMIT: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_fast_path_limit"),
-    value: &0,
+    value: 0,
     description:
         "An exclusive upper bound on the number of results we may return from a Persist fast-path peek; \
         queries that may return more results will follow the normal / slow path. \
@@ -701,7 +691,7 @@ const PERSIST_FAST_PATH_LIMIT: ServerVar<usize> = ServerVar {
 
 pub const PERSIST_TXN_TABLES: ServerVar<PersistTxnTablesImpl> = ServerVar {
     name: UncasedStr::new("persist_txn_tables"),
-    value: &PersistTxnTablesImpl::Off,
+    value: PersistTxnTablesImpl::Off,
     description: "\
         Whether to use the new persist-txn tables implementation or the legacy \
         one.
@@ -717,7 +707,7 @@ pub const PERSIST_TXN_TABLES: ServerVar<PersistTxnTablesImpl> = ServerVar {
 
 const TIMESTAMP_ORACLE_IMPL: ServerVar<TimestampOracleImpl> = ServerVar {
     name: UncasedStr::new("timestamp_oracle"),
-    value: &TimestampOracleImpl::Catalog,
+    value: TimestampOracleImpl::Catalog,
     description: "Backing implementation of TimestampOracle.",
     internal: true,
 };
@@ -725,7 +715,7 @@ const TIMESTAMP_ORACLE_IMPL: ServerVar<TimestampOracleImpl> = ServerVar {
 /// Controls `mz_adapter::coord::timestamp_oracle::postgres_oracle::DynamicConfig::pg_connection_pool_max_size`.
 const PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("pg_timestamp_oracle_connection_pool_max_size"),
-    value: &DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE,
+    value: DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE,
     description: "Maximum size of the Postgres/CRDB connection pool, used by the Postgres/CRDB timestamp oracle.",
     internal: true,
 };
@@ -733,7 +723,7 @@ const PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE: ServerVar<usize> = ServerVar
 /// Controls `mz_adapter::coord::timestamp_oracle::postgres_oracle::DynamicConfig::pg_connection_pool_max_wait`.
 const PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT: ServerVar<Option<Duration>> = ServerVar {
     name: UncasedStr::new("pg_timestamp_oracle_connection_pool_max_wait"),
-    value: &Some(DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_WAIT),
+    value: Some(DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_WAIT),
     description: "The maximum time to wait when attempting to obtain a connection from the Postgres/CRDB connection pool, used by the Postgres/CRDB timestamp oracle.",
     internal: true,
 };
@@ -741,7 +731,7 @@ const PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT: ServerVar<Option<Duration>> 
 /// Controls `mz_adapter::coord::timestamp_oracle::postgres_oracle::DynamicConfig::pg_connection_pool_ttl`.
 const PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_timestamp_oracle_connection_pool_ttl"),
-    value: &DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL,
+    value: DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL,
     description: "The minimum TTL of a Consensus connection to Postgres/CRDB before it is proactively terminated",
     internal: true,
 };
@@ -749,7 +739,7 @@ const PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL: ServerVar<Duration> = ServerVar {
 /// Controls `mz_adapter::coord::timestamp_oracle::postgres_oracle::DynamicConfig::pg_connection_pool_ttl_stagger`.
 const PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_timestamp_oracle_connection_pool_ttl_stagger"),
-    value: &DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER,
+    value: DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER,
     description: "The minimum time between TTLing Consensus connections to Postgres/CRDB.",
     internal: true,
 };
@@ -757,14 +747,14 @@ const PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER: ServerVar<Duration> = Ser
 /// The default for the `DISK` option when creating managed clusters and cluster replicas.
 const DISK_CLUSTER_REPLICAS_DEFAULT: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("disk_cluster_replicas_default"),
-    value: &false,
+    value: false,
     description: "Whether the disk option for managed clusters and cluster replicas should be enabled by default.",
     internal: true,
 };
 
 const UNSAFE_NEW_TRANSACTION_WALL_TIME: ServerVar<Option<CheckedTimestamp<DateTime<Utc>>>> = ServerVar {
     name: UncasedStr::new("unsafe_new_transaction_wall_time"),
-    value: &None,
+    value: None,
     description:
         "Sets the wall time for all new explicit or implicit transactions to control the value of `now()`. \
         If not set, uses the system's clock.",
@@ -821,7 +811,7 @@ mod upsert_rocksdb {
 
     pub static UPSERT_ROCKSDB_COMPACTION_STYLE: ServerVar<CompactionStyle> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_compaction_style"),
-        value: &mz_rocksdb_types::defaults::DEFAULT_COMPACTION_STYLE,
+        value: mz_rocksdb_types::defaults::DEFAULT_COMPACTION_STYLE,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
@@ -829,7 +819,7 @@ mod upsert_rocksdb {
     };
     pub const UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET: ServerVar<usize> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_optimize_compaction_memtable_budget"),
-        value: &mz_rocksdb_types::defaults::DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
+        value: mz_rocksdb_types::defaults::DEFAULT_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
@@ -837,7 +827,7 @@ mod upsert_rocksdb {
     };
     pub const UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES: ServerVar<bool> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_level_compaction_dynamic_level_bytes"),
-        value: &mz_rocksdb_types::defaults::DEFAULT_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES,
+        value: mz_rocksdb_types::defaults::DEFAULT_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
@@ -845,7 +835,7 @@ mod upsert_rocksdb {
     };
     pub const UPSERT_ROCKSDB_UNIVERSAL_COMPACTION_RATIO: ServerVar<i32> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_universal_compaction_ratio"),
-        value: &mz_rocksdb_types::defaults::DEFAULT_UNIVERSAL_COMPACTION_RATIO,
+        value: mz_rocksdb_types::defaults::DEFAULT_UNIVERSAL_COMPACTION_RATIO,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
@@ -853,7 +843,7 @@ mod upsert_rocksdb {
     };
     pub const UPSERT_ROCKSDB_PARALLELISM: ServerVar<Option<i32>> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_parallelism"),
-        value: &mz_rocksdb_types::defaults::DEFAULT_PARALLELISM,
+        value: mz_rocksdb_types::defaults::DEFAULT_PARALLELISM,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
@@ -861,7 +851,7 @@ mod upsert_rocksdb {
     };
     pub static UPSERT_ROCKSDB_COMPRESSION_TYPE: ServerVar<CompressionType> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_compression_type"),
-        value: &mz_rocksdb_types::defaults::DEFAULT_COMPRESSION_TYPE,
+        value: mz_rocksdb_types::defaults::DEFAULT_COMPRESSION_TYPE,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
@@ -869,7 +859,7 @@ mod upsert_rocksdb {
     };
     pub static UPSERT_ROCKSDB_BOTTOMMOST_COMPRESSION_TYPE: ServerVar<CompressionType> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_bottommost_compression_type"),
-        value: &mz_rocksdb_types::defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE,
+        value: mz_rocksdb_types::defaults::DEFAULT_BOTTOMMOST_COMPRESSION_TYPE,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
@@ -878,7 +868,7 @@ mod upsert_rocksdb {
 
     pub static UPSERT_ROCKSDB_BATCH_SIZE: ServerVar<usize> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_batch_size"),
-        value: &mz_rocksdb_types::defaults::DEFAULT_BATCH_SIZE,
+        value: mz_rocksdb_types::defaults::DEFAULT_BATCH_SIZE,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Can be changed dynamically (Materialize).",
@@ -887,7 +877,7 @@ mod upsert_rocksdb {
 
     pub static UPSERT_ROCKSDB_RETRY_DURATION: ServerVar<Duration> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_retry_duration"),
-        value: &mz_rocksdb_types::defaults::DEFAULT_RETRY_DURATION,
+        value: mz_rocksdb_types::defaults::DEFAULT_RETRY_DURATION,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
@@ -897,7 +887,7 @@ mod upsert_rocksdb {
     /// Controls whether automatic spill to disk should be turned on when using `DISK`.
     pub const UPSERT_ROCKSDB_AUTO_SPILL_TO_DISK: ServerVar<bool> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_auto_spill_to_disk"),
-        value: &false,
+        value: false,
         description:
             "Controls whether automatic spill to disk should be turned on when using `DISK`",
         internal: true,
@@ -907,7 +897,7 @@ mod upsert_rocksdb {
     /// The default is 85 MiB = 89128960 bytes
     pub const UPSERT_ROCKSDB_AUTO_SPILL_THRESHOLD_BYTES: ServerVar<usize> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_auto_spill_threshold_bytes"),
-        value: &mz_rocksdb_types::defaults::DEFAULT_AUTO_SPILL_MEMORY_THRESHOLD,
+        value: mz_rocksdb_types::defaults::DEFAULT_AUTO_SPILL_MEMORY_THRESHOLD,
         description:
             "The upsert in-memory state size threshold in bytes after which it will spill to disk",
         internal: true,
@@ -915,7 +905,7 @@ mod upsert_rocksdb {
 
     pub static UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS: ServerVar<u32> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_stats_log_interval_seconds"),
-        value: &mz_rocksdb_types::defaults::DEFAULT_STATS_LOG_INTERVAL_S,
+        value: mz_rocksdb_types::defaults::DEFAULT_STATS_LOG_INTERVAL_S,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
@@ -923,7 +913,7 @@ mod upsert_rocksdb {
     };
     pub static UPSERT_ROCKSDB_STATS_PERSIST_INTERVAL_SECONDS: ServerVar<u32> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_stats_persist_interval_seconds"),
-        value: &mz_rocksdb_types::defaults::DEFAULT_STATS_PERSIST_INTERVAL_S,
+        value: mz_rocksdb_types::defaults::DEFAULT_STATS_PERSIST_INTERVAL_S,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
@@ -932,7 +922,7 @@ mod upsert_rocksdb {
     pub static UPSERT_ROCKSDB_POINT_LOOKUP_BLOCK_CACHE_SIZE_MB: ServerVar<Option<u32>> =
         ServerVar {
             name: UncasedStr::new("upsert_rocksdb_point_lookup_block_cache_size_mb"),
-            value: &None,
+            value: None,
             description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
@@ -943,7 +933,7 @@ mod upsert_rocksdb {
     /// If value is 0, then no shrinking will occur.
     pub static UPSERT_ROCKSDB_SHRINK_ALLOCATED_BUFFERS_BY_RATIO: ServerVar<usize> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_shrink_allocated_buffers_by_ratio"),
-        value: &mz_rocksdb_types::defaults::DEFAULT_SHRINK_BUFFERS_BY_RATIO,
+        value: mz_rocksdb_types::defaults::DEFAULT_SHRINK_BUFFERS_BY_RATIO,
         description:
             "The number of times by which allocated buffers will be shrinked in upsert rocksdb.",
         internal: true,
@@ -954,7 +944,7 @@ mod upsert_rocksdb {
         ServerVar<Option<Numeric>>,
     > = Lazy::new(|| ServerVar {
         name: UncasedStr::new("upsert_rocksdb_write_buffer_manager_cluster_memory_fraction"),
-        value: &None,
+        value: None,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
@@ -965,7 +955,7 @@ mod upsert_rocksdb {
     pub static UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_MEMORY_BYTES: ServerVar<Option<usize>> =
         ServerVar {
             name: UncasedStr::new("upsert_rocksdb_write_buffer_manager_memory_bytes"),
-            value: &None,
+            value: None,
             description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
@@ -973,47 +963,41 @@ mod upsert_rocksdb {
         };
     pub static UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_ALLOW_STALL: ServerVar<bool> = ServerVar {
         name: UncasedStr::new("upsert_rocksdb_write_buffer_manager_allow_stall"),
-        value: &false,
+        value: false,
         description: "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` \
                   sources. Described in the `mz_rocksdb_types::config` module. \
                   Only takes effect on source restart (Materialize).",
         internal: true,
     };
 }
-static DEFAULT_LOGGING_FILTER: Lazy<CloneableEnvFilter> =
-    Lazy::new(|| CloneableEnvFilter::from_str("info").expect("valid EnvFilter"));
+
 static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("log_filter"),
-    value: &DEFAULT_LOGGING_FILTER,
+    value: CloneableEnvFilter::from_str("info").expect("valid EnvFilter"),
     description: "Sets the filter to apply to stderr logging.",
     internal: true,
 });
 
-static DEFAULT_WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<usize> = Lazy::new(|| {
-    usize::cast_from(mz_secrets::cache::DEFAULT_TTL_SECS.load(std::sync::atomic::Ordering::Relaxed))
-});
-
 static WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<ServerVar<usize>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("webhooks_secrets_caching_ttl_secs"),
-    value: &DEFAULT_WEBHOOKS_SECRETS_CACHING_TTL_SECS,
+    value: usize::cast_from(
+        mz_secrets::cache::DEFAULT_TTL_SECS.load(std::sync::atomic::Ordering::Relaxed),
+    ),
     description: "Sets the time-to-live for values in the Webhooks secrets cache.",
     internal: true,
 });
 
-static DEFAULT_OPENTELEMETRY_FILTER: Lazy<CloneableEnvFilter> =
-    Lazy::new(|| CloneableEnvFilter::from_str("off").expect("valid EnvFilter"));
 static OPENTELEMETRY_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("opentelemetry_filter"),
-    value: &DEFAULT_OPENTELEMETRY_FILTER,
+    value: CloneableEnvFilter::from_str("off").expect("valid EnvFilter"),
     description: "Sets the filter to apply to OpenTelemetry-backed distributed tracing.",
     internal: true,
 });
 
-// Note(parkmycar): This value was chosen arbitrarily.
-const DEFAULT_COORD_SLOW_MESSAGE_REPORTING_THRESHOLD: Duration = Duration::from_millis(100);
 const COORD_SLOW_MESSAGE_REPORTING_THRESHOLD: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("coord_slow_message_reporting_threshold"),
-    value: &DEFAULT_COORD_SLOW_MESSAGE_REPORTING_THRESHOLD,
+    // Note(parkmycar): This value was chosen arbitrarily.
+    value: Duration::from_millis(100),
     description:
         "Sets the threshold at which we will report the handling of a coordinator message \
     for being slow.",
@@ -1023,7 +1007,7 @@ const COORD_SLOW_MESSAGE_REPORTING_THRESHOLD: ServerVar<Duration> = ServerVar {
 /// Controls the connect_timeout setting when connecting to PG via `mz_postgres_util`.
 const PG_SOURCE_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_source_connect_timeout"),
-    value: &mz_postgres_util::DEFAULT_CONNECT_TIMEOUT,
+    value: mz_postgres_util::DEFAULT_CONNECT_TIMEOUT,
     description: "Sets the timeout applied to socket-level connection attempts for PG \
     replication connections. (Materialize)",
     internal: true,
@@ -1033,7 +1017,7 @@ const PG_SOURCE_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
 /// when connecting to PG via `mz_postgres_util`.
 const PG_SOURCE_KEEPALIVES_RETRIES: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("pg_source_keepalives_retries"),
-    value: &mz_postgres_util::DEFAULT_KEEPALIVE_RETRIES,
+    value: mz_postgres_util::DEFAULT_KEEPALIVE_RETRIES,
     description:
         "Sets the maximum number of TCP keepalive probes that will be sent before dropping \
     a connection when connecting to PG via `mz_postgres_util`. (Materialize)",
@@ -1044,7 +1028,7 @@ const PG_SOURCE_KEEPALIVES_RETRIES: ServerVar<u32> = ServerVar {
 /// to PG via `mz_postgres_util`.
 const PG_SOURCE_KEEPALIVES_IDLE: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_source_keepalives_idle"),
-    value: &mz_postgres_util::DEFAULT_KEEPALIVE_IDLE,
+    value: mz_postgres_util::DEFAULT_KEEPALIVE_IDLE,
     description:
         "Sets the amount of idle time before a keepalive packet is sent on the connection \
     when connecting to PG via `mz_postgres_util`. (Materialize)",
@@ -1054,7 +1038,7 @@ const PG_SOURCE_KEEPALIVES_IDLE: ServerVar<Duration> = ServerVar {
 /// Sets the time interval between TCP keepalive probes when connecting to PG via `mz_postgres_util`.
 const PG_SOURCE_KEEPALIVES_INTERVAL: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_source_keepalives_interval"),
-    value: &mz_postgres_util::DEFAULT_KEEPALIVE_INTERVAL,
+    value: mz_postgres_util::DEFAULT_KEEPALIVE_INTERVAL,
     description: "Sets the time interval between TCP keepalive probes when connecting to PG via \
     replication. (Materialize)",
     internal: true,
@@ -1063,7 +1047,7 @@ const PG_SOURCE_KEEPALIVES_INTERVAL: ServerVar<Duration> = ServerVar {
 /// Sets the TCP user timeout when connecting to PG via `mz_postgres_util`.
 const PG_SOURCE_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_source_tcp_user_timeout"),
-    value: &mz_postgres_util::DEFAULT_TCP_USER_TIMEOUT,
+    value: mz_postgres_util::DEFAULT_TCP_USER_TIMEOUT,
     description:
         "Sets the TCP user timeout when connecting to PG via `mz_postgres_util`. (Materialize)",
     internal: true,
@@ -1073,7 +1057,7 @@ const PG_SOURCE_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
 /// PG sources.
 const PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_source_snapshot_statement_timeout"),
-    value: &mz_postgres_util::DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT,
+    value: mz_postgres_util::DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT,
     description: "Sets the `statement_timeout` value to use during the snapshotting phase of PG sources (Materialize)",
     internal: true,
 };
@@ -1081,7 +1065,7 @@ const PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
 /// Controls the check interval for connections to SSH bastions via `mz_ssh_util`.
 const SSH_CHECK_INTERVAL: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("ssh_check_interval"),
-    value: &mz_ssh_util::tunnel::DEFAULT_CHECK_INTERVAL,
+    value: mz_ssh_util::tunnel::DEFAULT_CHECK_INTERVAL,
     description: "Controls the check interval for connections to SSH bastions via `mz_ssh_util`.",
     internal: true,
 };
@@ -1089,7 +1073,7 @@ const SSH_CHECK_INTERVAL: ServerVar<Duration> = ServerVar {
 /// Controls the connect timeout for connections to SSH bastions via `mz_ssh_util`.
 const SSH_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("ssh_connect_timeout"),
-    value: &mz_ssh_util::tunnel::DEFAULT_CONNECT_TIMEOUT,
+    value: mz_ssh_util::tunnel::DEFAULT_CONNECT_TIMEOUT,
     description: "Controls the connect timeout for connections to SSH bastions via `mz_ssh_util`.",
     internal: true,
 };
@@ -1097,7 +1081,7 @@ const SSH_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
 /// Controls the keepalive idle interval for connections to SSH bastions via `mz_ssh_util`.
 const SSH_KEEPALIVES_IDLE: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("ssh_keepalives_idle"),
-    value: &mz_ssh_util::tunnel::DEFAULT_KEEPALIVES_IDLE,
+    value: mz_ssh_util::tunnel::DEFAULT_KEEPALIVES_IDLE,
     description:
         "Controls the keepalive idle interval for connections to SSH bastions via `mz_ssh_util`.",
     internal: true,
@@ -1106,7 +1090,7 @@ const SSH_KEEPALIVES_IDLE: ServerVar<Duration> = ServerVar {
 /// Enables `socket.keepalive.enable` for rdkafka client connections. Defaults to true.
 const KAFKA_SOCKET_KEEPALIVE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("kafka_socket_keepalive"),
-    value: &mz_kafka_util::client::DEFAULT_KEEPALIVE,
+    value: mz_kafka_util::client::DEFAULT_KEEPALIVE,
     description:
         "Enables `socket.keepalive.enable` for rdkafka client connections. Defaults to true.",
     internal: true,
@@ -1117,7 +1101,7 @@ const KAFKA_SOCKET_KEEPALIVE: ServerVar<bool> = ServerVar {
 /// `kafka_transaction_timeout`, or less than 10ms.
 const KAFKA_SOCKET_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("kafka_socket_timeout"),
-    value: &mz_kafka_util::client::DEFAULT_SOCKET_TIMEOUT,
+    value: mz_kafka_util::client::DEFAULT_SOCKET_TIMEOUT,
     description: "Controls `socket.timeout.ms` for rdkafka \
         client connections. Defaults to the rdkafka default (60000ms). \
         Cannot be greater than 300000ms or more than 100ms greater than \
@@ -1130,7 +1114,7 @@ const KAFKA_SOCKET_TIMEOUT: ServerVar<Duration> = ServerVar {
 /// (60000ms). Cannot be greater than `i32::MAX` or less than 1000ms.
 const KAFKA_TRANSACTION_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("kafka_transaction_timeout"),
-    value: &mz_kafka_util::client::DEFAULT_TRANSACTION_TIMEOUT,
+    value: mz_kafka_util::client::DEFAULT_TRANSACTION_TIMEOUT,
     description: "Controls `transaction.timeout.ms` for rdkafka \
         client connections. Defaults to the rdkafka default (60000ms). \
         Cannot be greater than `i32::MAX` or less than 1000ms.",
@@ -1141,7 +1125,7 @@ const KAFKA_TRANSACTION_TIMEOUT: ServerVar<Duration> = ServerVar {
 /// (30000ms). Cannot be greater than `i32::MAX` or less than 1000ms
 const KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("kafka_socket_connection_setup_timeout"),
-    value: &mz_kafka_util::client::DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT,
+    value: mz_kafka_util::client::DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT,
     description: "Controls `socket.connection.setup.timeout.ms` for rdkafka \
         client connections. Defaults to the rdkafka default (30000ms). \
         Cannot be greater than `i32::MAX` or less than 1000ms",
@@ -1151,7 +1135,7 @@ const KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT: ServerVar<Duration> = ServerVar {
 /// Controls the timeout when fetching kafka metadata. Defaults to 10s.
 const KAFKA_FETCH_METADATA_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("kafka_fetch_metadata_timeout"),
-    value: &mz_kafka_util::client::DEFAULT_FETCH_METADATA_TIMEOUT,
+    value: mz_kafka_util::client::DEFAULT_FETCH_METADATA_TIMEOUT,
     description: "Controls the timeout when fetching kafka metadata. \
         Defaults to 10s.",
     internal: true,
@@ -1162,7 +1146,7 @@ const KAFKA_FETCH_METADATA_TIMEOUT: ServerVar<Duration> = ServerVar {
 /// Used by persist as [`mz_persist_client::cfg::DynamicConfig::consensus_connect_timeout`].
 const CRDB_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("crdb_connect_timeout"),
-    value: &PersistConfig::DEFAULT_CRDB_CONNECT_TIMEOUT,
+    value: PersistConfig::DEFAULT_CRDB_CONNECT_TIMEOUT,
     description: "The time to connect to CockroachDB before timing out and retrying.",
     internal: true,
 };
@@ -1172,7 +1156,7 @@ const CRDB_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
 /// Used by persist as [`mz_persist_client::cfg::DynamicConfig::consensus_tcp_user_timeout`].
 const CRDB_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("crdb_tcp_user_timeout"),
-    value: &PersistConfig::DEFAULT_CRDB_TCP_USER_TIMEOUT,
+    value: PersistConfig::DEFAULT_CRDB_TCP_USER_TIMEOUT,
     description:
         "The TCP timeout for connections to CockroachDB. Specifies the amount of time that \
         transmitted data may remain unacknowledged before the TCP connection is forcibly \
@@ -1183,7 +1167,7 @@ const CRDB_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
 /// The maximum number of in-flight bytes emitted by persist_sources feeding compute dataflows.
 const COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar {
     name: UncasedStr::new("compute_dataflow_max_inflight_bytes"),
-    value: &None,
+    value: None,
     description: "The maximum number of in-flight bytes emitted by persist_sources feeding \
                   compute dataflows (Materialize).",
     internal: true,
@@ -1196,7 +1180,7 @@ const COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar 
 /// `storage_dataflow_max_inflight_bytes_disk_only` flag
 const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar {
     name: UncasedStr::new("storage_dataflow_max_inflight_bytes"),
-    value: &Some(256 * 1024 * 1024),
+    value: Some(256 * 1024 * 1024),
     description: "The maximum number of in-flight bytes emitted by persist_sources feeding \
                   storage dataflows. Defaults to backpressure enabled (Materialize).",
     internal: true,
@@ -1206,7 +1190,7 @@ const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar 
 /// (namely, upsert) till after rehydration is finished.
 const STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("storage_dataflow_delay_sources_past_rehydration"),
-    value: &false,
+    value: false,
     description: "Whether or not to delay sources producing values in some scenarios \
                   (namely, upsert) till after rehydration is finished",
     internal: true,
@@ -1217,7 +1201,7 @@ const STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION: ServerVar<bool> = ServerV
 /// Default is 0, which means shrinking is disabled.
 const STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("storage_shrink_upsert_unused_buffers_by_ratio"),
-    value: &0,
+    value: 0,
     description: "Configuration ratio to shrink unusef buffers in upsert by",
     internal: true,
 };
@@ -1226,13 +1210,11 @@ const STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO: ServerVar<usize> = ServerVa
 /// in-flight bytes emitted by persist_sources feeding storage dataflows.
 /// If not configured, the storage_dataflow_max_inflight_bytes value will be used.
 /// For this value to be used storage_dataflow_max_inflight_bytes needs to be set.
-static DEFAULT_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION: Lazy<Option<Numeric>> =
-    Lazy::new(|| Some(0.0025.into()));
 pub static STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION: Lazy<
     ServerVar<Option<Numeric>>,
 > = Lazy::new(|| ServerVar {
     name: UncasedStr::new("storage_dataflow_max_inflight_bytes_to_cluster_size_fraction"),
-    value: &DEFAULT_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION,
+    value: Some(0.0025.into()),
     description: "The fraction of the cluster replica size to be used as the maximum number of \
     in-flight bytes emitted by persist_sources feeding storage dataflows. \
     If not configured, the storage_dataflow_max_inflight_bytes value will be used.",
@@ -1241,7 +1223,7 @@ pub static STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION: Lazy<
 
 const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("storage_dataflow_max_inflight_bytes_disk_only"),
-    value: &true,
+    value: true,
     description: "Whether or not `storage_dataflow_max_inflight_bytes` applies only to \
         upsert dataflows using disks. Defaults to true (Materialize).",
     internal: true,
@@ -1250,7 +1232,7 @@ const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY: ServerVar<bool> = ServerVar
 /// Controls [`mz_persist_client::cfg::PersistConfig::sink_minimum_batch_updates`].
 const PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_sink_minimum_batch_updates"),
-    value: &PersistConfig::DEFAULT_SINK_MINIMUM_BATCH_UPDATES,
+    value: PersistConfig::DEFAULT_SINK_MINIMUM_BATCH_UPDATES,
     description: "In the compute persist sink, workers with less than the minimum number of updates \
                   will flush their records to single downstream worker to be batched up there... in \
                   the hopes of grouping our updates into fewer, larger batches.",
@@ -1261,7 +1243,7 @@ const PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
 const STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("storage_persist_sink_minimum_batch_updates"),
     // Reasonable default based on our experience in production.
-    value: &1024,
+    value: 1024,
     description: "In the storage persist sink, workers with less than the minimum number of updates \
                   will flush their records to single downstream worker to be batched up there... in \
                   the hopes of grouping our updates into fewer, larger batches.",
@@ -1271,7 +1253,7 @@ const STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
 /// Controls [`mz_persist_client::cfg::PersistConfig::storage_source_decode_fuel`].
 const STORAGE_SOURCE_DECODE_FUEL: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("storage_source_decode_fuel"),
-    value: &PersistConfig::DEFAULT_STORAGE_SOURCE_DECODE_FUEL,
+    value: PersistConfig::DEFAULT_STORAGE_SOURCE_DECODE_FUEL,
     description: "The maximum amount of work to do in the persist_source mfp_and_decode \
                   operator before yielding.",
     internal: true,
@@ -1279,7 +1261,7 @@ const STORAGE_SOURCE_DECODE_FUEL: ServerVar<usize> = ServerVar {
 
 const STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("storage_record_source_sink_namespaced_errors"),
-    value: &true,
+    value: true,
     description: "Whether or not to record namespaced errors in the status history tables",
     internal: true,
 };
@@ -1287,7 +1269,7 @@ const STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS: ServerVar<bool> = ServerVar 
 /// Controls [`mz_persist_client::cfg::DynamicConfig::stats_audit_percent`].
 const PERSIST_STATS_AUDIT_PERCENT: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_stats_audit_percent"),
-    value: &PersistConfig::DEFAULT_STATS_AUDIT_PERCENT,
+    value: PersistConfig::DEFAULT_STATS_AUDIT_PERCENT,
     description: "Percent of filtered data to opt in to correctness auditing (Materialize).",
     internal: true,
 };
@@ -1295,7 +1277,7 @@ const PERSIST_STATS_AUDIT_PERCENT: ServerVar<usize> = ServerVar {
 /// Controls [`mz_persist_client::cfg::DynamicConfig::stats_collection_enabled`].
 const PERSIST_STATS_COLLECTION_ENABLED: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("persist_stats_collection_enabled"),
-    value: &PersistConfig::DEFAULT_STATS_COLLECTION_ENABLED,
+    value: PersistConfig::DEFAULT_STATS_COLLECTION_ENABLED,
     description: "Whether to calculate and record statistics about the data stored in persist \
                   to be used at read time, see persist_stats_filter_enabled (Materialize).",
     internal: true,
@@ -1304,7 +1286,7 @@ const PERSIST_STATS_COLLECTION_ENABLED: ServerVar<bool> = ServerVar {
 /// Controls [`mz_persist_client::cfg::DynamicConfig::stats_filter_enabled`].
 const PERSIST_STATS_FILTER_ENABLED: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("persist_stats_filter_enabled"),
-    value: &PersistConfig::DEFAULT_STATS_FILTER_ENABLED,
+    value: PersistConfig::DEFAULT_STATS_FILTER_ENABLED,
     description: "Whether to use recorded statistics about the data stored in persist \
                   to filter at read time, see persist_stats_collection_enabled (Materialize).",
     internal: true,
@@ -1313,18 +1295,16 @@ const PERSIST_STATS_FILTER_ENABLED: ServerVar<bool> = ServerVar {
 /// Controls [`mz_persist_client::cfg::DynamicConfig::stats_budget_bytes`].
 const PERSIST_STATS_BUDGET_BYTES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_stats_budget_bytes"),
-    value: &PersistConfig::DEFAULT_STATS_BUDGET_BYTES,
+    value: PersistConfig::DEFAULT_STATS_BUDGET_BYTES,
     description: "The budget (in bytes) of how many stats to maintain per batch part.",
     internal: true,
 };
 
-static PERSIST_DEFAULT_STATS_UNTRIMMABLE_COLUMNS: Lazy<UntrimmableColumns> =
-    Lazy::new(|| PersistConfig::DEFAULT_STATS_UNTRIMMABLE_COLUMNS.clone());
 /// Controls [`mz_persist_client::cfg::DynamicConfig::stats_untrimmable_columns`].
 static PERSIST_STATS_UNTRIMMABLE_COLUMNS: Lazy<ServerVar<UntrimmableColumns>> =
     Lazy::new(|| ServerVar {
         name: UncasedStr::new("persist_stats_untrimmable_columns"),
-        value: &PERSIST_DEFAULT_STATS_UNTRIMMABLE_COLUMNS,
+        value: PersistConfig::DEFAULT_STATS_UNTRIMMABLE_COLUMNS.clone(),
         description: "Which columns to always retain during persist stats trimming. The expected \
         format is JSON (ex. `{\"equals\": [\"foo\"], \"prefixes\": [], \"suffixes\": [\"_bar\"]}`) \
         and all strings must be lowercase.",
@@ -1334,7 +1314,7 @@ static PERSIST_STATS_UNTRIMMABLE_COLUMNS: Lazy<ServerVar<UntrimmableColumns>> =
 /// Controls [`mz_persist_client::cfg::DynamicConfig::pubsub_client_enabled`].
 const PERSIST_PUBSUB_CLIENT_ENABLED: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("persist_pubsub_client_enabled"),
-    value: &PersistConfig::DEFAULT_PUBSUB_CLIENT_ENABLED,
+    value: PersistConfig::DEFAULT_PUBSUB_CLIENT_ENABLED,
     description: "Whether to connect to the Persist PubSub service.",
     internal: true,
 };
@@ -1342,7 +1322,7 @@ const PERSIST_PUBSUB_CLIENT_ENABLED: ServerVar<bool> = ServerVar {
 /// Controls [`mz_persist_client::cfg::DynamicConfig::pubsub_push_diff_enabled`].
 const PERSIST_PUBSUB_PUSH_DIFF_ENABLED: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("persist_pubsub_push_diff_enabled"),
-    value: &PersistConfig::DEFAULT_PUBSUB_PUSH_DIFF_ENABLED,
+    value: PersistConfig::DEFAULT_PUBSUB_PUSH_DIFF_ENABLED,
     description: "Whether to push state diffs to Persist PubSub.",
     internal: true,
 };
@@ -1350,7 +1330,7 @@ const PERSIST_PUBSUB_PUSH_DIFF_ENABLED: ServerVar<bool> = ServerVar {
 /// Controls [`mz_persist_client::cfg::DynamicConfig::rollup_threshold`].
 const PERSIST_ROLLUP_THRESHOLD: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_rollup_threshold"),
-    value: &PersistConfig::DEFAULT_ROLLUP_THRESHOLD,
+    value: PersistConfig::DEFAULT_ROLLUP_THRESHOLD,
     description: "The number of seqnos between rollups.",
     internal: true,
 };
@@ -1360,7 +1340,7 @@ const PERSIST_ROLLUP_THRESHOLD: ServerVar<usize> = ServerVar {
 /// be able to alter parameters while LD is broken.
 pub static ENABLE_LAUNCHDARKLY: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_launchdarkly"),
-    value: &true,
+    value: true,
     description: "Boolean flag indicating whether flag synchronization from LaunchDarkly should be enabled (Materialize).",
     internal: true
 };
@@ -1370,14 +1350,14 @@ pub static ENABLE_LAUNCHDARKLY: ServerVar<bool> = ServerVar {
 /// is additionally gated by a feature flag.
 static REAL_TIME_RECENCY: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("real_time_recency"),
-    value: &false,
+    value: false,
     description: "Feature flag indicating whether real time recency is enabled (Materialize).",
     internal: false,
 };
 
 static EMIT_TIMESTAMP_NOTICE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("emit_timestamp_notice"),
-    value: &false,
+    value: false,
     description:
         "Boolean flag indicating whether to send a NOTICE with timestamp explanations of queries (Materialize).",
     internal: false
@@ -1385,7 +1365,7 @@ static EMIT_TIMESTAMP_NOTICE: ServerVar<bool> = ServerVar {
 
 static EMIT_TRACE_ID_NOTICE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("emit_trace_id_notice"),
-    value: &false,
+    value: false,
     description:
         "Boolean flag indicating whether to send a NOTICE specifying the trace id when available (Materialize).",
     internal: false
@@ -1393,14 +1373,14 @@ static EMIT_TRACE_ID_NOTICE: ServerVar<bool> = ServerVar {
 
 static UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP: ServerVar<Option<mz_repr::Timestamp>> = ServerVar {
     name: UncasedStr::new("unsafe_mock_audit_event_timestamp"),
-    value: &None,
+    value: None,
     description: "Mocked timestamp to use for audit events for testing purposes",
     internal: true,
 };
 
 pub const ENABLE_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_rbac_checks"),
-    value: &true,
+    value: true,
     description: "User facing global boolean flag indicating whether to apply RBAC checks before \
     executing statements (Materialize).",
     internal: false,
@@ -1409,7 +1389,7 @@ pub const ENABLE_RBAC_CHECKS: ServerVar<bool> = ServerVar {
 pub const ENABLE_SESSION_RBAC_CHECKS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_session_rbac_checks"),
     // TODO(jkosh44) Once RBAC is complete, change this to `true`.
-    value: &false,
+    value: false,
     description: "User facing session boolean flag indicating whether to apply RBAC checks before \
     executing statements (Materialize).",
     internal: false,
@@ -1417,7 +1397,7 @@ pub const ENABLE_SESSION_RBAC_CHECKS: ServerVar<bool> = ServerVar {
 
 pub const EMIT_INTROSPECTION_QUERY_NOTICE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("emit_introspection_query_notice"),
-    value: &true,
+    value: true,
     description: "Whether to print a notice when querying per-replica introspection sources.",
     internal: false,
 };
@@ -1425,7 +1405,7 @@ pub const EMIT_INTROSPECTION_QUERY_NOTICE: ServerVar<bool> = ServerVar {
 // TODO(mgree) change this to a SelectOption
 pub const ENABLE_SESSION_CARDINALITY_ESTIMATES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_session_cardinality_estimates"),
-    value: &false,
+    value: false,
     description:
         "Feature flag indicating whether to use cardinality estimates when optimizing queries; \
     does not affect EXPLAIN WITH(cardinality) (Materialize).",
@@ -1434,7 +1414,7 @@ pub const ENABLE_SESSION_CARDINALITY_ESTIMATES: ServerVar<bool> = ServerVar {
 
 const OPTIMIZER_STATS_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("optimizer_stats_timeout"),
-    value: &Duration::from_millis(250),
+    value: Duration::from_millis(250),
     description: "Sets the timeout applied to the optimizer's statistics collection from storage; \
     applied to non-oneshot, i.e., long-lasting queries, like CREATE MATERIALIZED VIEW (Materialize).",
     internal: true,
@@ -1442,7 +1422,7 @@ const OPTIMIZER_STATS_TIMEOUT: ServerVar<Duration> = ServerVar {
 
 const OPTIMIZER_ONESHOT_STATS_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("optimizer_oneshot_stats_timeout"),
-    value: &Duration::from_millis(20),
+    value: Duration::from_millis(20),
     description: "Sets the timeout applied to the optimizer's statistics collection from storage; \
     applied to oneshot queries, like SELECT (Materialize).",
     internal: true,
@@ -1450,17 +1430,16 @@ const OPTIMIZER_ONESHOT_STATS_TIMEOUT: ServerVar<Duration> = ServerVar {
 
 const PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("privatelink_status_update_quota_per_minute"),
-    value: &20,
+    value: 20,
     description: "Sets the per-minute quota for privatelink vpc status updates to be written to \
     the storage-collection-backed system table. This value implies the total and burst quota per-minute.",
     internal: true,
 };
 
-static DEFAULT_STATEMENT_LOGGING_SAMPLE_RATE: Lazy<Numeric> = Lazy::new(|| 0.1.into());
 pub static STATEMENT_LOGGING_SAMPLE_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| {
     ServerVar {
     name: UncasedStr::new("statement_logging_sample_rate"),
-    value: &DEFAULT_STATEMENT_LOGGING_SAMPLE_RATE,
+    value: 0.1.into(),
     description: "User-facing session variable indicating how many statement executions should be \
     logged, subject to constraint by the system variable `statement_logging_max_sample_rate` (Materialize).",
     internal: false,
@@ -1471,7 +1450,7 @@ pub static STATEMENT_LOGGING_SAMPLE_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|
 /// than the one from Differential Dataflow.
 const ENABLE_MZ_JOIN_CORE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_mz_join_core"),
-    value: &true,
+    value: true,
     description:
         "Feature flag indicating whether compute rendering should use Materialize's custom linear \
          join implementation rather than the one from Differential Dataflow. (Materialize).",
@@ -1481,7 +1460,7 @@ const ENABLE_MZ_JOIN_CORE: ServerVar<bool> = ServerVar {
 pub static DEFAULT_LINEAR_JOIN_YIELDING: Lazy<String> = Lazy::new(|| "work:1000000".into());
 static LINEAR_JOIN_YIELDING: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("linear_join_yielding"),
-    value: &DEFAULT_LINEAR_JOIN_YIELDING,
+    value: DEFAULT_LINEAR_JOIN_YIELDING.clone(),
     description:
         "The yielding behavior compute rendering should apply for linear join operators. Either \
          'work:<amount>' or 'time:<milliseconds>' or 'work:<amount>,time:<milliseconds>'. Note \
@@ -1492,7 +1471,7 @@ static LINEAR_JOIN_YIELDING: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
 
 pub const DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("default_idle_arrangement_merge_effort"),
-    value: &1000,
+    value: 1000,
     description:
         "The default value to use for the `IDLE ARRANGEMENT MERGE EFFORT` cluster/replica option.",
     internal: true,
@@ -1500,7 +1479,7 @@ pub const DEFAULT_IDLE_ARRANGEMENT_MERGE_EFFORT: ServerVar<u32> = ServerVar {
 
 pub const DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("default_arrangement_exert_proportionality"),
-    value: &16,
+    value: 16,
     description:
         "The default value to use for the `ARRANGEMENT EXERT PROPORTIONALITY` cluster/replica option.",
     internal: true,
@@ -1508,26 +1487,24 @@ pub const DEFAULT_ARRANGEMENT_EXERT_PROPORTIONALITY: ServerVar<u32> = ServerVar 
 
 pub const ENABLE_DEFAULT_CONNECTION_VALIDATION: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_default_connection_validation"),
-    value: &true,
+    value: true,
     description:
         "LD facing global boolean flag that allows turning default connection validation off for everyone (Materialize).",
     internal: true,
 };
 
-static DEFAULT_STATEMENT_LOGGING_MAX_SAMPLE_RATE: Lazy<Numeric> = Lazy::new(|| 0.0.into());
 pub static STATEMENT_LOGGING_MAX_SAMPLE_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("statement_logging_max_sample_rate"),
-    value: &DEFAULT_STATEMENT_LOGGING_MAX_SAMPLE_RATE,
+    value: 0.0.into(),
     description: "The maximum rate at which statements may be logged. If this value is less than \
 that of `statement_logging_sample_rate`, the latter is ignored (Materialize).",
     internal: false,
 });
 
-static DEFAULT_STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE: Lazy<Numeric> = Lazy::new(|| 0.0.into());
 pub static STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE: Lazy<ServerVar<Numeric>> =
     Lazy::new(|| ServerVar {
         name: UncasedStr::new("statement_logging_default_sample_rate"),
-        value: &DEFAULT_STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE,
+        value: 0.0.into(),
         description:
             "The default value of `statement_logging_sample_rate` for new sessions (Materialize).",
         internal: false,
@@ -1535,7 +1512,7 @@ pub static STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE: Lazy<ServerVar<Numeric>> =
 
 pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("auto_route_introspection_queries"),
-    value: &true,
+    value: true,
     description:
         "Whether to force queries that depend only on system tables, to run on the mz_introspection cluster (Materialize).",
     internal: false
@@ -1543,7 +1520,7 @@ pub const AUTO_ROUTE_INTROSPECTION_QUERIES: ServerVar<bool> = ServerVar {
 
 pub const MAX_CONNECTIONS: ServerVar<u32> = ServerVar {
     name: UncasedStr::new("max_connections"),
-    value: &1000,
+    value: 1000,
     description: "The maximum number of concurrent connections (Materialize).",
     internal: false,
 };
@@ -1551,7 +1528,7 @@ pub const MAX_CONNECTIONS: ServerVar<u32> = ServerVar {
 /// Controls [`mz_storage_types::parameters::StorageParameters::keep_n_source_status_history_entries`].
 const KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("keep_n_source_status_history_entries"),
-    value: &5,
+    value: 5,
     description: "On reboot, truncate all but the last n entries per ID in the source_status_history collection (Materialize).",
     internal: true
 };
@@ -1559,7 +1536,7 @@ const KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
 /// Controls [`mz_storage_types::parameters::StorageParameters::keep_n_sink_status_history_entries`].
 const KEEP_N_SINK_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("keep_n_sink_status_history_entries"),
-    value: &5,
+    value: 5,
     description: "On reboot, truncate all but the last n entries per ID in the sink_status_history collection (Materialize).",
     internal: true
 };
@@ -1567,7 +1544,7 @@ const KEEP_N_SINK_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
 /// Controls [`mz_storage_types::parameters::StorageParameters::keep_n_privatelink_status_history_entries`].
 const KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("keep_n_privatelink_status_history_entries"),
-    value: &5,
+    value: 5,
     description: "On reboot, truncate all but the last n entries per ID in the mz_aws_privatelink_connection_status_history \
     collection (Materialize).",
     internal: true
@@ -1575,49 +1552,49 @@ const KEEP_N_PRIVATELINK_STATUS_HISTORY_ENTRIES: ServerVar<usize> = ServerVar {
 
 const ENABLE_STORAGE_SHARD_FINALIZATION: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_storage_shard_finalization"),
-    value: &true,
+    value: true,
     description: "Whether to allow the storage client to finalize shards (Materialize).",
     internal: true,
 };
 
 pub const ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_consolidate_after_union_negate"),
-    value: &true,
+    value: true,
     description: "consolidation after Unions that have a Negated input (Materialize).",
     internal: false,
 };
 
 pub const ENABLE_SPECIALIZED_ARRANGEMENTS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_specialized_arrangements"),
-    value: &false,
+    value: false,
     description: "type-specialization for arrangements in compute rendering",
     internal: true,
 };
 
 pub const MIN_TIMESTAMP_INTERVAL: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("min_timestamp_interval"),
-    value: &Duration::from_millis(1000),
+    value: Duration::from_millis(1000),
     description: "Minimum timestamp interval",
     internal: true,
 };
 
 pub const MAX_TIMESTAMP_INTERVAL: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("max_timestamp_interval"),
-    value: &Duration::from_millis(1000),
+    value: Duration::from_millis(1000),
     description: "Maximum timestamp interval",
     internal: true,
 };
 
 pub const WEBHOOK_CONCURRENT_REQUEST_LIMIT: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("webhook_concurrent_request_limit"),
-    value: &WEBHOOK_CONCURRENCY_LIMIT,
+    value: WEBHOOK_CONCURRENCY_LIMIT,
     description: "Maximum number of concurrent requests for appending to a webhook source.",
     internal: true,
 };
 
 pub const ENABLE_COLUMNATION_LGALLOC: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("enable_columnation_lgalloc"),
-    value: &false,
+    value: false,
     description: "Enable allocating regions from lgalloc",
     internal: true,
 };
@@ -1628,19 +1605,19 @@ mod grpc_client {
 
     pub const CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
         name: UncasedStr::new("grpc_client_connect_timeout"),
-        value: &Duration::from_secs(5),
+        value: Duration::from_secs(5),
         description: "Timeout to apply to initial gRPC client connection establishment.",
         internal: true,
     };
     pub const HTTP2_KEEP_ALIVE_INTERVAL: ServerVar<Duration> = ServerVar {
         name: UncasedStr::new("grpc_client_http2_keep_alive_interval"),
-        value: &Duration::from_secs(3),
+        value: Duration::from_secs(3),
         description: "Idle time to wait before sending HTTP/2 PINGs to maintain established gRPC client connections.",
         internal: true,
     };
     pub const HTTP2_KEEP_ALIVE_TIMEOUT: ServerVar<Duration> = ServerVar {
         name: UncasedStr::new("grpc_client_http2_keep_alive_timeout"),
-        value: &Duration::from_secs(5),
+        value: Duration::from_secs(5),
         description:
             "Time to wait for HTTP/2 pong response before terminating a gRPC client connection.",
         internal: true,
@@ -1655,7 +1632,7 @@ mod cluster_scheduling {
     pub const CLUSTER_MULTI_PROCESS_REPLICA_AZ_AFFINITY_WEIGHT: ServerVar<Option<i32>> =
         ServerVar {
             name: UncasedStr::new("cluster_multi_process_replica_az_affinity_weight"),
-            value: &DEFAULT_POD_AZ_AFFINITY_WEIGHT,
+            value: DEFAULT_POD_AZ_AFFINITY_WEIGHT,
             description:
                 "Whether or not to add an availability zone affinity between instances of \
             multi-process replicas. Either an affinity weight or empty (off) (Materialize).",
@@ -1664,7 +1641,7 @@ mod cluster_scheduling {
 
     pub const CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY: ServerVar<bool> = ServerVar {
         name: UncasedStr::new("cluster_soften_replication_anti_affinity"),
-        value: &DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY,
+        value: DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY,
         description: "Whether or not to turn the node-scope anti affinity between replicas \
             in the same cluster into a preference (Materialize).",
         internal: true,
@@ -1672,7 +1649,7 @@ mod cluster_scheduling {
 
     pub const CLUSTER_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT: ServerVar<i32> = ServerVar {
         name: UncasedStr::new("cluster_soften_replication_anti_affinity_weight"),
-        value: &DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT,
+        value: DEFAULT_SOFTEN_REPLICATION_ANTI_AFFINITY_WEIGHT,
         description:
             "The preference weight for `cluster_soften_replication_anti_affinity` (Materialize).",
         internal: true,
@@ -1680,7 +1657,7 @@ mod cluster_scheduling {
 
     pub const CLUSTER_ENABLE_TOPOLOGY_SPREAD: ServerVar<bool> = ServerVar {
         name: UncasedStr::new("cluster_enable_topology_spread"),
-        value: &DEFAULT_TOPOLOGY_SPREAD_ENABLED,
+        value: DEFAULT_TOPOLOGY_SPREAD_ENABLED,
         description:
             "Whether or not to add topology spread constraints among replicas in the same cluster (Materialize).",
         internal: true,
@@ -1688,7 +1665,7 @@ mod cluster_scheduling {
 
     pub const CLUSTER_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE: ServerVar<bool> = ServerVar {
         name: UncasedStr::new("cluster_topology_spread_ignore_non_singular_scale"),
-        value: &DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE,
+        value: DEFAULT_TOPOLOGY_SPREAD_IGNORE_NON_SINGULAR_SCALE,
         description:
             "If true, ignore replicas with more than 1 process when adding topology spread constraints (Materialize).",
         internal: true,
@@ -1696,21 +1673,21 @@ mod cluster_scheduling {
 
     pub const CLUSTER_TOPOLOGY_SPREAD_MAX_SKEW: ServerVar<i32> = ServerVar {
         name: UncasedStr::new("cluster_topology_spread_max_skew"),
-        value: &DEFAULT_TOPOLOGY_SPREAD_MAX_SKEW,
+        value: DEFAULT_TOPOLOGY_SPREAD_MAX_SKEW,
         description: "The `maxSkew` for replica topology spread constraints (Materialize).",
         internal: true,
     };
 
     pub const CLUSTER_TOPOLOGY_SPREAD_SOFT: ServerVar<bool> = ServerVar {
         name: UncasedStr::new("cluster_topology_spread_soft"),
-        value: &DEFAULT_TOPOLOGY_SPREAD_SOFT,
+        value: DEFAULT_TOPOLOGY_SPREAD_SOFT,
         description: "If true, soften the topology spread constraints for replicas (Materialize).",
         internal: true,
     };
 
     pub const CLUSTER_SOFTEN_AZ_AFFINITY: ServerVar<bool> = ServerVar {
         name: UncasedStr::new("cluster_soften_az_affinity"),
-        value: &DEFAULT_SOFTEN_AZ_AFFINITY,
+        value: DEFAULT_SOFTEN_AZ_AFFINITY,
         description: "Whether or not to turn the az-scope node affinity for replicas. \
             Note this could violate requests from the user (Materialize).",
         internal: true,
@@ -1718,7 +1695,7 @@ mod cluster_scheduling {
 
     pub const CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT: ServerVar<i32> = ServerVar {
         name: UncasedStr::new("cluster_soften_az_affinity_weight"),
-        value: &DEFAULT_SOFTEN_AZ_AFFINITY_WEIGHT,
+        value: DEFAULT_SOFTEN_AZ_AFFINITY_WEIGHT,
         description: "The preference weight for `cluster_soften_az_affinity` (Materialize).",
         internal: true,
     };
@@ -1775,7 +1752,7 @@ macro_rules! feature_flags {
             // accessible through their FeatureFlag variant.
             static [<$name:upper _VAR>]: ServerVar<bool> = ServerVar {
                 name: UncasedStr::new(stringify!($name)),
-                value: &$value,
+                value: $value,
                 description: concat!("Whether ", $desc, " is allowed (Materialize)."),
                 internal: $internal
             };
@@ -2177,7 +2154,7 @@ feature_flags!(
     {
         name: enable_aws_connection,
         desc: "CREATE CONNECTION ... TO AWS",
-        default: &false,
+        default: false,
         internal: true,
         enable_for_item_parsing: false,
     },
@@ -3880,18 +3857,16 @@ where
     V: Debug + 'static,
 {
     name: &'static UncasedStr,
-    value: &'static V,
+    value: V,
     description: &'static str,
     internal: bool,
 }
 
-// ServerVar is mostly just a bundle of static refs, so cloning is cheap and does not require
-// cloning the value.
-impl<V: Debug + 'static> Clone for ServerVar<V> {
+impl<V: Clone + Debug + 'static> Clone for ServerVar<V> {
     fn clone(&self) -> Self {
         Self {
             name: self.name,
-            value: self.value,
+            value: self.value.clone(),
             description: self.description,
             internal: self.internal,
         }
@@ -3938,8 +3913,7 @@ impl From<&'static PersistFeatureFlag> for ServerVar<bool> {
     fn from(value: &'static PersistFeatureFlag) -> Self {
         Self {
             name: UncasedStr::new(value.name),
-            // Awkward dance to get a static reference to a boolean...
-            value: &value.default,
+            value: value.default,
             description: value.description,
             internal: true,
         }
@@ -3948,7 +3922,7 @@ impl From<&'static PersistFeatureFlag> for ServerVar<bool> {
 
 /// A `SystemVar` is persisted on disk value for a configuration parameter. If unset,
 /// the server default is used instead.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct SystemVar<V>
 where
     V: Value + Debug + PartialEq + 'static,
@@ -3960,25 +3934,9 @@ where
     constraints: Vec<ValueConstraint<V>>,
 }
 
-// The derived `Clone` implementation requires `V: Clone`, which is not needed.
-impl<V> Clone for SystemVar<V>
-where
-    V: Value + Debug + PartialEq + 'static,
-    V::Owned: Debug + Clone + Send + Sync,
-{
-    fn clone(&self) -> Self {
-        SystemVar {
-            persisted_value: self.persisted_value.clone(),
-            dynamic_default: self.dynamic_default.clone(),
-            parent: self.parent.clone(),
-            constraints: self.constraints.clone(),
-        }
-    }
-}
-
 impl<V> SystemVar<V>
 where
-    V: Value + Debug + PartialEq + 'static,
+    V: Value + Debug + Clone + PartialEq + 'static,
     V::Owned: Debug + Clone + Send + Sync,
 {
     fn new(parent: &ServerVar<V>) -> SystemVar<V> {
@@ -4023,14 +3981,14 @@ where
                 self.dynamic_default
                     .as_ref()
                     .map(|v| v.borrow())
-                    .unwrap_or(self.parent.value)
+                    .unwrap_or(&self.parent.value)
             })
     }
 }
 
 impl<V> Var for SystemVar<V>
 where
-    V: Value + Debug + PartialEq + 'static,
+    V: Value + Debug + Clone + PartialEq + 'static,
     V::Owned: Debug + Clone + Send + Sync,
 {
     fn name(&self) -> &'static str {
@@ -4056,7 +4014,7 @@ where
 
 impl<V> SystemVarMut for SystemVar<V>
 where
-    V: Value + Debug + PartialEq + 'static,
+    V: Value + Debug + Clone + PartialEq + 'static,
     V::Owned: Debug + Clone + Send + Sync,
 {
     fn as_var(&self) -> &dyn Var {
@@ -4074,7 +4032,7 @@ where
 
     fn is_default(&self, input: VarInput) -> Result<bool, VarError> {
         let v = V::parse(self, input)?;
-        Ok(self.parent.value == v.borrow())
+        Ok(self.parent.value.borrow() == v.borrow())
     }
 
     fn set(&mut self, input: VarInput) -> Result<bool, VarError> {
@@ -4292,7 +4250,7 @@ where
             .or_else(|| self.session_value.as_ref().map(|v| v.borrow()))
             .or_else(|| self.role_value.as_ref().map(|v| v.borrow()))
             .or_else(|| self.default_value.as_ref().map(|v| v.borrow()))
-            .unwrap_or(self.parent.value)
+            .unwrap_or(&self.parent.value)
     }
 }
 
@@ -4409,7 +4367,7 @@ where
             .as_ref()
             .map(|v| v.borrow())
             .or_else(|| self.default_value.as_ref().map(|v| v.borrow()))
-            .unwrap_or(self.parent.value)
+            .unwrap_or(&self.parent.value)
             .to_owned();
         if local {
             self.local_value = Some(value);
