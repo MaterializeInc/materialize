@@ -33,12 +33,6 @@ if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
     try bin/pyactivate -m ruff --extend-exclude=misc/dbt-materialize .
     # We need to maintain compatibility with older Python versions for this
     try bin/pyactivate -m ruff --target-version=py38 misc/dbt-materialize
-
-    try bin/pyfmt --check --diff
-    if try_last_failed; then
-        echo "lint: $(red error:) python formatting discrepancies found"
-        echo "hint: run bin/pyfmt" >&2
-    fi
 fi
 
 try_status_report
