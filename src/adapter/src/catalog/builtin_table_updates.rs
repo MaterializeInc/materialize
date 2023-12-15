@@ -631,6 +631,7 @@ impl CatalogState {
                         "aws-privatelink"
                     }
                     mz_storage_types::connections::Connection::Ssh { .. } => "ssh-tunnel",
+                    mz_storage_types::connections::Connection::MySql { .. } => "mysql",
                 }),
                 Datum::String(&owner_id.to_string()),
                 privileges,
@@ -676,7 +677,8 @@ impl CatalogState {
                 }
             }
             mz_storage_types::connections::Connection::Csr(_)
-            | mz_storage_types::connections::Connection::Postgres(_) => (),
+            | mz_storage_types::connections::Connection::Postgres(_)
+            | mz_storage_types::connections::Connection::MySql(_) => (),
         };
         updates
     }

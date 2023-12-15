@@ -191,6 +191,7 @@ pub enum Connection<C: ConnectionAccess = InlinedConnection> {
     Ssh(SshConnection),
     Aws(AwsConnection),
     AwsPrivatelink(AwsPrivatelinkConnection),
+    MySql(MySqlConnection<C>),
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<Connection, R>
@@ -204,6 +205,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<Connection, R>
             Connection::Ssh(ssh) => Connection::Ssh(ssh),
             Connection::Aws(aws) => Connection::Aws(aws),
             Connection::AwsPrivatelink(awspl) => Connection::AwsPrivatelink(awspl),
+            Connection::MySql(mysql) => Connection::MySql(mysql.into_inline_connection(r)),
         }
     }
 }
@@ -218,6 +220,7 @@ impl<C: ConnectionAccess> Connection<C> {
             Connection::Ssh(conn) => conn.validate_by_default(),
             Connection::Aws(conn) => conn.validate_by_default(),
             Connection::AwsPrivatelink(conn) => conn.validate_by_default(),
+            Connection::MySql(conn) => conn.validate_by_default(),
         }
     }
 }
@@ -236,6 +239,7 @@ impl Connection<InlinedConnection> {
             Connection::Ssh(conn) => conn.validate(id, storage_configuration).await,
             Connection::Aws(conn) => conn.validate(id, storage_configuration).await,
             Connection::AwsPrivatelink(conn) => conn.validate(id, storage_configuration).await,
+            Connection::MySql(conn) => conn.validate(id, storage_configuration).await,
         }
     }
 
@@ -1259,6 +1263,249 @@ impl RustType<ProtoTunnel> for Tunnel<InlinedConnection> {
             Some(ProtoTunnelField::Ssh(ssh)) => Tunnel::Ssh(ssh.into_rust()?),
             Some(ProtoTunnelField::AwsPrivatelink(aws)) => Tunnel::AwsPrivatelink(aws.into_rust()?),
         })
+    }
+}
+
+/// Specifies which MySQL SSL Mode to use:
+/// <https://dev.mysql.com/doc/refman/8.0/en/connection-options.html#option_general_ssl-mode>
+/// This is not available as an enum in the mysql-async crate, so we define our own.
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum MySqlSslMode {
+    Disabled,
+    Required,
+    VerifyCa,
+    VerifyIdentity,
+}
+
+impl RustType<i32> for MySqlSslMode {
+    fn into_proto(&self) -> i32 {
+        match self {
+            MySqlSslMode::Disabled => ProtoMySqlSslMode::Disabled.into(),
+            MySqlSslMode::Required => ProtoMySqlSslMode::Required.into(),
+            MySqlSslMode::VerifyCa => ProtoMySqlSslMode::VerifyCa.into(),
+            MySqlSslMode::VerifyIdentity => ProtoMySqlSslMode::VerifyIdentity.into(),
+        }
+    }
+
+    fn from_proto(proto: i32) -> Result<Self, TryFromProtoError> {
+        Ok(match ProtoMySqlSslMode::from_i32(proto) {
+            Some(ProtoMySqlSslMode::Disabled) => MySqlSslMode::Disabled,
+            Some(ProtoMySqlSslMode::Required) => MySqlSslMode::Required,
+            Some(ProtoMySqlSslMode::VerifyCa) => MySqlSslMode::VerifyCa,
+            Some(ProtoMySqlSslMode::VerifyIdentity) => MySqlSslMode::VerifyIdentity,
+            None => {
+                return Err(TryFromProtoError::UnknownEnumVariant(
+                    "tls_mode".to_string(),
+                ))
+            }
+        })
+    }
+}
+
+pub fn any_mysql_ssl_mode() -> impl Strategy<Value = MySqlSslMode> {
+    proptest::sample::select(vec![
+        MySqlSslMode::Disabled,
+        MySqlSslMode::Required,
+        MySqlSslMode::VerifyCa,
+        MySqlSslMode::VerifyIdentity,
+    ])
+}
+
+/// A connection to a MySQL server.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct MySqlConnection<C: ConnectionAccess = InlinedConnection> {
+    /// The hostname of the server.
+    pub host: String,
+    /// The port of the server.
+    pub port: u16,
+    /// The name of the database to connect to.
+    pub database: String,
+    /// The username to authenticate as.
+    pub user: StringOrSecret,
+    /// An optional password for authentication.
+    pub password: Option<GlobalId>,
+    /// A tunnel through which to route traffic.
+    pub tunnel: Tunnel<C>,
+    /// Whether to use TLS for encryption, verify the server's certificate, and identity.
+    pub tls_mode: MySqlSslMode,
+    /// An optional root TLS certificate in PEM format, to verify the server's
+    /// identity.
+    pub tls_root_cert: Option<StringOrSecret>,
+    /// An optional TLS client certificate for authentication.
+    pub tls_identity: Option<TlsIdentity>,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<MySqlConnection, R>
+    for MySqlConnection<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> MySqlConnection {
+        let MySqlConnection {
+            host,
+            port,
+            database,
+            user,
+            password,
+            tunnel,
+            tls_mode,
+            tls_root_cert,
+            tls_identity,
+        } = self;
+
+        MySqlConnection {
+            host,
+            port,
+            database,
+            user,
+            password,
+            tunnel: tunnel.into_inline_connection(r),
+            tls_mode,
+            tls_root_cert,
+            tls_identity,
+        }
+    }
+}
+
+impl<C: ConnectionAccess> MySqlConnection<C> {
+    fn validate_by_default(&self) -> bool {
+        true
+    }
+}
+
+impl MySqlConnection<InlinedConnection> {
+    pub async fn config(
+        &self,
+        secrets_reader: &dyn mz_secrets::SecretsReader,
+        _storage_configuration: &StorageConfiguration,
+    ) -> Result<mz_mysql_util::Config, anyhow::Error> {
+        // TODO(roshan): Set appropriate connection timeouts
+        let mut opts = mysql_async::OptsBuilder::default()
+            .ip_or_hostname(&self.host)
+            .tcp_port(self.port)
+            .db_name(Some(&self.database))
+            .user(Some(&self.user.get_string(secrets_reader).await?));
+
+        if let Some(password) = self.password {
+            let password = secrets_reader.read_string(password).await?;
+            opts = opts.pass(Some(password));
+        }
+
+        // TODO(roshan): Implement SSL mode support
+        if self.tls_mode != MySqlSslMode::Disabled {
+            return Err(anyhow!("MySQL TLS modes are not yet supported"));
+        };
+
+        // TODO(roshan): Implement Root TLS Cert support
+        if self.tls_root_cert.is_some() {
+            return Err(anyhow!("MySQL TLS Certs are not yet supported"));
+        }
+
+        // TODO(roshan): Implement SSH Tunnels, AWS Privatelink
+        let tunnel = match &self.tunnel {
+            Tunnel::Direct => mz_mysql_util::TunnelConfig::Direct,
+            _ => {
+                return Err(anyhow!("MySQL Tunnels are not yet supported"));
+            }
+        };
+
+        Ok(mz_mysql_util::Config::new(opts.into(), tunnel))
+    }
+
+    async fn validate(
+        &self,
+        _id: GlobalId,
+        storage_configuration: &StorageConfiguration,
+    ) -> Result<(), anyhow::Error> {
+        let config = self
+            .config(
+                &*storage_configuration.connection_context.secrets_reader,
+                storage_configuration,
+            )
+            .await?;
+        let conn = config
+            .connect(
+                "connection validation",
+                &storage_configuration.connection_context.ssh_tunnel_manager,
+            )
+            .await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+}
+
+impl RustType<ProtoMySqlConnection> for MySqlConnection {
+    fn into_proto(&self) -> ProtoMySqlConnection {
+        ProtoMySqlConnection {
+            host: self.host.into_proto(),
+            port: self.port.into_proto(),
+            database: self.database.into_proto(),
+            user: Some(self.user.into_proto()),
+            password: self.password.into_proto(),
+            tls_mode: self.tls_mode.into_proto(),
+            tls_root_cert: self.tls_root_cert.into_proto(),
+            tls_identity: self.tls_identity.into_proto(),
+            tunnel: Some(self.tunnel.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoMySqlConnection) -> Result<Self, TryFromProtoError> {
+        Ok(MySqlConnection {
+            host: proto.host,
+            port: proto.port.into_rust()?,
+            database: proto.database,
+            user: proto.user.into_rust_if_some("ProtoMySqlConnection::user")?,
+            password: proto.password.into_rust()?,
+            tunnel: proto
+                .tunnel
+                .into_rust_if_some("ProtoMySqlConnection::tunnel")?,
+            tls_mode: proto.tls_mode.into_rust()?,
+            tls_root_cert: proto.tls_root_cert.into_rust()?,
+            tls_identity: proto.tls_identity.into_rust()?,
+        })
+    }
+}
+
+impl<C: ConnectionAccess> Arbitrary for MySqlConnection<C> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<String>(),
+            any::<u16>(),
+            any::<String>(),
+            any::<StringOrSecret>(),
+            any::<Option<GlobalId>>(),
+            any::<Tunnel<C>>(),
+            any_mysql_ssl_mode(),
+            any::<Option<StringOrSecret>>(),
+            any::<Option<TlsIdentity>>(),
+        )
+            .prop_map(
+                |(
+                    host,
+                    port,
+                    database,
+                    user,
+                    password,
+                    tunnel,
+                    tls_mode,
+                    tls_root_cert,
+                    tls_identity,
+                )| {
+                    MySqlConnection {
+                        host,
+                        port,
+                        database,
+                        user,
+                        password,
+                        tunnel,
+                        tls_mode,
+                        tls_root_cert,
+                        tls_identity,
+                    }
+                },
+            )
+            .boxed()
     }
 }
 

@@ -762,6 +762,7 @@ pub enum CreateConnectionType {
     Csr,
     Postgres,
     Ssh,
+    MySql,
 }
 
 impl AstDisplay for CreateConnectionType {
@@ -784,6 +785,9 @@ impl AstDisplay for CreateConnectionType {
             }
             Self::Ssh => {
                 f.write_str("SSH TUNNEL");
+            }
+            Self::MySql => {
+                f.write_str("MYSQL");
             }
         }
     }
