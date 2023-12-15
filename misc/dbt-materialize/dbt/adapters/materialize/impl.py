@@ -218,9 +218,7 @@ class MaterializeAdapter(PostgresAdapter):
 
         if sql_header:
             self.connections.execute(sql_header)
-        self.connections.execute(
-            f"create temporary view {view_name} as {sql_view_def}"
-        )
+        self.connections.execute(f"create temporary view {view_name} as {sql_view_def}")
 
         # Fetch the names and types of each column in the view. Schema ID 0
         # indicates the temporary schema.
