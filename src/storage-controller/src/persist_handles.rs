@@ -584,8 +584,9 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         let res = self.txns.register(register_ts.clone(), handles).await;
         match res {
             Ok(tidy) => {
+                self.tidy.merge(tidy);
                 // If we using eager uppers, make sure to advance the physical
-                // upper of the newly registered data shard past the
+                // upper of the all data shards past the
                 // register_ts. This protects against something like:
                 //
                 // - Upper of some shard s is at 5.
@@ -594,7 +595,8 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                 // - Reboot.
                 // - Try and read s at 10.
                 if !self.lazy_persist_txn_tables {
-                    self.tidy.merge(tidy);
+                    self.tidy
+                        .merge(self.txns.apply_eager_le(&register_ts).await);
                 }
                 self.send_new_uppers(new_uppers);
             }
