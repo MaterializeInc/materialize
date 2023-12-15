@@ -34,31 +34,6 @@ pub async fn get_schemas(
         .collect::<Vec<_>>())
 }
 
-/// Structured error to differentiate errors that can occur while fetching a
-/// publication.
-///
-/// If the receiver of this error doesn't differentiate between different error
-/// types in this context, `PublicationInfoError` implements
-/// `Into<PostgresError>`, which can automatically be returned in more contexts.
-#[derive(Debug, thiserror::Error)]
-pub enum PublicationInfoError {
-    #[error("publication {0} does not exist")]
-    PublicationMissing(String),
-    #[error(transparent)]
-    PostgresError(#[from] PostgresError),
-}
-
-impl From<PublicationInfoError> for PostgresError {
-    fn from(value: PublicationInfoError) -> Self {
-        match value {
-            PublicationInfoError::PublicationMissing(_) => {
-                anyhow::anyhow!(value.to_string()).into()
-            }
-            PublicationInfoError::PostgresError(e) => e,
-        }
-    }
-}
-
 /// Fetches table schema information from an upstream Postgres source for
 /// tables that are part of a publication, given a connection string and the
 /// publication name.
@@ -75,7 +50,7 @@ pub async fn publication_info(
     config: &Config,
     publication: &str,
     oid_filter: Option<u32>,
-) -> Result<Vec<PostgresTableDesc>, PublicationInfoError> {
+) -> Result<Vec<PostgresTableDesc>, PostgresError> {
     let client = config
         .connect("postgres_publication_info", ssh_tunnel_manager)
         .await?;
@@ -88,7 +63,7 @@ pub async fn publication_info(
         .await
         .map_err(PostgresError::from)?
         .get(0)
-        .ok_or_else(|| PublicationInfoError::PublicationMissing(publication.to_string()))?;
+        .ok_or_else(|| PostgresError::PublicationMissing(publication.to_string()))?;
 
     let tables = client
         .query(

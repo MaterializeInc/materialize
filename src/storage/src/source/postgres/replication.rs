@@ -83,7 +83,6 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
 use mz_ore::result::ResultExt;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_postgres_util::PostgresError;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
@@ -621,8 +620,7 @@ fn extract_transaction<'a>(
                             publication,
                             Some(rel_id),
                         )
-                        .await
-                        .map_err(PostgresError::from)?;
+                        .await?;
                         let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
 
                         if let Err(err) = verify_schema(rel_id, expected_desc, &upstream_info) {
