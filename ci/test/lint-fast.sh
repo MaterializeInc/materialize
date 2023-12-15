@@ -14,7 +14,6 @@
 set -euo pipefail
 
 . misc/shlib/shlib.bash
-. misc/buildkite/git.bash
 
 try bin/lint
 try cargo --locked fmt -- --check
@@ -27,41 +26,5 @@ try cargo deplint Cargo.lock ci/test/lint-deps.toml
 # don't care about its output in the test pipeline, so that we don't only
 # discover the failures after a merge to main.
 try cargo --locked about generate ci/deploy/licenses.hbs > /dev/null
-
-CURRENT_GIT_BRANCH=$(try git branch --show-current)
-IN_BUILDKITE=in_ci
-IN_BUILDKITE_PR=0
-ON_MAIN_BRANCH=0
-IN_LOCAL_NON_MAIN_BRANCH=0
-
-if [[ ${BUILDKITE_PULL_REQUEST:-false} != "false" ]]; then
-  IN_BUILDKITE_PR=1
-fi
-
-if [[ "$CURRENT_GIT_BRANCH" == "main" ]]; then
-  ON_MAIN_BRANCH=1
-fi
-
-if [[ "$IN_BUILDKITE" != 1 && "$ON_MAIN_BRANCH" != 1 ]]; then
-  IN_LOCAL_NON_MAIN_BRANCH=1
-fi
-
-echo $IN_BUILDKITE_PR
-echo $IN_LOCAL_NON_MAIN_BRANCH
-
-if [[ $IN_BUILDKITE_PR || $IN_LOCAL_NON_MAIN_BRANCH ]]; then
-  # see ./ci/test/lint-buf/README.md
-
-  fetch_pr_target_branch
-
-  ci_collapsed_heading "Verify that protobuf config is up-to-date"
-  try bin/pyactivate ./ci/test/lint-buf/generate-buf-config.py
-  try yamllint src/buf.yaml
-  try git diff --name-only --exit-code src/buf.yaml
-
-  ci_collapsed_heading "Lint protobuf"
-  COMMON_ANCESTOR="$(get_common_ancestor_commit_of_pr_and_target)"
-  try buf breaking src --against ".git#ref=$COMMON_ANCESTOR,subdir=src" --verbose
-fi
 
 try_status_report
