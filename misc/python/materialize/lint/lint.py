@@ -89,6 +89,7 @@ class LintManager:
             for lint_file in os.listdir(checks_path)
             if not self.is_ignore_file(checks_path / lint_file)
         ]
+        lint_files.sort()
         threads = []
 
         print(
