@@ -277,6 +277,9 @@ impl WebhookAppenderGuard {
 
 /// A handle to invalidate [`WebhookAppender`]s. See the comment on [`WebhookAppenderGuard`] for
 /// more detail.
+///
+/// Note: to invalidate the associated [`WebhookAppender`]s, you must drop the corresponding
+/// [`WebhookAppenderInvalidator`].
 #[derive(Debug)]
 pub struct WebhookAppenderInvalidator {
     is_closed: Arc<AtomicBool>,
@@ -295,15 +298,11 @@ impl WebhookAppenderInvalidator {
             is_closed: Arc::clone(&self.is_closed),
         }
     }
-
-    pub fn close(&self) {
-        self.is_closed.store(true, Ordering::SeqCst);
-    }
 }
 
 impl Drop for WebhookAppenderInvalidator {
     fn drop(&mut self) {
-        self.close()
+        self.is_closed.store(true, Ordering::SeqCst);
     }
 }
 
