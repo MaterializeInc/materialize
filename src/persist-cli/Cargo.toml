@@ -9,6 +9,9 @@ autobins = false
 autoexamples = false
 autobenches = false
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "persistcli"
 bench = false

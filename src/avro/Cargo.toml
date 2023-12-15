@@ -11,6 +11,9 @@ edition.workspace = true
 rust-version.workspace = true
 autobenches = false
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = "1.0.66"
 byteorder = { version = "1.4.3", optional = true }

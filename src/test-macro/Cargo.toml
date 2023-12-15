@@ -7,6 +7,9 @@ edition.workspace = true
 rust-version.workspace = true
 authors = ["Materialize, Inc.", "Daniel Mueller <deso@posteo.net>"]
 
+[lints]
+workspace = true
+
 [dependencies]
 proc-macro2 = "1.0"
 quote = {version = "1.0"}

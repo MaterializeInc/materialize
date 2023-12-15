@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
 axum = { version = "0.6.20", features = ["headers"] }

@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 mz-lowertest-derive = { path = "../lowertest-derive" }
 mz-ore = { path = "../ore" }

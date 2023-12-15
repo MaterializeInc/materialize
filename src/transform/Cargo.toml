@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 differential-dataflow = "0.12.0"
 enum-kinds = "0.5.1"
