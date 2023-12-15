@@ -611,9 +611,34 @@ class AccumulateReductions(Dataflow):
 
 > CREATE INDEX i_accumulable IN CLUSTER idx_cluster ON accumulable(a);
 
+> SET CLUSTER = idx_cluster;
+
+? EXPLAIN SELECT count(*) FROM accumulable;
+Explained Query:
+  Return
+    Union
+      Get l0
+      Map (0)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)]
+        Project ()
+          ReadIndex on=accumulable i_accumulable=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.i_accumulable (*** full scan ***)
+
 > SELECT count(*) FROM accumulable;
   /* B */
 10000001
+
+> SET CLUSTER = default;
 """
         )
 
