@@ -376,7 +376,7 @@ pub trait StorageController: Debug {
         commands: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
 
-    /// Returns a [`MonotonicAppender`] which is a channel that can be used to  monotonically
+    /// Returns a [`MonotonicAppender`] which is a channel that can be used to monotonically
     /// append to the specified [`GlobalId`].
     fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError>;
 

@@ -241,7 +241,7 @@ pub struct WebhookAppender {
 }
 
 impl WebhookAppender {
-    /// Checks if the [`WebhookAppender`] or underlying channel have closed.
+    /// Checks if the [`WebhookAppender`] has closed.
     pub fn is_closed(&self) -> bool {
         self.guard.is_closed()
     }

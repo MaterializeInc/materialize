@@ -90,7 +90,6 @@ pub enum Command {
         database: String,
         schema: String,
         name: String,
-        conn_id: ConnectionId,
         tx: oneshot::Sender<Result<AppendWebhookResponse, AdapterError>>,
     },
 

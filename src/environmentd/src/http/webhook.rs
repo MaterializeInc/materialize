@@ -20,7 +20,6 @@ use mz_repr::{ColumnType, Datum, Row, ScalarType};
 use mz_sql::plan::{WebhookHeaderFilters, WebhookHeaders};
 use mz_storage_types::controller::StorageError;
 
-use anyhow::Context;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use bytes::Bytes;
@@ -44,9 +43,6 @@ pub async fn handle_webhook(
 ) -> impl IntoResponse {
     // Record the time we receive the request, for use if validation checks the current timestamp.
     let received_at = adapter_client.now();
-    let conn_id = adapter_client
-        .new_conn_id()
-        .context("allocate connection id")?;
 
     // Collect headers into a map, while converting them into strings.
     let mut headers_s = BTreeMap::new();
@@ -86,7 +82,7 @@ pub async fn handle_webhook(
 
                 // Acquire and cache a new appender.
                 let appender = adapter_client
-                    .get_webhook_appender(database.clone(), schema.clone(), name.clone(), conn_id)
+                    .get_webhook_appender(database.clone(), schema.clone(), name.clone())
                     .await?;
 
                 guard.insert((database, schema, name), appender.clone());

@@ -315,7 +315,6 @@ Issue a SQL query to get started. Need help?
         database: String,
         schema: String,
         name: String,
-        conn_id: ConnectionId,
     ) -> Result<AppendWebhookResponse, AdapterError> {
         let (tx, rx) = oneshot::channel();
 
@@ -324,7 +323,6 @@ Issue a SQL query to get started. Need help?
             database,
             schema,
             name,
-            conn_id,
             tx,
         });
 

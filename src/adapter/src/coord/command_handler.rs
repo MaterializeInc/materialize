@@ -17,6 +17,7 @@ use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source};
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -121,10 +122,9 @@ impl Coordinator {
                     database,
                     schema,
                     name,
-                    conn_id,
                     tx,
                 } => {
-                    self.handle_get_webhook(database, schema, name, conn_id, tx);
+                    self.handle_get_webhook(database, schema, name, tx);
                 }
 
                 Command::GetSystemVars { conn_id, tx } => {
@@ -838,7 +838,6 @@ impl Coordinator {
         database: String,
         schema: String,
         name: String,
-        conn_id: ConnectionId,
         tx: oneshot::Sender<Result<AppendWebhookResponse, AdapterError>>,
     ) {
         /// Attempts to resolve a Webhook source from a provided `database.schema.name` path.
@@ -850,7 +849,6 @@ impl Coordinator {
             database: String,
             schema: String,
             name: String,
-            conn_id: ConnectionId,
         ) -> Result<AppendWebhookResponse, PartialItemName> {
             // Resolve our collection.
             let name = PartialItemName {
@@ -860,7 +858,7 @@ impl Coordinator {
             };
             let Ok(entry) = coord
                 .catalog()
-                .resolve_entry(None, &vec![], &name, &conn_id)
+                .resolve_entry(None, &vec![], &name, &SYSTEM_CONN_ID)
             else {
                 return Err(name);
             };
@@ -924,7 +922,7 @@ impl Coordinator {
             })
         }
 
-        let response = resolve(self, database, schema, name, conn_id).map_err(|name| {
+        let response = resolve(self, database, schema, name).map_err(|name| {
             AdapterError::UnknownWebhookSource {
                 database: name.database.expect("provided"),
                 schema: name.schema.expect("provided"),
