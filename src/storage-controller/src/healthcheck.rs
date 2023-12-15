@@ -106,6 +106,13 @@ where
         }
     }
 
+    pub fn extend_previous_statuses<I>(&mut self, previous_statuses: I)
+    where
+        I: IntoIterator<Item = (GlobalId, String)>,
+    {
+        self.previous_statuses.extend(previous_statuses)
+    }
+
     fn pack_status_updates(updates: Vec<RawStatusUpdate>) -> Vec<(Row, Diff)> {
         updates
             .into_iter()

@@ -933,16 +933,54 @@ where
                             self.introspection_tokens.insert(id, scraper_token);
                         }
                         IntrospectionType::SourceStatusHistory => {
-                            self.partially_truncate_status_history(
-                                IntrospectionType::SourceStatusHistory,
+                            let last_status_per_id = self
+                                .partially_truncate_status_history(
+                                    IntrospectionType::SourceStatusHistory,
+                                )
+                                .await;
+
+                            let status_col = healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC
+                                .get_by_name(&ColumnName::from("status"))
+                                .expect("schema has not changed")
+                                .0;
+
+                            self.collection_status_manager.extend_previous_statuses(
+                                last_status_per_id.into_iter().flatten().map(|(id, row)| {
+                                    (
+                                        id,
+                                        row.iter()
+                                            .nth(status_col)
+                                            .expect("schema has not changed")
+                                            .unwrap_str()
+                                            .into(),
+                                    )
+                                }),
                             )
-                            .await;
                         }
                         IntrospectionType::SinkStatusHistory => {
-                            self.partially_truncate_status_history(
-                                IntrospectionType::SinkStatusHistory,
+                            let last_status_per_id = self
+                                .partially_truncate_status_history(
+                                    IntrospectionType::SinkStatusHistory,
+                                )
+                                .await;
+
+                            let status_col = healthcheck::MZ_SINK_STATUS_HISTORY_DESC
+                                .get_by_name(&ColumnName::from("status"))
+                                .expect("schema has not changed")
+                                .0;
+
+                            self.collection_status_manager.extend_previous_statuses(
+                                last_status_per_id.into_iter().flatten().map(|(id, row)| {
+                                    (
+                                        id,
+                                        row.iter()
+                                            .nth(status_col)
+                                            .expect("schema has not changed")
+                                            .unwrap_str()
+                                            .into(),
+                                    )
+                                }),
                             )
-                            .await;
                         }
                         IntrospectionType::PrivatelinkConnectionStatusHistory => {
                             // Truncate the private link connection status history table and
@@ -2698,9 +2736,10 @@ where
         self.reconcile_managed_collection(id, updates).await;
     }
 
-    /// Effectively truncates the source status history shard except for the most recent updates
-    /// from each ID.
-    /// Returns a map with latest row per id
+    /// Effectively truncates the source status history shard except for the
+    /// most recent updates from each ID.
+    ///
+    /// Returns a map with latest unpacked row per id.
     async fn partially_truncate_status_history(
         &mut self,
         collection: IntrospectionType,
