@@ -431,7 +431,7 @@ def workflow_autospill(c: Composition) -> None:
                 "--orchestrator-process-scratch-directory=/mzdata/source_data",
             ],
             additional_system_parameter_defaults={
-                "upsert_source_disk_default": "true",
+                "disk_cluster_replicas_default": "false",
                 "upsert_rocksdb_auto_spill_to_disk": "true",
                 "upsert_rocksdb_auto_spill_threshold_bytes": "200",
                 "storage_dataflow_delay_sources_past_rehydration": "true",

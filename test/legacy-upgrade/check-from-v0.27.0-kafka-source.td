@@ -54,4 +54,4 @@ materialize_public_kafka_source  linked
     details->>'cluster_name' = 'materialize_public_kafka_source'
   ) AND user IS NOT NULL
 create  cluster          "{\"name\":\"materialize_public_kafka_source\"}"  ${expected-user}
-create  cluster-replica  "{\"cluster_name\":\"materialize_public_kafka_source\",\"disk\":false,\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"linked\"}"  ${expected-user}
+create  cluster-replica  "{\"cluster_name\":\"materialize_public_kafka_source\",\"disk\":true,\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"linked\"}"  ${expected-user}

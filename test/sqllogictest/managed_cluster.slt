@@ -411,8 +411,8 @@ COMPLETE 0
 statement ok
 CREATE CLUSTER foo REPLICAS (r1 (SIZE '1'), r2 (SIZE '1', DISK))
 
-statement error db error: ERROR: Cannot convert unmanaged cluster to managed, non-unique replica DISK options
-ALTER CLUSTER foo SET (MANAGED, SIZE '1')
+statement error db error: ERROR: Cluster replicas with DISK true do not match expected DISK false
+ALTER CLUSTER foo SET (MANAGED, DISK=False, SIZE '1')
 
 statement ok
 DROP CLUSTER foo
@@ -420,8 +420,8 @@ DROP CLUSTER foo
 statement ok
 CREATE CLUSTER foo REPLICAS (r1 (SIZE '1'))
 
-statement error db error: ERROR: Cluster replicas with DISK false do not match expected DISK true
-ALTER CLUSTER foo SET (MANAGED, SIZE '1', DISK)
+statement error db error: ERROR: Cluster replicas with DISK true do not match expected DISK false
+ALTER CLUSTER foo SET (MANAGED, SIZE '1', DISK=False)
 
 statement ok
 DROP CLUSTER foo
