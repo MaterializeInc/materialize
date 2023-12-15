@@ -429,7 +429,7 @@ SCENARIOS = [
             10000001
             """
         ),
-        materialized_memory="9.0Gb",
+        materialized_memory="9.5Gb",
         clusterd_memory="3.5Gb",
     ),
     KafkaScenario(
