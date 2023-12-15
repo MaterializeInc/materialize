@@ -9,7 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# lint — complains about misformatted files and other problems.
+# check-cargo.sh — check for cargo issues (e.g., ensure that all crates use the same rust version).
 
 set -euo pipefail
 
