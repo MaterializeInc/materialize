@@ -181,11 +181,6 @@ where
         CB: ContainerBuilder + for<'a> PushInto<(C1::Item<'a>, G::Timestamp, R)>,
         R: Data;
 
-    /// Wraps the stream with an operator that passes through all received inputs as long as the
-    /// provided token can be upgraded. Once the token cannot be upgraded anymore, all data flowing
-    /// into the operator is dropped.
-    fn with_token(&self, token: Weak<()>) -> StreamCore<G, C1>;
-
     /// Distributes the data of the stream to all workers in a round-robin fashion.
     fn distribute(&self) -> StreamCore<G, C1>
     where
@@ -275,11 +270,6 @@ where
         E: Data,
         IE: Fn(D1, R) -> (E, R) + 'static,
         R: num_traits::sign::Signed;
-
-    /// Wraps the collection with an operator that passes through all received inputs as long as
-    /// the provided token can be upgraded. Once the token cannot be upgraded anymore, all data
-    /// flowing into the operator is dropped.
-    fn with_token(&self, token: Weak<()>) -> Collection<G, D1, R>;
 
     /// Consolidates the collection if `must_consolidate` is `true` and leaves it
     /// untouched otherwise.
@@ -538,18 +528,6 @@ where
         })
     }
 
-    fn with_token(&self, token: Weak<()>) -> StreamCore<G, C1> {
-        self.unary(Pipeline, "WithToken", move |_cap, _info| {
-            move |input, output| {
-                input.for_each(|cap, data| {
-                    if token.upgrade().is_some() {
-                        output.session(&cap).give_container(data);
-                    }
-                });
-            }
-        })
-    }
-
     fn distribute(&self) -> StreamCore<G, C1>
     where
         C1: ContainerBytes + Send,
@@ -666,10 +644,6 @@ where
                 })
             });
         (oks.as_collection(), errs.as_collection())
-    }
-
-    fn with_token(&self, token: Weak<()>) -> Collection<G, D1, R> {
-        self.inner.with_token(token).as_collection()
     }
 
     fn consolidate_named_if<Ba>(self, must_consolidate: bool, name: &str) -> Self
