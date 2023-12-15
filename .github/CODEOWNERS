@@ -113,4 +113,5 @@
 /src/walkabout                      @benesch
 /src/workspace-hack                 @benesch
 /test
+/misc/python/materialize/cli/ci_closed_issues_detect.py @MaterializeInc/testing
 /misc/python/materialize/cloudtest  @MaterializeInc/cloud @MaterializeInc/testing
