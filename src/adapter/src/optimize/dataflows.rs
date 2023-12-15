@@ -46,7 +46,6 @@ use crate::coord::id_bundle::CollectionIdBundle;
 use crate::optimize::{view, Optimize, OptimizeMode, OptimizerConfig, OptimizerError};
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::util::viewable_variables;
-use crate::AdapterError;
 
 /// A reference-less snapshot of a compute instance. There is no guarantee `instance_id` continues
 /// to exist after this has been made.
@@ -161,7 +160,7 @@ impl<'a> DataflowBuilder<'a> {
         &mut self,
         id: &GlobalId,
         dataflow: &mut DataflowDesc,
-    ) -> Result<(), AdapterError> {
+    ) -> Result<(), OptimizerError> {
         maybe_grow(|| {
             // Avoid importing the item redundantly.
             if dataflow.is_imported(id) {
@@ -235,7 +234,7 @@ impl<'a> DataflowBuilder<'a> {
         view_id: &GlobalId,
         view: &OptimizedMirRelationExpr,
         dataflow: &mut DataflowDesc,
-    ) -> Result<(), AdapterError> {
+    ) -> Result<(), OptimizerError> {
         for get_id in view.depends_on() {
             self.import_into_dataflow(&get_id, dataflow)?;
         }
@@ -253,7 +252,7 @@ impl<'a> DataflowBuilder<'a> {
         name: String,
         id: GlobalId,
         sink_description: ComputeSinkDesc,
-    ) -> Result<(DataflowDesc, DataflowMetainfo), AdapterError> {
+    ) -> Result<(DataflowDesc, DataflowMetainfo), OptimizerError> {
         let mut dataflow = DataflowDesc::new(name);
         let dataflow_metainfo =
             self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
@@ -267,7 +266,7 @@ impl<'a> DataflowBuilder<'a> {
         dataflow: &mut DataflowDesc,
         id: GlobalId,
         sink_description: ComputeSinkDesc,
-    ) -> Result<DataflowMetainfo, AdapterError> {
+    ) -> Result<DataflowMetainfo, OptimizerError> {
         self.import_into_dataflow(&sink_description.from, dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
             prep_relation_expr(plan, ExprPrepStyle::Index)?;
@@ -420,7 +419,7 @@ impl<'a> CheckedRecursion for DataflowBuilder<'a> {
 pub fn prep_relation_expr(
     expr: &mut OptimizedMirRelationExpr,
     style: ExprPrepStyle,
-) -> Result<(), AdapterError> {
+) -> Result<(), OptimizerError> {
     match style {
         ExprPrepStyle::Index => {
             expr.0.try_visit_mut_post(&mut |e| {
@@ -429,7 +428,7 @@ pub fn prep_relation_expr(
                     let mfp =
                         MapFilterProject::new(input.arity()).filter(predicates.iter().cloned());
                     match mfp.into_plan() {
-                        Err(e) => coord_bail!("{:?}", e),
+                        Err(e) => Err(OptimizerError::Internal(e)),
                         Ok(mut mfp) => {
                             for s in mfp.iter_nontemporal_exprs() {
                                 prep_scalar_expr(s, style)?;
@@ -464,7 +463,7 @@ pub fn prep_relation_expr(
 pub fn prep_scalar_expr(
     expr: &mut MirScalarExpr,
     style: ExprPrepStyle,
-) -> Result<(), AdapterError> {
+) -> Result<(), OptimizerError> {
     match style {
         // Evaluate each unmaterializable function and replace the
         // invocation with the result.
@@ -490,8 +489,8 @@ pub fn prep_scalar_expr(
 
             if let Some(f) = last_observed_unmaterializable_func {
                 let err = match style {
-                    ExprPrepStyle::Index => AdapterError::UnmaterializableFunction(f),
-                    ExprPrepStyle::AsOfUpTo => AdapterError::UncallableFunction {
+                    ExprPrepStyle::Index => OptimizerError::UnmaterializableFunction(f),
+                    ExprPrepStyle::AsOfUpTo => OptimizerError::UncallableFunction {
                         func: f,
                         context: "AS OF or UP TO",
                     },
@@ -524,7 +523,7 @@ fn eval_unmaterializable_func(
     f: &UnmaterializableFunc,
     logical_time: EvalTime,
     session: &Session,
-) -> Result<MirScalarExpr, AdapterError> {
+) -> Result<MirScalarExpr, OptimizerError> {
     let pack_1d_array = |datums: Vec<Datum>| {
         let mut row = Row::default();
         row.packer()
@@ -616,7 +615,10 @@ fn eval_unmaterializable_func(
         UnmaterializableFunc::MzNow => match logical_time {
             EvalTime::Time(logical_time) => pack(Datum::MzTimestamp(logical_time)),
             EvalTime::Deferred => Ok(MirScalarExpr::CallUnmaterializable(f.clone())),
-            EvalTime::NotAvailable => coord_bail!("cannot call mz_now in this context"),
+            EvalTime::NotAvailable => Err(OptimizerError::UncallableFunction {
+                func: UnmaterializableFunc::MzNow,
+                context: "this",
+            }),
         },
         UnmaterializableFunc::MzRoleOidMemberships => {
             let role_memberships = role_oid_memberships(state);

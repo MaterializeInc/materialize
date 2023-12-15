@@ -61,7 +61,9 @@ pub mod view;
 
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
-use mz_expr::OptimizedMirRelationExpr;
+use mz_expr::{EvalError, OptimizedMirRelationExpr, UnmaterializableFunc};
+use mz_ore::stack::RecursionLimitError;
+use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::explain::ExplainConfig;
 use mz_sql::plan::PlanError;
 use mz_sql::session::vars::SystemVars;
@@ -187,9 +189,52 @@ pub enum OptimizerError {
     #[error("{0}")]
     PlanError(#[from] PlanError),
     #[error("{0}")]
+    RecursionLimitError(#[from] RecursionLimitError),
+    #[error("{0}")]
     TransformError(#[from] TransformError),
+    #[error("{0}")]
+    EvalError(#[from] EvalError),
+    #[error("cannot materialize call to {0}")]
+    UnmaterializableFunction(UnmaterializableFunc),
+    #[error("cannot call {func} in {context} ")]
+    UncallableFunction {
+        func: UnmaterializableFunc,
+        context: &'static str,
+    },
     #[error("internal optimizer error: {0}")]
     Internal(String),
+}
+
+impl OptimizerError {
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::UnmaterializableFunction(UnmaterializableFunc::CurrentTimestamp) => {
+                Some("See: https://materialize.com/docs/sql/functions/now_and_mz_now/".into())
+            }
+            _ => None,
+        }
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            Self::UnmaterializableFunction(UnmaterializableFunc::CurrentTimestamp) => {
+                Some("Try using `mz_now()` here instead.".into())
+            }
+            _ => None,
+        }
+    }
+}
+
+impl From<TimestampError> for OptimizerError {
+    fn from(value: TimestampError) -> Self {
+        OptimizerError::EvalError(EvalError::from(value))
+    }
+}
+
+impl From<anyhow::Error> for OptimizerError {
+    fn from(value: anyhow::Error) -> Self {
+        OptimizerError::Internal(value.to_string())
+    }
 }
 
 // TODO: create a dedicated AdapterError::OptimizerError variant.
