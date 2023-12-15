@@ -55,6 +55,7 @@ kube = { version = "0.87.1", default-features = false, features = ["client", "de
 kube-client = { version = "0.87.1", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
 kube-core = { version = "0.87.1", default-features = false, features = ["jsonpatch", "schema", "ws"] }
 libc = { version = "0.2.148", features = ["extra_traits", "use_std"] }
+libz-sys = { version = "1.1.8", features = ["static"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 lru = { version = "0.12.0" }
 memchr = { version = "2.5.0", features = ["use_std"] }
@@ -94,7 +95,7 @@ serde_json = { version = "1.0.99", features = ["alloc", "arbitrary_precision", "
 sha2 = { version = "0.10.6" }
 similar = { version = "2.2.1", features = ["inline", "unicode"] }
 smallvec = { version = "1.10.0", default-features = false, features = ["const_generics", "serde", "union", "write"] }
-socket2 = { version = "0.4.9", default-features = false, features = ["all"] }
+socket2 = { version = "0.5.3", default-features = false, features = ["all"] }
 subtle = { version = "2.4.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.39", features = ["extra-traits", "full", "visit-mut"] }
@@ -163,6 +164,7 @@ kube = { version = "0.87.1", default-features = false, features = ["client", "de
 kube-client = { version = "0.87.1", default-features = false, features = ["jsonpatch", "openssl-tls", "ws"] }
 kube-core = { version = "0.87.1", default-features = false, features = ["jsonpatch", "schema", "ws"] }
 libc = { version = "0.2.148", features = ["extra_traits", "use_std"] }
+libz-sys = { version = "1.1.8", features = ["static"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 lru = { version = "0.12.0" }
 memchr = { version = "2.5.0", features = ["use_std"] }
@@ -202,7 +204,7 @@ serde_json = { version = "1.0.99", features = ["alloc", "arbitrary_precision", "
 sha2 = { version = "0.10.6" }
 similar = { version = "2.2.1", features = ["inline", "unicode"] }
 smallvec = { version = "1.10.0", default-features = false, features = ["const_generics", "serde", "union", "write"] }
-socket2 = { version = "0.4.9", default-features = false, features = ["all"] }
+socket2 = { version = "0.5.3", default-features = false, features = ["all"] }
 subtle = { version = "2.4.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.39", features = ["extra-traits", "full", "visit-mut"] }
