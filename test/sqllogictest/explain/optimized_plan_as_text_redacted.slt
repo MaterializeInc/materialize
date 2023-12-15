@@ -938,4 +938,3 @@ Used Indexes:
   - materialize.public.t_a_idx_1 (*** full scan ***)
 
 EOF
-

@@ -384,7 +384,7 @@ steps:
   - group: AWS
     key: aws
     steps:
-      - id: aws
+      - id: aws-checks
         label: AWS
         timeout_in_minutes: 30
         agents:

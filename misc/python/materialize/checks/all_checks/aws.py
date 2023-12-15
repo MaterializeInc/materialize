@@ -12,10 +12,15 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
+from materialize.checks.executors import Executor
+from materialize.mz_version import MzVersion
 
 
 @externally_idempotent(False)
 class AwsConnection(Check):
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version >= MzVersion.parse_mz("v0.80.0-dev")
+
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
