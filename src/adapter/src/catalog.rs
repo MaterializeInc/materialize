@@ -19,6 +19,8 @@ use std::sync::Arc;
 use futures::Future;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
+use mz_ore::soft_assert_or_log;
+use smallvec::SmallVec;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::MutexGuard;
 use tracing::{info, trace};
@@ -154,11 +156,12 @@ impl Clone for Catalog {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct CatalogPlans {
     optimized_plan_by_id: BTreeMap<GlobalId, DataflowDescription<OptimizedMirRelationExpr>>,
     physical_plan_by_id: BTreeMap<GlobalId, DataflowDescription<mz_compute_types::plan::Plan>>,
-    dataflow_metainfos: BTreeMap<GlobalId, DataflowMetainfo<OptimizerNotice>>,
+    dataflow_metainfos: BTreeMap<GlobalId, DataflowMetainfo<Arc<OptimizerNotice>>>,
+    notices_by_dep_id: BTreeMap<GlobalId, SmallVec<[Arc<OptimizerNotice>; 4]>>,
 }
 
 impl Catalog {
@@ -205,8 +208,16 @@ impl Catalog {
     pub fn set_dataflow_metainfo(
         &mut self,
         id: GlobalId,
-        metainfo: DataflowMetainfo<OptimizerNotice>,
+        metainfo: DataflowMetainfo<Arc<OptimizerNotice>>,
     ) {
+        // Add entries to the `notices_by_dep_id` lookup map.
+        for notice in metainfo.optimizer_notices.iter() {
+            for dep_id in notice.dependencies.iter() {
+                let entry = self.plans.notices_by_dep_id.entry(*dep_id).or_default();
+                entry.push(Arc::clone(notice))
+            }
+        }
+        // Add the dataflow with the scoped entries.
         self.plans.dataflow_metainfos.insert(id, metainfo);
     }
 
@@ -215,19 +226,82 @@ impl Catalog {
     pub fn try_get_dataflow_metainfo(
         &self,
         id: &GlobalId,
-    ) -> Option<&DataflowMetainfo<OptimizerNotice>> {
+    ) -> Option<&DataflowMetainfo<Arc<OptimizerNotice>>> {
         self.plans.dataflow_metainfos.get(id)
     }
 
-    /// Drop all optimized and physical plans and `DataflowMetainfo`s for the item identified by
-    /// `id`.
+    /// Drop all optimized and physical plans and `DataflowMetainfo`s for the
+    /// item identified by `id`.
     ///
     /// Ignore requests for non-existing plans or `DataflowMetainfo`s.
+    ///
+    /// Return a set containing all dropped notices. Note that if for some
+    /// reason we end up with two identical notices being dropped by the same
+    /// call, the result will only contain only one instance of that notice.
     #[tracing::instrument(level = "trace", skip(self))]
-    pub fn drop_plans_and_metainfos(&mut self, id: GlobalId) {
-        self.plans.optimized_plan_by_id.remove(&id);
-        self.plans.physical_plan_by_id.remove(&id);
-        self.plans.dataflow_metainfos.remove(&id);
+    pub fn drop_plans_and_metainfos(
+        &mut self,
+        drop_ids: &BTreeSet<GlobalId>,
+    ) -> BTreeSet<Arc<OptimizerNotice>> {
+        // Collect dropped notices in this set.
+        let mut dropped_notices = BTreeSet::new();
+
+        // Remove plans and metainfo.optimizer_notices entries.
+        for id in drop_ids {
+            self.plans.optimized_plan_by_id.remove(id);
+            self.plans.physical_plan_by_id.remove(id);
+            if let Some(mut metainfo) = self.plans.dataflow_metainfos.remove(id) {
+                for n in metainfo.optimizer_notices.drain(..) {
+                    // Remove the corresponding notices_by_dep_id entries.
+                    for dep_id in n.dependencies.iter() {
+                        if let Some(notices) = self.plans.notices_by_dep_id.get_mut(dep_id) {
+                            notices.retain(|x| &n != x)
+                        }
+                    }
+                    dropped_notices.insert(n);
+                }
+            }
+        }
+
+        // Remove notices_by_dep_id entries.
+        for id in drop_ids {
+            if let Some(mut notices) = self.plans.notices_by_dep_id.remove(id) {
+                for n in notices.drain(..) {
+                    // Remove the corresponding metainfo.optimizer_notices entries.
+                    if let Some(item_id) = n.item_id.as_ref() {
+                        if let Some(metainfo) = self.plans.dataflow_metainfos.get_mut(item_id) {
+                            metainfo.optimizer_notices.retain(|x| &n != x)
+                        }
+                    }
+                    dropped_notices.insert(n);
+                }
+            }
+        }
+
+        // Collect dependency ids not in drop_ids with at least one dropped
+        // notice.
+        let mut todo_dep_ids = BTreeSet::new();
+        for notice in dropped_notices.iter() {
+            for dep_id in notice.dependencies.iter() {
+                if !drop_ids.contains(dep_id) {
+                    todo_dep_ids.insert(*dep_id);
+                }
+            }
+        }
+        // Remove notices in `dropped_notices` for all `notices_by_dep_id`
+        // entries in `todo_dep_ids`.
+        for id in todo_dep_ids {
+            if let Some(notices) = self.plans.notices_by_dep_id.get_mut(&id) {
+                notices.retain(|n| !dropped_notices.contains(n))
+            }
+        }
+
+        soft_assert_or_log!(
+            dropped_notices.iter().all(|n| Arc::strong_count(n) == 1),
+            "all dropped_notices entries have `Arc::strong_count(_) == 1`"
+        );
+
+        return dropped_notices;
     }
 }
 
@@ -1175,19 +1249,11 @@ impl Catalog {
         self.state = state;
         self.transient_revision += 1;
 
-        for id in drop_ids {
-            if let Some(df_meta) = self.try_get_dataflow_metainfo(&id) {
-                if self.state().system_config().enable_mz_notices() {
-                    // Generate retractions for the Builtin tables.
-                    self.pack_optimizer_notices(
-                        &mut builtin_table_updates,
-                        df_meta.optimizer_notices.iter(),
-                        -1,
-                    );
-                }
-            }
-            // Drop in-memory planning metadata.
-            self.drop_plans_and_metainfos(id);
+        // Drop in-memory planning metadata.
+        let dropped_notices = self.drop_plans_and_metainfos(&drop_ids);
+        if self.state().system_config().enable_mz_notices() {
+            // Generate retractions for the Builtin tables.
+            self.pack_optimizer_notices(&mut builtin_table_updates, dropped_notices.iter(), -1);
         }
 
         Ok(TransactionResult {

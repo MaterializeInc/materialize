@@ -924,11 +924,7 @@ impl Catalog {
 
             let mut catalog = Catalog {
                 state,
-                plans: CatalogPlans {
-                    optimized_plan_by_id: Default::default(),
-                    physical_plan_by_id: Default::default(),
-                    dataflow_metainfos: BTreeMap::new(),
-                },
+                plans: CatalogPlans::default(),
                 transient_revision: 1,
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
             };

@@ -73,13 +73,6 @@ pub static MZ_NOTICES: BuiltinView = BuiltinView {
     n.created_at
 FROM
     mz_internal.mz_optimizer_notices n
-WHERE
-    -- All dependencies are still present in the catalog
-    (
-        SELECT COUNT(*)
-        FROM unnest(n.dependency_ids) AS d(id)
-        WHERE id IN (SELECT id FROM mz_catalog.mz_objects)
-    ) = list_length(n.dependency_ids)
 ",
     sensitivity: DataSensitivity::Superuser,
 };

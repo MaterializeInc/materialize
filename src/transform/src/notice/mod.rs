@@ -36,13 +36,14 @@ pub use index_too_wide_for_literal_constraints::IndexTooWideForLiteralConstraint
 
 use std::collections::BTreeSet;
 use std::fmt::{self, Error, Formatter, Write};
+use std::sync::Arc;
 use std::{concat, stringify};
 
 use enum_kinds::EnumKind;
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::GlobalId;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 /// An long lived in-memory representation of a [`RawOptimizerNotice`] that is
 /// meant to be kept as part of the hydrated catalog state.
 pub struct OptimizerNotice {
@@ -82,7 +83,7 @@ impl OptimizerNotice {
     ///
     /// This method should be consistent with [`RawOptimizerNotice::explain`].
     pub fn explain(
-        notices: &Vec<Self>,
+        notices: &Vec<Arc<Self>>,
         humanizer: &dyn ExprHumanizer,
         redacted: bool,
     ) -> Result<Vec<String>, Error> {
@@ -113,7 +114,7 @@ impl OptimizerNotice {
     }
 }
 
-#[derive(EnumKind, Clone, Debug)]
+#[derive(EnumKind, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[enum_kind(ActionKind)]
 /// An action attached to an [`OptimizerNotice`]
 pub enum Action {
@@ -274,7 +275,7 @@ macro_rules! raw_optimizer_notices {
         paste::paste!{
             /// Notices that the optimizer wants to show to users.
             #[derive(EnumKind, Clone, Debug, Eq, PartialEq)]
-            #[enum_kind(OptimizerNoticeKind)]
+            #[enum_kind(OptimizerNoticeKind, derive(PartialOrd, Ord))]
             pub enum RawOptimizerNotice {
                 $(
                     #[doc = concat!("See [`", stringify!($ty), "`].")]

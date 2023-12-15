@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::sync::Arc;
+
 use mz_catalog::builtin::notice::MZ_OPTIMIZER_NOTICES;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_transform::dataflow::DataflowMetainfo;
@@ -26,7 +28,7 @@ impl Catalog {
         &self,
         df_meta: DataflowMetainfo<RawOptimizerNotice>,
         item_id: Option<GlobalId>,
-    ) -> DataflowMetainfo<OptimizerNotice> {
+    ) -> DataflowMetainfo<Arc<OptimizerNotice>> {
         self.state.render_notices(df_meta, item_id)
     }
 
@@ -37,7 +39,7 @@ impl Catalog {
     pub fn pack_optimizer_notices<'a>(
         &self,
         updates: &mut Vec<BuiltinTableUpdate>,
-        notices: impl Iterator<Item = &'a OptimizerNotice>,
+        notices: impl Iterator<Item = &'a Arc<OptimizerNotice>>,
         diff: Diff,
     ) {
         self.state.pack_optimizer_notices(updates, notices, diff);
@@ -51,7 +53,7 @@ impl CatalogState {
         &self,
         df_meta: DataflowMetainfo<RawOptimizerNotice>,
         item_id: Option<GlobalId>,
-    ) -> DataflowMetainfo<OptimizerNotice> {
+    ) -> DataflowMetainfo<Arc<OptimizerNotice>> {
         let optimizer_notices = df_meta
             .optimizer_notices
             .into_iter()
@@ -87,6 +89,7 @@ impl CatalogState {
                 },
                 created_at: (self.config().now)(),
             })
+            .map(From::from) // Wrap each notice into an `Arc`.
             .collect();
 
         DataflowMetainfo {
@@ -100,7 +103,7 @@ impl CatalogState {
     pub fn pack_optimizer_notices<'a>(
         &self,
         updates: &mut Vec<BuiltinTableUpdate>,
-        notices: impl Iterator<Item = &'a OptimizerNotice>,
+        notices: impl Iterator<Item = &'a Arc<OptimizerNotice>>,
         diff: Diff,
     ) {
         let mut row = Row::default();
