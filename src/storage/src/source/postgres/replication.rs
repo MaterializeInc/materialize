@@ -78,29 +78,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use bytes::Bytes;
 use differential_dataflow::{AsCollection, Collection};
 use futures::{future, future::select, FutureExt, Stream as AsyncStream, StreamExt, TryStreamExt};
-<<<<<<< HEAD
-=======
-use once_cell::sync::Lazy;
-use postgres_protocol::message::backend::{
-    LogicalReplicationMessage, ReplicationMessage, TupleData,
-};
-use serde::{Deserialize, Serialize};
-use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
-use tokio_postgres::error::SqlState;
-use tokio_postgres::replication::LogicalReplicationStream;
-use tokio_postgres::types::PgLsn;
-use tokio_postgres::Client;
-use tracing::{error, trace};
-
->>>>>>> 3e4316fb92 (sql: move missing publication error around)
 use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
 use mz_ore::result::ResultExt;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_postgres_util::PostgresError;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;

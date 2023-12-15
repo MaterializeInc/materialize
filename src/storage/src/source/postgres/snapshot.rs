@@ -139,26 +139,10 @@ use std::str::FromStr;
 
 use differential_dataflow::{AsCollection, Collection};
 use futures::TryStreamExt;
-<<<<<<< HEAD
-use mz_expr::MirScalarExpr;
-use mz_ore::result::ResultExt;
-use mz_postgres_util::desc::PostgresTableDesc;
-use mz_postgres_util::schemas::PublicationInfoError;
-use mz_postgres_util::simple_query_opt;
-=======
-use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::{Broadcast, CapabilitySet, ConnectLoop, Feedback};
-use timely::dataflow::{Scope, Stream};
-use timely::progress::{Antichain, Timestamp};
-use tokio_postgres::types::PgLsn;
-use tokio_postgres::Client;
-use tracing::trace;
-
 use mz_expr::MirScalarExpr;
 use mz_ore::result::ResultExt;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::{simple_query_opt, PostgresError};
->>>>>>> 3e4316fb92 (sql: move missing publication error around)
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
@@ -361,11 +345,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     definite_error_handle.give(&definite_error_cap_set[0], ReplicationError::Definite(Rc::new(err))).await;
                     return Ok(());
                 }
-<<<<<<< HEAD
-                Err(PublicationInfoError::PostgresError(e)) => Err(e)?,
-=======
                 Err(e) => Err(TransientError::from(e))?,
->>>>>>> 3e4316fb92 (sql: move missing publication error around)
                 Ok(i) => i,
             };
 
