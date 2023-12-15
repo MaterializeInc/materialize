@@ -760,7 +760,7 @@ mod tests {
         sub.step_past(10).await;
         assert!(
             sub.progress() > 10,
-            "operator should advance to 10 when shard is registered"
+            "operator should advance past 10 when shard is registered"
         );
 
         // Forget the shard at 20.
@@ -768,7 +768,7 @@ mod tests {
         sub.step_past(20).await;
         assert!(
             sub.progress() > 20,
-            "operator should advance to 20 when shard is forgotten"
+            "operator should advance past 20 when shard is forgotten"
         );
     }
 }
