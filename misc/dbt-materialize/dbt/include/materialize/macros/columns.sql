@@ -17,7 +17,7 @@
     {%- if select_sql_header is not none -%}
     {{ select_sql_header }}
     {%- endif -%}
-    #__dbt_sbq_parse_header__#
+    --#dbt_sbq_parse_header#--
     select * from (
         {{ select_sql }}
     ) as __dbt_sbq
