@@ -22,5 +22,8 @@ def test_full_testdrive(mz: MaterializeApplication) -> None:
     parser.add_argument("--file-pattern", default="*.td", type=str)
     args = parser.parse_args()
 
+    file_pattern = args.file_pattern
+    print(f"File pattern: {file_pattern}")
+
     mz.testdrive.copy("test/testdrive", "/workdir")
-    mz.testdrive.run(f"testdrive/{args.file_pattern}")
+    mz.testdrive.run(f"testdrive/{file_pattern}")
