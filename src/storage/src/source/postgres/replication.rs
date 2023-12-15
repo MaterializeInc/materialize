@@ -78,6 +78,23 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use bytes::Bytes;
 use differential_dataflow::{AsCollection, Collection};
 use futures::{future, future::select, FutureExt, Stream as AsyncStream, StreamExt, TryStreamExt};
+<<<<<<< HEAD
+=======
+use once_cell::sync::Lazy;
+use postgres_protocol::message::backend::{
+    LogicalReplicationMessage, ReplicationMessage, TupleData,
+};
+use serde::{Deserialize, Serialize};
+use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::{Scope, Stream};
+use timely::progress::Antichain;
+use tokio_postgres::error::SqlState;
+use tokio_postgres::replication::LogicalReplicationStream;
+use tokio_postgres::types::PgLsn;
+use tokio_postgres::Client;
+use tracing::{error, trace};
+
+>>>>>>> 3e4316fb92 (sql: move missing publication error around)
 use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
@@ -555,8 +572,7 @@ fn extract_transaction<'a>(
                             publication,
                             Some(rel_id),
                         )
-                        .await
-                        .map_err(PostgresError::from)?;
+                        .await?;
                         let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
 
                         if let Err(err) = verify_schema(rel_id, expected_desc, &upstream_info) {
