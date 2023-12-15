@@ -35,23 +35,24 @@ def mz_image_tag_exists(image_tag: str) -> bool:
 
     command = [
         "docker",
-        "pull",
+        "manifest",
+        "inspect",
         image_name,
     ]
 
-    print(f"Trying to pull image: {image_name}")
+    print(f"Checking existence of image manifest: {image_name}")
 
     try:
         subprocess.check_output(command, stderr=subprocess.STDOUT, text=True)
         EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = True
         return True
     except subprocess.CalledProcessError as e:
-        print(f"Failed to pull image: {image_name}")
+        print(f"Failed to fetch image manifest: {image_name}")
 
-        if "not found: manifest unknown: manifest unknown" in e.output:
+        if "no such manifest:" in e.output:
             EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = False
         else:
-            print(f"Error when pulling image was: {e.output}")
+            print(f"Error when checking image manifest was: {e.output}")
             # do not cache the result of unknown error messages
 
         return False
