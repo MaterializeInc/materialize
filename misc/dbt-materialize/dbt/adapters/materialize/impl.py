@@ -214,17 +214,11 @@ class MaterializeAdapter(PostgresAdapter):
         # statement, we split the input based on the string appended to the
         # header in materialize__get_empty_subquery_sql.
 
-        sql_part1, _, sql_part2 = sql.partition("#__dbt_sbq_parse_header__#")
+        sql_header, sql_view_def = sql.split("#__dbt_sbq_parse_header__#")
 
-        if sql_part2:
-            self.connections.execute(sql_part1)
-            self.connections.execute(
-                f"create temporary view {view_name} as {sql_part2}"
-            )
-        else:
-            self.connections.execute(
-                f"create temporary view {view_name} as {sql_part1}"
-            )
+        if sql_header:
+            self.connections.execute(sql_header)
+        self.connections.execute(f"create temporary view {view_name} as {sql_view_def}")
 
         # Fetch the names and types of each column in the view. Schema ID 0
         # indicates the temporary schema.

@@ -257,6 +257,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         )
 
         env = [
+            V1EnvVar(name="MZ_SOFT_ASSERTIONS", value="1"),
             V1EnvVar(name="MZ_POD_NAME", value_from=value_from),
             V1EnvVar(name="AWS_REGION", value="minio"),
             V1EnvVar(name="AWS_ACCESS_KEY_ID", value="minio"),

@@ -1499,24 +1499,51 @@ async fn test_utilization_hold() {
         .execute("ALTER SYSTEM SET metrics_retention='1s'", &[])
         .await
         .unwrap();
-    for q in QUERIES_TO_TRY {
-        let explain_q = &format!("EXPLAIN TIMESTAMP AS JSON FOR {q}");
-        for cluster in CLUSTERS_TO_TRY {
-            client
-                .execute(&format!("SET cluster={cluster}"), &[])
-                .await
-                .unwrap();
-            let row = client.query_one(explain_q, &[]).await.unwrap();
-            let explain: String = row.get(0);
-            let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
-            let since = explain
-                .determination
-                .since
-                .into_option()
-                .expect("The since must be finite");
-            // Check that since is not more than 2 seconds in the past
-            assert!(Timestamp::new(now_millis)
-                .less_equal(&since.step_forward_by(&Timestamp::new(2000))));
+
+    // This is a bit clunky, but setting the metrics_retention will not
+    // propagate to all tables instantly. We have to retry the queries below,
+    // but only up to a point.
+    let deadline = Instant::now() + Duration::from_secs(60);
+
+    'retry: loop {
+        let now = Instant::now();
+        if now > deadline {
+            panic!("sinces did not advance as expected in time");
+        }
+
+        let mut all_sinces_correct = true;
+
+        for q in QUERIES_TO_TRY {
+            let explain_q = &format!("EXPLAIN TIMESTAMP AS JSON FOR {q}");
+            for cluster in CLUSTERS_TO_TRY {
+                client
+                    .execute(&format!("SET cluster={cluster}"), &[])
+                    .await
+                    .unwrap();
+                let row = client.query_one(explain_q, &[]).await.unwrap();
+                let explain: String = row.get(0);
+                let explain: TimestampExplanation<Timestamp> =
+                    serde_json::from_str(&explain).unwrap();
+                let since = explain
+                    .determination
+                    .since
+                    .into_option()
+                    .expect("The since must be finite");
+                // Check that since is not more than 2 seconds in the past
+                let since_is_correct = Timestamp::new(now_millis)
+                    .less_equal(&since.step_forward_by(&Timestamp::new(2000)));
+
+                if !since_is_correct {
+                    info!(now_millis = ?now_millis, since = ?since, query = ?q,
+                          "since has not yet advanced to expected time, retrying");
+                }
+
+                all_sinces_correct &= since_is_correct;
+            }
+        }
+
+        if all_sinces_correct {
+            break 'retry;
         }
     }
 }

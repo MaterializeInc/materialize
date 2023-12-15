@@ -15,8 +15,9 @@
 
 {% macro materialize__get_empty_subquery_sql(select_sql, select_sql_header=none) %}
     {%- if select_sql_header is not none -%}
-    {{ select_sql_header + '#__dbt_sbq_parse_header__#' }}
+    {{ select_sql_header }}
     {%- endif -%}
+    #__dbt_sbq_parse_header__#
     select * from (
         {{ select_sql }}
     ) as __dbt_sbq

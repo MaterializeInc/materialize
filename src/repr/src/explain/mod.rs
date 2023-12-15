@@ -619,7 +619,7 @@ pub struct Indices<'a>(pub &'a [usize]);
 ///
 /// Interval expressions are used only for runs of three or more elements.
 #[derive(Debug)]
-pub struct CompactScalarSeq<'a, T: ScalarOps>(pub &'a [T]); // TODO(cloud#8196) remove this
+pub struct CompactScalarSeq<'a, T: ScalarOps>(pub &'a [T]); // TODO(#23922) remove this
 
 /// Pretty-prints a list of scalar expressions that may have runs of column
 /// indices as a comma-separated list interleaved with interval expressions.
