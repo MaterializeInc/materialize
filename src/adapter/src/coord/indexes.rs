@@ -15,8 +15,8 @@ use mz_expr::{CollectionPlan, MirScalarExpr};
 use mz_repr::GlobalId;
 use mz_transform::IndexOracle;
 
-use crate::coord::dataflows::DataflowBuilder;
 use crate::coord::{CollectionIdBundle, Coordinator};
+use crate::optimize::dataflows::DataflowBuilder;
 
 impl Coordinator {
     /// Creates a new index oracle for the specified compute instance.

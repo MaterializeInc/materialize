@@ -52,6 +52,7 @@
 //! For details, see the `20230714_optimizer_interface.md` design doc in this
 //! repository.
 
+pub mod dataflows;
 pub mod index;
 pub mod materialized_view;
 pub mod peek;
@@ -68,7 +69,6 @@ use mz_sql::plan::PlanError;
 use mz_sql::session::vars::SystemVars;
 use mz_transform::TransformError;
 
-use crate::coord::dataflows::DataflowBuilder;
 use crate::AdapterError;
 
 /// A trait that represents an optimization stage.
@@ -204,7 +204,8 @@ impl From<OptimizerError> for AdapterError {
     }
 }
 
-impl<'a> DataflowBuilder<'a> {
+// TODO(dataflows): move to dataflows mod
+impl<'a> dataflows::DataflowBuilder<'a> {
     // Re-optimize the imported view plans using the current optimizer
     // configuration if we are running in `EXPLAIN`.
     pub fn reoptimize_imported_views(

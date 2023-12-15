@@ -27,11 +27,11 @@ use timely::progress::Antichain;
 use tracing::{span, warn, Level};
 
 use crate::catalog::Catalog;
-use crate::coord::dataflows::{
+use crate::coord::peek::{create_fast_path_plan, FastPathPlan};
+use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, EvalTime,
     ExprPrepStyle,
 };
-use crate::coord::peek::{create_fast_path_plan, FastPathPlan};
 use crate::optimize::{
     LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode, OptimizerConfig,
     OptimizerError,

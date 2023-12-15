@@ -18,11 +18,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use maplit::{btreemap, btreeset};
-use mz_adapter_types::compaction::CompactionWindow;
+
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, MaterializedView, Source, View};
 use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDesc, DataflowDescription, IndexDesc};
-use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::ComputeSinkDesc;
 use mz_compute_types::ComputeInstanceId;
 use mz_controller::Controller;
@@ -43,9 +42,8 @@ use tracing::warn;
 
 use crate::catalog::CatalogState;
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::Coordinator;
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
-use crate::util::{viewable_variables, ResultExt};
+use crate::util::viewable_variables;
 use crate::AdapterError;
 
 /// A reference-less snapshot of a compute instance. There is no guarantee `instance_id` continues
@@ -126,43 +124,6 @@ pub enum EvalTime {
     Deferred,
     /// Errors on mz_now() calls.
     NotAvailable,
-}
-
-impl Coordinator {
-    /// Creates a new dataflow builder from the catalog and indexes in `self`.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder {
-        let compute = self
-            .instance_snapshot(instance)
-            .expect("compute instance does not exist");
-        DataflowBuilder::new(self.catalog().state(), compute)
-    }
-
-    /// Return a reference-less snapshot to the indicated compute instance.
-    pub fn instance_snapshot(
-        &self,
-        id: ComputeInstanceId,
-    ) -> Result<ComputeInstanceSnapshot, InstanceMissing> {
-        ComputeInstanceSnapshot::new(&self.controller, id)
-    }
-
-    /// Call into the compute controller to install a finalized dataflow, and
-    /// initialize the read policies for its exported objects.
-    pub(crate) async fn ship_dataflow(
-        &mut self,
-        dataflow: DataflowDescription<Plan>,
-        instance: ComputeInstanceId,
-    ) {
-        let export_ids = dataflow.export_ids().collect();
-
-        self.controller
-            .active_compute()
-            .create_dataflow(instance, dataflow)
-            .unwrap_or_terminate("dataflow creation cannot fail");
-
-        self.initialize_compute_read_policies(export_ids, instance, CompactionWindow::Default)
-            .await;
-    }
 }
 
 /// Returns an ID bundle with the given dataflows imports.
@@ -717,22 +678,5 @@ fn role_oid_memberships_inner<'a>(
             .get_mut(&role.oid)
             .expect("inserted above")
             .extend(parent_membership);
-    }
-}
-
-#[cfg(test)]
-impl Coordinator {
-    #[allow(dead_code)]
-    async fn verify_ship_dataflow_no_error(&mut self, dataflow: DataflowDescription<Plan>) {
-        // `ship_dataflow_new` is not allowed to have a `Result` return because this function is
-        // called after `catalog_transact`, after which no errors are allowed. This test exists to
-        // prevent us from incorrectly teaching those functions how to return errors (which has
-        // happened twice and is the motivation for this test).
-
-        // An arbitrary compute instance ID to satisfy the function calls below. Note that
-        // this only works because this function will never run.
-        let compute_instance = ComputeInstanceId::User(1);
-
-        let _: () = self.ship_dataflow(dataflow, compute_instance).await;
     }
 }

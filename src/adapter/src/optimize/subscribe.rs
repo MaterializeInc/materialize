@@ -29,7 +29,7 @@ use timely::progress::Antichain;
 use tracing::{span, Level};
 
 use crate::catalog::Catalog;
-use crate::coord::dataflows::{
+use crate::optimize::dataflows::{
     dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
 };
 use crate::optimize::{
