@@ -232,7 +232,6 @@ Minutes
 Mode
 Month
 Months
-Ms
 Mutually
 Name
 Names

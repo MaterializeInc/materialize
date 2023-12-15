@@ -2353,23 +2353,6 @@ impl<'a> Parser<'a> {
             TOPIC => {
                 if self.parse_keyword(METADATA) {
                     self.expect_keywords(&[REFRESH, INTERVAL])?;
-
-                    // ** HACK ALERT **
-                    //
-                    // In v0.80 of Materialize we removed support for the unstable Kafka connection
-                    // syntax:
-                    //
-                    // `TOPIC METADATA REFRESH INTERVAL MS 500`
-                    //
-                    // now users have to write:
-                    //
-                    // `TOPIC METADATA REFRESH INTERVAL = '500ms'`
-                    //
-                    // To bridge the gap though for any environments that might have this old
-                    // syntax (there shouldn't be any), we support parsing the `MS` keyword and
-                    // then in a Catalog migration, switch from `Number` to `Interval`.
-                    let _ = self.parse_keyword(MS);
-
                     KafkaSourceConfigOptionName::TopicMetadataRefreshInterval
                 } else {
                     KafkaSourceConfigOptionName::Topic
