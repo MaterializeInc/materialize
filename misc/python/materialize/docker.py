@@ -36,7 +36,11 @@ def mz_image_tag_exists(image_tag: str) -> bool:
         return True
     except subprocess.CalledProcessError as e:
         print(f"Failed to pull image: {image}")
-        return "not found: manifest unknown: manifest unknown" not in e.output
+
+        if "not found: manifest unknown: manifest unknown" not in e.output:
+            print(f"Error when pulling image was: {e.output}")
+
+        return False
 
 
 def commit_to_image_tag(commit_hash: str) -> str:
