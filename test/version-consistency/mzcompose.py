@@ -16,7 +16,10 @@ from materialize.version_consistency.version_consistency_test import (
     EVALUATION_STRATEGY_NAMES,
     VersionConsistencyTest,
 )
-from materialize.version_list import resolve_ancestor_image_tag
+from materialize.version_list import (
+    ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS,
+    resolve_ancestor_image_tag,
+)
 
 SERVICES = [
     Cockroach(setup_materialize=True),
@@ -53,7 +56,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     name_mz_this, name_mz_other = "mz_this", "mz_other"
     port_mz_internal, port_mz_this, port_mz_other = 6875, 6875, 16875
-    tag_mz_other = resolve_ancestor_image_tag()
+    tag_mz_other = resolve_ancestor_image_tag(
+        ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS
+    )
 
     print(f"Using {tag_mz_other} as tag for other mz version")
 
