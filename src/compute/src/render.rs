@@ -158,7 +158,7 @@ use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors,
 };
-use crate::render::context::{ArrangementFlavor, Context, ShutdownToken};
+use crate::render::context::{ArrangementFlavor, Context, ShutdownProbe, shutdown_token};
 use crate::render::continual_task::ContinualTaskCtx;
 use crate::row_spine::{RowRowBatcher, RowRowBuilder};
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher};
@@ -388,9 +388,9 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Build declared objects.
                 for object in dataflow.objects_to_build {
-                    let object_token = Rc::new(());
-                    context.shutdown_token = ShutdownToken::new(Rc::downgrade(&object_token));
-                    tokens.insert(object.id, object_token);
+                    let (probe, token) = shutdown_token(region);
+                    context.shutdown_probe = probe;
+                    tokens.insert(object.id, Rc::new(token));
 
                     let bundle = context.scope.clone().region_named(
                         &format!("BuildingObject({:?})", object.id),
@@ -475,9 +475,9 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Build declared objects.
                 for object in dataflow.objects_to_build {
-                    let object_token = Rc::new(());
-                    context.shutdown_token = ShutdownToken::new(Rc::downgrade(&object_token));
-                    tokens.insert(object.id, object_token);
+                    let (probe, token) = shutdown_token(region);
+                    context.shutdown_probe = probe;
+                    tokens.insert(object.id, Rc::new(token));
 
                     let bundle = context.scope.clone().region_named(
                         &format!("BuildingObject({:?})", object.id),
@@ -851,9 +851,6 @@ where
 
                 // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
                 let mut oks = oks.consolidate_named::<KeyBatcher<_, _, _>>("LetRecConsolidation");
-                if let Some(token) = &self.shutdown_token.get_inner() {
-                    oks = oks.with_token(Weak::clone(token));
-                }
 
                 if let Some(limit) = limit {
                     // We swallow the results of the `max_iter`th iteration, because
@@ -875,15 +872,13 @@ where
                     }
                 }
 
-                oks_v.set(&oks);
-
                 // Set err variable to the distinct elements of `err`.
                 // Distinctness is important, as we otherwise might add the same error each iteration,
                 // say if the limit of `oks` has an error. This would result in non-terminating rather
                 // than a clean report of the error. The trade-off is that we lose information about
                 // multiplicities of errors, but .. this seems to be the better call.
                 let err: KeyCollection<_, _, _> = err.into();
-                let mut errs = err
+                let errs = err
                     .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
                         "Arrange recursive err",
                     )
@@ -892,9 +887,13 @@ where
                         move |_k, _s, t| t.push(((), Diff::ONE)),
                     )
                     .as_collection(|k, _| k.clone());
-                if let Some(token) = &self.shutdown_token.get_inner() {
-                    errs = errs.with_token(Weak::clone(token));
-                }
+
+                // Actively interrupt the data flow during shutdown, to ensure we won't keep
+                // iterating for long (or even forever).
+                let oks = render_shutdown_fuse(oks, self.shutdown_probe.clone());
+                let errs = render_shutdown_fuse(errs, self.shutdown_probe.clone());
+
+                oks_v.set(&oks);
                 err_v.set(&errs);
             }
             // Now extract each of the rec bindings into the outer scope.
@@ -1526,6 +1525,30 @@ where
             }
         })
     }
+}
+
+/// Wraps the provided `Collection` with an operator that passes through all received inputs as
+/// long as the provided `ShutdownProbe` does not announce dataflow shutdown. Once the token
+/// dataflow is shutting down, all data flowing into the operator is dropped.
+fn render_shutdown_fuse<G, D>(
+    collection: Collection<G, D, Diff>,
+    probe: ShutdownProbe,
+) -> Collection<G, D, Diff>
+where
+    G: Scope,
+    D: Data,
+{
+    let stream = collection.inner;
+    let stream = stream.unary(Pipeline, "ShutdownFuse", move |_cap, _info| {
+        move |input, output| {
+            input.for_each(|cap, data| {
+                if !probe.in_shutdown() {
+                    output.session(&cap).give_container(data);
+                }
+            });
+        }
+    });
+    stream.as_collection()
 }
 
 /// Suppress progress messages for times before the given `as_of`.
