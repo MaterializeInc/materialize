@@ -59,6 +59,9 @@ r2 1 true
 
 > DROP CLUSTER c;
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM RESET disk_cluster_replicas_default
+
 # Can disable whether disk-backed replicas are allowed
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_disk_cluster_replicas = false

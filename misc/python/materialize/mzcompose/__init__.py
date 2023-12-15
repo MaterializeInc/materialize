@@ -53,6 +53,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     # Old name of `enable_unsafe_functions`.
     "enable_dangerous_functions": "true",
     "enable_disk_cluster_replicas": "true",
+    "disk_cluster_replicas_default": "true",
     "statement_logging_max_sample_rate": "0.01",
     "statement_logging_default_sample_rate": "0.01",
     # Following values are set based on Load Test environment to
