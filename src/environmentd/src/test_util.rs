@@ -91,6 +91,7 @@ use futures::future::{BoxFuture, LocalBoxFuture};
 use futures::Future;
 use headers::{Header, HeaderMapExt};
 use hyper::http::header::HeaderMap;
+use mz_adapter::TimestampExplanation;
 use mz_controller::ControllerConfig;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
@@ -128,7 +129,6 @@ use postgres::tls::{MakeTlsConnect, TlsConnect};
 use postgres::types::{FromSql, Type};
 use postgres::{NoTls, Socket};
 use postgres_openssl::MakeTlsConnector;
-use regex::Regex;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
@@ -1010,15 +1010,33 @@ pub async fn insert_with_deterministic_timestamps(
     }
 }
 
-pub async fn get_explain_timestamp(table: &str, client: &Client) -> EpochMillis {
-    let row = client
-        .query_one(&format!("EXPLAIN TIMESTAMP FOR SELECT * FROM {table}"), &[])
+pub async fn get_explain_timestamp(from_suffix: &str, client: &Client) -> EpochMillis {
+    try_get_explain_timestamp(from_suffix, client)
         .await
-        .unwrap();
+        .unwrap()
+}
+
+pub async fn try_get_explain_timestamp(
+    from_suffix: &str,
+    client: &Client,
+) -> Result<EpochMillis, anyhow::Error> {
+    let det = get_explain_timestamp_determination(from_suffix, client).await?;
+    let ts = det.determination.timestamp_context.timestamp_or_default();
+    Ok(ts.into())
+}
+
+pub async fn get_explain_timestamp_determination(
+    from_suffix: &str,
+    client: &Client,
+) -> Result<TimestampExplanation<mz_repr::Timestamp>, anyhow::Error> {
+    let row = client
+        .query_one(
+            &format!("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM {from_suffix}"),
+            &[],
+        )
+        .await?;
     let explain: String = row.get(0);
-    let timestamp_re = Regex::new(r"^\s+query timestamp:\s*(\d+)").unwrap();
-    let timestamp_caps = timestamp_re.captures(&explain).unwrap();
-    timestamp_caps.get(1).unwrap().as_str().parse().unwrap()
+    Ok(serde_json::from_str(&explain).unwrap())
 }
 
 /// Helper function to create a Postgres source.

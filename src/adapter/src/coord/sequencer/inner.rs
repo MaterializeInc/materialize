@@ -3309,10 +3309,11 @@ impl Coordinator {
         let root_dispatch = tracing::dispatcher::get_default(|d| d.clone());
 
         let pipeline_result = match stmt {
-            plan::ExplaineeStatement::Query {
+            plan::ExplaineeStatement::Select {
                 raw_plan,
                 row_set_finishing,
                 desc,
+                when,
                 broken,
             } => {
                 // Please see the doc comment on `explain_query_optimizer_pipeline` for more
@@ -3324,6 +3325,7 @@ impl Coordinator {
                     ctx.session_mut(),
                     row_set_finishing,
                     desc,
+                    when,
                     &config,
                     root_dispatch,
                 )
@@ -3481,6 +3483,7 @@ impl Coordinator {
         session: &mut Session,
         finishing: RowSetFinishing,
         desc: RelationDesc,
+        when: QueryWhen,
         explain_config: &mz_repr::explain::ExplainConfig,
         root_dispatch: tracing::Dispatch,
     ) -> Result<
@@ -3566,7 +3569,6 @@ impl Coordinator {
                 .sufficient_collections(&source_ids);
 
             // Acquire a timestamp (necessary for loading statistics).
-            let when = QueryWhen::Immediately;
             let oracle_read_ts = self
                 .oracle_read_ts(session, &timeline_context, &when)
                 .with_subscriber(root_dispatch.clone())
@@ -3891,6 +3893,7 @@ impl Coordinator {
         plan: plan::ExplainTimestampPlan,
         target_cluster: TargetCluster,
     ) {
+        let when = plan.when.clone();
         let (format, source_ids, optimized_plan, cluster_id, id_bundle) = return_if_err!(
             self.sequence_explain_timestamp_begin_inner(ctx.session(), plan, target_cluster),
             ctx
@@ -3913,6 +3916,7 @@ impl Coordinator {
                         format,
                         cluster_id,
                         optimized_plan,
+                        when,
                         id_bundle,
                     },
                 );
@@ -3937,6 +3941,7 @@ impl Coordinator {
                         cluster_id,
                         optimized_plan,
                         id_bundle,
+                        when,
                         None,
                     )
                     .await;
@@ -3960,7 +3965,11 @@ impl Coordinator {
         ),
         AdapterError,
     > {
-        let plan::ExplainTimestampPlan { format, raw_plan } = plan;
+        let plan::ExplainTimestampPlan {
+            format,
+            raw_plan,
+            when: _,
+        } = plan;
 
         // Collect optimizer parameters.
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
@@ -4055,6 +4064,7 @@ impl Coordinator {
         cluster_id: ClusterId,
         source: OptimizedMirRelationExpr,
         id_bundle: CollectionIdBundle,
+        when: QueryWhen,
         real_time_recency_ts: Option<Timestamp>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let is_json = match format {
@@ -4067,7 +4077,6 @@ impl Coordinator {
         let source_ids = source.depends_on();
         let timeline_context = self.validate_timeline_context(source_ids.clone())?;
 
-        let when = QueryWhen::Immediately;
         let oracle_read_ts = self.oracle_read_ts(session, &timeline_context, &when).await;
 
         let determination = self

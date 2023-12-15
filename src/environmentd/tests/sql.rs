@@ -93,7 +93,8 @@ use http::StatusCode;
 use itertools::Itertools;
 use mz_adapter::{TimestampContext, TimestampExplanation};
 use mz_environmentd::test_util::{
-    self, MzTimestamp, PostgresErrorExt, TestServerWithRuntime, KAFKA_ADDRS,
+    self, try_get_explain_timestamp, MzTimestamp, PostgresErrorExt, TestServerWithRuntime,
+    KAFKA_ADDRS,
 };
 use mz_ore::assert_contains;
 use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
@@ -3551,5 +3552,39 @@ fn test_peek_on_dropped_indexed_view() {
                 Ok(())
             }
         })
+        .unwrap();
+}
+
+/// Test AS OF in EXPLAIN. This output will only differ from the non-ASOF versions with RETAIN
+/// HISTORY, where the object and its indexes have differing compaction policies.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_explain_as_of() {
+    // TODO: This would be better in testdrive, but we'd need to support negative intervals in AS
+    // OF first.
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
+
+    // Retry until we are able to explain plan and timestamp for a few seconds ago.
+    // mz_cluster_replica_statuses is a retained metrics table which is why a historical AS OF
+    // works.
+    Retry::default()
+        .clamp_backoff(Duration::from_secs(1))
+        .retry_async(|_| async {
+            let now: String = client
+                .query_one("SELECT mz_now()::text", &[])
+                .await
+                .unwrap()
+                .get(0);
+            let now: u64 = now.parse().unwrap();
+            let ts = now - 3000;
+            let query = format!("mz_internal.mz_cluster_replica_statuses AS OF {ts}");
+            let query_ts = try_get_explain_timestamp(&query, &client).await?;
+            assert_eq!(ts, query_ts);
+            client
+                .query_one(&format!("EXPLAIN PLAN FOR SELECT * FROM {query}"), &[])
+                .await?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
         .unwrap();
 }

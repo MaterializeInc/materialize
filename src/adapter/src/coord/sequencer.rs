@@ -24,7 +24,7 @@ use mz_sql::catalog::{CatalogCluster, CatalogError};
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
     self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlans,
-    FetchPlan, MutationKind, Params, Plan, PlanKind, RaisePlan,
+    FetchPlan, MutationKind, Params, Plan, PlanKind, QueryWhen, RaisePlan,
 };
 use mz_sql::rbac;
 use mz_sql_parser::ast::{Raw, Statement};
@@ -692,6 +692,7 @@ impl Coordinator {
         cluster_id: ClusterId,
         optimized_plan: OptimizedMirRelationExpr,
         id_bundle: CollectionIdBundle,
+        when: QueryWhen,
         real_time_recency_ts: Option<Timestamp>,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.sequence_explain_timestamp_finish_inner(
@@ -700,6 +701,7 @@ impl Coordinator {
             cluster_id,
             optimized_plan,
             id_bundle,
+            when,
             real_time_recency_ts,
         )
         .await

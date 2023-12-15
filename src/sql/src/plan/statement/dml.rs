@@ -235,16 +235,7 @@ pub fn describe_explain_plan(
 
     Ok(
         StatementDesc::new(Some(relation_desc)).with_params(match explainee {
-            Explainee::Query(q, _) => {
-                describe_select(
-                    scx,
-                    SelectStatement {
-                        query: *q,
-                        as_of: None,
-                    },
-                )?
-                .param_types
-            }
+            Explainee::Select(select, _) => describe_select(scx, *select)?.param_types,
             _ => vec![],
         }),
     )
@@ -252,13 +243,13 @@ pub fn describe_explain_plan(
 
 pub fn describe_explain_timestamp(
     scx: &StatementContext,
-    ExplainTimestampStatement { query, .. }: ExplainTimestampStatement<Aug>,
+    ExplainTimestampStatement { select, .. }: ExplainTimestampStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     let mut relation_desc = RelationDesc::empty();
     relation_desc = relation_desc.with_column("Timestamp", ScalarType::String.nullable(false));
 
     Ok(StatementDesc::new(Some(relation_desc))
-        .with_params(describe_select(scx, SelectStatement { query, as_of: None })?.param_types))
+        .with_params(describe_select(scx, select)?.param_types))
 }
 
 pub fn describe_explain_schema(
@@ -329,22 +320,24 @@ pub fn plan_explain_plan(
             }
             crate::plan::Explainee::Index(item.id())
         }
-        Explainee::Query(query, broken) => {
+        Explainee::Select(select, broken) => {
             let query::PlannedRootQuery {
                 expr: mut raw_plan,
                 desc,
                 finishing: row_set_finishing,
                 scope: _,
-            } = query::plan_root_query(scx, *query, QueryLifetime::OneShot)?;
+            } = query::plan_root_query(scx, select.query, QueryLifetime::OneShot)?;
+            let when = query::plan_as_of(scx, select.as_of)?;
             raw_plan.bind_parameters(params)?;
 
             if broken {
                 scx.require_feature_flag(&vars::ENABLE_EXPLAIN_BROKEN)?;
             }
 
-            crate::plan::Explainee::Statement(ExplaineeStatement::Query {
+            crate::plan::Explainee::Statement(ExplaineeStatement::Select {
                 raw_plan,
                 row_set_finishing,
+                when,
                 desc,
                 broken,
             })
@@ -474,7 +467,7 @@ pub fn plan_explain_schema(
 
 pub fn plan_explain_timestamp(
     scx: &StatementContext,
-    ExplainTimestampStatement { format, query }: ExplainTimestampStatement<Aug>,
+    ExplainTimestampStatement { format, select }: ExplainTimestampStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
     let format = match format {
@@ -489,15 +482,17 @@ pub fn plan_explain_timestamp(
             desc: _,
             finishing: _,
             scope: _,
-        } = query::plan_root_query(scx, query, QueryLifetime::OneShot)?;
+        } = query::plan_root_query(scx, select.query, QueryLifetime::OneShot)?;
         raw_plan.bind_parameters(params)?;
 
         raw_plan
     };
+    let when = query::plan_as_of(scx, select.as_of)?;
 
     Ok(Plan::ExplainTimestamp(ExplainTimestampPlan {
         format,
         raw_plan,
+        when,
     }))
 }
 

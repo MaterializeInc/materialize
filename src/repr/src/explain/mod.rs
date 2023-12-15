@@ -310,7 +310,7 @@ pub enum Explainee {
     Dataflow(GlobalId),
     /// The object to be explained is a one-off query and may or may not be
     /// served using a dataflow.
-    Query,
+    Select,
 }
 
 /// A trait that provides a unified interface for objects that
