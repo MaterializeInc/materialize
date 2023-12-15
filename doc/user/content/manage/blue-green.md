@@ -1,11 +1,11 @@
 ---
-title: "Blue/Green Deployments"
+title: "Blue/Green deployments"
 description: "How to perform Blue/Green Deployments in Materialize."
 menu:
   main:
     parent: manage
-    name: "Blue/Green Deployments"
-    weight: 11
+    name: "Blue/Green deployments"
+    weight: 13
 ---
 
 Materialize offers some helpful tools to manage Blue/Green deployments. We
