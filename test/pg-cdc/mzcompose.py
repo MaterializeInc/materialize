@@ -21,6 +21,18 @@ SERVICES = [
     Postgres(extra_command=["-c", "max_slot_wal_keep_size=10"]),
 ]
 
+# Test that ceased statuses persist across restart
+def workflow_ceased_status(c: Composition, parser: WorkflowArgumentParser) -> None:
+    with c.override(Testdrive(no_reset=True)):
+        c.up("materialized", "postgres")
+        c.run("testdrive", "ceased/before-mz-restart.td")
+
+        # Restart mz
+        c.kill("materialized")
+        c.up("materialized")
+
+        c.run("testdrive", "ceased/after-mz-restart.td")
+
 
 def workflow_replication_slots(c: Composition, parser: WorkflowArgumentParser) -> None:
     with c.override(Postgres(extra_command=["-c", "max_replication_slots=2"])):
