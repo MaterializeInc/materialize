@@ -50,7 +50,9 @@ use mz_server_core::{ConnectionHandler, Server};
 use mz_sql::session::user::{
     User, HTTP_DEFAULT_USER, SUPPORT_USER, SUPPORT_USER_NAME, SYSTEM_USER, SYSTEM_USER_NAME,
 };
-use mz_sql::session::vars::{ConnectionCounter, DropConnection, VarInput};
+use mz_sql::session::vars::{
+    ConnectionCounter, DropConnection, Value, Var, VarInput, WELCOME_MESSAGE,
+};
 use openssl::ssl::{Ssl, SslContext};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -622,7 +624,8 @@ where
             |session| {
                 session
                     .vars_mut()
-                    .set_default("welcome_message", Box::new(false))
+                    .set_default(WELCOME_MESSAGE.name(), VarInput::Flat(&false.format()))
+                    .expect("known to exist")
             },
             options,
         )

@@ -659,3 +659,28 @@ simple conn=mz_system,user=mz_system
 ALTER ROLE parker SET metrics_retention TO 10;
 ----
 db error: ERROR: unrecognized configuration parameter "metrics_retention"
+
+# Role defaults should override a change to the system default.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster TO new_system_default
+----
+COMPLETE 0
+
+simple conn=joe_1,user=joe
+SHOW cluster;
+----
+will_work
+COMPLETE 1
+
+# Reset the role default, so new sessions should get the system default.
+simple conn=joe_1,user=joe
+ALTER ROLE joe RESET cluster;
+----
+COMPLETE 0
+
+simple conn=joe_2,user=joe
+SHOW cluster;
+----
+new_system_default
+COMPLETE 1
