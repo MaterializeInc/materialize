@@ -59,6 +59,7 @@ _item&lowbar;name_ | The name of the source, table or materialized view you want
 Field                | Value  | Description
 ---------------------|--------|------------
 `TOPIC`              | `text` | The prefix used to generate the Kafka topic name to create and write to.
+`COMPRESSION TYPE`   | `text` | Default: `none`. The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.
 
 ### CSR `CONNECTION` options
 
