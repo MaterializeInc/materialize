@@ -528,11 +528,19 @@ impl JoinImplementation {
                                 "using differential join plan to determine delta join hydration path");
                         } else {
                             tracing::info!(
-                                delta_join_path = delta_orders[differential_join_start].iter().map(|(input, _equiv, _jic)| format!("%{input}")).join(" » "),
-                                differential_join_path =
-                                  format!("{differential_join_start} » {}",
-                                          differential_join_order.iter().map(|(input, _equiv, _jic)| format!("%{input}")).join(" » ")),
-                                "differential join plan differs from corresponding delta join path");
+                                delta_join_path = delta_orders[differential_join_start]
+                                    .iter()
+                                    .map(|(input, _equiv, _jic)| format!("%{input}"))
+                                    .join(" » "),
+                                differential_join_path = format!(
+                                    "{differential_join_start} » {}",
+                                    differential_join_order
+                                        .iter()
+                                        .map(|(input, _equiv, _jic)| format!("%{input}"))
+                                        .join(" » ")
+                                ),
+                                "differential join plan differs from corresponding delta join path"
+                            );
                         }
                     }
                     _ => panic!("delta_queries::plan returned non-delta plan"),
