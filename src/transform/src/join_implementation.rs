@@ -18,7 +18,6 @@
 
 use std::collections::BTreeMap;
 
-use itertools::Itertools;
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::JoinImplementation::{Differential, IndexedFilter, Unimplemented};
 use mz_expr::{
@@ -424,20 +423,16 @@ impl JoinImplementation {
             let old_implementation = implementation.clone();
 
             let num_inputs = inputs.len();
-            let (
-                differential_query_plan,
-                differential_join_start,
-                differential_join_order,
-                differential_new_arrangements,
-            ) = differential::plan(
-                relation,
-                &input_mapper,
-                &available_arrangements,
-                &unique_keys,
-                &cardinalities,
-                &filters,
-            )
-            .expect("Failed to produce a join plan");
+            let (differential_query_plan, differential_join_start, differential_new_arrangements) =
+                differential::plan(
+                    relation,
+                    &input_mapper,
+                    &available_arrangements,
+                    &unique_keys,
+                    &cardinalities,
+                    &filters,
+                )
+                .expect("Failed to produce a join plan");
 
             if num_inputs <= 2 {
                 // if inputs.len() == 0 then something is very wrong.
@@ -494,59 +489,6 @@ impl JoinImplementation {
             //
             // TODO(mgree): with this refactoring, we should compute `orders` once---both joins
             //              call `optimize_orders` and we can save some work.
-
-            let reorder_delta_plan = |delta_query_plan: &mut MirRelationExpr| {
-                match delta_query_plan {
-                    MirRelationExpr::Join {
-                        implementation: mz_expr::JoinImplementation::DeltaQuery(delta_orders),
-                        ..
-                    } => {
-                        // The differential query starts with the input `differential_join_start`---call that input `k`.
-                        //
-                        // Find the delta order that starts with the same input the differential join does.
-                        let selected_delta_order = &delta_orders[differential_join_start];
-
-                        // If the path that starts with input `k` matches the plan for differential join...
-                        if selected_delta_order
-                            .iter()
-                            .skip(1)
-                            .zip_eq(differential_join_order.iter())
-                            .all(
-                                |(
-                                    (delta_input, delta_equiv, _delta_jic),
-                                    (diff_input, diff_equiv, _diff_jic),
-                                )| {
-                                    delta_input == diff_input && delta_equiv == diff_equiv
-                                },
-                            )
-                        {
-                            // ... then put the differential join plan first.
-                            delta_orders.swap(0, differential_join_start);
-                            tracing::info!(
-                                original_hydration_path = delta_orders[0][0].0,
-                                new_hydration_path = differential_join_start,
-                                "using differential join plan to determine delta join hydration path");
-                        } else {
-                            tracing::info!(
-                                delta_join_path = delta_orders[differential_join_start]
-                                    .iter()
-                                    .map(|(input, _equiv, _jic)| format!("%{input}"))
-                                    .join(" » "),
-                                differential_join_path = format!(
-                                    "{differential_join_start} » {}",
-                                    differential_join_order
-                                        .iter()
-                                        .map(|(input, _equiv, _jic)| format!("%{input}"))
-                                        .join(" » ")
-                                ),
-                                "differential join plan differs from corresponding delta join path"
-                            );
-                        }
-                    }
-                    _ => panic!("delta_queries::plan returned non-delta plan"),
-                };
-            };
-
             match delta_queries::plan(
                 relation,
                 &input_mapper,
@@ -554,19 +496,19 @@ impl JoinImplementation {
                 &unique_keys,
                 &cardinalities,
                 &filters,
+                Some(differential_join_start), // pick the first path, used for hydration
             ) {
                 // If delta plan's inputs need no new arrangements, pick the delta plan.
-                Ok((mut delta_query_plan, 0)) => {
+                Ok((delta_query_plan, 0)) => {
                     soft_assert!(
                         matches!(old_implementation, Unimplemented | Differential(..)),
                         "delta query plans should not be planned twice"
                     );
 
-                    reorder_delta_plan(&mut delta_query_plan);
                     *relation = delta_query_plan;
                 }
                 // If the delta plan needs new arrangements, compare with the differential plan.
-                Ok((mut delta_query_plan, delta_new_arrangements)) => {
+                Ok((delta_query_plan, delta_new_arrangements)) => {
                     tracing::debug!(
                         delta_new_arrangements = delta_new_arrangements,
                         differential_new_arrangements = differential_new_arrangements,
@@ -576,7 +518,6 @@ impl JoinImplementation {
                     if eager_delta_joins && delta_new_arrangements <= differential_new_arrangements
                     {
                         // If we're eagerly planning delta joins, pick the delta plan if it's more economical.
-                        reorder_delta_plan(&mut delta_query_plan);
                         *relation = delta_query_plan;
                     } else if let Unimplemented = old_implementation {
                         // If we haven't planned the join yet, use the differential plan.
@@ -667,6 +608,7 @@ mod delta_queries {
         unique_keys: &[Vec<Vec<usize>>],
         cardinalities: &[Option<usize>],
         filters: &[FilterCharacteristics],
+        first_path: Option<usize>,
     ) -> Result<(MirRelationExpr, usize), TransformError> {
         let mut new_join = join.clone();
 
@@ -721,6 +663,11 @@ mod delta_queries {
                 .iter_mut()
                 .for_each(|order| super::permute_order(order, &lifted_projections));
 
+            // Pick the first path, if given. (The first path is used for hydration.)
+            if let Some(first_path) = first_path {
+                orders.swap(0, first_path);
+            }
+
             *implementation = JoinImplementation::DeltaQuery(orders);
 
             super::install_lifted_mfp(&mut new_join, lifted_mfp)?;
@@ -743,8 +690,8 @@ mod differential {
     use crate::TransformError;
 
     /// Creates a linear differential plan, and any predicates that need to be lifted.
-    /// It also returns the starting input, the
-    /// join ordering used, and the number of new arrangements necessary for this plan.
+    /// It also returns the starting input and the number of new arrangements necessary
+    /// for this plan.
     pub fn plan(
         join: &MirRelationExpr,
         input_mapper: &JoinInputMapper,
@@ -752,15 +699,7 @@ mod differential {
         unique_keys: &[Vec<Vec<usize>>],
         cardinalities: &[Option<usize>],
         filters: &[FilterCharacteristics],
-    ) -> Result<
-        (
-            MirRelationExpr,
-            usize,
-            Vec<(usize, Vec<MirScalarExpr>, Option<JoinInputCharacteristics>)>,
-            usize,
-        ),
-        TransformError,
-    > {
+    ) -> Result<(MirRelationExpr, usize, usize), TransformError> {
         let mut new_join = join.clone();
 
         if let MirRelationExpr::Join {
@@ -879,7 +818,6 @@ mod differential {
             order.remove(0);
 
             // Install the implementation.
-            let join_order = order.clone();
             *implementation = JoinImplementation::Differential(
                 (start, Some(start_key), start_characteristics),
                 order,
@@ -888,7 +826,7 @@ mod differential {
             super::install_lifted_mfp(&mut new_join, lifted_mfp)?;
 
             // Hooray done!
-            Ok((new_join, start, join_order, new_arrangements))
+            Ok((new_join, start, new_arrangements))
         } else {
             Err(TransformError::Internal(String::from(
                 "differential::plan call on non-join expression.",
