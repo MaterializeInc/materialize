@@ -93,7 +93,7 @@ pub(crate) async fn migrate(
             if catalog_version <= Version::new(0, 79, u64::MAX) {
                 ast_rewrite_create_sink_into_kafka_options_0_80_0(stmt)?;
             }
-            ast_rewrite_rewrite_type_schemas_0_80_0(stmt);
+            ast_rewrite_rewrite_type_schemas_0_81_0(stmt);
 
             Ok(())
         })
@@ -282,7 +282,7 @@ fn ast_rewrite_create_sink_into_kafka_options_0_80_0(
 }
 
 /// Rewrite all non-`pg_catalog` system types to have the correct schema.
-fn ast_rewrite_rewrite_type_schemas_0_80_0(stmt: &mut Statement<Raw>) {
+fn ast_rewrite_rewrite_type_schemas_0_81_0(stmt: &mut Statement<Raw>) {
     use mz_sql::ast::visit_mut::VisitMut;
 
     static NON_PG_CATALOG_TYPES: Lazy<BTreeMap<&'static str, &'static BuiltinType<NameReference>>> =

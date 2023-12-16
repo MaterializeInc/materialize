@@ -49,7 +49,7 @@ mod validate;
 
 use crate::session::vars;
 pub(crate) use ddl::PgConfigOptionExtracted;
-use mz_pgrepr::oid::FIRST_MATERIALIZE_OID;
+use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_USER_OID};
 use mz_repr::role_id::RoleId;
 
 /// Describes the output of a SQL statement.
@@ -765,7 +765,9 @@ impl<'a> StatementContext<'a> {
         // representation on `pgrepr::Type` promises to
         // produce an unqualified type name that does
         // not require quoting.
-        let mut ty = if ty.oid() < FIRST_MATERIALIZE_OID {
+        let mut ty = if ty.oid() >= FIRST_USER_OID {
+            return Err(PlanError::)
+        } else if ty.oid() < FIRST_MATERIALIZE_OID {
             format!("pg_catalog.{}", ty)
         } else {
             // This relies on all non-PG types existing in `mz_catalog`, which is annoying.
