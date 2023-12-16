@@ -1000,7 +1000,7 @@ impl<T: Timestamp + TotalOrder> DataTimes<T> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) enum Unapplied<'a> {
     Register,
     Batch(&'a Vec<u8>),
@@ -1012,24 +1012,19 @@ struct UnappliedIterInput<'a, T>
 where
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
 {
-    unapplieds: Vec<(&'a ShardId, Unapplied<'a>, &'a T)>,
-    idx: usize,
+    unapplieds: VecDeque<(&'a ShardId, Unapplied<'a>, &'a T)>,
 }
 
 impl<'a, T> UnappliedIterInput<'a, T>
 where
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
 {
-    fn new(unapplieds: Vec<(&'a ShardId, Unapplied<'a>, &'a T)>) -> UnappliedIterInput<'a, T> {
-        UnappliedIterInput { unapplieds, idx: 0 }
-    }
-
-    fn get(&self) -> Option<&(&ShardId, Unapplied, &T)> {
-        self.unapplieds.get(self.idx)
+    fn new(unapplieds: VecDeque<(&'a ShardId, Unapplied<'a>, &'a T)>) -> UnappliedIterInput<'a, T> {
+        UnappliedIterInput { unapplieds }
     }
 
     fn ts(&self) -> Option<&T> {
-        self.get().map(|(_, _, ts)| *ts)
+        self.unapplieds.front().map(|(_, _, ts)| *ts)
     }
 }
 
@@ -1128,12 +1123,11 @@ impl<'a, T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> Iterator
         //
         // To further optimize this, we could use something like a min-heap here, but with only 3
         // inputs, this is probably fine.
-        let min_input = [&mut self.registers, &mut self.batches, &mut self.forgets]
+        [&mut self.registers, &mut self.batches, &mut self.forgets]
             .into_iter()
-            .min()?;
-        let res = min_input.unapplieds.get(min_input.idx).cloned();
-        min_input.idx += 1;
-        res
+            .min()?
+            .unapplieds
+            .pop_front()
     }
 }
 
