@@ -53,9 +53,7 @@ pub trait Attribute {
     fn handle_env_tasks(&mut self) {}
 
     /// The attribute ids of all other attributes that this attribute depends on.
-    fn add_dependencies(builder: &mut DerivedAttributesBuilder)
-    where
-        Self: Sized;
+    fn add_dependencies(builder: &mut DerivedAttributesBuilder);
 
     /// Attributes for each subexpression, visited in post-order.
     fn get_results(&self) -> &Vec<Self::Value>;

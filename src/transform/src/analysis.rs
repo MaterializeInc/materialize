@@ -9,6 +9,8 @@
 
 //! Traits and types for reusable expression analysis
 
+pub mod equivalences;
+
 use mz_expr::MirRelationExpr;
 
 pub use common::{Derived, DerivedBuilder, DerivedView};
