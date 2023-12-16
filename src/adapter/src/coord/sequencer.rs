@@ -29,6 +29,7 @@ use mz_sql::plan::{
 use mz_sql::rbac;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_types::connections::inline::IntoInlineConnection;
+use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::{event, Instrument, Level, Span};
 
@@ -603,7 +604,7 @@ impl Coordinator {
     pub(crate) async fn sequence_execute_single_statement_transaction(
         &mut self,
         ctx: ExecuteContext,
-        stmt: Statement<Raw>,
+        stmt: Arc<Statement<Raw>>,
         params: Params,
     ) {
         // Put the session into single statement implicit so anything can execute.
