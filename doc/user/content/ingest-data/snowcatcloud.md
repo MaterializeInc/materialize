@@ -27,7 +27,7 @@ To create a Materialize cluster, follow the steps outlined in Materialize create
 or create a managed cluster using the following SQL statement:
 
 ```sql
-CREATE CLUSTER snowcatcloud_cluster SIZE = '3xsmall';
+CREATE CLUSTER snowcatcloud_cluster (SIZE = '3xsmall');
 ```
 
 ## Step 2. Create a Shared Secret

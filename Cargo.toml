@@ -35,6 +35,7 @@ members = [
     "src/lowertest",
     "src/lowertest-derive",
     "src/metabase",
+    "src/mysql-util",
     "src/mz",
     "src/lsp-server",
     "src/metrics",

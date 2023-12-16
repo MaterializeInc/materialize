@@ -22,6 +22,8 @@
 //! More information about builtin system tables and types can be found in
 //! <https://materialize.com/docs/sql/system-catalog/>.
 
+pub mod notice;
+
 use std::hash::Hash;
 use std::string::ToString;
 use std::sync::Mutex;
@@ -2066,6 +2068,8 @@ pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("connection_id", ScalarType::String.nullable(true))
         .with_column("size", ScalarType::String.nullable(true))
         .with_column("envelope_type", ScalarType::String.nullable(true))
+        .with_column("key_format", ScalarType::String.nullable(true))
+        .with_column("value_format", ScalarType::String.nullable(true))
         .with_column("cluster_id", ScalarType::String.nullable(true))
         .with_column("owner_id", ScalarType::String.nullable(false))
         .with_column(
@@ -2089,6 +2093,7 @@ pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("connection_id", ScalarType::String.nullable(true))
         .with_column("size", ScalarType::String.nullable(true))
         .with_column("envelope_type", ScalarType::String.nullable(true))
+        .with_column("format", ScalarType::String.nullable(false))
         .with_column("cluster_id", ScalarType::String.nullable(false))
         .with_column("owner_id", ScalarType::String.nullable(false))
         .with_column("create_sql", ScalarType::String.nullable(false))
@@ -2642,6 +2647,27 @@ pub static MZ_AWS_PRIVATELINK_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| Bui
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("principal", ScalarType::String.nullable(false)),
+    is_retained_metrics_object: false,
+    sensitivity: DataSensitivity::Public,
+});
+
+pub static MZ_AWS_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_aws_connections",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("endpoint", ScalarType::String.nullable(true))
+        .with_column("region", ScalarType::String.nullable(true))
+        .with_column("access_key_id", ScalarType::String.nullable(true))
+        .with_column("access_key_id_secret_id", ScalarType::String.nullable(true))
+        .with_column("assume_role_arn", ScalarType::String.nullable(true))
+        .with_column(
+            "assume_role_session_name",
+            ScalarType::String.nullable(true),
+        )
+        .with_column("principal", ScalarType::String.nullable(true))
+        .with_column("external_id", ScalarType::String.nullable(true))
+        .with_column("example_trust_policy", ScalarType::Jsonb.nullable(true)),
     is_retained_metrics_object: false,
     sensitivity: DataSensitivity::Public,
 });
@@ -6185,6 +6211,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_STORAGE_USAGE_BY_SHARD),
         Builtin::Table(&MZ_EGRESS_IPS),
         Builtin::Table(&MZ_AWS_PRIVATELINK_CONNECTIONS),
+        Builtin::Table(&MZ_AWS_CONNECTIONS),
         Builtin::Table(&MZ_SUBSCRIPTIONS),
         Builtin::Table(&MZ_SESSIONS),
         Builtin::Table(&MZ_DEFAULT_PRIVILEGES),
@@ -6377,6 +6404,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND),
         Builtin::Index(&MZ_FRONTIERS_IND),
     ]);
+
+    builtins.extend(notice::builtins());
 
     builtins
 });

@@ -106,7 +106,7 @@ machines had computed.
 ## Example
 
 ```sql
-CREATE CLUSTER REPLICA c1.r1 SIZE = 'medium';
+CREATE CLUSTER REPLICA c1.r1 (SIZE = 'medium');
 ```
 
 ## Privileges

@@ -3531,6 +3531,9 @@ version = "0.0.0"
 dependencies = [
  "mz-ore",
  "mz-repr",
+ "mz-storage-types",
+ "serde",
+ "timely",
  "workspace-hack",
 ]
 
@@ -3621,7 +3624,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "0.80.0-dev"
+version = "0.81.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3732,7 +3735,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "0.80.0-dev"
+version = "0.81.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -3882,7 +3885,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.80.0-dev"
+version = "0.81.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -4079,7 +4082,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.80.0-dev"
+version = "0.81.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -4507,6 +4510,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-mysql-util"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "mysql_async",
+ "mz-ore",
+ "mz-ssh-util",
+ "thiserror",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-npm"
 version = "0.0.0"
 dependencies = [
@@ -4713,7 +4729,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.80.0-dev"
+version = "0.81.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -5245,7 +5261,7 @@ dependencies = [
  "futures",
  "mz-ore",
  "openssl",
- "socket2 0.4.9",
+ "socket2 0.5.3",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -5510,7 +5526,7 @@ dependencies = [
 
 [[package]]
 name = "mz-stash-debug"
-version = "0.80.0-dev"
+version = "0.81.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -5641,7 +5657,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "derivative",
  "differential-dataflow",
  "http",
  "itertools",
@@ -5745,10 +5760,12 @@ dependencies = [
  "anyhow",
  "aws-config",
  "aws-credential-types",
+ "aws-sdk-sts",
  "aws-types",
  "base64 0.13.1",
  "bytes",
  "dec",
+ "derivative",
  "differential-dataflow",
  "fail",
  "itertools",
@@ -5783,6 +5800,7 @@ dependencies = [
  "rdkafka",
  "scopeguard",
  "serde",
+ "serde_json",
  "thiserror",
  "timely",
  "tokio",
@@ -5822,7 +5840,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "0.80.0-dev"
+version = "0.81.0-dev"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -5952,6 +5970,7 @@ dependencies = [
  "anyhow",
  "datadriven",
  "differential-dataflow",
+ "enum-kinds",
  "itertools",
  "mz-compute-types",
  "mz-expr",
@@ -9669,6 +9688,7 @@ dependencies = [
  "kube-client",
  "kube-core",
  "libc",
+ "libz-sys",
  "log",
  "lru",
  "memchr",
@@ -9712,7 +9732,7 @@ dependencies = [
  "sha2",
  "similar",
  "smallvec",
- "socket2 0.4.9",
+ "socket2 0.5.3",
  "subtle",
  "syn 1.0.107",
  "syn 2.0.39",

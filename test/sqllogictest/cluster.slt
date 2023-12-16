@@ -417,7 +417,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE '1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-154
+155
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -425,7 +425,7 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-125
+126
 
 simple conn=mz_system,user=mz_system
 ALTER CLUSTER default OWNER TO materialize
@@ -692,7 +692,7 @@ db error: ERROR: cannot modify managed cluster t1
 query TTTT
 SELECT event_type, object_type, details, user FROM mz_audit_events ORDER BY occurred_at DESC LIMIT 1;
 ----
-create  cluster-replica  {"billed_as":"free","cluster_id":"u2","cluster_name":"t1","disk":false,"internal":true,"logical_size":"2","replica_id":"u4","replica_name":"free"}  mz_system
+create  cluster-replica  {"billed_as":"free","cluster_id":"u2","cluster_name":"t1","disk":true,"internal":true,"logical_size":"2","replica_id":"u4","replica_name":"free"}  mz_system
 
 simple conn=mz_system,user=mz_system
 CREATE CLUSTER REPLICA t1.r123 SIZE '2', BILLED AS 'free'
@@ -753,7 +753,7 @@ COMPLETE 0
 query TTTT
 SELECT event_type, object_type, details, user FROM mz_audit_events ORDER BY occurred_at DESC LIMIT 1;
 ----
-create  cluster-replica  {"billed_as":"free","cluster_id":"u4","cluster_name":"t1","disk":false,"internal":true,"logical_size":"2","replica_id":"u8","replica_name":"free"}  mz_system
+create  cluster-replica  {"billed_as":"free","cluster_id":"u4","cluster_name":"t1","disk":true,"internal":true,"logical_size":"2","replica_id":"u8","replica_name":"free"}  mz_system
 
 simple conn=mz_system,user=mz_system
 CREATE CLUSTER REPLICA t1.internal_r2 SIZE '2', INTERNAL

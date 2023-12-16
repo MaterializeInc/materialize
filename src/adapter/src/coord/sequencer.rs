@@ -24,11 +24,12 @@ use mz_sql::catalog::{CatalogCluster, CatalogError};
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
     self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlans,
-    FetchPlan, MutationKind, Params, Plan, PlanKind, RaisePlan,
+    FetchPlan, MutationKind, Params, Plan, PlanKind, QueryWhen, RaisePlan,
 };
 use mz_sql::rbac;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_types::connections::inline::IntoInlineConnection;
+use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::{event, Instrument, Level, Span};
 
@@ -603,7 +604,7 @@ impl Coordinator {
     pub(crate) async fn sequence_execute_single_statement_transaction(
         &mut self,
         ctx: ExecuteContext,
-        stmt: Statement<Raw>,
+        stmt: Arc<Statement<Raw>>,
         params: Params,
     ) {
         // Put the session into single statement implicit so anything can execute.
@@ -692,6 +693,7 @@ impl Coordinator {
         cluster_id: ClusterId,
         optimized_plan: OptimizedMirRelationExpr,
         id_bundle: CollectionIdBundle,
+        when: QueryWhen,
         real_time_recency_ts: Option<Timestamp>,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.sequence_explain_timestamp_finish_inner(
@@ -700,6 +702,7 @@ impl Coordinator {
             cluster_id,
             optimized_plan,
             id_bundle,
+            when,
             real_time_recency_ts,
         )
         .await

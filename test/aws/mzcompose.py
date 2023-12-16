@@ -28,9 +28,11 @@ ENVIRONMENT_NAME = f"environment-{DEFAULT_ORG_ID}-{DEFAULT_ORDINAL}"
 NAMESPACE = ENVIRONMENT_NAME
 SERVICE_ACCOUNT_NAME = ENVIRONMENT_NAME
 OIDC_SUB = f"system:serviceaccount:{NAMESPACE}:{SERVICE_ACCOUNT_NAME}"
-PURPOSE = "Customer Secrets"
+PURPOSE = "test-aws"
 STACK = "mzcompose"
 KMS_KEY_ALIAS_NAME = f"alias/customer_key_{DEFAULT_MZ_ENVIRONMENT_ID}"
+AWS_CONNECTION_ROLE_ARN = "arn:aws:iam::123456789000:role/MaterializeConnection"
+AWS_EXTERNAL_ID_PREFIX = "eb5cb59b-e2fe-41f3-87ca-d2176a495345"
 
 AWS_ACCESS_KEY_ID = "LSIAQAAAAAAVNCBMPNSG"
 AWS_SECRET_ACCESS_KEY = "secret"
@@ -50,13 +52,21 @@ SERVICES = [
             f"--aws-secrets-controller-tags=Environment={ENVIRONMENT_NAME}",
             f"--aws-secrets-controller-tags=Purpose={PURPOSE}",
             f"--aws-secrets-controller-tags=Stack={STACK}",
+            f"--aws-connection-role-arn={AWS_CONNECTION_ROLE_ARN}",
+            f"--aws-external-id-prefix={AWS_EXTERNAL_ID_PREFIX}",
         ],
     ),
-    Testdrive(),
+    Testdrive(default_timeout="5s"),
 ]
 
 
 def workflow_default(c: Composition) -> None:
+    for name in ["secrets-manager", "aws-connection"]:
+        with c.test_case(name):
+            c.workflow(name)
+
+
+def workflow_secrets_manager(c: Composition) -> None:
     c.up("localstack")
 
     aws_endpoint_url = f"http://localhost:{c.port('localstack', 4566)}"
@@ -191,3 +201,8 @@ def workflow_default(c: Composition) -> None:
     # Check that the file has been deleted from Secrets Manager
     secrets = list_secrets()
     assert secret_name("u1") not in secrets
+
+
+def workflow_aws_connection(c: Composition) -> None:
+    c.up("localstack", "materialized")
+    c.run("testdrive", "aws-connection/aws-connection.td")

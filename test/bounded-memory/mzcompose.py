@@ -415,17 +415,21 @@ SCENARIOS = [
 
             > CREATE INDEX i_accumulable IN CLUSTER idx_cluster ON accumulable(a);
 
+            > SET CLUSTER = idx_cluster;
+
             > SELECT count(*) FROM accumulable;
             10000001
             """
         ),
         post_restart=dedent(
             """
+            > SET CLUSTER = idx_cluster;
+
             > SELECT count(*) FROM accumulable;
             10000001
             """
         ),
-        materialized_memory="4.5Gb",
+        materialized_memory="9.5Gb",
         clusterd_memory="3.5Gb",
     ),
     KafkaScenario(

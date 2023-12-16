@@ -33,7 +33,7 @@ Materialize provides public Kafka topics and a Confluent Schema Registry for its
 1. In your `psql` terminal, create a new [cluster](https://materialize.com/docs/sql/create-cluster/) and [schema](https://materialize.com/docs/sql/create-schema/):
 
     ```sql
-    CREATE CLUSTER demo REPLICAS (r1 (SIZE = 'xsmall'))
+    CREATE CLUSTER demo (SIZE = 'xsmall');
     CREATE SCHEMA shop;
     ```
 

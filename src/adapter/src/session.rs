@@ -584,7 +584,7 @@ impl<T: TimestampManipulation> Session<T> {
         self.portals.insert(
             portal_name,
             Portal {
-                stmt,
+                stmt: stmt.map(Arc::new),
                 desc,
                 catalog_revision,
                 parameters: Params {
@@ -638,7 +638,7 @@ impl<T: TimestampManipulation> Session<T> {
                 Entry::Occupied(_) => continue,
                 Entry::Vacant(entry) => {
                     entry.insert(Portal {
-                        stmt,
+                        stmt: stmt.map(Arc::new),
                         desc,
                         catalog_revision,
                         parameters,
@@ -819,7 +819,7 @@ impl PreparedStatement {
 #[derivative(Debug)]
 pub struct Portal {
     /// The statement that is bound to this portal.
-    pub stmt: Option<Statement<Raw>>,
+    pub stmt: Option<Arc<Statement<Raw>>>,
     /// The statement description.
     pub desc: StatementDesc,
     /// The most recent catalog revision that has verified this statement.
@@ -1285,7 +1285,7 @@ pub enum TransactionOps<T> {
     /// This transaction has a prospective statement that will execute during commit.
     SingleStatement {
         /// The prospective statement.
-        stmt: Statement<Raw>,
+        stmt: Arc<Statement<Raw>>,
         /// The statement params.
         params: mz_sql::plan::Params,
     },

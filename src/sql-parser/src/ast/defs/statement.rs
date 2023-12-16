@@ -2981,7 +2981,7 @@ impl_display_t!(ExplainSinkSchemaStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainTimestampStatement<T: AstInfo> {
     pub format: ExplainFormat,
-    pub query: Query<T>,
+    pub select: SelectStatement<T>,
 }
 
 impl<T: AstInfo> AstDisplay for ExplainTimestampStatement<T> {
@@ -2989,7 +2989,7 @@ impl<T: AstInfo> AstDisplay for ExplainTimestampStatement<T> {
         f.write_str("EXPLAIN TIMESTAMP AS ");
         f.write_node(&self.format);
         f.write_str(" FOR ");
-        f.write_node(&self.query);
+        f.write_node(&self.select);
     }
 }
 impl_display_t!(ExplainTimestampStatement);
@@ -3353,7 +3353,7 @@ pub enum Explainee<T: AstInfo> {
     View(T::ItemName),
     MaterializedView(T::ItemName),
     Index(T::ItemName),
-    Query(Box<Query<T>>, bool),
+    Select(Box<SelectStatement<T>>, bool),
     CreateMaterializedView(Box<CreateMaterializedViewStatement<T>>, bool),
     CreateIndex(Box<CreateIndexStatement<T>>, bool),
 }
@@ -3373,11 +3373,11 @@ impl<T: AstInfo> AstDisplay for Explainee<T> {
                 f.write_str("INDEX ");
                 f.write_node(name);
             }
-            Self::Query(query, broken) => {
+            Self::Select(select, broken) => {
                 if *broken {
                     f.write_str("BROKEN ");
                 }
-                f.write_node(query);
+                f.write_node(select);
             }
             Self::CreateMaterializedView(statement, broken) => {
                 if *broken {

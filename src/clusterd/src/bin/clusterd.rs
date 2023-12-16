@@ -174,6 +174,11 @@ struct Args {
     #[clap(long, env = "AWS_EXTERNAL_ID", value_name = "ID", parse(from_str = AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable))]
     aws_external_id_prefix: Option<AwsExternalIdPrefix>,
 
+    /// The ARN for a Materialize-controlled role to assume before assuming
+    /// a customer's requested role for an AWS connection.
+    #[clap(long, env = "AWS_CONNECTION_ROLE_ARN")]
+    aws_connection_role_arn: Option<String>,
+
     // === Process orchestrator options. ===
     /// Where to write a PID lock file.
     ///
@@ -333,6 +338,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             args.environment_id,
             &args.tracing.startup_log_filter,
             args.aws_external_id_prefix,
+            args.aws_connection_role_arn,
             secrets_reader,
             None,
         ),

@@ -37,7 +37,9 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
+use std::sync::atomic::Ordering;
 
+use mz_ore::assert::SOFT_ASSERTIONS;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::{bracketed, separated, Indent};
 
@@ -155,8 +157,14 @@ impl From<serde_json::Error> for ExplainError {
 pub struct ExplainConfig {
     /// Show the number of columns.
     pub arity: bool,
+    /// Show cardinality information.
+    pub cardinality: bool,
+    /// Show inferred column names.
+    pub column_names: bool,
     /// Render implemented MIR `Join` nodes in a way which reflects the implementation.
     pub join_impls: bool,
+    /// Use inferred column names when rendering scalar and aggregate expressions.
+    pub humanized_exprs: bool,
     /// Show the sets of unique keys.
     pub keys: bool,
     /// Restrict output trees to linear chains. Ignored if `raw_plans` is set.
@@ -166,10 +174,14 @@ pub struct ExplainConfig {
     /// Show the slow path plan even if a fast path plan was created. Useful for debugging.
     /// Enforced if `timing` is set.
     pub no_fast_path: bool,
+    /// Don't print optimizer hints.
+    pub no_notices: bool,
     /// Don't normalize plans before explaining them.
     pub raw_plans: bool,
     /// Disable virtual syntax in the explanation.
     pub raw_syntax: bool,
+    /// Anonymize literals in the plan.
+    pub redacted: bool,
     /// Show the `subtree_size` attribute in the explanation if it is supported by the backing IR.
     pub subtree_size: bool,
     /// Print optimization timings.
@@ -178,12 +190,9 @@ pub struct ExplainConfig {
     pub types: bool,
     /// Show MFP pushdown information.
     pub filter_pushdown: bool,
-    /// Show cardinality information.
-    pub cardinality: bool,
-    /// Show inferred column names.
-    pub column_names: bool,
-    /// Use inferred column names when rendering scalar and aggregate expressions.
-    pub humanized_exprs: bool,
+    // -------------
+    // Feature flags
+    // -------------
     /// Enable outer join lowering implemented in #22347 and #22348.
     pub enable_new_outer_join_lowering: Option<bool>,
 }
@@ -191,21 +200,24 @@ pub struct ExplainConfig {
 impl Default for ExplainConfig {
     fn default() -> Self {
         Self {
+            // Don't redact in debug builds and in CI.
+            redacted: !SOFT_ASSERTIONS.load(Ordering::Relaxed),
             arity: false,
+            cardinality: false,
+            column_names: false,
+            filter_pushdown: false,
+            humanized_exprs: false,
             join_impls: true,
             keys: false,
             linear_chains: false,
-            non_negative: false,
             no_fast_path: true,
+            no_notices: false,
+            non_negative: false,
             raw_plans: true,
             raw_syntax: false,
             subtree_size: false,
             timing: false,
             types: false,
-            filter_pushdown: false,
-            cardinality: false,
-            column_names: false,
-            humanized_exprs: false,
             enable_new_outer_join_lowering: None,
         }
     }
@@ -233,21 +245,23 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
             flags.insert("raw_syntax".into());
         }
         let result = ExplainConfig {
+            redacted: flags.remove("redacted"),
             arity: flags.remove("arity"),
+            cardinality: flags.remove("cardinality"),
+            column_names: flags.remove("column_names"),
+            filter_pushdown: flags.remove("filter_pushdown") || flags.remove("mfp_pushdown"),
+            humanized_exprs: flags.remove("humanized_exprs") && !flags.contains("raw_plans"),
             join_impls: flags.remove("join_impls"),
             keys: flags.remove("keys"),
             linear_chains: flags.remove("linear_chains") && !flags.contains("raw_plans"),
-            non_negative: flags.remove("non_negative"),
             no_fast_path: flags.remove("no_fast_path") || flags.contains("timing"),
+            no_notices: flags.remove("no_notices"),
+            non_negative: flags.remove("non_negative"),
             raw_plans: flags.remove("raw_plans"),
             raw_syntax: flags.remove("raw_syntax"),
             subtree_size: flags.remove("subtree_size"),
             timing: flags.remove("timing"),
             types: flags.remove("types"),
-            filter_pushdown: flags.remove("filter_pushdown") || flags.remove("mfp_pushdown"),
-            cardinality: flags.remove("cardinality"),
-            column_names: flags.remove("column_names"),
-            humanized_exprs: flags.remove("humanized_exprs") && !flags.contains("raw_plans"),
             enable_new_outer_join_lowering: parse_flag(&mut flags, "new_outer_join_lowering")?,
         };
         if flags.is_empty() {
@@ -296,7 +310,7 @@ pub enum Explainee {
     Dataflow(GlobalId),
     /// The object to be explained is a one-off query and may or may not be
     /// served using a dataflow.
-    Query,
+    Select,
 }
 
 /// A trait that provides a unified interface for objects that
@@ -422,6 +436,7 @@ impl<'a> AsRef<&'a dyn ExprHumanizer> for RenderingContext<'a> {
         &self.humanizer
     }
 }
+
 #[allow(missing_debug_implementations)]
 pub struct PlanRenderingContext<'a, T> {
     pub indent: Indent,
@@ -604,7 +619,17 @@ pub struct Indices<'a>(pub &'a [usize]);
 ///
 /// Interval expressions are used only for runs of three or more elements.
 #[derive(Debug)]
-pub struct CompactScalarSeq<'a, T: ScalarOps>(pub &'a [T]);
+pub struct CompactScalarSeq<'a, T: ScalarOps>(pub &'a [T]); // TODO(cloud#8196) remove this
+
+/// Pretty-prints a list of scalar expressions that may have runs of column
+/// indices as a comma-separated list interleaved with interval expressions.
+///
+/// Interval expressions are used only for runs of three or more elements.
+#[derive(Debug)]
+pub struct CompactScalars<T, I>(pub I)
+where
+    T: ScalarOps,
+    I: Iterator<Item = T> + Clone;
 
 pub trait ScalarOps {
     fn match_col_ref(&self) -> Option<usize>;
@@ -909,21 +934,23 @@ mod tests {
 
         let format = ExplainFormat::Text;
         let config = &ExplainConfig {
+            redacted: false,
             arity: false,
+            cardinality: false,
+            column_names: false,
+            filter_pushdown: false,
+            humanized_exprs: false,
             join_impls: false,
             keys: false,
             linear_chains: false,
-            non_negative: false,
             no_fast_path: false,
+            no_notices: false,
+            non_negative: false,
             raw_plans: false,
             raw_syntax: false,
             subtree_size: false,
             timing: true,
             types: false,
-            filter_pushdown: false,
-            cardinality: false,
-            column_names: false,
-            humanized_exprs: false,
             enable_new_outer_join_lowering: None,
         };
         let context = ExplainContext {

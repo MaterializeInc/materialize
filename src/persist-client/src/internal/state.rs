@@ -918,6 +918,16 @@ where
             && self.critical_readers.is_empty()
     }
 
+    pub(crate) fn is_single_empty_batch(&self) -> bool {
+        let mut batch_count = 0;
+        let mut is_empty = true;
+        self.trace.map_batches(|b| {
+            batch_count += 1;
+            is_empty &= b.parts.is_empty()
+        });
+        batch_count <= 1 && is_empty
+    }
+
     pub fn become_tombstone_and_shrink(&mut self) -> ControlFlow<NoOpStateTransition<()>, ()> {
         assert_eq!(self.trace.upper(), &Antichain::new());
         assert_eq!(self.trace.since(), &Antichain::new());

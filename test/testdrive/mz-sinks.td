@@ -38,3 +38,6 @@ debezium
 
 > SELECT envelope_type FROM mz_sinks WHERE name = 'mz_sinks_upsert'
 upsert
+
+> SELECT format FROM mz_sinks WHERE name = 'mz_sinks_upsert'
+avro

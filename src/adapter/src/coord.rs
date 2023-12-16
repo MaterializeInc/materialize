@@ -81,7 +81,9 @@ use fail::fail_point;
 use futures::future::{BoxFuture, FutureExt, LocalBoxFuture};
 use futures::StreamExt;
 use itertools::Itertools;
-use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
+use mz_adapter_types::compaction::{
+    CompactionWindow, ReadCapability, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+};
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
 use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
@@ -97,6 +99,7 @@ use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::option::OptionExt;
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
@@ -114,6 +117,7 @@ use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::{self, ConnectionCounter, OwnedVarInput, SystemVars};
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::ConnectionContext;
@@ -138,7 +142,6 @@ use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
 use crate::coord::dataflows::dataflow_import_id_bundle;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
-use crate::coord::read_policy::ReadCapability;
 use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
 use crate::coord::timestamp_oracle::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::timestamp_oracle::postgres_oracle::{
@@ -224,7 +227,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     ExecuteSingleStatementTransaction {
         ctx: ExecuteContext,
         otel_ctx: OpenTelemetryContext,
-        stmt: Statement<Raw>,
+        stmt: Arc<Statement<Raw>>,
         params: mz_sql::plan::Params,
     },
     PeekStageReady {
@@ -287,7 +290,7 @@ pub struct BackgroundWorkResult<T> {
     pub result: Result<T, AdapterError>,
     pub params: Params,
     pub resolved_ids: ResolvedIds,
-    pub original_stmt: Statement<Raw>,
+    pub original_stmt: Arc<Statement<Raw>>,
     pub otel_ctx: OpenTelemetryContext,
 }
 
@@ -318,6 +321,7 @@ pub enum RealTimeRecencyContext {
         cluster_id: ClusterId,
         optimized_plan: OptimizedMirRelationExpr,
         id_bundle: CollectionIdBundle,
+        when: QueryWhen,
     },
     Peek {
         ctx: ExecuteContext,
@@ -1086,16 +1090,8 @@ impl Coordinator {
         self.controller
             .set_default_arrangement_exert_proportionality(exert_prop);
 
-        // Capture identifiers that need to have their read holds relaxed once the bootstrap completes.
-        //
-        // TODO[btv] -- This is of type `Timestamp` because that's what `initialize_read_policies`
-        // takes, but it's not clear that that type makes sense. Read policies are logically
-        // durations, not instants.
-        //
-        // Ultimately, it doesn't concretely matter today, because the type ends up just being
-        // u64 anyway.
-        let mut policies_to_set: BTreeMap<Timestamp, CollectionIdBundle> = Default::default();
-        policies_to_set.insert(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS, Default::default());
+        let mut policies_to_set: BTreeMap<CompactionWindow, CollectionIdBundle> =
+            Default::default();
 
         debug!("coordinator init: creating compute replicas");
         let mut replicas_to_start = vec![];
@@ -1262,16 +1258,7 @@ impl Coordinator {
                 entry.item().typ(),
                 entry.id()
             );
-            let policy = entry
-                .item()
-                .initial_logical_compaction_window()
-                .map(|duration| {
-                    let ts = Timestamp::from(
-                        u64::try_from(duration.as_millis())
-                            .expect("Timestamp millis must fit in u64"),
-                    );
-                    ts
-                });
+            let policy = entry.item().initial_logical_compaction_window();
             match entry.item() {
                 // Currently catalog item rebuild assumes that sinks and
                 // indexes are always built individually and does not store information
@@ -1322,6 +1309,20 @@ impl Coordinator {
                         );
                         df_desc.set_as_of(as_of);
 
+                        let df_meta = self
+                            .catalog()
+                            .try_get_dataflow_metainfo(&entry.id())
+                            .expect("added in `bootstrap_dataflow_plans`");
+
+                        if self.catalog().state().system_config().enable_mz_notices() {
+                            // Collect optimization hint updates.
+                            self.catalog().pack_optimizer_notices(
+                                &mut builtin_table_updates,
+                                df_meta.optimizer_notices.iter(),
+                                1,
+                            );
+                        }
+
                         // What follows is morally equivalent to `self.ship_dataflow(df, idx.cluster_id)`,
                         // but we cannot call that as it will also downgrade the read hold on the index.
                         policy_entry
@@ -1353,6 +1354,20 @@ impl Coordinator {
                     // Timestamp selection
                     let as_of = self.bootstrap_materialized_view_as_of(&df_desc, mview.cluster_id);
                     df_desc.set_as_of(as_of);
+
+                    let df_meta = self
+                        .catalog()
+                        .try_get_dataflow_metainfo(&entry.id())
+                        .expect("added in `bootstrap_dataflow_plans`");
+
+                    if self.catalog().state().system_config().enable_mz_notices() {
+                        // Collect optimization hint updates.
+                        self.catalog().pack_optimizer_notices(
+                            &mut builtin_table_updates,
+                            df_meta.optimizer_notices.iter(),
+                            1,
+                        );
+                    }
 
                     self.ship_dataflow(df_desc, mview.cluster_id).await;
                 }
@@ -1408,8 +1423,8 @@ impl Coordinator {
         // As of this writing, there can only be at most two keys in `policies_to_set`,
         // so the extra load isn't crazy, but that might not be true in general if we
         // open up custom compaction windows to users.
-        for (ts, policies) in policies_to_set {
-            self.initialize_read_policies(&policies, Some(ts)).await;
+        for (cw, policies) in policies_to_set {
+            self.initialize_read_policies(&policies, cw).await;
         }
 
         debug!("coordinator init: announcing completion of initialization to controller");
@@ -1681,6 +1696,7 @@ impl Coordinator {
                     let global_lir_plan = optimizer.optimize(global_mir_plan)?;
 
                     let (physical_plan, metainfo) = global_lir_plan.unapply();
+                    let metainfo = self.catalog().render_notices(metainfo, Some(entry.id()));
 
                     let catalog = self.catalog_mut();
                     catalog.set_optimized_plan(id, optimized_plan);
@@ -1722,6 +1738,7 @@ impl Coordinator {
                     let global_lir_plan = optimizer.optimize(global_mir_plan)?;
 
                     let (physical_plan, metainfo) = global_lir_plan.unapply();
+                    let metainfo = self.catalog().render_notices(metainfo, Some(entry.id()));
 
                     let catalog = self.catalog_mut();
                     catalog.set_optimized_plan(id, optimized_plan);
@@ -1982,14 +1999,22 @@ impl Coordinator {
         mut cmd_rx: mpsc::UnboundedReceiver<(OpenTelemetryContext, Command)>,
         group_commit_rx: appends::GroupCommitWaiter,
     ) -> LocalBoxFuture<'static, ()> {
+        struct LastMessage {
+            kind: &'static str,
+            stmt: Option<Arc<Statement<Raw>>>,
+        }
+
         async move {
             // Watcher that listens for and reports cluster service status changes.
             let mut cluster_events = self.controller.events_stream();
-            let last_message_kind = Arc::new(Mutex::new("none"));
+            let last_message = Arc::new(Mutex::new(LastMessage {
+                kind: "none",
+                stmt: None,
+            }));
 
             let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
             let idle_metric = self.metrics.queue_busy_seconds.with_label_values(&[]);
-            let last_message_kind_watchdog = Arc::clone(&last_message_kind);
+            let last_message_watchdog = Arc::clone(&last_message);
 
             spawn(|| "coord watchdog", async move {
                 // Every 5 seconds, attempt to measure how long it takes for the
@@ -2014,12 +2039,16 @@ impl Coordinator {
                     let Ok(maybe_permit) = timeout else {
                         // Only log the error if we're newly stuck, to prevent logging repeatedly.
                         if !coord_stuck {
-                            let last_message = last_message_kind_watchdog
-                                .lock()
-                                .map(|g| *g)
-                                .unwrap_or("poisoned");
+                            let last_message = last_message_watchdog.lock().expect("poisoned");
+                            let last_message_sql = last_message
+                                .stmt
+                                .as_ref()
+                                .map(|stmt| stmt.to_ast_string_redacted())
+                                .display_or("<none>");
                             tracing::error!(
-                                "Coordinator is stuck on {last_message}, did not respond after {duration:?}"
+                                last_message_kind = %last_message.kind,
+                                %last_message_sql,
+                                "coordinator stuck for {duration:?}",
                             );
                         }
                         coord_stuck = true;
@@ -2134,17 +2163,35 @@ impl Coordinator {
                 // All message processing functions trace. Start a parent span
                 // for them to make it easy to find slow messages.
                 let msg_kind = msg.kind();
-                let span = span!(Level::DEBUG, "coordinator processing (handle_message)", kind = msg_kind);
+                let span = span!(
+                    Level::DEBUG,
+                    "coordinator processing (handle_message)",
+                    kind = msg_kind
+                );
                 let otel_context = span.context().span().span_context().clone();
 
-                // Record the last kind of message incase we get stuck.
-                if let Ok(mut guard) = last_message_kind.lock() {
-                    *guard = msg_kind;
-                }
+                // Record the last kind of message in case we get stuck. For
+                // execute commands, we additionally stash the user's SQL,
+                // statement, so we can log it in case we get stuck.
+                *last_message.lock().expect("poisoned") = LastMessage {
+                    kind: msg_kind,
+                    stmt: match &msg {
+                        Message::Command(
+                            _,
+                            Command::Execute {
+                                portal_name,
+                                session,
+                                ..
+                            },
+                        ) => session
+                            .get_portal_unverified(portal_name)
+                            .and_then(|p| p.stmt.as_ref().map(Arc::clone)),
+                        _ => None,
+                    },
+                };
 
                 let start = Instant::now();
-                self.handle_message(span, msg)
-                    .await;
+                self.handle_message(span, msg).await;
                 let duration = start.elapsed();
 
                 // Report slow messages to Prometheus.

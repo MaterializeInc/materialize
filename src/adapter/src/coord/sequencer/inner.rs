@@ -19,6 +19,7 @@ use anyhow::anyhow;
 use futures::future::BoxFuture;
 use itertools::Itertools;
 use maplit::{btreemap, btreeset};
+use mz_adapter_types::compaction::CompactionWindow;
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{
@@ -48,7 +49,6 @@ use mz_sql::names::{
     SchemaSpecifier, SystemObjectId,
 };
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
-use mz_adapter_types::compaction::DEFAULT_LOGICAL_COMPACTION_WINDOW_TS;
 use mz_adapter_types::connection::ConnectionId;
 use mz_catalog::memory::objects::{
     CatalogItem, Cluster, Connection, DataSourceDesc, Secret, Sink, Source, Table, Type, View,
@@ -71,15 +71,13 @@ use mz_sql_parser::ast::{
     PgConfigOptionName, ReferencedSubsources, Statement, TransactionMode, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_storage_client::controller::{
-    CollectionDescription, DataSource, DataSourceOther, ReadPolicy,
-};
+use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_transform::dataflow::DataflowMetainfo;
-use mz_transform::optimizer_notices::OptimizerNotice;
+use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
 use mz_transform::{EmptyStatisticsOracle, StatisticsOracle};
-use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
+use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
 use tracing::instrument::WithSubscriber;
 use tracing::Instrument;
@@ -94,7 +92,6 @@ use crate::coord::dataflows::{
 };
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{FastPathPlan, PeekDataflowPlan, PeekPlan, PlannedPeek};
-use crate::coord::read_policy::SINCE_GRANULARITY;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{
     TimestampContext, TimestampDetermination, TimestampProvider, TimestampSource,
@@ -303,10 +300,7 @@ impl Coordinator {
                 }
 
                 coord
-                    .initialize_storage_read_policies(
-                        source_ids,
-                        Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-                    )
+                    .initialize_storage_read_policies(source_ids, CompactionWindow::Default)
                     .await;
             })
             .await;
@@ -605,10 +599,7 @@ impl Coordinator {
                 coord.apply_local_write(register_ts).await;
 
                 coord
-                    .initialize_storage_read_policies(
-                        vec![table_id],
-                        Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-                    )
+                    .initialize_storage_read_policies(vec![table_id], CompactionWindow::Default)
                     .await;
 
                 // Advance the new table to a timestamp higher than the current
@@ -1054,20 +1045,23 @@ impl Coordinator {
                 coord
                     .catalog_mut()
                     .set_physical_plan(id, global_lir_plan.df_desc().clone());
-                coord
-                    .catalog_mut()
-                    .set_dataflow_metainfo(id, global_lir_plan.df_meta().clone());
-
-                // Emit notices.
-                coord.emit_optimizer_notices(session, &global_lir_plan.df_meta().optimizer_notices);
 
                 let output_desc = global_lir_plan.desc().clone();
-                let mut df_desc = global_lir_plan.unapply().0;
+                let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
                 // Timestamp selection
                 let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
                 let since = coord.least_valid_read(&id_bundle);
                 df_desc.set_as_of(since.clone());
+
+                // Emit notices.
+                coord.emit_optimizer_notices(session, &df_meta.optimizer_notices);
+
+                // Notices rendering
+                let df_meta = coord.catalog().render_notices(df_meta, Some(id));
+                coord
+                    .catalog_mut()
+                    .set_dataflow_metainfo(id, df_meta.clone());
 
                 // Announce the creation of the materialized view source.
                 coord
@@ -1089,13 +1083,32 @@ impl Coordinator {
                     .unwrap_or_terminate("cannot fail to append");
 
                 coord
-                    .initialize_storage_read_policies(
-                        vec![id],
-                        Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-                    )
+                    .initialize_storage_read_policies(vec![id], CompactionWindow::Default)
                     .await;
 
-                coord.ship_dataflow(df_desc, cluster_id).await;
+                if coord.catalog().state().system_config().enable_mz_notices() {
+                    // Initialize a container for builtin table updates.
+                    let mut builtin_table_updates =
+                        Vec::with_capacity(df_meta.optimizer_notices.len());
+                    // Collect optimization hint updates.
+                    coord.catalog().pack_optimizer_notices(
+                        &mut builtin_table_updates,
+                        df_meta.optimizer_notices.iter(),
+                        1,
+                    );
+                    // Write collected optimization hints to the builtin tables.
+                    let builtin_updates_fut = coord
+                        .builtin_table_update()
+                        .execute(builtin_table_updates)
+                        .await;
+
+                    let ship_dataflow_fut = coord.ship_dataflow(df_desc, cluster_id);
+
+                    let ((), ()) =
+                        futures::future::join(builtin_updates_fut, ship_dataflow_fut).await;
+                } else {
+                    coord.ship_dataflow(df_desc, cluster_id).await;
+                }
             })
             .await;
 
@@ -1190,21 +1203,45 @@ impl Coordinator {
                 coord
                     .catalog_mut()
                     .set_physical_plan(id, global_lir_plan.df_desc().clone());
-                coord
-                    .catalog_mut()
-                    .set_dataflow_metainfo(id, global_lir_plan.df_meta().clone());
 
-                // Emit notices.
-                coord.emit_optimizer_notices(session, &global_lir_plan.df_meta().optimizer_notices);
-
-                let mut df_desc = global_lir_plan.unapply().0;
+                let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
                 // Timestamp selection
                 let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
                 let since = coord.least_valid_read(&id_bundle);
                 df_desc.set_as_of(since);
 
-                coord.ship_dataflow(df_desc, cluster_id).await;
+                // Emit notices.
+                coord.emit_optimizer_notices(session, &df_meta.optimizer_notices);
+
+                // Notices rendering
+                let df_meta = coord.catalog().render_notices(df_meta, Some(id));
+                coord
+                    .catalog_mut()
+                    .set_dataflow_metainfo(id, df_meta.clone());
+
+                if coord.catalog().state().system_config().enable_mz_notices() {
+                    // Initialize a container for builtin table updates.
+                    let mut builtin_table_updates =
+                        Vec::with_capacity(df_meta.optimizer_notices.len());
+                    // Collect optimization hint updates.
+                    coord.catalog().pack_optimizer_notices(
+                        &mut builtin_table_updates,
+                        df_meta.optimizer_notices.iter(),
+                        1,
+                    );
+                    // Write collected optimization hints to the builtin tables.
+                    let builtin_updates_fut = coord
+                        .builtin_table_update()
+                        .execute(builtin_table_updates)
+                        .await;
+
+                    let ship_dataflow_fut = coord.ship_dataflow(df_desc, cluster_id);
+
+                    futures::future::join(builtin_updates_fut, ship_dataflow_fut).await;
+                } else {
+                    coord.ship_dataflow(df_desc, cluster_id).await;
+                }
 
                 coord.set_index_options(id, options).expect("index enabled");
             })
@@ -3020,17 +3057,6 @@ impl Coordinator {
         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
         let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
 
-        // Save plan structures.
-        self.catalog_mut()
-            .set_optimized_plan(id, global_mir_plan.df_desc().clone());
-        self.catalog_mut()
-            .set_physical_plan(id, global_lir_plan.df_desc().clone());
-        self.catalog_mut()
-            .set_dataflow_metainfo(id, global_lir_plan.df_meta().clone());
-
-        // Emit notices.
-        self.emit_optimizer_notices(ctx.session(), &global_lir_plan.df_meta().optimizer_notices);
-
         let sink_id = global_lir_plan.sink_id();
 
         let (tx, rx) = mpsc::unbounded_channel();
@@ -3049,11 +3075,13 @@ impl Coordinator {
         };
         active_subscribe.initialize();
 
+        let (df_desc, df_meta) = global_lir_plan.unapply();
+        // Emit notices.
+        self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
+
         // Add metadata for the new SUBSCRIBE.
         let write_notify_fut = self.add_active_subscribe(sink_id, active_subscribe).await;
-
-        // Ship the underlying dataflow.
-        let (df_desc, _df_meta) = global_lir_plan.unapply();
+        // Ship dataflow.
         let ship_dataflow_fut = self.ship_dataflow(df_desc, cluster_id);
 
         // Both adding metadata for the new SUBSCRIBE and shipping the underlying dataflow, send
@@ -3281,10 +3309,11 @@ impl Coordinator {
         let root_dispatch = tracing::dispatcher::get_default(|d| d.clone());
 
         let pipeline_result = match stmt {
-            plan::ExplaineeStatement::Query {
+            plan::ExplaineeStatement::Select {
                 raw_plan,
                 row_set_finishing,
                 desc,
+                when,
                 broken,
             } => {
                 // Please see the doc comment on `explain_query_optimizer_pipeline` for more
@@ -3296,6 +3325,7 @@ impl Coordinator {
                     ctx.session_mut(),
                     row_set_finishing,
                     desc,
+                    when,
                     &config,
                     root_dispatch,
                 )
@@ -3453,6 +3483,7 @@ impl Coordinator {
         session: &mut Session,
         finishing: RowSetFinishing,
         desc: RelationDesc,
+        when: QueryWhen,
         explain_config: &mz_repr::explain::ExplainConfig,
         root_dispatch: tracing::Dispatch,
     ) -> Result<
@@ -3538,7 +3569,6 @@ impl Coordinator {
                 .sufficient_collections(&source_ids);
 
             // Acquire a timestamp (necessary for loading statistics).
-            let when = QueryWhen::Immediately;
             let oracle_read_ts = self
                 .oracle_read_ts(session, &timeline_context, &when)
                 .with_subscriber(root_dispatch.clone())
@@ -3863,6 +3893,7 @@ impl Coordinator {
         plan: plan::ExplainTimestampPlan,
         target_cluster: TargetCluster,
     ) {
+        let when = plan.when.clone();
         let (format, source_ids, optimized_plan, cluster_id, id_bundle) = return_if_err!(
             self.sequence_explain_timestamp_begin_inner(ctx.session(), plan, target_cluster),
             ctx
@@ -3885,6 +3916,7 @@ impl Coordinator {
                         format,
                         cluster_id,
                         optimized_plan,
+                        when,
                         id_bundle,
                     },
                 );
@@ -3909,6 +3941,7 @@ impl Coordinator {
                         cluster_id,
                         optimized_plan,
                         id_bundle,
+                        when,
                         None,
                     )
                     .await;
@@ -3932,7 +3965,11 @@ impl Coordinator {
         ),
         AdapterError,
     > {
-        let plan::ExplainTimestampPlan { format, raw_plan } = plan;
+        let plan::ExplainTimestampPlan {
+            format,
+            raw_plan,
+            when: _,
+        } = plan;
 
         // Collect optimizer parameters.
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
@@ -4027,6 +4064,7 @@ impl Coordinator {
         cluster_id: ClusterId,
         source: OptimizedMirRelationExpr,
         id_bundle: CollectionIdBundle,
+        when: QueryWhen,
         real_time_recency_ts: Option<Timestamp>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let is_json = match format {
@@ -4039,7 +4077,6 @@ impl Coordinator {
         let source_ids = source.depends_on();
         let timeline_context = self.validate_timeline_context(source_ids.clone())?;
 
-        let when = QueryWhen::Immediately;
         let oracle_read_ts = self.oracle_read_ts(session, &timeline_context, &when).await;
 
         let determination = self
@@ -4590,9 +4627,7 @@ impl Coordinator {
         for o in plan.options {
             options.push(match o {
                 IndexOptionName::LogicalCompactionWindow => {
-                    IndexOption::LogicalCompactionWindow(Some(Duration::from_millis(
-                        DEFAULT_LOGICAL_COMPACTION_WINDOW_TS.into(),
-                    )))
+                    IndexOption::LogicalCompactionWindow(CompactionWindow::Default)
                 }
             });
         }
@@ -4617,13 +4652,7 @@ impl Coordinator {
                         .index()
                         .expect("setting options on index")
                         .cluster_id;
-                    let policy = match window {
-                        Some(time) => {
-                            ReadPolicy::lag_writes_by(time.try_into()?, SINCE_GRANULARITY)
-                        }
-                        None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
-                    };
-                    self.update_compute_base_read_policy(cluster, id, policy);
+                    self.update_compute_base_read_policy(cluster, id, window.into());
                 }
             }
         }
@@ -5536,11 +5565,8 @@ impl Coordinator {
                     .await
                     .expect("altering collection after txn must succeed");
 
-                self.initialize_storage_read_policies(
-                    source_ids,
-                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS),
-                )
-                .await;
+                self.initialize_storage_read_policies(source_ids, CompactionWindow::Default)
+                    .await;
             }
         }
 
@@ -6259,24 +6285,32 @@ impl Coordinator {
     pub(super) fn emit_optimizer_notices(
         &mut self,
         session: &Session,
-        optimizer_notices: &Vec<OptimizerNotice>,
+        notices: &Vec<RawOptimizerNotice>,
     ) {
-        let humanizer = self.catalog().for_session(session);
-        for optimizer_notice in optimizer_notices {
-            let system_vars = self.catalog.system_config();
-            let notice_enabled = match optimizer_notice {
-                OptimizerNotice::IndexTooWideForLiteralConstraints(..) => {
+        let humanizer = self.catalog().state();
+        let system_vars = self.catalog.system_config();
+        for notice in notices {
+            let kind = OptimizerNoticeKind::from(notice);
+            let notice_enabled = match kind {
+                OptimizerNoticeKind::IndexTooWideForLiteralConstraints => {
                     system_vars.enable_notices_for_index_too_wide_for_literal_constraints()
                 }
-                OptimizerNotice::IndexKeyEmpty => system_vars.enable_notices_for_index_empty_key(),
+                OptimizerNoticeKind::IndexKeyEmpty => {
+                    system_vars.enable_notices_for_index_empty_key()
+                }
             };
             if notice_enabled {
-                let (notice, hint) = optimizer_notice.to_string(&humanizer);
-                session.add_notice(AdapterNotice::OptimizerNotice { notice, hint });
+                // We don't need to redact the notice parts because
+                // `emit_optimizer_notices` is onlyy called by the `sequence_~`
+                // method for the DDL that produces that notice.
+                session.add_notice(AdapterNotice::OptimizerNotice {
+                    notice: notice.message(humanizer, false).to_string(),
+                    hint: notice.hint(humanizer, false).to_string(),
+                });
             }
             self.metrics
                 .optimization_notices
-                .with_label_values(&[optimizer_notice.metric_label()])
+                .with_label_values(&[kind.metric_label()])
                 .inc_by(1);
         }
     }

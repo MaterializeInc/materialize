@@ -32,7 +32,7 @@ use mz_ore::vec::swap_remove_multiple;
 use mz_repr::{GlobalId, Row};
 
 use crate::canonicalize_mfp::CanonicalizeMfp;
-use crate::optimizer_notices::{IndexTooWideForLiteralConstraints, OptimizerNotice};
+use crate::notice::IndexTooWideForLiteralConstraints;
 use crate::TransformCtx;
 
 /// Convert literal constraints into `IndexedFilter` joins.
@@ -330,16 +330,14 @@ impl LiteralConstraints {
                                 .collect_vec();
 
                             transform_ctx.dataflow_metainfo.push_optimizer_notice_dedup(
-                                OptimizerNotice::IndexTooWideForLiteralConstraints(
-                                    IndexTooWideForLiteralConstraints {
-                                        index_id,
-                                        index_key,
-                                        usable_subset,
-                                        literal_values,
-                                        index_on_id: get_id,
-                                        recommended_key,
-                                    },
-                                ),
+                                IndexTooWideForLiteralConstraints {
+                                    index_id,
+                                    index_key,
+                                    usable_subset,
+                                    literal_values,
+                                    index_on_id: get_id,
+                                    recommended_key,
+                                },
                             )
                         }
                         _ => (),

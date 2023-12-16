@@ -7,16 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+mod notice;
+
 use std::net::Ipv4Addr;
 
 use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_catalog::builtin::{
-    MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES,
-    MZ_CLUSTERS, MZ_CLUSTER_LINKS, MZ_CLUSTER_REPLICAS, MZ_CLUSTER_REPLICA_METRICS,
-    MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_COMMENTS, MZ_CONNECTIONS,
-    MZ_DATABASES, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS,
+    MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_CONNECTIONS,
+    MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_LINKS,
+    MZ_CLUSTER_REPLICAS, MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES,
+    MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_COMMENTS, MZ_CONNECTIONS, MZ_DATABASES,
+    MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS,
     MZ_INTERNAL_CLUSTER_REPLICAS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES,
     MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS,
     MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS,
@@ -46,8 +49,9 @@ use mz_sql::catalog::{CatalogCluster, CatalogDatabase, CatalogSchema, CatalogTyp
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{CommentObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_storage_types::connections::aws::{AwsAuth, AwsConnection};
 use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::connections::KafkaConnection;
+use mz_storage_types::connections::{KafkaConnection, StringOrSecret};
 use mz_storage_types::sinks::{KafkaSinkConnection, StorageSinkConnection};
 use mz_storage_types::sources::{
     GenericSourceConnection, KafkaSourceConnection, PostgresSourceConnection,
@@ -349,8 +353,8 @@ impl CatalogState {
         let mut updates =
             match entry.item() {
                 CatalogItem::Log(_) => self.pack_source_update(
-                    id, oid, schema_id, name, "log", None, None, None, None, owner_id, privileges,
-                    diff, None,
+                    id, oid, schema_id, name, "log", None, None, None, None, None, None, owner_id,
+                    privileges, diff, None,
                 ),
                 CatalogItem::Index(index) => {
                     self.pack_index_update(id, oid, name, owner_id, index, diff)
@@ -363,6 +367,8 @@ impl CatalogState {
                     let envelope = source.envelope();
                     let cluster_id = entry.item().cluster_id().map(|id| id.to_string());
 
+                    let (key_format, value_format) = source.formats();
+
                     let mut updates = self.pack_source_update(
                         id,
                         oid,
@@ -372,6 +378,8 @@ impl CatalogState {
                         connection_id,
                         self.get_storage_object_size(id),
                         envelope,
+                        key_format,
+                        value_format,
                         cluster_id.as_deref(),
                         owner_id,
                         privileges,
@@ -512,6 +520,8 @@ impl CatalogState {
         connection_id: Option<GlobalId>,
         size: Option<&str>,
         envelope: Option<&str>,
+        key_format: Option<&str>,
+        value_format: Option<&str>,
         cluster_id: Option<&str>,
         owner_id: &RoleId,
         privileges: Datum,
@@ -536,6 +546,8 @@ impl CatalogState {
                 Datum::from(connection_id.map(|id| id.to_string()).as_deref()),
                 Datum::from(size),
                 Datum::from(envelope),
+                Datum::from(key_format),
+                Datum::from(value_format),
                 Datum::from(cluster_id),
                 Datum::String(&owner_id.to_string()),
                 privileges,
@@ -636,26 +648,35 @@ impl CatalogState {
                         diff,
                     ));
                 } else {
-                    tracing::error!("does this even happen?");
+                    tracing::error!(%id, "missing SSH public key; cannot write row to mz_ssh_connections table");
                 }
             }
             mz_storage_types::connections::Connection::Kafka(ref kafka) => {
                 updates.extend(self.pack_kafka_connection_update(id, kafka, diff));
             }
+            mz_storage_types::connections::Connection::Aws(ref aws_config) => {
+                match self.pack_aws_connection_update(id, aws_config, diff) {
+                    Ok(update) => {
+                        updates.push(update);
+                    }
+                    Err(e) => {
+                        tracing::error!(%id, %e, "failed writing row to mz_aws_connections table");
+                    }
+                }
+            }
             mz_storage_types::connections::Connection::AwsPrivatelink(_) => {
                 if let Some(aws_principal_context) = self.aws_principal_context.as_ref() {
-                    updates.extend(self.pack_aws_privatelink_connection_update(
+                    updates.push(self.pack_aws_privatelink_connection_update(
                         id,
                         aws_principal_context,
                         diff,
                     ));
                 } else {
-                    tracing::error!("Missing AWS principal context, cannot write to mz_aws_privatelink_connections table");
+                    tracing::error!(%id, "missing AWS principal context; cannot write row to mz_aws_privatelink_connections table");
                 }
             }
             mz_storage_types::connections::Connection::Csr(_)
-            | mz_storage_types::connections::Connection::Postgres(_)
-            | mz_storage_types::connections::Connection::Aws(_) => (),
+            | mz_storage_types::connections::Connection::Postgres(_) => (),
         };
         updates
     }
@@ -714,12 +735,69 @@ impl CatalogState {
         connection_id: GlobalId,
         aws_principal_context: &AwsPrincipalContext,
         diff: Diff,
-    ) -> Result<BuiltinTableUpdate, Error> {
+    ) -> BuiltinTableUpdate {
         let id = self.resolve_builtin_table(&MZ_AWS_PRIVATELINK_CONNECTIONS);
         let row = Row::pack_slice(&[
             Datum::String(&connection_id.to_string()),
             Datum::String(&aws_principal_context.to_principal_string(connection_id)),
         ]);
+        BuiltinTableUpdate { id, row, diff }
+    }
+
+    pub fn pack_aws_connection_update(
+        &self,
+        connection_id: GlobalId,
+        aws_config: &AwsConnection,
+        diff: Diff,
+    ) -> Result<BuiltinTableUpdate, anyhow::Error> {
+        let id = self.resolve_builtin_table(&MZ_AWS_CONNECTIONS);
+
+        let mut access_key_id = None;
+        let mut access_key_id_secret_id = None;
+        let mut assume_role_arn = None;
+        let mut assume_role_session_name = None;
+        let mut principal = None;
+        let mut external_id = None;
+        let mut example_trust_policy = None;
+        match &aws_config.auth {
+            AwsAuth::Credentials(credentials) => match &credentials.access_key_id {
+                StringOrSecret::String(access_key) => access_key_id = Some(access_key.as_str()),
+                StringOrSecret::Secret(secret_id) => {
+                    access_key_id_secret_id = Some(secret_id.to_string())
+                }
+            },
+            AwsAuth::AssumeRole(assume_role) => {
+                assume_role_arn = Some(assume_role.arn.as_str());
+                assume_role_session_name = assume_role.session_name.as_deref();
+                principal = self
+                    .config
+                    .connection_context
+                    .aws_connection_role_arn
+                    .as_deref();
+                external_id =
+                    Some(assume_role.external_id(&self.config.connection_context, connection_id)?);
+                example_trust_policy = {
+                    let policy = assume_role
+                        .example_trust_policy(&self.config.connection_context, connection_id)?;
+                    let policy = Jsonb::from_serde_json(policy).expect("valid json");
+                    Some(policy.into_row())
+                };
+            }
+        }
+
+        let row = Row::pack_slice(&[
+            Datum::String(&connection_id.to_string()),
+            Datum::from(aws_config.endpoint.as_deref()),
+            Datum::from(aws_config.region.as_deref()),
+            Datum::from(access_key_id),
+            Datum::from(access_key_id_secret_id.as_deref()),
+            Datum::from(assume_role_arn),
+            Datum::from(assume_role_session_name),
+            Datum::from(principal),
+            Datum::from(external_id.as_deref()),
+            Datum::from(example_trust_policy.as_ref().map(|p| p.into_element())),
+        ]);
+
         Ok(BuiltinTableUpdate { id, row, diff })
     }
 
@@ -840,6 +918,7 @@ impl CatalogState {
             .ast;
 
         let envelope = sink.envelope();
+        let format = sink.format();
 
         updates.push(BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SINKS),
@@ -852,6 +931,7 @@ impl CatalogState {
                 Datum::from(sink.connection_id().map(|id| id.to_string()).as_deref()),
                 Datum::from(self.get_storage_object_size(id)),
                 Datum::from(envelope),
+                Datum::from(format),
                 Datum::String(&sink.cluster_id.to_string()),
                 Datum::String(&owner_id.to_string()),
                 Datum::String(&sink.create_sql),

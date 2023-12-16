@@ -33,6 +33,7 @@ tests=(
     test/sqllogictest/explain/*.slt \
     test/sqllogictest/transform/*.slt \
     test/sqllogictest/transform/fold_vs_dataflow/*.slt \
+    test/sqllogictest/transform/notice/*.slt \
     test/sqllogictest/special/* \
 )
 tests_without_views_and_replica=(

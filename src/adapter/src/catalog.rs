@@ -15,17 +15,16 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert;
 use std::sync::Arc;
-use std::time::Duration;
 
 use futures::Future;
 use itertools::Itertools;
-use mz_adapter_types::connection::ConnectionId;
-use mz_storage_types::connections::ConnectionContext;
+use mz_adapter_types::compaction::CompactionWindow;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::MutexGuard;
 use tracing::{info, trace};
 use uuid::Uuid;
 
+use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::{EventDetails, EventType, FullNameV1, IdFullNameV1, ObjectType, VersionedEvent};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_catalog::builtin::{
@@ -89,8 +88,10 @@ use mz_sql_parser::ast::{
 };
 use mz_stash::{DebugStashFactory, StashFactory};
 use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
+use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::Timeline;
 use mz_transform::dataflow::DataflowMetainfo;
+use mz_transform::notice::OptimizerNotice;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
@@ -157,7 +158,7 @@ impl Clone for Catalog {
 pub struct CatalogPlans {
     optimized_plan_by_id: BTreeMap<GlobalId, DataflowDescription<OptimizedMirRelationExpr>>,
     physical_plan_by_id: BTreeMap<GlobalId, DataflowDescription<mz_compute_types::plan::Plan>>,
-    dataflow_metainfos: BTreeMap<GlobalId, DataflowMetainfo>,
+    dataflow_metainfos: BTreeMap<GlobalId, DataflowMetainfo<OptimizerNotice>>,
 }
 
 impl Catalog {
@@ -201,13 +202,20 @@ impl Catalog {
 
     /// Set the `DataflowMetainfo` for the item identified by `id`.
     #[tracing::instrument(level = "trace", skip(self))]
-    pub fn set_dataflow_metainfo(&mut self, id: GlobalId, metainfo: DataflowMetainfo) {
+    pub fn set_dataflow_metainfo(
+        &mut self,
+        id: GlobalId,
+        metainfo: DataflowMetainfo<OptimizerNotice>,
+    ) {
         self.plans.dataflow_metainfos.insert(id, metainfo);
     }
 
     /// Try to get the `DataflowMetainfo` for the item identified by `id`.
     #[tracing::instrument(level = "trace", skip(self))]
-    pub fn try_get_dataflow_metainfo(&self, id: &GlobalId) -> Option<&DataflowMetainfo> {
+    pub fn try_get_dataflow_metainfo(
+        &self,
+        id: &GlobalId,
+    ) -> Option<&DataflowMetainfo<OptimizerNotice>> {
         self.plans.dataflow_metainfos.get(id)
     }
 
@@ -1187,6 +1195,17 @@ impl Catalog {
         self.transient_revision += 1;
 
         for id in drop_ids {
+            if let Some(df_meta) = self.try_get_dataflow_metainfo(&id) {
+                if self.state().system_config().enable_mz_notices() {
+                    // Generate retractions for the Builtin tables.
+                    self.pack_optimizer_notices(
+                        &mut builtin_table_updates,
+                        df_meta.optimizer_notices.iter(),
+                        -1,
+                    );
+                }
+            }
+            // Drop in-memory planning metadata.
             self.drop_plans_and_metainfos(id);
         }
 
@@ -3420,7 +3439,7 @@ impl Catalog {
         create_sql: String,
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
-        custom_logical_compaction_window: Option<Duration>,
+        custom_logical_compaction_window: Option<CompactionWindow>,
     ) -> Result<CatalogItem, AdapterError> {
         self.state.parse_item(
             id,

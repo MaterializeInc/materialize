@@ -61,6 +61,8 @@ IGNORE_RE = re.compile(
     | \(\#1\)\ IS\ NULL
     # test/sqllogictest/cockroach/*.slt
     | cockroach\#
+    # cloud repo
+    | cloud\#
     # ci/test/lint-buf/README.md
     | Ignore\ because\ of\ #99999
     )

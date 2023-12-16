@@ -587,6 +587,7 @@ where
         };
         let environment_id = self.connection_context().environment_id.clone();
         let aws_external_id_prefix = self.connection_context().aws_external_id_prefix.clone();
+        let aws_connection_role_arn = self.connection_context().aws_connection_role_arn.clone();
         let persist_pubsub_url = self.persist_pubsub_url.clone();
         let persist_txn_tables = self.persist_txn_tables;
         let secrets_args = self.secrets_args.to_flags();
@@ -618,6 +619,12 @@ where
                             args.push(format!(
                                 "--aws-external-id-prefix={}",
                                 aws_external_id_prefix
+                            ));
+                        }
+                        if let Some(aws_connection_role_arn) = &aws_connection_role_arn {
+                            args.push(format!(
+                                "--aws-connection-role-arn={}",
+                                aws_connection_role_arn
                             ));
                         }
                         if let Some(memory_limit) = location.allocation.memory_limit {

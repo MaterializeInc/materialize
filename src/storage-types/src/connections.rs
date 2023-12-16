@@ -18,10 +18,7 @@ use anyhow::{anyhow, Context};
 use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceReader};
-use mz_kafka_util::client::{
-    BrokerRewrite, MzClientContext, MzKafkaError, TunnelingClientContext,
-    DEFAULT_FETCH_METADATA_TIMEOUT,
-};
+use mz_kafka_util::client::{BrokerRewrite, MzClientContext, MzKafkaError, TunnelingClientContext};
 use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
@@ -44,7 +41,7 @@ use tokio_postgres::config::SslMode;
 use url::Url;
 
 use crate::configuration::StorageConfiguration;
-use crate::connections::aws::AwsConfig;
+use crate::connections::aws::AwsConnection;
 use crate::errors::{ContextCreationError, CsrConnectError};
 
 pub mod aws;
@@ -131,6 +128,9 @@ pub struct ConnectionContext {
     pub librdkafka_log_level: tracing::Level,
     /// A prefix for an external ID to use for all AWS AssumeRole operations.
     pub aws_external_id_prefix: Option<AwsExternalIdPrefix>,
+    /// The ARN for a Materialize-controlled role to assume before assuming
+    /// a customer's requested role for an AWS connection.
+    pub aws_connection_role_arn: Option<String>,
     /// A secrets reader.
     pub secrets_reader: Arc<dyn SecretsReader>,
     /// A cloud resource reader, if supported in this configuration.
@@ -151,6 +151,7 @@ impl ConnectionContext {
         environment_id: String,
         startup_log_level: &CloneableEnvFilter,
         aws_external_id_prefix: Option<AwsExternalIdPrefix>,
+        aws_connection_role_arn: Option<String>,
         secrets_reader: Arc<dyn SecretsReader>,
         cloud_resource_reader: Option<Arc<dyn CloudResourceReader>>,
     ) -> ConnectionContext {
@@ -161,6 +162,7 @@ impl ConnectionContext {
                 "librdkafka",
             ),
             aws_external_id_prefix,
+            aws_connection_role_arn,
             secrets_reader,
             cloud_resource_reader,
             ssh_tunnel_manager: SshTunnelManager::default(),
@@ -173,6 +175,7 @@ impl ConnectionContext {
             environment_id: "test-environment-id".into(),
             librdkafka_log_level: tracing::Level::INFO,
             aws_external_id_prefix: None,
+            aws_connection_role_arn: None,
             secrets_reader,
             cloud_resource_reader: None,
             ssh_tunnel_manager: SshTunnelManager::default(),
@@ -186,7 +189,7 @@ pub enum Connection<C: ConnectionAccess = InlinedConnection> {
     Csr(CsrConnection<C>),
     Postgres(PostgresConnection<C>),
     Ssh(SshConnection),
-    Aws(AwsConfig),
+    Aws(AwsConnection),
     AwsPrivatelink(AwsPrivatelinkConnection),
 }
 
@@ -458,15 +461,11 @@ impl KafkaConnection {
             );
         }
 
-        // We don't override any socket timeouts (like `socket.timeout.ms`) as we allow rdkafka
-        // to choose a reasonably default for us, but we do enable keepalives, as
-        // they have no downsides <https://github.com/confluentinc/librdkafka/issues/283>.
-        options.insert("socket.keepalive.enable".into(), "true".into());
-
         let mut config = mz_kafka_util::client::create_new_client_config(
             storage_configuration
                 .connection_context
                 .librdkafka_log_level,
+            storage_configuration.parameters.kafka_timeout_config,
         );
         for (k, v) in options {
             config.set(
@@ -585,6 +584,11 @@ impl KafkaConnection {
             .create_with_context(storage_configuration, context, &BTreeMap::new())
             .await?;
 
+        let timeout = storage_configuration
+            .parameters
+            .kafka_timeout_config
+            .fetch_metadata_timeout;
+
         // librdkafka doesn't expose an API for determining whether a connection to
         // the Kafka cluster has been successfully established. So we make a
         // metadata request, though we don't care about the results, so that we can
@@ -597,7 +601,7 @@ impl KafkaConnection {
         // error is buried in the librdkafka logs, which are not visible to users.
         let result = mz_ore::task::spawn_blocking(
             || "kafka_get_metadata",
-            move || consumer.fetch_metadata(None, DEFAULT_FETCH_METADATA_TIMEOUT),
+            move || consumer.fetch_metadata(None, timeout),
         )
         .await?;
         match result {

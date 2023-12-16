@@ -145,7 +145,7 @@ impl Coordinator {
         if let Some(revision) = Self::verify_statement_revision(
             self.catalog(),
             session,
-            portal.stmt.as_ref(),
+            portal.stmt.as_deref(),
             &portal.desc,
             portal.catalog_revision,
         )? {

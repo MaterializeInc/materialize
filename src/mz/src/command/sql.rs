@@ -38,13 +38,6 @@ pub async fn run(cx: &RegionContext, RunArgs { cluster, psql_args }: RunArgs) ->
     let region_info = cx.get_region_info().await?;
     let email = claims.await?.email;
 
-    eprintln!("Authenticated using profile '{}'.", cx.get_profile());
-    if let Some(cluster) = cluster.clone() {
-        eprintln!("Connected to cluster '{}'.", cluster);
-    } else {
-        eprintln!("Connected to the default cluster.")
-    }
-
     let _error = sql_client
         .shell(&region_info, email, cluster)
         .args(psql_args)

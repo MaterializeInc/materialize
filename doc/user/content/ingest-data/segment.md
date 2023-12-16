@@ -28,7 +28,7 @@ create a [cluster guide](/sql/create-cluster),
 or create a managed cluster for all your webhooks using the following SQL statement:
 
 ```sql
-CREATE CLUSTER webhooks_cluster SIZE = '3xsmall';
+CREATE CLUSTER webhooks_cluster (SIZE = '3xsmall');
 ```
 
 ## Step 2. Create a Shared Secret

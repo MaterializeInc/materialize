@@ -286,10 +286,11 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 6  connection_id  text
 7  size  text
 8  envelope_type  text
-9  cluster_id  text
-10  owner_id  text
-11  create_sql  text
-12  redacted_create_sql  text
+9  format  text
+10  cluster_id  text
+11  owner_id  text
+12  create_sql  text
+13  redacted_create_sql  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_sources' ORDER BY position
@@ -302,11 +303,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 6  connection_id  text
 7  size  text
 8  envelope_type  text
-9  cluster_id  text
-10  owner_id  text
-11  privileges  mz_aclitem[]
-12  create_sql  text
-13  redacted_create_sql  text
+9  key_format  text
+10  value_format  text
+11  cluster_id  text
+12  owner_id  text
+13  privileges  mz_aclitem[]
+14  create_sql  text
+15  redacted_create_sql  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_storage_usage' ORDER BY position

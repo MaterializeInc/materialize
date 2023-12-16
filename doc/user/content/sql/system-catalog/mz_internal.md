@@ -354,6 +354,28 @@ The view is defined as the transitive closure of [`mz_object_dependencies`](#mz_
 | `object_id`             | [`text`]     | The ID of the dependent object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).                          |
 | `referenced_object_id`  | [`text`]     | The ID of the (possibly transitively) referenced object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
 
+### `mz_notices`
+
+The `mz_notices` view contains a list of currently active optimizer notices
+emitted by the system.
+
+<!-- RELATION_SPEC mz_internal.mz_notices -->
+| Field                   | Type                         | Meaning                                                                                                                                           |
+| ----------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `notice_type`           | [`text`]                     | The notice type.                                                                                                                                  |
+| `message`               | [`text`]                     | A brief description of the issue highlighted by this notice.                                                                                      |
+| `hint`                  | [`text`]                     | A high-level hint that tells the user what can be improved.                                                                                       |
+| `action`                | [`text`]                     | A concrete action that will resolve the notice.                                                                                                   |
+| `redacted_message`      | [`text`]                     | A redacted version of the `message` column. `NULL` if no redaction is needed.                                                                     |
+| `redacted_hint`         | [`text`]                     | A redacted version of the `hint` column. `NULL` if no redaction is needed.                                                                        |
+| `redacted_action`       | [`text`]                     | A redacted version of the `action` column. `NULL` if no redaction is needed.                                                                      |
+| `action_type`           | [`text`]                     | The type of the `action` string (`sql_statements` for a valid SQL string or `plain_text` for plain text).                                         |
+| `object_id`             | [`text`]                     | The ID of the materialized view or index. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). For global notices, this column is `NULL`. |
+| `created_at`            | [`timestamp with time zone`] | The time at which the notice was created. Note that some notices are re-created on `environmentd` restart.                                        |
+
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_optimizer_notices -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_notices_redacted -->
+
 ### `mz_postgres_sources`
 
 The `mz_postgres_sources` table contains a row for each PostgreSQL source in the
@@ -1222,6 +1244,7 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aws_connections -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability_raw -->

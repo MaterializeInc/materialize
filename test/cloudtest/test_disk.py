@@ -14,7 +14,7 @@ from materialize.cloudtest.util.cluster import cluster_pod_name
 
 
 def test_disk_replica(mz: MaterializeApplication) -> None:
-    """Testing `DISK` cluster replicas"""
+    """Testing `DISK = true` cluster replicas"""
     mz.testdrive.run(
         input=dedent(
             """
@@ -78,3 +78,60 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
         "ls /scratch/storage/upsert",
     )
     assert source_global_id in on_disk_sources
+
+    mz.testdrive.run(
+        input=dedent(
+            """
+            > DROP CLUSTER disk_cluster1 CASCADE
+            """
+        )
+    )
+
+
+def test_no_disk_replica(mz: MaterializeApplication) -> None:
+    """Testing `DISK = false` cluster replicas"""
+    mz.testdrive.run(
+        input=dedent(
+            """
+            $ kafka-create-topic topic=test-no-disk
+
+            $ kafka-ingest key-format=bytes format=bytes topic=test-no-disk
+            key1:val1
+            key2:val2
+
+            > CREATE CLUSTER no_disk_cluster1
+                REPLICAS (r1 (
+                    SIZE '1', DISK = false
+                ))
+
+            > CREATE CONNECTION IF NOT EXISTS kafka
+              TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
+
+            > CREATE SOURCE no_disk_source1
+              IN CLUSTER no_disk_cluster1
+              FROM KAFKA CONNECTION kafka
+              (TOPIC 'testdrive-test-no-disk-${testdrive.seed}')
+              KEY FORMAT TEXT
+              VALUE FORMAT TEXT
+              ENVELOPE UPSERT;
+
+
+            > SELECT * FROM no_disk_source1;
+            key           text
+            ------------------
+            key1          val1
+            key2          val2
+
+            $ kafka-ingest key-format=bytes format=bytes topic=test-no-disk
+            key1:val3
+
+            > SELECT * FROM no_disk_source1;
+            key           text
+            ------------------
+            key1          val3
+            key2          val2
+
+            > DROP CLUSTER no_disk_cluster1 CASCADE;
+            """
+        )
+    )

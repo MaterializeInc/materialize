@@ -20,7 +20,7 @@ use mz_sql_parser::ast::{
     ConnectionOption, ConnectionOptionName, CreateConnectionType, KafkaBroker,
     KafkaBrokerAwsPrivatelinkOption, KafkaBrokerAwsPrivatelinkOptionName, KafkaBrokerTunnel,
 };
-use mz_storage_types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials};
+use mz_storage_types::connections::aws::{AwsAssumeRole, AwsAuth, AwsConnection, AwsCredentials};
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, CsrConnection, CsrConnectionHttpAuth,
@@ -36,6 +36,8 @@ use crate::plan::{PlanError, StatementContext};
 generate_extracted_config!(
     ConnectionOption,
     (AccessKeyId, StringOrSecret),
+    (AssumeRoleArn, String),
+    (AssumeRoleSessionName, String),
     (AvailabilityZones, Vec<String>),
     (AwsPrivatelink, with_options::Object),
     (Broker, Vec<KafkaBroker<Aug>>),
@@ -47,7 +49,6 @@ generate_extracted_config!(
     (Port, u16),
     (ProgressTopic, String),
     (Region, String),
-    (RoleArn, String),
     (SaslMechanisms, String),
     (SaslPassword, with_options::Secret),
     (SaslUsername, StringOrSecret),
@@ -88,7 +89,8 @@ pub(super) fn validate_options_per_connection_type(
             Token,
             Endpoint,
             Region,
-            RoleArn,
+            AssumeRoleArn,
+            AssumeRoleSessionName,
         ]
         .as_slice(),
         CreateConnectionType::AwsPrivatelink => &[AvailabilityZones, Port, ServiceName],
@@ -164,17 +166,41 @@ impl ConnectionOptionExtracted {
 
         let connection: Connection<ReferencedConnection> = match connection_type {
             CreateConnectionType::Aws => {
-                Connection::Aws(AwsConfig {
-                    credentials: AwsCredentials {
-                        access_key_id: self
-                            .access_key_id
-                            .ok_or_else(|| sql_err!("ACCESS KEY ID option is required"))?,
-                        secret_access_key: self
-                            .secret_access_key
-                            .ok_or_else(|| sql_err!("SECRET ACCESS KEY option is required"))?
-                            .into(),
-                        session_token: self.token,
-                    },
+                let credentials = match (self.access_key_id, self.secret_access_key, self.token) {
+                    (Some(access_key_id), Some(secret_access_key), session_token) => {
+                        Some(AwsCredentials {
+                            access_key_id,
+                            secret_access_key: secret_access_key.into(),
+                            session_token,
+                        })
+                    }
+                    (None, None, None) => None,
+                    _ => {
+                        sql_bail!("must specify both ACCESS KEY ID and SECRET ACCESS KEY with optional SESSION TOKEN");
+                    }
+                };
+
+                let assume_role = match (self.assume_role_arn, self.assume_role_session_name) {
+                    (Some(arn), session_name) => Some(AwsAssumeRole { arn, session_name }),
+                    (None, Some(_)) => {
+                        sql_bail!(
+                            "must specify ASSUME ROLE ARN with optional ASSUME ROLE SESSION NAME"
+                        );
+                    }
+                    _ => None,
+                };
+
+                let auth = match (credentials, assume_role) {
+                    (None, None) => sql_bail!("must specify either ASSUME ROLE ARN or ACCESS KEY ID and SECRET ACCESS KEY"),
+                    (Some(credentials), None) => AwsAuth::Credentials(credentials),
+                    (None, Some(assume_role)) => AwsAuth::AssumeRole(assume_role),
+                    (Some(_), Some(_)) => {
+                        sql_bail!("cannot specify both ACCESS KEY ID and ASSUME ROLE ARN");
+                    }
+                };
+
+                Connection::Aws(AwsConnection {
+                    auth,
                     endpoint: match self.endpoint {
                         // TODO(benesch): this should not treat an empty endpoint as equivalent to a `NULL`
                         // endpoint, but making that change now would break testdrive. AWS connections are
@@ -184,7 +210,6 @@ impl ConnectionOptionExtracted {
                         _ => None,
                     },
                     region: self.region,
-                    role: self.role_arn.map(|arn| AwsAssumeRole { arn }),
                 })
             }
             CreateConnectionType::AwsPrivatelink => {

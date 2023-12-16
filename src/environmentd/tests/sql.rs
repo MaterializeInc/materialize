@@ -93,7 +93,8 @@ use http::StatusCode;
 use itertools::Itertools;
 use mz_adapter::{TimestampContext, TimestampExplanation};
 use mz_environmentd::test_util::{
-    self, MzTimestamp, PostgresErrorExt, TestServerWithRuntime, KAFKA_ADDRS,
+    self, try_get_explain_timestamp, MzTimestamp, PostgresErrorExt, TestServerWithRuntime,
+    KAFKA_ADDRS,
 };
 use mz_ore::assert_contains;
 use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
@@ -1499,24 +1500,51 @@ async fn test_utilization_hold() {
         .execute("ALTER SYSTEM SET metrics_retention='1s'", &[])
         .await
         .unwrap();
-    for q in QUERIES_TO_TRY {
-        let explain_q = &format!("EXPLAIN TIMESTAMP AS JSON FOR {q}");
-        for cluster in CLUSTERS_TO_TRY {
-            client
-                .execute(&format!("SET cluster={cluster}"), &[])
-                .await
-                .unwrap();
-            let row = client.query_one(explain_q, &[]).await.unwrap();
-            let explain: String = row.get(0);
-            let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
-            let since = explain
-                .determination
-                .since
-                .into_option()
-                .expect("The since must be finite");
-            // Check that since is not more than 2 seconds in the past
-            assert!(Timestamp::new(now_millis)
-                .less_equal(&since.step_forward_by(&Timestamp::new(2000))));
+
+    // This is a bit clunky, but setting the metrics_retention will not
+    // propagate to all tables instantly. We have to retry the queries below,
+    // but only up to a point.
+    let deadline = Instant::now() + Duration::from_secs(60);
+
+    'retry: loop {
+        let now = Instant::now();
+        if now > deadline {
+            panic!("sinces did not advance as expected in time");
+        }
+
+        let mut all_sinces_correct = true;
+
+        for q in QUERIES_TO_TRY {
+            let explain_q = &format!("EXPLAIN TIMESTAMP AS JSON FOR {q}");
+            for cluster in CLUSTERS_TO_TRY {
+                client
+                    .execute(&format!("SET cluster={cluster}"), &[])
+                    .await
+                    .unwrap();
+                let row = client.query_one(explain_q, &[]).await.unwrap();
+                let explain: String = row.get(0);
+                let explain: TimestampExplanation<Timestamp> =
+                    serde_json::from_str(&explain).unwrap();
+                let since = explain
+                    .determination
+                    .since
+                    .into_option()
+                    .expect("The since must be finite");
+                // Check that since is not more than 2 seconds in the past
+                let since_is_correct = Timestamp::new(now_millis)
+                    .less_equal(&since.step_forward_by(&Timestamp::new(2000)));
+
+                if !since_is_correct {
+                    info!(now_millis = ?now_millis, since = ?since, query = ?q,
+                          "since has not yet advanced to expected time, retrying");
+                }
+
+                all_sinces_correct &= since_is_correct;
+            }
+        }
+
+        if all_sinces_correct {
+            break 'retry;
         }
     }
 }
@@ -3524,5 +3552,39 @@ fn test_peek_on_dropped_indexed_view() {
                 Ok(())
             }
         })
+        .unwrap();
+}
+
+/// Test AS OF in EXPLAIN. This output will only differ from the non-ASOF versions with RETAIN
+/// HISTORY, where the object and its indexes have differing compaction policies.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_explain_as_of() {
+    // TODO: This would be better in testdrive, but we'd need to support negative intervals in AS
+    // OF first.
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
+
+    // Retry until we are able to explain plan and timestamp for a few seconds ago.
+    // mz_cluster_replica_statuses is a retained metrics table which is why a historical AS OF
+    // works.
+    Retry::default()
+        .clamp_backoff(Duration::from_secs(1))
+        .retry_async(|_| async {
+            let now: String = client
+                .query_one("SELECT mz_now()::text", &[])
+                .await
+                .unwrap()
+                .get(0);
+            let now: u64 = now.parse().unwrap();
+            let ts = now - 3000;
+            let query = format!("mz_internal.mz_cluster_replica_statuses AS OF {ts}");
+            let query_ts = try_get_explain_timestamp(&query, &client).await?;
+            assert_eq!(ts, query_ts);
+            client
+                .query_one(&format!("EXPLAIN PLAN FOR SELECT * FROM {query}"), &[])
+                .await?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
         .unwrap();
 }

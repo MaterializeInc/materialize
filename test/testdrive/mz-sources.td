@@ -25,6 +25,11 @@ $ kafka-create-topic topic=none-topic partitions=1
   INCLUDE KEY
   ENVELOPE NONE
 
+> CREATE SOURCE none_source_no_key
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-none-topic-${testdrive.seed}')
+  FORMAT TEXT
+  ENVELOPE NONE
+
 
 $ set keyschema={
     "type": "record",
@@ -145,3 +150,12 @@ debezium
 
 > SELECT envelope_type FROM mz_sources WHERE name = 'upsert_source'
 upsert
+
+> SELECT key_format, value_format FROM mz_sources WHERE name = 'none_source'
+text text
+
+> SELECT key_format, value_format FROM mz_sources WHERE name = 'none_source_no_key'
+<null> text
+
+> SELECT key_format, value_format FROM mz_sources WHERE name = 'debezium_source'
+avro avro

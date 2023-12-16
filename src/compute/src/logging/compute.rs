@@ -32,9 +32,10 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Filter, InspectCore, Operator};
 use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::logging::WorkerIdentifier;
+use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::scheduling::Scheduler;
 use timely::worker::Worker;
-use timely::{Container, Data};
+use timely::{Container, Data, PartialOrder};
 use tracing::error;
 use uuid::Uuid;
 
@@ -438,6 +439,8 @@ impl<A: Allocate> DemuxState<A> {
 struct ExportState {
     /// The ID of the dataflow maintaining this export.
     dataflow_id: usize,
+    /// The most recently reported frontier of this export.
+    reported_frontier: MutableAntichain<Timestamp>,
     /// Imports feeding this export, and their frontier delay tracking state.
     imports: BTreeMap<GlobalId, FrontierDelayState>,
     /// Number of errors in this export.
@@ -454,6 +457,7 @@ impl ExportState {
     fn new(dataflow_id: usize) -> Self {
         Self {
             dataflow_id,
+            reported_frontier: MutableAntichain::new(),
             imports: Default::default(),
             error_count: 0,
             delayed: false,
@@ -813,12 +817,21 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     }
 
     fn handle_frontier(&mut self, export_id: GlobalId, frontier: Timestamp, diff: i8) {
+        let diff = i64::from(diff);
         let ts = self.ts();
         let datum = FrontierDatum {
             export_id,
             frontier,
         };
-        self.output.frontier.give((datum, ts, diff.into()));
+        self.output.frontier.give((datum, ts, diff));
+
+        let Some(export) = self.state.exports.get_mut(&export_id) else {
+            // We might see frontier updates from dataflows we have already dropped but that are
+            // still running in Timely. We ignore those.
+            return;
+        };
+
+        export.reported_frontier.update_iter([(frontier, diff)]);
 
         // Everything below only applies to frontier insertions.
         if diff <= 0 {
@@ -827,38 +840,36 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
 
         // Check if we have imports associated to this export and report frontier advancement
         // delays.
-        if let Some(export) = self.state.exports.get_mut(&export_id) {
-            for (&import_id, delay_state) in &mut export.imports {
-                let FrontierDelayState {
-                    time_deque,
-                    delay_map,
-                } = delay_state;
-                while let Some(current_front) = time_deque.pop_front() {
-                    let (import_frontier, update_time) = current_front;
-                    if frontier >= import_frontier {
-                        let elapsed_ns = self.time.saturating_sub(update_time).as_nanos();
-                        let elapsed_pow = elapsed_ns.next_power_of_two();
-                        let datum = FrontierDelayDatum {
-                            export_id,
-                            import_id,
-                            delay_pow: elapsed_pow,
-                        };
-                        self.output.frontier_delay.give((datum, ts, 1));
+        for (&import_id, delay_state) in &mut export.imports {
+            let FrontierDelayState {
+                time_deque,
+                delay_map,
+            } = delay_state;
+            while let Some(current_front) = time_deque.pop_front() {
+                let (import_frontier, update_time) = current_front;
+                if frontier >= import_frontier {
+                    let elapsed_ns = self.time.saturating_sub(update_time).as_nanos();
+                    let elapsed_pow = elapsed_ns.next_power_of_two();
+                    let datum = FrontierDelayDatum {
+                        export_id,
+                        import_id,
+                        delay_pow: elapsed_pow,
+                    };
+                    self.output.frontier_delay.give((datum, ts, 1));
 
-                        let delay_count = delay_map.entry(elapsed_pow).or_default();
-                        *delay_count += 1;
-                    } else {
-                        time_deque.push_front(current_front);
-                        break;
-                    }
+                    let delay_count = delay_map.entry(elapsed_pow).or_default();
+                    *delay_count += 1;
+                } else {
+                    time_deque.push_front(current_front);
+                    break;
                 }
+            }
 
-                // If any of the imports has no pending frontiers that means the export has caught
-                // up with its inputs.
-                if export.delayed && time_deque.is_empty() {
-                    export.delayed = false;
-                    self.state.delayed_time.register_caught_up_export(self.time);
-                }
+            // If any of the imports has no pending frontiers that means the export has caught
+            // up with its inputs.
+            if export.delayed && time_deque.is_empty() {
+                export.delayed = false;
+                self.state.delayed_time.register_caught_up_export(self.time);
             }
         }
     }
@@ -888,17 +899,25 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         // by a dataflow `inspect_container` operator, which may outlive the corresponding trace or
         // sink recording in the current `ComputeState` until Timely eventually drops it.
         if let Some(export) = self.state.exports.get_mut(&export_id) {
-            let delay_state = export.imports.entry(import_id).or_default();
-            delay_state.time_deque.push_back((frontier, self.time));
+            // It is possible that an export's frontier is beyond the frontier of its inputs. In
+            // particular, `persist_sink` is known to immediately advance non-active workers to the
+            // empty frontier. We must be careful to not enqueue import frontiers in this case, as
+            // they might otherwise never be picked up and leak.
+            let import_frontier = [frontier];
+            let export_frontier = export.reported_frontier.frontier();
+            if PartialOrder::less_than(&export_frontier, &AntichainRef::new(&import_frontier)) {
+                let delay_state = export.imports.entry(import_id).or_default();
+                delay_state.time_deque.push_back((frontier, self.time));
 
-            // If all of the imports have pending frontiers that means the export has become
-            // delayed.
-            if !export.delayed
-                && delay_state.time_deque.len() == 1
-                && export.imports.values().all(|i| !i.time_deque.is_empty())
-            {
-                export.delayed = true;
-                self.state.delayed_time.register_delayed_export(self.time);
+                // If all of the imports have pending frontiers that means the export has become
+                // delayed.
+                if !export.delayed
+                    && delay_state.time_deque.len() == 1
+                    && export.imports.values().all(|i| !i.time_deque.is_empty())
+                {
+                    export.delayed = true;
+                    self.state.delayed_time.register_delayed_export(self.time);
+                }
             }
         }
     }
