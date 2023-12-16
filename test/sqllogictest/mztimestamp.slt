@@ -65,3 +65,8 @@ SELECT '1990-01'::mz_timestamp;
 # This would be negative milliseconds since the Unix epoch
 query error db error: ERROR: invalid input syntax for type mz_timestamp: could not parse mz_timestamp: out of range for mz_timestamp: "1960\-01\-01 11:00"
 SELECT '1960-01-01 11:00'::mz_timestamp;
+
+query T
+SELECT 1::mz_catalog.mz_timestamp
+----
+1

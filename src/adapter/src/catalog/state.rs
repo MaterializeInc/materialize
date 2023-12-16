@@ -1626,30 +1626,30 @@ impl CatalogState {
         Ok(())
     }
 
-    /// Optimized lookup for a builtin table
+    /// Optimized lookup for a builtin table.
     ///
-    /// Panics if the builtin table doesn't exist in the catalog
+    /// Panics if the builtin table doesn't exist in the catalog.
     pub fn resolve_builtin_table(&self, builtin: &'static BuiltinTable) -> GlobalId {
         self.resolve_builtin_object(&Builtin::<IdReference>::Table(builtin))
     }
 
-    /// Optimized lookup for a builtin log
+    /// Optimized lookup for a builtin log.
     ///
-    /// Panics if the builtin log doesn't exist in the catalog
+    /// Panics if the builtin log doesn't exist in the catalog.
     pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> GlobalId {
         self.resolve_builtin_object(&Builtin::<IdReference>::Log(builtin))
     }
 
-    /// Optimized lookup for a builtin storage collection
+    /// Optimized lookup for a builtin storage collection.
     ///
-    /// Panics if the builtin storage collection doesn't exist in the catalog
+    /// Panics if the builtin storage collection doesn't exist in the catalog.
     pub fn resolve_builtin_source(&self, builtin: &'static BuiltinSource) -> GlobalId {
         self.resolve_builtin_object(&Builtin::<IdReference>::Source(builtin))
     }
 
-    /// Optimized lookup for a builtin object
+    /// Optimized lookup for a builtin object.
     ///
-    /// Panics if the builtin object doesn't exist in the catalog
+    /// Panics if the builtin object doesn't exist in the catalog.
     pub fn resolve_builtin_object<T: TypeReference>(&self, builtin: &Builtin<T>) -> GlobalId {
         let schema_id = &self.ambient_schemas_by_name[builtin.schema()];
         let schema = &self.ambient_schemas_by_id[schema_id];
@@ -1704,6 +1704,13 @@ impl CatalogState {
         }
 
         Err(SqlCatalogError::UnknownSchema(schema_name.into()))
+    }
+
+    /// Optimized lookup for a system schema.
+    ///
+    /// Panics if the system schema doesn't exist in the catalog.
+    pub fn resolve_system_schema(&self, name: &str) -> SchemaId {
+        self.ambient_schemas_by_name[name]
     }
 
     pub fn resolve_search_path(

@@ -1259,7 +1259,7 @@ pub const TYPE_ANYCOMPATIBLERANGE: BuiltinType<NameReference> = BuiltinType {
 
 pub const TYPE_LIST: BuiltinType<NameReference> = BuiltinType {
     name: "list",
-    schema: PG_CATALOG_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: mz_pgrepr::oid::TYPE_LIST_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
@@ -1270,7 +1270,7 @@ pub const TYPE_LIST: BuiltinType<NameReference> = BuiltinType {
 
 pub const TYPE_MAP: BuiltinType<NameReference> = BuiltinType {
     name: "map",
-    schema: PG_CATALOG_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: mz_pgrepr::oid::TYPE_MAP_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
@@ -1281,7 +1281,7 @@ pub const TYPE_MAP: BuiltinType<NameReference> = BuiltinType {
 
 pub const TYPE_ANYCOMPATIBLELIST: BuiltinType<NameReference> = BuiltinType {
     name: "anycompatiblelist",
-    schema: PG_CATALOG_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: mz_pgrepr::oid::TYPE_ANYCOMPATIBLELIST_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
@@ -1292,7 +1292,7 @@ pub const TYPE_ANYCOMPATIBLELIST: BuiltinType<NameReference> = BuiltinType {
 
 pub const TYPE_ANYCOMPATIBLEMAP: BuiltinType<NameReference> = BuiltinType {
     name: "anycompatiblemap",
-    schema: PG_CATALOG_SCHEMA,
+    schema: MZ_CATALOG_SCHEMA,
     oid: mz_pgrepr::oid::TYPE_ANYCOMPATIBLEMAP_OID,
     details: CatalogTypeDetails {
         typ: CatalogType::Pseudo,
@@ -2886,9 +2886,9 @@ pub const MZ_OBJECTS: BuiltinView = BuiltinView {
     sql:
         "SELECT id, oid, schema_id, name, type, owner_id, privileges FROM mz_catalog.mz_relations
 UNION ALL
-    SELECT id, oid, schema_id, name, 'sink', owner_id, NULL::mz_aclitem[] FROM mz_catalog.mz_sinks
+    SELECT id, oid, schema_id, name, 'sink', owner_id, NULL::mz_catalog.mz_aclitem[] FROM mz_catalog.mz_sinks
 UNION ALL
-    SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index', mz_indexes.owner_id, NULL::mz_aclitem[]
+    SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index', mz_indexes.owner_id, NULL::mz_catalog.mz_aclitem[]
     FROM mz_catalog.mz_indexes
     JOIN mz_catalog.mz_relations ON mz_indexes.on_id = mz_relations.id
 UNION ALL
@@ -2896,7 +2896,7 @@ UNION ALL
 UNION ALL
     SELECT id, oid, schema_id, name, 'type', owner_id, privileges FROM mz_catalog.mz_types
 UNION ALL
-    SELECT id, oid, schema_id, name, 'function', owner_id, NULL::mz_aclitem[] FROM mz_catalog.mz_functions
+    SELECT id, oid, schema_id, name, 'function', owner_id, NULL::mz_catalog.mz_aclitem[] FROM mz_catalog.mz_functions
 UNION ALL
     SELECT id, oid, schema_id, name, 'secret', owner_id, privileges FROM mz_catalog.mz_secrets",
     sensitivity: DataSensitivity::Public,
@@ -6450,5 +6450,27 @@ pub mod BUILTINS {
 
     pub fn iter() -> impl Iterator<Item = &'static Builtin<NameReference>> {
         BUILTINS_STATIC.iter()
+    }
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_builtin_type_schema() {
+    use mz_pgrepr::oid::FIRST_MATERIALIZE_OID;
+
+    for typ in BUILTINS::types() {
+        if typ.oid < FIRST_MATERIALIZE_OID {
+            assert_eq!(
+                typ.schema, PG_CATALOG_SCHEMA,
+                "{typ:?} should be in {PG_CATALOG_SCHEMA} schema"
+            );
+        } else {
+            // `mz_pgrepr::Type` resolution relies on all non-PG types existing in the mz_catalog
+            // schema.
+            assert_eq!(
+                typ.schema, MZ_CATALOG_SCHEMA,
+                "{typ:?} should be in {MZ_CATALOG_SCHEMA} schema"
+            );
+        }
     }
 }

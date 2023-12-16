@@ -10,14 +10,18 @@
 use std::collections::BTreeMap;
 
 use futures::future::BoxFuture;
+use mz_catalog::builtin::{BuiltinType, BUILTINS};
 use mz_catalog::durable::Transaction;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_repr::namespaces::PG_CATALOG_SCHEMA;
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{Raw, Statement};
+use mz_sql::catalog::NameReference;
+use mz_sql_parser::ast::{visit_mut, Ident, Raw, RawDataType, Statement};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::GenericSourceConnection;
+use once_cell::sync::Lazy;
 use semver::Version;
 use tracing::info;
 
@@ -86,10 +90,10 @@ pub(crate) async fn migrate(
             //
             // Migration functions may also take `tx` as input to stage
             // arbitrary changes to the catalog.
-
             if catalog_version <= Version::new(0, 79, u64::MAX) {
                 ast_rewrite_create_sink_into_kafka_options_0_80_0(stmt)?;
             }
+            ast_rewrite_rewrite_type_schemas_0_81_0(stmt);
 
             Ok(())
         })
@@ -275,6 +279,49 @@ fn ast_rewrite_create_sink_into_kafka_options_0_80_0(
     Rewriter.visit_statement_mut(stmt);
 
     Ok(())
+}
+
+/// Rewrite all non-`pg_catalog` system types to have the correct schema.
+fn ast_rewrite_rewrite_type_schemas_0_81_0(stmt: &mut Statement<Raw>) {
+    use mz_sql::ast::visit_mut::VisitMut;
+
+    static NON_PG_CATALOG_TYPES: Lazy<BTreeMap<&'static str, &'static BuiltinType<NameReference>>> =
+        Lazy::new(|| {
+            BUILTINS::types()
+                .filter(|typ| typ.schema != PG_CATALOG_SCHEMA)
+                .map(|typ| (typ.name, typ))
+                .collect()
+        });
+
+    struct Rewriter;
+
+    impl<'ast> VisitMut<'ast, Raw> for Rewriter {
+        fn visit_data_type_mut(&mut self, node: &'ast mut RawDataType) {
+            match node {
+                RawDataType::Array(_) => {}
+                RawDataType::List(_) => {}
+                RawDataType::Map { .. } => {}
+                RawDataType::Other { name, .. } => {
+                    let name = name.name_mut();
+                    let name = &mut name.0;
+                    let len = name.len();
+                    if len >= 2 {
+                        let item_name = &name[len - 1];
+                        let schema_name = &name[len - 2];
+
+                        if schema_name.as_str() == PG_CATALOG_SCHEMA {
+                            if let Some(typ) = NON_PG_CATALOG_TYPES.get(item_name.as_str()) {
+                                name[len - 2] = Ident::new_unchecked(typ.schema);
+                            }
+                        }
+                    }
+                }
+            }
+            visit_mut::visit_data_type_mut(self, node);
+        }
+    }
+
+    Rewriter.visit_statement_mut(stmt);
 }
 
 fn _add_to_audit_log(
