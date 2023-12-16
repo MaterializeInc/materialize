@@ -766,7 +766,7 @@ impl<'a> StatementContext<'a> {
         // produce an unqualified type name that does
         // not require quoting.
         let mut ty = if ty.oid() >= FIRST_USER_OID {
-            return Err(PlanError::)
+            sql_bail!("internal error, unexpected user type: {ty:?} ");
         } else if ty.oid() < FIRST_MATERIALIZE_OID {
             format!("pg_catalog.{}", ty)
         } else {
