@@ -66,7 +66,7 @@ criterion = { version = "0.4.0", features = ["html_reports"] }
 datadriven = { version = "0.6.0", features = ["async"] }
 futures-task = "0.3.21"
 num_cpus = "1.14.0"
-tempfile = "3.2.0"
+tempfile = "3.8.1"
 
 [build-dependencies]
 prost-build = "0.11.2"

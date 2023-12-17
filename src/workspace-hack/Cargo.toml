@@ -16,11 +16,14 @@ publish = false
 [dependencies]
 ahash = { version = "0.8.0" }
 anyhow = { version = "1.0.66", features = ["backtrace"] }
-aws-credential-types = { version = "0.55.1", default-features = false, features = ["hardcoded-credentials"] }
-aws-sdk-sts = { version = "0.26.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sig-auth = { version = "0.55.1", default-features = false, features = ["sign-eventstream"] }
-aws-sigv4 = { version = "0.55.1", features = ["sign-eventstream"] }
-aws-smithy-http = { version = "0.55.2", default-features = false, features = ["event-stream", "rt-tokio"] }
+aws-credential-types = { version = "1.1.1", default-features = false, features = ["hardcoded-credentials", "test-util"] }
+aws-runtime = { version = "1.1.1", default-features = false, features = ["event-stream"] }
+aws-sdk-sts = { version = "1.7.0", default-features = false, features = ["rt-tokio"] }
+aws-sigv4 = { version = "1.1.1", features = ["http0-compat", "sign-eventstream"] }
+aws-smithy-async = { version = "1.1.1", default-features = false, features = ["rt-tokio"] }
+aws-smithy-http = { version = "0.60.1", default-features = false, features = ["event-stream"] }
+aws-smithy-runtime = { version = "1.1.1", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
+aws-smithy-types = { version = "1.1.1", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "rt-tokio"] }
 axum = { version = "0.6.20", features = ["headers", "ws"] }
 bstr = { version = "0.2.14" }
 byteorder = { version = "1.4.3" }
@@ -47,7 +50,7 @@ futures-task = { version = "0.3.28" }
 futures-util = { version = "0.3.28", features = ["channel", "io", "sink"] }
 globset = { version = "0.4.9", features = ["serde1"] }
 hashbrown = { version = "0.14.0", features = ["raw"] }
-hyper = { version = "0.14.25", features = ["full"] }
+hyper = { version = "0.14.27", features = ["full"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 itertools = { version = "0.10.5" }
 k8s-openapi = { version = "0.20.0", default-features = false, features = ["schemars", "v1_26"] }
@@ -114,7 +117,7 @@ tower-http = { version = "0.4.3", features = ["auth", "cors", "map-response-body
 tracing = { version = "0.1.37", features = ["log"] }
 tracing-core = { version = "0.1.30" }
 tracing-subscriber = { version = "0.3.16", features = ["env-filter", "json"] }
-tungstenite = { version = "0.20.1", features = ["native-tls"] }
+tungstenite = { version = "0.20.1" }
 uncased = { version = "0.9.7" }
 url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.2.2", features = ["serde", "v4", "v5"] }
@@ -124,11 +127,14 @@ zstd-sys = { version = "2.0.9", features = ["std"] }
 [build-dependencies]
 ahash = { version = "0.8.0" }
 anyhow = { version = "1.0.66", features = ["backtrace"] }
-aws-credential-types = { version = "0.55.1", default-features = false, features = ["hardcoded-credentials"] }
-aws-sdk-sts = { version = "0.26.0", default-features = false, features = ["native-tls", "rt-tokio"] }
-aws-sig-auth = { version = "0.55.1", default-features = false, features = ["sign-eventstream"] }
-aws-sigv4 = { version = "0.55.1", features = ["sign-eventstream"] }
-aws-smithy-http = { version = "0.55.2", default-features = false, features = ["event-stream", "rt-tokio"] }
+aws-credential-types = { version = "1.1.1", default-features = false, features = ["hardcoded-credentials", "test-util"] }
+aws-runtime = { version = "1.1.1", default-features = false, features = ["event-stream"] }
+aws-sdk-sts = { version = "1.7.0", default-features = false, features = ["rt-tokio"] }
+aws-sigv4 = { version = "1.1.1", features = ["http0-compat", "sign-eventstream"] }
+aws-smithy-async = { version = "1.1.1", default-features = false, features = ["rt-tokio"] }
+aws-smithy-http = { version = "0.60.1", default-features = false, features = ["event-stream"] }
+aws-smithy-runtime = { version = "1.1.1", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
+aws-smithy-types = { version = "1.1.1", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "rt-tokio"] }
 axum = { version = "0.6.20", features = ["headers", "ws"] }
 bstr = { version = "0.2.14" }
 byteorder = { version = "1.4.3" }
@@ -156,7 +162,7 @@ futures-task = { version = "0.3.28" }
 futures-util = { version = "0.3.28", features = ["channel", "io", "sink"] }
 globset = { version = "0.4.9", features = ["serde1"] }
 hashbrown = { version = "0.14.0", features = ["raw"] }
-hyper = { version = "0.14.25", features = ["full"] }
+hyper = { version = "0.14.27", features = ["full"] }
 indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 itertools = { version = "0.10.5" }
 k8s-openapi = { version = "0.20.0", default-features = false, features = ["schemars", "v1_26"] }
@@ -224,7 +230,7 @@ tower-http = { version = "0.4.3", features = ["auth", "cors", "map-response-body
 tracing = { version = "0.1.37", features = ["log"] }
 tracing-core = { version = "0.1.30" }
 tracing-subscriber = { version = "0.3.16", features = ["env-filter", "json"] }
-tungstenite = { version = "0.20.1", features = ["native-tls"] }
+tungstenite = { version = "0.20.1" }
 uncased = { version = "0.9.7" }
 url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.2.2", features = ["serde", "v4", "v5"] }
@@ -232,29 +238,27 @@ zeroize = { version = "1.5.7", features = ["serde"] }
 zstd-sys = { version = "2.0.9", features = ["std"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
+bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
-once_cell = { version = "1.16.0", features = ["unstable"] }
+once_cell = { version = "1.19.0", features = ["unstable"] }
 openssl-sys = { version = "0.9.90", default-features = false, features = ["vendored"] }
-rustix = { version = "0.37.15", features = ["fs", "termios"] }
 tikv-jemalloc-sys = { version = "0.5.2", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
+bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
-once_cell = { version = "1.16.0", features = ["unstable"] }
+once_cell = { version = "1.19.0", features = ["unstable"] }
 openssl-sys = { version = "0.9.90", default-features = false, features = ["vendored"] }
-rustix = { version = "0.37.15", features = ["fs", "termios"] }
 tikv-jemalloc-sys = { version = "0.5.2", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 
 [target.x86_64-apple-darwin.dependencies]
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
-once_cell = { version = "1.16.0", features = ["unstable"] }
-rustix = { version = "0.37.15", features = ["fs", "termios"] }
+once_cell = { version = "1.19.0", features = ["unstable"] }
 security-framework = { version = "2.7.0", features = ["alpn"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
-once_cell = { version = "1.16.0", features = ["unstable"] }
-rustix = { version = "0.37.15", features = ["fs", "termios"] }
+once_cell = { version = "1.19.0", features = ["unstable"] }
 security-framework = { version = "2.7.0", features = ["alpn"] }
 
 ### END HAKARI SECTION

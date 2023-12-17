@@ -6,7 +6,7 @@ members = [
     "src/audit-log",
     "src/avro",
     "src/avro-derive",
-    "src/aws-s3-util",
+    "src/aws-util",
     "src/aws-secrets-controller",
     "src/balancerd",
     "src/build-info",

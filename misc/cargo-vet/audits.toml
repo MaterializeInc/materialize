@@ -40,6 +40,11 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.3.0"
 
+[[audits.once_cell]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+delta = "1.17.1 -> 1.19.0"
+
 [[audits.quanta]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
@@ -49,6 +54,16 @@ version = "0.11.1"
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "10.7.0"
+
+[[audits.redox_syscall]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+delta = "0.3.5 -> 0.4.1"
+
+[[audits.tempfile]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+delta = "3.8.0 -> 3.8.1"
 
 [[audits.timely]]
 who = "Moritz Hoffmann <mh@materialize.com>"
@@ -98,6 +113,120 @@ criteria = "safe-to-deploy"
 user-id = 3618 # David Tolnay (dtolnay)
 start = "2019-07-23"
 end = "2024-11-16"
+
+[[trusted.aws-config]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-credential-types]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-12-29"
+end = "2024-12-17"
+
+[[trusted.aws-http]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-runtime]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2023-04-06"
+end = "2024-12-17"
+
+[[trusted.aws-sdk-s3]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-sdk-secretsmanager]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-sdk-sts]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-sigv4]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-smithy-async]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-smithy-checksums]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-07-20"
+end = "2024-12-17"
+
+[[trusted.aws-smithy-eventstream]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-smithy-http]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-smithy-json]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-smithy-query]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-smithy-runtime]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2023-04-06"
+end = "2024-12-17"
+
+[[trusted.aws-smithy-runtime-api]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2023-04-06"
+end = "2024-12-17"
+
+[[trusted.aws-smithy-types]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-smithy-xml]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
+
+[[trusted.aws-types]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-17"
 
 [[trusted.bincode]]
 criteria = "safe-to-deploy"
@@ -231,6 +360,36 @@ user-id = 189 # Andrew Gallant (BurntSushi)
 start = "2019-04-15"
 end = "2024-11-16"
 
+[[trusted.h2]]
+criteria = "maintained-and-necessary"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2019-03-13"
+end = "2024-12-17"
+
+[[trusted.http]]
+criteria = "maintained-and-necessary"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2019-04-05"
+end = "2024-12-17"
+
+[[trusted.httparse]]
+criteria = "maintained-and-necessary"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2019-07-03"
+end = "2024-12-17"
+
+[[trusted.hyper]]
+criteria = "maintained-and-necessary"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2019-03-01"
+end = "2024-12-17"
+
+[[trusted.hyper-tls]]
+criteria = "maintained-and-necessary"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2019-03-19"
+end = "2024-12-17"
+
 [[trusted.indexmap]]
 criteria = "safe-to-deploy"
 user-id = 539 # Josh Stone (cuviper)
@@ -279,6 +438,12 @@ user-id = 189 # Andrew Gallant (BurntSushi)
 start = "2019-07-07"
 end = "2024-11-16"
 
+[[trusted.mime]]
+criteria = "maintained-and-necessary"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2019-09-09"
+end = "2024-12-17"
+
 [[trusted.num-complex]]
 criteria = "safe-to-deploy"
 user-id = 539 # Josh Stone (cuviper)
@@ -302,6 +467,12 @@ criteria = "safe-to-deploy"
 user-id = 539 # Josh Stone (cuviper)
 start = "2019-06-11"
 end = "2024-11-16"
+
+[[trusted.num_cpus]]
+criteria = "maintained-and-necessary"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2019-06-10"
+end = "2024-12-17"
 
 [[trusted.openssl-probe]]
 criteria = "safe-to-deploy"
@@ -381,11 +552,23 @@ user-id = 189 # Andrew Gallant (BurntSushi)
 start = "2019-02-25"
 end = "2024-11-16"
 
+[[trusted.regex-lite]]
+criteria = "maintained-and-necessary"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2023-02-28"
+end = "2024-12-17"
+
 [[trusted.regex-syntax]]
 criteria = "safe-to-deploy"
 user-id = 189 # Andrew Gallant (BurntSushi)
 start = "2019-03-30"
 end = "2024-11-16"
+
+[[trusted.reqwest]]
+criteria = "maintained-and-necessary"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2019-03-04"
+end = "2024-12-17"
 
 [[trusted.rustc-demangle]]
 criteria = "safe-to-deploy"
@@ -410,6 +593,12 @@ criteria = "safe-to-deploy"
 user-id = 189 # Andrew Gallant (BurntSushi)
 start = "2019-07-16"
 end = "2024-11-16"
+
+[[trusted.same-file]]
+criteria = "maintained-and-necessary"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-07-16"
+end = "2024-12-17"
 
 [[trusted.scoped-tls]]
 criteria = "safe-to-deploy"
@@ -572,6 +761,12 @@ criteria = "safe-to-deploy"
 user-id = 6743 # Ed Page (epage)
 start = "2021-09-13"
 end = "2024-11-16"
+
+[[trusted.try-lock]]
+criteria = "maintained-and-necessary"
+user-id = 359 # Sean McArthur (seanmonstar)
+start = "2020-07-10"
+end = "2024-12-17"
 
 [[trusted.unicode-ident]]
 criteria = "safe-to-deploy"

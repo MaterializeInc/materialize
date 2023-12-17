@@ -75,19 +75,38 @@
 #![warn(clippy::from_over_into)]
 // END LINT CONFIG
 
-use aws_sdk_s3::config::Builder;
-use aws_sdk_s3::Client;
-use aws_types::sdk_config::SdkConfig;
+use aws_config::{BehaviorVersion, ConfigLoader};
+use aws_smithy_runtime::client::http::hyper_014::HyperClientBuilder;
+use aws_smithy_runtime_api::client::http::HttpClient;
+use hyper_tls::HttpsConnector;
 
-/// Creates a new client from an [SDK config](aws_types::sdk_config::SdkConfig)
-/// with Materialize-specific customizations.
-///
-/// Specifically, if the SDK config overrides the endpoint URL, the client
-/// will be configured to use path-style addressing, as custom AWS endpoints
-/// typically do not support virtual host-style addressing.
-pub fn new_client(sdk_config: &SdkConfig) -> Client {
-    let conf = Builder::from(sdk_config)
-        .force_path_style(sdk_config.endpoint_url().is_some())
-        .build();
-    Client::from_conf(conf)
+#[cfg(feature = "s3")]
+pub mod s3;
+
+/// Creates an AWS SDK configuration loader with the defaults for the latest
+/// behavior version plus some Materialize-specific overrides.
+pub fn defaults() -> ConfigLoader {
+    // Use the SDK's latest behavior version. We already pin the crate versions,
+    // and CI puts version upgrades through rigorous testing, so we're happy to
+    // take the latest behavior version. We can adjust this in the future as
+    // necessary, if the AWS SDK ships a new behavior version that causes
+    // trouble.
+    let behavior_version = BehaviorVersion::latest();
+
+    // This is the only method allowed to call `aws_config::defaults`.
+    #[allow(clippy::disallowed_methods)]
+    let loader = aws_config::defaults(behavior_version);
+
+    // Install our custom HTTP client.
+    let loader = loader.http_client(http_client());
+
+    loader
+}
+
+/// Returns an HTTP client for use with the AWS SDK that is appropriately
+/// configured for Materialize.
+pub fn http_client() -> impl HttpClient {
+    // The default AWS HTTP client uses rustls, while our company policy is to
+    // use native TLS.
+    HyperClientBuilder::new().build(HttpsConnector::new())
 }

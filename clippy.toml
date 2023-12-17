@@ -44,7 +44,11 @@ disallowed-methods = [
 
     { path = "rdkafka::config::ClientConfig::new", reason = "use the `client::create_new_client_config` wrapper in `kafka_util` instead" },
 
-    { path = "aws_sdk_s3::Client::new", reason = "use the `mz_aws_s3_util::new_client` function instead" },
+    { path = "aws_config::defaults", reason = "use the `mz_aws_config::defaults` function instead" },
+    { path = "aws_config::load_defaults", reason = "use the `mz_aws_config::defaults` function instead" },
+    { path = "aws_config::from_env", reason = "use the `mz_aws_config::defaults` function instead" },
+    { path = "aws_config::load_from_env", reason = "use the `mz_aws_config::defaults` function instead" },
+    { path = "aws_sdk_s3::Client::new", reason = "use the `mz_aws_util::s3::new_client` function instead" },
 
     # Prevent access to Differential APIs that want to use the default trace or use a default name, or where we offer
     # our own wrapper
