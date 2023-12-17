@@ -152,7 +152,9 @@ def maybe_upload_debuginfo(
                         "--ignore-failed-read",
                     ],
                     stdin=p1.stdout,
-                    stdout=subprocess.PIPE,
+                    # Suppress noisy warnings about missing files.
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                 )
 
                 # This causes p1 to receive SIGPIPE if p2 exits early,
@@ -161,7 +163,7 @@ def maybe_upload_debuginfo(
                 p1.stdout.close()
 
                 for p in [p1, p2]:
-                    if p.returncode:
+                    if p.wait():
                         raise subprocess.CalledProcessError(p.returncode, p.args)
 
                 print(f"Uploading source tarball for {bin} to Polar Signals...")
