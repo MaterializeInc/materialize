@@ -7,8 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 import json
-from textwrap import dedent
 import time
+from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.cockroach import Cockroach
