@@ -93,10 +93,11 @@ use http::StatusCode;
 use itertools::Itertools;
 use mz_adapter::{TimestampContext, TimestampExplanation};
 use mz_environmentd::test_util::{
-    self, try_get_explain_timestamp, MzTimestamp, PostgresErrorExt, TestServerWithRuntime,
-    KAFKA_ADDRS,
+    self, get_explain_timestamp, get_explain_timestamp_determination, try_get_explain_timestamp,
+    MzTimestamp, PostgresErrorExt, TestServerWithRuntime, KAFKA_ADDRS,
 };
 use mz_ore::assert_contains;
+use mz_ore::collections::CollectionExt;
 use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
 use mz_ore::result::ResultExt;
 use mz_ore::retry::Retry;
@@ -3587,4 +3588,110 @@ async fn test_explain_as_of() {
         })
         .await
         .unwrap();
+}
+
+// Test that RETAIN HISTORY results in the since and upper being separated by the specified amount.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_retain_history() {
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
+    let sys_client = server
+        .connect()
+        .internal()
+        .user(&SYSTEM_USER.name)
+        .await
+        .unwrap();
+
+    // Must fail before flag set.
+    assert!(client
+        .batch_execute(
+            "CREATE MATERIALIZED VIEW v WITH (RETAIN HISTORY = FOR '2s') AS SELECT * FROM t",
+        )
+        .await
+        .is_err());
+
+    sys_client
+        .batch_execute("ALTER SYSTEM SET enable_logical_compaction_window = true")
+        .await
+        .unwrap();
+
+    client
+        .batch_execute("CREATE TABLE t (a INT4)")
+        .await
+        .unwrap();
+    client
+        .batch_execute("INSERT INTO t VALUES (1)")
+        .await
+        .unwrap();
+
+    assert_contains!(
+        client
+            .batch_execute(
+                "CREATE MATERIALIZED VIEW v WITH (RETAIN HISTORY = FOR '-2s') AS SELECT * FROM t",
+            )
+            .await
+            .unwrap_err()
+            .to_string(),
+        "invalid RETAIN HISTORY"
+    );
+
+    client
+        .batch_execute(
+            "CREATE MATERIALIZED VIEW v WITH (RETAIN HISTORY = FOR '5s') AS SELECT * FROM t",
+        )
+        .await
+        .unwrap();
+
+    // Test compaction and querying without an index present.
+    Retry::default()
+        .retry_async(|_| async {
+            let ts = get_explain_timestamp_determination("v", &client).await?;
+            let source = ts.sources.into_element();
+            let upper = source.write_frontier.into_element();
+            let since = source.read_frontier.into_element();
+            if upper.saturating_sub(since) < Timestamp::from(2000u64) {
+                anyhow::bail!("{upper} - {since} should be atleast 2s apart")
+            }
+            client
+                .query(
+                    &format!(
+                        "SELECT * FROM v AS OF {}-2000",
+                        ts.determination.timestamp_context.timestamp_or_default()
+                    ),
+                    &[],
+                )
+                .await?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    // With an index the AS OF query should fail because we haven't taught the planner about retain
+    // history yet.
+    client
+        .batch_execute("CREATE INDEX i ON v (a)")
+        .await
+        .unwrap();
+
+    let ts = get_explain_timestamp("v", &client).await;
+    assert_contains!(
+        client
+            .query(&format!("SELECT * FROM v AS OF {ts}-2000"), &[])
+            .await
+            .unwrap_err()
+            .to_string(),
+        "not valid for all inputs"
+    );
+
+    // Make sure we didn't fail just because the index didn't have enough time after creation.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let ts = get_explain_timestamp("v", &client).await;
+    assert_contains!(
+        client
+            .query(&format!("SELECT * FROM v AS OF {ts}-2000"), &[])
+            .await
+            .unwrap_err()
+            .to_string(),
+        "not valid for all inputs"
+    );
 }

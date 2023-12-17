@@ -955,6 +955,7 @@ impl Coordinator {
                     column_names,
                     cluster_id,
                     non_null_assertions,
+                    compaction_window,
                 },
             replace: _,
             drop_ids,
@@ -1032,6 +1033,7 @@ impl Coordinator {
                 resolved_ids,
                 cluster_id,
                 non_null_assertions,
+                custom_logical_compaction_window: compaction_window,
             }),
             owner_id: *session.current_role_id(),
         });
@@ -1083,7 +1085,10 @@ impl Coordinator {
                     .unwrap_or_terminate("cannot fail to append");
 
                 coord
-                    .initialize_storage_read_policies(vec![id], CompactionWindow::Default)
+                    .initialize_storage_read_policies(
+                        vec![id],
+                        compaction_window.unwrap_or(CompactionWindow::Default),
+                    )
                     .await;
 
                 if coord.catalog().state().system_config().enable_mz_notices() {

@@ -1435,6 +1435,7 @@ pub struct MaterializedView {
     pub column_names: Vec<ColumnName>,
     pub cluster_id: ClusterId,
     pub non_null_assertions: Vec<usize>,
+    pub compaction_window: Option<CompactionWindow>,
 }
 
 #[derive(Clone, Debug)]

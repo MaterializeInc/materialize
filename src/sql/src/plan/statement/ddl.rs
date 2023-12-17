@@ -2056,12 +2056,19 @@ pub fn plan_create_materialized_view(
 
     let MaterializedViewOptionExtracted {
         assert_not_null,
+        retain_history,
         seen: _,
     }: MaterializedViewOptionExtracted = stmt.with_options.try_into()?;
 
     if !assert_not_null.is_empty() {
         scx.require_feature_flag(&crate::session::vars::ENABLE_ASSERT_NOT_NULL)?;
     }
+    let compaction_window = retain_history
+        .map(|cw| {
+            scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
+            Ok::<_, PlanError>(cw.try_into()?)
+        })
+        .transpose()?;
     let mut non_null_assertions = assert_not_null
         .into_iter()
         .map(normalize::column_name)
@@ -2150,6 +2157,7 @@ pub fn plan_create_materialized_view(
             column_names,
             cluster_id,
             non_null_assertions,
+            compaction_window,
         },
         replace,
         drop_ids,
@@ -2160,7 +2168,8 @@ pub fn plan_create_materialized_view(
 
 generate_extracted_config!(
     MaterializedViewOption,
-    (AssertNotNull, Ident, AllowMultiple)
+    (AssertNotNull, Ident, AllowMultiple),
+    (RetainHistory, Duration)
 );
 
 pub fn describe_create_sink(

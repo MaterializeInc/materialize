@@ -30,12 +30,14 @@ use crate::ast::{AstInfo, Expr, Ident, OrderByExpr, UnresolvedItemName, WithOpti
 pub enum MaterializedViewOptionName {
     /// The `ASSERT NOT NULL [=] <ident>` option.
     AssertNotNull,
+    RetainHistory,
 }
 
 impl AstDisplay for MaterializedViewOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             MaterializedViewOptionName::AssertNotNull => f.write_str("ASSERT NOT NULL"),
+            MaterializedViewOptionName::RetainHistory => f.write_str("RETAIN HISTORY"),
         }
     }
 }

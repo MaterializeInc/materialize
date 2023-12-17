@@ -3231,16 +3231,42 @@ impl<'a> Parser<'a> {
     fn parse_materialized_view_option_name(
         &mut self,
     ) -> Result<MaterializedViewOptionName, ParserError> {
-        self.expect_keywords(&[ASSERT, NOT, NULL])?;
-        Ok(MaterializedViewOptionName::AssertNotNull)
+        let option = self.expect_one_of_keywords(&[ASSERT, RETAIN])?;
+        let name = match option {
+            ASSERT => {
+                self.expect_keywords(&[NOT, NULL])?;
+                MaterializedViewOptionName::AssertNotNull
+            }
+            RETAIN => {
+                self.expect_keyword(HISTORY)?;
+                MaterializedViewOptionName::RetainHistory
+            }
+            _ => unreachable!(),
+        };
+        Ok(name)
     }
 
     fn parse_materialized_view_option(
         &mut self,
     ) -> Result<MaterializedViewOption<Raw>, ParserError> {
         let name = self.parse_materialized_view_option_name()?;
+        if name == MaterializedViewOptionName::RetainHistory {
+            return self.parse_materialized_view_option_retain_history();
+        }
         let value = self.parse_optional_option_value()?;
         Ok(MaterializedViewOption { name, value })
+    }
+
+    fn parse_materialized_view_option_retain_history(
+        &mut self,
+    ) -> Result<MaterializedViewOption<Raw>, ParserError> {
+        let _ = self.consume_token(&Token::Eq);
+        self.expect_keyword(FOR)?;
+        let value = self.parse_value()?;
+        Ok(MaterializedViewOption {
+            name: MaterializedViewOptionName::RetainHistory,
+            value: Some(WithOptionValue::RetainHistoryFor(value)),
+        })
     }
 
     fn parse_create_index(&mut self) -> Result<Statement<Raw>, ParserError> {

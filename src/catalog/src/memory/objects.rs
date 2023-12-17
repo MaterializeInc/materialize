@@ -702,6 +702,7 @@ pub struct MaterializedView {
     pub resolved_ids: ResolvedIds,
     pub cluster_id: ClusterId,
     pub non_null_assertions: Vec<usize>,
+    pub custom_logical_compaction_window: Option<CompactionWindow>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1094,8 +1095,8 @@ impl CatalogItem {
             CatalogItem::Table(table) => table.custom_logical_compaction_window,
             CatalogItem::Source(source) => source.custom_logical_compaction_window,
             CatalogItem::Index(index) => index.custom_logical_compaction_window,
-            CatalogItem::MaterializedView(_)
-            | CatalogItem::Log(_)
+            CatalogItem::MaterializedView(mview) => mview.custom_logical_compaction_window,
+            CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
             | CatalogItem::Type(_)
