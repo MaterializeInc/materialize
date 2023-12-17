@@ -1329,10 +1329,21 @@ impl HirRelationExpr {
         }
     }
 
-    pub fn filter(self, predicates: Vec<HirScalarExpr>) -> Self {
-        HirRelationExpr::Filter {
-            input: Box::new(self),
+    pub fn filter(mut self, preds: Vec<HirScalarExpr>) -> Self {
+        if let HirRelationExpr::Filter {
+            input: _,
             predicates,
+        } = &mut self
+        {
+            predicates.extend(preds);
+            predicates.sort();
+            predicates.dedup();
+            self
+        } else {
+            HirRelationExpr::Filter {
+                input: Box::new(self),
+                predicates: preds,
+            }
         }
     }
 
@@ -1369,27 +1380,52 @@ impl HirRelationExpr {
     }
 
     pub fn negate(self) -> Self {
-        HirRelationExpr::Negate {
-            input: Box::new(self),
+        if let HirRelationExpr::Negate { input } = self {
+            *input
+        } else {
+            HirRelationExpr::Negate {
+                input: Box::new(self),
+            }
         }
     }
 
     pub fn distinct(self) -> Self {
-        HirRelationExpr::Distinct {
-            input: Box::new(self),
+        if let HirRelationExpr::Distinct { .. } = self {
+            self
+        } else {
+            HirRelationExpr::Distinct {
+                input: Box::new(self),
+            }
         }
     }
 
     pub fn threshold(self) -> Self {
-        HirRelationExpr::Threshold {
-            input: Box::new(self),
+        if let HirRelationExpr::Threshold { .. } = self {
+            self
+        } else {
+            HirRelationExpr::Threshold {
+                input: Box::new(self),
+            }
         }
     }
 
     pub fn union(self, other: Self) -> Self {
+        let mut terms = Vec::new();
+        if let HirRelationExpr::Union { base, inputs } = self {
+            terms.push(*base);
+            terms.extend(inputs);
+        } else {
+            terms.push(self);
+        }
+        if let HirRelationExpr::Union { base, inputs } = other {
+            terms.push(*base);
+            terms.extend(inputs);
+        } else {
+            terms.push(other);
+        }
         HirRelationExpr::Union {
-            base: Box::new(self),
-            inputs: vec![other],
+            base: Box::new(terms.remove(0)),
+            inputs: terms,
         }
     }
 
@@ -1434,10 +1470,7 @@ impl HirRelationExpr {
     pub fn take(&mut self) -> HirRelationExpr {
         mem::replace(
             self,
-            HirRelationExpr::Constant {
-                rows: vec![],
-                typ: RelationType::new(Vec::new()),
-            },
+            HirRelationExpr::constant(vec![], RelationType::new(Vec::new())),
         )
     }
 
@@ -1801,23 +1834,23 @@ impl HirRelationExpr {
         if !finishing.is_trivial(self.arity()) {
             let old_finishing =
                 mem::replace(finishing, RowSetFinishing::trivial(finishing.project.len()));
-            *self = HirRelationExpr::TopK {
-                input: Box::new(std::mem::replace(
+            *self = HirRelationExpr::top_k(
+                std::mem::replace(
                     self,
                     HirRelationExpr::Constant {
                         rows: vec![],
                         typ: RelationType::new(Vec::new()),
                     },
-                )),
-                group_key: vec![],
-                order_key: old_finishing.order_by,
-                limit: old_finishing
+                ),
+                vec![],
+                old_finishing.order_by,
+                old_finishing
                     .limit
                     .map(|l| HirScalarExpr::literal(Datum::Int64(*l), ScalarType::Int64)),
-                offset: old_finishing.offset,
-                expected_group_size: group_size_hints.limit_input_group_size,
-            }
-            .project(old_finishing.project)
+                old_finishing.offset,
+                group_size_hints.limit_input_group_size,
+            )
+            .project(old_finishing.project);
         }
     }
 
