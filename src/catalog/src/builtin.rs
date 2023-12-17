@@ -2660,6 +2660,12 @@ pub static MZ_AWS_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("region", ScalarType::String.nullable(true))
         .with_column("access_key_id", ScalarType::String.nullable(true))
         .with_column("access_key_id_secret_id", ScalarType::String.nullable(true))
+        .with_column(
+            "secret_access_key_secret_id",
+            ScalarType::String.nullable(true),
+        )
+        .with_column("session_token", ScalarType::String.nullable(true))
+        .with_column("session_token_secret_id", ScalarType::String.nullable(true))
         .with_column("assume_role_arn", ScalarType::String.nullable(true))
         .with_column(
             "assume_role_session_name",

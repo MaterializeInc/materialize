@@ -97,7 +97,7 @@ The AWS Connection create statement with all the options will now look like:
 CREATE CONNECTION <connector_name> TO AWS (
   ACCESS KEY ID [[=] <value>], -- existing
   SECRET ACCESS KEY [[=] SECRET <value>], -- existing
-  TOKEN [[=] SECRET <value>], -- existing
+  SESSION TOKEN [[=] SECRET <value>], -- rename existing from TOKEN
   ASSUME ROLE ARN [[=] <value>], -- rename existing from ROLE ARN
   ASSUME ROLE SESSION NAME [[=] <value>], -- new option
   ENDPOINT [[=] <value>], -- existing

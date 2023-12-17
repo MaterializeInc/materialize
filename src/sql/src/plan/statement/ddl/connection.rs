@@ -60,7 +60,7 @@ generate_extracted_config!(
     (SslCertificateAuthority, StringOrSecret),
     (SslKey, with_options::Secret),
     (SslMode, String),
-    (Token, StringOrSecret),
+    (SessionToken, StringOrSecret),
     (Url, String),
     (User, StringOrSecret)
 );
@@ -86,7 +86,7 @@ pub(super) fn validate_options_per_connection_type(
         CreateConnectionType::Aws => [
             AccessKeyId,
             SecretAccessKey,
-            Token,
+            SessionToken,
             Endpoint,
             Region,
             AssumeRoleArn,
@@ -166,7 +166,11 @@ impl ConnectionOptionExtracted {
 
         let connection: Connection<ReferencedConnection> = match connection_type {
             CreateConnectionType::Aws => {
-                let credentials = match (self.access_key_id, self.secret_access_key, self.token) {
+                let credentials = match (
+                    self.access_key_id,
+                    self.secret_access_key,
+                    self.session_token,
+                ) {
                     (Some(access_key_id), Some(secret_access_key), session_token) => {
                         Some(AwsCredentials {
                             access_key_id,
