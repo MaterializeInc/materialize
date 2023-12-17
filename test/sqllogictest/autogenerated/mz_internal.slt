@@ -57,6 +57,30 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 23  statement_kind  text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_aws_connections' ORDER BY position
+----
+1  id  text
+2  endpoint  text
+3  region  text
+4  access_key_id  text
+5  access_key_id_secret_id  text
+6  secret_access_key_secret_id  text
+7  session_token  text
+8  session_token_secret_id  text
+9  assume_role_arn  text
+10  assume_role_session_name  text
+11  principal  text
+12  external_id  text
+13  example_trust_policy  jsonb
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_aws_privatelink_connection_status_history' ORDER BY position
+----
+1  occurred_at  timestamp␠with␠time␠zone
+2  connection_id  text
+3  status  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_frontiers' ORDER BY position
 ----
 1  object_id  text
@@ -433,13 +457,6 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  status  text
 4  error  text
 5  details  jsonb
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_aws_privatelink_connection_status_history' ORDER BY position
-----
-1  occurred_at  timestamp␠with␠time␠zone
-2  connection_id  text
-3  status  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_subscriptions' ORDER BY position
