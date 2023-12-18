@@ -538,7 +538,7 @@ where
                     let mut ret = Vec::new();
                     for (unapplied, unapplied_ts) in unapplied {
                         match unapplied {
-                            Unapplied::Register => {
+                            Unapplied::RegisterForget => {
                                 let () = crate::empty_caa(
                                     || {
                                         format!(

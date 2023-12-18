@@ -972,7 +972,7 @@ impl<T: Timestamp + TotalOrder> DataTimes<T> {
 
 #[derive(Debug)]
 pub(crate) enum Unapplied<'a> {
-    Register,
+    RegisterForget,
     Batch(&'a Vec<u8>),
 }
 
@@ -1053,7 +1053,7 @@ where
         let registers = UnappliedIterInput::new(
             registers
                 .iter()
-                .map(|(data_id, ts)| (data_id, Unapplied::Register, ts))
+                .map(|(data_id, ts)| (data_id, Unapplied::RegisterForget, ts))
                 .collect(),
         );
         let batches = UnappliedIterInput::new(
@@ -1076,7 +1076,8 @@ impl<'a, T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> Iterator
         // This will emit registers and forgets before batches at the same timestamp. Currently,
         // this is fine because for a single data shard you can't combine registers, forgets, and
         // batches at the same timestamp. In the future if we allow combining these operations in
-        // a single op, then we probably want to emit registers, then batches, then forgets.
+        // a single op, then we probably want to emit registers, then batches, then forgets or we
+        // can make forget exclusive in which case we'd emit it before batches.
         min(&mut self.registers, &mut self.batches)
             .unapplieds
             .pop_front()
