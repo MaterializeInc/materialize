@@ -2958,7 +2958,11 @@ impl SystemVars {
             .with_var(&PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE)
             .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
             .with_var(&ENABLE_COLUMNATION_LGALLOC)
-            .with_var(&TIMESTAMP_ORACLE_IMPL);
+            .with_var(&TIMESTAMP_ORACLE_IMPL)
+            .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE)
+            .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT)
+            .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL)
+            .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER);
 
         for flag in PersistFeatureFlag::ALL {
             vars = vars.with_var(&flag.into())
@@ -3010,7 +3014,7 @@ impl SystemVars {
         let var = self
             .vars
             .get(var.name)
-            .expect("provided var should be in state");
+            .expect(&format!("provided var {var:?} should be in state"));
 
         var.value_any()
             .downcast_ref()
