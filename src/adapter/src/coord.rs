@@ -930,8 +930,6 @@ pub struct Coordinator {
     /// The controller for the storage and compute layers.
     #[derivative(Debug = "ignore")]
     controller: mz_controller::Controller,
-    /// Optimizer instance for logical optimization of views.
-    view_optimizer: Optimizer,
     /// The catalog in an Arc suitable for readonly references. The Arc allows
     /// us to hand out cheap copies of the catalog to functions that can use it
     /// off of the main coordinator thread. If the coordinator needs to mutate
@@ -2507,9 +2505,6 @@ pub fn serve(
                 let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
                 let mut coord = Coordinator {
                     controller,
-                    view_optimizer: Optimizer::logical_optimizer(
-                        &mz_transform::typecheck::empty_context(),
-                    ),
                     catalog,
                     internal_cmd_tx,
                     group_commit_tx,
