@@ -907,6 +907,31 @@ steps:
               composition: sqlancer
               args: [--runtime=1500, --oracle=HAVING]
 
+  - group: RQG
+    key: rqg
+    steps:
+    - id: rqg-simple-aggregates
+      label: "RQG simple-aggregates workload"
+      artifact_paths: junit_*.xml
+      timeout_in_minutes: 45
+      agents:
+        queue: linux-x86_64
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: rqg
+            args: ["simple-aggregates"]
+
+    - id: rqg-db3-joins
+      label: "RQG dbt3-joins workload"
+      artifact_paths: junit_*.xml
+      timeout_in_minutes: 45
+      agents:
+        queue: linux-x86_64
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: rqg
+            args: ["dbt3-joins"]
+
   - id: crdb-restarts
     label: "CRDB rolling restarts"
     timeout_in_minutes: 15

@@ -609,6 +609,7 @@ class Composition:
         stdin: str | None = None,
         check: bool = True,
         workdir: str | None = None,
+        env_extra: dict[str, str] = {},
     ) -> subprocess.CompletedProcess:
         """Execute a one-off command in a service's running container
 
@@ -626,6 +627,7 @@ class Composition:
             "exec",
             *(["--detach"] if detach else []),
             *(["--workdir", workdir] if workdir else []),
+            *(f"-e{k}={v}" for k, v in env_extra.items()),
             "-T",
             service,
             *(
