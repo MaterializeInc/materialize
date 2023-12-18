@@ -14,8 +14,11 @@ import time
 import uuid
 from textwrap import dedent
 
+from materialize.docker import is_image_tag_of_version
+from materialize.mz_version import MzVersion
 from materialize.version_list import (
     ANCESTOR_OVERRIDES_FOR_PERFORMANCE_REGRESSIONS,
+    get_commits_of_accepted_regressions_between_versions,
     get_latest_published_version,
     resolve_ancestor_image_tag,
 )
@@ -402,7 +405,49 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             break
 
     if len(scenarios_with_regressions) > 0:
-        print(
-            f"ERROR: The following scenarios have regressions: {', '.join([scenario.__name__ for scenario in scenarios_with_regressions])}"
+        regressions_justified, comment = _are_regressions_justified(
+            this_tag=args.this_tag, baseline_tag=args.other_tag
         )
-        sys.exit(1)
+
+        print("+++ Regressions")
+
+        print(
+            f"{'INFO' if regressions_justified else 'ERROR'}:"
+            f" The following scenarios have regressions:"
+            f" {', '.join([scenario.__name__ for scenario in scenarios_with_regressions])}"
+        )
+
+        if regressions_justified:
+            print(f"However, the regressions are accepted. {comment}")
+        else:
+            sys.exit(1)
+
+
+def _are_regressions_justified(this_tag: str, baseline_tag: str) -> tuple[bool, str]:
+    if not _tag_references_release_version(
+        this_tag
+    ) or not _tag_references_release_version(baseline_tag):
+        return False, ""
+
+    this_version = MzVersion.parse_mz(this_tag)
+    baseline_version = MzVersion.parse_mz(baseline_tag)
+
+    commits_with_regressions = get_commits_of_accepted_regressions_between_versions(
+        ANCESTOR_OVERRIDES_FOR_PERFORMANCE_REGRESSIONS,
+        since_version_exclusive=baseline_version,
+        to_version_inclusive=this_version,
+    )
+
+    if len(commits_with_regressions) == 0:
+        return False, ""
+    else:
+        return (
+            True,
+            f"Accepted regressions were introduced with these commits: {commits_with_regressions}",
+        )
+
+
+def _tag_references_release_version(image_tag: str) -> bool:
+    return is_image_tag_of_version(image_tag) and MzVersion.is_valid_version_string(
+        image_tag
+    )
