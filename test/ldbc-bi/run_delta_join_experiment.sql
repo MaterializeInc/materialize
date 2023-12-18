@@ -18,6 +18,8 @@
 \! date -Iseconds
 \! echo RUNNING QUERIES
 \! echo
+\! echo Q10 EXPLAINED
+\i e10.sql
 \! echo Q10 RUN 1
 \i q10.sql
 \! echo Q10 RUN 2
@@ -25,6 +27,8 @@
 \! echo Q10 RUN 3
 \i q10.sql
 \! echo
+\! echo Q11 EXPLAINED
+\i e11.sql
 \! echo Q11 RUN 1
 \i q11.sql
 \! echo Q11 RUN 2
@@ -32,6 +36,8 @@
 \! echo Q11 RUN 3
 \i q11.sql
 \! echo
+\! echo Q15 EXPLAINED
+\i e15.sql
 \! echo Q15 RUN 1
 \i q15.sql
 \! echo Q15 RUN 2
@@ -39,6 +45,8 @@
 \! echo Q15 RUN 3
 \i q15.sql
 \! echo
+\! echo Q16 EXPLAINED
+\i e16.sql
 \! echo Q16 RUN 1
 \i q16.sql
 \! echo Q16 RUN 2
@@ -46,6 +54,8 @@
 \! echo Q16 RUN 3
 \i q16.sql
 \! echo
+\! echo Q17 EXPLAINED
+\i e17.sql
 \! echo Q17 RUN 1
 \i q17.sql
 \! echo Q17 RUN 2
@@ -53,6 +63,8 @@
 \! echo Q17 RUN 3
 \i q17.sql
 \! echo
+\! echo Q18 EXPLAINED
+\i e19.sql
 \! echo Q18 RUN 1
 \i q18.sql
 \! echo Q18 RUN 2
@@ -60,6 +72,8 @@
 \! echo Q18 RUN 3
 \i q18.sql
 \! echo
+\! echo Q19 EXPLAINED
+\i e19.sql
 \! echo Q19 RUN 1
 \i q19.sql
 \! echo Q19 RUN 2
@@ -67,6 +81,8 @@
 \! echo Q19 RUN 3
 \i q19.sql
 \! echo
+\! echo Q20 EXPLAINED
+\i e20.sql
 \! echo Q20 RUN 1
 \i q20.sql
 \! echo Q20 RUN 2
