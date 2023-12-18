@@ -286,10 +286,15 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 if !table_info.contains_key(&oid) {
                                     continue;
                                 }
+
+                                let event_is_ok = event.is_ok();
                                 let data = (oid, event);
                                 if let Some((rewind_caps, req)) = rewinds.get(&oid) {
                                     let [data_cap, _upper_cap] = rewind_caps;
-                                    if commit_lsn <= req.snapshot_lsn {
+                                    // Do not "rewind" definite errors because
+                                    // we cannot guarantee that the snapshot
+                                    // dataflow produced a definite error.
+                                    if commit_lsn <= req.snapshot_lsn && event_is_ok {
                                         let update = (data.clone(), MzOffset::from(0), -diff);
                                         data_output.give(data_cap, update).await;
                                     }
