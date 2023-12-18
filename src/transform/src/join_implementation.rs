@@ -157,7 +157,6 @@ impl JoinImplementation {
             // that could be planned with the arrangements from a differential. If such a delta
             // join were viable, we'd have already planned it the first time.
             if eager_delta_joins && !matches!(implementation, Unimplemented) {
-                tracing::info!(implementation = ?implementation, "ignoring implemented join");
                 return Ok(());
             }
 
@@ -423,19 +422,22 @@ impl JoinImplementation {
 
             let old_implementation = implementation.clone();
             let num_inputs = inputs.len();
-
+            // We've already planned a differential join... should we replace it with a delta join?
+            //
+            // This code path is only active when `eager_delta_joins` is false.
             if matches!(old_implementation, Differential(..)) {
                 soft_assert_or_log!(
                     !eager_delta_joins,
                     "eager delta joins run join implementation just once"
                 );
 
+                // Binary joins can't be delta joins---give up.
                 if inputs.len() <= 2 {
-                    tracing::debug!(plan = ?old_implementation, "leaving binary join with original plan");
                     return Ok(());
                 }
 
-                match delta_queries::plan(
+                // Only plan a delta join if it's no new arrangements (beyond what differential planned).
+                if let Ok((delta_query_plan, 0)) = delta_queries::plan(
                     relation,
                     &input_mapper,
                     &available_arrangements,
@@ -443,18 +445,16 @@ impl JoinImplementation {
                     &cardinalities,
                     &filters,
                 ) {
-                    Ok((delta_query_plan, 0)) => {
-                        tracing::debug!(plan = ?delta_query_plan, "replacing differential join with delta join");
-                        *relation = delta_query_plan;
-                        return Ok(());
-                    }
-                    _ => {
-                        tracing::debug!(plan = ?old_implementation, "leaving binary join in place, delta join planning failed or had new arrangements");
-                        return Ok(());
-                    }
+                    tracing::debug!(plan = ?delta_query_plan, "replacing differential join with delta join");
+                    *relation = delta_query_plan;
                 }
+
+                return Ok(());
             }
 
+            // To have reached here, we must be in our first run of join planning.
+            //
+            // We plan a differential join first.
             let (differential_query_plan, differential_new_arrangements) = differential::plan(
                 relation,
                 &input_mapper,
@@ -465,6 +465,7 @@ impl JoinImplementation {
             )
             .expect("Failed to produce a differential join plan");
 
+            // Binary joins _must_ be differential. We won't plan a delta join.
             if num_inputs <= 2 {
                 // if inputs.len() == 0 then something is very wrong.
                 soft_assert_or_log!(num_inputs != 0, "join with no inputs");
@@ -486,12 +487,13 @@ impl JoinImplementation {
                 // See more details here:
                 // https://github.com/MaterializeInc/materialize/pull/16099#issuecomment-1316857374
                 // https://github.com/MaterializeInc/materialize/pull/17708#discussion_r1112848747
-                tracing::debug!(plan = ?differential_query_plan, "binary join planned as differential join");
                 *relation = differential_query_plan;
 
                 return Ok(());
             }
 
+            // We are plannign a multiway join for the first time.
+            //
             // We compare the delta and differential join plans.
             //
             // A delta query requires that, for every order, there is an arrangement for every
@@ -536,7 +538,10 @@ impl JoinImplementation {
                         matches!(old_implementation, Unimplemented | Differential(..)),
                         "delta query plans should not be planned twice"
                     );
-                    tracing::debug!(plan = ?delta_query_plan, differential_new_arrangements = differential_new_arrangements, "picking delta query plan (no new arrangements)");
+                    tracing::debug!(
+                        plan = ?delta_query_plan,
+                        differential_new_arrangements = differential_new_arrangements,
+                        "picking delta query plan (no new arrangements)");
                     *relation = delta_query_plan;
                 }
                 // If the delta plan needs new arrangements, compare with the differential plan.
@@ -550,11 +555,15 @@ impl JoinImplementation {
                     if eager_delta_joins && delta_new_arrangements <= differential_new_arrangements
                     {
                         // If we're eagerly planning delta joins, pick the delta plan if it's more economical.
-                        tracing::debug!(plan = ?delta_query_plan, "picking delta query plan");
+                        tracing::debug!(
+                            plan = ?delta_query_plan,
+                            "picking delta query plan");
                         *relation = delta_query_plan;
                     } else if let Unimplemented = old_implementation {
                         // If we haven't planned the join yet, use the differential plan.
-                        tracing::debug!(plan = ?differential_query_plan, "picking differential query plan");
+                        tracing::debug!(
+                            plan = ?differential_query_plan,
+                            "picking differential query plan");
                         *relation = differential_query_plan;
                     } else {
                         // But don't replace an existing differential plan.
@@ -567,7 +576,9 @@ impl JoinImplementation {
                 }
                 // If we can't plan a delta join, plan a differential join.
                 Err(..) => {
-                    tracing::debug!(plan = ?differential_query_plan, "picking differential query plan (delta planning failed)");
+                    tracing::debug!(
+                        plan = ?differential_query_plan,
+                        "picking differential query plan (delta planning failed)");
                     *relation = differential_query_plan;
                 }
             }
