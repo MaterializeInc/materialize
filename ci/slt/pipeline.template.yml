@@ -19,7 +19,7 @@ steps:
 
   - id: sqllogictest
     label: ":bulb: SQL logic tests %N"
-    timeout_in_minutes: 180
+    timeout_in_minutes: 360 # TODO(def-) Turn back to 180 when #23980 is fixed
     parallelism: 10
     artifact_paths: junit_*.xml
     agents:
@@ -31,7 +31,7 @@ steps:
 
   - id: sqllogictest-1-replica
     label: ":bulb: SQL logic tests 1 replica %N"
-    timeout_in_minutes: 180
+    timeout_in_minutes: 360 # TODO(def-) Turn back to 180 when #23980 is fixed
     parallelism: 10
     artifact_paths: junit_*.xml
     agents:
