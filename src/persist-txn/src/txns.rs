@@ -699,7 +699,7 @@ impl Tidy {
     }
 }
 
-/// A helper to make [Self::get_write] a more targeted mutable borrow of self.
+/// A helper to make a more targeted mutable borrow of self.
 #[derive(Debug)]
 pub(crate) struct DataHandles<K, V, T, D>
 where
