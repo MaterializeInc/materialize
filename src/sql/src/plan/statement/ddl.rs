@@ -3066,6 +3066,7 @@ pub fn plan_create_cluster(
         let Some(size) = size else {
             sql_bail!("SIZE must be specified for managed clusters");
         };
+        ensure_cluster_size_allowed(scx, &size)?;
 
         let compute = plan_compute_replica_config(
             introspection_interval,
@@ -3200,6 +3201,7 @@ fn plan_replica_config(
         (Some(size), availability_zone, billed_as, None, None, None, None, None) => {
             let disk_default = scx.catalog.system_vars().disk_cluster_replicas_default();
             let disk = disk.unwrap_or(disk_default);
+            ensure_cluster_size_allowed(scx, &size)?;
 
             Ok(ReplicaConfig::Managed {
                 size,
@@ -4241,6 +4243,7 @@ pub fn plan_alter_cluster(
                 options.replication_factor = AlterOptionParameter::Set(replication_factor);
             }
             if let Some(size) = size {
+                ensure_cluster_size_allowed(scx, &size)?;
                 options.size = AlterOptionParameter::Set(size);
             }
             if let Some(availability_zones) = availability_zones {
@@ -5498,6 +5501,18 @@ fn ensure_cluster_is_not_managed(
         Err(PlanError::ManagedCluster {
             cluster_name: cluster.name().to_string(),
         })
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_cluster_size_allowed(scx: &StatementContext, size: &str) -> Result<(), PlanError> {
+    // This isn't a robust check by any means, but we rarely change
+    // cluster size names. This feature flag can be removed upon
+    // completion of https://github.com/MaterializeInc/cloud/issues/5343
+    // and https://github.com/MaterializeInc/cloud/issues/7013
+    if size.ends_with("cc") || size.ends_with("C") {
+        scx.require_feature_flag(&vars::ENABLE_CC_CLUSTER_SIZES)
     } else {
         Ok(())
     }
