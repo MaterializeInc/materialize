@@ -358,12 +358,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     # Build the list of scenarios to run
     root_scenario = globals()[args.root_scenario]
-    scenarios = []
+    selected_scenarios = []
 
     if root_scenario.__subclasses__():
-        scenarios = [s for s in all_subclasses(root_scenario) if not s.__subclasses__()]
+        selected_scenarios = [
+            s for s in all_subclasses(root_scenario) if not s.__subclasses__()
+        ]
     else:
-        scenarios = [root_scenario]
+        selected_scenarios = [root_scenario]
 
     dependencies = ["postgres"]
 
@@ -374,15 +376,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up(*dependencies)
 
+    scenarios_to_run = selected_scenarios
+    scenarios_with_regressions = []
     for cycle in range(0, args.max_retries):
         print(
-            f"Cycle {cycle+1} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios])}"
+            f"Cycle {cycle+1} with scenarios: {', '.join([scenario.__name__ for scenario in scenarios_to_run])}"
         )
 
         report = Report()
 
         scenarios_with_regressions = []
-        for scenario in scenarios:
+        for scenario in scenarios_to_run:
             comparators = run_one_scenario(c, scenario, args)
             report.extend(comparators)
 
@@ -393,12 +397,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             print(f"+++ Benchmark Report for cycle {cycle+1}:")
             report.dump()
 
-        scenarios = scenarios_with_regressions
-        if not scenarios:
+        scenarios_to_run = scenarios_with_regressions
+        if len(scenarios_to_run) == 0:
             break
 
-    if scenarios:
+    if len(scenarios_with_regressions) > 0:
         print(
-            f"ERROR: The following scenarios have regressions: {', '.join([scenario.__name__ for scenario in scenarios])}"
+            f"ERROR: The following scenarios have regressions: {', '.join([scenario.__name__ for scenario in scenarios_with_regressions])}"
         )
         sys.exit(1)
