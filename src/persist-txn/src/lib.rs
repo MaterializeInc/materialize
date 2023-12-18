@@ -281,7 +281,6 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{ShardId, ShardIdSchema};
 use mz_persist_types::codec_impls::VecU8Schema;
 use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
-use prost::Message;
 use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -299,6 +298,7 @@ pub mod txns;
 mod proto {
     use bytes::Bytes;
     use mz_persist_client::batch::ProtoBatch;
+    use prost::Message;
     use uuid::Uuid;
 
     include!(concat!(env!("OUT_DIR"), "/mz_persist_txn.proto.rs"));
@@ -309,6 +309,20 @@ mod proto {
                 batch_id: Bytes::copy_from_slice(Uuid::new_v4().as_bytes()),
                 batch: Some(batch),
             }
+        }
+
+        /// Recovers the ProtoBatch from an encoded batch.
+        ///
+        /// This might be an encoded ProtoIdBatch (new path) or a ProtoBatch
+        /// (legacy path). Some proto shenanigans are done to sniff out which.
+        pub(crate) fn parse(buf: &[u8]) -> ProtoBatch {
+            let b = ProtoIdBatch::decode(buf).expect("valid ProtoIdBatch");
+            // First try the new format.
+            if let Some(batch) = b.batch {
+                return batch;
+            }
+            // Fall back to the legacy format.
+            ProtoBatch::decode(buf).expect("valid (legacy) ProtoBatch")
         }
     }
 }
@@ -541,8 +555,7 @@ async fn apply_caa<K, V, T, D>(
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    let batch = ProtoIdBatch::decode(batch_raw).expect("valid batch");
-    let batch = batch.batch.expect("valid batch");
+    let batch = ProtoIdBatch::parse(batch_raw);
     let mut batch = data_write.batch_from_transmittable_batch(batch);
     let Some(mut upper) = data_write.shared_upper().into_option() else {
         // Shard is closed, which means the upper must be past init_ts.
@@ -644,6 +657,7 @@ pub mod tests {
     use mz_persist_client::read::ReadHandle;
     use mz_persist_client::{Diagnostics, PersistClient, ShardId};
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
+    use prost::Message;
 
     use crate::operator::DataSubscribe;
     use crate::txn_write::Txn;
@@ -888,13 +902,22 @@ pub mod tests {
 
         // Pretend we somehow got two batches that happen to have the same
         // serialization.
-        let b0 = batch.into_transmittable_batch();
-        let b1 = b0.clone();
-        assert_eq!(b0.encode_to_vec(), b1.encode_to_vec());
+        let b0_raw = batch.into_transmittable_batch();
+        let b1_raw = b0_raw.clone();
+        assert_eq!(b0_raw.encode_to_vec(), b1_raw.encode_to_vec());
 
         // They don't if we wrap them in ProtoIdBatch.
-        let b0 = ProtoIdBatch::new(b0);
-        let b1 = ProtoIdBatch::new(b1);
+        let b0 = ProtoIdBatch::new(b0_raw.clone());
+        let b1 = ProtoIdBatch::new(b1_raw);
         assert!(b0.encode_to_vec() != b1.encode_to_vec());
+
+        // The transmittable batch roundtrips.
+        let roundtrip = ProtoIdBatch::parse(&b0.encode_to_vec());
+        assert_eq!(roundtrip, b0_raw);
+
+        // We've started running things in all of staging, so we've got to be
+        // able to read the previous serialization (ProtoBatch directly) back.
+        let roundtrip = ProtoIdBatch::parse(&b0_raw.encode_to_vec());
+        assert_eq!(roundtrip, b0_raw);
     }
 }

@@ -17,5 +17,8 @@ package mz_persist_txn.proto;
 // serialization is unique.
 message ProtoIdBatch {
     bytes batch_id = 1;
-    mz_persist_client.batch.ProtoBatch batch = 2;
+    // We reserved 4 in ProtoBatch so that we can use the presence of this field
+    // as a sentinel for whether persist-txn has encoded a batch as ProtoIdBatch
+    // or (the legacy) ProtoBatch.
+    mz_persist_client.batch.ProtoBatch batch = 4;
 }
