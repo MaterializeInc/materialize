@@ -95,7 +95,7 @@ pub static MZ_NOTICES_REDACTED: BuiltinView = BuiltinView {
 FROM
     mz_internal.mz_notices
 ",
-    sensitivity: DataSensitivity::Public,
+    sensitivity: DataSensitivity::SuperuserAndSupport,
 };
 
 pub const MZ_NOTICES_IND: BuiltinIndex = BuiltinIndex {

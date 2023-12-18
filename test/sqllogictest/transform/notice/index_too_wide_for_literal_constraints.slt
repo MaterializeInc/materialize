@@ -10,12 +10,18 @@
 mode cockroach
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_table_keys = true
+ALTER SYSTEM SET enable_table_keys TO true
 ----
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_mz_notices = true
+ALTER SYSTEM SET enable_mz_notices TO true
+----
+COMPLETE 0
+
+# Disable rbac checks in order to select from mz_notices.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false
 ----
 COMPLETE 0
 
@@ -205,11 +211,11 @@ Notices:
 EOF
 
 # Verify that the same notices can be found in the catalog.
-query TTTTT
+query TTTTTTTT
 SELECT
-  n.notice_type, n.message, n.hint, n.action, n.action_type
+  n.notice_type, n.message, n.redacted_message, n.hint, n.redacted_hint, n.action, n.redacted_action, n.action_type
 FROM
-  mz_internal.mz_notices_redacted n JOIN
+  mz_internal.mz_notices n JOIN
   mz_catalog.mz_materialized_views mv ON(n.object_id = mv.id)
 WHERE
   mv.name = 'mv1';
@@ -222,11 +228,11 @@ statement ok
 DROP INDEX t6_idx_x_y_z;
 
 # Verify that the second notice is no longer in the catalog.
-query TTTTT
+query TTTTTTTT
 SELECT
-  n.notice_type, n.message, n.hint, n.action, n.action_type
+  n.notice_type, n.message, n.redacted_message, n.hint, n.redacted_hint, n.action, n.redacted_action, n.action_type
 FROM
-  mz_internal.mz_notices_redacted n JOIN
+  mz_internal.mz_notices n JOIN
   mz_catalog.mz_materialized_views mv ON(n.object_id = mv.id)
 WHERE
   mv.name = 'mv1';
@@ -238,11 +244,11 @@ statement ok
 DROP MATERIALIZED VIEW mv1;
 
 # Verify that the notices are no longer in the catalog.
-query TTTTT
+query TTTTTTTT
 SELECT
-  n.notice_type, n.message, n.hint, n.action, n.action_type
+  n.notice_type, n.message, n.redacted_message, n.hint, n.redacted_hint, n.action, n.redacted_action, n.action_type
 FROM
-  mz_internal.mz_notices_redacted n JOIN
+  mz_internal.mz_notices n JOIN
   mz_catalog.mz_materialized_views mv ON(n.object_id = mv.id)
 WHERE
   mv.name = 'mv1';
