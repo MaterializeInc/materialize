@@ -369,5 +369,5 @@ for f in "${tests[@]}"; do
 done
 tests=("${temp[@]}")
 
-sqllogictest -v --auto-index-selects "${tests[@]}" "$@"
-sqllogictest -v "${tests_without_views[@]}" "$@"
+sqllogictest -v --auto-index-tables --auto-index-selects "${tests[@]}" "$@"
+sqllogictest -v --auto-index-tables "${tests_without_views[@]}" "$@"
