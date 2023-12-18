@@ -540,7 +540,12 @@ where
                         match unapplied {
                             Unapplied::Register => {
                                 let () = crate::empty_caa(
-                                    || format!("data {:.9} register fill", data_id.to_string()),
+                                    || {
+                                        format!(
+                                            "data {:.9} register/forget fill",
+                                            data_id.to_string()
+                                        )
+                                    },
                                     &mut data_write,
                                     unapplied_ts.clone(),
                                 )
@@ -553,14 +558,6 @@ where
                                 // encoded bytes, so we intentionally use the raw batch so that
                                 // it definitely retracts.
                                 ret.push((batch_raw.clone(), (T::encode(unapplied_ts), data_id)));
-                            }
-                            Unapplied::Forget => {
-                                let () = crate::empty_caa(
-                                    || format!("data {:.9} forget fill", data_id.to_string()),
-                                    &mut data_write,
-                                    unapplied_ts.clone(),
-                                )
-                                .await;
                             }
                         }
                     }
@@ -580,10 +577,6 @@ where
             self.txns_cache
                 .unapplied_registers
                 .retain(|(_, register_ts)| ts < register_ts);
-            // Remove all the applied forgets.
-            self.txns_cache
-                .unapplied_forgets
-                .retain(|(_, forget_ts)| ts < forget_ts);
 
             debug!("apply_le {:?} success", ts);
             Tidy { retractions }
