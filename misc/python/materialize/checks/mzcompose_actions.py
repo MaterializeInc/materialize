@@ -40,7 +40,11 @@ class StartMz(MzcomposeAction):
         mz_service: str | None = None,
     ) -> None:
         self.tag = tag
-        self.environment_extra = environment_extra
+        self.environment_extra = [
+            "MZ_AWS_CONNECTION_ROLE_ARN=arn:aws:iam::123456789000:role/MaterializeConnection",
+            "MZ_AWS_EXTERNAL_ID_PREFIX=eb5cb59b-e2fe-41f3-87ca-d2176a495345",
+            *environment_extra,
+        ]
         self.system_parameter_defaults = system_parameter_defaults
         self.additional_system_parameter_defaults = additional_system_parameter_defaults
         self.catalog_store = (
