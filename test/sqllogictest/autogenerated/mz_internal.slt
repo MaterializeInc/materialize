@@ -255,6 +255,17 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 10  created_at  timestamp␠with␠time␠zone
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_notices_redacted' ORDER BY position
+----
+1  notice_type  text
+2  message  text
+3  hint  text
+4  action  text
+5  action_type  text
+6  object_id  text
+7  created_at  timestamp␠with␠time␠zone
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_postgres_sources' ORDER BY position
 ----
 1  id  text
