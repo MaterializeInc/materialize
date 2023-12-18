@@ -25,7 +25,7 @@ use mz_expr::{
     MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
 use mz_ore::cast::{CastFrom, CastLossy, TryCastFrom};
-use mz_ore::soft_assert;
+use mz_ore::soft_assert_or_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 use crate::attribute::cardinality::{FactorizerVariable, SymExp};
@@ -157,6 +157,7 @@ impl JoinImplementation {
             // that could be planned with the arrangements from a differential. If such a delta
             // join were viable, we'd have already planned it the first time.
             if eager_delta_joins && !matches!(implementation, Unimplemented) {
+                tracing::info!(implementation = ?implementation, "ignoring implemented join");
                 return Ok(());
             }
 
@@ -437,7 +438,7 @@ impl JoinImplementation {
 
             if num_inputs <= 2 {
                 // if inputs.len() == 0 then something is very wrong.
-                soft_assert!(num_inputs != 0, "join with no inputs");
+                soft_assert_or_log!(num_inputs != 0, "join with no inputs");
                 // if inputs.len() == 1:
                 // Single input joins are filters and should be planned as
                 // differential plans instead of delta queries. Because a
@@ -446,7 +447,7 @@ impl JoinImplementation {
                 // filters will always be planned as delta queries.
                 // (ggevay: This is an old comment, and I'm not sure whether a single-input join
                 // could still actually occur. It is not happening in any of our slts currently.)
-                soft_assert!(
+                soft_assert_or_log!(
                     num_inputs != 1,
                     "join with only one input (should be filter)"
                 );
@@ -500,7 +501,7 @@ impl JoinImplementation {
             ) {
                 // If delta plan's inputs need no new arrangements, pick the delta plan.
                 Ok((delta_query_plan, 0)) => {
-                    soft_assert!(
+                    soft_assert_or_log!(
                         matches!(old_implementation, Unimplemented | Differential(..)),
                         "delta query plans should not be planned twice"
                     );
@@ -526,7 +527,7 @@ impl JoinImplementation {
                         *relation = differential_query_plan;
                     } else {
                         // But don't replace an existing differential plan.
-                        soft_assert!(
+                        soft_assert_or_log!(
                             matches!(old_implementation, Differential(..)),
                             "implemented plan in second run of join implementation should be differential \
                              if the delta plan is not viable")
