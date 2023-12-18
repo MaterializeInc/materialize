@@ -52,11 +52,16 @@ one-shot select. It may be more interesting to treat the queries as
 materialized views; we would then want to not just track total time
 querying in the benchmark, but also some measure of latency.
 
+# Local changes
+
+We've manually reordered `weights` in the `PathQ19` view of query 19 to
+accommodate the way delta joins hydrate (they follow the join plan of
+the first syntactic table, which happened to be a poor choice for this
+query).
+
 ## TODO
 
-- [ ] q05-q20
 - [ ] apply updates
   + do we want to measure "liveness" of the views as we run?
 - [ ] fully automate locally/in staging
 - [ ] load generator
-  + where does this live, properly?
