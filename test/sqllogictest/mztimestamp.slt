@@ -59,11 +59,11 @@ false
 false
 
 # Bad timestamp string
-query error db error: ERROR: invalid input syntax for type mz_timestamp: could not parse mz_timestamp: could not parse as number of milliseconds since epoch; could not parse as date and time: invalid input syntax for type timestamp: YEAR, MONTH, DAY are all required: "1990\-01": "1990\-01"
+query error invalid input syntax for type mz_timestamp: could not parse mz_timestamp: could not parse as number of milliseconds since epoch; could not parse as date and time: invalid input syntax for type timestamp: YEAR, MONTH, DAY are all required: "1990\-01": "1990\-01"
 SELECT '1990-01'::mz_timestamp;
 
 # This would be negative milliseconds since the Unix epoch
-query error db error: ERROR: invalid input syntax for type mz_timestamp: could not parse mz_timestamp: out of range for mz_timestamp: "1960\-01\-01 11:00"
+query error invalid input syntax for type mz_timestamp: could not parse mz_timestamp: out of range for mz_timestamp: "1960\-01\-01 11:00"
 SELECT '1960-01-01 11:00'::mz_timestamp;
 
 query T
