@@ -68,11 +68,11 @@ pub struct OptimizerNotice {
     /// A recommended action. This is a more concrete version of the hint.
     pub action: Action,
     /// A redacted version of the `message` field.
-    pub message_redacted: String,
+    pub message_redacted: Option<String>,
     /// A redacted version of the `hint` field.
-    pub hint_redacted: String,
+    pub hint_redacted: Option<String>,
     /// A redacted version of the `action` field.
-    pub action_redacted: Action,
+    pub action_redacted: Option<Action>,
     /// The date at which this notice was last created.
     pub created_at: u64,
 }
@@ -91,13 +91,16 @@ impl OptimizerNotice {
         for notice in notices {
             if notice.is_valid(humanizer) {
                 let mut s = String::new();
-                if redacted {
-                    write!(s, "  - Notice: {}\n", notice.message_redacted)?;
-                    write!(s, "    Hint: {}", notice.hint_redacted)?;
-                } else {
-                    write!(s, "  - Notice: {}\n", notice.message)?;
-                    write!(s, "    Hint: {}", notice.hint)?;
+                let message = match notice.message_redacted.as_deref() {
+                    Some(message_redacted) if redacted => message_redacted,
+                    _ => notice.message.as_str(),
                 };
+                let hint = match notice.hint_redacted.as_deref() {
+                    Some(hint_redacted) if redacted => hint_redacted,
+                    _ => notice.hint.as_str(),
+                };
+                write!(s, "  - Notice: {}\n", message)?;
+                write!(s, "    Hint: {}", hint)?;
                 notice_strings.push(s);
             }
         }

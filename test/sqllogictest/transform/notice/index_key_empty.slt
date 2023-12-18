@@ -59,11 +59,11 @@ WHERE
 ----
 Empty index key
 Empty index key. The index will be completely skewed to one worker thread, which can lead to performance problems.
-Empty index key. The index will be completely skewed to one worker thread, which can lead to performance problems.
+NULL
 CREATE DEFAULT INDEX is almost always better than an index with an empty key. (Except for cross joins with big inputs, which are better to avoid anyway.)
-CREATE DEFAULT INDEX is almost always better than an index with an empty key. (Except for cross joins with big inputs, which are better to avoid anyway.)
+NULL
 Drop the encosing index and re-create it using `CREATE DEFAULT INDEX ON` instead.
-Drop the encosing index and re-create it using `CREATE DEFAULT INDEX ON` instead.
+NULL
 plain_text
 
 # Drop the catalog item associated with the notice.

@@ -220,8 +220,8 @@ FROM
 WHERE
   mv.name = 'mv1';
 ----
-Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.public.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  CREATE␠INDEX␠ON␠t6(y);  sql_statements
-Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.public.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  CREATE␠INDEX␠ON␠t6(y);  sql_statements
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.public.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.public.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.public.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.public.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
 
 # Drop one of the indexes associated with the notices.
 statement ok
@@ -237,7 +237,7 @@ FROM
 WHERE
   mv.name = 'mv1';
 ----
-Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.public.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  CREATE␠INDEX␠ON␠t6(y);  sql_statements
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.public.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.public.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
 
 # Drop the catalog item associated with the notices.
 statement ok

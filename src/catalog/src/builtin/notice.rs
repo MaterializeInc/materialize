@@ -86,9 +86,9 @@ pub static MZ_NOTICES_REDACTED: BuiltinView = BuiltinView {
     column_defs: None,
     sql: "SELECT
     notice_type,
-    redacted_message as message,
-    redacted_hint as hint,
-    redacted_action as action,
+    coalesce(redacted_message, message) as message,
+    coalesce(redacted_hint, hint) as hint,
+    coalesce(redacted_action, action) as action,
     action_type,
     object_id,
     created_at
