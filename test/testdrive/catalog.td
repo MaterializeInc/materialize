@@ -544,7 +544,7 @@ mz_compute_dependencies                      source <null>  <null>
 mz_compute_error_counts_raw                  log   <null>   <null>
 mz_compute_exports_per_worker                log   <null>   <null>
 mz_compute_frontiers_per_worker              log   <null>   <null>
-mz_compute_hydration_status                  source <null>  <null>
+mz_compute_hydration_statuses                source <null>  <null>
 mz_compute_import_frontiers_per_worker       log   <null>   <null>
 mz_compute_operator_durations_histogram_raw  log   <null>   <null>
 mz_dataflow_addresses_per_worker             log   <null>   <null>

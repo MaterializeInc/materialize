@@ -405,7 +405,7 @@ mz_compute_frontiers_per_worker
 SOURCE
 materialize
 mz_internal
-mz_compute_hydration_status
+mz_compute_hydration_statuses
 SOURCE
 materialize
 mz_internal
