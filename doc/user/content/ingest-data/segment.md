@@ -137,7 +137,7 @@ CREATE VIEW parse_segment AS SELECT
     try_parse_monotonic_iso8601_timestamp(body->>'timestamp') AS timestamp,
     body->>'type' AS type,
     body->>'userId' AS user_id,
-    try_parse_monotonic_iso8601_timestamp(body->>'version') AS version
+    body->>'version' AS version
 FROM my_segment_source;
 ```
 {{< /tab >}}
