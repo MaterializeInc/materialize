@@ -3940,6 +3940,7 @@ dependencies = [
  "mz-expr",
  "mz-ore",
  "mz-persist-client",
+ "mz-persist-txn",
  "mz-persist-types",
  "mz-pid-file",
  "mz-prof",
