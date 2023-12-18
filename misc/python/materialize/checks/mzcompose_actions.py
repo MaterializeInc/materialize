@@ -110,6 +110,7 @@ class ConfigureMz(MzcomposeAction):
     def __init__(self, scenario: "Scenario", mz_service: str | None = None) -> None:
         self.handle: Any | None = None
         self.mz_service = mz_service
+        self.scenario = scenario
 
     def execute(self, e: Executor) -> None:
         input = dedent(
@@ -159,7 +160,13 @@ class ConfigureMz(MzcomposeAction):
             system_settings.add(
                 "GRANT CREATE ON SCHEMA materialize.public TO materialize;"
             )
-            system_settings.add("GRANT CREATE ON CLUSTER default TO materialize;")
+            if self.scenario.base_version() >= MzVersion.parse_mz("v0.81.0-dev"):
+                cluster_name = "quickstart"
+            else:
+                cluster_name = "default"
+            system_settings.add(
+                f"GRANT CREATE ON CLUSTER {cluster_name} TO materialize;"
+            )
 
         if (
             MzVersion.parse_mz("v0.58.0-dev")
@@ -240,12 +247,16 @@ class UseClusterdCompute(MzcomposeAction):
                 port=6877,
                 user="mz_system",
             )
+        if self.base_version >= MzVersion.parse_mz("v0.81.0-dev"):
+            cluster_name = "quickstart"
+        else:
+            cluster_name = "default"
 
         c.sql(
             f"""
-            ALTER CLUSTER default SET (MANAGED = false);
-            DROP CLUSTER REPLICA default.r1;
-            CREATE CLUSTER REPLICA default.r1
+            ALTER CLUSTER {cluster_name} SET (MANAGED = false);
+            DROP CLUSTER REPLICA {cluster_name}.r1;
+            CREATE CLUSTER REPLICA {cluster_name}.r1
                 {storage_addresses},
                 COMPUTECTL ADDRESSES ['clusterd_compute_1:2101'],
                 COMPUTE ADDRESSES ['clusterd_compute_1:2102'],
@@ -318,14 +329,22 @@ class KillClusterdStorage(MzcomposeAction):
 
 
 class DropCreateDefaultReplica(MzcomposeAction):
+    def __init__(self, scenario: "Scenario") -> None:
+        self.base_version = scenario.base_version()
+
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
+        if self.base_version >= MzVersion.parse_mz("v0.81.0-dev"):
+            cluster_name = "quickstart"
+        else:
+            cluster_name = "default"
+
         c.sql(
-            """
-            ALTER CLUSTER default SET (MANAGED = false);
-            DROP CLUSTER REPLICA default.r1;
-            CREATE CLUSTER REPLICA default.r1 SIZE '1';
+            f"""
+            ALTER CLUSTER {cluster_name} SET (MANAGED = false);
+            DROP CLUSTER REPLICA {cluster_name}.r1;
+            CREATE CLUSTER REPLICA {cluster_name}.r1 SIZE '1';
             """,
             port=6877,
             user="mz_system",

@@ -1381,15 +1381,15 @@ def workflow_test_remote_storage(c: Composition) -> None:
         c.run("testdrive", "storage/04-after-clusterd-restart.td")
 
 
-def workflow_test_drop_default_cluster(c: Composition) -> None:
-    """Test that the default cluster can be dropped"""
+def workflow_test_drop_quickstart_cluster(c: Composition) -> None:
+    """Test that the quickstart cluster can be dropped"""
 
     c.down(destroy_volumes=True)
     c.up("materialized")
 
-    c.sql("DROP CLUSTER default CASCADE", user="mz_system", port=6877)
+    c.sql("DROP CLUSTER quickstart CASCADE", user="mz_system", port=6877)
     c.sql(
-        "CREATE CLUSTER default REPLICAS (default (SIZE '1'))",
+        "CREATE CLUSTER quickstart REPLICAS (quickstart (SIZE '1'))",
         user="mz_system",
         port=6877,
     )
@@ -1988,13 +1988,13 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
         )
         assert output == expected, f"expected: {expected}, got: {output}"
 
-    subscribe1 = start_subscribe("t1", "default")
-    check_mz_subscriptions((["materialize", "default", "t1"],))
+    subscribe1 = start_subscribe("t1", "quickstart")
+    check_mz_subscriptions((["materialize", "quickstart", "t1"],))
 
     subscribe2 = start_subscribe("t2", "cluster1")
     check_mz_subscriptions(
         (
-            ["materialize", "default", "t1"],
+            ["materialize", "quickstart", "t1"],
             ["materialize", "cluster1", "t2"],
         )
     )
@@ -2002,11 +2002,11 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
     stop_subscribe(subscribe1)
     check_mz_subscriptions((["materialize", "cluster1", "t2"],))
 
-    subscribe3 = start_subscribe("t3", "default")
+    subscribe3 = start_subscribe("t3", "quickstart")
     check_mz_subscriptions(
         (
             ["materialize", "cluster1", "t2"],
-            ["materialize", "default", "t3"],
+            ["materialize", "quickstart", "t3"],
         )
     )
 

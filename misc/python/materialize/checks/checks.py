@@ -48,6 +48,15 @@ class Check:
         else:
             return "mz_internal"
 
+    def _default_cluster(self) -> str:
+        """
+        :return: name of the cluster created in all environments.
+        """
+        if self.base_version >= MzVersion.parse_mz("v0.81.0-dev"):
+            return "quickstart"
+        else:
+            return "default"
+
     def initialize(self) -> Testdrive:
         return Testdrive(TESTDRIVE_NOP)
 

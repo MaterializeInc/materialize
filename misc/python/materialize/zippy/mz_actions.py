@@ -93,7 +93,7 @@ class MzStart(Action):
 
         c.sql(
             """
-            ALTER CLUSTER default SET (MANAGED = false);
+            ALTER CLUSTER quickstart SET (MANAGED = false);
             """,
             user="mz_system",
             port=6877,

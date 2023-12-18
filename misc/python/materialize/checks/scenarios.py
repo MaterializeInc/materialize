@@ -135,7 +135,7 @@ class DropCreateDefaultReplica(Scenario):
             StartMz(self),
             Initialize(self),
             Manipulate(self, phase=1),
-            DropCreateDefaultReplicaAction(),
+            DropCreateDefaultReplicaAction(self),
             Manipulate(self, phase=2),
             Validate(self),
         ]

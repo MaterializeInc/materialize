@@ -34,4 +34,4 @@ def source_capable_clusters(capabilities: Capabilities) -> list[str]:
         # Default cluster may have multiple replicas, can not be used for sources
         return ["storage"]
     else:
-        return ["storage", "default"]
+        return ["storage", "quickstart"]
