@@ -26,6 +26,10 @@ from materialize.scalability.comparison_outcome import ComparisonOutcome
 from materialize.scalability.df.df_totals import DfTotalsExtended
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.endpoints import (
+    TARGET_HEAD,
+    TARGET_MATERIALIZE_LOCAL,
+    TARGET_MATERIALIZE_REMOTE,
+    TARGET_POSTGRES,
     MaterializeContainer,
     MaterializeLocal,
     MaterializeRemote,
@@ -239,34 +243,37 @@ def get_baseline_and_other_endpoints(
 ) -> tuple[Endpoint | None, list[Endpoint]]:
     baseline_endpoint: Endpoint | None = None
     other_endpoints: list[Endpoint] = []
-    for i, target in enumerate(args.target):
-        original_target = target
+    for i, specified_target in enumerate(args.target):
         endpoint: Endpoint | None = None
 
-        if target == "local":
+        if specified_target == TARGET_MATERIALIZE_LOCAL:
             endpoint = MaterializeLocal()
-        elif target == "remote":
+        elif specified_target == TARGET_MATERIALIZE_REMOTE:
             endpoint = MaterializeRemote(materialize_url=args.materialize_url[i])
-        elif target == "postgres":
+        elif specified_target == TARGET_POSTGRES:
             endpoint = PostgresContainer(composition=c)
-        elif target == "HEAD":
+        elif specified_target == TARGET_HEAD:
             endpoint = MaterializeContainer(
-                composition=c, specified_target=original_target
+                composition=c,
+                specified_target=specified_target,
+                resolved_target=specified_target,
             )
         else:
-            if target == "common-ancestor":
-                target = resolve_ancestor_image_tag(
+            resolved_target = specified_target
+            if specified_target == "common-ancestor":
+                resolved_target = resolve_ancestor_image_tag(
                     ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS
                 )
             endpoint = MaterializeContainer(
                 composition=c,
-                specified_target=original_target,
-                image=f"materialize/materialized:{target}",
+                specified_target=specified_target,
+                resolved_target=resolved_target,
+                image=f"materialize/materialized:{resolved_target}",
                 alternative_image="materialize/materialized:latest",
             )
         assert endpoint is not None
 
-        if original_target == regression_against_target:
+        if specified_target == regression_against_target:
             baseline_endpoint = endpoint
         else:
             other_endpoints.append(endpoint)
