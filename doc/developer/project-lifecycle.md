@@ -78,15 +78,19 @@ Before a project can move to Public Preview, it must:
   one external tester, with additional optional internal testers.
 - Be entirely code complete, if it wasn't already.
 - Have comprehensive tests live and running.
-- Have basic observability live and running.
-- Have basic metrics live and running.
+- Have suitable observability live and running.
+- Have suitable metrics live and running.
 - Have addressed all known stability issues.
 - Have addressed all known limitations, except those that are explicitly out of scope.
 - Support all known customer configurations, except those that are explicitly out of scope.
-- Have polished reference documentation live behind a {{< public-preview >}} flag.
-- Have a merged release note behind a {{< public-preview >}} flag.
-- Have its GitHub epic status set to "Public Preview".
-- Have its feature flag enabled in all environments by default.
+- Have polished reference documentation published with a {{< private-preview >}} notice.
+
+To move a feature to Public Preview:
+
+- Update any documentation about the feature to use the {{< public-preview >}} notice.
+- Add a release note with a {{< public-preview >}} flag.
+- Update the GitHub epic status to "Public Preview".
+- Enable the feature flag in all environments.
 
 ## Public Preview
 
@@ -106,11 +110,15 @@ Before a project can move to General Availability, it must:
 - Be used by at least two customers in production use cases.
 - Have additional documentation (like user guides) live, or
   an explicit justification for why it's not required.
-- Have a blog post describing the project, or an explicit
-  justification for why it's not required.
-- Have a merged release note that the project is in General Availability.
-- Have a merged Changelog announcement.
-- Have its GitHub epic status set to "GA" and closed.
+
+To move a project to General Availability:
+
+- Remove the {{< public-preview >}} notice from the documentation.
+- Write a blog post describing the project, or explicitly
+  justify why a blog post is not required.
+- Write a release note announcing that the project is in General Availability.
+- Write a Changelog announcement.
+- Update the GitHub epic status to "GA", then close the issue.
 
 ## General Availability
 
