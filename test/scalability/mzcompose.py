@@ -45,7 +45,10 @@ from materialize.scalability.workload import Workload, WorkloadSelfTest
 from materialize.scalability.workloads import *  # noqa: F401 F403
 from materialize.scalability.workloads_test import *  # noqa: F401 F403
 from materialize.util import YesNoOnce, all_subclasses
-from materialize.version_list import resolve_ancestor_image_tag
+from materialize.version_list import (
+    ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS,
+    resolve_ancestor_image_tag,
+)
 
 SERVICES = [
     Materialized(
@@ -252,7 +255,9 @@ def get_baseline_and_other_endpoints(
             )
         else:
             if target == "common-ancestor":
-                target = resolve_ancestor_image_tag()
+                target = resolve_ancestor_image_tag(
+                    ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS
+                )
             endpoint = MaterializeContainer(
                 composition=c,
                 specified_target=original_target,

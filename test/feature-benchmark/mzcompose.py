@@ -15,6 +15,7 @@ import uuid
 from textwrap import dedent
 
 from materialize.version_list import (
+    ANCESTOR_OVERRIDES_FOR_PERFORMANCE_REGRESSIONS,
     get_latest_published_version,
     resolve_ancestor_image_tag,
 )
@@ -134,7 +135,9 @@ def run_one_scenario(
         )
 
         if tag == "common-ancestor":
-            tag = resolve_ancestor_image_tag()
+            tag = resolve_ancestor_image_tag(
+                ANCESTOR_OVERRIDES_FOR_PERFORMANCE_REGRESSIONS
+            )
 
         entrypoint_host = "balancerd" if balancerd else "materialized"
 

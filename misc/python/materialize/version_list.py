@@ -41,7 +41,7 @@ INVALID_VERSIONS = {
     MzVersion.parse_mz("v0.57.6"),
 }
 
-SKIP_IMAGE_CHECK_BELOW_THIS_VERSION = MzVersion.parse_mz("v0.77.0")
+_SKIP_IMAGE_CHECK_BELOW_THIS_VERSION = MzVersion.parse_mz("v0.77.0")
 
 
 """
@@ -49,7 +49,9 @@ Git revisions that are based on commits listed as keys require at least the vers
 Note that specified versions do not necessarily need to be already published.
 Commits must be ordered descending by their date.
 """
-MIN_ANCESTOR_MZ_VERSION_PER_COMMIT: dict[str, MzVersion] = {
+_MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_PERFORMANCE_AND_SCALABILITY_REGRESSIONS: dict[
+    str, MzVersion
+] = {
     # insert newer commits at the top
     # PR#23659 (persist-txn: enable in CI with "eager uppers") introduces regressions against v0.79.0
     "c4f520a57a3046e5074939d2ea345d1c72be7079": MzVersion.parse_mz("v0.80.0"),
@@ -57,22 +59,47 @@ MIN_ANCESTOR_MZ_VERSION_PER_COMMIT: dict[str, MzVersion] = {
     "5179ebd39aea4867622357a832aaddcde951b411": MzVersion.parse_mz("v0.79.0"),
 }
 
+"""
+See: #_MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_PERFORMANCE_AND_SCALABILITY_REGRESSIONS
+"""
+_MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_CORRECTNESS_REGRESSIONS: dict[
+    str, MzVersion
+] = {
+    # insert newer commits at the top
+}
 
-def resolve_ancestor_image_tag() -> str:
-    ancestor_image_resolution = _create_ancestor_image_resolution()
+ANCESTOR_OVERRIDES_FOR_PERFORMANCE_REGRESSIONS = _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_PERFORMANCE_AND_SCALABILITY_REGRESSIONS
+ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS = _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_PERFORMANCE_AND_SCALABILITY_REGRESSIONS
+ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS = (
+    _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_CORRECTNESS_REGRESSIONS
+)
+
+
+def resolve_ancestor_image_tag(ancestor_overrides: dict[str, MzVersion]) -> str:
+    """
+    Resolve the ancestor image tag.
+    :param ancestor_overrides: one of #ANCESTOR_OVERRIDES_FOR_PERFORMANCE_REGRESSIONS, #ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS, #ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS
+    :return: image of the ancestor
+    """
+    ancestor_image_resolution = _create_ancestor_image_resolution(ancestor_overrides)
     image_tag, context = ancestor_image_resolution.resolve_image_tag()
     print(f"Using {image_tag} as image tag for ancestor (context: {context})")
     return image_tag
 
 
-def _create_ancestor_image_resolution() -> AncestorImageResolutionBase:
+def _create_ancestor_image_resolution(
+    ancestor_overrides: dict[str, MzVersion]
+) -> AncestorImageResolutionBase:
     if buildkite.is_in_buildkite():
-        return AncestorImageResolutionLocal()
+        return AncestorImageResolutionLocal(ancestor_overrides)
     else:
-        return AncestorImageResolutionInBuildkite()
+        return AncestorImageResolutionInBuildkite(ancestor_overrides)
 
 
 class AncestorImageResolutionBase:
+    def __init__(self, ancestor_overrides: dict[str, MzVersion]):
+        self.ancestor_overrides = ancestor_overrides
+
     def resolve_image_tag(self) -> tuple[str, str]:
         raise NotImplementedError
 
@@ -89,7 +116,7 @@ class AncestorImageResolutionBase:
         for (
             commit_hash,
             min_required_mz_version,
-        ) in MIN_ANCESTOR_MZ_VERSION_PER_COMMIT.items():
+        ) in self.ancestor_overrides.items():
             if latest_published_version >= min_required_mz_version:
                 continue
 
@@ -326,7 +353,7 @@ def is_valid_release_image(version: MzVersion) -> bool:
     if version in INVALID_VERSIONS:
         return False
 
-    if version < SKIP_IMAGE_CHECK_BELOW_THIS_VERSION:
+    if version < _SKIP_IMAGE_CHECK_BELOW_THIS_VERSION:
         # optimization: assume that all versions older than this one are either valid or listed in INVALID_VERSIONS
         return True
 
