@@ -480,7 +480,7 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
     let name = name();
     let empty: &[((&K, &V), &T, D)] = &[];
     let Some(mut upper) = txns_or_data_write.shared_upper().into_option() else {
-        // Shard is closed.
+        // Shard is closed, which means the upper must be past init_ts.
         return;
     };
     loop {
@@ -526,7 +526,7 @@ async fn apply_caa<K, V, T, D>(
     let batch = ProtoBatch::decode(batch_raw).expect("valid batch");
     let mut batch = data_write.batch_from_transmittable_batch(batch);
     let Some(mut upper) = data_write.shared_upper().into_option() else {
-        // Shard is closed.
+        // Shard is closed, which means the upper must be past init_ts.
         // Mark the batch as consumed, so we don't get warnings in the logs.
         batch.into_hollow_batch();
         return;
