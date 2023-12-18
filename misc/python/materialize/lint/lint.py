@@ -10,10 +10,11 @@ import argparse
 import os
 import subprocess
 import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from materialize import MZ_ROOT
+from materialize import MZ_ROOT, buildkite
 
 MAIN_PATH = MZ_ROOT / "ci" / "test" / "lint-main"
 MAIN_CHECKS_PATH = MAIN_PATH / "checks"
@@ -90,11 +91,15 @@ class LintManager:
             if not self.is_ignore_file(checks_path / lint_file)
         ]
         lint_files.sort()
+
         threads = []
 
         print(
             f"--- Running {len(lint_files)} check(s) in {checks_path.relative_to(MZ_ROOT)}"
         )
+
+        status_printer_thread = StatusPrinterThread()
+        status_printer_thread.start()
 
         for lint_file in lint_files:
             thread = LintingThread(checks_path, lint_file)
@@ -103,6 +108,8 @@ class LintManager:
 
         for thread in threads:
             thread.join()
+
+        status_printer_thread.stop()
 
         failed_checks = []
 
@@ -157,6 +164,22 @@ class LintingThread(threading.Thread):
 
     def has_output(self) -> bool:
         return len(self.output) > 0
+
+
+class StatusPrinterThread(threading.Thread):
+    def __init__(self) -> None:
+        super().__init__(target=self.print_status, args=())
+        self.active = not buildkite.is_in_buildkite()
+
+    def print_status(self) -> None:
+        while self.active:
+            print(".", end="", flush=True)
+            time.sleep(0.5)
+
+    def stop(self) -> None:
+        if self.active:
+            self.active = False
+            print()
 
 
 if __name__ == "__main__":
