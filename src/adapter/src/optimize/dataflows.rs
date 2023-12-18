@@ -18,11 +18,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use maplit::{btreemap, btreeset};
-use mz_adapter_types::compaction::CompactionWindow;
+
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, MaterializedView, Source, View};
 use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDesc, DataflowDescription, IndexDesc};
-use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::ComputeSinkDesc;
 use mz_compute_types::ComputeInstanceId;
 use mz_controller::Controller;
@@ -34,6 +33,7 @@ use mz_expr::{
 use mz_ore::cast::ReinterpretCast;
 use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::adt::array::ArrayDimension;
+use mz_repr::explain::trace_plan;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, Row};
 use mz_sql::catalog::{CatalogRole, SessionCatalog};
@@ -43,10 +43,9 @@ use tracing::warn;
 
 use crate::catalog::CatalogState;
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::Coordinator;
+use crate::optimize::{view, Optimize, OptimizeMode, OptimizerConfig, OptimizerError};
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
-use crate::util::{viewable_variables, ResultExt};
-use crate::AdapterError;
+use crate::util::viewable_variables;
 
 /// A reference-less snapshot of a compute instance. There is no guarantee `instance_id` continues
 /// to exist after this has been made.
@@ -128,43 +127,6 @@ pub enum EvalTime {
     NotAvailable,
 }
 
-impl Coordinator {
-    /// Creates a new dataflow builder from the catalog and indexes in `self`.
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder {
-        let compute = self
-            .instance_snapshot(instance)
-            .expect("compute instance does not exist");
-        DataflowBuilder::new(self.catalog().state(), compute)
-    }
-
-    /// Return a reference-less snapshot to the indicated compute instance.
-    pub fn instance_snapshot(
-        &self,
-        id: ComputeInstanceId,
-    ) -> Result<ComputeInstanceSnapshot, InstanceMissing> {
-        ComputeInstanceSnapshot::new(&self.controller, id)
-    }
-
-    /// Call into the compute controller to install a finalized dataflow, and
-    /// initialize the read policies for its exported objects.
-    pub(crate) async fn ship_dataflow(
-        &mut self,
-        dataflow: DataflowDescription<Plan>,
-        instance: ComputeInstanceId,
-    ) {
-        let export_ids = dataflow.export_ids().collect();
-
-        self.controller
-            .active_compute()
-            .create_dataflow(instance, dataflow)
-            .unwrap_or_terminate("dataflow creation cannot fail");
-
-        self.initialize_compute_read_policies(export_ids, instance, CompactionWindow::Default)
-            .await;
-    }
-}
-
 /// Returns an ID bundle with the given dataflows imports.
 pub fn dataflow_import_id_bundle<P>(
     dataflow: &DataflowDescription<P>,
@@ -198,7 +160,7 @@ impl<'a> DataflowBuilder<'a> {
         &mut self,
         id: &GlobalId,
         dataflow: &mut DataflowDesc,
-    ) -> Result<(), AdapterError> {
+    ) -> Result<(), OptimizerError> {
         maybe_grow(|| {
             // Avoid importing the item redundantly.
             if dataflow.is_imported(id) {
@@ -272,7 +234,7 @@ impl<'a> DataflowBuilder<'a> {
         view_id: &GlobalId,
         view: &OptimizedMirRelationExpr,
         dataflow: &mut DataflowDesc,
-    ) -> Result<(), AdapterError> {
+    ) -> Result<(), OptimizerError> {
         for get_id in view.depends_on() {
             self.import_into_dataflow(&get_id, dataflow)?;
         }
@@ -290,7 +252,7 @@ impl<'a> DataflowBuilder<'a> {
         name: String,
         id: GlobalId,
         sink_description: ComputeSinkDesc,
-    ) -> Result<(DataflowDesc, DataflowMetainfo), AdapterError> {
+    ) -> Result<(DataflowDesc, DataflowMetainfo), OptimizerError> {
         let mut dataflow = DataflowDesc::new(name);
         let dataflow_metainfo =
             self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
@@ -304,7 +266,7 @@ impl<'a> DataflowBuilder<'a> {
         dataflow: &mut DataflowDesc,
         id: GlobalId,
         sink_description: ComputeSinkDesc,
-    ) -> Result<DataflowMetainfo, AdapterError> {
+    ) -> Result<DataflowMetainfo, OptimizerError> {
         self.import_into_dataflow(&sink_description.from, dataflow)?;
         for BuildDesc { plan, .. } in &mut dataflow.objects_to_build {
             prep_relation_expr(plan, ExprPrepStyle::Index)?;
@@ -320,6 +282,40 @@ impl<'a> DataflowBuilder<'a> {
         )?;
 
         Ok(dataflow_metainfo)
+    }
+
+    // Re-optimize the imported view plans using the current optimizer
+    // configuration if we are running in `EXPLAIN`.
+    pub fn reoptimize_imported_views(
+        &self,
+        df_desc: &mut DataflowDesc,
+        config: &OptimizerConfig,
+    ) -> Result<(), OptimizerError> {
+        if config.mode == OptimizeMode::Explain {
+            for desc in df_desc.objects_to_build.iter_mut().rev() {
+                if matches!(desc.id, GlobalId::Explain | GlobalId::Transient(_)) {
+                    // Skip descriptions that do not reference proper views.
+                    continue;
+                }
+                if let CatalogItem::View(view) = &self.catalog.get_entry(&desc.id).item {
+                    let _span = tracing::span!(
+                        target: "optimizer",
+                        tracing::Level::DEBUG,
+                        "view",
+                        path.segment = desc.id.to_string()
+                    )
+                    .entered();
+
+                    let mut view_optimizer = view::Optimizer::new(config.clone());
+                    desc.plan = view_optimizer.optimize(view.raw_expr.clone())?;
+
+                    // Report the optimized plan under this span.
+                    trace_plan(desc.plan.as_inner());
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Determine the given source's monotonicity.
@@ -427,7 +423,7 @@ impl<'a> CheckedRecursion for DataflowBuilder<'a> {
 pub fn prep_relation_expr(
     expr: &mut OptimizedMirRelationExpr,
     style: ExprPrepStyle,
-) -> Result<(), AdapterError> {
+) -> Result<(), OptimizerError> {
     match style {
         ExprPrepStyle::Index => {
             expr.0.try_visit_mut_post(&mut |e| {
@@ -436,7 +432,7 @@ pub fn prep_relation_expr(
                     let mfp =
                         MapFilterProject::new(input.arity()).filter(predicates.iter().cloned());
                     match mfp.into_plan() {
-                        Err(e) => coord_bail!("{:?}", e),
+                        Err(e) => Err(OptimizerError::Internal(e)),
                         Ok(mut mfp) => {
                             for s in mfp.iter_nontemporal_exprs() {
                                 prep_scalar_expr(s, style)?;
@@ -471,7 +467,7 @@ pub fn prep_relation_expr(
 pub fn prep_scalar_expr(
     expr: &mut MirScalarExpr,
     style: ExprPrepStyle,
-) -> Result<(), AdapterError> {
+) -> Result<(), OptimizerError> {
     match style {
         // Evaluate each unmaterializable function and replace the
         // invocation with the result.
@@ -497,8 +493,8 @@ pub fn prep_scalar_expr(
 
             if let Some(f) = last_observed_unmaterializable_func {
                 let err = match style {
-                    ExprPrepStyle::Index => AdapterError::UnmaterializableFunction(f),
-                    ExprPrepStyle::AsOfUpTo => AdapterError::UncallableFunction {
+                    ExprPrepStyle::Index => OptimizerError::UnmaterializableFunction(f),
+                    ExprPrepStyle::AsOfUpTo => OptimizerError::UncallableFunction {
                         func: f,
                         context: "AS OF or UP TO",
                     },
@@ -531,7 +527,7 @@ fn eval_unmaterializable_func(
     f: &UnmaterializableFunc,
     logical_time: EvalTime,
     session: &Session,
-) -> Result<MirScalarExpr, AdapterError> {
+) -> Result<MirScalarExpr, OptimizerError> {
     let pack_1d_array = |datums: Vec<Datum>| {
         let mut row = Row::default();
         row.packer()
@@ -623,7 +619,10 @@ fn eval_unmaterializable_func(
         UnmaterializableFunc::MzNow => match logical_time {
             EvalTime::Time(logical_time) => pack(Datum::MzTimestamp(logical_time)),
             EvalTime::Deferred => Ok(MirScalarExpr::CallUnmaterializable(f.clone())),
-            EvalTime::NotAvailable => coord_bail!("cannot call mz_now in this context"),
+            EvalTime::NotAvailable => Err(OptimizerError::UncallableFunction {
+                func: UnmaterializableFunc::MzNow,
+                context: "this",
+            }),
         },
         UnmaterializableFunc::MzRoleOidMemberships => {
             let role_memberships = role_oid_memberships(state);
@@ -721,22 +720,5 @@ fn role_oid_memberships_inner<'a>(
             .get_mut(&role.oid)
             .expect("inserted above")
             .extend(parent_membership);
-    }
-}
-
-#[cfg(test)]
-impl Coordinator {
-    #[allow(dead_code)]
-    async fn verify_ship_dataflow_no_error(&mut self, dataflow: DataflowDescription<Plan>) {
-        // `ship_dataflow_new` is not allowed to have a `Result` return because this function is
-        // called after `catalog_transact`, after which no errors are allowed. This test exists to
-        // prevent us from incorrectly teaching those functions how to return errors (which has
-        // happened twice and is the motivation for this test).
-
-        // An arbitrary compute instance ID to satisfy the function calls below. Note that
-        // this only works because this function will never run.
-        let compute_instance = ComputeInstanceId::User(1);
-
-        let _: () = self.ship_dataflow(dataflow, compute_instance).await;
     }
 }

@@ -166,6 +166,13 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             connect_timeout: config.ssh_connect_timeout(),
             keepalives_idle: config.ssh_keepalives_idle(),
         },
+        kafka_timeout_config: mz_kafka_util::client::TimeoutConfig::build(
+            config.kafka_socket_keepalive(),
+            config.kafka_socket_timeout(),
+            config.kafka_transaction_timeout(),
+            config.kafka_socket_connection_setup_timeout(),
+            config.kafka_fetch_metadata_timeout(),
+        ),
     }
 }
 

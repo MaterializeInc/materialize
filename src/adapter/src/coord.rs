@@ -89,6 +89,7 @@ use mz_build_info::BuildInfo;
 use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
 use mz_catalog::memory::objects::{CatalogEntry, CatalogItem, Connection, DataSourceDesc, Source};
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
+use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::ComputeInstanceId;
@@ -99,10 +100,10 @@ use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::option::OptionExt;
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
-
 use mz_ore::{soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::ExplainFormat;
@@ -117,12 +118,12 @@ use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::{self, ConnectionCounter, OwnedVarInput, SystemVars};
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::Timeline;
-use mz_transform::Optimizer;
 use opentelemetry::trace::TraceContextExt;
 use timely::progress::Antichain;
 use timely::PartialOrder;
@@ -138,7 +139,6 @@ use crate::client::{Client, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
-use crate::coord::dataflows::dataflow_import_id_bundle;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
@@ -149,6 +149,9 @@ use crate::coord::timestamp_oracle::postgres_oracle::{
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
+use crate::optimize::dataflows::{
+    dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
+};
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
@@ -159,7 +162,6 @@ use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
 use mz_catalog::durable::DurableCatalogState;
 
-pub(crate) mod dataflows;
 use self::statement_logging::{StatementLogging, StatementLoggingId};
 
 pub(crate) mod id_bundle;
@@ -226,7 +228,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     ExecuteSingleStatementTransaction {
         ctx: ExecuteContext,
         otel_ctx: OpenTelemetryContext,
-        stmt: Statement<Raw>,
+        stmt: Arc<Statement<Raw>>,
         params: mz_sql::plan::Params,
     },
     PeekStageReady {
@@ -289,7 +291,7 @@ pub struct BackgroundWorkResult<T> {
     pub result: Result<T, AdapterError>,
     pub params: Params,
     pub resolved_ids: ResolvedIds,
-    pub original_stmt: Statement<Raw>,
+    pub original_stmt: Arc<Statement<Raw>>,
     pub otel_ctx: OpenTelemetryContext,
 }
 
@@ -320,6 +322,7 @@ pub enum RealTimeRecencyContext {
         cluster_id: ClusterId,
         optimized_plan: OptimizedMirRelationExpr,
         id_bundle: CollectionIdBundle,
+        when: QueryWhen,
     },
     Peek {
         ctx: ExecuteContext,
@@ -927,8 +930,6 @@ pub struct Coordinator {
     /// The controller for the storage and compute layers.
     #[derivative(Debug = "ignore")]
     controller: mz_controller::Controller,
-    /// Optimizer instance for logical optimization of views.
-    view_optimizer: Optimizer,
     /// The catalog in an Arc suitable for readonly references. The Arc allows
     /// us to hand out cheap copies of the catalog to functions that can use it
     /// off of the main coordinator thread. If the coordinator needs to mutate
@@ -1997,14 +1998,22 @@ impl Coordinator {
         mut cmd_rx: mpsc::UnboundedReceiver<(OpenTelemetryContext, Command)>,
         group_commit_rx: appends::GroupCommitWaiter,
     ) -> LocalBoxFuture<'static, ()> {
+        struct LastMessage {
+            kind: &'static str,
+            stmt: Option<Arc<Statement<Raw>>>,
+        }
+
         async move {
             // Watcher that listens for and reports cluster service status changes.
             let mut cluster_events = self.controller.events_stream();
-            let last_message_kind = Arc::new(Mutex::new("none"));
+            let last_message = Arc::new(Mutex::new(LastMessage {
+                kind: "none",
+                stmt: None,
+            }));
 
             let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
             let idle_metric = self.metrics.queue_busy_seconds.with_label_values(&[]);
-            let last_message_kind_watchdog = Arc::clone(&last_message_kind);
+            let last_message_watchdog = Arc::clone(&last_message);
 
             spawn(|| "coord watchdog", async move {
                 // Every 5 seconds, attempt to measure how long it takes for the
@@ -2029,12 +2038,16 @@ impl Coordinator {
                     let Ok(maybe_permit) = timeout else {
                         // Only log the error if we're newly stuck, to prevent logging repeatedly.
                         if !coord_stuck {
-                            let last_message = last_message_kind_watchdog
-                                .lock()
-                                .map(|g| *g)
-                                .unwrap_or("poisoned");
+                            let last_message = last_message_watchdog.lock().expect("poisoned");
+                            let last_message_sql = last_message
+                                .stmt
+                                .as_ref()
+                                .map(|stmt| stmt.to_ast_string_redacted())
+                                .display_or("<none>");
                             tracing::error!(
-                                "Coordinator is stuck on {last_message}, did not respond after {duration:?}"
+                                last_message_kind = %last_message.kind,
+                                %last_message_sql,
+                                "coordinator stuck for {duration:?}",
                             );
                         }
                         coord_stuck = true;
@@ -2149,17 +2162,35 @@ impl Coordinator {
                 // All message processing functions trace. Start a parent span
                 // for them to make it easy to find slow messages.
                 let msg_kind = msg.kind();
-                let span = span!(Level::DEBUG, "coordinator processing (handle_message)", kind = msg_kind);
+                let span = span!(
+                    Level::DEBUG,
+                    "coordinator processing (handle_message)",
+                    kind = msg_kind
+                );
                 let otel_context = span.context().span().span_context().clone();
 
-                // Record the last kind of message incase we get stuck.
-                if let Ok(mut guard) = last_message_kind.lock() {
-                    *guard = msg_kind;
-                }
+                // Record the last kind of message in case we get stuck. For
+                // execute commands, we additionally stash the user's SQL,
+                // statement, so we can log it in case we get stuck.
+                *last_message.lock().expect("poisoned") = LastMessage {
+                    kind: msg_kind,
+                    stmt: match &msg {
+                        Message::Command(
+                            _,
+                            Command::Execute {
+                                portal_name,
+                                session,
+                                ..
+                            },
+                        ) => session
+                            .get_portal_unverified(portal_name)
+                            .and_then(|p| p.stmt.as_ref().map(Arc::clone)),
+                        _ => None,
+                    },
+                };
 
                 let start = Instant::now();
-                self.handle_message(span, msg)
-                    .await;
+                self.handle_message(span, msg).await;
                 let duration = start.elapsed();
 
                 // Report slow messages to Prometheus.
@@ -2244,6 +2275,58 @@ impl Coordinator {
         if let Some(uuid) = ctx_extra.retire() {
             self.end_statement_execution(uuid, reason);
         }
+    }
+
+    /// Creates a new dataflow builder from the catalog and indexes in `self`.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder {
+        let compute = self
+            .instance_snapshot(instance)
+            .expect("compute instance does not exist");
+        DataflowBuilder::new(self.catalog().state(), compute)
+    }
+
+    /// Return a reference-less snapshot to the indicated compute instance.
+    pub fn instance_snapshot(
+        &self,
+        id: ComputeInstanceId,
+    ) -> Result<ComputeInstanceSnapshot, InstanceMissing> {
+        ComputeInstanceSnapshot::new(&self.controller, id)
+    }
+
+    /// Call into the compute controller to install a finalized dataflow, and
+    /// initialize the read policies for its exported objects.
+    pub(crate) async fn ship_dataflow(
+        &mut self,
+        dataflow: DataflowDescription<Plan>,
+        instance: ComputeInstanceId,
+    ) {
+        let export_ids = dataflow.export_ids().collect();
+
+        self.controller
+            .active_compute()
+            .create_dataflow(instance, dataflow)
+            .unwrap_or_terminate("dataflow creation cannot fail");
+
+        self.initialize_compute_read_policies(export_ids, instance, CompactionWindow::Default)
+            .await;
+    }
+}
+
+#[cfg(test)]
+impl Coordinator {
+    #[allow(dead_code)]
+    async fn verify_ship_dataflow_no_error(&mut self, dataflow: DataflowDescription<Plan>) {
+        // `ship_dataflow_new` is not allowed to have a `Result` return because this function is
+        // called after `catalog_transact`, after which no errors are allowed. This test exists to
+        // prevent us from incorrectly teaching those functions how to return errors (which has
+        // happened twice and is the motivation for this test).
+
+        // An arbitrary compute instance ID to satisfy the function calls below. Note that
+        // this only works because this function will never run.
+        let compute_instance = ComputeInstanceId::User(1);
+
+        let _: () = self.ship_dataflow(dataflow, compute_instance).await;
     }
 }
 
@@ -2422,9 +2505,6 @@ pub fn serve(
                 let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
                 let mut coord = Coordinator {
                     controller,
-                    view_optimizer: Optimizer::logical_optimizer(
-                        &mz_transform::typecheck::empty_context(),
-                    ),
                     catalog,
                     internal_cmd_tx,
                     group_commit_tx,

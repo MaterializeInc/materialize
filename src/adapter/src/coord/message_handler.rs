@@ -775,6 +775,7 @@ impl Coordinator {
                 cluster_id,
                 optimized_plan,
                 id_bundle,
+                when,
             } => {
                 let result = self
                     .sequence_explain_timestamp_finish(
@@ -783,6 +784,7 @@ impl Coordinator {
                         cluster_id,
                         optimized_plan,
                         id_bundle,
+                        when,
                         Some(real_time_recency_ts),
                     )
                     .await;

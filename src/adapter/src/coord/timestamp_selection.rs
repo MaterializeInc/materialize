@@ -28,10 +28,10 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::{event, Level};
 
 use crate::catalog::CatalogState;
-use crate::coord::dataflows::{prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::Coordinator;
+use crate::optimize::dataflows::{prep_scalar_expr, ExprPrepStyle};
 use crate::session::Session;
 use crate::AdapterError;
 

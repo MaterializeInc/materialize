@@ -26,6 +26,7 @@ use mz_persist::location::{
     VersionedData,
 };
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tracing::warn;
 
@@ -134,7 +135,7 @@ pub(super) async fn make_consensus(
     let consensus = if commit {
         consensus
     } else {
-        Arc::new(ReadOnly(consensus))
+        Arc::new(ReadOnly::new(consensus))
     };
     let consensus = Arc::new(MetricsConsensus::new(consensus, Arc::clone(&metrics)));
     Ok(consensus)
@@ -152,7 +153,7 @@ pub(super) async fn make_blob(
     let blob = if commit {
         blob
     } else {
-        Arc::new(ReadOnly(blob))
+        Arc::new(ReadOnly::new(blob))
     };
     let blob = Arc::new(MetricsBlob::new(blob, Arc::clone(&metrics)));
     Ok(blob)
@@ -163,12 +164,35 @@ pub(super) async fn make_blob(
 /// their own writes, among other things -- but it should handle the case of GC, where
 /// all reads finish before the writes begin.
 #[derive(Debug)]
-struct ReadOnly<T>(T);
+struct ReadOnly<T> {
+    store: T,
+    ignored_write: AtomicBool,
+}
+
+impl<T> ReadOnly<T> {
+    fn new(store: T) -> Self {
+        Self {
+            store,
+            ignored_write: AtomicBool::new(false),
+        }
+    }
+
+    fn ignored_write(&self) -> bool {
+        self.ignored_write.load(Ordering::SeqCst)
+    }
+
+    fn ignoring_write(&self) {
+        self.ignored_write.store(true, Ordering::SeqCst)
+    }
+}
 
 #[async_trait]
 impl Blob for ReadOnly<Arc<dyn Blob + Sync + Send>> {
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
-        self.0.get(key).await
+        if self.ignored_write() {
+            warn!("potentially-invalid get({key}) after ignored write");
+        }
+        self.store.get(key).await
     }
 
     async fn list_keys_and_metadata(
@@ -176,21 +200,27 @@ impl Blob for ReadOnly<Arc<dyn Blob + Sync + Send>> {
         key_prefix: &str,
         f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
     ) -> Result<(), ExternalError> {
-        self.0.list_keys_and_metadata(key_prefix, f).await
+        if self.ignored_write() {
+            warn!("potentially-invalid list_keys_and_metadata() after ignored write");
+        }
+        self.store.list_keys_and_metadata(key_prefix, f).await
     }
 
     async fn set(&self, key: &str, _value: Bytes, _atomic: Atomicity) -> Result<(), ExternalError> {
         warn!("ignoring set({key}) in read-only mode");
+        self.ignoring_write();
         Ok(())
     }
 
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         warn!("ignoring delete({key}) in read-only mode");
+        self.ignoring_write();
         Ok(None)
     }
 
     async fn restore(&self, key: &str) -> Result<(), ExternalError> {
         warn!("ignoring restore({key}) in read-only mode");
+        self.ignoring_write();
         Ok(())
     }
 }
@@ -198,20 +228,30 @@ impl Blob for ReadOnly<Arc<dyn Blob + Sync + Send>> {
 #[async_trait]
 impl Consensus for ReadOnly<Arc<dyn Consensus + Sync + Send>> {
     fn list_keys(&self) -> ResultStream<String> {
-        self.0.list_keys()
+        if self.ignored_write() {
+            warn!("potentially-invalid list_keys() after ignored write");
+        }
+        self.store.list_keys()
     }
 
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
-        self.0.head(key).await
+        if self.ignored_write() {
+            warn!("potentially-invalid head({key}) after ignored write");
+        }
+        self.store.head(key).await
     }
 
     async fn compare_and_set(
         &self,
         key: &str,
-        _expected: Option<SeqNo>,
-        _new: VersionedData,
+        expected: Option<SeqNo>,
+        new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
-        warn!("ignoring cas({key}) in read-only mode");
+        warn!(
+            "ignoring cas({key}) in read-only mode ({} bytes at seqno {expected:?})",
+            new.data.len(),
+        );
+        self.ignoring_write();
         Ok(CaSResult::Committed)
     }
 
@@ -221,11 +261,15 @@ impl Consensus for ReadOnly<Arc<dyn Consensus + Sync + Send>> {
         from: SeqNo,
         limit: usize,
     ) -> Result<Vec<VersionedData>, ExternalError> {
-        self.0.scan(key, from, limit).await
+        if self.ignored_write() {
+            warn!("potentially-invalid scan({key}) after ignored write");
+        }
+        self.store.scan(key, from, limit).await
     }
 
-    async fn truncate(&self, key: &str, _seqno: SeqNo) -> Result<usize, ExternalError> {
-        warn!("ignoring truncate({key}) in read-only mode");
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+        warn!("ignoring truncate({key}) in read-only mode (to seqno {seqno})");
+        self.ignoring_write();
         Ok(0)
     }
 }

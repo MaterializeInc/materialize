@@ -376,8 +376,11 @@ mod tests {
         log.record_txn(2, &txn);
         assert_eq!(apply_2.is_empty(), false);
         cache.update_gt(&2).await;
+        // Manually delete the register from unapplied registers since there's no event to signal
+        // that it's been deleted.
+        cache.unapplied_registers.retain(|(d, _)| d != &d0);
         assert_eq!(cache.min_unapplied_ts(), &2);
-        assert_eq!(cache.unapplied_batches().count(), 1);
+        assert_eq!(cache.unapplied().count(), 1);
 
         // Running the apply unblocks reads but does not advance the min
         // unapplied ts.
@@ -388,7 +391,7 @@ mod tests {
         txns.tidy_at(3, tidy_2).await.unwrap();
         cache.update_gt(&3).await;
         assert_eq!(cache.min_unapplied_ts(), &4);
-        assert_eq!(cache.unapplied_batches().count(), 0);
+        assert_eq!(cache.unapplied().count(), 0);
 
         // We can also sneak the tidy into a normal txn. Tidies copy across txn
         // merges.
@@ -464,7 +467,7 @@ mod tests {
                 loop {
                     let data_write = writer(&client, d0).await;
                     match txns.register(register_ts, [data_write]).await {
-                        Ok(()) => {
+                        Ok(_) => {
                             debug!("{} registered at {}", idx, register_ts);
                             break;
                         }

@@ -4477,7 +4477,7 @@ mod tests {
     use mz_stash::DebugStashFactory;
 
     use crate::catalog::{Catalog, CatalogItem, Op, PrivilegeMap, SYSTEM_CONN_ID};
-    use crate::coord::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
+    use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
     use crate::session::Session;
 
     /// System sessions have an empty `search_path` so it's necessary to
@@ -5392,16 +5392,7 @@ mod tests {
             let catalog = Arc::new(catalog);
             let conn_catalog = catalog.for_system_session();
 
-            let resolve_type_oid = |item: &str| {
-                conn_catalog
-                    .resolve_type(&PartialItemName {
-                        database: None,
-                        schema: Some(PG_CATALOG_SCHEMA.into()),
-                        item: item.to_string(),
-                    })
-                    .unwrap_or_else(|_| panic!("unable to resolve type: {item}"))
-                    .oid()
-            };
+            let resolve_type_oid = |item: &str| conn_catalog.state().get_system_type(item).oid();
             let mut handles = Vec::new();
 
             // Extracted during planning; always panics when executed.

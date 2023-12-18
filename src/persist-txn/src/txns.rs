@@ -26,7 +26,7 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, instrument};
 
 use crate::metrics::Metrics;
-use crate::txn_cache::TxnsCache;
+use crate::txn_cache::{TxnsCache, Unapplied};
 use crate::txn_write::Txn;
 use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
 
@@ -201,6 +201,9 @@ where
     /// less_equal to `register_ts` AND there is no forget ts between `R` and
     /// `register_ts`.
     ///
+    /// As a side effect all txns <= register_ts are applied, including the
+    /// registration itself.
+    ///
     /// **WARNING!** While a data shard is registered to the txn set, writing to
     /// it directly (i.e. using a WriteHandle instead of the TxnHandle,
     /// registering it with another txn shard) will lead to incorrectness,
@@ -210,7 +213,7 @@ where
         &mut self,
         register_ts: T,
         data_writes: impl IntoIterator<Item = WriteHandle<K, V, T, D>>,
-    ) -> Result<(), T> {
+    ) -> Result<Tidy, T> {
         let op = &Arc::clone(&self.metrics).register;
         op.run(async {
             let data_writes = data_writes.into_iter().collect::<Vec<_>>();
@@ -287,8 +290,9 @@ where
                     .data_write
                     .insert(data_write.shard_id(), data_write);
             }
+            let tidy = self.apply_le(&register_ts).await;
 
-            Ok(())
+            Ok(tidy)
         })
         .await
     }
@@ -533,28 +537,41 @@ where
             self.txns_cache.update_gt(ts).await;
             self.txns_cache.update_gauges(&self.metrics);
 
-            let mut unapplied_batches_by_data = BTreeMap::<_, Vec<_>>::new();
-            for (data_id, batch_raw, commit_ts) in self.txns_cache.unapplied_batches() {
-                if ts < commit_ts {
+            let mut unapplied_by_data = BTreeMap::<_, Vec<_>>::new();
+            for (data_id, unapplied, unapplied_ts) in self.txns_cache.unapplied() {
+                if ts < &unapplied_ts {
                     break;
                 }
-                unapplied_batches_by_data
+                unapplied_by_data
                     .entry(*data_id)
                     .or_default()
-                    .push((batch_raw, commit_ts));
+                    .push((unapplied, unapplied_ts));
             }
 
             let retractions = FuturesUnordered::new();
-            for (data_id, batches) in unapplied_batches_by_data {
+            for (data_id, unapplied) in unapplied_by_data {
                 let mut data_write = self.datas.take_write(&data_id).await;
                 retractions.push(async move {
                     let mut ret = Vec::new();
-                    for (batch_raw, commit_ts) in batches {
-                        crate::apply_caa(&mut data_write, batch_raw, commit_ts.clone()).await;
-                        // NB: Protos are not guaranteed to exactly roundtrip the
-                        // encoded bytes, so we intentionally use the raw batch so that
-                        // it definitely retracts.
-                        ret.push((batch_raw.clone(), (T::encode(commit_ts), data_id)));
+                    for (unapplied, unapplied_ts) in unapplied {
+                        match unapplied {
+                            Unapplied::Batch(batch_raw) => {
+                                crate::apply_caa(&mut data_write, batch_raw, unapplied_ts.clone())
+                                    .await;
+                                // NB: Protos are not guaranteed to exactly roundtrip the
+                                // encoded bytes, so we intentionally use the raw batch so that
+                                // it definitely retracts.
+                                ret.push((batch_raw.clone(), (T::encode(unapplied_ts), data_id)));
+                            }
+                            Unapplied::Register => {
+                                let () = crate::empty_caa(
+                                    || format!("data {:.9} register fill", data_id.to_string()),
+                                    &mut data_write,
+                                    unapplied_ts.clone(),
+                                )
+                                .await;
+                            }
+                        }
                     }
                     (data_write, ret)
                 });
@@ -567,6 +584,11 @@ where
                     retractions
                 })
                 .collect();
+
+            // Remove all the applied registers.
+            self.txns_cache
+                .unapplied_registers
+                .retain(|(_, register_ts)| ts < register_ts);
 
             debug!("apply_le {:?} success", ts);
             Tidy { retractions }
@@ -829,30 +851,30 @@ mod tests {
         let mut txns = TxnsHandle::expect_open(client.clone()).await;
         let log = txns.new_log();
         let d0 = txns.expect_register(2).await;
-        txns.apply_le(&2).await;
 
         // Register a second time is a no-op (idempotent).
-        assert_eq!(txns.register(3, [writer(&client, d0).await]).await, Ok(()));
-        txns.apply_le(&3).await;
+        txns.register(3, [writer(&client, d0).await]).await.unwrap();
 
         // Cannot register a new data shard at an already closed off time. An
         // error is returned with the first time that a registration would
         // succeed.
         let d1 = ShardId::new();
-        assert_eq!(txns.register(2, [writer(&client, d1).await]).await, Err(4));
+        assert_eq!(
+            txns.register(2, [writer(&client, d1).await])
+                .await
+                .unwrap_err(),
+            4
+        );
 
         // Can still register after txns have been committed.
         txns.expect_commit_at(4, d0, &["foo"], &log).await;
-        assert_eq!(txns.register(5, [writer(&client, d1).await]).await, Ok(()));
-        txns.apply_le(&5).await;
+        txns.register(5, [writer(&client, d1).await]).await.unwrap();
 
         // We can also register some new and some already registered shards.
         let d2 = ShardId::new();
-        assert_eq!(
-            txns.register(6, [writer(&client, d0).await, writer(&client, d2).await])
-                .await,
-            Ok(())
-        );
+        txns.register(6, [writer(&client, d0).await, writer(&client, d2).await])
+            .await
+            .unwrap();
 
         let () = log.assert_snapshot(d0, 6).await;
         let () = log.assert_snapshot(d1, 6).await;
@@ -879,7 +901,7 @@ mod tests {
         let () = d0_write
             .compare_and_append(
                 &[(("foo".to_owned(), ()), 2, 1)],
-                Antichain::from_elem(0),
+                Antichain::from_elem(2),
                 Antichain::from_elem(3),
             )
             .await
@@ -930,7 +952,6 @@ mod tests {
 
         // Can register and forget an already registered and forgotten shard.
         txns.register(7, [writer(&client, d0).await]).await.unwrap();
-        txns.apply_le(&7).await;
         let mut forget_expected = vec![d0, d1];
         forget_expected.sort();
         assert_eq!(txns.forget_all(8).await, Ok(forget_expected));
@@ -1392,15 +1413,15 @@ mod tests {
         let d1 = txns.expect_register(2).await;
         let mut d1_write = writer(&client, d1).await;
 
-        assert_eq!(d0_write.fetch_recent_upper().await.elements(), &[0]);
-        assert_eq!(d1_write.fetch_recent_upper().await.elements(), &[0]);
+        assert_eq!(d0_write.fetch_recent_upper().await.elements(), &[2]);
+        assert_eq!(d1_write.fetch_recent_upper().await.elements(), &[3]);
 
         // Normal `apply` (used by expect_commit_at) does not advance the
         // physical upper of data shards that were not involved in the txn (lazy
         // upper). d1 is not involved in this txn so stays where it is.
         txns.expect_commit_at(3, d0, &["0-2"], &log).await;
         assert_eq!(d0_write.fetch_recent_upper().await.elements(), &[4]);
-        assert_eq!(d1_write.fetch_recent_upper().await.elements(), &[0]);
+        assert_eq!(d1_write.fetch_recent_upper().await.elements(), &[3]);
 
         // d0 is not involved in this txn so stays where it is.
         txns.expect_commit_at(4, d1, &["1-3"], &log).await;

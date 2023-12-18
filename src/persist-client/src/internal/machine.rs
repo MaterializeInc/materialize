@@ -640,8 +640,8 @@ where
         (seqno, maintenance)
     }
 
-    pub fn is_tombstone(&self) -> bool {
-        self.applier.is_tombstone()
+    pub fn is_finalized(&self) -> bool {
+        self.applier.is_finalized()
     }
 
     async fn tombstone_step(&mut self) -> Result<(bool, RoutineMaintenance), InvalidUsage<T>> {
@@ -2015,7 +2015,7 @@ pub mod datadriven {
         _args: DirectiveArgs<'_>,
     ) -> anyhow::Result<String> {
         let seqno = datadriven.machine.seqno();
-        let tombstone = datadriven.machine.is_tombstone();
+        let tombstone = datadriven.machine.is_finalized();
         Ok(format!("{seqno} {tombstone}\n"))
     }
 

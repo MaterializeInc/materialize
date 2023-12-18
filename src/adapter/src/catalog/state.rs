@@ -81,7 +81,6 @@ use mz_storage_types::connections::inline::{
     ConnectionResolver, InlinedConnection, IntoInlineConnection,
 };
 use mz_storage_types::connections::ConnectionContext;
-use mz_transform::Optimizer;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::{AwsPrincipalContext, BuiltinTableUpdate, ClusterReplicaSizeMap, ConnCatalog};
@@ -916,11 +915,15 @@ impl CatalogState {
             Plan::CreateMaterializedView(CreateMaterializedViewPlan {
                 materialized_view, ..
             }) => {
-                let optimizer =
-                    Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
+                // Collect optimizer parameters.
+                let optimizer_config =
+                    optimize::OptimizerConfig::from(session_catalog.system_vars());
+                // Build an optimizer for this VIEW.
+                // TODO(aalexandrov): ideally this should be a materialized_view::Optimizer.
+                let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
+
                 let raw_expr = materialized_view.expr;
-                let decorrelated_expr = raw_expr.clone().lower(session_catalog.system_vars())?;
-                let optimized_expr = optimizer.optimize(decorrelated_expr)?;
+                let optimized_expr = optimizer.optimize(raw_expr.clone())?;
                 let mut typ = optimized_expr.typ();
                 for &i in &materialized_view.non_null_assertions {
                     typ.column_types[i].nullable = false;
@@ -934,6 +937,7 @@ impl CatalogState {
                     resolved_ids,
                     cluster_id: materialized_view.cluster_id,
                     non_null_assertions: materialized_view.non_null_assertions,
+                    custom_logical_compaction_window: materialized_view.compaction_window,
                 })
             }
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
@@ -1626,30 +1630,30 @@ impl CatalogState {
         Ok(())
     }
 
-    /// Optimized lookup for a builtin table
+    /// Optimized lookup for a builtin table.
     ///
-    /// Panics if the builtin table doesn't exist in the catalog
+    /// Panics if the builtin table doesn't exist in the catalog.
     pub fn resolve_builtin_table(&self, builtin: &'static BuiltinTable) -> GlobalId {
         self.resolve_builtin_object(&Builtin::<IdReference>::Table(builtin))
     }
 
-    /// Optimized lookup for a builtin log
+    /// Optimized lookup for a builtin log.
     ///
-    /// Panics if the builtin log doesn't exist in the catalog
+    /// Panics if the builtin log doesn't exist in the catalog.
     pub fn resolve_builtin_log(&self, builtin: &'static BuiltinLog) -> GlobalId {
         self.resolve_builtin_object(&Builtin::<IdReference>::Log(builtin))
     }
 
-    /// Optimized lookup for a builtin storage collection
+    /// Optimized lookup for a builtin storage collection.
     ///
-    /// Panics if the builtin storage collection doesn't exist in the catalog
+    /// Panics if the builtin storage collection doesn't exist in the catalog.
     pub fn resolve_builtin_source(&self, builtin: &'static BuiltinSource) -> GlobalId {
         self.resolve_builtin_object(&Builtin::<IdReference>::Source(builtin))
     }
 
-    /// Optimized lookup for a builtin object
+    /// Optimized lookup for a builtin object.
     ///
-    /// Panics if the builtin object doesn't exist in the catalog
+    /// Panics if the builtin object doesn't exist in the catalog.
     pub fn resolve_builtin_object<T: TypeReference>(&self, builtin: &Builtin<T>) -> GlobalId {
         let schema_id = &self.ambient_schemas_by_name[builtin.schema()];
         let schema = &self.ambient_schemas_by_id[schema_id];
@@ -1704,6 +1708,13 @@ impl CatalogState {
         }
 
         Err(SqlCatalogError::UnknownSchema(schema_name.into()))
+    }
+
+    /// Optimized lookup for a system schema.
+    ///
+    /// Panics if the system schema doesn't exist in the catalog.
+    pub fn resolve_system_schema(&self, name: &str) -> SchemaId {
+        self.ambient_schemas_by_name[name]
     }
 
     pub fn resolve_search_path(

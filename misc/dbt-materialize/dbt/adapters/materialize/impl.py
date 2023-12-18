@@ -214,7 +214,7 @@ class MaterializeAdapter(PostgresAdapter):
         # statement, we split the input based on the string appended to the
         # header in materialize__get_empty_subquery_sql.
 
-        sql_header, sql_view_def = sql.split("#__dbt_sbq_parse_header__#")
+        sql_header, sql_view_def = sql.split("--#dbt_sbq_parse_header#--")
 
         if sql_header:
             self.connections.execute(sql_header)

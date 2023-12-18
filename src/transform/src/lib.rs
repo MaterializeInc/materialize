@@ -457,6 +457,7 @@ pub struct Optimizer {
 
 impl Optimizer {
     /// Builds a logical optimizer that only performs logical transformations.
+    #[deprecated = "Create an Optimize instance and call `optimize` instead."]
     pub fn logical_optimizer(ctx: &crate::typecheck::SharedContext) -> Self {
         let transforms: Vec<Box<dyn crate::Transform>> = vec![
             Box::new(crate::typecheck::Typecheck::new(Arc::clone(ctx)).strict_join_equivalences()),

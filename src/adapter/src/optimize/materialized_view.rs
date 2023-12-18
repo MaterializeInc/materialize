@@ -42,7 +42,7 @@ use timely::progress::Antichain;
 use tracing::{span, Level};
 
 use crate::catalog::Catalog;
-use crate::coord::dataflows::{
+use crate::optimize::dataflows::{
     prep_relation_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
 };
 use crate::optimize::{
@@ -153,6 +153,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
 
         // MIR ⇒ MIR optimization (local)
         let expr = span!(target: "optimizer", Level::DEBUG, "local").in_scope(|| {
+            #[allow(deprecated)]
             let optimizer = TransformOptimizer::logical_optimizer(&self.typecheck_ctx);
             let expr = optimizer.optimize(expr)?.into_inner();
 

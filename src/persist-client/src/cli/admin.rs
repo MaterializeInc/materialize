@@ -58,6 +58,8 @@ pub(crate) enum Command {
     ForceCompaction(ForceCompactionArgs),
     /// Manually kick off a GC run for a shard.
     ForceGc(ForceGcArgs),
+    /// Manually finalize an unfinalized shard.
+    Finalize(StateArgs),
     /// Attempt to ensure that all the files referenced by consensus are available
     /// in Blob.
     RestoreBlob(RestoreBlobArgs),
@@ -131,6 +133,29 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
                 command.commit,
             )
             .await?;
+            info_log_non_zero_metrics(&metrics_registry.gather());
+        }
+        Command::Finalize(args) => {
+            let StateArgs {
+                shard_id,
+                consensus_uri,
+                blob_uri,
+            } = args;
+            let shard_id = ShardId::from_str(&shard_id).expect("invalid shard id");
+            let commit = command.commit;
+
+            let cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
+            let metrics_registry = MetricsRegistry::new();
+            let metrics = Arc::new(Metrics::new(&cfg, &metrics_registry));
+            let consensus =
+                make_consensus(&cfg, &consensus_uri, commit, Arc::clone(&metrics)).await?;
+            let blob = make_blob(&cfg, &blob_uri, commit, Arc::clone(&metrics)).await?;
+            let mut machine =
+                make_machine(&cfg, consensus, blob, metrics, shard_id, commit).await?;
+            let maintenance = machine.become_tombstone().await?;
+            if !maintenance.is_empty() {
+                info!("ignoring non-empty requested maintenance: {maintenance:?}")
+            }
             info_log_non_zero_metrics(&metrics_registry.gather());
         }
         Command::RestoreBlob(args) => {

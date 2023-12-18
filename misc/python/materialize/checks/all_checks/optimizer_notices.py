@@ -18,7 +18,7 @@ SCHEMA = "optimizer_notices"
 
 class OptimizerNotices(Check):
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v0.80.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v0.81.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(

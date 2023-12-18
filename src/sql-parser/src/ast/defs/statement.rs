@@ -2981,7 +2981,7 @@ impl_display_t!(ExplainSinkSchemaStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainTimestampStatement<T: AstInfo> {
     pub format: ExplainFormat,
-    pub query: Query<T>,
+    pub select: SelectStatement<T>,
 }
 
 impl<T: AstInfo> AstDisplay for ExplainTimestampStatement<T> {
@@ -2989,7 +2989,7 @@ impl<T: AstInfo> AstDisplay for ExplainTimestampStatement<T> {
         f.write_str("EXPLAIN TIMESTAMP AS ");
         f.write_node(&self.format);
         f.write_str(" FOR ");
-        f.write_node(&self.query);
+        f.write_node(&self.select);
     }
 }
 impl_display_t!(ExplainTimestampStatement);
@@ -3129,6 +3129,7 @@ pub enum WithOptionValue<T: AstInfo> {
     // Special cases.
     ClusterReplicas(Vec<ReplicaDefinition<T>>),
     ConnectionKafkaBroker(KafkaBroker<T>),
+    RetainHistoryFor(Value),
 }
 
 impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
@@ -3137,7 +3138,9 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
             // When adding branches to this match statement, think about whether it is OK for us to collect
             // the value as part of our telemetry. Check the data management policy to be sure!
             match self {
-                WithOptionValue::Value(_) | WithOptionValue::Sequence(_) => {
+                WithOptionValue::Value(_)
+                | WithOptionValue::Sequence(_)
+                | WithOptionValue::RetainHistoryFor(_) => {
                     // These are redact-aware.
                 }
                 WithOptionValue::DataType(_)
@@ -3178,6 +3181,10 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
             }
             WithOptionValue::ConnectionKafkaBroker(broker) => {
                 f.write_node(broker);
+            }
+            WithOptionValue::RetainHistoryFor(value) => {
+                f.write_str("FOR ");
+                f.write_node(value);
             }
         }
     }
@@ -3353,7 +3360,7 @@ pub enum Explainee<T: AstInfo> {
     View(T::ItemName),
     MaterializedView(T::ItemName),
     Index(T::ItemName),
-    Query(Box<Query<T>>, bool),
+    Select(Box<SelectStatement<T>>, bool),
     CreateMaterializedView(Box<CreateMaterializedViewStatement<T>>, bool),
     CreateIndex(Box<CreateIndexStatement<T>>, bool),
 }
@@ -3373,11 +3380,11 @@ impl<T: AstInfo> AstDisplay for Explainee<T> {
                 f.write_str("INDEX ");
                 f.write_node(name);
             }
-            Self::Query(query, broken) => {
+            Self::Select(select, broken) => {
                 if *broken {
                     f.write_str("BROKEN ");
                 }
-                f.write_node(query);
+                f.write_node(select);
             }
             Self::CreateMaterializedView(statement, broken) => {
                 if *broken {

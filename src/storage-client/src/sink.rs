@@ -13,9 +13,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
 use maplit::btreemap;
-use mz_kafka_util::client::{
-    GetPartitionsError, MzClientContext, TunnelingClientContext, DEFAULT_FETCH_METADATA_TIMEOUT,
-};
+use mz_kafka_util::client::{GetPartitionsError, MzClientContext, TunnelingClientContext};
 use mz_ore::collections::CollectionExt;
 use mz_ore::task;
 use mz_repr::Timestamp;
@@ -70,13 +68,14 @@ struct TopicConfigs {
 async fn discover_topic_configs<C: ClientContext>(
     client: &AdminClient<C>,
     topic: &str,
+    fetch_timeout: Duration,
 ) -> Result<TopicConfigs, anyhow::Error> {
     let mut partition_count = -1;
     let mut replication_factor = -1;
 
     let metadata = client
         .inner()
-        .fetch_metadata(None, DEFAULT_FETCH_METADATA_TIMEOUT)
+        .fetch_metadata(None, fetch_timeout)
         .with_context(|| {
             format!(
                 "error fetching metadata when creating new topic {} for sink",
@@ -208,6 +207,7 @@ async fn ensure_kafka_topic<C>(
         mut replication_factor,
         cleanup_policy,
     }: TopicConfig,
+    fetch_timeout: Duration,
 ) -> Result<(), anyhow::Error>
 where
     C: ClientContext,
@@ -217,7 +217,7 @@ where
     // Newer versions of Kafka can instead send create topic requests with -1 and have this happen
     // behind the scenes, but this is unsupported and will result in errors on pre-2.4 Kafka.
     if partition_count == -1 || replication_factor == -1 {
-        match discover_topic_configs(client, topic).await {
+        match discover_topic_configs(client, topic, fetch_timeout).await {
             Ok(configs) => {
                 if partition_count == -1 {
                     partition_count = configs.partition_count;
@@ -361,6 +361,10 @@ pub async fn build_kafka(
         progress_client_read_uncommitted,
         progress_topic.clone(),
         ProgressKey::new(sink_id),
+        storage_configuration
+            .parameters
+            .kafka_timeout_config
+            .fetch_metadata_timeout,
     )
     .await
     .check_ssh_status(progress_client_read_committed.client().context())?;
@@ -401,6 +405,10 @@ pub async fn build_kafka(
             replication_factor: -1,
             cleanup_policy: TopicCleanupPolicy::Compaction,
         },
+        storage_configuration
+            .parameters
+            .kafka_timeout_config
+            .fetch_metadata_timeout,
     )
     .await
     .check_ssh_status(admin_client.inner().context())
@@ -417,6 +425,10 @@ pub async fn build_kafka(
                 bytes: None,
             },
         },
+        storage_configuration
+            .parameters
+            .kafka_timeout_config
+            .fetch_metadata_timeout,
     )
     .await
     .check_ssh_status(admin_client.inner().context())
@@ -454,6 +466,7 @@ async fn determine_latest_progress_record(
     progress_client_read_uncommitted: Arc<BaseConsumer<TunnelingClientContext<MzClientContext>>>,
     progress_topic: String,
     progress_key: ProgressKey,
+    fetch_timeout: Duration,
 ) -> Result<Option<Timestamp>, anyhow::Error> {
     // ****************************** WARNING ******************************
     // Be VERY careful when editing the code in this function. It is very easy
@@ -474,6 +487,7 @@ async fn determine_latest_progress_record(
         progress_client_read_uncommitted: &BaseConsumer<C>,
         progress_topic: &str,
         progress_key: &ProgressKey,
+        fetch_timeout: Duration,
     ) -> Result<Option<Timestamp>, anyhow::Error>
     where
         C: ConsumerContext,
@@ -484,7 +498,7 @@ async fn determine_latest_progress_record(
         let partitions = match mz_kafka_util::client::get_partitions(
             progress_client_read_committed.client(),
             progress_topic,
-            DEFAULT_FETCH_METADATA_TIMEOUT,
+            fetch_timeout,
         ) {
             Ok(partitions) => partitions,
             Err(GetPartitionsError::TopicDoesNotExist) => {
@@ -541,7 +555,7 @@ async fn determine_latest_progress_record(
         //     unable to act on our stale information.
         //
         let (lo, hi) = progress_client_read_uncommitted
-            .fetch_watermarks(progress_topic, partition, DEFAULT_FETCH_METADATA_TIMEOUT)
+            .fetch_watermarks(progress_topic, partition, fetch_timeout)
             .map_err(|e| {
                 anyhow!(
                     "Failed to fetch metadata while reading from progress topic: {}",
@@ -665,6 +679,7 @@ async fn determine_latest_progress_record(
                 &progress_client_read_uncommitted,
                 &progress_topic,
                 &progress_key,
+                fetch_timeout,
             )
         },
     )

@@ -741,4 +741,34 @@ mod tests {
         log.assert_subscribe(d0, 4, u64::MAX).await;
         log.assert_subscribe(d0, 6, u64::MAX).await;
     }
+
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn subscribe_shard_register_forget() {
+        let client = PersistClient::new_for_tests().await;
+        let mut txns = TxnsHandle::expect_open(client.clone()).await;
+        let d0 = ShardId::new();
+
+        // Start a subscription on the data shard.
+        let mut sub = txns.read_cache().expect_subscribe(&client, d0, 0);
+        assert_eq!(sub.progress(), 0);
+
+        // Register the shard at 10.
+        txns.register(10, [writer(&client, d0).await])
+            .await
+            .unwrap();
+        sub.step_past(10).await;
+        assert!(
+            sub.progress() > 10,
+            "operator should advance past 10 when shard is registered"
+        );
+
+        // Forget the shard at 20.
+        txns.forget(20, d0).await.unwrap();
+        sub.step_past(20).await;
+        assert!(
+            sub.progress() > 20,
+            "operator should advance past 20 when shard is forgotten"
+        );
+    }
 }

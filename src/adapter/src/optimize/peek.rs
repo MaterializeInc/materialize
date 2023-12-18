@@ -27,11 +27,11 @@ use timely::progress::Antichain;
 use tracing::{span, warn, Level};
 
 use crate::catalog::Catalog;
-use crate::coord::dataflows::{
+use crate::coord::peek::{create_fast_path_plan, FastPathPlan};
+use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, EvalTime,
     ExprPrepStyle,
 };
-use crate::coord::peek::{create_fast_path_plan, FastPathPlan};
 use crate::optimize::{
     LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode, OptimizerConfig,
     OptimizerError,
@@ -223,6 +223,7 @@ impl Optimize<MirRelationExpr> for Optimizer {
     fn optimize(&mut self, expr: MirRelationExpr) -> Result<Self::To, OptimizerError> {
         // MIR ⇒ MIR optimization (local)
         let expr = span!(target: "optimizer", Level::DEBUG, "local").in_scope(|| {
+            #[allow(deprecated)]
             let optimizer = TransformOptimizer::logical_optimizer(&self.typecheck_ctx);
             let expr = optimizer.optimize(expr)?.into_inner();
 

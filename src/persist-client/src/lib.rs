@@ -645,7 +645,8 @@ impl PersistClient {
     }
 
     /// Check if the given shard is in a finalized state; ie. it can no longer be
-    /// read and any data that was written to it is no longer accessible.
+    /// read, any data that was written to it is no longer accessible, and we've
+    /// discarded references to that data from state.
     pub async fn is_finalized<K, V, T, D>(
         &self,
         shard_id: ShardId,
@@ -660,7 +661,7 @@ impl PersistClient {
         let machine = self
             .make_machine::<K, V, T, D>(shard_id, diagnostics)
             .await?;
-        Ok(machine.is_tombstone())
+        Ok(machine.is_finalized())
     }
 
     /// If a shard is guaranteed to never be used again, finalize it to delete

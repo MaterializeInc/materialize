@@ -29,8 +29,6 @@ use std::ops::Deref;
 #[cfg(feature = "proptest")]
 use std::ops::Range;
 
-use crate::cast::CastFrom;
-
 /// A wrapper type which ensures a signed number is non-negative.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 #[repr(transparent)]
@@ -94,7 +92,7 @@ impl From<NonNeg<i64>> for u64 {
 }
 
 #[cfg(target_pointer_width = "64")]
-impl CastFrom<NonNeg<i64>> for usize {
+impl crate::cast::CastFrom<NonNeg<i64>> for usize {
     #[allow(clippy::as_conversions)]
     fn cast_from(from: NonNeg<i64>) -> usize {
         usize::cast_from(u64::from(from))

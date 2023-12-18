@@ -1003,7 +1003,7 @@ where
             };
 
             // In an aborted transaction, reject all commands except COMMIT/ROLLBACK.
-            let txn_exit_stmt = is_txn_exit_stmt(portal.stmt.as_ref());
+            let txn_exit_stmt = is_txn_exit_stmt(portal.stmt.as_deref());
             if aborted_txn && !txn_exit_stmt {
                 if let Some(outer_ctx_extra) = outer_ctx_extra {
                     self.adapter_client.retire_execute(

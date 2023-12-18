@@ -177,7 +177,7 @@ pub fn lex(query: &str) -> Result<Vec<PosToken>, LexerError> {
             '[' => Token::LBracket,
             ']' => Token::RBracket,
             #[rustfmt::skip]
-            '+'|'-'|'*'|'/'|'<'|'>'|'='|'~'|'!'|'@'|'#'|'%'|'^'|'&'|'|'|'`'|'?' => lex_op(buf)?,
+            '+'|'-'|'*'|'/'|'<'|'>'|'='|'~'|'!'|'@'|'#'|'%'|'^'|'&'|'|'|'`'|'?' => lex_op(buf),
             _ => bail!(pos, "unexpected character in input: {}", ch),
         };
         tokens.push(PosToken {
@@ -395,7 +395,7 @@ fn lex_number(buf: &mut LexBuf) -> Result<Token, LexerError> {
     Ok(Token::Number(s))
 }
 
-fn lex_op(buf: &mut LexBuf) -> Result<Token, LexerError> {
+fn lex_op(buf: &mut LexBuf) -> Token {
     buf.prev();
     let mut s = String::new();
 
@@ -405,8 +405,14 @@ fn lex_op(buf: &mut LexBuf) -> Result<Token, LexerError> {
         match ch {
             // ...except the sequences `--` and `/*` start comments, even within
             // what would otherwise be an operator...
-            '-' if buf.consume('-') => lex_line_comment(buf),
-            '/' if buf.consume('*') => lex_multiline_comment(buf)?,
+            '-' if buf.peek() == Some('-') => {
+                buf.prev();
+                break;
+            }
+            '/' if buf.peek() == Some('*') => {
+                buf.prev();
+                break;
+            }
             #[rustfmt::skip]
             '+'|'-'|'*'|'/'|'<'|'>'|'='|'~'|'!'|'@'|'#'|'%'|'^'|'&'|'|'|'`'|'?' => s.push(ch),
             _ => {
@@ -433,11 +439,11 @@ fn lex_op(buf: &mut LexBuf) -> Result<Token, LexerError> {
     match s.as_str() {
         // `*` and `=` are not just expression operators in SQL, so give them
         // dedicated tokens to simplify the parser.
-        "*" => Ok(Token::Star),
-        "=" => Ok(Token::Eq),
+        "*" => Token::Star,
+        "=" => Token::Eq,
         // Normalize the two forms of the not-equals operator.
-        "!=" => Ok(Token::Op("<>".into())),
+        "!=" => Token::Op("<>".into()),
         // Emit all other operators as is.
-        _ => Ok(Token::Op(s)),
+        _ => Token::Op(s),
     }
 }
