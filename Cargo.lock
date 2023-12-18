@@ -5379,6 +5379,7 @@ name = "mz-sql-lexer"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "datadriven",
  "mz-ore",
  "phf",
  "phf_codegen",
