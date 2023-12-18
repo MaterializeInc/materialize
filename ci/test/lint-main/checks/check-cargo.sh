@@ -17,6 +17,23 @@ cd "$(dirname "$0")/../../../.."
 
 . misc/shlib/shlib.bash
 
+INSTALLED_CARGO_PACKAGES=$(cargo install --list)
+
+if ! echo $INSTALLED_CARGO_PACKAGES | grep --silent "cargo-about"; then
+  echo "lint: cargo-about is not installed"
+  echo "hint: install it with: cargo install cargo-about"
+fi
+
+if ! echo $INSTALLED_CARGO_PACKAGES | grep --silent "cargo-hakari"; then
+  echo "lint: cargo-hakari is not installed"
+  echo "hint: install it with: cargo install cargo-hakari"
+fi
+
+if ! echo $INSTALLED_CARGO_PACKAGES | grep --silent "cargo-deplint"; then
+  echo "lint: cargo-deplint is not installed"
+  echo "hint: install it with: cargo install cargo-deplint"
+fi
+
 try bin/lint-cargo
 
 try cargo --locked fmt -- --check

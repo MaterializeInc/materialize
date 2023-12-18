@@ -18,6 +18,11 @@ cd "$(dirname "$0")/../../../.."
 . misc/shlib/shlib.bash
 . misc/buildkite/git.bash
 
+if ! buf --version >/dev/null 2>/dev/null; then
+  echo "lint: buf is not installed"
+  echo "hint: refer to https://buf.build/docs/installation for install instructions"
+fi
+
 CURRENT_GIT_BRANCH=$(try git branch --show-current)
 IN_BUILDKITE=in_ci
 IN_BUILDKITE_PR=0
