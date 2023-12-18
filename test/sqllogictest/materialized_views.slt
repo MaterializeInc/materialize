@@ -602,19 +602,19 @@ NULL 2 3
 statement ok
 CREATE MATERIALIZED VIEW mv_assertion_at_begin WITH (ASSERT NOT NULL x) AS SELECT * FROM t2;
 
-statement error column 1 must not be null
+statement error column "x" must not be null
 SELECT * FROM mv_assertion_at_begin;
 
 statement ok
 CREATE MATERIALIZED VIEW mv_assertion_at_end WITH (ASSERT NOT NULL z) AS SELECT * FROM t2;
 
-statement error column 3 must not be null
+statement error column "z" must not be null
 SELECT * FROM mv_assertion_at_end;
 
 statement ok
 CREATE MATERIALIZED VIEW mv_two_assertions WITH (ASSERT NOT NULL x, ASSERT NOT NULL z) AS SELECT * FROM t2;
 
-statement error column 1 must not be null
+statement error column "x" must not be null
 SELECT * FROM mv_two_assertions;
 
 statement ok
@@ -632,7 +632,7 @@ CREATE MATERIALIZED VIEW mv_bad_assertion_on_renamed_column (a, b, c) WITH (ASSE
 statement ok
 CREATE MATERIALIZED VIEW mv_good_assertion_on_renamed_column (a, b, c) WITH (ASSERT NOT NULL b) AS SELECT * FROM t2;
 
-statement error column 2 must not be null
+statement error column "b" must not be null
 SELECT * FROM mv_good_assertion_on_renamed_column;
 
 statement ok
