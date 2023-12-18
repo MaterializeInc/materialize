@@ -3014,7 +3014,7 @@ impl SystemVars {
         let var = self
             .vars
             .get(var.name)
-            .expect(&format!("provided var {var:?} should be in state"));
+            .unwrap_or_else(|| panic!("provided var {var:?} should be in state"));
 
         var.value_any()
             .downcast_ref()
