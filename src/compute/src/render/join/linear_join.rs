@@ -11,7 +11,7 @@
 //!
 //! Consult [LinearJoinPlan] documentation for details.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
@@ -63,7 +63,7 @@ impl Default for LinearJoinSpec {
             implementation: LinearJoinImpl::Materialize,
             yielding: YieldSpec {
                 after_work: Some(1_000_000),
-                after_time: None,
+                after_time: Some(Duration::from_millis(100)),
             },
         }
     }

@@ -1457,7 +1457,8 @@ const ENABLE_MZ_JOIN_CORE: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
-pub static DEFAULT_LINEAR_JOIN_YIELDING: Lazy<String> = Lazy::new(|| "work:1000000".into());
+pub static DEFAULT_LINEAR_JOIN_YIELDING: Lazy<String> =
+    Lazy::new(|| "work:1000000,time:100".into());
 static LINEAR_JOIN_YIELDING: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("linear_join_yielding"),
     value: DEFAULT_LINEAR_JOIN_YIELDING.clone(),
@@ -1930,7 +1931,7 @@ feature_flags!(
     {
         name: enable_multi_worker_storage_persist_sink,
         desc: "multi-worker storage persist sink",
-        default: false,
+        default: true,
         internal: true,
         enable_for_item_parsing: true,
     },
@@ -2000,7 +2001,7 @@ feature_flags!(
     {
         name: enable_disk_cluster_replicas,
         desc: "`WITH (DISK)` for cluster replicas",
-        default: false,
+        default: true,
         internal: true,
         enable_for_item_parsing: true,
     },
@@ -2021,7 +2022,7 @@ feature_flags!(
     {
         name: enable_connection_validation_syntax,
         desc: "CREATE CONNECTION .. WITH (VALIDATE) and VALIDATE CONNECTION syntax",
-        default: false,
+        default: true,
         internal: true,
         enable_for_item_parsing: true,
     },
@@ -2091,7 +2092,7 @@ feature_flags!(
     {
         name: enable_unified_clusters,
         desc: "unified compute and storage cluster",
-        default: false,
+        default: true,
         internal: true,
         enable_for_item_parsing: true,
     },
@@ -2105,7 +2106,7 @@ feature_flags!(
     {
         name: enable_comment,
         desc: "the COMMENT ON feature for objects",
-        default: false,
+        default: true,
         internal: false,
         enable_for_item_parsing: true,
     },
@@ -2126,7 +2127,7 @@ feature_flags!(
     {
         name: enable_alter_swap,
         desc: "the ALTER SWAP feature for objects",
-        default: false,
+        default: true,
         internal: false,
         enable_for_item_parsing: true,
     },
@@ -2140,7 +2141,7 @@ feature_flags!(
     {
         name: enable_default_kafka_ssh_tunnel,
         desc: "the top-level SSH TUNNEL feature for kafka connections",
-        default: false,
+        default: true,
         internal: true,
         enable_for_item_parsing: true,
     },
