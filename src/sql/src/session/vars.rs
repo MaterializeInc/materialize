@@ -2180,6 +2180,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_cc_cluster_sizes,
+        desc: "use of 'cc' cluster sizes",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
 );
 
 /// Represents the input to a variable.

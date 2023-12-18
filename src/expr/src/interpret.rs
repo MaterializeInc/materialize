@@ -775,6 +775,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     }
 
     fn unary(&self, func: &UnaryFunc, summary: Self::Summary) -> Self::Summary {
+        let fallible = func.could_error() || summary.range.fallible;
         let mapped_spec = if let Some(special) = SpecialUnary::for_func(func) {
             (special.map_fn)(self, summary.range)
         } else {
@@ -791,7 +792,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
 
         let col_type = func.output_type(summary.col_type);
 
-        let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, true));
+        let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, fallible));
         ColumnSpec { col_type, range }
     }
 
@@ -802,6 +803,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         right: Self::Summary,
     ) -> Self::Summary {
         let (left_monotonic, right_monotonic) = func.is_monotone();
+        let fallible = func.could_error() || left.range.fallible || right.range.fallible;
 
         let mapped_spec = if let Some(special) = SpecialBinary::for_func(func) {
             (special.map_fn)(left.range, right.range)
@@ -822,11 +824,12 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
 
         let col_type = func.output_type(left.col_type, right.col_type);
 
-        let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, true));
+        let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, fallible));
         ColumnSpec { col_type, range }
     }
 
     fn variadic(&self, func: &VariadicFunc, args: Vec<Self::Summary>) -> Self::Summary {
+        let fallible = func.could_error() || args.iter().any(|s| s.range.fallible);
         if func.is_associative() && args.len() > 2 {
             // To avoid a combinatorial explosion, evaluate large variadic calls as a series of
             // smaller ones, since associativity guarantees we'll get compatible results.
@@ -871,7 +874,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         let col_types = args.into_iter().map(|spec| spec.col_type).collect();
         let col_type = func.output_type(col_types);
 
-        let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, true));
+        let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, fallible));
 
         ColumnSpec { col_type, range }
     }
@@ -1517,6 +1520,34 @@ mod tests {
         assert!(!range_out.may_contain(Datum::Numeric(0.into())));
         assert!(range_out.may_contain(Datum::Numeric(200.into())));
         assert!(!range_out.may_contain(Datum::Numeric(400.into())));
+    }
+
+    #[mz_ore::test]
+    fn test_like() {
+        let arena = RowArena::new();
+
+        let expr = MirScalarExpr::CallUnary {
+            func: UnaryFunc::IsLikeMatch(IsLikeMatch(
+                crate::like_pattern::compile("%whatever%", true).unwrap(),
+            )),
+            expr: Box::new(MirScalarExpr::Column(0)),
+        };
+
+        let relation = RelationType::new(vec![ScalarType::String.nullable(true)]);
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(Datum::String("aardvark"), Datum::String("zebra")),
+        );
+
+        let range_out = interpreter.expr(&expr).range;
+        assert!(
+            !range_out.fallible,
+            "like function should not error on non-error input"
+        );
+        assert!(range_out.may_contain(Datum::True));
+        assert!(range_out.may_contain(Datum::False));
+        assert!(range_out.may_contain(Datum::Null));
     }
 
     #[mz_ore::test]

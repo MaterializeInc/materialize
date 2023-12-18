@@ -9,7 +9,7 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import Check, externally_idempotent
 
 PROTOBUF = dedent(
     """
@@ -31,6 +31,7 @@ PROTOBUF = dedent(
 )
 
 
+@externally_idempotent(False)
 class KafkaFormats(Check):
     def initialize(self) -> Testdrive:
         return Testdrive(
