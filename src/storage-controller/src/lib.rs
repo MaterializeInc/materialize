@@ -2185,7 +2185,10 @@ where
         //   be called shortly).
         // - That all txn writes through `init_ts` have been applied
         //   (materialized physically in the data shards).
-        let removed = txns
+        //
+        // We don't have an extra timestamp here for the tidy, so for now ignore it and let the
+        // next transaction perform any tidy needed.
+        let (removed, _tidy) = txns
             .forget_all(init_ts.clone())
             .await
             .map_err(|_| StorageError::InvalidUppers(vec![]))?;

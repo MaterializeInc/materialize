@@ -623,7 +623,10 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
             let mut ts = T::minimum();
             loop {
                 match self.txns.forget(ts, data_id).await {
-                    Ok(()) => break,
+                    Ok(tidy) => {
+                        self.tidy.merge(tidy);
+                        break;
+                    }
                     Err(new_ts) => ts = new_ts,
                 }
             }
