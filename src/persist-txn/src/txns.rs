@@ -396,8 +396,8 @@ where
                 }
             }
 
-            let tidy = self.apply_le(&forget_ts).await;
             self.datas.data_write.remove(&data_id);
+            let tidy = self.apply_le(&forget_ts).await;
 
             Ok(tidy)
         })
@@ -493,8 +493,8 @@ where
             for data_id in registered.iter() {
                 self.datas.data_write.remove(data_id);
             }
-
             let tidy = self.apply_le(&forget_ts).await;
+
             Ok((registered, tidy))
         })
         .await
