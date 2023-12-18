@@ -82,15 +82,15 @@ public              mz_support=U/mz_system
 query TT rowsort
 SELECT * FROM cluster_privileges ORDER BY name, privilege
 ----
-default           =U/mz_system
-default           mz_system=UC/mz_system
-default           materialize=UC/mz_system
-default           mz_support=U/mz_system
 mz_introspection  =U/mz_system
 mz_introspection  mz_system=UC/mz_system
 mz_introspection  mz_support=UC/mz_system
 mz_system         mz_system=UC/mz_system
 mz_system         mz_support=U/mz_system
+quickstart           =U/mz_system
+quickstart           mz_system=UC/mz_system
+quickstart           materialize=UC/mz_system
+quickstart           mz_support=U/mz_system
 
 ### The materialize privilege comes from the views created above
 ### The mz_support privilege comes from the `_redacted`
@@ -4628,7 +4628,7 @@ statement ok
 CREATE ROLE r1
 
 simple conn=mz_system,user=mz_system
-GRANT CREATE ON CLUSTER default TO r1
+GRANT CREATE ON CLUSTER quickstart TO r1
 ----
 COMPLETE 0
 

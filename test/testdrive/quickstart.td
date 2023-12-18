@@ -10,12 +10,12 @@
 # This test verifies the Quickstart page works: https://materialize.com/docs/get-started/quickstart/
 # Uses shared compute+storage cluster
 
-> CREATE CLUSTER quickstart REPLICAS (r1 (SIZE '4-4'));
+> CREATE CLUSTER quickstart_tutorial REPLICAS (r1 (SIZE '4-4'));
 
-> SET CLUSTER = quickstart
+> SET CLUSTER = quickstart_tutorial
 
 > CREATE SOURCE auction_house
-  IN CLUSTER quickstart
+  IN CLUSTER quickstart_tutorial
   FROM LOAD GENERATOR AUCTION
   (TICK INTERVAL '0.05s')
   FOR ALL TABLES
@@ -25,7 +25,7 @@ name                   type           size                         cluster
 --------------------------------------------------------------------------
 accounts               subsource      <null>                       <null>
 bids                   subsource      <null>                       <null>
-auction_house          load-generator <null>                       quickstart
+auction_house          load-generator <null>                       quickstart_tutorial
 auction_house_progress progress       <null>                       <null>
 auctions               subsource      <null>                       <null>
 organizations          subsource      <null>                       <null>
@@ -132,4 +132,4 @@ INSERT INTO fraud_accounts VALUES (12)
 
 > DROP TABLE fraud_accounts
 
-> DROP CLUSTER quickstart CASCADE
+> DROP CLUSTER quickstart_tutorial CASCADE

@@ -1164,11 +1164,11 @@ SELECT * FROM blue_mv1;
 20
 
 query TT
-SELECT name, id FROM mz_clusters WHERE id LIKE 'u%';
+SELECT name, id FROM mz_clusters WHERE id LIKE 'u%' ORDER BY name;
 ----
-c u3
-default u1
 blue_compute u4
+c u3
+quickstart u1
 
 statement ok
 BEGIN;

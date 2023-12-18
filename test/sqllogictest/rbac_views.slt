@@ -141,9 +141,9 @@ materialize  r1           c        USAGE
 materialize  r3           c        USAGE
 materialize  r3           c        CREATE
 materialize  r4           c        CREATE
-mz_system    PUBLIC       default  USAGE
-mz_system    materialize  default  USAGE
-mz_system    materialize  default  CREATE
+mz_system    PUBLIC       quickstart  USAGE
+mz_system    materialize  quickstart  USAGE
+mz_system    materialize  quickstart  CREATE
 
 simple conn=r1,user=r1
 SELECT * FROM mz_internal.mz_show_my_cluster_privileges ORDER BY name, grantee
@@ -152,7 +152,7 @@ materialize,PUBLIC,c,USAGE
 materialize,r1,c,USAGE
 materialize,r3,c,USAGE
 materialize,r3,c,CREATE
-mz_system,PUBLIC,default,USAGE
+mz_system,PUBLIC,quickstart,USAGE
 COMPLETE 5
 
 # SHOW DATABASE PRIVILEGES
@@ -291,9 +291,9 @@ materialize  r1           NULL         NULL    c            cluster   USAGE
 materialize  r3           NULL         NULL    c            cluster   USAGE
 materialize  r3           NULL         NULL    c            cluster   CREATE
 materialize  r4           NULL         NULL    c            cluster   CREATE
-mz_system    PUBLIC       NULL         NULL    default      cluster  USAGE
-mz_system    materialize  NULL         NULL    default      cluster  USAGE
-mz_system    materialize  NULL         NULL    default      cluster  CREATE
+mz_system    PUBLIC       NULL         NULL    quickstart   cluster  USAGE
+mz_system    materialize  NULL         NULL    quickstart   cluster  USAGE
+mz_system    materialize  NULL         NULL    quickstart   cluster  CREATE
 materialize  PUBLIC       NULL         NULL    d            database  CREATE
 materialize  materialize  NULL         NULL    d            database  USAGE
 materialize  materialize  NULL         NULL    d            database  CREATE
@@ -342,7 +342,7 @@ materialize,PUBLIC,NULL,NULL,c,cluster,USAGE
 materialize,r1,NULL,NULL,c,cluster,USAGE
 materialize,r3,NULL,NULL,c,cluster,USAGE
 materialize,r3,NULL,NULL,c,cluster,CREATE
-mz_system,PUBLIC,NULL,NULL,default,cluster,USAGE
+mz_system,PUBLIC,NULL,NULL,quickstart,cluster,USAGE
 materialize,PUBLIC,NULL,NULL,d,database,CREATE
 materialize,r1,NULL,NULL,d,database,USAGE
 materialize,r1,NULL,NULL,d,database,CREATE
@@ -373,9 +373,9 @@ materialize  r1           NULL         NULL    c            cluster   USAGE
 materialize  r3           NULL         NULL    c            cluster   USAGE
 materialize  r3           NULL         NULL    c            cluster   CREATE
 materialize  r4           NULL         NULL    c            cluster   CREATE
-mz_system    PUBLIC       NULL         NULL    default      cluster  USAGE
-mz_system    materialize  NULL         NULL    default      cluster  USAGE
-mz_system    materialize  NULL         NULL    default      cluster  CREATE
+mz_system    PUBLIC       NULL         NULL    quickstart   cluster   USAGE
+mz_system    materialize  NULL         NULL    quickstart   cluster   USAGE
+mz_system    materialize  NULL         NULL    quickstart   cluster   CREATE
 materialize  PUBLIC       NULL         NULL    d            database  CREATE
 materialize  materialize  NULL         NULL    d            database  USAGE
 materialize  materialize  NULL         NULL    d            database  CREATE
@@ -427,9 +427,9 @@ materialize  r1           NULL         NULL    c            cluster   USAGE
 materialize  r3           NULL         NULL    c            cluster   USAGE
 materialize  r3           NULL         NULL    c            cluster   CREATE
 materialize  r4           NULL         NULL    c            cluster   CREATE
-mz_system    PUBLIC       NULL         NULL    default      cluster  USAGE
-mz_system    materialize  NULL         NULL    default      cluster  USAGE
-mz_system    materialize  NULL         NULL    default      cluster  CREATE
+mz_system    PUBLIC       NULL         NULL    quickstart   cluster   USAGE
+mz_system    materialize  NULL         NULL    quickstart   cluster   USAGE
+mz_system    materialize  NULL         NULL    quickstart   cluster   CREATE
 
 query TTTTTTT
 SELECT * FROM (SHOW PRIVILEGES FOR r2) ORDER BY object_type, database, schema, name, grantee
@@ -437,7 +437,7 @@ SELECT * FROM (SHOW PRIVILEGES FOR r2) ORDER BY object_type, database, schema, n
 materialize  PUBLIC       NULL         NULL    c            cluster   USAGE
 materialize  r3           NULL         NULL    c            cluster   USAGE
 materialize  r3           NULL         NULL    c            cluster   CREATE
-mz_system    PUBLIC       NULL         NULL    default      cluster  USAGE
+mz_system    PUBLIC       NULL         NULL    quickstart   cluster   USAGE
 materialize  PUBLIC       NULL         NULL    d            database  CREATE
 materialize  r2           NULL         NULL    d            database  USAGE
 mz_system    PUBLIC       NULL         NULL    materialize  database  USAGE
