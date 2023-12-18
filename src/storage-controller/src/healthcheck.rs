@@ -113,7 +113,8 @@ impl TryFrom<IntrospectionType> for &dyn IntrospectionStatusUpdate {
         match value {
             IntrospectionType::SourceStatusHistory => Ok(&SourceStatusUpdates),
             IntrospectionType::SinkStatusHistory => Ok(&SinkStatusUpdates),
-            _ => return Err(()),
+            IntrospectionType::PrivatelinkConnectionStatusHistory => Ok(&PrivateLinkStatusUpdates),
+            _ => Err(()),
         }
     }
 }
@@ -196,6 +197,36 @@ impl IntrospectionStatusUpdate for SinkStatusUpdates {
             // `health_operator`.
             _ => true,
         }
+    }
+}
+
+struct PrivateLinkStatusUpdates;
+
+impl IntrospectionStatusUpdate for PrivateLinkStatusUpdates {
+    fn global_id(&self) -> usize {
+        healthcheck::MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
+            .get_by_name(&ColumnName::from("connection_id"))
+            .expect("schema has not changed")
+            .0
+    }
+
+    fn produce_new(&self, prev: &Row, new: &Row) -> bool {
+        let occurred_at = healthcheck::MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
+            .get_by_name(&ColumnName::from("occurred_at"))
+            .expect("schema has not changed")
+            .0;
+        let new = new
+            .iter()
+            .nth(occurred_at)
+            .expect("MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC unchanged")
+            .unwrap_timestamptz();
+        let prev = prev
+            .iter()
+            .nth(occurred_at)
+            .expect("MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC unchanged")
+            .unwrap_timestamptz();
+
+        prev < new
     }
 }
 

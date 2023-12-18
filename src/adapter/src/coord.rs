@@ -237,7 +237,7 @@ pub enum Message<T = mz_repr::Timestamp> {
         stage: PeekStage,
     },
     DrainStatementLog,
-    PrivateLinkVpcEndpointEvents(BTreeMap<GlobalId, VpcEndpointEvent>),
+    PrivateLinkVpcEndpointEvents(Vec<VpcEndpointEvent>),
 }
 
 impl Message {
