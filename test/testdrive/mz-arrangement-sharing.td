@@ -564,7 +564,7 @@ ArrangeBy[[]]
 ReduceAccumulable
 
 > DROP TABLE t1 CASCADE
-> SET cluster=default
+> SET cluster=quickstart
 > DROP CLUSTER linear_join CASCADE
 
 # from negative-multiplicities.td
@@ -875,13 +875,13 @@ ReduceMinsMaxes
 "ReduceInaccumulable Error Check"
 "ReduceInaccumulable"
 
-> SET CLUSTER TO default
+> SET CLUSTER TO quickstart
 
 # Check dataflows of our logging infrastructure with log_logging
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET log_filter = 'debug'
-ALTER CLUSTER default SET (MANAGED = false);
-CREATE CLUSTER REPLICA default.replica SIZE = '2', INTROSPECTION DEBUGGING = true;
+ALTER CLUSTER quickstart SET (MANAGED = false);
+CREATE CLUSTER REPLICA quickstart.replica SIZE = '2', INTROSPECTION DEBUGGING = true;
 
 > SET cluster_replica = replica;
 
@@ -916,6 +916,6 @@ CREATE CLUSTER REPLICA default.replica SIZE = '2', INTROSPECTION DEBUGGING = tru
 "Arrange Timely(Operates)"
 "Arrange Timely(Parks)"
 
-# Reset default cluster into its previous state so that other tests can expect it to be unchanged
+# Reset quickstart cluster into its previous state so that other tests can expect it to be unchanged
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-DROP CLUSTER REPLICA default.replica
+DROP CLUSTER REPLICA quickstart.replica

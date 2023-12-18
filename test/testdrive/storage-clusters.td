@@ -57,7 +57,7 @@ contains:cannot create more than one replica of a cluster containing sources or 
 contains:cannot drop cluster "storage" because other objects depend on it
 > DROP CLUSTER storage CASCADE
 
-> SET cluster = default
+> SET cluster = quickstart
 
 # Test that a cluster can contain multiple sources and sinks, and verify that
 # the sources and sinks produce the correct output.

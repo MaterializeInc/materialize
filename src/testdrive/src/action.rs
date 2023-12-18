@@ -403,6 +403,13 @@ impl State {
             self.default_timeout,
         )
         .await?;
+
+        let version = inner_client
+            .query_one("SELECT mz_version_num()", &[])
+            .await
+            .context("getting version of materialize")
+            .map(|row| row.get::<_, i32>(0))?;
+
         inner_client
             .batch_execute("ALTER SYSTEM RESET ALL")
             .await
@@ -477,12 +484,17 @@ impl State {
                 self.materialize_user
             ))
             .await?;
+
+        let cluster = match version {
+            ..=8099 => "default",
+            8100.. => "quickstart",
+        };
         inner_client
-            .batch_execute("GRANT USAGE ON CLUSTER default TO PUBLIC")
+            .batch_execute(&format!("GRANT USAGE ON CLUSTER {cluster} TO PUBLIC"))
             .await?;
         inner_client
             .batch_execute(&format!(
-                "GRANT ALL PRIVILEGES ON CLUSTER default TO {}",
+                "GRANT ALL PRIVILEGES ON CLUSTER {cluster} TO {}",
                 self.materialize_user
             ))
             .await?;

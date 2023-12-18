@@ -10,7 +10,7 @@
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
 $ postgres-execute connection=mz_system
-DROP CLUSTER default CASCADE
+DROP CLUSTER quickstart CASCADE
 
 > SELECT 0
 0
@@ -23,11 +23,11 @@ DROP CLUSTER default CASCADE
 
 # filtering isn't supported as a simple query today
 ! SELECT * FROM (VALUES (1), (2)) where column1 > 1
-contains:unknown cluster 'default'
+contains:unknown cluster 'quickstart'
 
 ! SELECT generate_series(0, 10)
-contains:unknown cluster 'default'
+contains:unknown cluster 'quickstart'
 
-# to make it easier to run the test again, let's recreate the default cluster
+# to make it easier to run the test again, let's recreate the defaquickstartult cluster
 $ postgres-execute connection=mz_system
-CREATE CLUSTER default REPLICAS ()
+CREATE CLUSTER quickstart REPLICAS ()
