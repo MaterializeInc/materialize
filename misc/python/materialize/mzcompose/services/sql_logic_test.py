@@ -40,6 +40,7 @@ class SqlLogicTest(Service):
                 "mzbuild": mzbuild,
                 "environment": environment,
                 "volumes": volumes,
+                "tmpfs": ["/tmp"],
                 "depends_on": depends_on,
                 "propagate_uid_gid": True,
                 "init": True,
