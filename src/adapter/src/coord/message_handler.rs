@@ -155,7 +155,10 @@ impl Coordinator {
                     self.drain_statement_log().await;
                 }
                 Message::PrivateLinkVpcEndpointEvents(events) => {
-                    self.write_privatelink_status_updates(events).await;
+                    self.controller
+                        .storage
+                        .append_privatelink_updates(events)
+                        .await;
                 }
             }
         }

@@ -8,15 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use std::num::NonZeroU32;
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 use governor::{Quota, RateLimiter};
-
-use mz_cloud_resources::VpcEndpointEvent;
 use mz_ore::future::OreStreamExt;
 use mz_ore::task::spawn;
-use mz_repr::{Datum, GlobalId, Row};
-use mz_storage_client::controller::IntrospectionType;
 
 use crate::coord::Coordinator;
 
@@ -31,15 +27,6 @@ impl Coordinator {
             .privatelink_status_update_quota_per_minute();
 
         if let Some(controller) = &self.cloud_resource_controller {
-            // Retrieve the timestamp of the last event written to the status table for each id
-            // to avoid writing duplicate rows
-            let mut last_written_events = self
-                .controller
-                .storage
-                .get_privatelink_status_table_latest()
-                .clone()
-                .unwrap_or_else(BTreeMap::new);
-
             let controller = Arc::clone(controller);
             spawn(|| "privatelink_vpc_endpoint_watch", async move {
                 let mut stream = controller.watch_vpc_endpoints().await;
@@ -57,52 +44,12 @@ impl Coordinator {
                         // to continue to work, despite not being polled
                         rate_limiter.until_ready().await;
 
-                        // Events to be written, de-duped by connection_id
-                        let mut event_map = BTreeMap::new();
-
-                        for event in new_events {
-                            match last_written_events.get(&event.connection_id) {
-                                // Ignore if an event with this time was already written
-                                Some(time) if time >= &event.time => {}
-                                _ => {
-                                    last_written_events
-                                        .insert(event.connection_id.clone(), event.time.clone());
-                                    event_map.insert(event.connection_id, event);
-                                }
-                            }
-                        }
-
                         // Send the event batch to the coordinator to be written
                         let _ =
-                            internal_cmd_tx.send(Message::PrivateLinkVpcEndpointEvents(event_map));
+                            internal_cmd_tx.send(Message::PrivateLinkVpcEndpointEvents(new_events));
                     }
                 }
             });
         }
-    }
-
-    pub(crate) async fn write_privatelink_status_updates(
-        &mut self,
-        events: BTreeMap<GlobalId, VpcEndpointEvent>,
-    ) {
-        let mut updates = Vec::new();
-        for value in events.into_values() {
-            updates.push((
-                Row::pack_slice(&[
-                    Datum::TimestampTz(value.time.try_into().expect("must fit")),
-                    Datum::String(&value.connection_id.to_string()),
-                    Datum::String(&value.status.to_string()),
-                ]),
-                1,
-            ));
-        }
-
-        self.controller
-            .storage
-            .record_introspection_updates(
-                IntrospectionType::PrivatelinkConnectionStatusHistory,
-                updates,
-            )
-            .await;
     }
 }

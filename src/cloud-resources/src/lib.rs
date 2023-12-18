@@ -86,7 +86,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
-use mz_repr::GlobalId;
+use mz_repr::{Datum, GlobalId, Row};
 use serde::{Deserialize, Serialize};
 
 use crate::crd::vpc_endpoint::v1::{VpcEndpointState, VpcEndpointStatus};
@@ -195,9 +195,19 @@ pub fn vpc_endpoint_host(id: GlobalId, availability_zone: Option<&str>) -> Strin
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct VpcEndpointEvent {
     pub connection_id: GlobalId,
     pub status: VpcEndpointState,
     pub time: DateTime<Utc>,
+}
+
+impl From<VpcEndpointEvent> for Row {
+    fn from(value: VpcEndpointEvent) -> Self {
+        Row::pack_slice(&[
+            Datum::TimestampTz(value.time.try_into().expect("must fit")),
+            Datum::String(&value.connection_id.to_string()),
+            Datum::String(&value.status.to_string()),
+        ])
+    }
 }

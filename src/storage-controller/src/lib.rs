@@ -92,9 +92,9 @@ use differential_dataflow::lattice::Lattice;
 use futures::stream::BoxStream;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
+use mz_cloud_resources::VpcEndpointEvent;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
-
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
@@ -395,10 +395,6 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Write frontiers that have been recorded in the `ReplicaFrontiers` collection, kept to be
     /// able to retract old rows.
     recorded_replica_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<T>>,
-
-    /// The latest timestamp for each id in the mz_privatelink_connection_status_history
-    /// table, read on startup by the adapter to initialize the privatelink vpce watch task
-    privatelink_status_table_latest: Option<BTreeMap<GlobalId, DateTime<Utc>>>,
 }
 
 #[async_trait(?Send)]
@@ -983,34 +979,30 @@ where
                             )
                         }
                         IntrospectionType::PrivatelinkConnectionStatusHistory => {
-                            // Truncate the private link connection status history table and
-                            // store the latest timestamp for each id in the table.
+                            let last_status_per_id = self
+                                .partially_truncate_status_history(
+                                    IntrospectionType::PrivatelinkConnectionStatusHistory,
+                                )
+                                .await;
+
                             let occurred_at_col =
                                 healthcheck::MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
                                     .get_by_name(&ColumnName::from("occurred_at"))
                                     .expect("schema has not changed")
                                     .0;
-                            self.privatelink_status_table_latest = self
-                                .partially_truncate_status_history(
-                                    IntrospectionType::PrivatelinkConnectionStatusHistory,
-                                )
-                                .await
-                                .and_then(|map| {
-                                    Some(
-                                        map.into_iter()
-                                            .map(|(id, row)| {
-                                                (
-                                                    id,
-                                                    row.iter()
-                                                        .nth(occurred_at_col)
-                                                        .expect("schema has not changed")
-                                                        .unwrap_timestamptz()
-                                                        .into(),
-                                                )
-                                            })
-                                            .collect(),
+
+                            self.collection_status_manager.extend_previous_statuses(
+                                last_status_per_id.into_iter().flatten().map(|(id, row)| {
+                                    (
+                                        id,
+                                        row.iter()
+                                            .nth(occurred_at_col)
+                                            .expect("schema has not changed")
+                                            .unwrap_timestamptz()
+                                            .to_string(),
                                     )
-                                });
+                                }),
+                            )
                         }
 
                         // Truncate compute-maintained collections.
@@ -2116,6 +2108,15 @@ where
         self.append_to_managed_collection(id, updates).await;
     }
 
+    async fn append_privatelink_updates(&mut self, updates: Vec<VpcEndpointEvent>) {
+        self.collection_status_manager
+            .append_updates(
+                updates,
+                IntrospectionType::PrivatelinkConnectionStatusHistory,
+            )
+            .await
+    }
+
     /// With the CRDB based timestamp oracle, there is no longer write timestamp
     /// fencing. As in, when a new Coordinator, `B`, starts up, there is nothing
     /// that prevents an old Coordinator, `A`, from getting a new write
@@ -2235,10 +2236,6 @@ where
 
         self.txns_init_run = true;
         Ok(())
-    }
-
-    fn get_privatelink_status_table_latest(&self) -> &Option<BTreeMap<GlobalId, DateTime<Utc>>> {
-        &self.privatelink_status_table_latest
     }
 }
 
@@ -2480,7 +2477,6 @@ where
             metrics: StorageControllerMetrics::new(metrics_registry),
             recorded_frontiers: BTreeMap::new(),
             recorded_replica_frontiers: BTreeMap::new(),
-            privatelink_status_table_latest: None,
         }
     }
 

@@ -8,10 +8,12 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::str::FromStr;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
+use mz_cloud_resources::VpcEndpointEvent;
 use mz_ore::now::EpochMillis;
 use mz_persist_types::Codec64;
 use mz_repr::{Datum, GlobalId, Row, TimestampManipulation};
@@ -41,6 +43,26 @@ pub trait IntrospectionStatusUpdate: Into<Row> + Clone {
     /// Provide this record's value, which is used as the "last value" when
     /// determining whether or not to produce values.
     fn value(self) -> String;
+}
+
+// Dependency graph means we have to implement this.
+impl IntrospectionStatusUpdate for VpcEndpointEvent {
+    fn produce_vs_last_value(&self, last_value: &str) -> bool {
+        match DateTime::<Utc>::from_str(last_value) {
+            // These should roundtrip, but better to turn it into an append-only
+            // envelope if there's an issue.
+            Err(_) => true,
+            Ok(last_value) => last_value < self.time,
+        }
+    }
+
+    fn id(&self) -> GlobalId {
+        self.connection_id
+    }
+
+    fn value(self) -> String {
+        self.time.to_string()
+    }
 }
 
 /// Represents an entry in `mz_internal.mz_{source|sink}_status_history`
