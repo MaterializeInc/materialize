@@ -888,7 +888,9 @@ impl CatalogState {
                 desc: source.desc,
                 timeline,
                 resolved_ids,
-                custom_logical_compaction_window,
+                custom_logical_compaction_window: source
+                    .compaction_window
+                    .or(custom_logical_compaction_window),
                 is_retained_metrics_object,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {

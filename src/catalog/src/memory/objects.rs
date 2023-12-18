@@ -518,7 +518,10 @@ impl Source {
             desc: plan.source.desc,
             timeline: plan.timeline,
             resolved_ids,
-            custom_logical_compaction_window,
+            custom_logical_compaction_window: plan
+                .source
+                .compaction_window
+                .or(custom_logical_compaction_window),
             is_retained_metrics_object,
         }
     }

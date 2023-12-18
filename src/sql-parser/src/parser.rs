@@ -2738,25 +2738,36 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_source_option_name(&mut self) -> Result<CreateSourceOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[IGNORE, SIZE, TIMELINE, TIMESTAMP])? {
-            IGNORE => {
-                self.expect_keyword(KEYS)?;
-                CreateSourceOptionName::IgnoreKeys
-            }
-            SIZE => CreateSourceOptionName::Size,
-            TIMELINE => CreateSourceOptionName::Timeline,
-            TIMESTAMP => {
-                self.expect_keyword(INTERVAL)?;
-                CreateSourceOptionName::TimestampInterval
-            }
-            _ => unreachable!(),
-        };
+        let name =
+            match self.expect_one_of_keywords(&[IGNORE, SIZE, TIMELINE, TIMESTAMP, RETAIN])? {
+                IGNORE => {
+                    self.expect_keyword(KEYS)?;
+                    CreateSourceOptionName::IgnoreKeys
+                }
+                SIZE => CreateSourceOptionName::Size,
+                TIMELINE => CreateSourceOptionName::Timeline,
+                TIMESTAMP => {
+                    self.expect_keyword(INTERVAL)?;
+                    CreateSourceOptionName::TimestampInterval
+                }
+                RETAIN => {
+                    self.expect_keyword(HISTORY)?;
+                    CreateSourceOptionName::RetainHistory
+                }
+                _ => unreachable!(),
+            };
         Ok(name)
     }
 
     /// Parses a single valid option in the WITH block of a create source
     fn parse_source_option(&mut self) -> Result<CreateSourceOption<Raw>, ParserError> {
         let name = self.parse_source_option_name()?;
+        if name == CreateSourceOptionName::RetainHistory {
+            return Ok(CreateSourceOption {
+                name,
+                value: self.parse_option_retain_history()?,
+            });
+        }
         Ok(CreateSourceOption {
             name,
             value: self.parse_optional_option_value()?,
@@ -3251,22 +3262,20 @@ impl<'a> Parser<'a> {
     ) -> Result<MaterializedViewOption<Raw>, ParserError> {
         let name = self.parse_materialized_view_option_name()?;
         if name == MaterializedViewOptionName::RetainHistory {
-            return self.parse_materialized_view_option_retain_history();
+            return Ok(MaterializedViewOption {
+                name,
+                value: self.parse_option_retain_history()?,
+            });
         }
         let value = self.parse_optional_option_value()?;
         Ok(MaterializedViewOption { name, value })
     }
 
-    fn parse_materialized_view_option_retain_history(
-        &mut self,
-    ) -> Result<MaterializedViewOption<Raw>, ParserError> {
+    fn parse_option_retain_history(&mut self) -> Result<Option<WithOptionValue<Raw>>, ParserError> {
         let _ = self.consume_token(&Token::Eq);
         self.expect_keyword(FOR)?;
         let value = self.parse_value()?;
-        Ok(MaterializedViewOption {
-            name: MaterializedViewOptionName::RetainHistory,
-            value: Some(WithOptionValue::RetainHistoryFor(value)),
-        })
+        Ok(Some(WithOptionValue::RetainHistoryFor(value)))
     }
 
     fn parse_create_index(&mut self) -> Result<Statement<Raw>, ParserError> {
