@@ -8,13 +8,15 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::str::FromStr;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use mz_ore::now::EpochMillis;
 use mz_persist_types::Codec64;
-use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
+use mz_repr::{ColumnName, Datum, GlobalId, Row, TimestampManipulation};
+use mz_storage_client::healthcheck;
 use timely::progress::Timestamp;
 
 use crate::collection_mgmt::CollectionManager;
@@ -41,40 +43,42 @@ pub struct RawStatusUpdate {
     pub namespaced_errors: BTreeMap<String, String>,
 }
 
-pub fn pack_status_row(update: RawStatusUpdate) -> Row {
-    let timestamp = Datum::TimestampTz(update.ts.try_into().expect("must fit"));
-    let id = update.id.to_string();
-    let id = Datum::String(&id);
-    let status = Datum::String(&update.status_name);
-    let error = update.error.as_deref().into();
+impl From<RawStatusUpdate> for Row {
+    fn from(update: RawStatusUpdate) -> Self {
+        let timestamp = Datum::TimestampTz(update.ts.try_into().expect("must fit"));
+        let id = update.id.to_string();
+        let id = Datum::String(&id);
+        let status = Datum::String(&update.status_name);
+        let error = update.error.as_deref().into();
 
-    let mut row = Row::default();
-    let mut packer = row.packer();
-    packer.extend([timestamp, id, status, error]);
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        packer.extend([timestamp, id, status, error]);
 
-    if !update.hints.is_empty() || !update.namespaced_errors.is_empty() {
-        packer.push_dict_with(|dict_packer| {
-            // `hint` and `namespaced` are ordered,
-            // as well as the BTree's they each contain.
-            if !update.hints.is_empty() {
-                dict_packer.push(Datum::String("hints"));
-                dict_packer.push_list(update.hints.iter().map(|s| Datum::String(s)));
-            }
-            if !update.namespaced_errors.is_empty() {
-                dict_packer.push(Datum::String("namespaced"));
-                dict_packer.push_dict(
-                    update
-                        .namespaced_errors
-                        .iter()
-                        .map(|(k, v)| (k.as_str(), Datum::String(v))),
-                );
-            }
-        });
-    } else {
-        packer.push(Datum::Null);
+        if !update.hints.is_empty() || !update.namespaced_errors.is_empty() {
+            packer.push_dict_with(|dict_packer| {
+                // `hint` and `namespaced` are ordered,
+                // as well as the BTree's they each contain.
+                if !update.hints.is_empty() {
+                    dict_packer.push(Datum::String("hints"));
+                    dict_packer.push_list(update.hints.iter().map(|s| Datum::String(s)));
+                }
+                if !update.namespaced_errors.is_empty() {
+                    dict_packer.push(Datum::String("namespaced"));
+                    dict_packer.push_dict(
+                        update
+                            .namespaced_errors
+                            .iter()
+                            .map(|(k, v)| (k.as_str(), Datum::String(v))),
+                    );
+                }
+            });
+        } else {
+            packer.push(Datum::Null);
+        }
+
+        row
     }
-
-    row
 }
 
 /// A lightweight wrapper around [`CollectionManager`] that assists with
@@ -88,7 +92,111 @@ where
     collection_manager: CollectionManager<T>,
     /// A list of introspection IDs for managed collections
     introspection_ids: Arc<std::sync::Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
-    previous_statuses: BTreeMap<GlobalId, String>,
+    /// The previous value seen for each `GlobalId` of a specific type.
+    previous_statuses: BTreeMap<GlobalId, Row>,
+}
+
+/// Provides [`IntrospectionStatusManager`] a means of generating specific types
+/// of envelopes for data from each [`IntrospectionType`].
+pub trait IntrospectionStatusUpdate {
+    /// Provide this record's GlobalId, which is used as a key when determining
+    /// whether or not to produce values.
+    fn global_id(&self) -> usize;
+
+    // Determine whether or not to produce or drop this value.
+    fn produce_new(&self, prev: &Row, new: &Row) -> bool;
+}
+
+impl TryFrom<IntrospectionType> for &dyn IntrospectionStatusUpdate {
+    type Error = ();
+    fn try_from(value: IntrospectionType) -> Result<&'static dyn IntrospectionStatusUpdate, ()> {
+        match value {
+            IntrospectionType::SourceStatusHistory => Ok(&SourceStatusUpdates),
+            IntrospectionType::SinkStatusHistory => Ok(&SinkStatusUpdates),
+            _ => return Err(()),
+        }
+    }
+}
+
+struct SourceStatusUpdates;
+
+impl IntrospectionStatusUpdate for SourceStatusUpdates {
+    fn global_id(&self) -> usize {
+        healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC
+            .get_by_name(&ColumnName::from("source_id"))
+            .expect("schema has not changed")
+            .0
+    }
+
+    fn produce_new(&self, prev: &Row, new: &Row) -> bool {
+        let status = healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC
+            .get_by_name(&ColumnName::from("status"))
+            .expect("schema has not changed")
+            .0;
+        let new = new
+            .iter()
+            .nth(status)
+            .expect("MZ_SOURCE_STATUS_HISTORY_DESC unchanged")
+            .unwrap_str();
+        let prev = prev
+            .iter()
+            .nth(status)
+            .expect("MZ_SOURCE_STATUS_HISTORY_DESC unchanged")
+            .unwrap_str();
+
+        match (new, prev) {
+            // TODO(guswynn): Ideally only `failed` sources should not be marked as paused.
+            // Additionally, dropping a replica and then restarting environmentd will
+            // fail this check. This will all be resolved in:
+            // https://github.com/MaterializeInc/materialize/pull/23013
+            (new, prev) if new == "paused" && prev == "stalled" => false,
+            // Don't re-mark that object as paused.
+            (new, prev) if new == "paused" && prev == "paused" => false,
+            // De-duplication of other statuses is currently managed by the
+            // `health_operator`.
+            _ => true,
+        }
+    }
+}
+struct SinkStatusUpdates;
+
+impl IntrospectionStatusUpdate for SinkStatusUpdates {
+    fn global_id(&self) -> usize {
+        healthcheck::MZ_SINK_STATUS_HISTORY_DESC
+            .get_by_name(&ColumnName::from("sink_id"))
+            .expect("schema has not changed")
+            .0
+    }
+
+    fn produce_new(&self, prev: &Row, new: &Row) -> bool {
+        let status = healthcheck::MZ_SINK_STATUS_HISTORY_DESC
+            .get_by_name(&ColumnName::from("status"))
+            .expect("schema has not changed")
+            .0;
+        let new = new
+            .iter()
+            .nth(status)
+            .expect("MZ_SINK_STATUS_HISTORY_DESC unchanged")
+            .unwrap_str();
+        let prev = prev
+            .iter()
+            .nth(status)
+            .expect("MZ_SINK_STATUS_HISTORY_DESC unchanged")
+            .unwrap_str();
+
+        match (new, prev) {
+            // TODO(guswynn): Ideally only `failed` sources should not be marked as paused.
+            // Additionally, dropping a replica and then restarting environmentd will
+            // fail this check. This will all be resolved in:
+            // https://github.com/MaterializeInc/materialize/pull/23013
+            (new, prev) if new == "paused" && prev == "stalled" => false,
+            // Don't re-mark that object as paused.
+            (new, prev) if new == "paused" && prev == "paused" => false,
+            // De-duplication of other statuses is currently managed by the
+            // `health_operator`.
+            _ => true,
+        }
+    }
 }
 
 impl<T> CollectionStatusManager<T>
@@ -108,19 +216,22 @@ where
 
     pub fn extend_previous_statuses<I>(&mut self, previous_statuses: I)
     where
-        I: IntoIterator<Item = (GlobalId, String)>,
+        I: IntoIterator<Item = (GlobalId, Row)>,
     {
         self.previous_statuses.extend(previous_statuses)
     }
 
-    fn pack_status_updates(updates: Vec<RawStatusUpdate>) -> Vec<(Row, Diff)> {
-        updates
-            .into_iter()
-            .map(|update| (pack_status_row(update), 1))
-            .collect()
-    }
-
-    async fn append_updates(&mut self, updates: Vec<RawStatusUpdate>, type_: IntrospectionType) {
+    /// Appends updates for sources to the appropriate managed status
+    /// collection.
+    ///
+    /// If `type_` is correlated to an [`IntrospectionStatusUpdate`]
+    /// implementation, the rows will have envelope-like behavior applied.
+    /// Otherwise, the rows will be treated as append-only.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `type_` is not registered in `introspection_ids`
+    pub async fn append_rows(&mut self, updates: Vec<Row>, type_: IntrospectionType) {
         let source_status_history_id = *self
             .introspection_ids
             .lock()
@@ -129,52 +240,46 @@ where
             .unwrap_or_else(|| panic!("{:?} status history collection to be registered", type_));
 
         let new: Vec<_> = updates
-            .iter()
-            .filter(
-                |r| match (&r.status_name, self.previous_statuses.get(&r.id).as_deref()) {
-                    // TODO(guswynn): Ideally only `failed` sources should not be marked as paused.
-                    // Additionally, dropping a replica and then restarting environmentd will
-                    // fail this check. This will all be resolved in:
-                    // https://github.com/MaterializeInc/materialize/pull/23013
-                    (new, Some(prev)) if new == "paused" && prev == "stalled" => false,
-                    // Don't re-mark that object as paused. De-duplication of other
-                    // statuses is currently managed by the `health_operator`.
-                    (new, Some(prev)) if new == "paused" && prev == "paused" => false,
-                    _ => true,
-                },
-            )
-            .cloned()
+            .into_iter()
+            .filter(|r| self.assess_row(type_, r))
+            .map(|r| (r, 1))
             .collect();
 
         self.collection_manager
-            .append_to_collection(
-                source_status_history_id,
-                Self::pack_status_updates(new.clone()),
-            )
-            .await;
-
-        self.previous_statuses
-            .extend(new.into_iter().map(|r| (r.id, r.status_name)));
-    }
-
-    /// Appends updates for sources to the appropriate managed status collection
-    ///
-    /// # Panics
-    ///
-    /// Panics if the source status history collection is not registered in `introspection_ids`
-    pub async fn append_source_updates(&mut self, updates: Vec<RawStatusUpdate>) {
-        self.append_updates(updates, IntrospectionType::SourceStatusHistory)
+            .append_to_collection(source_status_history_id, new)
             .await;
     }
 
-    /// Appends updates for sinks to the appropriate managed status collection
-    ///
-    /// # Panics
-    ///
-    /// Panics if the sink status history collection is not registered in `introspection_ids`
-    pub async fn append_sink_updates(&mut self, updates: Vec<RawStatusUpdate>) {
-        self.append_updates(updates, IntrospectionType::SinkStatusHistory)
-            .await;
+    // Determines if the row should be produced to the collection or ignored
+    // based on the presence of the correlation between `IntrospectionType` and
+    // `IntrospectionStatusUpdate`.
+    fn assess_row(&mut self, type_: IntrospectionType, new: &Row) -> bool {
+        let type_: &dyn IntrospectionStatusUpdate = match type_.try_into() {
+            Ok(type_) => type_,
+            Err(()) => return true,
+        };
+
+        let key = type_.global_id();
+        let this_id = new
+            .iter()
+            .nth(key)
+            .expect("schema has not changed")
+            .unwrap_str();
+        let this_id = GlobalId::from_str(this_id).expect("GlobalIds must be parseable from datums");
+
+        match self.previous_statuses.get_mut(&this_id) {
+            None => {
+                self.previous_statuses.insert(this_id, new.clone());
+                true
+            }
+            Some(prev) => {
+                let produce = type_.produce_new(prev, new);
+                if produce {
+                    *prev = new.clone()
+                }
+                produce
+            }
+        }
     }
 
     async fn drop_items(
@@ -183,15 +288,17 @@ where
         ts: DateTime<Utc>,
         type_: IntrospectionType,
     ) {
-        self.append_updates(
+        self.append_rows(
             ids.iter()
-                .map(|id| RawStatusUpdate {
-                    id: *id,
-                    ts,
-                    status_name: "dropped".to_string(),
-                    error: None,
-                    hints: Default::default(),
-                    namespaced_errors: Default::default(),
+                .map(|id| {
+                    Row::from(RawStatusUpdate {
+                        id: *id,
+                        ts,
+                        status_name: "dropped".to_string(),
+                        error: None,
+                        hints: Default::default(),
+                        namespaced_errors: Default::default(),
+                    })
                 })
                 .collect(),
             type_,
@@ -202,6 +309,7 @@ where
         //
         // TODO(guswynn): clean up dropped sources/sinks from status history tables, at some point.
     }
+
     /// Marks the sources as dropped.
     ///
     /// # Panics
@@ -233,7 +341,7 @@ mod tests {
         let hint = "hint message";
         let id = GlobalId::User(1);
         let status = "dropped";
-        let row = pack_status_row(RawStatusUpdate {
+        let row = Row::from(RawStatusUpdate {
             id,
             ts: chrono::offset::Utc::now(),
             status_name: status.to_string(),
@@ -277,7 +385,7 @@ mod tests {
         let error_message = "error message";
         let id = GlobalId::User(1);
         let status = "dropped";
-        let row = pack_status_row(RawStatusUpdate {
+        let row = Row::from(RawStatusUpdate {
             id,
             ts: chrono::offset::Utc::now(),
             status_name: status.to_string(),
@@ -305,7 +413,7 @@ mod tests {
         let id = GlobalId::User(1);
         let status = "dropped";
         let hint = "hint message";
-        let row = pack_status_row(RawStatusUpdate {
+        let row = Row::from(RawStatusUpdate {
             id,
             ts: chrono::offset::Utc::now(),
             status_name: status.to_string(),
@@ -349,7 +457,7 @@ mod tests {
         let error_message = "error message";
         let id = GlobalId::User(1);
         let status = "dropped";
-        let row = pack_status_row(RawStatusUpdate {
+        let row = Row::from(RawStatusUpdate {
             id,
             ts: chrono::offset::Utc::now(),
             status_name: status.to_string(),
@@ -394,7 +502,7 @@ mod tests {
         let hint = "hint message";
         let id = GlobalId::User(1);
         let status = "dropped";
-        let row = pack_status_row(RawStatusUpdate {
+        let row = Row::from(RawStatusUpdate {
             id,
             ts: chrono::offset::Utc::now(),
             status_name: status.to_string(),

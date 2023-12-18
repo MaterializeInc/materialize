@@ -939,23 +939,8 @@ where
                                 )
                                 .await;
 
-                            let status_col = healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC
-                                .get_by_name(&ColumnName::from("status"))
-                                .expect("schema has not changed")
-                                .0;
-
-                            self.collection_status_manager.extend_previous_statuses(
-                                last_status_per_id.into_iter().flatten().map(|(id, row)| {
-                                    (
-                                        id,
-                                        row.iter()
-                                            .nth(status_col)
-                                            .expect("schema has not changed")
-                                            .unwrap_str()
-                                            .into(),
-                                    )
-                                }),
-                            )
+                            self.collection_status_manager
+                                .extend_previous_statuses(last_status_per_id.into_iter().flatten())
                         }
                         IntrospectionType::SinkStatusHistory => {
                             let last_status_per_id = self
@@ -964,23 +949,8 @@ where
                                 )
                                 .await;
 
-                            let status_col = healthcheck::MZ_SINK_STATUS_HISTORY_DESC
-                                .get_by_name(&ColumnName::from("status"))
-                                .expect("schema has not changed")
-                                .0;
-
-                            self.collection_status_manager.extend_previous_statuses(
-                                last_status_per_id.into_iter().flatten().map(|(id, row)| {
-                                    (
-                                        id,
-                                        row.iter()
-                                            .nth(status_col)
-                                            .expect("schema has not changed")
-                                            .unwrap_str()
-                                            .into(),
-                                    )
-                                }),
-                            )
+                            self.collection_status_manager
+                                .extend_previous_statuses(last_status_per_id.into_iter().flatten())
                         }
                         IntrospectionType::PrivatelinkConnectionStatusHistory => {
                             // Truncate the private link connection status history table and
@@ -3510,6 +3480,7 @@ where
                 hints: update.hints,
                 namespaced_errors: update.namespaced_errors,
             };
+            let update: Row = update.into();
 
             if self.exports.contains_key(&id) {
                 sink_status_updates.push(update);
@@ -3519,10 +3490,14 @@ where
         }
 
         self.collection_status_manager
-            .append_source_updates(source_status_updates)
+            .append_rows(
+                source_status_updates,
+                IntrospectionType::SourceStatusHistory,
+            )
             .await;
+
         self.collection_status_manager
-            .append_sink_updates(sink_status_updates)
+            .append_rows(sink_status_updates, IntrospectionType::SinkStatusHistory)
             .await;
     }
 }
