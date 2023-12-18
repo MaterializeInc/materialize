@@ -9,7 +9,7 @@
 
 //! A cache of the txn shard contents.
 
-use std::cmp::{min, Ordering, Reverse};
+use std::cmp::{min, Reverse};
 use std::collections::{BTreeMap, BinaryHeap, VecDeque};
 use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
