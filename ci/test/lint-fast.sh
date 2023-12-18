@@ -11,4 +11,4 @@
 #
 # lint-fast.sh — fast linters that don't require building any code.
 
-bin/lint
+bin/lint --verbose
