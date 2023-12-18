@@ -2144,7 +2144,7 @@ feature_flags!(
     {
         name: enable_eager_delta_joins,
         desc:
-            "Plan delta joins when it would require no more arrangements than a differential join.",
+            "eager delta joins",
         default: &false,
         internal: true,
         enable_for_item_parsing: false,
