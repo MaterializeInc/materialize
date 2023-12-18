@@ -46,7 +46,8 @@ def main() -> int:
     verbose_output = args.verbose
 
     manager = LintManager(print_duration, verbose_output)
-    return manager.run()
+    return_code = manager.run()
+    return return_code
 
 
 class LintManager:
@@ -194,4 +195,4 @@ class StatusPrinterThread(threading.Thread):
 
 
 if __name__ == "__main__":
-    main()
+    exit(main())
