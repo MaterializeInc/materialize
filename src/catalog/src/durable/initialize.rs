@@ -65,7 +65,7 @@ const USER_ID_ALLOC_KEY: &str = "user";
 const SYSTEM_ID_ALLOC_KEY: &str = "system";
 
 const DEFAULT_USER_CLUSTER_ID: ClusterId = ClusterId::User(1);
-const DEFAULT_USER_CLUSTER_NAME: &str = "default";
+const DEFAULT_USER_CLUSTER_NAME: &str = "quickstart";
 
 const DEFAULT_USER_REPLICA_ID: ReplicaId = ReplicaId::User(1);
 const DEFAULT_USER_REPLICA_NAME: &str = "r1";

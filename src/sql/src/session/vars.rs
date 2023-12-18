@@ -272,7 +272,7 @@ const CLIENT_MIN_MESSAGES: ServerVar<ClientSeverity> = ServerVar {
 pub const CLUSTER_VAR_NAME: &UncasedStr = UncasedStr::new("cluster");
 pub static CLUSTER: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     name: CLUSTER_VAR_NAME,
-    value: "default".to_string(),
+    value: "quickstart".to_string(),
     description: "Sets the current cluster (Materialize).",
     internal: false,
 });

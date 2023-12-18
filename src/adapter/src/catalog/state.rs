@@ -220,7 +220,7 @@ impl CatalogState {
             state: Cow::Borrowed(self),
             unresolvable_ids: BTreeSet::new(),
             conn_id: SYSTEM_CONN_ID.clone(),
-            cluster: "default".into(),
+            cluster: "quickstart".into(),
             database: self
                 .resolve_database(DEFAULT_DATABASE_NAME)
                 .ok()
