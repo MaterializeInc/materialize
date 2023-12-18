@@ -52,24 +52,22 @@
 //! For details, see the `20230714_optimizer_interface.md` design doc in this
 //! repository.
 
+pub mod dataflows;
 pub mod index;
 pub mod materialized_view;
 pub mod peek;
 pub mod subscribe;
 pub mod view;
 
-use mz_catalog::memory::objects::CatalogItem;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
-use mz_expr::OptimizedMirRelationExpr;
-use mz_repr::explain::{trace_plan, ExplainConfig};
-use mz_repr::GlobalId;
+use mz_expr::{EvalError, OptimizedMirRelationExpr, UnmaterializableFunc};
+use mz_ore::stack::RecursionLimitError;
+use mz_repr::adt::timestamp::TimestampError;
+use mz_repr::explain::ExplainConfig;
 use mz_sql::plan::PlanError;
 use mz_sql::session::vars::SystemVars;
 use mz_transform::TransformError;
-
-use crate::coord::dataflows::DataflowBuilder;
-use crate::AdapterError;
 
 /// A trait that represents an optimization stage.
 ///
@@ -183,59 +181,53 @@ type LirDataflowDescription = DataflowDescription<Plan>;
 /// Error types that can be generated during optimization.
 #[derive(Debug, thiserror::Error)]
 pub enum OptimizerError {
-    // TODO: change dataflows.rs error types and reverse this ownership.
-    #[error("{0}")]
-    AdapterError(#[from] AdapterError),
     #[error("{0}")]
     PlanError(#[from] PlanError),
     #[error("{0}")]
+    RecursionLimitError(#[from] RecursionLimitError),
+    #[error("{0}")]
     TransformError(#[from] TransformError),
+    #[error("{0}")]
+    EvalError(#[from] EvalError),
+    #[error("cannot materialize call to {0}")]
+    UnmaterializableFunction(UnmaterializableFunc),
+    #[error("cannot call {func} in {context} ")]
+    UncallableFunction {
+        func: UnmaterializableFunc,
+        context: &'static str,
+    },
     #[error("internal optimizer error: {0}")]
     Internal(String),
 }
 
-// TODO: create a dedicated AdapterError::OptimizerError variant.
-impl From<OptimizerError> for AdapterError {
-    fn from(value: OptimizerError) -> Self {
-        match value {
-            OptimizerError::AdapterError(err) => err,
-            err => AdapterError::Internal(err.to_string()),
+impl OptimizerError {
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::UnmaterializableFunction(UnmaterializableFunc::CurrentTimestamp) => {
+                Some("See: https://materialize.com/docs/sql/functions/now_and_mz_now/".into())
+            }
+            _ => None,
+        }
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            Self::UnmaterializableFunction(UnmaterializableFunc::CurrentTimestamp) => {
+                Some("Try using `mz_now()` here instead.".into())
+            }
+            _ => None,
         }
     }
 }
 
-impl<'a> DataflowBuilder<'a> {
-    // Re-optimize the imported view plans using the current optimizer
-    // configuration if we are running in `EXPLAIN`.
-    pub fn reoptimize_imported_views(
-        &self,
-        df_desc: &mut MirDataflowDescription,
-        config: &OptimizerConfig,
-    ) -> Result<(), OptimizerError> {
-        if config.mode == OptimizeMode::Explain {
-            for desc in df_desc.objects_to_build.iter_mut().rev() {
-                if matches!(desc.id, GlobalId::Explain | GlobalId::Transient(_)) {
-                    // Skip descriptions that do not reference proper views.
-                    continue;
-                }
-                if let CatalogItem::View(view) = &self.catalog.get_entry(&desc.id).item {
-                    let _span = tracing::span!(
-                        target: "optimizer",
-                        tracing::Level::DEBUG,
-                        "view",
-                        path.segment = desc.id.to_string()
-                    )
-                    .entered();
+impl From<TimestampError> for OptimizerError {
+    fn from(value: TimestampError) -> Self {
+        OptimizerError::EvalError(EvalError::from(value))
+    }
+}
 
-                    let mut view_optimizer = view::Optimizer::new(config.clone());
-                    desc.plan = view_optimizer.optimize(view.raw_expr.clone())?;
-
-                    // Report the optimized plan under this span.
-                    trace_plan(desc.plan.as_inner());
-                }
-            }
-        }
-
-        Ok(())
+impl From<anyhow::Error> for OptimizerError {
+    fn from(value: anyhow::Error) -> Self {
+        OptimizerError::Internal(value.to_string())
     }
 }

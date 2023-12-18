@@ -87,9 +87,6 @@ use tracing_core::callsite::rebuild_interest_cache;
 use crate::catalog::{self, Catalog, ConnCatalog, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
-use crate::coord::dataflows::{
-    dataflow_import_id_bundle, prep_scalar_expr, EvalTime, ExprPrepStyle,
-};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{FastPathPlan, PeekDataflowPlan, PeekPlan, PlannedPeek};
 use crate::coord::timeline::TimelineContext;
@@ -106,6 +103,9 @@ use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
+use crate::optimize::dataflows::{
+    dataflow_import_id_bundle, prep_scalar_expr, EvalTime, ExprPrepStyle,
+};
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::subscribe::ActiveSubscribe;

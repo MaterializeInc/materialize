@@ -20,7 +20,7 @@ use mz_sql::plan::{WebhookHeaders, WebhookValidation, WebhookValidationSecret};
 use mz_storage_client::controller::MonotonicAppender;
 use tokio::sync::Semaphore;
 
-use crate::coord::dataflows::{prep_scalar_expr, ExprPrepStyle};
+use crate::optimize::dataflows::{prep_scalar_expr, ExprPrepStyle};
 
 /// Errors returns when running validation of a webhook request.
 #[derive(thiserror::Error, Debug)]

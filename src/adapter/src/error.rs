@@ -15,7 +15,7 @@ use std::num::TryFromIntError;
 use dec::TryFromDecimalError;
 use itertools::Itertools;
 use mz_compute_client::controller::error as compute_error;
-use mz_expr::{EvalError, UnmaterializableFunc};
+use mz_expr::EvalError;
 use mz_ore::error::ErrorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
@@ -27,10 +27,11 @@ use mz_sql::plan::PlanError;
 use mz_sql::rbac;
 use mz_sql::session::vars::VarError;
 use mz_storage_types::controller::StorageError;
-use mz_transform::TransformError;
 use smallvec::SmallVec;
 use tokio::sync::oneshot;
 use tokio_postgres::error::SqlState;
+
+use crate::optimize::OptimizerError;
 
 /// Errors that can occur in the coordinator.
 #[derive(Debug)]
@@ -150,8 +151,8 @@ pub enum AdapterError {
     IdleInTransactionSessionTimeout,
     /// The transaction is in single-subscribe mode.
     SubscribeOnlyTransaction,
-    /// An error occurred in the MIR stage of the optimizer.
-    Transform(TransformError),
+    /// An error occurred in the the optimizer.
+    Optimizer(OptimizerError),
     /// A query depends on items which are not allowed to be referenced from the current cluster.
     UnallowedOnCluster {
         depends_on: SmallVec<[String; 2]>,
@@ -159,11 +160,6 @@ pub enum AdapterError {
     },
     /// A user tried to perform an action that they were unauthorized to do.
     Unauthorized(rbac::UnauthorizedError),
-    /// The specified function cannot be called
-    UncallableFunction {
-        func: UnmaterializableFunc,
-        context: &'static str,
-    },
     /// The named cursor does not exist.
     UnknownCursor(String),
     /// The named role does not exist.
@@ -188,8 +184,6 @@ pub enum AdapterError {
     Unstructured(anyhow::Error),
     /// The named feature is not supported and will (probably) not be.
     Unsupported(&'static str),
-    /// The specified function cannot be materialized.
-    UnmaterializableFunction(UnmaterializableFunc),
     /// Attempted to create an object that has unstable dependencies.
     UnstableDependency {
         object_type: String,
@@ -291,9 +285,6 @@ impl AdapterError {
                 "The object depends on the following log sources:\n    {}",
                 log_names.join("\n    "),
             )),
-            AdapterError::UnmaterializableFunction(UnmaterializableFunc::CurrentTimestamp) => {
-                Some("See: https://materialize.com/docs/sql/functions/now_and_mz_now/".into())
-            }
             AdapterError::UnstableDependency { unstable_dependencies, .. } => Some(format!(
                 "The object depends on the following unstable objects:\n    {}",
                 unstable_dependencies.join("\n    "),
@@ -315,6 +306,7 @@ impl AdapterError {
             }
             AdapterError::ReadOnlyTransaction => Some("SELECT queries cannot be combined with other query types, including SUBSCRIBE.".into()),
             AdapterError::InvalidAlter(_, e) => e.detail(),
+            AdapterError::Optimizer(e) => e.detail(),
             _ => None,
         }
     }
@@ -350,9 +342,6 @@ impl AdapterError {
             AdapterError::NoClusterReplicasAvailable(_) => {
                 Some("You can create cluster replicas using CREATE CLUSTER REPLICA".into())
             }
-            AdapterError::UnmaterializableFunction(UnmaterializableFunc::CurrentTimestamp) => {
-                Some("Try using `mz_now()` here instead.".into())
-            }
             AdapterError::UntargetedLogRead { .. } => Some(
                 "Use `SET cluster_replica = <replica-name>` to target a specific replica in the \
                  active cluster. Note that subsequent queries will only be answered by \
@@ -375,7 +364,8 @@ impl AdapterError {
                 "Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query."
                     .into(),
             ),
-            AdapterError::InvalidAlter(_, e) => e.hint(),
+            AdapterError::InvalidAlter(_, e) => e.detail(),
+            AdapterError::Optimizer(e) => e.hint(),
             _ => None,
         }
     }
@@ -440,18 +430,32 @@ impl AdapterError {
             AdapterError::ResultSize(_) => SqlState::OUT_OF_MEMORY,
             AdapterError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
             AdapterError::SubscribeOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
-            AdapterError::Transform(_) => SqlState::INTERNAL_ERROR,
+            AdapterError::Optimizer(e) => match e {
+                OptimizerError::PlanError(e) => {
+                    AdapterError::PlanError(e.clone()).code() // Delegate to outer
+                }
+                OptimizerError::RecursionLimitError(e) => {
+                    AdapterError::RecursionLimit(e.clone()).code() // Delegate to outer
+                }
+                OptimizerError::Internal(s) => {
+                    AdapterError::Internal(s.clone()).code() // Delegate to outer
+                }
+                OptimizerError::EvalError(e) => {
+                    AdapterError::Eval(e.clone()).code() // Delegate to outer
+                }
+                OptimizerError::TransformError(_) => SqlState::INTERNAL_ERROR,
+                OptimizerError::UnmaterializableFunction(_) => SqlState::FEATURE_NOT_SUPPORTED,
+                OptimizerError::UncallableFunction { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+            },
             AdapterError::UnallowedOnCluster { .. } => {
                 SqlState::S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED
             }
             AdapterError::Unauthorized(_) => SqlState::INSUFFICIENT_PRIVILEGE,
-            AdapterError::UncallableFunction { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::UnknownCursor(_) => SqlState::INVALID_CURSOR_NAME,
             AdapterError::UnknownPreparedStatement(_) => SqlState::UNDEFINED_PSTATEMENT,
             AdapterError::UnknownLoginRole(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
             AdapterError::UnknownClusterReplica { .. } => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnknownWebhookSource { .. } => SqlState::UNDEFINED_OBJECT,
-            AdapterError::UnmaterializableFunction(_) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::UnrecognizedConfigurationParam(_) => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnstableDependency { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Unsupported(..) => SqlState::FEATURE_NOT_SUPPORTED,
@@ -619,10 +623,7 @@ impl fmt::Display for AdapterError {
             AdapterError::SubscribeOnlyTransaction => {
                 f.write_str("SUBSCRIBE in transactions must be the only read statement")
             }
-            AdapterError::Transform(e) => e.fmt(f),
-            AdapterError::UncallableFunction { func, context } => {
-                write!(f, "cannot call {} in {}", func, context)
-            }
+            AdapterError::Optimizer(e) => e.fmt(f),
             AdapterError::UnallowedOnCluster {
                 depends_on,
                 cluster,
@@ -642,9 +643,6 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::UnknownLoginRole(name) => {
                 write!(f, "role {} does not exist", name.quoted())
-            }
-            AdapterError::UnmaterializableFunction(func) => {
-                write!(f, "cannot materialize call to {}", func)
             }
             AdapterError::Unsupported(features) => write!(f, "{} are not supported", features),
             AdapterError::Unstructured(e) => write!(f, "{}", e.display_with_causes()),
@@ -770,9 +768,16 @@ impl From<PlanError> for AdapterError {
     }
 }
 
-impl From<TransformError> for AdapterError {
-    fn from(e: TransformError) -> AdapterError {
-        AdapterError::Transform(e)
+impl From<OptimizerError> for AdapterError {
+    fn from(e: OptimizerError) -> AdapterError {
+        use OptimizerError::*;
+        match e {
+            PlanError(e) => Self::PlanError(e),
+            RecursionLimitError(e) => Self::RecursionLimit(e),
+            EvalError(e) => Self::Eval(e),
+            Internal(e) => Self::Internal(e),
+            e => Self::Optimizer(e),
+        }
     }
 }
 

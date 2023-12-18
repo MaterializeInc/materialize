@@ -37,7 +37,7 @@ use mz_transform::notice::IndexKeyEmpty;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
 
 use crate::catalog::Catalog;
-use crate::coord::dataflows::{
+use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
 };
 use crate::optimize::{

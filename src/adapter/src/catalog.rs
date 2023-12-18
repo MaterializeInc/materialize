@@ -4477,7 +4477,7 @@ mod tests {
     use mz_stash::DebugStashFactory;
 
     use crate::catalog::{Catalog, CatalogItem, Op, PrivilegeMap, SYSTEM_CONN_ID};
-    use crate::coord::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
+    use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
     use crate::session::Session;
 
     /// System sessions have an empty `search_path` so it's necessary to

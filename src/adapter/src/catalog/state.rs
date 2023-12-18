@@ -81,7 +81,6 @@ use mz_storage_types::connections::inline::{
     ConnectionResolver, InlinedConnection, IntoInlineConnection,
 };
 use mz_storage_types::connections::ConnectionContext;
-use mz_transform::Optimizer;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::{AwsPrincipalContext, BuiltinTableUpdate, ClusterReplicaSizeMap, ConnCatalog};
@@ -916,11 +915,15 @@ impl CatalogState {
             Plan::CreateMaterializedView(CreateMaterializedViewPlan {
                 materialized_view, ..
             }) => {
-                let optimizer =
-                    Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
+                // Collect optimizer parameters.
+                let optimizer_config =
+                    optimize::OptimizerConfig::from(session_catalog.system_vars());
+                // Build an optimizer for this VIEW.
+                // TODO(aalexandrov): ideally this should be a materialized_view::Optimizer.
+                let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
+
                 let raw_expr = materialized_view.expr;
-                let decorrelated_expr = raw_expr.clone().lower(session_catalog.system_vars())?;
-                let optimized_expr = optimizer.optimize(decorrelated_expr)?;
+                let optimized_expr = optimizer.optimize(raw_expr.clone())?;
                 let mut typ = optimized_expr.typ();
                 for &i in &materialized_view.non_null_assertions {
                     typ.column_types[i].nullable = false;

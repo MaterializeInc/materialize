@@ -44,6 +44,7 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::coord::timestamp_selection::TimestampDetermination;
+use crate::optimize::OptimizerError;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContextExtra, ExecuteResponse};
@@ -264,19 +265,19 @@ pub enum PeekPlan<T = mz_repr::Timestamp> {
 
 /// Convert `mfp` to an executable, non-temporal plan.
 /// It should be non-temporal, as OneShot preparation populates `mz_now`.
-fn mfp_to_safe_plan(mfp: mz_expr::MapFilterProject) -> Result<mz_expr::SafeMfpPlan, AdapterError> {
+fn mfp_to_safe_plan(
+    mfp: mz_expr::MapFilterProject,
+) -> Result<mz_expr::SafeMfpPlan, OptimizerError> {
     mfp.into_plan()
-        .map_err(|e| AdapterError::Unstructured(::anyhow::anyhow!(e)))?
+        .map_err(OptimizerError::Internal)?
         .into_nontemporal()
-        .map_err(|_e| {
-            AdapterError::Unstructured(::anyhow::anyhow!("OneShot plan has temporal constraints"))
-        })
+        .map_err(|_e| OptimizerError::Internal("OneShot plan has temporal constraints".to_string()))
 }
 
 fn permute_oneshot_mfp_around_index(
     mfp: mz_expr::MapFilterProject,
     key: &[MirScalarExpr],
-) -> Result<mz_expr::SafeMfpPlan, AdapterError> {
+) -> Result<mz_expr::SafeMfpPlan, OptimizerError> {
     let input_arity = mfp.input_arity;
     let mut safe_mfp = mfp_to_safe_plan(mfp)?;
     let (permute, thinning) = mz_expr::permutation_for_arrangement(key, input_arity);
@@ -294,7 +295,7 @@ pub fn create_fast_path_plan<T: Timestamp>(
     view_id: GlobalId,
     finishing: Option<&RowSetFinishing>,
     persist_fast_path_limit: usize,
-) -> Result<Option<FastPathPlan>, AdapterError> {
+) -> Result<Option<FastPathPlan>, OptimizerError> {
     // At this point, `dataflow_plan` contains our best optimized dataflow.
     // We will check the plan to see if there is a fast path to escape full dataflow construction.
 
