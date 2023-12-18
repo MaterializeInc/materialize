@@ -790,7 +790,7 @@ fn test_http_sql() {
                 .unwrap();
             super_user
                 .batch_execute(&format!(
-                    "GRANT ALL PRIVILEGES ON CLUSTER default TO {}",
+                    "GRANT ALL PRIVILEGES ON CLUSTER quickstart TO {}",
                     &HTTP_DEFAULT_USER.name
                 ))
                 .unwrap();
@@ -1512,7 +1512,7 @@ fn test_default_cluster_sizes() {
 
     let builtin_size: String = client
         .query(
-            "SELECT size FROM (SHOW CLUSTER REPLICAS WHERE cluster = 'default')",
+            "SELECT size FROM (SHOW CLUSTER REPLICAS WHERE cluster = 'quickstart')",
             &[],
         )
         .unwrap()

@@ -1423,7 +1423,7 @@ async fn test_utilization_hold() {
     const THIRTY_DAYS_MS: u64 = 30 * 24 * 60 * 60 * 1000;
     // `mz_introspection` tests indexes, `default` tests tables.
     // The bool determines whether we are testing indexes.
-    const CLUSTERS_TO_TRY: &[&str] = &["mz_introspection", "default"];
+    const CLUSTERS_TO_TRY: &[&str] = &["mz_introspection", "quickstart"];
     const QUERIES_TO_TRY: &[&str] = &["SELECT * FROM mz_internal.mz_cluster_replica_statuses"];
 
     let now_millis = 619388520000;
@@ -2383,8 +2383,8 @@ fn test_peek_on_dropped_cluster() {
         );
         assert!(err
             .message()
-            .contains("query could not complete because cluster \"default\" was dropped"),
-                "error message should contain 'query could not complete because cluster \"default\" was dropped'");
+            .contains("query could not complete because cluster \"quickstart\" was dropped"),
+                "error message should contain 'query could not complete because cluster \"quickstart\" was dropped'");
     });
 
     // Wait for asynchronous query to start.
@@ -2410,7 +2410,9 @@ fn test_peek_on_dropped_cluster() {
         .user(&SYSTEM_USER.name)
         .connect(postgres::NoTls)
         .unwrap();
-    drop_client.batch_execute("DROP CLUSTER default;").unwrap();
+    drop_client
+        .batch_execute("DROP CLUSTER quickstart;")
+        .unwrap();
     drop_client.batch_execute("DROP TABLE t;").unwrap();
     handle.join().unwrap();
 }
