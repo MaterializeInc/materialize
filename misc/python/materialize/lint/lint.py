@@ -10,10 +10,18 @@ import argparse
 import os
 import subprocess
 import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from materialize import MZ_ROOT
+from materialize import MZ_ROOT, buildkite
+from materialize.terminal import (
+    COLOR_ERROR,
+    COLOR_OK,
+    STYLE_BOLD,
+    with_formatting,
+    with_formattings,
+)
 
 MAIN_PATH = MZ_ROOT / "ci" / "test" / "lint-main"
 MAIN_CHECKS_PATH = MAIN_PATH / "checks"
@@ -90,11 +98,15 @@ class LintManager:
             if not self.is_ignore_file(checks_path / lint_file)
         ]
         lint_files.sort()
+
         threads = []
 
         print(
             f"--- Running {len(lint_files)} check(s) in {checks_path.relative_to(MZ_ROOT)}"
         )
+
+        status_printer_thread = StatusPrinterThread()
+        status_printer_thread.start()
 
         for lint_file in lint_files:
             thread = LintingThread(checks_path, lint_file)
@@ -103,6 +115,8 @@ class LintManager:
 
         for thread in threads:
             thread.join()
+
+        status_printer_thread.stop()
 
         failed_checks = []
 
@@ -113,9 +127,13 @@ class LintManager:
                 else ""
             )
             if thread.success:
-                print(f"--- {thread.name} (SUCCEEDED{formatted_duration})")
+                status = (
+                    f"({with_formatting('SUCCEEDED', COLOR_OK)}{formatted_duration})"
+                )
+                print(f"--- {thread.name} {status}")
             else:
-                print(f"+++ {thread.name} (FAILED{formatted_duration})")
+                status = f"({with_formattings('FAILED', [COLOR_ERROR, STYLE_BOLD])}{formatted_duration})"
+                print(f"+++ {thread.name} {status}")
                 failed_checks.append(thread.name)
 
             if thread.has_output() and (not thread.success or self.verbose_output):
@@ -157,6 +175,22 @@ class LintingThread(threading.Thread):
 
     def has_output(self) -> bool:
         return len(self.output) > 0
+
+
+class StatusPrinterThread(threading.Thread):
+    def __init__(self) -> None:
+        super().__init__(target=self.print_status, args=())
+        self.active = not buildkite.is_in_buildkite()
+
+    def print_status(self) -> None:
+        while self.active:
+            print(".", end="", flush=True)
+            time.sleep(0.5)
+
+    def stop(self) -> None:
+        if self.active:
+            self.active = False
+            print()
 
 
 if __name__ == "__main__":
