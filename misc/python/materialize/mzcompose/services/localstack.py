@@ -17,9 +17,9 @@ class Localstack(Service):
     def __init__(
         self,
         name: str = "localstack",
-        image: str = "localstack/localstack:0.13.1",
+        image: str = "localstack/localstack:3.0.2",
         port: int = 4566,
-        environment: list[str] = ["HOSTNAME_EXTERNAL=localstack"],
+        environment: list[str] = ["LOCALSTACK_HOST=localstack"],
         volumes: list[str] = ["/var/run/docker.sock:/var/run/docker.sock"],
     ) -> None:
         super().__init__(
