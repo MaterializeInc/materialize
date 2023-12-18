@@ -10,13 +10,19 @@
 ws-text
 {"query": "bad sql"}
 ----
-{"type":"Error","payload":{"message":"Expected a keyword at the beginning of a statement, found identifier \"bad\"","code":"XX000"}}
+{"type":"Error","payload":{"message":"Expected a keyword at the beginning of a statement, found identifier \"bad\"","code":"42601","position":0}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
 {"queries": [{"query": "bad sql"}]}
 ----
-{"type":"Error","payload":{"message":"Expected a keyword at the beginning of a statement, found identifier \"bad\"","code":"XX000"}}
+{"type":"Error","payload":{"message":"Expected a keyword at the beginning of a statement, found identifier \"bad\"","code":"42601","position":0}}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"queries": [{"query": "SELECT 1 1"}]}
+----
+{"type":"Error","payload":{"message":"Expected end of statement, found number \"1\"","code":"42601","position":9}}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text
@@ -217,7 +223,7 @@ ws-text
 {"query": "CREATE VIEW v AS SELECT 1"}
 ----
 {"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
-{"type":"Error","payload":{"message":"current transaction is aborted, commands ignored until end of transaction block","code":"XX000"}}
+{"type":"Error","payload":{"message":"current transaction is aborted, commands ignored until end of transaction block","code":"25P02"}}
 {"type":"ReadyForQuery","payload":"E"}
 
 
@@ -225,7 +231,7 @@ ws-text
 {"query": "SELECT 2"}
 ----
 {"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
-{"type":"Error","payload":{"message":"current transaction is aborted, commands ignored until end of transaction block","code":"XX000"}}
+{"type":"Error","payload":{"message":"current transaction is aborted, commands ignored until end of transaction block","code":"25P02"}}
 {"type":"ReadyForQuery","payload":"E"}
 
 ws-text
