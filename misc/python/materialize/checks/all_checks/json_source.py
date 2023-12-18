@@ -9,11 +9,12 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import Check, externally_idempotent
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 
 
+@externally_idempotent(False)
 class JsonSource(Check):
     """Test CREATE SOURCE ... FORMAT JSON"""
 

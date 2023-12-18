@@ -9,7 +9,7 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import Check, externally_idempotent
 
 
 class ParseError(Check):
@@ -136,6 +136,7 @@ def schemas() -> str:
     )
 
 
+@externally_idempotent(False)
 class DecodeError(Check):
     def initialize(self) -> Testdrive:
         return Testdrive(
