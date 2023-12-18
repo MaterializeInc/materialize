@@ -1924,8 +1924,8 @@ pub static MZ_COMPUTE_DEPENDENCIES: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSo
     is_retained_metrics_object: false,
     sensitivity: DataSensitivity::Public,
 });
-pub static MZ_COMPUTE_HYDRATION_STATUS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
-    name: "mz_compute_hydration_status",
+pub static MZ_COMPUTE_HYDRATION_STATUSES: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_compute_hydration_statuses",
     schema: MZ_INTERNAL_SCHEMA,
     data_source: Some(IntrospectionType::ComputeHydrationStatus),
     desc: RelationDesc::empty()
@@ -6359,7 +6359,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_FRONTIERS),
         Builtin::View(&MZ_GLOBAL_FRONTIERS),
         Builtin::Source(&MZ_COMPUTE_DEPENDENCIES),
-        Builtin::Source(&MZ_COMPUTE_HYDRATION_STATUS),
+        Builtin::Source(&MZ_COMPUTE_HYDRATION_STATUSES),
         Builtin::View(&MZ_MATERIALIZATION_LAG),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
