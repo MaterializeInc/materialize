@@ -59,6 +59,7 @@ pub fn optimize_dataflow(
         dataflow,
         indexes,
         stats,
+        #[allow(deprecated)]
         &Optimizer::logical_optimizer(&ctx),
         &mut dataflow_metainfo,
     )?;

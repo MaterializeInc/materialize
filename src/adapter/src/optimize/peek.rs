@@ -223,6 +223,7 @@ impl Optimize<MirRelationExpr> for Optimizer {
     fn optimize(&mut self, expr: MirRelationExpr) -> Result<Self::To, OptimizerError> {
         // MIR ⇒ MIR optimization (local)
         let expr = span!(target: "optimizer", Level::DEBUG, "local").in_scope(|| {
+            #[allow(deprecated)]
             let optimizer = TransformOptimizer::logical_optimizer(&self.typecheck_ctx);
             let expr = optimizer.optimize(expr)?.into_inner();
 

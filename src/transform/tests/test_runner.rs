@@ -117,6 +117,7 @@ mod tests {
     thread_local! {
         static FULL_TRANSFORM_LIST: Vec<Box<dyn Transform>> = {
             let ctx = mz_transform::typecheck::empty_context();
+            #[allow(deprecated)]
             Optimizer::logical_optimizer(&ctx)
                 .transforms
                 .into_iter()
@@ -413,6 +414,7 @@ mod tests {
         }
         let mut out = String::new();
         if test_type == TestType::Opt {
+            #[allow(deprecated)]
             let optimizer = Optimizer::logical_optimizer(&mz_transform::typecheck::empty_context());
             dataflow = dataflow
                 .into_iter()
