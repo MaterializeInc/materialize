@@ -15,6 +15,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from materialize import MZ_ROOT, buildkite
+from materialize.terminal import (
+    COLOR_ERROR,
+    COLOR_OK,
+    STYLE_BOLD,
+    with_formatting,
+    with_formattings,
+)
 
 MAIN_PATH = MZ_ROOT / "ci" / "test" / "lint-main"
 MAIN_CHECKS_PATH = MAIN_PATH / "checks"
@@ -120,9 +127,13 @@ class LintManager:
                 else ""
             )
             if thread.success:
-                print(f"--- {thread.name} (SUCCEEDED{formatted_duration})")
+                status = (
+                    f"({with_formatting('SUCCEEDED', COLOR_OK)}{formatted_duration})"
+                )
+                print(f"--- {thread.name} {status}")
             else:
-                print(f"+++ {thread.name} (FAILED{formatted_duration})")
+                status = f"({with_formattings('FAILED', [COLOR_ERROR, STYLE_BOLD])}{formatted_duration})"
+                print(f"+++ {thread.name} {status}")
                 failed_checks.append(thread.name)
 
             if thread.has_output() and (not thread.success or self.verbose_output):
