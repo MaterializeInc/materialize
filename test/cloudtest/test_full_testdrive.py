@@ -20,7 +20,7 @@ def test_full_testdrive(mz: MaterializeApplication) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--file-pattern", default="*.td", type=str)
-    args = parser.parse_args()
+    args, _ = parser.parse_known_args()
 
     file_pattern = args.file_pattern
     print(f"File pattern: {file_pattern}")
