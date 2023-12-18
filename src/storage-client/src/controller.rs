@@ -47,8 +47,7 @@ use crate::client::TimestamplessUpdate;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub enum IntrospectionType {
-    /// We're not responsible for appending to this collection automatically, but we should
-    /// automatically bump the write frontier from time to time.
+    PrivatelinkConnectionStatusHistory,
     SinkStatusHistory,
     SourceStatusHistory,
     ShardMapping,
@@ -70,9 +69,6 @@ pub enum IntrospectionType {
     ComputeDependencies,
     ComputeReplicaHeartbeats,
     ComputeHydrationStatus,
-
-    // Written by the Adapter for tracking AWS PrivateLink Connection Status History
-    PrivatelinkConnectionStatusHistory,
 }
 
 /// Describes how data is written to the collection.
