@@ -83,16 +83,20 @@ class LintManager:
         Runs checks in the given directory and validates their outcome.
         :return: names of failed checks
         """
-        print(f"--- Running checks in {checks_path}")
 
-        paths = os.listdir(checks_path)
-
+        lint_files = [
+            lint_file
+            for lint_file in os.listdir(checks_path)
+            if not self.is_ignore_file(checks_path / lint_file)
+        ]
+        lint_files.sort()
         threads = []
 
-        for lint_file in paths:
-            if self.is_ignore_file(checks_path / lint_file):
-                continue
+        print(
+            f"--- Running {len(lint_files)} check(s) in {checks_path.relative_to(MZ_ROOT)}"
+        )
 
+        for lint_file in lint_files:
             thread = LintingThread(checks_path, lint_file)
             thread.start()
             threads.append(thread)

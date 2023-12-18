@@ -302,6 +302,13 @@ We use the following tools to perform automatic code style checks:
 
 See the [style guide](style.md) for additional recommendations on code style.
 
+### Required Tools
+Linting requires the following tools and Cargo packages to be installed:
+* buf ([installation guide](https://buf.build/docs/installation))
+* cargo-about (`cargo install cargo-about`)
+* cargo-hakari (`cargo install cargo-hakari`)
+* cargo-deplint (`cargo install cargo-deplint`)
+
 ## Submitting and reviewing changes
 
 See [Developer guide: submitting and reviewing changes](guide-changes.md).

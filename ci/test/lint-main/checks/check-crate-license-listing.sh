@@ -9,7 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# check-rust-version.sh — checks the used rust version.
+# check-crate-license-listing.sh — check absence of failures in generating the license metadata page.
 
 set -euo pipefail
 
@@ -17,6 +17,9 @@ cd "$(dirname "$0")/../../../.."
 
 . misc/shlib/shlib.bash
 
-try bin/lint-versions
+# Smoke out failures in generating the license metadata page, even though we
+# don't care about its output in the test pipeline, so that we don't only
+# discover the failures after a merge to main.
+try cargo --locked about generate ci/deploy/licenses.hbs > /dev/null
 
 try_status_report

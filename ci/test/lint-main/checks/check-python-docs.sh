@@ -9,7 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# lint — complains about misformatted files and other problems.
+# check-python-docs.sh — check Python docs.
 
 set -euo pipefail
 
