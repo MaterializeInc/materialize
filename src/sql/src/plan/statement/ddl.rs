@@ -5511,7 +5511,7 @@ fn ensure_cluster_size_allowed(scx: &StatementContext, size: &str) -> Result<(),
     // cluster size names. This feature flag can be removed upon
     // completion of https://github.com/MaterializeInc/cloud/issues/5343
     // and https://github.com/MaterializeInc/cloud/issues/7013
-    if size.ends_with("cc") || size.ends_with("C") {
+    if size.ends_with("cc") || size.ends_with('C') {
         scx.require_feature_flag(&vars::ENABLE_CC_CLUSTER_SIZES)
     } else {
         Ok(())
