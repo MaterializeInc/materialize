@@ -156,9 +156,10 @@ class LintingThread(threading.Thread):
 
         try:
             # Note that coloring gets lost (e.g., in git diff)
-            stdout_pipe = subprocess.PIPE
             proc = subprocess.Popen(
-                directory_path / file_name, stdout=stdout_pipe, stderr=stdout_pipe
+                directory_path / file_name,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
             )
             stdout, _ = proc.communicate()
             self.success = proc.returncode == 0
