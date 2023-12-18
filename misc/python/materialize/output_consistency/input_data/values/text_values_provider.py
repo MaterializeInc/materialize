@@ -27,6 +27,7 @@ TEXT_DATA_TYPE_WITH_VALUES.add_raw_value(
 TEXT_DATA_TYPE_WITH_VALUES.add_raw_value("'a'", "VAL_1", set())
 TEXT_DATA_TYPE_WITH_VALUES.add_raw_value("'abc'", "VAL_2", set())
 TEXT_DATA_TYPE_WITH_VALUES.add_raw_value("'xAAx'", "VAL_3", set())
+TEXT_DATA_TYPE_WITH_VALUES.add_raw_value("'ff00aa'", "HEX_VAL", set())
 TEXT_DATA_TYPE_WITH_VALUES.add_raw_value(
     "' mAA m\n\t '",
     "VAL_W_SPACES",
