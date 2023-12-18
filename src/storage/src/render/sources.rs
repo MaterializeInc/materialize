@@ -14,6 +14,7 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use mz_ore::cast::CastLossy;
@@ -32,11 +33,15 @@ use mz_timely_util::builder_async::PressOnDropButton;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::order::refine_antichain;
 use serde::{Deserialize, Serialize};
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::operator::empty;
-use timely::dataflow::operators::{Concat, ConnectLoop, Exchange, Feedback, Leave, Map, OkErr};
+use timely::dataflow::operators::{
+    Concat, ConnectLoop, Exchange, Feedback, Leave, Map, OkErr, Operator,
+};
 use timely::dataflow::scopes::{Child, Scope};
 use timely::dataflow::Stream;
 use timely::progress::{Antichain, Timestamp as _};
+use timely::PartialOrder;
 
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};
 use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
@@ -259,7 +264,7 @@ where
         connection: _,
         timestamp_interval: _,
     } = description.desc;
-    let (stream, errors, health) = {
+    let (collection, errors, health) = {
         let (key_encoding, value_encoding) = match encoding {
             SourceDataEncoding::KeyValue { key, value } => (Some(key), value),
             SourceDataEncoding::Single(value) => (None, value),
@@ -551,8 +556,11 @@ where
 
     // Perform various additional transformations on the collection.
 
+    // Log the end of hydration, based on the output frontier.
+    let stream = log_hydration(collection.inner, id, &base_source_config);
+
     // Force a shuffling of data in case sources are not uniformly distributed.
-    let collection = stream.inner.exchange(|x| x.hashed()).as_collection();
+    let collection = stream.exchange(|x| x.hashed()).as_collection();
 
     // Flatten the error collections.
     let err_collection = match error_collections.len() {
@@ -763,6 +771,51 @@ fn raise_key_value_errors(
             "Value not present for message".to_string(),
         )))),
     }
+}
+
+fn log_hydration<G, D>(
+    stream: Stream<G, D>,
+    source_id: GlobalId,
+    config: &RawSourceCreationConfig,
+) -> Stream<G, D>
+where
+    G: Scope<Timestamp = Timestamp>,
+    D: timely::Data,
+{
+    let worker_id = config.worker_id;
+    let resume_upper = config.resume_uppers[&source_id].clone();
+    let statistics = config.source_statistics.clone();
+
+    let hydration_started_at = Instant::now();
+    let mut hydration_finished = false;
+
+    stream.unary_frontier(Pipeline, "log_hydration", |_cap, _info| {
+        let mut buffer = Default::default();
+        move |input, output| {
+            input.for_each(|cap, data| {
+                data.swap(&mut buffer);
+                output.session(&cap).give_vec(&mut buffer);
+            });
+
+            if hydration_finished {
+                return;
+            }
+
+            let source_frontier = input.frontier().frontier();
+            if !PartialOrder::less_equal(&source_frontier, &resume_upper.borrow()) {
+                let hydration_time = hydration_started_at
+                    .elapsed()
+                    .as_millis()
+                    .try_into()
+                    .expect("Rehydration took more than ~584 million years!");
+
+                tracing::info!(worker_id, %source_id, ?hydration_time, "finished hydration");
+
+                statistics.set_rehydration_latency_ms(hydration_time);
+                hydration_finished = true;
+            }
+        }
+    })
 }
 
 #[cfg(test)]
