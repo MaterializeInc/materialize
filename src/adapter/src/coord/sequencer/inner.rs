@@ -106,7 +106,7 @@ use crate::notice::{AdapterNotice, DroppedInUseIndex};
 use crate::optimize::dataflows::{
     dataflow_import_id_bundle, prep_scalar_expr, EvalTime, ExprPrepStyle,
 };
-use crate::optimize::{self, Optimize, OptimizerConfig};
+use crate::optimize::{self, Optimize};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{viewable_variables, ClientTransmitter, ComputeSinkId, ResultExt};
@@ -1011,11 +1011,27 @@ impl Coordinator {
             optimizer_config,
         );
 
-        // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
-        let local_mir_plan = optimizer.optimize(raw_expr.clone())?;
-        let global_mir_plan = optimizer.optimize(local_mir_plan.clone())?;
-        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-        let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
+        let raw_expr_clone = raw_expr.clone();
+
+        // Then run the validation itself.
+        let (local_mir_plan, global_mir_plan, global_lir_plan) = match mz_ore::task::spawn_blocking(
+            || "optimize-materialized-view",
+            move || -> Result<_, AdapterError> {
+                // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
+                let local_mir_plan = optimizer.optimize(raw_expr_clone)?;
+                let global_mir_plan = optimizer.optimize(local_mir_plan.clone())?;
+                // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
+
+                Ok((local_mir_plan, global_mir_plan, global_lir_plan))
+            },
+        )
+        .await
+        {
+            Ok(Ok(result)) => result,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => coord_bail!("cannot optimize materialized view"),
+        };
 
         let mut ops = Vec::new();
         ops.extend(
@@ -2308,7 +2324,7 @@ impl Coordinator {
             .expect("compute instance does not exist");
         let view_id = self.allocate_transient_id()?;
         let index_id = self.allocate_transient_id()?;
-        let optimizer_config = OptimizerConfig::from(self.catalog().system_config());
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
         // Build an optimizer for this SELECT.
         let optimizer = optimize::peek::Optimizer::new(
@@ -3520,7 +3536,7 @@ impl Coordinator {
         let select_id = self.allocate_transient_id()?;
         let index_id = self.allocate_transient_id()?;
         let system_config = catalog.system_config();
-        let optimizer_config = OptimizerConfig::from((system_config, explain_config));
+        let optimizer_config = optimize::OptimizerConfig::from((system_config, explain_config));
 
         // Build an optimizer for this SELECT.
         let mut optimizer = optimize::peek::Optimizer::new(
