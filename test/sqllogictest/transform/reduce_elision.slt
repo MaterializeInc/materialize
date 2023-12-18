@@ -40,7 +40,7 @@ Explained Query:
   Project (#0..=#2, #1) // { arity: 4, keys: "([0, 1])" }
     Join on=(#1 = #3) type=differential // { arity: 4, keys: "([0, 1])" }
       implementation
-        %1:y[#1]UKA » %0[#1]KA
+        %1:y[#1]UK » %0[#1]K
       ArrangeBy keys=[[#1]] // { arity: 2, keys: "([0, 1])" }
         Distinct project=[#0, #1] // { arity: 2, keys: "([0, 1])" }
           Filter (#1) IS NOT NULL // { arity: 2, keys: "()" }
@@ -79,7 +79,7 @@ Explained Query:
         Project (#0..=#2, #1) // { arity: 4, keys: "([0, 1])" }
           Join on=(#1 = #3) type=differential // { arity: 4, keys: "([0, 1])" }
             implementation
-              %1:y[#1]UKA » %0[#1]KA
+              %1:y[#1]UK » %0[#1]K
             ArrangeBy keys=[[#1]] // { arity: 2, keys: "([0, 1])" }
               Distinct project=[#0, #1] // { arity: 2, keys: "([0, 1])" }
                 Filter (#1) IS NOT NULL // { arity: 2, keys: "()" }
@@ -120,7 +120,7 @@ Explained Query:
           Project (#0..=#2, #1) // { arity: 4, keys: "([0, 1])" }
             Join on=(#1 = #3) type=differential // { arity: 4, keys: "([0, 1])" }
               implementation
-                %1:y[#1]UKA » %0[#1]KA
+                %1:y[#1]UK » %0[#1]K
               ArrangeBy keys=[[#1]] // { arity: 2, keys: "([0, 1])" }
                 Distinct project=[#0, #1] // { arity: 2, keys: "([0, 1])" }
                   Filter (#1) IS NOT NULL // { arity: 2, keys: "()" }

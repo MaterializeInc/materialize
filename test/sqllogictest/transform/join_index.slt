@@ -37,7 +37,7 @@ EXPLAIN WITH(arity, join_impls) select * from foo inner join bar on foo.a = bar.
 Explained Query:
   CrossJoin type=differential // { arity: 4 }
     implementation
-      %0:foo[×]Aef » %1:bar[×]Aef
+      %0:foo[×]ef » %1:bar[×]ef
     ArrangeBy keys=[[]] // { arity: 2 }
       Filter (#0 = 1) // { arity: 2 }
         ReadStorage materialize.public.foo // { arity: 2 }
@@ -67,7 +67,7 @@ EXPLAIN WITH(arity, join_impls) select * from foo inner join bar on foo.a = abs(
 Explained Query:
   Join on=(#0 = abs(#2)) type=differential // { arity: 4 }
     implementation
-      %0:foo[#0]KAef » %1:bar[abs(#0)]KAef
+      %0:foo[#0]Kef » %1:bar[abs(#0)]Kef
     ArrangeBy keys=[[#0]] // { arity: 2 }
       Filter (1 = (#0 % 2)) // { arity: 2 }
         ReadStorage materialize.public.foo // { arity: 2 }
@@ -102,7 +102,7 @@ EXPLAIN WITH(arity, join_impls) select * from (select * from foo where a = 1) fi
 Explained Query:
   CrossJoin type=differential // { arity: 4 }
     implementation
-      %0:foo[×]Aef » %1:bar[×]Aef
+      %0:foo[×]ef » %1:bar[×]ef
     ArrangeBy keys=[[]] // { arity: 2 }
       Filter (#0 = 1) // { arity: 2 }
         ReadStorage materialize.public.foo // { arity: 2 }
@@ -321,7 +321,7 @@ Explained Query:
   Project (#1, #3) // { arity: 2 }
     Join on=(1 = (#0 / #2)) type=differential // { arity: 4 }
       implementation
-        %0:foo[×]A » %1:bar[×]A
+        %0:foo[×] » %1:bar[×]
       ArrangeBy keys=[[]] // { arity: 2 }
         ReadIndex on=foo foo_idx=[*** full scan ***] // { arity: 2 }
       ArrangeBy keys=[[]] // { arity: 2 }
@@ -352,7 +352,7 @@ Explained Query:
   Project (#1, #3) // { arity: 2 }
     Join on=(-1 = (#3 - #1) = (#0 / #2)) type=differential // { arity: 4 }
       implementation
-        %0:foo[×]A » %1:bar[×]A
+        %0:foo[×] » %1:bar[×]
       ArrangeBy keys=[[]] // { arity: 2 }
         ReadIndex on=foo foo_idx=[*** full scan ***] // { arity: 2 }
       ArrangeBy keys=[[]] // { arity: 2 }

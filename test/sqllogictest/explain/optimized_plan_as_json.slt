@@ -1474,7 +1474,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                               {
                                                 "unique_key": false,
                                                 "key_length": 0,
-                                                "arranged": true,
+                                                "arranged": false,
                                                 "cardinality": null,
                                                 "filters": {
                                                   "literal_equality": false,
@@ -1493,7 +1493,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                 {
                                                   "unique_key": false,
                                                   "key_length": 0,
-                                                  "arranged": true,
+                                                  "arranged": false,
                                                   "cardinality": null,
                                                   "filters": {
                                                     "literal_equality": false,
@@ -1760,7 +1760,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                               {
                                                 "unique_key": false,
                                                 "key_length": 0,
-                                                "arranged": true,
+                                                "arranged": false,
                                                 "cardinality": null,
                                                 "filters": {
                                                   "literal_equality": false,
@@ -1779,7 +1779,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                 {
                                                   "unique_key": false,
                                                   "key_length": 0,
-                                                  "arranged": true,
+                                                  "arranged": false,
                                                   "cardinality": null,
                                                   "filters": {
                                                     "literal_equality": false,
@@ -1881,7 +1881,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                           {
                             "unique_key": false,
                             "key_length": 1,
-                            "arranged": true,
+                            "arranged": false,
                             "cardinality": null,
                             "filters": {
                               "literal_equality": false,
@@ -2175,7 +2175,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                               {
                                                 "unique_key": false,
                                                 "key_length": 1,
-                                                "arranged": true,
+                                                "arranged": false,
                                                 "cardinality": null,
                                                 "filters": {
                                                   "literal_equality": false,
@@ -2380,7 +2380,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                   {
                                                     "unique_key": false,
                                                     "key_length": 1,
-                                                    "arranged": true,
+                                                    "arranged": false,
                                                     "cardinality": null,
                                                     "filters": {
                                                       "literal_equality": false,
@@ -3473,7 +3473,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                                   {
                                                     "unique_key": false,
                                                     "key_length": 1,
-                                                    "arranged": true,
+                                                    "arranged": false,
                                                     "cardinality": null,
                                                     "filters": {
                                                       "literal_equality": false,
@@ -3838,7 +3838,7 @@ FROM
                                                   {
                                                     "unique_key": false,
                                                     "key_length": 0,
-                                                    "arranged": true,
+                                                    "arranged": false,
                                                     "cardinality": null,
                                                     "filters": {
                                                       "literal_equality": false,
@@ -3857,7 +3857,7 @@ FROM
                                                     {
                                                       "unique_key": false,
                                                       "key_length": 0,
-                                                      "arranged": true,
+                                                      "arranged": false,
                                                       "cardinality": null,
                                                       "filters": {
                                                         "literal_equality": false,
@@ -4122,7 +4122,7 @@ FROM
                                                   {
                                                     "unique_key": false,
                                                     "key_length": 0,
-                                                    "arranged": true,
+                                                    "arranged": false,
                                                     "cardinality": null,
                                                     "filters": {
                                                       "literal_equality": false,
@@ -4141,7 +4141,7 @@ FROM
                                                     {
                                                       "unique_key": false,
                                                       "key_length": 0,
-                                                      "arranged": true,
+                                                      "arranged": false,
                                                       "cardinality": null,
                                                       "filters": {
                                                         "literal_equality": false,
@@ -4239,7 +4239,7 @@ FROM
                                       {
                                         "unique_key": false,
                                         "key_length": 1,
-                                        "arranged": true,
+                                        "arranged": false,
                                         "cardinality": null,
                                         "filters": {
                                           "literal_equality": false,
@@ -4396,7 +4396,7 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                     {
                       "unique_key": false,
                       "key_length": 0,
-                      "arranged": true,
+                      "arranged": false,
                       "cardinality": null,
                       "filters": {
                         "literal_equality": false,
@@ -4415,7 +4415,7 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                       {
                         "unique_key": false,
                         "key_length": 0,
-                        "arranged": true,
+                        "arranged": false,
                         "cardinality": null,
                         "filters": {
                           "literal_equality": false,
