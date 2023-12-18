@@ -1,0 +1,88 @@
+# Copyright 2020 The Actions Ecosystem Authors
+# Modifications Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Portions of this file are derived from the README examples in the Action
+# Slack Notifier project. The original source code was retrieved on
+# January 5, 2022 from:
+#
+#     https://github.com/actions-ecosystem/action-slack-notifier/blob/fc778468d09c43a6f4d1b8cccaca59766656996a/README.md
+
+# Send a notification to the #epd-mz-introspection-council Slack channel when a change
+# is made that adds a new index to the mz_introspection cluster.
+#
+# A notification is sent when all of these conditions are true:
+#   * A ready-to-review PR is (re-)opened, or a PR is moved from draft
+#     to ready-to-review.
+#   * The PR modifies the file 'src/catalog/src/builtin.rs'.
+#   * The PR adds a "BuiltinIndex" to the file.
+
+name: Slack Mz Introspection Council Notifications
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - ready_for_review
+    paths:
+      - "src/catalog/src/builtin.rs"
+
+jobs:
+  notify:
+    name: "Notify when new BuiltinIndex added"
+    runs-on: ubuntu-latest
+    if: ${{ !github.event.pull_request.draft }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: "Check Adds BuiltinIndex"
+        id: check-builtin-index
+        run: |
+          # Check for the text "BuiltinIndex" added to builtin.rs in the pull request
+          if git diff ${{ github.event.before }} ${{ github.sha }} "builtin.rs" | grep '^\+' | grep -i 'BuiltinIndex'; then
+            echo "has-new-index=true" >> $GITHUB_OUTPUT
+          fi
+      - name: "Push to Slack"
+        if: steps.check-builtin-index.outputs.has-new-index == 'true'
+        uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
+        with:
+          slack_token: ${{ secrets.SLACK_TOKEN }}
+          channel: epd-mz-introspection-council
+          custom_payload: |
+            {
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "A new builtin index is ready for review!"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "• *PR:* <${{ github.event.pull_request.html_url }}|${{ github.event.pull_request.title }}>"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "• *Author:* <${{ github.event.pull_request.user.html_url }}|${{ github.event.pull_request.user.login }}>"
+                  }
+                }
+              ]
+            }
