@@ -2185,6 +2185,8 @@ where
         //   be called shortly).
         // - That all txn writes through `init_ts` have been applied
         //   (materialized physically in the data shards).
+        //
+        // For now we ignore the tidy and let the next transaction perform any tidy needed.
         let (removed, _tidy) = txns
             .forget_all(init_ts.clone())
             .await
