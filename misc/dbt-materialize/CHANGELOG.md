@@ -1,6 +1,6 @@
 # dbt-materialize Changelog
 
-## Unreleased
+## 1.7.2 - 2023-12-18
 
 * Backport [dbt-core #8887](https://github.com/dbt-labs/dbt-core/pull/8887) to
   unblock users using any custom type with data contracts.
@@ -12,7 +12,7 @@
 
 * Work around [dbt-core #8353](https://github.com/dbt-labs/dbt-core/issues/8353)
   while a permanent fix doesn't land in dbt Core to unblock users using UUID
-  types.
+  types with data contracts.
 
 ## 1.7.0 - 2023-11-20
 
