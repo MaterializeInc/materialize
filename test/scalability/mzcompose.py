@@ -42,6 +42,7 @@ from materialize.scalability.plot.plot import (
     plot_duration_by_endpoints_for_workload,
     plot_tps_per_connections,
 )
+from materialize.scalability.regression_assessment import RegressionAssessment
 from materialize.scalability.result_analyzer import ResultAnalyzer
 from materialize.scalability.result_analyzers import DefaultResultAnalyzer
 from materialize.scalability.schema import Schema, TransactionIsolation
@@ -211,13 +212,20 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     create_plots(benchmark_result, baseline_endpoint)
     upload_plots_to_buildkite()
 
+    regression_assessment = RegressionAssessment(
+        baseline_endpoint,
+        benchmark_result.overall_comparison_outcome,
+    )
+
     report_regression_result(
         baseline_endpoint,
         regression_threshold,
         benchmark_result.overall_comparison_outcome,
     )
 
-    if benchmark_result.overall_comparison_outcome.has_regressions():
+    report_assessment(regression_assessment)
+
+    if regression_assessment.has_unjustified_regressions():
         sys.exit(1)
 
 
@@ -309,6 +317,7 @@ def report_regression_result(
 
     baseline_desc = endpoint_name_to_description(baseline_endpoint.try_load_version())
 
+    print("+++ Scalability changes")
     if outcome.has_scalability_changes():
         print(
             f"{'ERROR' if outcome.has_regressions() else 'INFO'}: "
@@ -323,6 +332,41 @@ def report_regression_result(
 
     else:
         print("No scalability changes were detected.")
+
+
+def report_assessment(regression_assessment: RegressionAssessment):
+    print("+++ Assessment of regressions")
+
+    if not regression_assessment.has_comparison_target():
+        print("No comparison was performed because not baseline was specified")
+        return
+
+    assert regression_assessment.baseline_endpoint is not None
+
+    if not regression_assessment.has_regressions():
+        print("No regressions were detected")
+        return
+
+    baseline_desc = endpoint_name_to_description(
+        regression_assessment.baseline_endpoint.try_load_version()
+    )
+    for (
+        endpoint_with_regression,
+        justification,
+    ) in regression_assessment.endpoints_with_regressions_and_justifications.items():
+        endpoint_desc = endpoint_name_to_description(
+            endpoint_with_regression.try_load_version()
+        )
+
+        if justification is None:
+            print(
+                f"* There are regressions between baseline {baseline_desc} and endpoint {endpoint_desc} that need to be checked."
+            )
+        else:
+            print(
+                f"* Although there are regressions between baseline {baseline_desc} and endpoint {endpoint_desc},"
+                f" they can be explained by the following commits that are marked as accepted regressions: {justification}."
+            )
 
 
 def create_result_analyzer(regression_threshold: float) -> ResultAnalyzer:
