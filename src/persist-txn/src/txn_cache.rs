@@ -977,69 +977,14 @@ pub(crate) enum Unapplied<'a> {
 }
 
 #[derive(Debug)]
-struct UnappliedIterInput<'a, T>
-where
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-{
-    unapplieds: VecDeque<(&'a ShardId, Unapplied<'a>, &'a T)>,
-}
-
-impl<'a, T> UnappliedIterInput<'a, T>
-where
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-{
-    fn new(unapplieds: VecDeque<(&'a ShardId, Unapplied<'a>, &'a T)>) -> UnappliedIterInput<'a, T> {
-        UnappliedIterInput { unapplieds }
-    }
-
-    fn ts(&self) -> Option<&T> {
-        self.unapplieds.front().map(|(_, _, ts)| *ts)
-    }
-}
-
-impl<'a, T> PartialEq for UnappliedIterInput<'a, T>
-where
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.ts().eq(&other.ts())
-    }
-}
-
-impl<'a, T> Eq for UnappliedIterInput<'a, T> where
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64
-{
-}
-
-impl<'a, T> PartialOrd for UnappliedIterInput<'a, T>
-where
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-{
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<'a, T> Ord for UnappliedIterInput<'a, T>
-where
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-{
-    fn cmp(&self, other: &Self) -> Ordering {
-        match (self.ts(), other.ts()) {
-            (None, _) => Ordering::Greater,
-            (_, None) => Ordering::Less,
-            (Some(self_ts), Some(other_ts)) => self_ts.cmp(other_ts),
-        }
-    }
-}
-
-#[derive(Debug)]
 struct UnappliedIter<'a, T>
 where
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
 {
-    registers: UnappliedIterInput<'a, T>,
-    batches: UnappliedIterInput<'a, T>,
+    batches: Vec<&'a (ShardId, Vec<u8>, T)>,
+    batches_idx: usize,
+    registers: &'a VecDeque<(ShardId, T)>,
+    register_idx: usize,
 }
 
 impl<'a, T> UnappliedIter<'a, T>
@@ -1050,20 +995,12 @@ where
         batches: &'a BTreeMap<usize, (ShardId, Vec<u8>, T)>,
         registers: &'a VecDeque<(ShardId, T)>,
     ) -> UnappliedIter<'a, T> {
-        let registers = UnappliedIterInput::new(
-            registers
-                .iter()
-                .map(|(data_id, ts)| (data_id, Unapplied::RegisterForget, ts))
-                .collect(),
-        );
-        let batches = UnappliedIterInput::new(
-            batches
-                .values()
-                .map(|(data_id, batch, ts)| (data_id, Unapplied::Batch(batch), ts))
-                .collect(),
-        );
-
-        UnappliedIter { batches, registers }
+        UnappliedIter {
+            batches: batches.values().collect(),
+            batches_idx: 0,
+            registers,
+            register_idx: 0,
+        }
     }
 }
 
@@ -1073,14 +1010,34 @@ impl<'a, T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> Iterator
     type Item = (&'a ShardId, Unapplied<'a>, &'a T);
 
     fn next(&mut self) -> Option<Self::Item> {
-        // This will emit registers and forgets before batches at the same timestamp. Currently,
-        // this is fine because for a single data shard you can't combine registers, forgets, and
-        // batches at the same timestamp. In the future if we allow combining these operations in
-        // a single op, then we probably want to emit registers, then batches, then forgets or we
-        // can make forget exclusive in which case we'd emit it before batches.
-        min(&mut self.registers, &mut self.batches)
-            .unapplieds
-            .pop_front()
+        match (
+            self.batches.get(self.batches_idx),
+            self.registers.get(self.register_idx),
+        ) {
+            (Some((batch_id, batch, batch_ts)), Some((register_id, register_ts))) => {
+                // This will emit registers and forgets before batches at the same timestamp. Currently,
+                // this is fine because for a single data shard you can't combine registers, forgets, and
+                // batches at the same timestamp. In the future if we allow combining these operations in
+                // a single op, then we probably want to emit registers, then batches, then forgets or we
+                // can make forget exclusive in which case we'd emit it before batches.
+                if register_ts <= batch_ts {
+                    self.register_idx += 1;
+                    Some((register_id, Unapplied::RegisterForget, register_ts))
+                } else {
+                    self.batches_idx += 1;
+                    Some((batch_id, Unapplied::Batch(batch), batch_ts))
+                }
+            }
+            (Some((batch_id, batch, batch_ts)), None) => {
+                self.batches_idx += 1;
+                Some((batch_id, Unapplied::Batch(batch), batch_ts))
+            }
+            (None, Some((register_id, register_ts))) => {
+                self.register_idx += 1;
+                Some((register_id, Unapplied::RegisterForget, register_ts))
+            }
+            (None, None) => None,
+        }
     }
 }
 
