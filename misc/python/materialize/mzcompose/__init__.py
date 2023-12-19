@@ -77,7 +77,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "timestamp_oracle": "postgres",
     "default_idle_arrangement_merge_effort": "0",
     "default_arrangement_exert_proportionality": "16",
-    "persist_txn_tables": "lazy",
+    "persist_txn_tables": "eager", # WIP lazy
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [

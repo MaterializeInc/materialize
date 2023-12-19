@@ -1010,7 +1010,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 deploy_generation: args.deploy_generation,
                 http_host_name: args.http_host_name,
                 internal_console_redirect_url: args.internal_console_redirect_url,
-                persist_txn_tables_cli: args.persist_txn_tables,
+                persist_txn_tables_cli: Some(PersistTxnTablesImpl::Lazy), // WIP args.persist_txn_tables,
             })
             .await
     })?;
