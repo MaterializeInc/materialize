@@ -3017,6 +3017,21 @@ impl<'a> Parser<'a> {
                     vec![]
                 };
 
+                // one token of lookahead:
+                // * `KEY (` means we're parsing a list of columns for the key
+                // * `KEY FORMAT` means there is no key, we'll parse a KeyValueFormat later
+                //
+                // Note: we parse this keyword but do nothing with it. There is a Catalog migration
+                // that will re-write the create_sql statement and remove this `KEY` syntax.
+                let _key = if self.peek_keyword(KEY)
+                    && self.peek_nth_token(1) != Some(Token::Keyword(FORMAT))
+                {
+                    let _ = self.expect_keyword(KEY);
+                    Some(self.parse_parenthesized_column_list(Mandatory)?)
+                } else {
+                    None
+                };
+
                 Ok(CreateSourceConnection::Kafka {
                     connection,
                     options,
