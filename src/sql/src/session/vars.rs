@@ -3071,6 +3071,11 @@ impl SystemVars {
             .filter(|v| Self::SESSION_VARS.contains_key(UncasedStr::new(v.name())))
     }
 
+    /// Returns whether or not this parameter can be modified by a superuser.
+    pub fn user_modifiable(&self, name: &str) -> bool {
+        Self::SESSION_VARS.contains_key(UncasedStr::new(name)) || name == ENABLE_RBAC_CHECKS.name()
+    }
+
     /// Returns a [`Var`] representing the configuration parameter with the
     /// specified name.
     ///

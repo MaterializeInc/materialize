@@ -80,7 +80,7 @@ impl User {
 
     /// Returns whether this user is a superuser.
     pub fn is_superuser(&self) -> bool {
-        self.is_external_admin() || self.name == SYSTEM_USER.name
+        matches!(self.kind(), UserKind::Superuser)
     }
 
     /// Returns whether this is user is the `mz_system` user.
@@ -92,6 +92,21 @@ impl User {
     pub fn limit_max_connections(&self) -> bool {
         !self.is_internal() && !self.is_external_admin()
     }
+
+    /// Returns the kind of user this is.
+    pub fn kind(&self) -> UserKind {
+        if self.is_external_admin() || self.is_system_user() {
+            UserKind::Superuser
+        } else {
+            UserKind::Regular
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum UserKind {
+    Regular,
+    Superuser,
 }
 
 pub const MZ_SYSTEM_ROLE_ID: RoleId = RoleId::System(1);
