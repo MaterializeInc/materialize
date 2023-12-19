@@ -342,6 +342,7 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
             include_workload_in_title=True,
         )
         plt.savefig(paths.plot_png("tps", workload_name), bbox_inches="tight", dpi=300)
+        plt.close()
 
     for (
         workload_name,
@@ -361,6 +362,7 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
             bbox_inches="tight",
             dpi=300,
         )
+        plt.close()
 
         fig = plt.figure(layout="constrained", figsize=(16, 10))
         (subfigure) = fig.subfigures(1, 1)
@@ -376,6 +378,7 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
             bbox_inches="tight",
             dpi=300,
         )
+        plt.close()
 
 
 def upload_regressions_to_buildkite(outcome: ComparisonOutcome) -> None:
