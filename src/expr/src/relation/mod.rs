@@ -2727,6 +2727,7 @@ impl AggregateExpr {
             | AggregateFunc::MaxDate
             | AggregateFunc::MaxTimestamp
             | AggregateFunc::MaxTimestampTz
+            | AggregateFunc::MaxInterval
             | AggregateFunc::MinNumeric
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
@@ -2742,6 +2743,7 @@ impl AggregateExpr {
             | AggregateFunc::MinDate
             | AggregateFunc::MinTimestamp
             | AggregateFunc::MinTimestampTz
+            | AggregateFunc::MinInterval
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
             | AggregateFunc::SumNumeric

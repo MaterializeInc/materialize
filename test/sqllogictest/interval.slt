@@ -1434,3 +1434,20 @@ query T
 SELECT age(to_timestamp(8200000000000), to_timestamp(-210833720368));
 ----
 266528 years 8 months 17 days 12:06:08
+
+# Aggregation
+
+query T
+SELECT MAX(unnest) FROM (SELECT UNNEST(ARRAY[INTERVAL '1-2 3 4:5:6.7' MONTH, INTERVAL '1-2 3 4:5:6.7' YEAR]));
+----
+1 year 2 months
+
+query T
+SELECT MAX(unnest) FROM (SELECT UNNEST(ARRAY[INTERVAL '2' SECOND, INTERVAL '1' SECOND]));
+----
+00:00:02
+
+query T
+SELECT MIN(unnest) FROM (SELECT UNNEST(ARRAY[INTERVAL '2' SECOND, INTERVAL '1' SECOND]));
+----
+00:00:01

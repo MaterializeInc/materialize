@@ -96,6 +96,7 @@ message ProtoAggregateFunc {
         google.protobuf.Empty max_date = 9;
         google.protobuf.Empty max_timestamp = 10;
         google.protobuf.Empty max_timestamp_tz = 11;
+        google.protobuf.Empty max_interval = 64;
         google.protobuf.Empty min_numeric = 12;
         google.protobuf.Empty min_int16 = 13;
         google.protobuf.Empty min_int32 = 14;
@@ -107,6 +108,7 @@ message ProtoAggregateFunc {
         google.protobuf.Empty min_date = 20;
         google.protobuf.Empty min_timestamp = 21;
         google.protobuf.Empty min_timestamp_tz = 22;
+        google.protobuf.Empty min_interval = 65;
         google.protobuf.Empty sum_int16 = 23;
         google.protobuf.Empty sum_int32 = 24;
         google.protobuf.Empty sum_int64 = 25;
