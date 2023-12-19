@@ -3674,6 +3674,11 @@ async fn test_retain_history() {
                         &[],
                     )
                     .await?;
+                // Assert that subsources have retain history propagated.
+                for row in client.query(&format!("SELECT create_sql FROM mz_sources WHERE id LIKE 'u%' AND name LIKE '{name}%'"), &[]).await.unwrap(){
+                    let sql :String = row.get(0);
+                    assert_contains!(sql, "RETAIN HISTORY = FOR");
+                }
                 Ok(())
             })
             .await
