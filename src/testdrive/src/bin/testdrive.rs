@@ -84,10 +84,10 @@ use std::{io, process};
 
 use aws_credential_types::Credentials;
 use aws_types::region::Region;
-use clap::clap_derive::ArgEnum;
 use globset::GlobBuilder;
 use itertools::Itertools;
 use mz_build_info::{build_info, BuildInfo};
+use mz_catalog::durable::CatalogKind;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::path::PathExt;
 use mz_testdrive::{CatalogConfig, Config};
@@ -315,13 +315,6 @@ struct Args {
         env = "AWS_SECRET_ACCESS_KEY"
     )]
     aws_secret_access_key: String,
-}
-
-#[derive(ArgEnum, Debug, Clone)]
-enum CatalogKind {
-    Stash,
-    Persist,
-    Shadow,
 }
 
 #[tokio::main]

@@ -10,6 +10,7 @@
 //! This crate is responsible for durably storing and modifying the catalog contents.
 
 use async_trait::async_trait;
+use clap::clap_derive::ArgEnum;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use std::fmt::Debug;
 use std::num::NonZeroI64;
@@ -285,6 +286,13 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         let id = id.into_element();
         Ok(ReplicaId::User(id))
     }
+}
+
+#[derive(ArgEnum, Debug, Clone)]
+pub enum CatalogKind {
+    Stash,
+    Persist,
+    Shadow,
 }
 
 /// Creates a openable durable catalog state implemented using the stash.

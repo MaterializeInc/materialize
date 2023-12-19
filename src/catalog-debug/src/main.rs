@@ -87,7 +87,6 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
-use clap::clap_derive::ArgEnum;
 use clap::Parser;
 use mz_adapter::catalog::Catalog;
 use mz_build_info::{build_info, BuildInfo};
@@ -101,7 +100,7 @@ use mz_catalog::durable::debug::{
     SystemPrivilegeCollection, TimestampCollection, Trace,
 };
 use mz_catalog::durable::{
-    persist_backed_catalog_state, stash_backed_catalog_state, BootstrapArgs,
+    persist_backed_catalog_state, stash_backed_catalog_state, BootstrapArgs, CatalogKind,
     OpenableDurableCatalogState, StashConfig,
 };
 use mz_ore::cli::{self, CliConfig};
@@ -153,12 +152,6 @@ pub struct Args {
 
     #[clap(subcommand)]
     action: Action,
-}
-
-#[derive(ArgEnum, Debug, Clone)]
-enum CatalogKind {
-    Stash,
-    Persist,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -248,6 +241,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             let metrics = Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry));
             Box::new(persist_backed_catalog_state(persist_client, organization_id, metrics).await)
         }
+        CatalogKind::Shadow => panic!("cannot use shadow catalog with catalog-debug tool"),
     };
 
     match args.action {
