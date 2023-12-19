@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 import psutil
 
 from materialize import MZ_ROOT, rustc_flags, spawn, ui
+from materialize.mzcompose import DEFAULT_SYSTEM_PARAMETERS
 from materialize.ui import UIError
 
 KNOWN_PROGRAMS = ["environmentd", "sqllogictest"]
@@ -139,6 +140,7 @@ def main() -> int:
         args.channel = args.args[0]
         del args.args[0]
 
+    env = dict(os.environ)
     if args.program in KNOWN_PROGRAMS:
         (build_retcode, built_programs) = _build(args, extra_programs=[args.program])
         if args.build_only:
@@ -229,6 +231,10 @@ def main() -> int:
             if args.monitoring:
                 command += ["--opentelemetry-endpoint=http://localhost:4317"]
         elif args.program == "sqllogictest":
+            formatted_params = [
+                f"{key}={value}" for key, value in DEFAULT_SYSTEM_PARAMETERS.items()
+            ]
+            env["MZ_SYSTEM_PARAMETER_DEFAULT"] = ";".join(formatted_params)
             db = urlparse(args.postgres).path.removeprefix("/")
             _run_sql(args.postgres, f"CREATE DATABASE IF NOT EXISTS {db}")
             command += [f"--postgres-url={args.postgres}", *args.args]
@@ -267,7 +273,7 @@ def main() -> int:
         except OSError:
             pass
         _set_foreground_process(os.getpid())
-        os.execvp(command[0], command)
+        os.execvpe(command[0], command, env)
 
     try:
         os.setpgid(child_pid, child_pid)
