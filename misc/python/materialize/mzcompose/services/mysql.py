@@ -43,6 +43,7 @@ class MySql(Service):
                         "mysqladmin",
                         "ping",
                         f"--password={root_password}",
+                        "--protocol=TCP",
                     ],
                     "interval": "1s",
                     "start_period": "60s",

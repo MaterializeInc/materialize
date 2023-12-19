@@ -10,17 +10,6 @@
 $ set-sql-timeout duration=1s
 $ set-max-tries max-tries=3
 
-$ mysql-connect name=mysql url=mysql://root@mysql:3306 password=${arg.mysql-root-password}
-
-$ mysql-execute name=mysql
-DROP DATABASE IF EXISTS test;
-CREATE DATABASE test;
-USE test;
-CREATE TABLE t1 (f1 INTEGER PRIMARY KEY, f2 INTEGER, f3 BIGINT UNSIGNED);
-INSERT INTO t1 VALUES (123, 123, 123);
-INSERT INTO t1 VALUES (234, 234, 234);
-COMMIT;
-
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
 
 #
@@ -29,7 +18,6 @@ COMMIT;
 
 ! CREATE CONNECTION mysq TO MYSQL (
     HOST mysql,
-    DATABASE test,
     USER root,
     PASSWORD SECRET mysqlpass
   )
@@ -44,7 +32,6 @@ ALTER SYSTEM SET enable_mysql_source = true
 
 > CREATE CONNECTION mysq TO MYSQL (
     HOST mysql,
-    DATABASE test,
     USER root,
     PASSWORD SECRET mysqlpass
   )
@@ -57,7 +44,7 @@ mysq   mysql
 > SHOW CREATE CONNECTION mysq
 name   create_sql
 ---------------------------------
-materialize.public.mysq   "CREATE CONNECTION \"materialize\".\"public\".\"mysq\" TO MYSQL (DATABASE = \"test\", HOST = \"mysql\", PASSWORD = SECRET \"materialize\".\"public\".\"mysqlpass\", USER = \"root\")"
+materialize.public.mysq   "CREATE CONNECTION \"materialize\".\"public\".\"mysq\" TO MYSQL (HOST = \"mysql\", PASSWORD = SECRET \"materialize\".\"public\".\"mysqlpass\", USER = \"root\")"
 
 #
 # Error checking
@@ -65,7 +52,6 @@ materialize.public.mysq   "CREATE CONNECTION \"materialize\".\"public\".\"mysq\"
 
 ! CREATE CONNECTION no_such_host TO MYSQL (
     HOST 'no_such_mysql.mtrlz.com',
-    DATABASE test,
     USER root,
     PASSWORD SECRET mysqlpass
   )
@@ -74,7 +60,6 @@ contains:failed to lookup address information: Name or service not known
 ! CREATE CONNECTION no_such_port TO MYSQL (
     HOST mysql,
     PORT 65534,
-    DATABASE test,
     USER root,
     PASSWORD SECRET mysqlpass
   )
@@ -83,16 +68,7 @@ contains:Connection refused
 > CREATE SECRET badpass AS 'badpass'
 ! CREATE CONNECTION no_such_password TO MYSQL (
     HOST mysql,
-    DATABASE test,
     USER root,
     PASSWORD SECRET badpass
   )
 contains:Access denied for user 'root'
-
-! CREATE CONNECTION no_such_dbname TO MYSQL (
-    HOST mysql,
-    DATABASE no_such_dbname,
-    USER root,
-    PASSWORD SECRET mysqlpass
-  )
-contains:Unknown database 'no_such_dbname'

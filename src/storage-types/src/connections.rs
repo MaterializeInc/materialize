@@ -1318,8 +1318,6 @@ pub struct MySqlConnection<C: ConnectionAccess = InlinedConnection> {
     pub host: String,
     /// The port of the server.
     pub port: u16,
-    /// The name of the database to connect to.
-    pub database: String,
     /// The username to authenticate as.
     pub user: StringOrSecret,
     /// An optional password for authentication.
@@ -1342,7 +1340,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<MySqlConnection, R>
         let MySqlConnection {
             host,
             port,
-            database,
             user,
             password,
             tunnel,
@@ -1354,7 +1351,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<MySqlConnection, R>
         MySqlConnection {
             host,
             port,
-            database,
             user,
             password,
             tunnel: tunnel.into_inline_connection(r),
@@ -1381,7 +1377,6 @@ impl MySqlConnection<InlinedConnection> {
         let mut opts = mysql_async::OptsBuilder::default()
             .ip_or_hostname(&self.host)
             .tcp_port(self.port)
-            .db_name(Some(&self.database))
             .user(Some(&self.user.get_string(secrets_reader).await?));
 
         if let Some(password) = self.password {
@@ -1437,7 +1432,6 @@ impl RustType<ProtoMySqlConnection> for MySqlConnection {
         ProtoMySqlConnection {
             host: self.host.into_proto(),
             port: self.port.into_proto(),
-            database: self.database.into_proto(),
             user: Some(self.user.into_proto()),
             password: self.password.into_proto(),
             tls_mode: self.tls_mode.into_proto(),
@@ -1451,7 +1445,6 @@ impl RustType<ProtoMySqlConnection> for MySqlConnection {
         Ok(MySqlConnection {
             host: proto.host,
             port: proto.port.into_rust()?,
-            database: proto.database,
             user: proto.user.into_rust_if_some("ProtoMySqlConnection::user")?,
             password: proto.password.into_rust()?,
             tunnel: proto
@@ -1472,7 +1465,6 @@ impl<C: ConnectionAccess> Arbitrary for MySqlConnection<C> {
         (
             any::<String>(),
             any::<u16>(),
-            any::<String>(),
             any::<StringOrSecret>(),
             any::<Option<GlobalId>>(),
             any::<Tunnel<C>>(),
@@ -1481,21 +1473,10 @@ impl<C: ConnectionAccess> Arbitrary for MySqlConnection<C> {
             any::<Option<TlsIdentity>>(),
         )
             .prop_map(
-                |(
-                    host,
-                    port,
-                    database,
-                    user,
-                    password,
-                    tunnel,
-                    tls_mode,
-                    tls_root_cert,
-                    tls_identity,
-                )| {
+                |(host, port, user, password, tunnel, tls_mode, tls_root_cert, tls_identity)| {
                     MySqlConnection {
                         host,
                         port,
-                        database,
                         user,
                         password,
                         tunnel,

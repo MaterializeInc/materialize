@@ -134,7 +134,6 @@ pub(super) fn validate_options_per_connection_type(
         CreateConnectionType::Ssh => &[Host, Port, User],
         CreateConnectionType::MySql => &[
             AwsPrivatelink,
-            Database,
             Host,
             Password,
             Port,
@@ -376,13 +375,18 @@ impl ConnectionOptionExtracted {
                 };
                 // Accepts the same SSL Mode values as the MySQL Client
                 // https://dev.mysql.com/doc/refman/8.0/en/connection-options.html#option_general_ssl-mode
-                let tls_mode = match self.ssl_mode.as_ref().map(|m| m.as_str()) {
-                    None | Some("disabled") => MySqlSslMode::Disabled,
+                let tls_mode = match self
+                    .ssl_mode
+                    .map(|f| f.to_uppercase())
+                    .as_ref()
+                    .map(|m| m.as_str())
+                {
+                    None | Some("DISABLED") => MySqlSslMode::Disabled,
                     // "preferred" intentionally omitted because it has dubious security
                     // properties.
-                    Some("required") => MySqlSslMode::Required,
-                    Some("verify_ca") | Some("verify-ca") => MySqlSslMode::VerifyCa,
-                    Some("verify_identity") | Some("verify-identity") => {
+                    Some("REQUIRED") => MySqlSslMode::Required,
+                    Some("VERIFY_CA") | Some("VERIFY-CA") => MySqlSslMode::VerifyCa,
+                    Some("VERIFY_IDENTITY") | Some("VERIFY-IDENTITY") => {
                         MySqlSslMode::VerifyIdentity
                     }
                     Some(m) => sql_bail!("invalid CONNECTION: unknown SSL MODE {}", m.quoted()),
@@ -391,9 +395,6 @@ impl ConnectionOptionExtracted {
                 let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
 
                 Connection::MySql(MySqlConnection {
-                    database: self
-                        .database
-                        .ok_or_else(|| sql_err!("DATABASE option is required"))?,
                     password: self.password.map(|password| password.into()),
                     host: self
                         .host

@@ -9,8 +9,6 @@
 
 use anyhow::anyhow;
 
-use mz_ore::retry::Retry;
-
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
@@ -29,18 +27,10 @@ pub async fn run_connect(
         .map_err(|_| anyhow!("Unable to parse MySQL URL {}", url))?;
     let opts = mysql_async::OptsBuilder::from_opts(opts_url).pass(password.clone());
     let pool = mysql_async::Pool::new(opts);
-
-    let conn = Retry::default()
-        .max_duration(state.default_timeout)
-        .retry_async_canceling({
-            |_| async {
-                let url2 = url.clone();
-                pool.get_conn().await.map_err(|err| {
-                    anyhow!("Unable to connect to MySQL server at {}: {:?}", url2, err)
-                })
-            }
-        })
-        .await?;
+    let conn = pool
+        .get_conn()
+        .await
+        .map_err(|_| anyhow!("Unable to connect to MySQL server at {}", url))?;
 
     state.mysql_clients.insert(name.clone(), conn);
     Ok(ControlFlow::Continue)
