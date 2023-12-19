@@ -2031,9 +2031,9 @@ CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') KEY (a, b) FORMAT BYTES
 ----
-error: Expected FORMAT, found left parenthesis
-CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') KEY (a, b) FORMAT BYTES
-                                                                 ^
+CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') FORMAT BYTES
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaSourceConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
 CREATE SOURCE src1 (PRIMARY KEY (key1, key2) NOT ENFORCED) FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT BYTES
