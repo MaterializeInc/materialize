@@ -42,7 +42,7 @@ class StartMz(MzcomposeAction):
         self.system_parameter_defaults = system_parameter_defaults
         self.catalog_store = (
             "shadow"
-            if scenario.base_version() >= MzVersion.parse_mz("v0.79.0-dev")
+            if scenario.base_version() >= MzVersion.parse_mz("v0.81.0-dev")
             else "stash"
         )
 
