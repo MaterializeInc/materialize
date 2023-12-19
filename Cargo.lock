@@ -5435,6 +5435,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-postgres",
+ "tokio-stream",
  "tower-http",
  "tracing",
  "uuid",
