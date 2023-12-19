@@ -35,11 +35,12 @@ use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, RelationDesc, ScalarType};
+use mz_sql::session::vars::CatalogKind;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::{SourceData, Timeline};
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tracing::debug;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
@@ -47,7 +48,8 @@ use crate::durable::impls::persist::metrics::Metrics;
 use crate::durable::impls::persist::state_update::{IntoStateUpdateKindRaw, StateUpdateKindRaw};
 pub use crate::durable::impls::persist::state_update::{StateUpdate, StateUpdateKind};
 use crate::durable::initialize::{
-    DEPLOY_GENERATION, PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, USER_VERSION_KEY,
+    CATALOG_KIND_KEY, DEPLOY_GENERATION, PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY,
+    USER_VERSION_KEY,
 };
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{AuditLogKey, Config, DurableType, Snapshot, StorageUsageKey};
@@ -527,6 +529,13 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         panic!("Persist implementation does not have a tombstone")
     }
 
+    async fn get_catalog_kind_config(&mut self) -> Result<Option<CatalogKind>, CatalogError> {
+        let value = self.get_current_config(CATALOG_KIND_KEY).await?;
+        value.map(CatalogKind::try_from).transpose().map_err(|err| {
+            DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(err.to_string())).into()
+        })
+    }
+
     #[tracing::instrument(level = "info", skip_all)]
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         let (persist_shard_readable, current_upper) = self.is_persist_shard_readable().await;
@@ -537,6 +546,10 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         } else {
             Err(CatalogError::Durable(DurableCatalogError::Uninitialized))
         }
+    }
+
+    fn set_catalog_kind(&mut self, catalog_kind: CatalogKind) {
+        warn!("unable to set catalog kind to {catalog_kind:?}");
     }
 
     #[tracing::instrument(level = "debug", skip(self))]

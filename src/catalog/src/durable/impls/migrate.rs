@@ -9,6 +9,8 @@
 
 use async_trait::async_trait;
 use mz_ore::now::EpochMillis;
+use mz_sql::session::vars::CatalogKind;
+use tracing::warn;
 
 use crate::durable::debug::{DebugCatalogState, Trace};
 use crate::durable::impls::persist::UnopenedPersistCatalogState;
@@ -30,6 +32,18 @@ use crate::durable::{
 pub(crate) enum Direction {
     MigrateToPersist,
     RollbackToStash,
+}
+
+impl TryFrom<CatalogKind> for Direction {
+    type Error = CatalogKind;
+
+    fn try_from(catalog_kind: CatalogKind) -> Result<Self, Self::Error> {
+        match catalog_kind {
+            CatalogKind::Stash => Ok(Direction::RollbackToStash),
+            CatalogKind::Persist => Ok(Direction::MigrateToPersist),
+            CatalogKind::Shadow => Err(catalog_kind),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -111,8 +125,28 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         self.openable_stash.get_tombstone().await
     }
 
+    async fn get_catalog_kind_config(&mut self) -> Result<Option<CatalogKind>, CatalogError> {
+        let tombstone = self.get_tombstone().await?;
+        if tombstone == Some(true) {
+            self.openable_persist.get_catalog_kind_config().await
+        } else {
+            self.openable_stash.get_catalog_kind_config().await
+        }
+    }
+
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         panic!("cannot get a trace with the migrate implementation")
+    }
+
+    fn set_catalog_kind(&mut self, catalog_kind: CatalogKind) {
+        let direction = match catalog_kind.try_into() {
+            Ok(direction) => direction,
+            Err(catalog_kind) => {
+                warn!("unable to set catalog kind to {catalog_kind:?}");
+                return;
+            }
+        };
+        self.direction = direction;
     }
 
     async fn expire(self: Box<Self>) {

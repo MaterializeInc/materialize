@@ -80,7 +80,8 @@ use mz_sql::plan::{
 };
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
-    ConnectionCounter, OwnedVarInput, SystemVars, Var, VarInput, PERSIST_TXN_TABLES,
+    ConnectionCounter, OwnedVarInput, SystemVars, Var, VarInput, CATALOG_KIND_IMPL,
+    PERSIST_TXN_TABLES,
 };
 use mz_sql::{plan, rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{
@@ -3315,6 +3316,13 @@ impl Catalog {
         // Launch Darkly, but use it in boot before Launch Darkly is available.
         if name == PERSIST_TXN_TABLES.name() {
             tx.set_persist_txn_tables(state.system_configuration.persist_txn_tables())?;
+        } else if name == CATALOG_KIND_IMPL.name() {
+            tx.set_catalog_kind(
+                state
+                    .system_configuration
+                    .catalog_kind()
+                    .expect("TODO(jkosh44)"),
+            )?;
         }
         Ok(())
     }

@@ -23,6 +23,7 @@ use mz_sql::catalog::{
 };
 use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+use mz_sql::session::vars::CatalogKind;
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_stash::TableTransaction;
 use mz_storage_types::controller::PersistTxnTablesImpl;
@@ -31,7 +32,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use crate::builtin::BuiltinLog;
-use crate::durable::initialize::{PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, TOMBSTONE_KEY};
+use crate::durable::initialize::{
+    CATALOG_KIND_KEY, PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, TOMBSTONE_KEY,
+};
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
     AuditLogKey, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
@@ -1078,6 +1081,16 @@ impl<'a> Transaction<'a> {
         value: PersistTxnTablesImpl,
     ) -> Result<(), CatalogError> {
         self.set_config(PERSIST_TXN_TABLES.into(), u64::from(value))?;
+        Ok(())
+    }
+
+    /// Updates the catalog `catalog_kind` "config" value to
+    /// match the `catalog_kind` "system var" value.
+    ///
+    /// These are mirrored so that we can toggle the flag with Launch Darkly,
+    /// but use it in boot before Launch Darkly is available.
+    pub fn set_catalog_kind(&mut self, value: CatalogKind) -> Result<(), CatalogError> {
+        self.set_config(CATALOG_KIND_KEY.into(), u64::from(value))?;
         Ok(())
     }
 

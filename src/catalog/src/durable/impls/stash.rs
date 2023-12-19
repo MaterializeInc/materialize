@@ -18,6 +18,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use itertools::Itertools;
 use postgres_openssl::MakeTlsConnector;
+use tracing::warn;
 
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_ore::metrics::MetricsFutureExt;
@@ -28,14 +29,15 @@ use mz_ore::soft_assert_eq_no_log;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::Timestamp;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
+use mz_sql::session::vars::CatalogKind;
 use mz_stash::{AppendBatch, DebugStashFactory, Diff, Stash, StashFactory, TypedCollection};
 use mz_stash_types::StashError;
 use mz_storage_types::sources::Timeline;
 
 use crate::durable::debug::{Collection, CollectionTrace, Trace};
 use crate::durable::initialize::{
-    DEPLOY_GENERATION, PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, TOMBSTONE_KEY,
-    USER_VERSION_KEY,
+    CATALOG_KIND_KEY, DEPLOY_GENERATION, PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY,
+    TOMBSTONE_KEY, USER_VERSION_KEY,
 };
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
@@ -256,6 +258,14 @@ impl OpenableDurableCatalogState for OpenableConnection {
         Ok(self.get_config(TOMBSTONE_KEY.into()).await?.map(|v| v > 0))
     }
 
+    async fn get_catalog_kind_config(&mut self) -> Result<Option<CatalogKind>, CatalogError> {
+        let value = self.get_config(CATALOG_KIND_KEY.into()).await?;
+
+        value.map(CatalogKind::try_from).transpose().map_err(|err| {
+            DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(err.to_string())).into()
+        })
+    }
+
     #[tracing::instrument(level = "info", skip_all)]
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         fn stringify<T: Collection>(
@@ -389,6 +399,10 @@ impl OpenableDurableCatalogState for OpenableConnection {
             system_configurations: stringify(system_configurations),
             system_privileges: stringify(system_privileges),
         })
+    }
+
+    fn set_catalog_kind(&mut self, catalog_kind: CatalogKind) {
+        warn!("unable to set catalog kind to {catalog_kind:?}");
     }
 
     async fn expire(self: Box<Self>) {
@@ -1302,8 +1316,16 @@ impl OpenableDurableCatalogState for TestOpenableConnection<'_> {
         self.openable_connection.get_tombstone().await
     }
 
+    async fn get_catalog_kind_config(&mut self) -> Result<Option<CatalogKind>, CatalogError> {
+        self.openable_connection.get_catalog_kind_config().await
+    }
+
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         self.openable_connection.trace().await
+    }
+
+    fn set_catalog_kind(&mut self, catalog_kind: CatalogKind) {
+        self.openable_connection.set_catalog_kind(catalog_kind);
     }
 
     async fn expire(self: Box<Self>) {
