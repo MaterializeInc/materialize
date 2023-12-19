@@ -223,9 +223,7 @@ where
             }
             ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(expr)) => {
                 let (output, errs) = self.build_bucketed(collection, expr, mfp_after);
-                if let Some(e) = errs {
-                    errors.push(e);
-                }
+                errors.push(errs);
                 SpecializedArrangement::RowRow(output)
             }
             ReducePlan::Basic(BasicPlan::Single(index, aggr)) => {
@@ -339,8 +337,7 @@ where
         let mfp_after2 = mfp_after;
 
         let aggregate_types_err = aggregate_types.clone();
-        use differential_dataflow::collection::concatenate;
-        let (oks, errs) = concatenate(scope, to_concat)
+        let (oks, errs) = differential_dataflow::collection::concatenate(scope, to_concat)
             .mz_arrange::<RowValSpine<_, _, _>>("Arrange ReduceCollation")
             .reduce_pair::<_, RowRowSpine<_, _>, _, RowErrSpine<_, _>>(
                 "ReduceCollation",
@@ -377,7 +374,9 @@ where
                         }
 
                         let temp_storage = RowArena::new();
-                        let mut datums_local = datums1.borrow_with(key);
+                        let datum_iter = key.into_datum_iter(None);
+                        let mut datums_local = datums1.borrow();
+                        datums_local.extend(datum_iter);
                         let key_len = datums_local.len();
                         // Merge results into the order they were asked for.
                         for typ in aggregate_types.iter() {
@@ -395,11 +394,6 @@ where
                             .unwrap_or(Ok(true))
                             == Ok(true)
                         {
-                            let binding = SharedRow::get();
-                            let mut row_builder = binding.borrow_mut();
-                            let mut row_packer = row_builder.packer();
-                            row_packer.extend(&datums_local[key_len..]);
-                            output.push((row_builder.clone(), 1));
                             // If we did not have enough values to stitch together, then we do not generate
                             // an output row. Not outputting here corresponds to the semantics of an
                             // equi-join on the key, similarly to the proposal in PR #17013.
@@ -409,6 +403,10 @@ where
                             if (accumulable.next(), hierarchical.next(), basic.next())
                                 == (None, None, None)
                             {
+                                let binding = SharedRow::get();
+                                let mut row_builder = binding.borrow_mut();
+                                let mut row_packer = row_builder.packer();
+                                row_packer.extend(&datums_local[key_len..]);
                                 output.push((row_builder.clone(), 1));
                             }
                         }
@@ -446,7 +444,9 @@ where
                     }
 
                     let temp_storage = RowArena::new();
-                    let mut datums_local = datums2.borrow_with(key);
+                    let datum_iter = key.into_datum_iter(None);
+                    let mut datums_local = datums2.borrow();
+                    datums_local.extend(datum_iter);
 
                     for typ in aggregate_types_err.iter() {
                         let datum = match typ {
@@ -475,8 +475,11 @@ where
                         output.push((EvalError::Internal(message.to_string()).into(), 1));
                     }
 
+                    // Finally, if `mfp_after` can produce errors, then we should also report
+                    // these here.
                     if let Some(Result::Err(e)) = mfp_after2
                         .as_ref()
+                        .filter(|mfp| mfp.could_error())
                         .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
                     {
                         output.push((e.into(), 1));
@@ -593,14 +596,17 @@ where
                         output.push((EvalError::Internal(message.to_string()).into(), 1));
                         return;
                     }
-                    let temp_storage = RowArena::new();
-                    let datum_iter = key.into_datum_iter(None);
-                    let mut datums_local = datums2.borrow();
-                    datums_local.extend(datum_iter);
-                    if let Some(Result::Err(e)) = mfp_after2
-                        .as_ref()
-                        .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
-                    {
+                    // If `mfp_after` can error, then evaluate it here.
+                    if let Some(mfp) = mfp_after2.as_ref().filter(|mfp| mfp.could_error()) {
+                        let temp_storage = RowArena::new();
+                        let datum_iter = key.into_datum_iter(None);
+                        let mut datums_local = datums2.borrow();
+                        datums_local.extend(datum_iter);
+
+                        let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
+                        else {
+                            return;
+                        };
                         output.push((e.into(), 1));
                     }
                 },
@@ -645,38 +651,75 @@ where
             );
         }
 
-        let mut datums = DatumVec::new();
+        // Allocations for the two closures.
+        let mut datums1 = DatumVec::new();
+        let mut datums2 = DatumVec::new();
+        let mfp_after1 = mfp_after.clone();
+        let mfp_after2 = mfp_after;
 
-        let output = differential_dataflow::collection::concatenate(&mut input.scope(), to_collect)
-            .mz_arrange::<RowValSpine<_, _, _>>("Arranged ReduceFuseBasic input")
-            .mz_reduce_abelian::<_, RowRowSpine<_, _>>("ReduceFuseBasic", {
-                move |key, input, output| {
-                    let temp_storage = RowArena::new();
-                    let mut datums_local = datums.borrow_with(key);
-                    let key_len = datums_local.len();
+        let arranged =
+            differential_dataflow::collection::concatenate(&mut input.scope(), to_collect)
+                .mz_arrange::<RowValSpine<_, _, _>>("Arranged ReduceFuseBasic input");
 
-                    for ((_, row), _) in input.iter() {
-                        datums_local.push(row.unpack_first());
-                    }
+        let output = arranged.mz_reduce_abelian::<_, RowRowSpine<_, _>>("ReduceFuseBasic", {
+            move |key, input, output| {
+                let temp_storage = RowArena::new();
+                let datum_iter = key.into_datum_iter(None);
+                let mut datums_local = datums1.borrow();
+                datums_local.extend(datum_iter);
+                let key_len = datums_local.len();
 
-                    if mfp_after
-                        .as_ref()
-                        .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
-                        .unwrap_or(Ok(true))
-                        == Ok(true)
-                    {
-                        let binding = SharedRow::get();
-                        let mut row_builder = binding.borrow_mut();
-                        let mut row_packer = row_builder.packer();
-                        row_packer.extend(&datums_local[key_len..]);
-                        output.push((row_builder.clone(), 1));
-                    }
+                for ((_, row), _) in input.iter() {
+                    datums_local.push(row.unpack_first());
                 }
-            });
-        (
-            output,
-            err_output.expect("expected to validate in at least one aggregate"),
-        )
+
+                if mfp_after1
+                    .as_ref()
+                    .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
+                    .unwrap_or(Ok(true))
+                    == Ok(true)
+                {
+                    let binding = SharedRow::get();
+                    let mut row_builder = binding.borrow_mut();
+                    let mut row_packer = row_builder.packer();
+                    row_packer.extend(&datums_local[key_len..]);
+                    output.push((row_builder.clone(), 1));
+                }
+            }
+        });
+        // If `mfp_after` can error, then we need to render a paired reduction
+        // to scan for these potential errors. Note that we cannot directly use
+        // `mz_timely_util::reduce::ReduceExt::reduce_pair` here because we only
+        // conditionally render the second component of the reduction pair.
+        let validation_errs = err_output.expect("expected to validate in at least one aggregate");
+        if let Some(mfp) = mfp_after2.filter(|mfp| mfp.could_error()) {
+            let mfp_errs = arranged
+                .mz_reduce_abelian::<_, RowErrSpine<_, _>>(
+                    "ReduceFuseBasic Error Check",
+                    move |key, input, output| {
+                        // Since negative accumulations are checked in at least one component
+                        // aggregate, we only need to look for MFP errors here.
+                        let temp_storage = RowArena::new();
+                        let datum_iter = key.into_datum_iter(None);
+                        let mut datums_local = datums2.borrow();
+                        datums_local.extend(datum_iter);
+
+                        for ((_, row), _) in input.iter() {
+                            datums_local.push(row.unpack_first());
+                        }
+
+                        let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
+                        else {
+                            return;
+                        };
+                        output.push((e.into(), 1));
+                    },
+                )
+                .as_collection(|_, v| v.into_owned());
+            (output, validation_errs.concat(&mfp_errs))
+        } else {
+            (output, validation_errs)
+        }
     }
 
     /// Build the dataflow to compute a single basic aggregation.
@@ -756,7 +799,9 @@ where
                 });
 
                 let temp_storage = RowArena::new();
-                let mut datums_local = datums1.borrow_with(key);
+                let datum_iter = key.into_datum_iter(None);
+                let mut datums_local = datums1.borrow();
+                datums_local.extend(datum_iter);
                 let key_len = datums_local.len();
                 datums_local.push(
                     // Note that this is not necessarily a window aggregation, in which case
@@ -784,51 +829,64 @@ where
         // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here, but
         // we then wouldn't be able to do this error check conditionally.  See its documentation for the
         // rationale around using a second reduction here.
-        if (validating && err_output.is_none()) || mfp_after2.is_some() {
+        let must_validate = validating && err_output.is_none();
+        let mfp_after2 = mfp_after2.filter(|mfp| mfp.could_error());
+        if must_validate || mfp_after2.is_some() {
             let error_logger = self.error_logger();
 
-            let errs = arranged.mz_reduce_abelian::<_, RowErrSpine<_, _>>(
-                "ReduceInaccumulable Error Check",
-                move |key, source, target| {
-                    // Negative counts would be surprising, but until we are 100% certain we won't
-                    // see them, we should report when we do. We may want to bake even more info
-                    // in here in the future.
-                    for (value, count) in source.iter() {
-                        if count.is_positive() {
-                            continue;
+            let errs = arranged
+                .mz_reduce_abelian::<_, RowErrSpine<_, _>>(
+                    "ReduceInaccumulable Error Check",
+                    move |key, source, target| {
+                        // Negative counts would be surprising, but until we are 100% certain we won't
+                        // see them, we should report when we do. We may want to bake even more info
+                        // in here in the future.
+                        if must_validate {
+                            for (value, count) in source.iter() {
+                                if count.is_positive() {
+                                    continue;
+                                }
+                                let value = value.into_owned();
+                                let message = "Non-positive accumulation in ReduceInaccumulable";
+                                error_logger
+                                    .log(message, &format!("value={value:?}, count={count}"));
+                                target.push((EvalError::Internal(message.to_string()).into(), 1));
+                                return;
+                            }
                         }
-                        let value = value.into_owned();
-                        let message = "Non-positive accumulation in ReduceInaccumulable";
-                        error_logger.log(message, &format!("value={value:?}, count={count}"));
-                        target.push((EvalError::Internal(message.to_string()).into(), 1));
-                        return;
-                    }
 
-                    let iter = source.iter().flat_map(|(v, w)| {
-                        let count = usize::try_from(*w).unwrap_or(0);
-                        std::iter::repeat(v.iter().next().unwrap()).take(count)
-                    });
+                        // We know that `mfp_after` can error if it exists, so try to evaluate it here.
+                        let Some(mfp) = &mfp_after2 else { return };
+                        let iter = source.iter().flat_map(|(v, w)| {
+                            let count = usize::try_from(*w).unwrap_or(0);
+                            std::iter::repeat(v.iter().next().unwrap()).take(count)
+                        });
 
-                    let temp_storage = RowArena::new();
-                    let mut datums_local = datums2.borrow_with(key);
-                    datums_local.push(
-                        func2.eval_fast_window_agg::<_, window_agg_helpers::OneByOneAggrImpls>(
-                            iter,
-                            &temp_storage,
-                        ),
-                    );
-                    if let Some(Result::Err(e)) = mfp_after2
-                        .as_ref()
-                        .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
-                    {
+                        let temp_storage = RowArena::new();
+                        let datum_iter = key.into_datum_iter(None);
+                        let mut datums_local = datums2.borrow();
+                        datums_local.extend(datum_iter);
+                        datums_local.push(
+                            func2.eval_fast_window_agg::<_, window_agg_helpers::OneByOneAggrImpls>(
+                                iter,
+                                &temp_storage,
+                            ),
+                        );
+                        let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
+                        else {
+                            return;
+                        };
                         target.push((e.into(), 1));
-                    }
-                },
-            );
-            (oks, Some(errs.as_collection(|_, v| v.into_owned())))
-        } else {
-            (oks, err_output)
+                    },
+                )
+                .as_collection(|_, v| v.into_owned());
+            if let Some(e) = err_output {
+                err_output = Some(e.concat(&errs));
+            } else {
+                err_output = Some(errs);
+            }
         }
+        (oks, err_output)
     }
 
     fn build_reduce_inaccumulable_distinct<S, Tr>(
@@ -899,10 +957,7 @@ where
             buckets,
         }: BucketedPlan,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> (
-        RowRowArrangement<S>,
-        Option<Collection<S, DataflowError, Diff>>,
-    )
+    ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
@@ -926,14 +981,13 @@ where
 
             // Repeatedly apply hierarchical reduction with a progressively coarser key.
             let mut stage = input.map(move |(key, values)| ((key, values.hashed()), values));
-            let mut validating = true;
             for b in buckets.into_iter() {
                 let input = stage.map(move |((key, hash), values)| ((key, hash % b), values));
 
                 // We only want the first stage to perform validation of whether invalid accumulations
                 // were observed in the input. Subsequently, we will either produce an error in the error
                 // stream or produce correct data in the output stream.
-                let negated_output = if validating {
+                let negated_output = if err_output.is_none() {
                     let (oks, errs) = self
                         .build_bucketed_negated_output::<_, Result<Vec<Row>, (Row, u64)>>(
                             &input,
@@ -952,7 +1006,6 @@ where
                                 Ok(values) => Ok((key, values)),
                             },
                         );
-                    validating = false;
                     err_output = Some(errs.leave_region());
                     oks
                 } else {
@@ -985,7 +1038,9 @@ where
             // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here,
             // but we then wouldn't be able to do this error check conditionally.  See its documentation
             // for the rationale around using a second reduction here.
-            if validating {
+            let must_validate = err_output.is_none();
+            let mfp_after2 = mfp_after2.filter(|mfp| mfp.could_error());
+            if must_validate || mfp_after2.is_some() {
                 let errs = arranged
                     .mz_reduce_abelian::<_, RowErrSpine<_, _>>(
                         "ReduceMinsMaxes Error Check",
@@ -993,41 +1048,56 @@ where
                             // Negative counts would be surprising, but until we are 100% certain we wont
                             // see them, we should report when we do. We may want to bake even more info
                             // in here in the future.
-                            for (val, count) in source.iter() {
-                                if count.is_positive() {
-                                    continue;
+                            if must_validate {
+                                for (val, count) in source.iter() {
+                                    if count.is_positive() {
+                                        continue;
+                                    }
+                                    let val = val.into_owned();
+                                    let message = "Non-positive accumulation in ReduceMinsMaxes";
+                                    error_logger
+                                        .log(message, &format!("val={val:?}, count={count}"));
+                                    target
+                                        .push((EvalError::Internal(message.to_string()).into(), 1));
+                                    return;
                                 }
-                                let val = val.into_owned();
-                                let message = "Non-positive accumulation in ReduceMinsMaxes";
-                                error_logger.log(message, &format!("val={val:?}, count={count}"));
-                                target.push((EvalError::Internal(message.to_string()).into(), 1));
-                                return;
                             }
 
+                            // We know that `mfp_after` can error if it exists, so try to evaluate it here.
+                            let Some(mfp) = &mfp_after2 else { return };
                             let temp_storage = RowArena::new();
-                            let mut datums_local = datums2.borrow_with(key);
+                            let datum_iter = key.into_datum_iter(None);
+                            let mut datums_local = datums2.borrow();
+                            datums_local.extend(datum_iter);
                             for (aggr_index, func) in aggr_funcs2.iter().enumerate() {
                                 let iter = source.iter().map(|(values, _cnt)| {
                                     values[aggr_index].iter().next().unwrap()
                                 });
                                 datums_local.push(func.eval(iter, &temp_storage));
                             }
-                            if let Some(Result::Err(e)) = mfp_after2
-                                .as_ref()
-                                .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
-                            {
-                                target.push((e.into(), 1));
-                            }
+                            let Result::Err(e) =
+                                mfp.evaluate_inner(&mut datums_local, &temp_storage)
+                            else {
+                                return;
+                            };
+                            target.push((e.into(), 1));
                         },
                     )
-                    .as_collection(|_, v| v.into_owned());
-                err_output = Some(errs.leave_region());
+                    .as_collection(|_, v| v.into_owned())
+                    .leave_region();
+                if let Some(e) = &err_output {
+                    err_output = Some(e.concat(&errs));
+                } else {
+                    err_output = Some(errs);
+                }
             }
             arranged
                 .mz_reduce_abelian::<_, RowRowSpine<_, _>>("ReduceMinsMaxes", {
                     move |key, source, target| {
                         let temp_storage = RowArena::new();
-                        let mut datums_local = datums1.borrow_with(key);
+                        let datum_iter = key.into_datum_iter(None);
+                        let mut datums_local = datums1.borrow();
+                        datums_local.extend(datum_iter);
                         let key_len = datums_local.len();
                         for (aggr_index, func) in aggr_funcs.iter().enumerate() {
                             let iter = source
@@ -1051,7 +1121,10 @@ where
                 })
                 .leave_region()
         });
-        (arranged_output, err_output)
+        (
+            arranged_output,
+            err_output.expect("expected to validate in one level of the hierarchy"),
+        )
     }
 
     /// Build the dataflow for one stage of a reduction tree for multiple hierarchical
@@ -1162,7 +1235,7 @@ where
 
         // It should be now possible to ensure that we have a monotonic collection.
         let error_logger = self.error_logger();
-        let (partial, mut errs) = collection.ensure_monotonic(move |data, diff| {
+        let (partial, validation_errs) = collection.ensure_monotonic(move |data, diff| {
             error_logger.log(
                 "Non-monotonic input to ReduceMonotonic",
                 &format!("data={data:?}, diff={diff}"),
@@ -1195,7 +1268,9 @@ where
         let output = arranged.mz_reduce_abelian::<_, RowRowSpine<_, _>>("ReduceMonotonic", {
             move |key, input, output| {
                 let temp_storage = RowArena::new();
-                let mut datums_local = datums1.borrow_with(key);
+                let datum_iter = key.into_datum_iter(None);
+                let mut datums_local = datums1.borrow();
+                datums_local.extend(datum_iter);
                 let key_len = datums_local.len();
                 let accum = &input[0].1;
                 for monoid in accum.iter() {
@@ -1213,38 +1288,37 @@ where
                     row_packer.extend(&datums_local[key_len..]);
                     output.push((row_builder.clone(), 1));
                 }
-
-                //     let mut row_packer = row_buf.packer();
-                //     let accum = &input[0].1;
-                //     for monoid in accum.iter() {
-                //         row_packer.extend(monoid.finalize().iter());
-                //     }
-                //     output.push((row_buf.clone(), 1));
             }
         });
 
-        if let Some(mfp_after2) = mfp_after2 {
-            errs = errs.concat(
-                &arranged
-                    .mz_reduce_abelian::<_, RowErrSpine<_, _>>("ReduceMonotonic", {
-                        move |key, input, output| {
-                            let temp_storage = RowArena::new();
-                            let mut datums_local = datums2.borrow_with(key);
-                            let accum = &input[0].1;
-                            for monoid in accum.iter() {
-                                datums_local.extend(monoid.finalize().iter());
-                            }
-                            if let Result::Err(e) =
-                                mfp_after2.evaluate_inner(&mut datums_local, &temp_storage)
-                            {
-                                output.push((e.into(), 1));
-                            }
+        // If `mfp_after` can error, then we need to render a paired reduction
+        // to scan for these potential errors. Note that we cannot directly use
+        // `mz_timely_util::reduce::ReduceExt::reduce_pair` here because we only
+        // conditionally render the second component of the reduction pair.
+        if let Some(mfp) = mfp_after2.filter(|mfp| mfp.could_error()) {
+            let mfp_errs = arranged
+                .mz_reduce_abelian::<_, RowErrSpine<_, _>>("ReduceMonotonic Error Check", {
+                    move |key, input, output| {
+                        let temp_storage = RowArena::new();
+                        let datum_iter = key.into_datum_iter(None);
+                        let mut datums_local = datums2.borrow();
+                        datums_local.extend(datum_iter);
+                        let accum = &input[0].1;
+                        for monoid in accum.iter() {
+                            datums_local.extend(monoid.finalize().iter());
                         }
-                    })
-                    .as_collection(|_k, v: &DataflowError| v.clone()),
-            );
+                        let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
+                        else {
+                            return;
+                        };
+                        output.push((e.into(), 1));
+                    }
+                })
+                .as_collection(|_k, v| v.clone());
+            (output, validation_errs.concat(&mfp_errs))
+        } else {
+            (output, validation_errs)
         }
-        (output, errs)
     }
 
     /// Build the dataflow to compute and arrange multiple accumulable aggregations.
@@ -1384,7 +1458,9 @@ where
                         let (ref accums, total) = input[0].1;
 
                         let temp_storage = RowArena::new();
-                        let mut datums_local = datums1.borrow_with(key);
+                        let datum_iter = key.into_datum_iter(None);
+                        let mut datums_local = datums1.borrow();
+                        datums_local.extend(datum_iter);
                         let key_len = datums_local.len();
                         for (aggr, accum) in full_aggrs.iter().zip(accums) {
                             datums_local.push(finalize_accum(&aggr.func, accum, total));
@@ -1440,15 +1516,20 @@ where
                         }
                     }
 
-                    let temp_storage = RowArena::new();
-                    let mut datums_local = datums2.borrow_with(key);
-                    for (aggr, accum) in full_aggrs2.iter().zip(accums) {
-                        datums_local.push(finalize_accum(&aggr.func, accum, total));
-                    }
-                    if let Some(Result::Err(e)) = mfp_after2
-                        .as_ref()
-                        .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
-                    {
+                    // If `mfp_after` can error, then evaluate it here.
+                    if let Some(mfp) = mfp_after2.as_ref().filter(|mfp| mfp.could_error()) {
+                        let temp_storage = RowArena::new();
+                        let datum_iter = key.into_datum_iter(None);
+                        let mut datums_local = datums2.borrow();
+                        datums_local.extend(datum_iter);
+                        for (aggr, accum) in full_aggrs2.iter().zip(accums) {
+                            datums_local.push(finalize_accum(&aggr.func, accum, total));
+                        }
+
+                        let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
+                        else {
+                            return;
+                        };
                         output.push((e.into(), 1));
                     }
                 },
