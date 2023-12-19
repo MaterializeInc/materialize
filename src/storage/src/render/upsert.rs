@@ -12,7 +12,6 @@ use std::cmp::Reverse;
 use std::convert::AsRef;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use std::time::Instant;
 
 use differential_dataflow::consolidation;
 use differential_dataflow::hashable::Hashable;
@@ -396,8 +395,6 @@ where
         Exchange::new(move |((key, _, _), _, _)| UpsertKey::hashed(key)),
     );
 
-    let rehydration_started = Instant::now();
-
     // We only care about UpsertValueError since this is the only error that we can retract
     let previous = previous.flat_map(move |result| {
         let value = match result {
@@ -418,7 +415,6 @@ where
     let (mut health_output, health_stream) = builder.new_output();
 
     let upsert_shared_metrics = Arc::clone(&upsert_metrics.shared);
-    let source_metrics = source_config.source_statistics.clone();
     let shutdown_button = builder.build(move |caps| async move {
         let [mut output_cap, health_cap]: [_; 2] = caps.try_into().unwrap();
 
@@ -572,8 +568,6 @@ where
             source_config.worker_id,
             source_config.id
         );
-        source_metrics
-                .set_rehydration_latency_ms(rehydration_started.elapsed().as_millis().try_into().expect("Rehydration took more than ~584 million years!"));
 
         // A re-usable buffer of changes, per key. This is an `IndexMap` because it has to be `drain`-able
         // and have a consistent iteration order.

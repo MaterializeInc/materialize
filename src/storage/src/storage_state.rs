@@ -753,6 +753,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         &self.storage_state.metrics.source_statistics,
                         ingestion_id,
                         &export.storage_metadata.data_shard,
+                        resume_uppers[export_id].clone(),
                     );
                     self.storage_state
                         .source_statistics
