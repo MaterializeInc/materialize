@@ -115,7 +115,7 @@ default, members of this role (and therefore **all users**) have the following
 
 Privilege                            | Scope     |
 -------------------------------------|-----------|
-`USAGE`                              | All types, all system catalog schemas, the `materialize.public` schema, the `materialize` database, and the `default` cluster.|
+`USAGE`                              | All types, all system catalog schemas, the `materialize.public` schema, the `materialize` database, and the `quickstart` cluster.|
 `SELECT`                             | All system catalog objects.  |
 
 This means that new, non-administrator users have limited access to resources in

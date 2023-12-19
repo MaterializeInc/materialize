@@ -19,16 +19,18 @@ When you enable a Materialize region, several clusters that are used to improve
 the user experience, as well as support system administration tasks, will be
 pre-installed.
 
-### `default` cluster
+### `quickstart` cluster
 
-A cluster named `default` with a size of `xsmall` and a replication factor of
+A cluster named `quickstart` with a size of `xsmall` and a replication factor of
 `1` will be pre-installed in every environment. You can modify or drop this
 cluster at any time.
 
 {{< note >}}
-The default value for the `cluster` session parameter is `default`.
-If the `default` cluster is dropped, you must run [`SET cluster`](/sql/select/#ad-hoc-queries)
-to choose a valid cluster in order to run `SELECT` queries.
+The default value for the `cluster` session parameter is `quickstart`.
+If the `quickstart` cluster is dropped, you must run [`SET cluster`](/sql/select/#ad-hoc-queries)
+to choose a valid cluster in order to run `SELECT` queries. A superuser (i.e. Frontegg admin)
+can also run [`ALTER SYSTEM SET cluster`](/sql/alter-system-set) to change the
+default value.
 {{< /note >}}
 
 ### `mz_introspection` system cluster

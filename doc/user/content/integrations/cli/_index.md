@@ -66,7 +66,7 @@ You can use `mz` to:
    ```
    ```
    Authenticated using profile 'default'.
-   Connected to the default cluster.
+   Connected to the quickstart cluster.
    psql (14.2)
    Type "help" for help.
 
