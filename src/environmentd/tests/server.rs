@@ -2411,7 +2411,7 @@ fn test_cancel_ws() {
     loop {
         let msg = ws.read().unwrap();
         if let Ok(msg) = msg.into_text() {
-            if msg.contains("query canceled") {
+            if msg.contains("canceling statement") {
                 break;
             }
         }
@@ -2703,7 +2703,7 @@ fn test_github_20262() {
     let mut expect = VecDeque::from([
         r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":true}}"#,
         r#"{"type":"Rows","payload":{"columns":[{"name":"mz_timestamp","type_oid":1700,"type_len":-1,"type_mod":2555908},{"name":"mz_diff","type_oid":20,"type_len":8,"type_mod":-1},{"name":"i","type_oid":23,"type_len":4,"type_mod":-1}]}}"#,
-        r#"{"type":"Error","payload":{"message":"query canceled","code":"XX000"}}"#,
+        r#"{"type":"Error","payload":{"message":"canceling statement due to user request","code":"57014"}}"#,
         r#"{"type":"ReadyForQuery","payload":"I"}"#,
         r#"{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}"#,
         r#"{"type":"CommandComplete","payload":"COMMIT"}"#,
