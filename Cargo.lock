@@ -4784,6 +4784,7 @@ dependencies = [
  "crossbeam-channel",
  "differential-dataflow",
  "futures",
+ "itertools",
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
