@@ -20,6 +20,7 @@ use mz_ore::metrics::{
 };
 use mz_repr::{GlobalId, Timestamp};
 use mz_storage_client::client::{SinkStatisticsUpdate, SourceStatisticsUpdate};
+use mz_storage_types::sources::SourceEnvelope;
 use prometheus::core::{AtomicI64, AtomicU64};
 use timely::progress::frontier::Antichain;
 use timely::PartialOrder;
@@ -80,7 +81,7 @@ impl SourceStatisticsMetricDefs {
             rehydration_latency_ms: registry.register(metric!(
                 name: "mz_source_rehydration_latency_ms",
                 help: "The amount of time in milliseconds it took for the worker to rehydrate the source envelope state. This will be specific to the envelope in use.",
-                var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
+                var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id", "envelope"],
             )),
         }
     }
@@ -106,8 +107,15 @@ impl SourceStatisticsMetrics {
         worker_id: usize,
         parent_source_id: GlobalId,
         shard_id: &mz_persist_client::ShardId,
+        envelope: SourceEnvelope,
     ) -> SourceStatisticsMetrics {
         let shard = shard_id.to_string();
+        let envelope = match envelope {
+            SourceEnvelope::None(_) => "none",
+            SourceEnvelope::Debezium(_) => "debezium",
+            SourceEnvelope::Upsert(_) => "upsert",
+            SourceEnvelope::CdcV2 => "cdcv2",
+        };
 
         SourceStatisticsMetrics {
             snapshot_committed: defs.snapshot_committed.get_delete_on_drop_gauge(vec![
@@ -155,6 +163,7 @@ impl SourceStatisticsMetrics {
                 worker_id.to_string(),
                 parent_source_id.to_string(),
                 shard,
+                envelope.to_string(),
             ]),
         }
     }
@@ -305,6 +314,7 @@ impl SourceStatistics {
         metrics: &SourceStatisticsMetricDefs,
         parent_source_id: GlobalId,
         shard_id: &mz_persist_client::ShardId,
+        envelope: SourceEnvelope,
         resume_upper: Antichain<Timestamp>,
     ) -> Self {
         Self {
@@ -322,7 +332,14 @@ impl SourceStatistics {
                     envelope_state_records: 0,
                     rehydration_latency_ms: None,
                 },
-                SourceStatisticsMetrics::new(metrics, id, worker_id, parent_source_id, shard_id),
+                SourceStatisticsMetrics::new(
+                    metrics,
+                    id,
+                    worker_id,
+                    parent_source_id,
+                    shard_id,
+                    envelope,
+                ),
             ))),
             meta: SourceStatisticsMetadata::new(resume_upper),
         }
