@@ -476,6 +476,7 @@ impl LogVariant {
 
             LogVariant::Compute(ComputeLog::PeekDuration) => RelationDesc::empty()
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
+                .with_column("type", ScalarType::String.nullable(false))
                 .with_column("duration_ns", ScalarType::UInt64.nullable(false)),
 
             LogVariant::Compute(ComputeLog::ShutdownDuration) => RelationDesc::empty()

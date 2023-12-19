@@ -314,9 +314,10 @@ pub(super) fn construct<A: Allocate + 'static>(
             }
         });
         let mut packer = PermutedRowPacker::new(ComputeLog::PeekDuration);
-        let peek_duration = peek_duration.as_collection().map(move |bucket| {
+        let peek_duration = peek_duration.as_collection().map(move |(typ, bucket)| {
             packer.pack_slice(&[
                 Datum::UInt64(u64::cast_from(worker_id)),
+                Datum::String(typ),
                 Datum::UInt64(bucket.try_into().expect("bucket too big")),
             ])
         });
@@ -421,7 +422,7 @@ struct DemuxState<A: Allocate> {
     /// Contains dataflows that have shut down but not yet been dropped.
     shutdown_dataflows: BTreeSet<usize>,
     /// Maps pending peeks to their installation time.
-    peek_stash: BTreeMap<Uuid, Duration>,
+    peek_stash: BTreeMap<Uuid, (&'static str, Duration)>,
     /// Arrangement size stash
     arrangement_size: BTreeMap<usize, ArrangementSizeState>,
     /// State maintained in support of the `delayed_time_seconds_total` metric.
@@ -553,7 +554,7 @@ struct DemuxOutput<'a> {
     import_frontier: OutputSession<'a, ImportFrontierDatum>,
     frontier_delay: OutputSession<'a, FrontierDelayDatum>,
     peek: OutputSession<'a, Peek>,
-    peek_duration: OutputSession<'a, u128>,
+    peek_duration: OutputSession<'a, (&'static str, u128)>,
     shutdown_duration: OutputSession<'a, u128>,
     arrangement_heap_size: OutputSession<'a, ArrangementHeapDatum>,
     arrangement_heap_capacity: OutputSession<'a, ArrangementHeapDatum>,
@@ -796,9 +797,10 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
     fn handle_peek_install(&mut self, peek: Peek) {
         let uuid = peek.uuid;
         let ts = self.ts();
+        let peek_type = peek.peek_type;
         self.output.peek.give((peek, ts, 1));
 
-        let existing = self.state.peek_stash.insert(uuid, self.time);
+        let existing = self.state.peek_stash.insert(uuid, (peek_type, self.time));
         if existing.is_some() {
             error!(
                 uuid = ?uuid,
@@ -812,10 +814,10 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         let ts = self.ts();
         self.output.peek.give((peek, ts, -1));
 
-        if let Some(start) = self.state.peek_stash.remove(&uuid) {
+        if let Some((typ, start)) = self.state.peek_stash.remove(&uuid) {
             let elapsed_ns = self.time.saturating_sub(start).as_nanos();
             let elapsed_pow = elapsed_ns.next_power_of_two();
-            self.output.peek_duration.give((elapsed_pow, ts, 1));
+            self.output.peek_duration.give(((typ, elapsed_pow), ts, 1));
         } else {
             error!(
                 uuid = ?uuid,

@@ -1152,10 +1152,11 @@ It distinguishes between individual records (`sent`, `received`) and batches of 
 The `mz_peek_durations_histogram` view describes a histogram of the duration in nanoseconds of read queries ("peeks") in the [dataflow] layer.
 
 <!-- RELATION_SPEC mz_internal.mz_peek_durations_histogram -->
-| Field          | Type        | Meaning                                            |
-| -------------- |-------------| --------                                           |
-| `duration_ns`  | [`uint8`]   | The upper bound of the bucket in nanoseconds.      |
-| `count`        | [`numeric`] | The (noncumulative) count of peeks in this bucket. |
+| Field         | Type        | Meaning                                            |
+|---------------|-------------|----------------------------------------------------|
+| `type`        | [`text`]    | The peek variant: `index` or `persist`.            |
+| `duration_ns` | [`uint8`]   | The upper bound of the bucket in nanoseconds.      |
+| `count`       | [`numeric`] | The (noncumulative) count of peeks in this bucket. |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_peek_durations_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_peek_durations_histogram_raw -->

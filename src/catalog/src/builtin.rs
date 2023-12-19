@@ -3804,11 +3804,11 @@ pub const MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
     sql: "SELECT
-    worker_id, duration_ns, pg_catalog.count(*) AS count
+    worker_id, type, duration_ns, pg_catalog.count(*) AS count
 FROM
     mz_internal.mz_peek_durations_histogram_raw
 GROUP BY
-    worker_id, duration_ns",
+    worker_id, type, duration_ns",
     sensitivity: DataSensitivity::Public,
 };
 
@@ -3818,10 +3818,10 @@ pub const MZ_PEEK_DURATIONS_HISTOGRAM: BuiltinView = BuiltinView {
     column_defs: None,
     sql: "
 SELECT
-    duration_ns,
+    type, duration_ns,
     pg_catalog.sum(count) AS count
 FROM mz_internal.mz_peek_durations_histogram_per_worker
-GROUP BY duration_ns",
+GROUP BY type, duration_ns",
     sensitivity: DataSensitivity::Public,
 };
 

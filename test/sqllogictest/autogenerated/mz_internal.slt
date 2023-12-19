@@ -612,8 +612,9 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_peek_durations_histogram' ORDER BY position
 ----
-1  duration_ns  uint8
-2  count  numeric
+1  type  text
+2  duration_ns  uint8
+3  count  numeric
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_records_per_dataflow' ORDER BY position
