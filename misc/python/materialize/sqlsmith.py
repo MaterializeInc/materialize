@@ -119,4 +119,6 @@ known_errors = [
     "window functions are not allowed in OR argument",  # wrong error message
     "window functions are not allowed in AND argument",  # wrong error message
     "invalid IANA Time Zone Database identifier",
+    "Top-level LIMIT must be a constant expression",
+    "LIMIT must not be negative",
 ]

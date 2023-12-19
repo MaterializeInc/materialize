@@ -78,6 +78,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "default_idle_arrangement_merge_effort": "0",
     "default_arrangement_exert_proportionality": "16",
     "persist_txn_tables": "eager",
+    "enable_expressions_in_limit_syntax": "true",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [
