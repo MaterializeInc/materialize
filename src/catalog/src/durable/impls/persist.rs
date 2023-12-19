@@ -130,6 +130,8 @@ impl UnopenedPersistCatalogState {
         let since_handle = persist_client
             .open_critical_since(
                 shard_id,
+                // TODO: We may need to use a different critical reader
+                // id for this if we want to be able to introspect it via SQL.
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
                 diagnostics(),
             )
