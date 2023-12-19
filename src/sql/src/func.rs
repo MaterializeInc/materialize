@@ -3012,6 +3012,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Timestamp) => AggregateFunc::MaxTimestamp => Timestamp, 2126;
             params!(TimestampTz) => AggregateFunc::MaxTimestampTz => TimestampTz, 2127;
             params!(Numeric) => AggregateFunc::MaxNumeric => Numeric, oid::FUNC_MAX_NUMERIC_OID;
+            params!(Interval) => AggregateFunc::MaxInterval => Interval, 2128;
         },
         "min" => Aggregate {
             params!(Bool) => AggregateFunc::MinBool => Bool, oid::FUNC_MIN_BOOL_OID;
@@ -3031,6 +3032,7 @@ pub static PG_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Timestamp) => AggregateFunc::MinTimestamp => Timestamp, 2142;
             params!(TimestampTz) => AggregateFunc::MinTimestampTz => TimestampTz, 2143;
             params!(Numeric) => AggregateFunc::MinNumeric => Numeric, oid::FUNC_MIN_NUMERIC_OID;
+            params!(Interval) => AggregateFunc::MinInterval => Interval, 2144;
         },
         "jsonb_agg" => Aggregate {
             params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {

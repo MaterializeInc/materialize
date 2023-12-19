@@ -525,6 +525,18 @@ impl TryFrom<Datum<'_>> for Option<crate::Timestamp> {
     }
 }
 
+impl TryFrom<Datum<'_>> for Interval {
+    type Error = ();
+
+    #[inline]
+    fn try_from(from: Datum<'_>) -> Result<Self, Self::Error> {
+        match from {
+            Datum::Interval(i) => Ok(i),
+            _ => Err(()),
+        }
+    }
+}
+
 impl<'a> Datum<'a> {
     /// Reports whether this datum is null (i.e., is [`Datum::Null`]).
     pub fn is_null(&self) -> bool {
