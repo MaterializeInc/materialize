@@ -96,6 +96,7 @@ use itertools::Itertools;
 use mz_aws_secrets_controller::AwsSecretsController;
 use mz_build_info::BuildInfo;
 use mz_catalog::config::ClusterReplicaSizeMap;
+use mz_catalog::durable::CatalogKind;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
 use mz_environmentd::{CatalogConfig, Listeners, ListenersConfig, BUILD_INFO};
@@ -605,13 +606,6 @@ pub struct Args {
 enum OrchestratorKind {
     Kubernetes,
     Process,
-}
-
-#[derive(ArgEnum, Debug, Clone)]
-enum CatalogKind {
-    Stash,
-    Persist,
-    Shadow,
 }
 
 // TODO [Alex Hunt] move this to a shared function that can be imported by the
