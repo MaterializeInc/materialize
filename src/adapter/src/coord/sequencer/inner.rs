@@ -247,22 +247,31 @@ impl Coordinator {
                             &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
                         ));
 
-                    let (data_source, status_collection_id) = match source.data_source {
+                    let (data_source, status_collection_id, set_read_policies) = match source
+                        .data_source
+                    {
                         DataSourceDesc::Ingestion(ingestion) => {
                             let ingestion =
                                 ingestion.into_inline_connection(coord.catalog().state());
 
+                            // The parent source dictates all of the subsource's read policies.
+                            let set_read_policies =
+                                ingestion.source_exports.keys().cloned().collect();
+
                             (
                                 DataSource::Ingestion(ingestion),
                                 source_status_collection_id,
+                                set_read_policies,
                             )
                         }
                         // Subsources use source statuses.
                         DataSourceDesc::Source => (
                             DataSource::Other(DataSourceOther::Source),
                             source_status_collection_id,
+                            // Subsources will inherit their parent source's read_policy.
+                            vec![],
                         ),
-                        DataSourceDesc::Progress => (DataSource::Progress, None),
+                        DataSourceDesc::Progress => (DataSource::Progress, None, vec![source_id]),
                         DataSourceDesc::Webhook { .. } => {
                             if let Some(url) =
                                 coord.catalog().state().try_get_webhook_url(&source_id)
@@ -270,7 +279,7 @@ impl Coordinator {
                                 session.add_notice(AdapterNotice::WebhookSourceCreated { url })
                             }
 
-                            (DataSource::Webhook, None)
+                            (DataSource::Webhook, None, vec![source_id])
                         }
                         DataSourceDesc::Introspection(_) => {
                             unreachable!("cannot create sources with introspection data sources")
@@ -297,7 +306,7 @@ impl Coordinator {
 
                     coord
                         .initialize_storage_read_policies(
-                            vec![source_id],
+                            set_read_policies,
                             source
                                 .custom_logical_compaction_window
                                 .unwrap_or(CompactionWindow::Default),
@@ -4163,6 +4172,8 @@ impl Coordinator {
                     cur_source.is_retained_metrics_object,
                 );
 
+                let source_compaction_window = source.custom_logical_compaction_window;
+
                 // Get new ingestion description for storage.
                 let ingestion = match &source.data_source {
                     DataSourceDesc::Ingestion(ingestion) => ingestion
@@ -4250,8 +4261,11 @@ impl Coordinator {
                     .await
                     .expect("altering collection after txn must succeed");
 
-                self.initialize_storage_read_policies(source_ids, CompactionWindow::Default)
-                    .await;
+                self.initialize_storage_read_policies(
+                    source_ids,
+                    source_compaction_window.unwrap_or(CompactionWindow::Default),
+                )
+                .await;
             }
         }
 

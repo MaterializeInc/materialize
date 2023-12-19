@@ -3628,8 +3628,15 @@ async fn test_retain_history() {
         )
         .await
         .unwrap();
+    client
+        .batch_execute(
+            "CREATE SOURCE s_auction FROM LOAD GENERATOR AUCTION FOR ALL TABLES WITH (RETAIN HISTORY = FOR '2s')",
+        )
+        .await
+        .unwrap();
 
-    for name in ["v", "s"] {
+    // users is a subsource on the auction source.
+    for name in ["v", "s", "users"] {
         // Test compaction and querying without an index present.
         Retry::default()
             .retry_async(|_| async {
@@ -3643,7 +3650,7 @@ async fn test_retain_history() {
                 client
                     .query(
                         &format!(
-                            "SELECT * FROM {name} AS OF {}-2000",
+                            "SELECT 1 FROM {name} LIMIT 1 AS OF {}-2000",
                             ts.determination.timestamp_context.timestamp_or_default()
                         ),
                         &[],
