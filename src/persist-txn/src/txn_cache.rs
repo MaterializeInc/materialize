@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
+use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
 use mz_persist_client::fetch::LeasedBatchPart;
@@ -317,7 +318,20 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
     /// Returns the operations needing application as of the current progress.
     pub(crate) fn unapplied(&self) -> impl Iterator<Item = (&ShardId, Unapplied, &T)> {
         assert_eq!(self.only_data_id, None);
-        UnappliedIter::new(&self.unapplied_batches, &self.unapplied_registers)
+        let registers = self
+            .unapplied_registers
+            .iter()
+            .map(|(data_id, ts)| (data_id, Unapplied::RegisterForget, ts));
+        let batches = self
+            .unapplied_batches
+            .values()
+            .map(|(data_id, batch, ts)| (data_id, Unapplied::Batch(batch), ts));
+        // This will emit registers and forgets before batches at the same timestamp. Currently,
+        // this is fine because for a single data shard you can't combine registers, forgets, and
+        // batches at the same timestamp. In the future if we allow combining these operations in
+        // a single op, then we probably want to emit registers, then batches, then forgets or we
+        // can make forget exclusive in which case we'd emit it before batches.
+        registers.merge_by(batches, |(_, _, ts1), (_, _, ts2)| ts1 <= ts2)
     }
 
     /// Filters out retractions known to have made it into the txns shard.
@@ -974,71 +988,6 @@ impl<T: Timestamp + TotalOrder> DataTimes<T> {
 pub(crate) enum Unapplied<'a> {
     RegisterForget,
     Batch(&'a Vec<u8>),
-}
-
-#[derive(Debug)]
-struct UnappliedIter<'a, T>
-where
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-{
-    batches: Vec<&'a (ShardId, Vec<u8>, T)>,
-    batches_idx: usize,
-    registers: &'a VecDeque<(ShardId, T)>,
-    register_idx: usize,
-}
-
-impl<'a, T> UnappliedIter<'a, T>
-where
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-{
-    fn new(
-        batches: &'a BTreeMap<usize, (ShardId, Vec<u8>, T)>,
-        registers: &'a VecDeque<(ShardId, T)>,
-    ) -> UnappliedIter<'a, T> {
-        UnappliedIter {
-            batches: batches.values().collect(),
-            batches_idx: 0,
-            registers,
-            register_idx: 0,
-        }
-    }
-}
-
-impl<'a, T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> Iterator
-    for UnappliedIter<'a, T>
-{
-    type Item = (&'a ShardId, Unapplied<'a>, &'a T);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match (
-            self.batches.get(self.batches_idx),
-            self.registers.get(self.register_idx),
-        ) {
-            (Some((batch_id, batch, batch_ts)), Some((register_id, register_ts))) => {
-                // This will emit registers and forgets before batches at the same timestamp. Currently,
-                // this is fine because for a single data shard you can't combine registers, forgets, and
-                // batches at the same timestamp. In the future if we allow combining these operations in
-                // a single op, then we probably want to emit registers, then batches, then forgets or we
-                // can make forget exclusive in which case we'd emit it before batches.
-                if register_ts <= batch_ts {
-                    self.register_idx += 1;
-                    Some((register_id, Unapplied::RegisterForget, register_ts))
-                } else {
-                    self.batches_idx += 1;
-                    Some((batch_id, Unapplied::Batch(batch), batch_ts))
-                }
-            }
-            (Some((batch_id, batch, batch_ts)), None) => {
-                self.batches_idx += 1;
-                Some((batch_id, Unapplied::Batch(batch), batch_ts))
-            }
-            (None, Some((register_id, register_ts))) => {
-                self.register_idx += 1;
-                Some((register_id, Unapplied::RegisterForget, register_ts))
-            }
-            (None, None) => None,
-        }
-    }
 }
 
 #[cfg(test)]
