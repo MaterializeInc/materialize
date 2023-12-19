@@ -659,3 +659,94 @@ simple conn=mz_system,user=mz_system
 ALTER ROLE parker SET metrics_retention TO 10;
 ----
 db error: ERROR: unrecognized configuration parameter "metrics_retention"
+
+# Role defaults should override a change to the system default.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET cluster TO new_system_default
+----
+COMPLETE 0
+
+simple conn=joe_1,user=joe
+SHOW cluster;
+----
+will_work
+COMPLETE 1
+
+# Reset the role default, so new sessions should get the system default.
+simple conn=joe_1,user=joe
+ALTER ROLE joe RESET cluster;
+----
+COMPLETE 0
+
+simple conn=joe_2,user=joe
+SHOW cluster;
+----
+new_system_default
+COMPLETE 1
+
+simple conn=joe_2,user=joe
+BEGIN;
+----
+COMPLETE 0
+
+simple conn=joe_2,user=joe
+SET LOCAL cluster TO 'txn_specific_cluster';
+----
+COMPLETE 0
+
+simple conn=joe_2,user=joe
+SHOW cluster;
+----
+txn_specific_cluster
+COMPLETE 1
+
+simple conn=joe_2,user=joe
+COMMIT;
+----
+COMPLETE 0
+
+simple conn=joe_2,user=joe
+SHOW cluster;
+----
+new_system_default
+COMPLETE 1
+
+simple conn=joe_2,user=joe
+BEGIN;
+----
+COMPLETE 0
+
+simple conn=joe_2,user=joe
+SET cluster TO 'foo_bar';
+----
+COMPLETE 0
+
+simple conn=joe_2,user=joe
+SHOW cluster;
+----
+foo_bar
+COMPLETE 1
+
+simple conn=joe_2,user=joe
+ROLLBACK;
+----
+COMPLETE 0
+
+simple conn=joe_2,user=joe
+SHOW cluster;
+----
+new_system_default
+COMPLETE 1
+
+# Not all session variables can be overriden.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET server_version TO this_wont_work
+----
+db error: ERROR: unrecognized configuration parameter "server_version"
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET emit_trace_id_notice TO true
+----
+db error: ERROR: unrecognized configuration parameter "emit_trace_id_notice"

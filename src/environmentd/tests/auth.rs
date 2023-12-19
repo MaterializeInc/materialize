@@ -1941,3 +1941,120 @@ async fn test_refresh_task_metrics() {
 
     assert_eq!(result, Ok(()));
 }
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_superuser_can_alter_cluster() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let metrics_registry = MetricsRegistry::new();
+
+    let tenant_id = Uuid::new_v4();
+    let client_id = Uuid::new_v4();
+    let secret = Uuid::new_v4();
+    let admin_client_id = Uuid::new_v4();
+    let admin_secret = Uuid::new_v4();
+
+    let frontegg_user = "user@_.com";
+    let admin_frontegg_user = "admin@_.com";
+
+    let admin_role = "mzadmin";
+
+    let users = BTreeMap::from([
+        (
+            (client_id.to_string(), secret.to_string()),
+            frontegg_user.to_string(),
+        ),
+        (
+            (admin_client_id.to_string(), admin_secret.to_string()),
+            admin_frontegg_user.to_string(),
+        ),
+    ]);
+    let roles = BTreeMap::from([
+        (frontegg_user.to_string(), Vec::new()),
+        (
+            admin_frontegg_user.to_string(),
+            vec![admin_role.to_string()],
+        ),
+    ]);
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let now = SYSTEM_TIME.clone();
+
+    let frontegg_server = FronteggMockServer::start(
+        None,
+        encoding_key,
+        tenant_id,
+        users,
+        roles,
+        now.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
+    )
+    .unwrap();
+
+    let password_prefix = "mzp_";
+    let frontegg_auth = FronteggAuthentication::new(
+        FronteggConfig {
+            admin_api_token_url: frontegg_server.url.clone(),
+            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            tenant_id: Some(tenant_id),
+            now,
+            admin_role: admin_role.to_string(),
+        },
+        mz_frontegg_auth::Client::default(),
+        &metrics_registry,
+    );
+
+    let admin_frontegg_password = format!("{password_prefix}{admin_client_id}{admin_secret}");
+    let frontegg_user_password = format!("{password_prefix}{client_id}{secret}");
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_frontegg(&frontegg_auth)
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
+
+    let tls = make_pg_tls(|b| Ok(b.set_verify(SslVerifyMode::NONE)));
+    let superuser = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(admin_frontegg_user)
+        .password(&admin_frontegg_password)
+        .with_tls(tls.clone())
+        .await
+        .unwrap();
+
+    let default_cluster = superuser
+        .query_one("SHOW cluster", &[])
+        .await
+        .unwrap()
+        .get::<_, String>(0);
+    assert_eq!(default_cluster, "default");
+
+    // External admins should be able to modify the system default cluster.
+    superuser
+        .execute("ALTER SYSTEM SET cluster TO foo_bar", &[])
+        .await
+        .unwrap();
+
+    // New system defaults only take effect for new sessions.
+    let regular_user = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(frontegg_user)
+        .password(&frontegg_user_password)
+        .with_tls(tls)
+        .await
+        .unwrap();
+
+    let new_default_cluster = regular_user
+        .query_one("SHOW cluster", &[])
+        .await
+        .unwrap()
+        .get::<_, String>(0);
+    assert_eq!(new_default_cluster, "foo_bar");
+}

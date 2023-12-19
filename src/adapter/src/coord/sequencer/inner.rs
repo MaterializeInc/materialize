@@ -59,9 +59,10 @@ use mz_sql::plan::{
     PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen, SideEffectingFunc,
     SourceSinkClusterConfig, UpdatePrivilege, VariableValue,
 };
+use mz_sql::session::user::UserKind;
 use mz_sql::session::vars::{
-    IsolationLevel, OwnedVarInput, SessionVars, Var, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
-    ENABLE_RBAC_CHECKS, SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME,
+    IsolationLevel, OwnedVarInput, SessionVars, VarInput, CLUSTER_VAR_NAME, DATABASE_VAR_NAME,
+    SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME,
 };
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -5675,34 +5676,36 @@ impl Coordinator {
         session: &Session,
         var_name: Option<&str>,
     ) -> Result<(), AdapterError> {
-        if session.user().is_system_user()
-            || (var_name == Some(ENABLE_RBAC_CHECKS.name()) && session.is_superuser())
-        {
-            match var_name {
-                Some(name) => {
-                    // In lieu of plumbing the user to all system config functions, just check that the var is
-                    // visible.
-                    let var = self.catalog().system_config().get(name)?;
-                    var.visible(session.user(), Some(self.catalog().system_config()))?;
-                    Ok(())
-                }
-                None => Ok(()),
+        match (session.user().kind(), var_name) {
+            // Only internal superusers can reset all system variables.
+            (UserKind::Superuser, None) if session.user().is_internal() => Ok(()),
+            // Whether or not a variable can be modified depends if we're an internal superuser.
+            (UserKind::Superuser, Some(name))
+                if session.user().is_internal()
+                    || self.catalog().system_config().user_modifiable(name) =>
+            {
+                // In lieu of plumbing the user to all system config functions, just check that
+                // the var is visible.
+                let var = self.catalog().system_config().get(name)?;
+                var.visible(session.user(), Some(self.catalog().system_config()))?;
+                Ok(())
             }
-        } else if var_name == Some(ENABLE_RBAC_CHECKS.name()) {
-            Err(AdapterError::Unauthorized(
-                rbac::UnauthorizedError::Superuser {
-                    action: format!(
-                        "toggle the '{}' system configuration parameter",
-                        ENABLE_RBAC_CHECKS.name()
-                    ),
-                },
-            ))
-        } else {
-            Err(AdapterError::Unauthorized(
+            // If we're not a superuser, but the variable is user modifiable, indicate they can use
+            // session variables.
+            (UserKind::Regular, Some(name))
+                if self.catalog().system_config().user_modifiable(name) =>
+            {
+                Err(AdapterError::Unauthorized(
+                    rbac::UnauthorizedError::Superuser {
+                        action: format!("toggle the '{name}' system configuration parameter"),
+                    },
+                ))
+            }
+            _ => Err(AdapterError::Unauthorized(
                 rbac::UnauthorizedError::MzSystem {
                     action: "alter system".into(),
                 },
-            ))
+            )),
         }
     }
 
