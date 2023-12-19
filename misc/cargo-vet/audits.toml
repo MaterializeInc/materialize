@@ -55,6 +55,11 @@ who = "matthewarthur <matthewleearthur@gmail.com>"
 criteria = "maintained-and-necessary"
 version = "0.37.25"
 
+[[audits.rustix]]
+who = "matthewarthur <matthewleearthur@gmail.com>"
+criteria = "maintained-and-necessary"
+version = "0.37.25"
+
 [[audits.timely]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
