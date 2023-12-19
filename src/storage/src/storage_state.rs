@@ -93,8 +93,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_client::client::{
-    RunIngestionCommand, SinkStatisticsUpdate, SourceStatisticsUpdate, StatusUpdate,
-    StorageCommand, StorageResponse,
+    RunIngestionCommand, StatusUpdate, StorageCommand, StorageResponse,
 };
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
@@ -116,7 +115,7 @@ use crate::internal_control::{
     self, DataflowParameters, InternalCommandSender, InternalStorageCommand,
 };
 use crate::metrics::StorageMetrics;
-use crate::statistics::{SinkStatisticsMetrics, SourceStatisticsMetrics, StorageStatistics};
+use crate::statistics::{SinkStatistics, SourceStatistics};
 use crate::storage_state::async_storage_worker::{AsyncStorageWorker, AsyncStorageWorkerResponse};
 
 pub mod async_storage_worker;
@@ -292,11 +291,9 @@ pub struct StorageState {
 
     /// Stats objects shared with operators to allow them to update the metrics
     /// we report in `StatisticsUpdates` responses.
-    pub source_statistics:
-        BTreeMap<GlobalId, StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics>>,
+    pub source_statistics: BTreeMap<GlobalId, SourceStatistics>,
     /// The same as `source_statistics`, but for sinks.
-    pub sink_statistics:
-        BTreeMap<GlobalId, StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>>,
+    pub sink_statistics: BTreeMap<GlobalId, SinkStatistics>,
 
     /// Status updates reported by health operators.
     ///
@@ -750,15 +747,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 );
 
                 for (export_id, export) in ingestion_description.source_exports.iter() {
-                    // This is a separate line cause rustfmt :(
-                    let stats =
-                        StorageStatistics::<SourceStatisticsUpdate, SourceStatisticsMetrics>::new(
-                            *export_id,
-                            self.storage_state.timely_worker_index,
-                            &self.storage_state.metrics.source_statistics,
-                            ingestion_id,
-                            &export.storage_metadata.data_shard,
-                        );
+                    let stats = SourceStatistics::new(
+                        *export_id,
+                        self.storage_state.timely_worker_index,
+                        &self.storage_state.metrics.source_statistics,
+                        ingestion_id,
+                        &export.storage_metadata.data_shard,
+                    );
                     self.storage_state
                         .source_statistics
                         .insert(*export_id, stats);
@@ -833,8 +828,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     sink_write_frontier.clear();
                     sink_write_frontier.insert(mz_repr::Timestamp::minimum());
                 }
-                // This is a separate line cause rustfmt :(
-                let stats = StorageStatistics::<SinkStatisticsUpdate, SinkStatisticsMetrics>::new(
+                let stats = SinkStatistics::new(
                     sink_id,
                     self.storage_state.timely_worker_index,
                     &self.storage_state.metrics.sink_statistics,

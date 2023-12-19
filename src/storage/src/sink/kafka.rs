@@ -30,7 +30,6 @@ use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::task;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_ssh_util::tunnel::SshTunnelStatus;
-use mz_storage_client::client::SinkStatisticsUpdate;
 use mz_storage_client::sink::progress_key::ProgressKey;
 use mz_storage_client::sink::ProgressRecord;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -58,7 +57,7 @@ use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespac
 use crate::metrics::sink::SinkMetrics;
 use crate::metrics::StorageMetrics;
 use crate::render::sinks::SinkRender;
-use crate::statistics::{SinkStatisticsMetrics, StorageStatistics};
+use crate::statistics::SinkStatistics;
 use crate::storage_state::StorageState;
 
 // 30s is a good maximum backoff for network operations. Long enough to reduce
@@ -836,7 +835,7 @@ fn kafka<G>(
     as_of: SinkAsOf,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: &StorageMetrics,
-    sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
+    sink_statistics: SinkStatistics,
     storage_configuration: &StorageConfiguration,
 ) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>)
 where
@@ -898,7 +897,7 @@ fn produce_to_kafka<G>(
     shared_gate_ts: Rc<Cell<Option<Timestamp>>>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: &StorageMetrics,
-    sink_statistics: StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>,
+    sink_statistics: SinkStatistics,
     storage_configuration: StorageConfiguration,
 ) -> (Stream<G, HealthStatusMessage>, PressOnDropButton)
 where

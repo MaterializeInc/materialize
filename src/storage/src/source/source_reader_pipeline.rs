@@ -49,7 +49,6 @@ use mz_ore::now::NowFn;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
-use mz_storage_client::client::SourceStatisticsUpdate;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::SourceError;
@@ -81,9 +80,7 @@ use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, Recloc
 use crate::source::types::{
     MaybeLength, SourceMessage, SourceOutput, SourceReaderError, SourceRender,
 };
-use crate::statistics::{SourceStatisticsMetrics, StorageStatistics};
-
-pub type SourceStatistics = StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics>;
+use crate::statistics::SourceStatistics;
 
 /// Shared configuration information for all source types. This is used in the
 /// `create_raw_source` functions, which produce raw sources.

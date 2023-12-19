@@ -269,7 +269,13 @@ impl<Stats: Clone, Metrics> StorageStatistics<Stats, Metrics> {
     }
 }
 
-impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
+/// Statistics maintained for sources.
+pub type SourceStatistics = StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics>;
+
+/// Statistics maintained for sinks.
+pub type SinkStatistics = StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics>;
+
+impl SourceStatistics {
     pub(crate) fn new(
         id: GlobalId,
         worker_id: usize,
@@ -422,7 +428,7 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
     }
 }
 
-impl StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics> {
+impl SinkStatistics {
     pub(crate) fn new(id: GlobalId, worker_id: usize, metrics: &SinkStatisticsMetricDefs) -> Self {
         Self {
             stats: Rc::new(RefCell::new((
