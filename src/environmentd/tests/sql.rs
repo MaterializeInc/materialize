@@ -2514,7 +2514,6 @@ fn test_isolation_level_notice() {
 }
 
 #[test] // allow(test-attribute)
-#[ignore] // TODO: Reenable when #23396 is fixed
 fn test_emit_tracing_notice() {
     let server = test_util::TestHarness::default()
         .with_enable_tracing(true)
