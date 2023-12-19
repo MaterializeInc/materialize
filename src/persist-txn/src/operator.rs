@@ -151,7 +151,7 @@ where
 {
     let worker_idx = scope.index();
     let chosen_worker = usize::cast_from(name.hashed()) % scope.peers();
-    let name = format!("txns_progress_source({})", name);
+    let name = format!("txns_progress_source({}) [{}]", name, unique_id);
     let mut builder = AsyncOperatorBuilder::new(name.clone(), scope);
     let name = format!("{} [{}]", name, unique_id);
     let (mut txns_output, txns_stream) = builder.new_output();
@@ -221,7 +221,7 @@ where
     C: TxnsCodec,
     G: Scope<Timestamp = T>,
 {
-    let name = format!("txns_progress_frontiers({})", name);
+    let name = format!("txns_progress_frontiers({}) [{}]", name, unique_id);
     let mut builder = AsyncOperatorBuilder::new(name.clone(), passthrough.scope());
     let name = format!(
         "{} [{}] {}/{}",
@@ -235,6 +235,7 @@ where
     let mut passthrough_input =
         builder.new_input_connection(&passthrough, Pipeline, vec![Antichain::new()]);
 
+    let (worker_idx, num_workers) = (passthrough.scope().index(), passthrough.scope().peers());
     let shutdown_button = builder.build(move |capabilities| async move {
         let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
         let client = client.await;
@@ -259,9 +260,11 @@ where
             .expect("schema shouldn't change");
         let empty_to = snap.unblock_read(data_write).await;
         debug!(
-            "{} {:.9} starting as_of={:?} empty_to={:?}",
+            "{} {:.9} {}/{} starting as_of={:?} empty_to={:?}",
             name,
             data_id.to_string(),
+            worker_idx,
+            num_workers,
             as_of,
             empty_to.elements()
         );
@@ -286,9 +289,11 @@ where
                     Event::Data(_data_cap, data) => {
                         for data in data.drain(..) {
                             debug!(
-                                "{} {:.9} emitting data {:?}",
+                                "{} {:.9} {}/{} emitting data {:?}",
                                 name,
                                 data_id.to_string(),
+                                worker_idx,
+                                num_workers,
                                 data
                             );
                             passthrough_output.give(&cap, data).await;
@@ -307,9 +312,11 @@ where
                         if &output_progress_exclusive < input_progress_exclusive {
                             output_progress_exclusive.clone_from(input_progress_exclusive);
                             debug!(
-                                "{} {:.9} downgrading cap to {:?}",
+                                "{} {:.9} {}/{} downgrading cap to {:?}",
                                 name,
                                 data_id.to_string(),
+                                worker_idx,
+                                num_workers,
                                 output_progress_exclusive
                             );
                             cap.downgrade(&output_progress_exclusive);
@@ -331,9 +338,11 @@ where
                     .state
                     .data_listen_next(&data_id, output_progress_exclusive.clone());
                 debug!(
-                    "{} {:.9} data_listen_next at {:?}({:?}): {:?}",
+                    "{} {:.9} {}/{} data_listen_next at {:?}({:?}): {:?}",
                     name,
                     data_id.to_string(),
+                    worker_idx,
+                    num_workers,
                     read_data_to.elements(),
                     output_progress_exclusive,
                     data_listen_next,
@@ -373,9 +382,11 @@ where
                         assert!(output_progress_exclusive < new_progress);
                         output_progress_exclusive = new_progress;
                         trace!(
-                            "{} {:.9} downgrading cap to {:?}",
+                            "{} {:.9} {}/{} downgrading cap to {:?}",
                             name,
                             data_id.to_string(),
+                            worker_idx,
+                            num_workers,
                             output_progress_exclusive
                         );
                         cap.downgrade(&output_progress_exclusive);
