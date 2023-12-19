@@ -71,6 +71,9 @@ fish          fish    1000
 birdmore      geese   56
 mammalmore    moose   2
 
+# statistics are only populated every minute by default
+$ set-sql-timeout duration=2minutes
+
 # Also test a source with multiple sub-sources.
 > CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
@@ -167,5 +170,20 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
   GROUP BY s.name
   ORDER BY s.name
 upsert true 10 "${updates-committed}" "${updates-committed}" true true 2
+
+# check pre-aggregated view
+> SELECT s.name,
+    u.snapshot_committed,
+    u.messages_received,
+    u.updates_staged,
+    u.updates_committed,
+    u.bytes_received > 0,
+    u.envelope_state_bytes < ${state-bytes},
+    u.envelope_state_records,
+    u.rehydration_latency IS NOT NULL
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics_agg_view u ON s.id = u.id
+  WHERE s.name IN ('upsert')
+upsert true 10 "${updates-committed}" "${updates-committed}" true true 2 true
 
 > DROP SOURCE upsert

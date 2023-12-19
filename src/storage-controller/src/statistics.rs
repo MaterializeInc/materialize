@@ -65,7 +65,7 @@ where
     T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
 {
     // TODO(guswynn): Should this be configurable? Maybe via LaunchDarkly?
-    const STATISTICS_INTERVAL: Duration = Duration::from_secs(30);
+    const STATISTICS_INTERVAL: Duration = Duration::from_secs(60);
 
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
 

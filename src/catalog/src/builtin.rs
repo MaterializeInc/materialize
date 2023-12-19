@@ -2828,7 +2828,7 @@ pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSourc
         .with_column("envelope_state_bytes", ScalarType::UInt64.nullable(false))
         .with_column("envelope_state_records", ScalarType::UInt64.nullable(false))
         .with_column("rehydration_latency", ScalarType::Interval.nullable(true)),
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
     sensitivity: DataSensitivity::Public,
 });
 pub static MZ_SINK_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -2842,7 +2842,7 @@ pub static MZ_SINK_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource 
         .with_column("messages_committed", ScalarType::UInt64.nullable(false))
         .with_column("bytes_staged", ScalarType::UInt64.nullable(false))
         .with_column("bytes_committed", ScalarType::UInt64.nullable(false)),
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
     sensitivity: DataSensitivity::Public,
 });
 
@@ -5618,7 +5618,7 @@ sources AS (
         r.id AS replica_id,
         ss.rehydration_latency IS NOT NULL AS hydrated
     FROM mz_sources s
-    LEFT JOIN mz_internal.mz_source_statistics ss USING (id)
+    LEFT JOIN mz_internal.mz_source_statistics_agg_view ss USING (id)
     JOIN mz_cluster_replicas r
         ON (r.cluster_id = s.cluster_id)
 ),
@@ -5947,20 +5947,62 @@ ON mz_internal.mz_sink_status_history (sink_id)",
     is_retained_metrics_object: false,
 };
 
+pub const MZ_SOURCE_STATISTICS_AGG_VIEW: BuiltinView = BuiltinView {
+    name: "mz_source_statistics_agg_view",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: None,
+    // everything but `params`
+    sql: "
+SELECT
+    id,
+    bool_and(snapshot_committed) as snapshot_committed,
+    SUM(messages_received) AS messages_received,
+    SUM(bytes_received) AS bytes_received,
+    SUM(updates_staged) AS updates_staged,
+    SUM(updates_committed) AS updates_committed,
+    SUM(envelope_state_bytes) AS envelope_state_bytes,
+    SUM(envelope_state_records) AS envelope_state_records,
+    -- Ensure we aggregate to NULL when not all workers are done rehydrating.
+    CASE
+        WHEN bool_or(rehydration_latency IS NULL) THEN NULL
+        ELSE MAX(rehydration_latency)
+    END AS rehydration_latency
+FROM mz_internal.mz_source_statistics
+GROUP BY id",
+    sensitivity: DataSensitivity::Public,
+};
+
 pub const MZ_SOURCE_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_source_statistics_ind",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "IN CLUSTER mz_introspection
-ON mz_internal.mz_source_statistics (id)",
-    is_retained_metrics_object: false,
+ON mz_internal.mz_source_statistics_agg_view (id)",
+    is_retained_metrics_object: true,
+};
+
+pub const MZ_SINK_STATISTICS_AGG_VIEW: BuiltinView = BuiltinView {
+    name: "mz_sink_statistics_agg_view",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: None,
+    // everything but `params`
+    sql: "
+SELECT
+    id,
+    SUM(messages_staged) AS messages_staged,
+    SUM(messages_committed) AS messages_committed,
+    SUM(bytes_staged) AS bytes_staged,
+    SUM(bytes_committed) AS bytes_committed
+FROM mz_internal.mz_sink_statistics
+GROUP BY id",
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SINK_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_sink_statistics_ind",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "IN CLUSTER mz_introspection
-ON mz_internal.mz_sink_statistics (id)",
-    is_retained_metrics_object: false,
+ON mz_internal.mz_sink_statistics_agg_view (id)",
+    is_retained_metrics_object: true,
 };
 
 pub const MZ_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
@@ -6421,6 +6463,10 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_STORAGE_SHARDS),
         Builtin::Source(&MZ_SOURCE_STATISTICS),
         Builtin::Source(&MZ_SINK_STATISTICS),
+        Builtin::View(&MZ_SOURCE_STATISTICS_AGG_VIEW),
+        Builtin::Index(&MZ_SOURCE_STATISTICS_IND),
+        Builtin::View(&MZ_SINK_STATISTICS_AGG_VIEW),
+        Builtin::Index(&MZ_SINK_STATISTICS_IND),
         Builtin::View(&MZ_STORAGE_USAGE),
         Builtin::Source(&MZ_FRONTIERS),
         Builtin::View(&MZ_GLOBAL_FRONTIERS),
@@ -6458,8 +6504,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_SOURCE_STATUS_HISTORY_IND),
         Builtin::Index(&MZ_SINK_STATUSES_IND),
         Builtin::Index(&MZ_SINK_STATUS_HISTORY_IND),
-        Builtin::Index(&MZ_SOURCE_STATISTICS_IND),
-        Builtin::Index(&MZ_SINK_STATISTICS_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICAS_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_SIZES_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_STATUSES_IND),
