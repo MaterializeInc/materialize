@@ -614,6 +614,8 @@ impl Coordinator {
         let catalog = self.catalog();
         let catalog = catalog.for_session(ctx.session());
         let original_stmt = Arc::clone(&stmt);
+        // `resolved_ids` should be derivable from `stmt`. If `stmt` is transformed to remove/add
+        // IDs, then `resolved_ids` should be updated to also remove/add those IDs.
         let (stmt, resolved_ids) = match mz_sql::names::resolve(&catalog, (*stmt).clone()) {
             Ok(resolved) => resolved,
             Err(e) => return ctx.retire(Err(e.into())),
