@@ -266,6 +266,7 @@ steps:
 
   - id: legacy-upgrade
     label: Legacy upgrade tests
+    depends_on: build-x86_64
     timeout_in_minutes: 60
     artifact_paths: junit_*.xml
     plugins:
