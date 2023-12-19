@@ -265,13 +265,14 @@ steps:
       queue: linux-x86_64
 
   - id: legacy-upgrade
-    label: Legacy upgrade tests
+    label: Legacy upgrade tests (docs-based)
     depends_on: build-x86_64
     timeout_in_minutes: 60
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: legacy-upgrade
+          args: ["--versions-source=docs"]
     agents:
       queue: linux-x86_64
 
