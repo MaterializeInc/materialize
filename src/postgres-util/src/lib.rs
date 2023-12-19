@@ -79,15 +79,6 @@
 
 use tracing::warn;
 
-macro_rules! bail_generic {
-    ($fmt:expr, $($arg:tt)*) => {
-        return Err(PostgresError::Generic(anyhow::anyhow!($fmt, $($arg)*)))
-    };
-    ($err:expr $(,)?) => {
-        return Err(PostgresError::Generic(anyhow::anyhow!($err)))
-    };
-}
-
 #[cfg(feature = "replication")]
 pub mod replication;
 #[cfg(feature = "replication")]
