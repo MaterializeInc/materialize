@@ -264,6 +264,16 @@ steps:
     agents:
       queue: linux-x86_64
 
+  - id: legacy-upgrade
+    label: Legacy upgrade tests
+    timeout_in_minutes: 60
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: legacy-upgrade
+    agents:
+      queue: linux-x86_64
+
   - group: "Debezium tests"
     key: debezium-tests
     steps:

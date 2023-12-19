@@ -23,10 +23,7 @@ from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
-from materialize.version_list import (
-    get_all_published_mz_versions,
-    get_published_minor_mz_versions,
-)
+from materialize.version_list import VersionsFromDocs
 
 mz_options: dict[MzVersion, str] = {}
 
@@ -69,12 +66,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    tested_versions = get_published_minor_mz_versions(limit=2)
-    all_versions_ascending = get_all_published_mz_versions(newest_first=False)
+    version_list = VersionsFromDocs()
+    all_versions = version_list.all_versions()
 
-    for tested_version in tested_versions:
-        priors = [v for v in all_versions_ascending if v <= tested_version]
-        test_upgrade_from_version(c, f"{tested_version}", priors, filter=args.filter)
+    tested_versions = version_list.minor_versions()[-2:]
+
+    for version in tested_versions:
+        priors = [v for v in all_versions if v <= version]
+        test_upgrade_from_version(c, f"{version}", priors, filter=args.filter)
 
     test_upgrade_from_version(c, "current_source", priors=[], filter=args.filter)
 
