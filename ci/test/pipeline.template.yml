@@ -265,7 +265,7 @@ steps:
       queue: linux-x86_64
 
   - id: legacy-upgrade
-    label: Legacy upgrade tests (docs-based)
+    label: Legacy upgrade tests (last version from docs)
     depends_on: build-x86_64
     timeout_in_minutes: 60
     artifact_paths: junit_*.xml
