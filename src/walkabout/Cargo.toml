@@ -16,7 +16,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 
 [dev-dependencies]
 datadriven = "0.6.0"
-tempfile = "3.2.0"
+tempfile = "3.8.1"
 
 [features]
 default = ["workspace-hack"]

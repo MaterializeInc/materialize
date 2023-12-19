@@ -166,8 +166,8 @@ async fn run() -> anyhow::Result<()> {
         })
         .collect::<String>();
 
-    let config = aws_config::load_from_env().await;
-    let client = mz_aws_s3_util::new_client(&config);
+    let config = mz_aws_util::defaults().load().await;
+    let client = mz_aws_util::s3::new_client(&config);
 
     let first_object_key = format!("{}{:>05}", args.key_prefix, 0);
 

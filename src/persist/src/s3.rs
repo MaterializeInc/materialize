@@ -18,11 +18,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use aws_config::default_provider::{credentials, region};
-use aws_config::meta::region::ProvideRegion;
 use aws_config::sts::AssumeRoleProvider;
 use aws_config::timeout::TimeoutConfig;
-use aws_credential_types::provider::SharedCredentialsProvider;
 use aws_credential_types::Credentials;
 use aws_sdk_s3::config::{AsyncSleep, Sleep};
 use aws_sdk_s3::error::SdkError;
@@ -123,21 +120,20 @@ impl S3BlobConfig {
         knobs: Box<dyn BlobKnobs>,
         metrics: S3BlobMetrics,
     ) -> Result<Self, Error> {
-        let region = match region {
-            Some(region_name) => Some(Region::new(region_name)),
-            None => region::default_provider().region().await,
+        let mut loader = mz_aws_util::defaults();
+
+        if let Some(region) = region {
+            loader = loader.region(Region::new(region));
         };
 
-        let mut loader = aws_config::from_env().region(region.clone());
-
         if let Some(role_arn) = role_arn {
-            let mut role_provider = AssumeRoleProvider::builder(role_arn).session_name("persist");
-            if let Some(region) = region {
-                role_provider = role_provider.region(region);
-            }
-            let default_provider =
-                SharedCredentialsProvider::new(credentials::default_provider().await);
-            loader = loader.credentials_provider(role_provider.build(default_provider));
+            let assume_role_sdk_config = mz_aws_util::defaults().load().await;
+            let role_provider = AssumeRoleProvider::builder(role_arn)
+                .configure(&assume_role_sdk_config)
+                .session_name("persist")
+                .build()
+                .await;
+            loader = loader.credentials_provider(role_provider);
         }
 
         if let Some((access_key_id, secret_access_key)) = credentials {
@@ -170,7 +166,7 @@ impl S3BlobConfig {
                 .build(),
         );
 
-        let client = mz_aws_s3_util::new_client(&loader.load().await);
+        let client = mz_aws_util::s3::new_client(&loader.load().await);
         Ok(S3BlobConfig {
             metrics,
             client,
@@ -380,14 +376,14 @@ impl Blob for S3Blob {
 
         // Get the remaining number of parts
         let num_parts = match first_part.parts_count() {
-            // For a non-multipart upload, parts_count will be 0. The rest of  the code works
+            // For a non-multipart upload, parts_count will be None. The rest of  the code works
             // perfectly well if we just pretend this was a multipart upload of 1 part.
-            0 => 1,
+            None => 1,
             // For any positive value greater than 0, just return it.
-            parts @ 1.. => parts,
-            // A negative value is invalid.
-            bad => {
-                assert!(bad < 0);
+            Some(parts @ 1..) => parts,
+            // A non-positive value is invalid.
+            Some(bad) => {
+                assert!(bad <= 0);
                 return Err(anyhow!("unexpected number of s3 object parts: {}", bad).into());
             }
         };
@@ -501,13 +497,17 @@ impl Blob for S3Blob {
                 for object in contents.iter() {
                     if let Some(key) = object.key.as_ref() {
                         if let Some(key) = key.strip_prefix(&strippable_root_prefix) {
-                            f(BlobMetadata {
-                                key,
-                                size_in_bytes: object
-                                    .size
+                            let size_in_bytes = match object.size {
+                                None => {
+                                    return Err(ExternalError::from(anyhow!(
+                                        "object missing size: {key}"
+                                    )))
+                                }
+                                Some(size) => size
                                     .try_into()
                                     .expect("file in S3 cannot have negative size"),
-                            });
+                            };
+                            f(BlobMetadata { key, size_in_bytes });
                         } else {
                             return Err(ExternalError::from(anyhow!(
                                 "found key with invalid prefix: {}",
@@ -559,7 +559,16 @@ impl Blob for S3Blob {
             .send()
             .await;
         let size_bytes = match head_res {
-            Ok(x) => u64::try_from(x.content_length).expect("file in S3 cannot have negative size"),
+            Ok(x) => match x.content_length {
+                None => {
+                    return Err(ExternalError::from(anyhow!(
+                        "s3 delete content length was none"
+                    )))
+                }
+                Some(content_length) => {
+                    u64::try_from(content_length).expect("file in S3 cannot have negative size")
+                }
+            },
             Err(SdkError::ServiceError(err)) if err.err().is_not_found() => return Ok(None),
             Err(err) => return Err(ExternalError::from(anyhow!("s3 delete head err: {}", err))),
         };
@@ -597,14 +606,13 @@ impl Blob for S3Blob {
 
             let current_delete = list_res
                 .delete_markers()
-                .unwrap_or(&[])
                 .into_iter()
                 .filter(|d| {
                     // We need to check that any versions we're looking at have the right key,
                     // not just a key with our key as a prefix.
                     d.key() == Some(path.as_str())
                 })
-                .find(|d| d.is_latest())
+                .find(|d| d.is_latest().unwrap_or(false))
                 .and_then(|d| d.version_id());
 
             if let Some(version) = current_delete {
@@ -617,14 +625,16 @@ impl Blob for S3Blob {
                     .send()
                     .await
                     .map_err(|err| Error::from(err.to_string()))?;
-                assert!(deleted.delete_marker(), "deleting a delete marker");
+                assert!(
+                    deleted.delete_marker().unwrap_or(false),
+                    "deleting a delete marker"
+                );
             } else {
                 let has_current_version = list_res
                     .versions()
-                    .unwrap_or(&[])
                     .into_iter()
                     .filter(|d| d.key() == Some(path.as_str()))
-                    .any(|v| v.is_latest());
+                    .any(|v| v.is_latest().unwrap_or(false));
 
                 if !has_current_version {
                     return Err(Determinate::new(anyhow!(

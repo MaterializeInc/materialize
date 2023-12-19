@@ -330,7 +330,7 @@ async fn main() {
         Some(region) => {
             // Standard AWS region without a custom endpoint. Try to find actual
             // AWS credentials.
-            let config = aws_config::from_env()
+            let config = mz_aws_util::defaults()
                 .region(Region::new(region))
                 .load()
                 .await;
@@ -356,7 +356,7 @@ async fn main() {
             let endpoint = args
                 .aws_endpoint
                 .unwrap_or_else(|| "http://localhost:4566".parse().unwrap());
-            let config = aws_config::from_env()
+            let config = mz_aws_util::defaults()
                 .region(Region::new("us-east-1"))
                 .credentials_provider(Credentials::from_keys(
                     args.aws_access_key_id,
