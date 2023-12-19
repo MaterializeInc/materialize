@@ -16,6 +16,11 @@ set -euo pipefail
 export BUILDKITE_REPO_REF="${BUILDKITE_REPO_REF:-origin}"
 export BUILDKITE_PULL_REQUEST_BASE_BRANCH="${BUILDKITE_PULL_REQUEST_BASE_BRANCH:-main}"
 
+if [[ "${BUILDKITE:-}" != "true" ]]; then
+  # when running locally, we origin may point to a fork of the repo but we want the mz repo
+  BUILDKITE_REPO_REF=$(git remote -v | grep "MaterializeInc/materialize" | grep "fetch" | head -n1 | cut -f1)
+fi
+
 configure_git_user_if_in_buildkite() {
   if [[ "${BUILDKITE:-}" == "true" ]]; then
     ci_collapsed_heading "Configure git"
