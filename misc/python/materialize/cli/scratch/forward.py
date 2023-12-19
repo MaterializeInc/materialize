@@ -26,6 +26,10 @@ def run(args: argparse.Namespace) -> None:
     instance = boto3.resource("ec2").Instance(args.instance)
     ssh_args = []
     for port in args.ports:
-        ssh_args.extend(["-L", f"{port}:127.0.0.1:{port}"])
+        ports = port.split(":")
+        assert len(ports) == 2
+        local_port = ports[0]
+        host_port = ports[1]
+        ssh_args.extend(["-L", f"{local_port}:127.0.0.1:{host_port}"])
 
     mssh(instance, "sleep infinity", extra_ssh_args=ssh_args)
