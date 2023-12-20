@@ -112,7 +112,7 @@ true
     FROM mz_sinks
     JOIN mz_internal.mz_sink_status_history ON mz_sinks.id = mz_sink_status_history.sink_id
     WHERE name = 'broken2'
-    AND error ILIKE '%Unable to fetch metadata about progress topic%Topic authorization failed%'
+    AND error ILIKE '%kafka: error registering kafka progress topic for sink%Topic authorization failed%'
   )
 true
 > DROP SINK broken2

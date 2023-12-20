@@ -40,7 +40,6 @@ use mz_storage_operators::metrics::BackpressureMetrics;
 pub mod decode;
 pub mod kafka;
 pub mod postgres;
-pub mod sink;
 pub mod source;
 pub mod upsert;
 
@@ -56,7 +55,6 @@ pub mod upsert;
 pub struct StorageMetrics {
     pub(crate) decode_defs: decode::DecodeMetricDefs,
     pub(crate) source_defs: source::SourceMetricDefs,
-    pub(crate) sink_defs: sink::SinkMetricDefs,
 
     // Defined in the `statistics` module, as they are kept in sync with
     // user-facing data.
@@ -70,7 +68,6 @@ impl StorageMetrics {
         Self {
             decode_defs: decode::DecodeMetricDefs::register_with(registry),
             source_defs: source::SourceMetricDefs::register_with(registry),
-            sink_defs: sink::SinkMetricDefs::register_with(registry),
             source_statistics: SourceStatisticsMetricDefs::register_with(registry),
             sink_statistics: SinkStatisticsMetricDefs::register_with(registry),
         }
@@ -136,16 +133,6 @@ impl StorageMetrics {
             data_shard,
             output_index,
         )
-    }
-
-    /// Get a `SinkMetrics` for the given connection, id, and worker id.
-    pub(crate) fn get_sink_metrics(
-        &self,
-        topic_name: &str,
-        id: GlobalId,
-        worker_id: usize,
-    ) -> sink::SinkMetrics {
-        sink::SinkMetrics::new(&self.sink_defs, topic_name, id, worker_id)
     }
 
     /// Get a `SourceMetrics` for the given id and worker id.
