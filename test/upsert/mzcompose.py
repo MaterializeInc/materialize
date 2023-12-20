@@ -423,6 +423,7 @@ def workflow_autospill(c: Composition) -> None:
         "kafka",
         "materialized",
         "schema-registry",
+        "clusterd1",
     ]
 
     with c.override(
@@ -434,12 +435,45 @@ def workflow_autospill(c: Composition) -> None:
                 "disk_cluster_replicas_default": "true",
                 "upsert_rocksdb_auto_spill_to_disk": "true",
                 "upsert_rocksdb_auto_spill_threshold_bytes": "200",
+                "enable_unmanaged_cluster_replicas": "true",
                 "storage_dataflow_delay_sources_past_rehydration": "true",
             },
         ),
+        Clusterd(
+            name="clusterd1",
+            options=[
+                "--scratch-directory=/scratch",
+            ],
+        ),
+        Testdrive(no_reset=True, consistent_seed=True),
     ):
+
+        # Helper function to get worker 0 autospill metrics for clusterd.
+        def fetch_auto_spill_metric() -> int | None:
+            metrics = c.exec(
+                "clusterd1", "curl", "localhost:6878/metrics", capture=True
+            ).stdout
+
+            value = None
+            for metric in metrics.splitlines():
+                if metric.startswith(
+                    "mz_storage_upsert_state_rocksdb_autospill_in_use"
+                ):
+                    if value:
+                        value += int(metric.split()[1])
+                    else:
+                        value = int(metric.split()[1])
+
+            return value
+
         c.up(*dependencies)
-        c.run("testdrive", "autospill/bytes.td")
+        c.run("testdrive", "autospill/01-setup.td")
+
+        c.run("testdrive", "autospill/02-memory.td")
+        assert fetch_auto_spill_metric() == 0
+
+        c.run("testdrive", "autospill/03-rocksdb.td")
+        assert fetch_auto_spill_metric() == 1
 
 
 # This should not be run on ci and is not added to workflow_default above!
