@@ -3154,10 +3154,20 @@ impl Catalog {
                 Op::ResetSystemConfiguration { name } => {
                     state.remove_system_configuration(&name)?;
                     tx.remove_system_config(&name);
+                    // This mirrors the `persist_txn_tables` "system var" into the catalog
+                    // storage "config" collection so that we can toggle the flag with
+                    // Launch Darkly, but use it in boot before Launch Darkly is available.
+                    if name == PERSIST_TXN_TABLES.name() {
+                        tx.set_persist_txn_tables(state.system_configuration.persist_txn_tables())?;
+                    } else if name == CATALOG_KIND_IMPL.name() {
+                        tx.set_catalog_kind(None)?;
+                    }
                 }
                 Op::ResetAllSystemConfiguration => {
                     state.clear_system_configuration();
                     tx.clear_system_configs();
+                    tx.set_persist_txn_tables(state.system_configuration.persist_txn_tables())?;
+                    tx.set_catalog_kind(None)?;
                 }
                 Op::UpdateRotatedKeys {
                     id,
@@ -5837,6 +5847,28 @@ mod tests {
             let catalog_kind =
                 CatalogKind::try_from(catalog_kind_value).expect("invalid value persisted");
             assert_eq!(catalog_kind, CatalogKind::Persist);
+
+            // Remove "catalog_kind" system variable.
+            let op = Op::ResetSystemConfiguration {
+                name: CATALOG_KIND_IMPL.name().to_string(),
+            };
+            catalog
+                .transact(mz_repr::Timestamp::MIN, None, vec![op], |_catalog| Ok(()))
+                .await
+                .expect("failed to transact");
+
+            // Check that the config was also removed.
+            let configs = catalog
+                .storage()
+                .await
+                .snapshot()
+                .await
+                .expect("failed to get snapshot")
+                .configs;
+            let catalog_kind_value = configs.get(&proto::ConfigKey {
+                key: CATALOG_KIND_KEY.to_string(),
+            });
+            assert_eq!(catalog_kind_value, None);
 
             catalog.expire().await;
         })
