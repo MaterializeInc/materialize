@@ -13,6 +13,8 @@ import subprocess
 from materialize.mz_version import MzVersion
 
 EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK: dict[str, bool] = dict()
+IMAGE_TAG_OF_VERSION_PREFIX = "v"
+IMAGE_TAG_OF_COMMIT_PREFIX = "devel-"
 
 
 def image_of_release_version_exists(version: MzVersion) -> bool:
@@ -58,8 +60,31 @@ def mz_image_tag_exists(image_tag: str) -> bool:
 
 
 def commit_to_image_tag(commit_hash: str) -> str:
-    return f"devel-{commit_hash}"
+    return f"{IMAGE_TAG_OF_COMMIT_PREFIX}{commit_hash}"
 
 
 def version_to_image_tag(version: MzVersion) -> str:
     return str(version)
+
+
+def is_image_tag_of_version(image_tag: str) -> bool:
+    return image_tag.startswith(IMAGE_TAG_OF_VERSION_PREFIX)
+
+
+def is_image_tag_of_commit(image_tag: str) -> bool:
+    return image_tag.startswith(IMAGE_TAG_OF_COMMIT_PREFIX)
+
+
+def get_version_from_image_tag(image_tag: str) -> str:
+    assert image_tag.startswith(IMAGE_TAG_OF_VERSION_PREFIX)
+    # image tag is equal to the version
+    return image_tag
+
+
+def get_mz_version_from_image_tag(image_tag: str) -> MzVersion:
+    return MzVersion.parse_mz(get_version_from_image_tag(image_tag))
+
+
+def get_commit_from_image_tag(image_tag: str) -> str:
+    assert image_tag.startswith(IMAGE_TAG_OF_COMMIT_PREFIX)
+    return image_tag.removeprefix(IMAGE_TAG_OF_COMMIT_PREFIX)

@@ -14,6 +14,8 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
+import frontmatter
+
 from materialize import buildkite, docker, git
 from materialize.docker import (
     commit_to_image_tag,
@@ -246,7 +248,12 @@ def get_published_minor_mz_versions(
     limit: int | None = None,
     include_filter: Callable[[MzVersion], bool] | None = None,
 ) -> list[MzVersion]:
-    """Get the latest patch version for every minor version."""
+    """
+    Get the latest patch version for every minor version.
+    Use this version if it is NOT important whether a tag was introduced before or after creating this branch.
+
+    See also: #get_minor_mz_versions_listed_in_docs()
+    """
 
     # sorted in descending order
     all_versions = get_all_mz_versions(newest_first=True)
@@ -278,10 +285,24 @@ def get_published_minor_mz_versions(
     return sorted(minor_versions.values(), reverse=newest_first)
 
 
+def get_minor_mz_versions_listed_in_docs() -> list[MzVersion]:
+    """
+    Get the latest patch version for every minor version.
+    Use this version if it is important whether a tag was introduced before or after creating this branch.
+
+    See also: #get_published_minor_mz_versions()
+    """
+    return VersionsFromDocs().minor_versions()
+
+
 def get_all_mz_versions(
     newest_first: bool = True,
 ) -> list[MzVersion]:
-    """Get all mz versions based on git tags. Versions known to be invalid are excluded."""
+    """
+    Get all mz versions based on git tags. Versions known to be invalid are excluded.
+
+    See also: #get_all_mz_versions_listed_in_docs
+    """
     return [
         version
         for version in get_version_tags(
@@ -289,6 +310,15 @@ def get_all_mz_versions(
         )
         if version not in INVALID_VERSIONS
     ]
+
+
+def get_all_mz_versions_listed_in_docs() -> list[MzVersion]:
+    """
+    Get all mz versions based on docs. Versions known to be invalid are excluded.
+
+    See also: #get_all_mz_versions()
+    """
+    return VersionsFromDocs().all_versions()
 
 
 def get_all_published_mz_versions(
@@ -359,3 +389,96 @@ def is_valid_release_image(version: MzVersion) -> bool:
 
     # This is a potentially expensive operation which pulls an image if it hasn't been pulled yet.
     return docker.image_of_release_version_exists(version)
+
+
+def get_commits_of_accepted_regressions_between_versions(
+    ancestor_overrides: dict[str, MzVersion],
+    since_version_exclusive: MzVersion,
+    to_version_inclusive: MzVersion,
+) -> list[str]:
+    """
+    Get commits of accepted regressions between both versions.
+    :param ancestor_overrides: one of #ANCESTOR_OVERRIDES_FOR_PERFORMANCE_REGRESSIONS, #ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS, #ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS
+    :return: commits
+    """
+
+    assert since_version_exclusive <= to_version_inclusive
+
+    commits = []
+
+    for (
+        regression_introducing_commit,
+        first_version_with_regression,
+    ) in ancestor_overrides.items():
+        if (
+            since_version_exclusive
+            < first_version_with_regression
+            <= to_version_inclusive
+        ):
+            commits.append(regression_introducing_commit)
+
+    return commits
+
+
+class VersionsFromDocs:
+    """Materialize versions as listed in doc/user/content/versions
+
+    Only versions that declare `versiond: true` in their
+    frontmatter are considered.
+
+    >>> len(VersionsFromDocs().all_versions()) > 0
+    True
+
+    >>> len(VersionsFromDocs().minor_versions()) > 0
+    True
+
+    >>> len(VersionsFromDocs().patch_versions(minor_version=MzVersion.parse_mz("v0.52.0")))
+    4
+
+    >>> min(VersionsFromDocs().all_versions())
+    MzVersion(major=0, minor=27, patch=0, prerelease=None, build=None)
+    """
+
+    def __init__(self) -> None:
+        files = Path(MZ_ROOT / "doc" / "user" / "content" / "releases").glob("v*.md")
+        self.versions = []
+        for f in files:
+            base = f.stem
+            metadata = frontmatter.load(f)
+            if not metadata.get("released", False):
+                continue
+
+            current_patch = metadata.get("patch", 0)
+
+            for patch in range(current_patch + 1):
+                version = MzVersion.parse_mz(f"{base}.{patch}")
+                if version not in INVALID_VERSIONS:
+                    self.versions.append(version)
+
+        assert len(self.versions) > 0
+        self.versions.sort()
+
+    def all_versions(self) -> list[MzVersion]:
+        return self.versions
+
+    def minor_versions(self) -> list[MzVersion]:
+        """Return the latest patch version for every minor version."""
+        minor_versions = {}
+        for version in self.versions:
+            minor_versions[f"{version.major}.{version.minor}"] = version
+
+        assert len(minor_versions) > 0
+        return sorted(minor_versions.values())
+
+    def patch_versions(self, minor_version: MzVersion) -> list[MzVersion]:
+        """Return all patch versions within the given minor version."""
+        patch_versions = []
+        for version in self.versions:
+            if (
+                version.major == minor_version.major
+                and version.minor == minor_version.minor
+            ):
+                patch_versions.append(version)
+
+        assert len(patch_versions) > 0
+        return sorted(patch_versions)

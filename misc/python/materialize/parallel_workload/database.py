@@ -271,7 +271,7 @@ class View(DBObject):
         ]
         self.columns = [copy(column) for column in self.source_columns]
         for column in self.columns:
-            column.raw_name = f"{column.raw_name}-{column.db_object}"
+            column.raw_name = f"{column.raw_name}-{column.db_object.name()}"
             column.db_object = self
 
         self.materialized = rng.choice([True, False])

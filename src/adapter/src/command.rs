@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
@@ -181,10 +180,8 @@ pub struct StartupResponse {
     /// A future that completes when all necessary Builtin Table writes have completed.
     #[derivative(Debug = "ignore")]
     pub write_notify: BoxFuture<'static, ()>,
-    /// Vec of (name, VarInput::Flat) tuples of session default variables that should be set.
-    pub session_defaults: Vec<(String, Box<dyn Any + Send + Sync>)>,
-    /// Vec of (name, VarInput::Flat) tuples of Role default variables that should be set.
-    pub role_defaults: Vec<(String, OwnedVarInput)>,
+    /// Map of (name, VarInput::Flat) tuples of session default variables that should be set.
+    pub session_defaults: BTreeMap<String, OwnedVarInput>,
     pub catalog: Arc<Catalog>,
 }
 

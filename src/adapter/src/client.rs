@@ -194,7 +194,6 @@ impl Client {
             role_id,
             write_notify,
             session_defaults,
-            role_defaults,
             catalog,
         } = response;
 
@@ -207,13 +206,10 @@ impl Client {
         session.initialize_role_metadata(role_id);
         let vars_mut = session.vars_mut();
         for (name, val) in session_defaults {
-            vars_mut.set_default(&name, val);
-        }
-        for (name, val) in role_defaults {
-            if let Err(err) = vars_mut.set_role_default(&name, val.borrow()) {
+            if let Err(err) = vars_mut.set_default(&name, val.borrow()) {
                 // Note: erroring here is unexpected, but we don't want to panic if somehow our
                 // assumptions are wrong.
-                tracing::error!("failed to set peristed role default, {err:?}");
+                tracing::error!("failed to set peristed default, {err:?}");
             }
         }
         session

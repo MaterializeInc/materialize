@@ -1063,12 +1063,13 @@ steps:
       queue: linux-x86_64
 
   - id: legacy-upgrade
-    label: Legacy upgrade tests
+    label: Legacy upgrade tests (last version from git)
     timeout_in_minutes: 60
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: legacy-upgrade
+          args: ["--versions-source=git"]
     agents:
       queue: linux-x86_64
 

@@ -20,8 +20,6 @@ skip = [
     # up.
     { name = "socket2", version = "0.4.9" },
     { name = "windows-sys", version = "0.42.0" },
-    { name = "windows-sys", version = "0.45.0" },
-    { name = "windows-targets", version = "0.42.0" },
     { name = "windows_aarch64_gnullvm", version = "0.42.0" },
     { name = "windows_aarch64_msvc", version = "0.42.0" },
     { name = "windows_i686_gnu", version = "0.42.0" },
@@ -34,6 +32,8 @@ skip = [
     { name = "hermit-abi", version = "0.1.6" },
     { name = "hermit-abi", version = "0.2.6" },
     { name = "redox_syscall", version = "0.2.10" },
+    { name = "linux-raw-sys", version = "0.3.4" },
+    { name = "rustix", version = "0.38.21" },
 
     # Waiting on https://github.com/tokio-rs/prost/pull/833 to make it into a
     # release. (not yet in v0.11.9)

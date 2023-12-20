@@ -387,7 +387,8 @@ generate_extracted_config!(
     (IgnoreKeys, bool),
     (Size, String),
     (Timeline, String),
-    (TimestampInterval, Duration)
+    (TimestampInterval, Duration),
+    (RetainHistory, Duration)
 );
 
 generate_extracted_config!(
@@ -543,6 +544,7 @@ pub fn plan_create_webhook_source(
                 headers,
             },
             desc,
+            compaction_window: None,
         },
         if_not_exists,
         timeline,
@@ -574,6 +576,7 @@ pub fn plan_create_source(
     let allowed_with_options = vec![
         CreateSourceOptionName::Size,
         CreateSourceOptionName::TimestampInterval,
+        CreateSourceOptionName::RetainHistory,
     ];
     if let Some(op) = with_options
         .iter()
@@ -1064,6 +1067,7 @@ pub fn plan_create_source(
         timeline,
         timestamp_interval,
         ignore_keys,
+        retain_history,
         seen: _,
     } = CreateSourceOptionExtracted::try_from(with_options.clone())?;
 
@@ -1259,6 +1263,13 @@ pub fn plan_create_source(
         Some(timeline) => Timeline::User(timeline),
     };
 
+    let compaction_window = retain_history
+        .map(|cw| {
+            scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
+            Ok::<_, PlanError>(cw.try_into()?)
+        })
+        .transpose()?;
+
     let source = Source {
         create_sql,
         data_source: DataSourceDesc::Ingestion(Ingestion {
@@ -1269,6 +1280,7 @@ pub fn plan_create_source(
             progress_subsource,
         }),
         desc,
+        compaction_window,
     };
 
     Ok(Plan::CreateSource(CreateSourcePlan {
@@ -1283,7 +1295,8 @@ pub fn plan_create_source(
 generate_extracted_config!(
     CreateSubsourceOption,
     (Progress, bool, Default(false)),
-    (References, bool, Default(false))
+    (References, bool, Default(false)),
+    (RetainHistory, Duration)
 );
 
 pub fn plan_create_subsource(
@@ -1301,7 +1314,8 @@ pub fn plan_create_subsource(
     let CreateSubsourceOptionExtracted {
         progress,
         references,
-        ..
+        retain_history,
+        seen: _,
     } = with_options.clone().try_into()?;
 
     // This invariant is enforced during purification; we are responsible for
@@ -1418,6 +1432,13 @@ pub fn plan_create_subsource(
     let typ = RelationType::new(column_types).with_keys(keys);
     let desc = RelationDesc::new(typ, names);
 
+    let compaction_window = retain_history
+        .map(|cw| {
+            scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
+            Ok::<_, PlanError>(cw.try_into()?)
+        })
+        .transpose()?;
+
     let source = Source {
         create_sql,
         data_source: if progress {
@@ -1428,6 +1449,7 @@ pub fn plan_create_subsource(
             unreachable!("state prohibited above")
         },
         desc,
+        compaction_window,
     };
 
     Ok(Plan::CreateSource(CreateSourcePlan {

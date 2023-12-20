@@ -96,6 +96,7 @@ use itertools::Itertools;
 use mz_aws_secrets_controller::AwsSecretsController;
 use mz_build_info::BuildInfo;
 use mz_catalog::config::ClusterReplicaSizeMap;
+use mz_catalog::durable::CatalogKind;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
 use mz_environmentd::{CatalogConfig, Listeners, ListenersConfig, BUILD_INFO};
@@ -607,13 +608,6 @@ enum OrchestratorKind {
     Process,
 }
 
-#[derive(ArgEnum, Debug, Clone)]
-enum CatalogKind {
-    Stash,
-    Persist,
-    Shadow,
-}
-
 // TODO [Alex Hunt] move this to a shared function that can be imported by the
 // region-controller.
 fn aws_secrets_controller_prefix(env_id: &EnvironmentId) -> String {
@@ -759,7 +753,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 SecretsControllerKind::AwsSecretsManager => {
                     Arc::new(
                         runtime.block_on(AwsSecretsController::new(
-                            args.environment_id.cloud_provider_region(),
                             // TODO [Alex Hunt] move this to a shared function that can be imported by the
                             // region-controller.
                             &aws_secrets_controller_prefix(&args.environment_id),
@@ -831,7 +824,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 SecretsControllerKind::AwsSecretsManager => {
                     Arc::new(
                         runtime.block_on(AwsSecretsController::new(
-                            args.environment_id.cloud_provider_region(),
                             &aws_secrets_controller_prefix(&args.environment_id),
                             &aws_secrets_controller_key_alias(&args.environment_id),
                             args.aws_secrets_controller_tags
@@ -919,9 +911,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             secrets_reader: args.secrets_controller,
             secrets_reader_local_file_dir: args.orchestrator_process_secrets_directory,
             secrets_reader_kubernetes_context: Some(args.orchestrator_kubernetes_context),
-            secrets_reader_aws_region: Some(
-                args.environment_id.cloud_provider_region().to_string(),
-            ),
             secrets_reader_aws_prefix: Some(aws_secrets_controller_prefix(&args.environment_id)),
         },
     };

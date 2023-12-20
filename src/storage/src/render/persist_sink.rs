@@ -996,9 +996,10 @@ where
         >::new();
 
         if !active_worker {
-            // The non-active workers report that they are done snapshotting.
-            source_statistics
-                .initialize_snapshot_committed(&Antichain::<mz_repr::Timestamp>::new());
+            // The non-active workers report that they are done snapshotting and hydrating.
+            let empty_frontier = Antichain::new();
+            source_statistics.initialize_snapshot_committed(&empty_frontier);
+            source_statistics.update_rehydration_latency_ms(&empty_frontier);
             return Ok(());
         }
 
@@ -1219,6 +1220,7 @@ where
                 source_statistics
                     .inc_updates_committed_by(batch_metrics.inserts + batch_metrics.retractions);
                 source_statistics.update_snapshot_committed(&batch_upper);
+                source_statistics.update_rehydration_latency_ms(&batch_upper);
 
                 metrics.processed_batches.inc();
                 metrics.row_inserts.inc_by(batch_metrics.inserts);

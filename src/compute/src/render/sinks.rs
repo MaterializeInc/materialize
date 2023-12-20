@@ -17,6 +17,7 @@ use differential_dataflow::Collection;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use mz_expr::{permutation_for_arrangement, EvalError, MapFilterProject};
 use mz_ore::soft_assert_or_log;
+use mz_ore::str::StrExt;
 use mz_ore::vec::PartialOrdVecExt;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
@@ -89,6 +90,7 @@ where
         let mut err_collection = err_collection.leave();
 
         let non_null_assertions = sink.non_null_assertions.clone();
+        let from_desc = sink.from_desc.clone();
         if !non_null_assertions.is_empty() {
             let (oks, null_errs) =
                 ok_collection.map_fallible("NullAssertions({sink_id:?})", move |row| {
@@ -99,9 +101,11 @@ where
                         let datum = iter.nth(skip).unwrap();
                         idx += skip + 1;
                         if datum.is_null() {
-                            // TODO[btv] can we plumb the column name through to here?
                             return Err(DataflowError::EvalError(Box::new(
-                                EvalError::MustNotBeNull(format!("column {}", i + 1)),
+                                EvalError::MustNotBeNull(format!(
+                                    "column {}",
+                                    from_desc.get_name(i).as_str().quoted()
+                                )),
                             )));
                         }
                     }

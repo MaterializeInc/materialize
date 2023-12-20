@@ -135,6 +135,8 @@ so it is executed.""",
 
     add_test_selection_block(pipeline, args.pipeline)
 
+    check_depends_on(pipeline, args.pipeline)
+
     # Remove the Materialize-specific keys from the configuration that are
     # only used to inform how to trim the pipeline and for coverage runs.
     def visit(step: dict[str, Any]) -> None:
@@ -203,6 +205,36 @@ def prioritize_pipeline(pipeline: Any) -> None:
                     visit(inner_config)
                 continue
             visit(config)
+
+
+def check_depends_on(pipeline: Any, pipeline_name: str) -> None:
+    if pipeline_name != "test":
+        return
+
+    def visit(step: dict[str, Any]) -> None:
+        # From buildkite documentation:
+        # Note that a step with an explicit dependency specified with the
+        # depends_on attribute will run immediately after the dependency step
+        # has completed, without waiting for block or wait steps unless those
+        # are also explicit dependencies.
+        if step.get("id") in ("analyze", "deploy", "coverage-pr-analyze"):
+            return
+
+        if (
+            "depends_on" not in step
+            and "prompt" not in step
+            and "wait" not in step
+            and "group" not in step
+        ):
+            raise UIError(
+                f"Every step should have an explicit depends_on value, missing in: {step}"
+            )
+
+    for step in pipeline["steps"]:
+        visit(step)
+        if "group" in step:
+            for inner_step in step.get("steps", []):
+                visit(inner_step)
 
 
 def add_test_selection_block(pipeline: Any, pipeline_name: str) -> None:

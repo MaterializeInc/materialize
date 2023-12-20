@@ -11,17 +11,19 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Instant;
 
 use mz_ore::metric;
 use mz_ore::metrics::{
     CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt, IntCounterVec, IntGaugeVec,
     MetricsRegistry, UIntGaugeVec,
 };
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, Timestamp};
 use mz_storage_client::client::{SinkStatisticsUpdate, SourceStatisticsUpdate};
+use mz_storage_types::sources::SourceEnvelope;
 use prometheus::core::{AtomicI64, AtomicU64};
 use timely::progress::frontier::Antichain;
-use timely::progress::Timestamp;
+use timely::PartialOrder;
 
 // Note(guswynn): ordinarily these metric structs would be in the `metrics` modules, but we
 // put them here so they can be near the user-facing definitions as well.
@@ -79,7 +81,7 @@ impl SourceStatisticsMetricDefs {
             rehydration_latency_ms: registry.register(metric!(
                 name: "mz_source_rehydration_latency_ms",
                 help: "The amount of time in milliseconds it took for the worker to rehydrate the source envelope state. This will be specific to the envelope in use.",
-                var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id"],
+                var_labels: ["source_id", "worker_id", "parent_source_id", "shard_id", "envelope"],
             )),
         }
     }
@@ -105,8 +107,15 @@ impl SourceStatisticsMetrics {
         worker_id: usize,
         parent_source_id: GlobalId,
         shard_id: &mz_persist_client::ShardId,
+        envelope: SourceEnvelope,
     ) -> SourceStatisticsMetrics {
         let shard = shard_id.to_string();
+        let envelope = match envelope {
+            SourceEnvelope::None(_) => "none",
+            SourceEnvelope::Debezium(_) => "debezium",
+            SourceEnvelope::Upsert(_) => "upsert",
+            SourceEnvelope::CdcV2 => "cdcv2",
+        };
 
         SourceStatisticsMetrics {
             snapshot_committed: defs.snapshot_committed.get_delete_on_drop_gauge(vec![
@@ -154,6 +163,7 @@ impl SourceStatisticsMetrics {
                 worker_id.to_string(),
                 parent_source_id.to_string(),
                 shard,
+                envelope.to_string(),
             ]),
         }
     }
@@ -226,6 +236,25 @@ impl SinkStatisticsMetrics {
     }
 }
 
+/// Meta data needed to maintain source statistics.
+#[derive(Debug, Clone)]
+pub struct SourceStatisticsMetadata {
+    /// The resumption upper of the source.
+    resume_upper: Antichain<Timestamp>,
+    /// Time at which the source (more precisely: this metadata object) was created.
+    created_at: Instant,
+}
+
+impl SourceStatisticsMetadata {
+    /// Create a new `SourceStatisticsMetadata` object.
+    pub fn new(resume_upper: Antichain<Timestamp>) -> Self {
+        Self {
+            resume_upper,
+            created_at: Instant::now(),
+        }
+    }
+}
+
 /// A helper struct designed to make it easy for operators to update user-facing metrics.
 /// This struct also ensures that each stack is also incremented in prometheus.
 ///
@@ -238,7 +267,7 @@ impl SinkStatisticsMetrics {
 ///     - This may be fixed in the future when we write the metrics from storaged directly.
 ///     - The value also eventually converge to the same value.
 #[derive(Debug)]
-pub struct StorageStatistics<Stats, Metrics> {
+pub struct StorageStatistics<Stats, Metrics, Meta> {
     // We just use `*StatisticsUpdate` for convenience here!
     // The boolean its an initialization flag, to ensure we
     // don't report a false `snapshot_committed` value before
@@ -250,18 +279,20 @@ pub struct StorageStatistics<Stats, Metrics> {
     // already are in an `Arc`, so this is a bit of extra wrapping, but the cost
     // shouldn't cost too much.
     stats: Rc<RefCell<(bool, Stats, Metrics)>>,
+    /// Meta data needed to maintain statistics.
+    meta: Meta,
 }
 
-impl<Stats, Metrics> Clone for StorageStatistics<Stats, Metrics> {
-    /// Return a snapshot of the stats data, if its been initialized.
+impl<Stats, Metrics, Meta: Clone> Clone for StorageStatistics<Stats, Metrics, Meta> {
     fn clone(&self) -> Self {
         Self {
             stats: Rc::clone(&self.stats),
+            meta: self.meta.clone(),
         }
     }
 }
 
-impl<Stats: Clone, Metrics> StorageStatistics<Stats, Metrics> {
+impl<Stats: Clone, Metrics, Meta> StorageStatistics<Stats, Metrics, Meta> {
     /// Return a snapshot of the stats data, if its been initialized.
     pub fn snapshot(&self) -> Option<Stats> {
         let inner = self.stats.borrow();
@@ -269,13 +300,22 @@ impl<Stats: Clone, Metrics> StorageStatistics<Stats, Metrics> {
     }
 }
 
-impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
+/// Statistics maintained for sources.
+pub type SourceStatistics =
+    StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics, SourceStatisticsMetadata>;
+
+/// Statistics maintained for sinks.
+pub type SinkStatistics = StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics, ()>;
+
+impl SourceStatistics {
     pub(crate) fn new(
         id: GlobalId,
         worker_id: usize,
         metrics: &SourceStatisticsMetricDefs,
         parent_source_id: GlobalId,
         shard_id: &mz_persist_client::ShardId,
+        envelope: SourceEnvelope,
+        resume_upper: Antichain<Timestamp>,
     ) -> Self {
         Self {
             stats: Rc::new(RefCell::new((
@@ -292,8 +332,16 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
                     envelope_state_records: 0,
                     rehydration_latency_ms: None,
                 },
-                SourceStatisticsMetrics::new(metrics, id, worker_id, parent_source_id, shard_id),
+                SourceStatisticsMetrics::new(
+                    metrics,
+                    id,
+                    worker_id,
+                    parent_source_id,
+                    shard_id,
+                    envelope,
+                ),
             ))),
+            meta: SourceStatisticsMetadata::new(resume_upper),
         }
     }
 
@@ -303,14 +351,14 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
     /// - In sql, we ensure that we _never_ reset `snapshot_committed` to `false`, but gauges and
     /// counters are ordinarily reset to 0 in Prometheus, so on restarts this value may be inconsistent.
     // TODO(guswynn): Actually test that this initialization logic works.
-    pub fn initialize_snapshot_committed<T: Timestamp>(&self, upper: &Antichain<T>) {
+    pub fn initialize_snapshot_committed(&self, upper: &Antichain<Timestamp>) {
         self.update_snapshot_committed(upper);
         self.stats.borrow_mut().0 = true;
     }
 
     /// Set the `snapshot_committed` stat based on the reported upper.
-    pub fn update_snapshot_committed<T: Timestamp>(&self, upper: &Antichain<T>) {
-        let value = *upper != Antichain::from_elem(T::minimum());
+    pub fn update_snapshot_committed(&self, upper: &Antichain<Timestamp>) {
+        let value = *upper != Antichain::from_elem(Timestamp::MIN);
         let mut cur = self.stats.borrow_mut();
         cur.1.snapshot_committed = value;
         cur.2.snapshot_committed.set(if value { 1 } else { 0 });
@@ -414,15 +462,28 @@ impl StorageStatistics<SourceStatisticsUpdate, SourceStatisticsMetrics> {
         cur.2.envelope_state_records.set(value);
     }
 
-    /// Set the `rehydration_latency_ms` to the given value.
-    pub fn set_rehydration_latency_ms(&self, value: i64) {
+    /// Set the `rehydration_latency_ms` stat based on the reported upper.
+    pub fn update_rehydration_latency_ms(&self, upper: &Antichain<Timestamp>) {
         let mut cur = self.stats.borrow_mut();
+
+        if cur.1.rehydration_latency_ms.is_some() {
+            return; // source was already hydrated before
+        }
+        if !PartialOrder::less_than(&self.meta.resume_upper, upper) {
+            return; // source is not yet hydrated
+        }
+
+        let elapsed = self.meta.created_at.elapsed();
+        let value = elapsed
+            .as_millis()
+            .try_into()
+            .expect("Rehydration took more than ~584 million years!");
         cur.1.rehydration_latency_ms = Some(value);
         cur.2.rehydration_latency_ms.set(value);
     }
 }
 
-impl StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics> {
+impl SinkStatistics {
     pub(crate) fn new(id: GlobalId, worker_id: usize, metrics: &SinkStatisticsMetricDefs) -> Self {
         Self {
             stats: Rc::new(RefCell::new((
@@ -438,6 +499,7 @@ impl StorageStatistics<SinkStatisticsUpdate, SinkStatisticsMetrics> {
                 },
                 SinkStatisticsMetrics::new(metrics, id, worker_id),
             ))),
+            meta: (),
         }
     }
 

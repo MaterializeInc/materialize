@@ -80,14 +80,12 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use aws_config::meta::region::RegionProviderChain;
 use aws_config::SdkConfig;
-use aws_sdk_secretsmanager::config::{Builder as SecretsManagerConfigBuilder, Region};
+use aws_sdk_secretsmanager::config::Builder as SecretsManagerConfigBuilder;
 use aws_sdk_secretsmanager::error::SdkError;
 use aws_sdk_secretsmanager::primitives::Blob;
 use aws_sdk_secretsmanager::types::{Filter, FilterNameStringType, Tag};
 use aws_sdk_secretsmanager::Client;
-use futures::stream::StreamExt;
 use mz_repr::GlobalId;
 use mz_secrets::{SecretsController, SecretsReader};
 
@@ -98,30 +96,28 @@ pub struct AwsSecretsController {
     pub default_tags: BTreeMap<String, String>,
 }
 
-pub async fn load_sdk_config(region: String) -> SdkConfig {
-    let region_provider = RegionProviderChain::first_try(Region::new(region));
-    let mut config_loader = aws_config::from_env().region(region_provider);
+pub async fn load_sdk_config() -> SdkConfig {
+    let mut config_loader = mz_aws_util::defaults();
     if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
         config_loader = config_loader.endpoint_url(endpoint);
     }
     config_loader.load().await
 }
 
-async fn load_secrets_manager_client(region: String) -> Client {
-    let sdk_config = load_sdk_config(region).await;
+async fn load_secrets_manager_client() -> Client {
+    let sdk_config = load_sdk_config().await;
     let sm_config = SecretsManagerConfigBuilder::from(&sdk_config).build();
     Client::from_conf(sm_config)
 }
 
 impl AwsSecretsController {
     pub async fn new(
-        region: &str,
         prefix: &str,
         key_alias: &str,
         default_tags: BTreeMap<String, String>,
     ) -> Self {
         AwsSecretsController {
-            client: AwsSecretsClient::new(region, prefix).await,
+            client: AwsSecretsClient::new(prefix).await,
             kms_key_alias: key_alias.to_string(),
             default_tags,
         }
@@ -217,10 +213,9 @@ impl SecretsController for AwsSecretsController {
             .into_paginator()
             .send();
         while let Some(page) = secrets_paginator.next().await {
-            for secret in page?.secret_list().unwrap_or_default() {
+            for secret in page?.secret_list() {
                 let required_tags_count: usize = secret
                     .tags()
-                    .expect("we just filtered to things with the expected tags")
                     .into_iter()
                     .filter_map(|tag| {
                         tag.key().and_then(|key| {
@@ -260,9 +255,9 @@ pub struct AwsSecretsClient {
 }
 
 impl AwsSecretsClient {
-    pub async fn new(region: &str, prefix: &str) -> Self {
+    pub async fn new(prefix: &str) -> Self {
         Self {
-            client: load_secrets_manager_client(region.to_owned()).await,
+            client: load_secrets_manager_client().await,
             // TODO [Alex Hunt] move this to a shared function that can be imported by the
             // region-controller.
             secret_name_prefix: prefix.to_owned(),

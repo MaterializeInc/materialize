@@ -84,10 +84,10 @@ use std::{io, process};
 
 use aws_credential_types::Credentials;
 use aws_types::region::Region;
-use clap::clap_derive::ArgEnum;
 use globset::GlobBuilder;
 use itertools::Itertools;
 use mz_build_info::{build_info, BuildInfo};
+use mz_catalog::durable::CatalogKind;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::path::PathExt;
 use mz_testdrive::{CatalogConfig, Config};
@@ -317,13 +317,6 @@ struct Args {
     aws_secret_access_key: String,
 }
 
-#[derive(ArgEnum, Debug, Clone)]
-enum CatalogKind {
-    Stash,
-    Persist,
-    Shadow,
-}
-
 #[tokio::main]
 async fn main() {
     let args: Args = cli::parse_args(CliConfig::default());
@@ -337,7 +330,7 @@ async fn main() {
         Some(region) => {
             // Standard AWS region without a custom endpoint. Try to find actual
             // AWS credentials.
-            let config = aws_config::from_env()
+            let config = mz_aws_util::defaults()
                 .region(Region::new(region))
                 .load()
                 .await;
@@ -363,7 +356,7 @@ async fn main() {
             let endpoint = args
                 .aws_endpoint
                 .unwrap_or_else(|| "http://localhost:4566".parse().unwrap());
-            let config = aws_config::from_env()
+            let config = mz_aws_util::defaults()
                 .region(Region::new("us-east-1"))
                 .credentials_provider(Credentials::from_keys(
                     args.aws_access_key_id,

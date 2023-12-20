@@ -10,8 +10,7 @@
 //! Logic for  processing client [`Command`]s. Each [`Command`] is initiated by a
 //! client via some external Materialize API (ex: HTTP and psql).
 
-use std::any::Any;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -35,7 +34,7 @@ use mz_sql::rbac;
 use mz_sql::rbac::CREATE_ITEM_USAGE;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{
-    EndTransactionAction, OwnedVarInput, Var, STATEMENT_LOGGING_SAMPLE_RATE,
+    EndTransactionAction, OwnedVarInput, Value, Var, STATEMENT_LOGGING_SAMPLE_RATE,
 };
 use opentelemetry::trace::TraceContextExt;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -233,22 +232,32 @@ impl Coordinator {
         // Early return if successful, otherwise cleanup any possible state.
         match self.handle_startup_inner(&user, &conn_id).await {
             Ok(role_id) => {
-                let mut session_defaults: Vec<(_, Box<dyn Any + Send + Sync>)> = Vec::new();
-                let default = self
-                    .catalog()
-                    .state()
-                    .system_config()
-                    .statement_logging_default_sample_rate();
-                session_defaults.push((
+                let mut session_defaults = BTreeMap::new();
+                let system_config = self.catalog().state().system_config();
+
+                // Override the session with any system defaults.
+                session_defaults.extend(
+                    system_config
+                        .iter_session()
+                        .map(|v| (v.name().to_string(), OwnedVarInput::Flat(v.value()))),
+                );
+
+                // Special case.
+                let statement_logging_default = system_config
+                    .statement_logging_default_sample_rate()
+                    .format();
+                session_defaults.insert(
                     STATEMENT_LOGGING_SAMPLE_RATE.name().to_string(),
-                    Box::new(default),
-                ));
-                let role_defaults = self
-                    .catalog()
-                    .get_role(&role_id)
-                    .vars()
-                    .map(|(name, val)| (name.to_owned(), val.clone()))
-                    .collect();
+                    OwnedVarInput::Flat(statement_logging_default),
+                );
+
+                // Override system defaults with role defaults.
+                session_defaults.extend(
+                    self.catalog()
+                        .get_role(&role_id)
+                        .vars()
+                        .map(|(name, val)| (name.to_string(), val.clone())),
+                );
 
                 let session_type = metrics::session_type_label_value(&user);
                 self.metrics
@@ -279,7 +288,6 @@ impl Coordinator {
                     role_id,
                     write_notify: Box::pin(notify),
                     session_defaults,
-                    role_defaults,
                     catalog: self.owned_catalog(),
                 });
                 if tx.send(resp).is_err() {
@@ -614,6 +622,8 @@ impl Coordinator {
         let catalog = self.catalog();
         let catalog = catalog.for_session(ctx.session());
         let original_stmt = Arc::clone(&stmt);
+        // `resolved_ids` should be derivable from `stmt`. If `stmt` is transformed to remove/add
+        // IDs, then `resolved_ids` should be updated to also remove/add those IDs.
         let (stmt, resolved_ids) = match mz_sql::names::resolve(&catalog, (*stmt).clone()) {
             Ok(resolved) => resolved,
             Err(e) => return ctx.retire(Err(e.into())),

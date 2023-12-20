@@ -9,12 +9,14 @@
 
 //! Types and traits that connect up our mz-repr types with the stats that persist maintains.
 
+use crate::controller::TxnsCodecRow;
 use crate::errors::DataflowError;
 use crate::sources::SourceData;
 use mz_expr::ResultSpec;
 use mz_persist_client::metrics::Metrics;
 use mz_persist_client::read::{Cursor, LazyPartStats, ReadHandle, Since};
 use mz_persist_client::stats::PartStats;
+use mz_persist_txn::txn_cache::TxnsCache;
 use mz_persist_types::columnar::Data;
 use mz_persist_types::dyn_struct::DynStruct;
 use mz_persist_types::stats::{BytesStats, ColumnStats, DynStats, JsonStats};
@@ -41,6 +43,10 @@ pub struct StatsCursor {
 impl StatsCursor {
     pub async fn new(
         handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
+        // If and only if we are using persist-txn to manage this shard, then
+        // this must be Some. This is because the upper might be advanced lazily
+        // and we have to go through persist-txn for reads.
+        txns_read: Option<&mut TxnsCache<Timestamp, TxnsCodecRow>>,
         metrics: &Metrics,
         desc: &RelationDesc,
         as_of: Antichain<Timestamp>,
@@ -53,12 +59,33 @@ impl StatsCursor {
                 count(&relation_stats).map_or(true, |n| n > 0)
             }
         };
-        let errors = handle
-            .snapshot_cursor(as_of.clone(), should_fetch("errors", |s| s.err_count()))
-            .await?;
-        let data = handle
-            .snapshot_cursor(as_of.clone(), should_fetch("data", |s| s.ok_count()))
-            .await?;
+        let (errors, data) = match txns_read {
+            None => {
+                let errors = handle
+                    .snapshot_cursor(as_of.clone(), should_fetch("errors", |s| s.err_count()))
+                    .await?;
+                let data = handle
+                    .snapshot_cursor(as_of.clone(), should_fetch("data", |s| s.ok_count()))
+                    .await?;
+                (errors, data)
+            }
+            Some(txns_read) => {
+                let as_of = as_of
+                    .as_option()
+                    .expect("reads as_of empty antichain block forever")
+                    .clone();
+                txns_read.update_gt(&as_of).await;
+                let data_snapshot = txns_read.data_snapshot(handle.shard_id(), as_of);
+                let errors: Cursor<SourceData, (), Timestamp, i64> = data_snapshot
+                    .snapshot_cursor(handle, should_fetch("errors", |s| s.err_count()))
+                    .await?;
+                let data = data_snapshot
+                    .snapshot_cursor(handle, should_fetch("data", |s| s.ok_count()))
+                    .await?;
+                (errors, data)
+            }
+        };
+
         Ok(StatsCursor { errors, data })
     }
 

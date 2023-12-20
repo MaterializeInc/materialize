@@ -233,45 +233,49 @@ class SQLsmithAction(Action):
             )
         return result
 
+    def refill_sqlsmith(self, exe: Executor) -> None:
+        self.composition.silent = True
+        seed = self.rng.randrange(2**31)
+        try:
+            result = self.composition.run(
+                "sqlsmith",
+                "--max-joins=0",
+                "--target=host=materialized port=6875 dbname=materialize user=materialize",
+                "--read-state",
+                "--dry-run",
+                "--max-queries=100",
+                f"--seed={seed}",
+                stdin=exe.db.sqlsmith_state,
+                capture=True,
+                capture_stderr=True,
+                rm=True,
+            )
+            if result.returncode != 0:
+                raise ValueError(
+                    f"SQLsmith failed: {result.returncode} (seed {seed})\nStderr: {result.stderr}\nState: {exe.db.sqlsmith_state}"
+                )
+            try:
+                data = json.loads(result.stdout)
+                self.queries.extend(data["queries"])
+            except:
+                print(f"Loading json failed: {result.stdout}")
+                # TODO(def-) SQLsmith sporadically fails to output
+                # the entire json, I believe this to be a bug in the C++
+                # json library used or the interaction with Python reading from
+                # it. Ignore for now
+                return
+        except:
+            if exe.db.scenario not in (Scenario.Kill, Scenario.BackupRestore):
+                raise
+        finally:
+            self.composition.silent = False
+
     def run(self, exe: Executor) -> bool:
         if exe.db.fast_startup:
             return False
 
-        if not self.queries:
-            self.composition.silent = True
-            seed = self.rng.randrange(2**31)
-            try:
-                result = self.composition.run(
-                    "sqlsmith",
-                    "--max-joins=0",
-                    "--target=host=materialized port=6875 dbname=materialize user=materialize",
-                    "--read-state",
-                    "--dry-run",
-                    "--max-queries=100",
-                    f"--seed={seed}",
-                    stdin=exe.db.sqlsmith_state,
-                    capture=True,
-                    capture_stderr=True,
-                    rm=True,
-                )
-                if result.returncode != 0:
-                    raise ValueError(
-                        f"SQLsmith failed: {result.returncode} (seed {seed})\nStderr: {result.stderr}\nState: {exe.db.sqlsmith_state}"
-                    )
-                try:
-                    data = json.loads(result.stdout)
-                except:
-                    print(f"Loading json failed: {result.stdout}")
-                    raise
-                self.queries.extend(data["queries"])
-            except:
-                if exe.db.scenario not in (Scenario.Kill, Scenario.BackupRestore):
-                    raise
-                else:
-                    return False
-            finally:
-                self.composition.silent = False
-
+        while not self.queries:
+            self.refill_sqlsmith(exe)
         query = self.queries.pop()
         exe.execute(query, explainable=True)
         exe.cur.fetchall()
@@ -1180,7 +1184,7 @@ class BackupRestoreAction(Action):
 
     def __init__(
         self, rng: random.Random, composition: Composition | None, db: Database
-    ) -> None:
+    ):
         super().__init__(rng, composition)
         self.db = db
         self.num = 0

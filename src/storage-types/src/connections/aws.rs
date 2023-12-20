@@ -10,9 +10,6 @@
 //! AWS configuration for sources and sinks.
 
 use anyhow::{anyhow, bail};
-use aws_config::default_provider::credentials::DefaultCredentialsChain;
-use aws_config::default_provider::region;
-use aws_config::meta::region::ProvideRegion;
 use aws_config::sts::AssumeRoleProvider;
 use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
 use aws_credential_types::Credentials;
@@ -176,7 +173,6 @@ impl AwsAssumeRole {
         &self,
         connection_context: &ConnectionContext,
         connection_id: GlobalId,
-        region: Option<Region>,
     ) -> Result<impl ProvideCredentials, anyhow::Error> {
         let external_id = self.external_id(connection_context, connection_id)?;
         // It's okay to use `dangerously_load_credentials_provider` here, as
@@ -186,7 +182,6 @@ impl AwsAssumeRole {
             connection_context,
             connection_id,
             Some(external_id),
-            region,
         )
         .await
     }
@@ -202,11 +197,14 @@ impl AwsAssumeRole {
         connection_context: &ConnectionContext,
         connection_id: GlobalId,
         external_id: Option<String>,
-        region: Option<Region>,
     ) -> Result<impl ProvideCredentials, anyhow::Error> {
         let Some(aws_connection_role_arn) = &connection_context.aws_connection_role_arn else {
             bail!("internal error: no AWS connection role configured");
         };
+
+        // Load the default SDK configuration to use for the assume role
+        // operations themselves.
+        let assume_role_sdk_config = mz_aws_util::defaults().load().await;
 
         // The default session name identifies the environment and the
         // connection.
@@ -223,14 +221,11 @@ impl AwsAssumeRole {
         // name here, so that we can identify the specific environment and
         // connection ID that initiated the session in our internal CloudTrail
         // logs. This session isn't visible to the end user.
-        let mut jump_credentials = AssumeRoleProvider::builder(aws_connection_role_arn)
-            .session_name(default_session_name.clone());
-
-        if let Some(region) = region.clone() {
-            jump_credentials = jump_credentials.region(region);
-        }
-        let jump_credentials =
-            jump_credentials.build(DefaultCredentialsChain::builder().build().await);
+        let jump_credentials = AssumeRoleProvider::builder(aws_connection_role_arn)
+            .configure(&assume_role_sdk_config)
+            .session_name(default_session_name.clone())
+            .build()
+            .await;
 
         // Then we create the provider that will assume the end user's role.
         // Here, we *must* install the external ID, as we're using the jump role
@@ -240,14 +235,12 @@ impl AwsAssumeRole {
         // respect the user's configured session name, if any, as this is the
         // session that will be visible to them.
         let mut credentials = AssumeRoleProvider::builder(&self.arn)
+            .configure(&assume_role_sdk_config)
             .session_name(self.session_name.clone().unwrap_or(default_session_name));
         if let Some(external_id) = external_id {
             credentials = credentials.external_id(external_id);
         }
-        if let Some(region) = region {
-            credentials = credentials.region(region);
-        }
-        Ok(credentials.build(jump_credentials))
+        Ok(credentials.build_from_provider(jump_credentials).await)
     }
 
     pub fn external_id(
@@ -323,11 +316,7 @@ impl AwsConnection {
             ),
             AwsAuth::AssumeRole(assume_role) => SharedCredentialsProvider::new(
                 assume_role
-                    .load_credentials_provider(
-                        connection_context,
-                        connection_id,
-                        self.region_or_default().await,
-                    )
+                    .load_credentials_provider(connection_context, connection_id)
                     .await?,
             ),
         };
@@ -338,14 +327,10 @@ impl AwsConnection {
         &self,
         credentials: impl ProvideCredentials + 'static,
     ) -> Result<SdkConfig, anyhow::Error> {
-        let mut loader = aws_config::from_env().credentials_provider(credentials);
-
-        // Technically this is ignored for `AwsAssumeRole`, see `region_or_default` for more
-        // information.
+        let mut loader = mz_aws_util::defaults().credentials_provider(credentials);
         if let Some(region) = &self.region {
             loader = loader.region(Region::new(region.clone()));
         }
-
         if let Some(endpoint) = &self.endpoint {
             loader = loader.endpoint_url(endpoint);
         }
@@ -378,7 +363,6 @@ impl AwsConnection {
                     &storage_configuration.connection_context,
                     id,
                     external_id,
-                    self.region_or_default().await,
                 )
                 .await?;
             let aws_config = self.load_sdk_config_from_credentials(credentials).await?;
@@ -396,20 +380,6 @@ impl AwsConnection {
         }
 
         Ok(())
-    }
-
-    /// `credentials_provider` seemingly is bugged and does not correctly inherit
-    /// the region (which may be filled with a default region) from the aws config.
-    /// This means we have to _manually_ fill it in in the `AssumeRoleProvider`, defaulting
-    /// to the default region. Fetching the default region happens in the aws config's
-    /// `load` function, but we are forced to replicated that logic here.
-    ///
-    /// <https://github.com/smithy-lang/smithy-rs/pull/3014> might remove the need to do this.
-    async fn region_or_default(&self) -> Option<Region> {
-        match &self.region {
-            Some(region_name) => Some(Region::new(region_name.clone())),
-            None => region::default_provider().region().await,
-        }
     }
 
     pub(crate) fn validate_by_default(&self) -> bool {

@@ -33,10 +33,12 @@ SERVICES = [
 
 
 def workflow_retain_history(c: Composition) -> None:
-    def check_retain_history():
+    def check_retain_history(name: str):
         start = time.time()
         while True:
-            ts = c.sql_query("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM retain_mv")
+            ts = c.sql_query(
+                f"EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM retain_{name}"
+            )
             ts = ts[0][0]
             ts = json.loads(ts)
             source = ts["sources"][0]
@@ -51,6 +53,10 @@ def workflow_retain_history(c: Composition) -> None:
                 raise UIError("timeout hit while waiting for retain history")
             time.sleep(0.5)
 
+    def check_retain_history_for(names: list[str]):
+        for name in names:
+            check_retain_history(name)
+
     c.up("materialized")
     c.sql(
         "ALTER SYSTEM SET enable_logical_compaction_window = true",
@@ -62,12 +68,16 @@ def workflow_retain_history(c: Composition) -> None:
     c.sql(
         "CREATE MATERIALIZED VIEW retain_mv WITH (RETAIN HISTORY = FOR '2s') AS SELECT * FROM retain_t"
     )
-    check_retain_history()
+    c.sql(
+        "CREATE SOURCE retain_s FROM LOAD GENERATOR COUNTER WITH (SIZE = '1', RETAIN HISTORY = FOR '5s')"
+    )
+    names = ["mv", "s"]
+    check_retain_history_for(names)
 
     # Ensure that RETAIN HISTORY is respected on boot.
     c.kill("materialized")
     c.up("materialized")
-    check_retain_history()
+    check_retain_history_for(names)
 
     c.kill("materialized")
 

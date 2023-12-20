@@ -1457,7 +1457,8 @@ const ENABLE_MZ_JOIN_CORE: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
-pub static DEFAULT_LINEAR_JOIN_YIELDING: Lazy<String> = Lazy::new(|| "work:1000000".into());
+pub static DEFAULT_LINEAR_JOIN_YIELDING: Lazy<String> =
+    Lazy::new(|| "work:1000000,time:100".into());
 static LINEAR_JOIN_YIELDING: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("linear_join_yielding"),
     value: DEFAULT_LINEAR_JOIN_YIELDING.clone(),
@@ -1930,7 +1931,7 @@ feature_flags!(
     {
         name: enable_multi_worker_storage_persist_sink,
         desc: "multi-worker storage persist sink",
-        default: false,
+        default: true,
         internal: true,
         enable_for_item_parsing: true,
     },
@@ -2000,7 +2001,7 @@ feature_flags!(
     {
         name: enable_disk_cluster_replicas,
         desc: "`WITH (DISK)` for cluster replicas",
-        default: false,
+        default: true,
         internal: true,
         enable_for_item_parsing: true,
     },
@@ -2021,7 +2022,7 @@ feature_flags!(
     {
         name: enable_connection_validation_syntax,
         desc: "CREATE CONNECTION .. WITH (VALIDATE) and VALIDATE CONNECTION syntax",
-        default: false,
+        default: true,
         internal: true,
         enable_for_item_parsing: true,
     },
@@ -2091,7 +2092,7 @@ feature_flags!(
     {
         name: enable_unified_clusters,
         desc: "unified compute and storage cluster",
-        default: false,
+        default: true,
         internal: true,
         enable_for_item_parsing: true,
     },
@@ -2105,7 +2106,7 @@ feature_flags!(
     {
         name: enable_comment,
         desc: "the COMMENT ON feature for objects",
-        default: false,
+        default: true,
         internal: false,
         enable_for_item_parsing: true,
     },
@@ -2126,7 +2127,7 @@ feature_flags!(
     {
         name: enable_alter_swap,
         desc: "the ALTER SWAP feature for objects",
-        default: false,
+        default: true,
         internal: false,
         enable_for_item_parsing: true,
     },
@@ -2140,7 +2141,7 @@ feature_flags!(
     {
         name: enable_default_kafka_ssh_tunnel,
         desc: "the top-level SSH TUNNEL feature for kafka connections",
-        default: false,
+        default: true,
         internal: true,
         enable_for_item_parsing: true,
     },
@@ -2252,27 +2253,11 @@ impl SessionVars {
             user,
         };
 
-        s.with_var(&APPLICATION_NAME)
-            .with_var(&CLIENT_ENCODING)
-            .with_var(&CLIENT_MIN_MESSAGES)
-            .with_var(&CLUSTER)
-            .with_var(&CLUSTER_REPLICA)
-            .with_var(&DATABASE)
-            .with_var(&DATE_STYLE)
-            .with_var(&EXTRA_FLOAT_DIGITS)
+        s.with_system_vars(&*SystemVars::SESSION_VARS)
             .with_var(&FAILPOINTS)
-            .with_value_constrained_var(&INTEGER_DATETIMES, ValueConstraint::Fixed)
-            .with_var(&INTERVAL_STYLE)
-            .with_var(&SEARCH_PATH)
             .with_value_constrained_var(&SERVER_VERSION, ValueConstraint::ReadOnly)
             .with_value_constrained_var(&SERVER_VERSION_NUM, ValueConstraint::ReadOnly)
-            .with_var(&SEARCH_PATH)
             .with_var(&SQL_SAFE_UPDATES)
-            .with_value_constrained_var(&STANDARD_CONFORMING_STRINGS, ValueConstraint::Fixed)
-            .with_var(&STATEMENT_TIMEOUT)
-            .with_var(&IDLE_IN_TRANSACTION_SESSION_TIMEOUT)
-            .with_var(&TIMEZONE)
-            .with_var(&TRANSACTION_ISOLATION)
             .with_feature_gated_var(&REAL_TIME_RECENCY, &ALLOW_REAL_TIME_RECENCY)
             .with_var(&EMIT_TIMESTAMP_NOTICE)
             .with_var(&EMIT_TRACE_ID_NOTICE)
@@ -2309,7 +2294,7 @@ impl SessionVars {
     ) -> Self
     where
         V: Value + Debug + PartialEq + Clone + 'static,
-        V::Owned: Debug + PartialEq + Send + Clone + Sync,
+        V::Owned: Debug + Send + Clone + Sync,
     {
         self.vars.insert(
             var.name,
@@ -2325,12 +2310,22 @@ impl SessionVars {
     ) -> Self
     where
         V: Value + Debug + PartialEq + Clone + 'static,
-        V::Owned: Debug + PartialEq + Send + Clone + Sync,
+        V::Owned: Debug + Send + Clone + Sync,
     {
         self.vars.insert(
             var.name,
             Box::new(SessionVar::new(var).add_feature_flag(flag)),
         );
+        self
+    }
+
+    fn with_system_vars<'a>(
+        mut self,
+        vars: impl IntoIterator<Item = (&'a &'static UncasedStr, &'a Box<dyn SystemVarMut>)>,
+    ) -> Self {
+        for (name, var) in vars {
+            self.vars.insert(name, var.to_session_var());
+        }
         self
     }
 
@@ -2459,26 +2454,14 @@ impl SessionVars {
 
     /// Sets the default value for the parameter named `name` to the value
     /// represented by `value`.
-    pub fn set_default(&mut self, name: &str, input: Box<dyn Any>) {
-        let name = UncasedStr::new(name);
-        let var = self.vars.get_mut(name).unwrap_or_else(|| {
-            panic!("SessionVars::set_default called with unknown variable {name}")
-        });
-        var.set_default(input);
-    }
-
-    /// Sets the "role default" parameter named `name` to the value represented by `value`.
-    ///
-    /// A role default only takes effect at the start of a Session, so running
-    /// `ALTER ROLE ... SET ...` has no visible impact until a new connection is started.
-    pub fn set_role_default(&mut self, name: &str, input: VarInput) -> Result<(), VarError> {
+    pub fn set_default(&mut self, name: &str, input: VarInput) -> Result<(), VarError> {
         let name = UncasedStr::new(name);
         self.check_read_only(name)?;
 
         self.vars
             .get_mut(name)
             // Note: visibility is checked when persisting a role default.
-            .map(|v| v.set_role_default(input))
+            .map(|v| v.set_default(input))
             .transpose()?
             .ok_or_else(|| VarError::UnknownParameter(name.to_string()))
     }
@@ -2820,6 +2803,39 @@ impl Default for SystemVars {
 }
 
 impl SystemVars {
+    /// Set of [`SystemVar`]s that can also get set at a per-Session level.
+    const SESSION_VARS: Lazy<BTreeMap<&'static UncasedStr, Box<dyn SystemVarMut>>> =
+        Lazy::new(|| {
+            #[allow(clippy::as_conversions)]
+            [
+                Box::new(SystemVar::new(&APPLICATION_NAME)) as Box<dyn SystemVarMut>,
+                Box::new(SystemVar::new(&CLIENT_ENCODING)),
+                Box::new(SystemVar::new(&CLIENT_MIN_MESSAGES)),
+                Box::new(SystemVar::new(&CLUSTER)),
+                Box::new(SystemVar::new(&CLUSTER_REPLICA)),
+                Box::new(SystemVar::new(&DATABASE)),
+                Box::new(SystemVar::new(&DATE_STYLE)),
+                Box::new(SystemVar::new(&EXTRA_FLOAT_DIGITS)),
+                Box::new(
+                    SystemVar::new(&INTEGER_DATETIMES)
+                        .with_value_constraint(ValueConstraint::Fixed),
+                ),
+                Box::new(SystemVar::new(&INTERVAL_STYLE)),
+                Box::new(SystemVar::new(&SEARCH_PATH)),
+                Box::new(
+                    SystemVar::new(&STANDARD_CONFORMING_STRINGS)
+                        .with_value_constraint(ValueConstraint::Fixed),
+                ),
+                Box::new(SystemVar::new(&STATEMENT_TIMEOUT)),
+                Box::new(SystemVar::new(&IDLE_IN_TRANSACTION_SESSION_TIMEOUT)),
+                Box::new(SystemVar::new(&TIMEZONE)),
+                Box::new(SystemVar::new(&TRANSACTION_ISOLATION)),
+            ]
+            .into_iter()
+            .map(|var| (UncasedStr::new(var.name()), var))
+            .collect()
+        });
+
     pub fn new(active_connection_count: Arc<Mutex<ConnectionCounter>>) -> Self {
         let vars = SystemVars {
             vars: Default::default(),
@@ -2828,6 +2844,7 @@ impl SystemVars {
         };
 
         let mut vars = vars
+            .with_session_vars(&Self::SESSION_VARS)
             .with_feature_flags()
             .with_var(&MAX_KAFKA_CONNECTIONS)
             .with_var(&MAX_POSTGRES_CONNECTIONS)
@@ -2988,15 +3005,6 @@ impl SystemVars {
         self
     }
 
-    pub fn set_unsafe(mut self, allow_unsafe: bool) -> Self {
-        self.allow_unsafe = allow_unsafe;
-        self
-    }
-
-    pub fn allow_unsafe(&self) -> bool {
-        self.allow_unsafe
-    }
-
     fn with_value_constrained_var<V>(
         mut self,
         var: &'static ServerVar<V>,
@@ -3011,6 +3019,25 @@ impl SystemVars {
             Box::new(SystemVar::new(var).with_value_constraint(c)),
         );
         self
+    }
+
+    fn with_session_vars(
+        mut self,
+        vars: &BTreeMap<&'static UncasedStr, Box<dyn SystemVarMut>>,
+    ) -> Self {
+        for (name, var) in vars {
+            self.vars.insert(*name, var.clone_var());
+        }
+        self
+    }
+
+    pub fn set_unsafe(mut self, allow_unsafe: bool) -> Self {
+        self.allow_unsafe = allow_unsafe;
+        self
+    }
+
+    pub fn allow_unsafe(&self) -> bool {
+        self.allow_unsafe
     }
 
     fn expect_value<V>(&self, var: &ServerVar<V>) -> &V
@@ -3039,7 +3066,10 @@ impl SystemVars {
     /// Returns an iterator over the configuration parameters and their current
     /// values on disk.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
-        self.vars.values().map(|v| v.as_var())
+        self.vars
+            .values()
+            .map(|v| v.as_var())
+            .filter(|v| !Self::SESSION_VARS.contains_key(UncasedStr::new(v.name())))
     }
 
     /// Returns an iterator over the configuration parameters and their current
@@ -3047,6 +3077,19 @@ impl SystemVars {
     /// that shouldn't be synced by SystemParameterFrontend.
     pub fn iter_synced(&self) -> impl Iterator<Item = &dyn Var> {
         self.iter().filter(|v| v.name() != ENABLE_LAUNCHDARKLY.name)
+    }
+
+    /// Returns an iterator over the configuration parameters that can be overriden per-Session.
+    pub fn iter_session(&self) -> impl Iterator<Item = &dyn Var> {
+        self.vars
+            .values()
+            .map(|v| v.as_var())
+            .filter(|v| Self::SESSION_VARS.contains_key(UncasedStr::new(v.name())))
+    }
+
+    /// Returns whether or not this parameter can be modified by a superuser.
+    pub fn user_modifiable(&self, name: &str) -> bool {
+        Self::SESSION_VARS.contains_key(UncasedStr::new(name)) || name == ENABLE_RBAC_CHECKS.name()
     }
 
     /// Returns a [`Var`] representing the configuration parameter with the
@@ -3844,6 +3887,9 @@ pub trait SystemVarMut: Var + Send + Sync {
     /// Upcast to Var, for use with `dyn`.
     fn as_var(&self) -> &dyn Var;
 
+    /// Creates a [`SessionVarMut`] from this [`SystemVarMut`].
+    fn to_session_var(&self) -> Box<dyn SessionVarMut>;
+
     /// Return the value as `dyn Any`.
     fn value_any(&self) -> &(dyn Any + 'static);
 
@@ -4036,6 +4082,14 @@ where
         self
     }
 
+    fn to_session_var(&self) -> Box<dyn SessionVarMut> {
+        let mut var = SessionVar::new(&self.parent);
+        for constraint in &self.constraints {
+            var = var.with_value_constraint(constraint.clone());
+        }
+        Box::new(var)
+    }
+
     fn value_any(&self) -> &(dyn Any + 'static) {
         let value = SystemVar::value(self);
         value
@@ -4142,17 +4196,16 @@ struct SessionVar<V>
 where
     V: Value + ToOwned + Debug + PartialEq + 'static,
 {
-    /// Default value.
+    /// Value compiled into the binary.
+    parent: ServerVar<V>,
+    /// Sysetm or Role default value.
     default_value: Option<V::Owned>,
-    /// Value persisted with the current role.
-    role_value: Option<V::Owned>,
     /// Value `LOCAL` to a transaction, will be unset at the completion of the transaction.
     local_value: Option<V::Owned>,
     /// Value set during a transaction, will be set if the transaction is committed.
     staged_value: Option<V::Owned>,
     /// Value that overrides the default.
     session_value: Option<V::Owned>,
-    parent: &'static ServerVar<V>,
     feature_flag: Option<&'static FeatureFlag>,
     constraints: Vec<ValueConstraint<V>>,
 }
@@ -4215,17 +4268,16 @@ where
 
 impl<V> SessionVar<V>
 where
-    V: Value + ToOwned + Debug + PartialEq + 'static,
+    V: Value + Clone + Debug + PartialEq + 'static,
     V::Owned: Debug + Send + Sync,
 {
-    fn new(parent: &'static ServerVar<V>) -> SessionVar<V> {
+    fn new(parent: &ServerVar<V>) -> SessionVar<V> {
         SessionVar {
             default_value: None,
-            role_value: None,
             local_value: None,
             staged_value: None,
             session_value: None,
-            parent,
+            parent: parent.clone(),
             feature_flag: None,
             constraints: vec![],
         }
@@ -4263,7 +4315,6 @@ where
             .map(|v| v.borrow())
             .or_else(|| self.staged_value.as_ref().map(|v| v.borrow()))
             .or_else(|| self.session_value.as_ref().map(|v| v.borrow()))
-            .or_else(|| self.role_value.as_ref().map(|v| v.borrow()))
             .or_else(|| self.default_value.as_ref().map(|v| v.borrow()))
             .unwrap_or(&self.parent.value)
     }
@@ -4271,7 +4322,7 @@ where
 
 impl<V> Var for SessionVar<V>
 where
-    V: Value + ToOwned + Debug + PartialEq + 'static,
+    V: Value + Clone + Debug + PartialEq + 'static,
     V::Owned: Debug + Send + Sync,
 {
     fn name(&self) -> &'static str {
@@ -4311,13 +4362,7 @@ pub trait SessionVarMut: Var + Send + Sync {
     fn set(&mut self, input: VarInput, local: bool) -> Result<(), VarError>;
 
     /// Sets the default value for the variable.
-    fn set_default(&mut self, value: Box<dyn Any>);
-
-    /// Parse the input and update the default Role value.
-    ///
-    /// Note: these only get set on Session start. Updating the default value for a role will not
-    /// have any effect until your Session restarts, i.e. you reconnect.
-    fn set_role_default(&mut self, input: VarInput) -> Result<(), VarError>;
+    fn set_default(&mut self, value: VarInput) -> Result<(), VarError>;
 
     /// Reset the stored value to the default.
     fn reset(&mut self, local: bool);
@@ -4327,8 +4372,8 @@ pub trait SessionVarMut: Var + Send + Sync {
 
 impl<V> SessionVarMut for SessionVar<V>
 where
-    V: Value + Debug + PartialEq + 'static,
-    V::Owned: Debug + Send + Sync + PartialEq,
+    V: Value + Clone + Debug + PartialEq + 'static,
+    V::Owned: Debug + Clone + Send + Sync,
 {
     /// Upcast to Var, for use with `dyn`.
     fn as_var(&self) -> &dyn Var {
@@ -4355,33 +4400,20 @@ where
         Ok(())
     }
 
-    /// Sets the default value.
-    fn set_default(&mut self, input: Box<dyn Any>) {
-        let v = input.downcast().unwrap_or_else(|input| {
-            panic!(
-                "SessionVar::set_default called with invalid value {:?} for {}",
-                input,
-                self.name()
-            )
-        });
-        self.default_value = Some(*v);
-    }
-
-    /// Parse the input and set the default Role value.
-    fn set_role_default(&mut self, input: VarInput) -> Result<(), VarError> {
+    /// Sets the default value for the variable.
+    fn set_default(&mut self, input: VarInput) -> Result<(), VarError> {
         let v = V::parse(self, input)?;
         self.check_constraints(&v)?;
-        self.role_value = Some(v);
+        self.default_value = Some(v);
         Ok(())
     }
 
     /// Reset the stored value to the default.
     fn reset(&mut self, local: bool) {
         let value = self
-            .role_value
+            .default_value
             .as_ref()
             .map(|v| v.borrow())
-            .or_else(|| self.default_value.as_ref().map(|v| v.borrow()))
             .unwrap_or(&self.parent.value)
             .to_owned();
         if local {

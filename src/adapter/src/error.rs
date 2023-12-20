@@ -234,7 +234,14 @@ impl AdapterError {
             message: self.to_string(),
             detail: self.detail(),
             hint: self.hint(),
-            position: None,
+            position: self.position(),
+        }
+    }
+
+    pub fn position(&self) -> Option<usize> {
+        match self {
+            AdapterError::ParseError(err) => Some(err.error.pos),
+            _ => None,
         }
     }
 

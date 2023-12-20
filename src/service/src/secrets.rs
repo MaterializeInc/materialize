@@ -41,12 +41,6 @@ pub struct SecretsReaderCliArgs {
     #[structopt(
         long,
         required_if_eq("secrets-reader", "aws-secrets-manager"),
-        env = "SECRETS_READER_AWS_REGION"
-    )]
-    pub secrets_reader_aws_region: Option<String>,
-    #[structopt(
-        long,
-        required_if_eq("secrets-reader", "aws-secrets-manager"),
         env = "SECRETS_READER_AWS_PREFIX"
     )]
     pub secrets_reader_aws_prefix: Option<String>,
@@ -74,9 +68,8 @@ impl SecretsReaderCliArgs {
                 Ok(Arc::new(KubernetesSecretsReader::new(context).await?))
             }
             SecretsControllerKind::AwsSecretsManager => {
-                let region = self.secrets_reader_aws_region.expect("clap enforced");
                 let prefix = self.secrets_reader_aws_prefix.expect("clap enforced");
-                Ok(Arc::new(AwsSecretsClient::new(&region, &prefix).await))
+                Ok(Arc::new(AwsSecretsClient::new(&prefix).await))
             }
         }
     }
@@ -112,12 +105,6 @@ impl SecretsReaderCliArgs {
             SecretsControllerKind::AwsSecretsManager => {
                 vec![
                     "--secrets-reader=aws-secrets-manager".to_string(),
-                    format!(
-                        "--secrets-reader-aws-region={}",
-                        self.secrets_reader_aws_region
-                            .as_ref()
-                            .expect("initialized correctly")
-                    ),
                     format!(
                         "--secrets-reader-aws-prefix={}",
                         self.secrets_reader_aws_prefix

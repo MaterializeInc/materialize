@@ -23,6 +23,15 @@ use tracing::{info, warn};
 
 use crate::PostgresError;
 
+macro_rules! bail_generic {
+    ($fmt:expr, $($arg:tt)*) => {
+        return Err(PostgresError::Generic(anyhow::anyhow!($fmt, $($arg)*)))
+    };
+    ($err:expr $(,)?) => {
+        return Err(PostgresError::Generic(anyhow::anyhow!($err)))
+    };
+}
+
 /// Configures an optional tunnel for use when connecting to a PostgreSQL
 /// database.
 #[derive(Debug, PartialEq, Clone)]

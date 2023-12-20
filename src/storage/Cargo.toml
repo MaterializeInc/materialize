@@ -32,7 +32,7 @@ indexmap = { version = "2.0.0", default-features = false, features = ["std"] }
 itertools = { version = "0.10.5" }
 maplit = "1.0.2"
 mz-avro = { path = "../avro", features = ["snappy"] }
-mz-aws-s3-util = { path = "../aws-s3-util" }
+mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
 mz-cloud-resources = { path = "../cloud-resources" }
@@ -106,7 +106,7 @@ mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 itertools = "0.10.5"
 num_cpus = "1.14.0"
-tempfile = "3.2.0"
+tempfile = "3.8.1"
 tokio = { version = "1.32.0", features = ["test-util"] }
 
 [package.metadata.cargo-udeps.ignore]

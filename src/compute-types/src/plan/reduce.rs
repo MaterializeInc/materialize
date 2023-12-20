@@ -900,6 +900,7 @@ pub fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::MaxDate
         | AggregateFunc::MaxTimestamp
         | AggregateFunc::MaxTimestampTz
+        | AggregateFunc::MaxInterval
         | AggregateFunc::MinNumeric
         | AggregateFunc::MinInt16
         | AggregateFunc::MinInt32
@@ -908,6 +909,7 @@ pub fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::MinUInt32
         | AggregateFunc::MinUInt64
         | AggregateFunc::MinMzTimestamp
+        | AggregateFunc::MinInterval
         | AggregateFunc::MinFloat32
         | AggregateFunc::MinFloat64
         | AggregateFunc::MinBool

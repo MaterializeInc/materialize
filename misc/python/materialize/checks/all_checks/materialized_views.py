@@ -105,31 +105,31 @@ class MaterializedViewsAssertNotNull(Check):
             dedent(
                 """
                 ! SELECT * FROM not_null_view1
-                contains: column 1 must not be null
+                contains: column "x" must not be null
 
                 ! SELECT * FROM not_null_view2
-                contains: column 2 must not be null
+                contains: column "y" must not be null
 
                 ! SELECT * FROM not_null_view3
-                contains: column 3 must not be null
+                contains: column "z" must not be null
 
                 ! SELECT * FROM not_null_view1 WHERE x IS NOT NULL
-                contains: column 1 must not be null
+                contains: column "x" must not be null
 
                 ! SELECT * FROM not_null_view2 WHERE y IS NOT NULL
-                contains: column 2 must not be null
+                contains: column "y" must not be null
 
                 ! SELECT * FROM not_null_view3 WHERE z IS NOT NULL
-                contains: column 3 must not be null
+                contains: column "z" must not be null
 
                 ! SELECT y FROM not_null_view1
-                contains: column 1 must not be null
+                contains: column "x" must not be null
 
                 ! SELECT z FROM not_null_view2
-                contains: column 2 must not be null
+                contains: column "y" must not be null
 
                 ! SELECT x FROM not_null_view3
-                contains: column 3 must not be null
+                contains: column "z" must not be null
 
                 > DELETE FROM not_null_table WHERE x IS NULL;
 
@@ -171,13 +171,13 @@ class MaterializedViewsAssertNotNull(Check):
                 > INSERT INTO not_null_table VALUES (NULL, 22, 23), (24, NULL, 26), (27, 28, NULL);
 
                 ! SELECT * FROM not_null_view1
-                contains: column 1 must not be null
+                contains: column "x" must not be null
 
                 ! SELECT * FROM not_null_view2
-                contains: column 2 must not be null
+                contains: column "y" must not be null
 
                 ! SELECT * FROM not_null_view3
-                contains: column 3 must not be null
+                contains: column "z" must not be null
            """
             )
         )

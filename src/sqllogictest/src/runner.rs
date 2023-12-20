@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -56,7 +56,9 @@ use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
-use mz_persist_client::rpc::PubSubClientConnection;
+use mz_persist_client::rpc::{
+    MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PubSubClientConnection, PubSubSender,
+};
 use mz_persist_client::PersistLocation;
 use mz_pgrepr::{oid, Interval, Jsonb, Numeric, UInt2, UInt4, UInt8, Value};
 use mz_repr::adt::date::Date;
@@ -81,10 +83,12 @@ use once_cell::sync::Lazy;
 use postgres_protocol::types;
 use regex::Regex;
 use tempfile::TempDir;
+use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
 use tokio::sync::oneshot;
 use tokio_postgres::types::{FromSql, Kind as PgKind, Type as PgType};
 use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
+use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
 use tracing::{error, info};
 use uuid::fmt::Simple;
@@ -966,11 +970,34 @@ impl<'a> RunnerInner<'a> {
         );
         let now = SYSTEM_TIME.clone();
         let metrics_registry = MetricsRegistry::new();
-        let persist_clients = PersistClientCache::new(
-            PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone()),
-            &metrics_registry,
-            |_, _| PubSubClientConnection::noop(),
-        );
+
+        let persist_config = PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone());
+        let persist_pubsub_server =
+            PersistGrpcPubSubServer::new(&persist_config, &metrics_registry);
+        let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
+        let persist_pubsub_tcp_listener =
+            TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
+                .await
+                .expect("pubsub addr binding");
+        let persist_pubsub_server_port = persist_pubsub_tcp_listener
+            .local_addr()
+            .expect("pubsub addr has local addr")
+            .port();
+        info!("listening for persist pubsub connections on localhost:{persist_pubsub_server_port}");
+        mz_ore::task::spawn(|| "persist_pubsub_server", async move {
+            persist_pubsub_server
+                .serve_with_stream(TcpListenerStream::new(persist_pubsub_tcp_listener))
+                .await
+                .expect("success")
+        });
+        let persist_clients =
+            PersistClientCache::new(persist_config, &metrics_registry, |_, metrics| {
+                let sender: Arc<dyn PubSubSender> = Arc::new(MetricsSameProcessPubSubSender::new(
+                    persist_pubsub_client.sender,
+                    metrics,
+                ));
+                PubSubClientConnection::new(sender, persist_pubsub_client.receiver)
+            });
         let persist_clients = Arc::new(persist_clients);
 
         let secrets_controller = Arc::clone(&orchestrator);
@@ -1005,12 +1032,11 @@ impl<'a> RunnerInner<'a> {
                 now: SYSTEM_TIME.clone(),
                 stash_metrics: Arc::new(StashMetrics::register_into(&metrics_registry)),
                 metrics_registry: metrics_registry.clone(),
-                persist_pubsub_url: "http://not-needed-for-sqllogictests".into(),
+                persist_pubsub_url: format!("http://localhost:{}", persist_pubsub_server_port),
                 secrets_args: mz_service::secrets::SecretsReaderCliArgs {
                     secrets_reader: mz_service::secrets::SecretsControllerKind::LocalFile,
                     secrets_reader_local_file_dir: Some(secrets_dir),
                     secrets_reader_kubernetes_context: None,
-                    secrets_reader_aws_region: None,
                     secrets_reader_aws_prefix: None,
                 },
                 connection_context,

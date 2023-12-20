@@ -60,10 +60,10 @@ class DefaultResultAnalyzer(ResultAnalyzer):
             workload_name,
             other_endpoint,
         )
-        comparison_outcome.regressions.extend(regressions)
-        comparison_outcome.significant_improvements.extend(improvements)
-        comparison_outcome.append_regression_df(entries_worse_than_threshold)
-        comparison_outcome.append_significant_improvement_df(
-            entries_better_than_threshold
+        comparison_outcome.append_regressions(
+            regressions,
+            improvements,
+            entries_worse_than_threshold,
+            entries_better_than_threshold,
         )
         return comparison_outcome

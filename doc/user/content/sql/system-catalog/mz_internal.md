@@ -248,13 +248,13 @@ SQL objects that don't exist in the compute layer (such as views) are omitted.
 | `object_id`     | [`text`] | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions`](#mz_subscriptions).                                                           |
 | `dependency_id` | [`text`] | The ID of a compute dependency. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables). |
 
-### `mz_compute_hydration_status`
+### `mz_compute_hydration_statuses`
 
-The `mz_compute_hydration_status` table describes the per-replica hydration status of each compute object (index, materialized view, or subscription).
+The `mz_compute_hydration_statuses` table describes the per-replica hydration status of each compute object (index, materialized view, or subscription).
 
 A compute object is hydrated on a given replica when it has fully processed the initial snapshot of data available in its inputs.
 
-<!-- RELATION_SPEC mz_internal.mz_compute_hydration_status -->
+<!-- RELATION_SPEC mz_internal.mz_compute_hydration_statuses -->
 | Field        | Type        | Meaning                                                                                                                                                                                                                                  |
 | -----------  | ----------- | --------                                                                                                                                                                                                                                 |
 | `object_id`  | [`text`]    | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions`](#mz_subscriptions). |

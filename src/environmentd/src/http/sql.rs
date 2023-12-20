@@ -47,6 +47,55 @@ use tungstenite::protocol::frame::coding::CloseCode;
 
 use crate::http::{init_ws, AuthedClient, AuthedUser, WsState, MAX_REQUEST_SIZE};
 
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(transparent)]
+    Adapter(#[from] AdapterError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Axum(#[from] axum::Error),
+    #[error("SUBSCRIBE only supported over websocket")]
+    SubscribeOnlyOverWs,
+    #[error("current transaction is aborted, commands ignored until end of transaction block")]
+    AbortedTransaction,
+    #[error("unsupported via this API: {0}")]
+    Unsupported(String),
+    #[error("{0}")]
+    Unstructured(anyhow::Error),
+}
+
+impl Error {
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Error::Adapter(err) => err.detail(),
+            _ => None,
+        }
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            Error::Adapter(err) => err.hint(),
+            _ => None,
+        }
+    }
+
+    pub fn position(&self) -> Option<usize> {
+        match self {
+            Error::Adapter(err) => err.position(),
+            _ => None,
+        }
+    }
+
+    pub fn code(&self) -> SqlState {
+        match self {
+            Error::Adapter(err) => err.code(),
+            Error::AbortedTransaction => SqlState::IN_FAILED_SQL_TRANSACTION,
+            _ => SqlState::INTERNAL_ERROR,
+        }
+    }
+}
+
 pub async fn handle_sql(
     mut client: AuthedClient,
     Json(request): Json<SqlRequest>,
@@ -163,7 +212,7 @@ async fn run_ws(state: &WsState, user: Option<AuthedUser>, mut ws: WebSocket) {
                 // response. Although this isn't the PG wire protocol, we choose to mirror it by
                 // only sending errors as responses to requests.
                 let _ = ws.recv().await;
-                let err = AdapterError::from(timeout);
+                let err = Error::from(AdapterError::from(timeout));
                 let _ = send_ws_response(&mut ws, WebSocketResponse::Error(err.into())).await;
                 return;
             },
@@ -181,7 +230,7 @@ async fn run_ws(state: &WsState, user: Option<AuthedUser>, mut ws: WebSocket) {
             }
         };
 
-        let req: Result<SqlRequest, anyhow::Error> = match msg {
+        let req: Result<SqlRequest, Error> = match msg {
             Message::Text(data) => serde_json::from_str(&data).err_into(),
             Message::Binary(data) => serde_json::from_slice(&data).err_into(),
             // Handled automatically by the server.
@@ -223,7 +272,7 @@ async fn run_ws(state: &WsState, user: Option<AuthedUser>, mut ws: WebSocket) {
                 WebSocketResponse::ReadyForQuery(client.client.session().transaction_code().into());
             send_ws_response(&mut ws, ready).await?;
 
-            Ok::<_, anyhow::Error>(())
+            Ok::<_, Error>(())
         };
 
         if let Err(err) = ws_response().await {
@@ -234,19 +283,16 @@ async fn run_ws(state: &WsState, user: Option<AuthedUser>, mut ws: WebSocket) {
 }
 
 async fn run_ws_request(
-    req: Result<SqlRequest, anyhow::Error>,
+    req: Result<SqlRequest, Error>,
     client: &mut AuthedClient,
     ws: &mut WebSocket,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), Error> {
     let req = req?;
     execute_request(client, req, ws).await
 }
 
 /// Sends a single [`WebSocketResponse`] over the provided [`WebSocket`].
-async fn send_ws_response(
-    ws: &mut WebSocket,
-    resp: WebSocketResponse,
-) -> Result<(), anyhow::Error> {
+async fn send_ws_response(ws: &mut WebSocket, resp: WebSocketResponse) -> Result<(), Error> {
     let msg = serde_json::to_string(&resp).unwrap();
     let msg = Message::Text(msg);
     ws.send(msg).await?;
@@ -258,7 +304,7 @@ async fn send_ws_response(
 async fn forward_notices(
     ws: &mut WebSocket,
     notices: impl IntoIterator<Item = AdapterNotice>,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), Error> {
     let ws_notices = notices.into_iter().map(|notice| {
         WebSocketResponse::Notice(Notice {
             message: notice.to_string(),
@@ -399,39 +445,25 @@ pub struct SqlError {
     pub detail: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<usize>,
 }
 
-impl From<AdapterError> for SqlError {
-    fn from(err: AdapterError) -> Self {
+impl From<Error> for SqlError {
+    fn from(err: Error) -> Self {
         SqlError {
             message: err.to_string(),
             code: err.code().code().to_string(),
             detail: err.detail(),
             hint: err.hint(),
+            position: err.position(),
         }
     }
 }
 
-impl From<String> for SqlError {
-    fn from(message: String) -> Self {
-        SqlError {
-            message,
-            code: SqlState::INTERNAL_ERROR.code().to_string(),
-            detail: None,
-            hint: None,
-        }
-    }
-}
-
-impl From<&str> for SqlError {
-    fn from(value: &str) -> Self {
-        SqlError::from(value.to_string())
-    }
-}
-
-impl From<anyhow::Error> for SqlError {
-    fn from(value: anyhow::Error) -> Self {
-        SqlError::from(value.to_string())
+impl From<AdapterError> for SqlError {
+    fn from(value: AdapterError) -> Self {
+        Error::from(value).into()
     }
 }
 
@@ -532,24 +564,24 @@ trait ResultSender: Send {
         canceled: C,
         res: StatementResult,
     ) -> (
-        Result<Result<(), ()>, anyhow::Error>,
+        Result<Result<(), ()>, Error>,
         Option<(StatementEndedExecutionReason, ExecuteContextExtra)>,
     )
     where
         C: Fn() -> F + Send + Sync,
         F: Future<Output = ()> + Send;
     /// Returns a future that resolves only when the client connection has gone away.
-    fn connection_error(&mut self) -> BoxFuture<anyhow::Error>;
+    fn connection_error(&mut self) -> BoxFuture<Error>;
     /// Reports whether the client supports streaming SUBSCRIBE results.
     fn allow_subscribe(&self) -> bool;
 
-    async fn await_rows<C, F, R>(&mut self, cancelled: C, f: F) -> Result<R, anyhow::Error>
+    async fn await_rows<C, F, R>(&mut self, cancelled: C, f: F) -> Result<R, Error>
     where
         C: Future<Output = ()> + Send,
         F: Future<Output = R> + Send,
     {
         tokio::select! {
-            _ = cancelled => anyhow::bail!("query canceled"),
+            _ = cancelled => Err(AdapterError::Canceled.into()),
             e = self.connection_error() => Err(e),
             r = f => Ok(r),
         }
@@ -570,7 +602,7 @@ impl ResultSender for SqlResponse {
         _canceled: C,
         res: StatementResult,
     ) -> (
-        Result<Result<(), ()>, anyhow::Error>,
+        Result<Result<(), ()>, Error>,
         Option<(StatementEndedExecutionReason, ExecuteContextExtra)>,
     )
     where
@@ -587,7 +619,7 @@ impl ResultSender for SqlResponse {
             StatementResult::Subscribe { ctx_extra, .. } => {
                 let message = "SUBSCRIBE only supported over websocket";
                 self.results.push(SqlResult::Err {
-                    error: message.into(),
+                    error: Error::SubscribeOnlyOverWs.into(),
                     notices: Vec::new(),
                 });
                 (
@@ -604,7 +636,7 @@ impl ResultSender for SqlResponse {
         (Ok(res), stmt_logging)
     }
 
-    fn connection_error(&mut self) -> BoxFuture<anyhow::Error> {
+    fn connection_error(&mut self) -> BoxFuture<Error> {
         Box::pin(futures::future::pending())
     }
 
@@ -627,14 +659,14 @@ impl ResultSender for WebSocket {
         canceled: C,
         res: StatementResult,
     ) -> (
-        Result<Result<(), ()>, anyhow::Error>,
+        Result<Result<(), ()>, Error>,
         Option<(StatementEndedExecutionReason, ExecuteContextExtra)>,
     )
     where
         C: Fn() -> F + Send + Sync,
         F: Future<Output = ()> + Send,
     {
-        async fn send(ws: &mut WebSocket, msg: WebSocketResponse) -> Result<(), anyhow::Error> {
+        async fn send(ws: &mut WebSocket, msg: WebSocketResponse) -> Result<(), Error> {
             let msg = serde_json::to_string(&msg).expect("must serialize");
             Ok(ws.send(Message::Text(msg)).await?)
         }
@@ -751,14 +783,16 @@ impl ResultSender for WebSocket {
                         Some(PeekResponseUnary::Error(error)) => {
                             break (
                                 true,
-                                vec![WebSocketResponse::Error(error.clone().into())],
+                                vec![WebSocketResponse::Error(
+                                    Error::Unstructured(anyhow!(error.clone())).into(),
+                                )],
                                 Some((StatementEndedExecutionReason::Errored { error }, ctx_extra)),
                             )
                         }
                         Some(PeekResponseUnary::Canceled) => {
                             break (
                                 true,
-                                vec![WebSocketResponse::Error("query canceled".into())],
+                                vec![WebSocketResponse::Error(AdapterError::Canceled.into())],
                                 Some((StatementEndedExecutionReason::Canceled, ctx_extra)),
                             )
                         }
@@ -796,14 +830,14 @@ impl ResultSender for WebSocket {
 
     // Send a websocket Ping every second to verify the client is still
     // connected.
-    fn connection_error(&mut self) -> BoxFuture<anyhow::Error> {
+    fn connection_error(&mut self) -> BoxFuture<Error> {
         Box::pin(async {
             let mut tick = time::interval(Duration::from_secs(1));
             tick.tick().await;
             loop {
                 tick.tick().await;
                 if let Err(err) = self.send(Message::Ping(Vec::new())).await {
-                    return anyhow::anyhow!(err);
+                    return err.into();
                 }
             }
         })
@@ -818,7 +852,7 @@ async fn send_and_retire<S: ResultSender>(
     res: StatementResult,
     client: &mut SessionClient,
     sender: &mut S,
-) -> Result<Result<(), ()>, anyhow::Error> {
+) -> Result<Result<(), ()>, Error> {
     let (res, stmt_logging) = sender.add_result(|| client.canceled(), res).await;
     if let Some((reason, ctx_extra)) = stmt_logging {
         client.retire_execute(ctx_extra, reason);
@@ -831,7 +865,7 @@ async fn execute_stmt_group<S: ResultSender>(
     client: &mut SessionClient,
     sender: &mut S,
     stmt_group: Vec<(Statement<Raw>, String, Vec<Option<String>>)>,
-) -> Result<Result<(), ()>, anyhow::Error> {
+) -> Result<Result<(), ()>, Error> {
     let num_stmts = stmt_group.len();
     for (stmt, sql, params) in stmt_group {
         assert!(num_stmts <= 1 || params.is_empty(),
@@ -840,10 +874,7 @@ async fn execute_stmt_group<S: ResultSender>(
 
         let is_aborted_txn = matches!(client.session().transaction(), TransactionStatus::Failed(_));
         if is_aborted_txn && !is_txn_exit_stmt(&stmt) {
-            let err = SqlResult::err(
-                client,
-                "current transaction is aborted, commands ignored until end of transaction block",
-            );
+            let err = SqlResult::err(client, Error::AbortedTransaction);
             let _ = send_and_retire(err.into(), client, sender).await?;
             return Ok(Err(()));
         }
@@ -869,7 +900,7 @@ async fn execute_stmt_group<S: ResultSender>(
                 // In Started (i.e., a single statement) and implicit transactions cleanup themselves.
                 TransactionStatus::Started(_) | TransactionStatus::InTransactionImplicit(_) => {
                     if let Err(err) = client.end_transaction(EndTransactionAction::Rollback).await {
-                        let err = SqlResult::err(client, err.to_string());
+                        let err = SqlResult::err(client, err);
                         let _ = send_and_retire(err.into(), client, sender).await?;
                     }
                 }
@@ -892,7 +923,7 @@ async fn execute_request<S: ResultSender>(
     client: &mut AuthedClient,
     request: SqlRequest,
     sender: &mut S,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), Error> {
     let client = &mut client.client;
 
     // This API prohibits executing statements with responses whose
@@ -900,7 +931,7 @@ async fn execute_request<S: ResultSender>(
     fn check_prohibited_stmts<S: ResultSender>(
         sender: &S,
         stmt: &Statement<Raw>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), Error> {
         let kind: StatementKind = stmt.into();
         let execute_responses = Plan::generated_from(kind)
             .into_iter()
@@ -925,7 +956,7 @@ async fn execute_request<S: ResultSender>(
                 _ => false,
             }
         }) {
-            anyhow::bail!("unsupported via this API: {}", stmt.to_ast_string());
+            return Err(Error::Unsupported(stmt.to_ast_string()));
         }
         Ok(())
     }
@@ -933,11 +964,11 @@ async fn execute_request<S: ResultSender>(
     fn parse<'a>(
         client: &SessionClient,
         query: &'a str,
-    ) -> Result<Vec<StatementParseResult<'a>>, anyhow::Error> {
-        match client.parse(query) {
-            Ok(result) => result.map_err(|e| anyhow!(e.error)),
-            Err(e) => Err(anyhow!(e)),
-        }
+    ) -> Result<Vec<StatementParseResult<'a>>, Error> {
+        let result = client
+            .parse(query)
+            .map_err(|e| Error::Unstructured(anyhow!(e)))?;
+        result.map_err(|e| AdapterError::from(e).into())
     }
 
     let mut stmt_groups = vec![];
@@ -956,11 +987,11 @@ async fn execute_request<S: ResultSender>(
             for ExtendedRequest { query, params } in queries {
                 let mut stmts = parse(client, &query)?;
                 if stmts.len() != 1 {
-                    anyhow::bail!(
+                    return Err(Error::Unstructured(anyhow!(
                         "each query must contain exactly 1 statement, but \"{}\" contains {}",
                         query,
                         stmts.len()
-                    );
+                    )));
                 }
 
                 let StatementParseResult { ast: stmt, sql } = stmts.pop().unwrap();
@@ -997,7 +1028,7 @@ async fn execute_stmt<S: ResultSender>(
     stmt: Statement<Raw>,
     sql: String,
     raw_params: Vec<Option<String>>,
-) -> Result<StatementResult, anyhow::Error> {
+) -> Result<StatementResult, Error> {
     const EMPTY_PORTAL: &str = "";
     if let Err(e) = client
         .prepare(EMPTY_PORTAL.into(), Some(stmt.clone()), sql, vec![])
@@ -1015,14 +1046,14 @@ async fn execute_stmt<S: ResultSender>(
 
     let param_types = &prep_stmt.desc().param_types;
     if param_types.len() != raw_params.len() {
-        let message = format!(
+        let message = anyhow!(
             "request supplied {actual} parameters, \
                         but {statement} requires {expected}",
             statement = stmt.to_ast_string(),
             actual = raw_params.len(),
             expected = param_types.len()
         );
-        return Ok(SqlResult::err(client, message).into());
+        return Ok(SqlResult::err(client, Error::Unstructured(message)).into());
     }
 
     let buf = RowArena::new();
@@ -1039,8 +1070,8 @@ async fn execute_stmt<S: ResultSender>(
                 ) {
                     Ok(param) => param.into_datum(&buf, &pg_typ),
                     Err(err) => {
-                        let msg = format!("unable to decode parameter: {}", err);
-                        return Ok(SqlResult::err(client, msg).into());
+                        let msg = anyhow!("unable to decode parameter: {}", err);
+                        return Ok(SqlResult::err(client, Error::Unstructured(msg)).into());
                     }
                 }
             }
@@ -1071,7 +1102,7 @@ async fn execute_stmt<S: ResultSender>(
         result_formats,
         revision,
     ) {
-        return Ok(SqlResult::err(client, err.to_string()).into());
+        return Ok(SqlResult::err(client, err).into());
     }
 
     let desc = client
@@ -1093,9 +1124,7 @@ async fn execute_stmt<S: ResultSender>(
     let tag = res.tag();
 
     Ok(match res {
-        ExecuteResponse::Canceled => {
-            SqlResult::err(client, "statement canceled due to user request").into()
-        }
+        ExecuteResponse::Canceled => SqlResult::err(client, AdapterError::Canceled).into(),
         ExecuteResponse::CreatedConnection { .. }
         | ExecuteResponse::CreatedDatabase { .. }
         | ExecuteResponse::CreatedSchema { .. }
@@ -1134,8 +1163,14 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::AlteredSystemConfiguration
         | ExecuteResponse::Deallocate { .. }
         | ExecuteResponse::ValidatedConnection
-        | ExecuteResponse::Prepare => SqlResult::ok(client, tag.expect("ok only called on tag-generating results"), Vec::default()).into(),
-        ExecuteResponse::TransactionCommitted { params } | ExecuteResponse::TransactionRolledBack { params }=> {
+        | ExecuteResponse::Prepare => SqlResult::ok(
+            client,
+            tag.expect("ok only called on tag-generating results"),
+            Vec::default(),
+        )
+        .into(),
+        ExecuteResponse::TransactionCommitted { params }
+        | ExecuteResponse::TransactionRolledBack { params } => {
             let notify_set: mz_ore::collections::HashSet<String> = client
                 .session()
                 .vars()
@@ -1145,30 +1180,51 @@ async fn execute_stmt<S: ResultSender>(
             let params = params
                 .into_iter()
                 .filter(|(name, _value)| notify_set.contains(*name))
-                .map(|(name, value)| ParameterStatus { name: name.to_string(), value })
+                .map(|(name, value)| ParameterStatus {
+                    name: name.to_string(),
+                    value,
+                })
                 .collect();
-            SqlResult::ok(client, tag.expect("ok only called on tag-generating results"), params).into()
-        },
+            SqlResult::ok(
+                client,
+                tag.expect("ok only called on tag-generating results"),
+                params,
+            )
+            .into()
+        }
         ExecuteResponse::SetVariable { name, .. } => {
             let mut params = Vec::with_capacity(1);
-            if let Some(var) = client.session().vars().notify_set().find(|v| v.name() == &name) {
-                params.push(ParameterStatus { name, value: var.value() });
+            if let Some(var) = client
+                .session()
+                .vars()
+                .notify_set()
+                .find(|v| v.name() == &name)
+            {
+                params.push(ParameterStatus {
+                    name,
+                    value: var.value(),
+                });
             };
-            SqlResult::ok(client, tag.expect("ok only called on tag-generating results"), params).into()
+            SqlResult::ok(
+                client,
+                tag.expect("ok only called on tag-generating results"),
+                params,
+            )
+            .into()
         }
-        ExecuteResponse::SendingRows {
-            future: rows,
-        } => {
+        ExecuteResponse::SendingRows { future: rows } => {
             let rows = match sender.await_rows(client.canceled(), rows).await? {
                 PeekResponseUnary::Rows(rows) => {
                     RecordFirstRowStream::record(execute_started, client);
                     rows
-                },
+                }
                 PeekResponseUnary::Error(e) => {
-                    return Ok(SqlResult::err(client, e).into());
+                    return Ok(
+                        SqlResult::err(client, Error::Unstructured(anyhow!(e))).into(),
+                    );
                 }
                 PeekResponseUnary::Canceled => {
-                    return Ok(SqlResult::err(client, "statement canceled due to user request").into());
+                    return Ok(SqlResult::err(client, AdapterError::Canceled).into());
                 }
             };
             let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
@@ -1177,7 +1233,16 @@ async fn execute_stmt<S: ResultSender>(
             let types = &desc.typ().column_types;
             for row in rows {
                 let datums = datum_vec.borrow_with(&row);
-                sql_rows.push(datums.iter().enumerate().map(|(i, d)| TypedDatum::new(*d, &types[i]).json(&JsonNumberPolicy::ConvertNumberToString)).collect());
+                sql_rows.push(
+                    datums
+                        .iter()
+                        .enumerate()
+                        .map(|(i, d)| {
+                            TypedDatum::new(*d, &types[i])
+                                .json(&JsonNumberPolicy::ConvertNumberToString)
+                        })
+                        .collect(),
+                );
             }
             let tag = format!("SELECT {}", sql_rows.len());
             SqlResult::rows(client, tag, sql_rows, desc).into()
@@ -1189,31 +1254,41 @@ async fn execute_stmt<S: ResultSender>(
             let types = &desc.typ().column_types;
             for row in rows {
                 let datums = datum_vec.borrow_with(&row);
-                sql_rows.push(datums.iter().enumerate().map(|(i, d)| TypedDatum::new(*d, &types[i]).json(&JsonNumberPolicy::ConvertNumberToString)).collect());
+                sql_rows.push(
+                    datums
+                        .iter()
+                        .enumerate()
+                        .map(|(i, d)| {
+                            TypedDatum::new(*d, &types[i])
+                                .json(&JsonNumberPolicy::ConvertNumberToString)
+                        })
+                        .collect(),
+                );
             }
             let tag = format!("SELECT {}", sql_rows.len());
             SqlResult::rows(client, tag, sql_rows, desc).into()
         }
-        ExecuteResponse::Subscribing { rx, ctx_extra }  => {
-            StatementResult::Subscribe {
-                tag:"SUBSCRIBE".into(),
-                desc: desc.relation_desc.unwrap(),
-                rx: RecordFirstRowStream::new(Box::new(UnboundedReceiverStream::new(rx)), execute_started, client),
-                ctx_extra,
-            }
+        ExecuteResponse::Subscribing { rx, ctx_extra } => StatementResult::Subscribe {
+            tag: "SUBSCRIBE".into(),
+            desc: desc.relation_desc.unwrap(),
+            rx: RecordFirstRowStream::new(
+                Box::new(UnboundedReceiverStream::new(rx)),
+                execute_started,
+                client,
+            ),
+            ctx_extra,
         },
         res @ (ExecuteResponse::Fetch { .. }
         | ExecuteResponse::CopyTo { .. }
         | ExecuteResponse::CopyFrom { .. }
         | ExecuteResponse::DeclaredCursor
-        | ExecuteResponse::ClosedCursor) => {
-            SqlResult::err(
-                client,
-                format!("internal error: encountered prohibited ExecuteResponse {:?}.\n\n
-This is a bug. Can you please file an issue letting us know?\n
-https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=C-bug%2CC-triage&template=01-bug.yml",
-            ExecuteResponseKind::from(res))).into()
-        }
+        | ExecuteResponse::ClosedCursor) => SqlResult::err(
+            client,
+            Error::Unstructured(anyhow!("internal error: encountered prohibited ExecuteResponse {:?}.\n\n
+            This is a bug. Can you please file an issue letting us know?\n
+            https://github.com/MaterializeInc/materialize/issues/new?assignees=&labels=C-bug%2CC-triage&template=01-bug.yml", ExecuteResponseKind::from(res))),
+        )
+        .into(),
     })
 }
 

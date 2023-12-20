@@ -34,6 +34,7 @@ use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::Diagnostics;
+use mz_persist_txn::txn_cache::TxnsCache;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::fixed_length::{FromRowByTypes, IntoRowByTypes};
 use mz_repr::{ColumnType, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
@@ -366,6 +367,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                     peek,
                     Arc::clone(&self.compute_state.persist_clients),
                     metadata,
+                    usize::cast_from(self.compute_state.max_result_size),
                     self.timely_worker,
                 )
             }
@@ -701,6 +703,7 @@ impl PendingPeek {
         peek: Peek,
         persist_clients: Arc<PersistClientCache>,
         metadata: CollectionMetadata,
+        max_result_size: usize,
         timely_worker: &mut TimelyWorker<A>,
     ) -> Self {
         let active_worker = {
@@ -729,6 +732,7 @@ impl PendingPeek {
                     metadata,
                     timestamp,
                     mfp_plan,
+                    max_result_size,
                     max_results_needed,
                 )
                 .await
@@ -796,6 +800,7 @@ impl PersistPeek {
         metadata: CollectionMetadata,
         as_of: Timestamp,
         mfp_plan: SafeMfpPlan,
+        max_result_size: usize,
         mut limit_remaining: usize,
     ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
         let client = persist_clients
@@ -813,10 +818,23 @@ impl PersistPeek {
             .await
             .map_err(|e| e.to_string())?;
 
+        // If we are using persist-txn for this collection, then the upper might
+        // be advanced lazily and we have to go through persist-txn for reads.
+        //
+        // TODO: If/when we have a process-wide TxnsRead worker for clusterd,
+        // use in here (instead of opening a new TxnsCache) to save a persist
+        // reader registration and some txns shard read traffic.
+        let mut txns_read = if let Some(txns_id) = metadata.txns_shard {
+            Some(TxnsCache::open(&client, txns_id, Some(metadata.data_shard)).await)
+        } else {
+            None
+        };
+
         let metrics = client.metrics();
 
         let mut cursor = StatsCursor::new(
             &mut reader,
+            txns_read.as_mut(),
             metrics,
             &metadata.relation_desc,
             Antichain::from_elem(as_of),
@@ -831,6 +849,7 @@ impl PersistPeek {
         let mut datum_vec = DatumVec::new();
         let mut row_builder = Row::default();
         let arena = RowArena::new();
+        let mut total_size = 0usize;
 
         while limit_remaining > 0 {
             let Some(batch) = cursor.next().await else {
@@ -852,6 +871,15 @@ impl PersistPeek {
                     .evaluate_into(&mut datum_local, &arena, &mut row_builder)
                     .map_err(|e| e.to_string())?;
                 if let Some(row) = eval_result {
+                    total_size = total_size
+                        .saturating_add(row.byte_len())
+                        .saturating_add(std::mem::size_of::<NonZeroUsize>());
+                    if total_size > max_result_size {
+                        return Err(format!(
+                            "result exceeds max size of {}",
+                            ByteSize::b(u64::cast_from(max_result_size))
+                        ));
+                    }
                     result.push((row, count));
                     limit_remaining = limit_remaining.saturating_sub(count.get());
                     if limit_remaining == 0 {

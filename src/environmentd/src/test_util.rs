@@ -498,7 +498,6 @@ impl Listeners {
                         secrets_reader: mz_service::secrets::SecretsControllerKind::LocalFile,
                         secrets_reader_local_file_dir: Some(data_directory.join("secrets")),
                         secrets_reader_kubernetes_context: None,
-                        secrets_reader_aws_region: None,
                         secrets_reader_aws_prefix: None,
                     },
                     connection_context,
