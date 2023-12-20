@@ -447,10 +447,17 @@ pub struct InMemoryHashMap {
 }
 
 impl InMemoryHashMap {
-    fn drain(&mut self) -> Drain<'_, UpsertKey, StateValue> {
-        // clearing the total_size when draining
+    /// Drain the map, returning the last total size as well.
+    fn drain(&mut self) -> (i64, Drain<'_, UpsertKey, StateValue>) {
+        let last_size = self.total_size;
         self.total_size = 0;
-        self.state.drain()
+
+        (last_size, self.state.drain())
+    }
+
+    /// Get the current size of the map. Note that after `drain`-ing, this is 0.
+    fn current_size(&self) -> i64 {
+        self.total_size
     }
 }
 
@@ -599,14 +606,15 @@ impl UpsertStateBackend for AutoSpillBackend {
             BackendType::InMemory(map) => {
                 let mut put_stats = map.multi_put(puts).await?;
                 let in_memory_size: usize = map
-                    .total_size
+                    .current_size()
                     .try_into()
                     .expect("unexpected error while casting");
                 if in_memory_size > self.auto_spill_threshold_bytes {
                     let mut rocksdb_backend =
                         AutoSpillBackend::init_rocksdb(&self.rockdsdb_params).await;
 
-                    let new_puts = map.drain().map(|(k, v)| {
+                    let (last_known_size, new_puts) = map.drain();
+                    let new_puts = new_puts.map(|(k, v)| {
                         (
                             k,
                             PutValue {
@@ -619,7 +627,7 @@ impl UpsertStateBackend for AutoSpillBackend {
                     let rocksdb_stats = rocksdb_backend.multi_put(new_puts).await?;
                     // Adjusting the sizes as the value sizes in rocksdb could be different than in memory
                     put_stats.size_diff += rocksdb_stats.size_diff;
-                    put_stats.size_diff -= map.total_size;
+                    put_stats.size_diff -= last_known_size;
                     // Setting backend to rocksdb
                     self.backend_type = BackendType::RocksDb(rocksdb_backend);
                     // Switching metric to 1 for rocksdb

@@ -17,7 +17,7 @@ $ kafka-create-topic topic=autospill
   'testdrive-autospill-${testdrive.seed}'
   )
   KEY FORMAT TEXT VALUE FORMAT TEXT
-  ENVELOPE UPSERT
+  ENVELOPE UPSERT WITH (SIZE '1')
 
 
 $ kafka-ingest format=bytes topic=autospill key-format=bytes key-terminator=:
@@ -26,6 +26,20 @@ animal:whale
 
 > SELECT count(*) from autospill;
 2
+
+> SELECT
+  SUM(u.envelope_state_bytes) > 0
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  WHERE s.name = 'autospill'
+true
+
+$ set-from-sql var=previous-bytes
+SELECT
+  (SUM(u.envelope_state_bytes))::text
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  WHERE s.name = 'autospill'
 
 # Inserting large value should trigger auto spill
 $ kafka-ingest format=bytes topic=autospill key-format=bytes key-terminator=:
@@ -36,13 +50,18 @@ fish:AREALLYBIGFISHAREALLYBIGFISHAREALLYBIGFISHAREALLYBIGFISH
 
 > SELECT
     SUM(u.envelope_state_bytes) > 0,
+    -- This + the assertion below that ensures the byte count goes to 0 tests
+    -- that we correctly transition the `envelope_state_bytes` count to the
+    -- in-rocksdb. In the past, we would accidentally SUM the previous and
+    -- new size here.
+    SUM(u.envelope_state_bytes) < (${previous-bytes} * 2),
     SUM(u.envelope_state_records)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
-  WHERE s.name IN ('autospill')
+  WHERE s.name = 'autospill'
   GROUP BY s.name
   ORDER BY s.name
-true 3
+true true 3
 
 # Removing all the inserted keys
 $ kafka-ingest format=bytes topic=autospill key-format=bytes key-terminator=:
