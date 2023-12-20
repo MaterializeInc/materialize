@@ -13,8 +13,13 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-export BUILDKITE_REPO_REF="${BUILDKITE_REPO_REF:-origin}"
-export BUILDKITE_PULL_REQUEST_BASE_BRANCH="${BUILDKITE_PULL_REQUEST_BASE_BRANCH:-main}"
+MZ_REPO_REF="${BUILDKITE_REPO_REF:-origin}"
+MZ_REPO_PULL_REQUEST_BASE_BRANCH="${BUILDKITE_PULL_REQUEST_BASE_BRANCH:-main}"
+
+if [[ "${BUILDKITE:-}" != "true" ]]; then
+  # when running locally, we origin may point to a fork of the repo but we want the mz repo
+  MZ_REPO_REF=$(git remote -v | grep "MaterializeInc/materialize" | grep "fetch" | head -n1 | cut -f1)
+fi
 
 configure_git_user_if_in_buildkite() {
   if [[ "${BUILDKITE:-}" == "true" ]]; then
@@ -26,16 +31,16 @@ configure_git_user_if_in_buildkite() {
 
 fetch_pr_target_branch() {
   ci_collapsed_heading "Fetch target branch"
-  run git fetch "$BUILDKITE_REPO_REF" "$BUILDKITE_PULL_REQUEST_BASE_BRANCH"
+  run git fetch "$MZ_REPO_REF" "$MZ_REPO_PULL_REQUEST_BASE_BRANCH"
 }
 
 merge_pr_target_branch() {
   configure_git_user_if_in_buildkite
 
   ci_collapsed_heading "Merge target branch"
-  run git merge "$BUILDKITE_REPO_REF"/"$BUILDKITE_PULL_REQUEST_BASE_BRANCH" --message "Merge"
+  run git merge "$MZ_REPO_REF"/"$MZ_REPO_PULL_REQUEST_BASE_BRANCH" --message "Merge"
 }
 
 get_common_ancestor_commit_of_pr_and_target() {
-  run git merge-base HEAD "$BUILDKITE_REPO_REF"/"$BUILDKITE_PULL_REQUEST_BASE_BRANCH"
+  run git merge-base HEAD "$MZ_REPO_REF"/"$MZ_REPO_PULL_REQUEST_BASE_BRANCH"
 }
