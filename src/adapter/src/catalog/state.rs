@@ -489,10 +489,7 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn check_unstable_dependencies(
-        &self,
-        item: &CatalogItem,
-    ) -> Result<(), AdapterError> {
+    pub(super) fn check_unstable_dependencies(&self, item: &CatalogItem) -> Result<(), Error> {
         if self.system_config().enable_unstable_dependencies() {
             return Ok(());
         }
@@ -512,9 +509,11 @@ impl CatalogState {
             Ok(())
         } else {
             let object_type = item.typ().to_string();
-            Err(AdapterError::UnstableDependency {
-                object_type,
-                unstable_dependencies,
+            Err(Error {
+                kind: ErrorKind::UnstableDependency {
+                    object_type,
+                    unstable_dependencies,
+                },
             })
         }
     }
@@ -1435,7 +1434,7 @@ impl CatalogState {
     }
 
     /// Get system configuration `name`.
-    pub fn get_system_configuration(&self, name: &str) -> Result<&dyn Var, AdapterError> {
+    pub fn get_system_configuration(&self, name: &str) -> Result<&dyn Var, Error> {
         Ok(self.system_configuration.get(name)?)
     }
 
@@ -1444,7 +1443,7 @@ impl CatalogState {
         &mut self,
         name: &str,
         value: VarInput,
-    ) -> Result<(), AdapterError> {
+    ) -> Result<(), Error> {
         Ok(self.system_configuration.set_default(name, value)?)
     }
 
@@ -1456,7 +1455,7 @@ impl CatalogState {
         &mut self,
         name: &str,
         value: VarInput,
-    ) -> Result<bool, AdapterError> {
+    ) -> Result<bool, Error> {
         Ok(self.system_configuration.set(name, value)?)
     }
 
@@ -1464,7 +1463,7 @@ impl CatalogState {
     ///
     /// Return a `bool` value indicating whether the configuration was modified
     /// by the call.
-    pub(super) fn remove_system_configuration(&mut self, name: &str) -> Result<bool, AdapterError> {
+    pub(super) fn remove_system_configuration(&mut self, name: &str) -> Result<bool, Error> {
         Ok(self.system_configuration.reset(name)?)
     }
 
@@ -1983,7 +1982,7 @@ impl CatalogState {
         location: mz_catalog::durable::ReplicaLocation,
         allowed_sizes: &Vec<String>,
         allowed_availability_zones: Option<&[String]>,
-    ) -> Result<ReplicaLocation, AdapterError> {
+    ) -> Result<ReplicaLocation, Error> {
         let location = match location {
             mz_catalog::durable::ReplicaLocation::Unmanaged {
                 storagectl_addrs,
@@ -1993,10 +1992,12 @@ impl CatalogState {
                 workers,
             } => {
                 if allowed_availability_zones.is_some() {
-                    coord_bail!(
-                        "internal error: tried concretize unmanaged replica \
-                        with specific availability_zones"
-                    );
+                    return Err(Error {
+                        kind: ErrorKind::Internal(
+                            "tried concretize unmanaged replica with specific availability_zones"
+                                .to_string(),
+                        ),
+                    });
                 }
                 ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
                     storagectl_addrs,
@@ -2014,10 +2015,11 @@ impl CatalogState {
                 internal,
             } => {
                 if allowed_availability_zones.is_some() && availability_zone.is_some() {
-                    coord_bail!(
-                        "internal error: tried concretize managed replica with \
-                        specific availability zones and availability zone"
-                    );
+                    return Err(Error {
+                        kind: ErrorKind::Internal(
+                            "tried concretize managed replica with specific availability zones and availability zone".to_string(),
+                        ),
+                    });
                 }
                 self.ensure_valid_replica_size(allowed_sizes, &size)?;
                 let cluster_replica_sizes = &self.cluster_replica_sizes;
@@ -2052,7 +2054,7 @@ impl CatalogState {
         &self,
         allowed_sizes: &[String],
         size: &String,
-    ) -> Result<(), AdapterError> {
+    ) -> Result<(), Error> {
         let cluster_replica_sizes = &self.cluster_replica_sizes;
 
         if !cluster_replica_sizes.0.contains_key(size)
@@ -2077,9 +2079,11 @@ impl CatalogState {
                 )| (scale, cpu_limit),
             );
 
-            Err(AdapterError::InvalidClusterReplicaSize {
-                size: size.to_owned(),
-                expected: entries.into_iter().map(|(name, _)| name.clone()).collect(),
+            Err(Error {
+                kind: ErrorKind::InvalidClusterReplicaSize {
+                    size: size.to_owned(),
+                    expected: entries.into_iter().map(|(name, _)| name.clone()).collect(),
+                },
             })
         } else {
             Ok(())
