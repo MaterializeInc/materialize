@@ -85,7 +85,7 @@ use prometheus::core::AtomicU64;
 use crate::metrics::upsert::{UpsertMetrics, UpsertSharedMetrics};
 use crate::render::upsert::rocksdb::RocksDB;
 use crate::render::upsert::{UpsertKey, UpsertValue};
-use crate::source::SourceStatistics;
+use crate::statistics::SourceStatistics;
 
 /// The default set of `bincode` options used for consolidating
 /// upsert snapshots (and writing values to RocksDB).
