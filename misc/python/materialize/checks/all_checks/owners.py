@@ -18,15 +18,15 @@ class Owners(Check):
     def _create_objects(self, role: str, i: int, expensive: bool = False) -> str:
         s = dedent(
             f"""
-            $[version>=5200] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+            $[version>=5200] postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
             GRANT CREATE ON DATABASE materialize TO {role}
             GRANT CREATE ON SCHEMA materialize.public TO {role}
             GRANT CREATE ON CLUSTER default TO {role}
-            $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+            $[version>=5900] postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
             GRANT CREATEDB ON SYSTEM TO {role}
-            $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+            $[version<5900] postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
             ALTER ROLE {role} CREATEDB
-            $ postgres-execute connection=postgres://{role}@materialized:6875/materialize
+            $ postgres-execute connection=postgres://{role}@${{testdrive.materialize-sql-addr}}
             CREATE DATABASE owner_db{i}
             CREATE SCHEMA owner_schema{i}
             CREATE CONNECTION owner_kafka_conn{i} FOR KAFKA {self._kafka_broker()}
@@ -53,7 +53,7 @@ class Owners(Check):
     def _alter_object_owners(self, i: int, expensive: bool = False) -> str:
         s = dedent(
             f"""
-            $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+            $ postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
             ALTER DATABASE owner_db{i} OWNER TO other_owner
             ALTER SCHEMA owner_schema{i} OWNER TO other_owner
             ALTER CONNECTION owner_kafka_conn{i} OWNER TO other_owner
@@ -102,7 +102,7 @@ class Owners(Check):
         ]
         if success:
             return (
-                f"$ postgres-execute connection=postgres://{role}@materialized:6875/materialize\n"
+                f"$ postgres-execute connection=postgres://{role}@${{testdrive.materialize-sql-addr}}\n"
                 + "\n".join(cmds)
                 + "\n"
             )
@@ -122,16 +122,16 @@ class Owners(Check):
         return Testdrive(
             dedent(
                 """
-                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT CREATEROLE ON SYSTEM TO materialize
 
-                $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version<5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 ALTER ROLE materialize CREATEROLE
 
                 > CREATE ROLE owner_role_01
                 >[version<5900] ALTER ROLE owner_role_01 CREATEDB CREATECLUSTER
 
-                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_01
 
                 > CREATE ROLE other_owner
@@ -151,16 +151,16 @@ class Owners(Check):
                 + self._alter_object_owners(4)
                 + dedent(
                     """
-                    $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                     GRANT CREATEROLE ON SYSTEM TO materialize
 
-                    $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    $[version<5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                     ALTER ROLE materialize CREATEROLE
 
                     > CREATE ROLE owner_role_02
                     >[version<5900] ALTER ROLE owner_role_02 CREATEDB CREATECLUSTER
 
-                    $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                     GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_02
                     """
                 ),
@@ -172,16 +172,16 @@ class Owners(Check):
                 + self._alter_object_owners(8)
                 + dedent(
                     """
-                    $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                     GRANT CREATEROLE ON SYSTEM TO materialize
 
-                    $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    $[version<5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                     ALTER ROLE materialize CREATEROLE
 
                     > CREATE ROLE owner_role_03
                     >[version<5900] ALTER ROLE owner_role_03 CREATEDB CREATECLUSTER
 
-                    $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                     GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_03
                     """
                 ),

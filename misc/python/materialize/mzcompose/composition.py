@@ -485,12 +485,15 @@ class Composition:
 
     def sql_connection(
         self,
-        service: str = "materialized",
+        service: str | None = None,
         user: str = "materialize",
         port: int | None = None,
         password: str | None = None,
         ssl_context: ssl.SSLContext | None = None,
     ) -> Connection:
+        if service is None:
+            service = "materialized"
+
         """Get a connection (with autocommit enabled) to the materialized service."""
         port = self.port(service, port) if port else self.default_port(service)
         conn = pg8000.connect(
@@ -505,7 +508,7 @@ class Composition:
 
     def sql_cursor(
         self,
-        service: str = "materialized",
+        service: str | None = None,
         user: str = "materialize",
         port: int | None = None,
         password: str | None = None,
@@ -518,7 +521,7 @@ class Composition:
     def sql(
         self,
         sql: str,
-        service: str = "materialized",
+        service: str | None = None,
         user: str = "materialize",
         port: int | None = None,
         password: str | None = None,
@@ -536,7 +539,7 @@ class Composition:
     def sql_query(
         self,
         sql: str,
-        service: str = "materialized",
+        service: str | None = None,
         user: str = "materialize",
         port: int | None = None,
         password: str | None = None,
@@ -548,8 +551,8 @@ class Composition:
             cursor.execute(sql)
             return cursor.fetchall()
 
-    def query_mz_version(self) -> str:
-        return self.sql_query("SELECT mz_version()")[0][0]
+    def query_mz_version(self, service: str | None = None) -> str:
+        return self.sql_query("SELECT mz_version()", service=service)[0][0]
 
     def run(
         self,
@@ -1014,6 +1017,7 @@ class Composition:
         persistent: bool = True,
         args: list[str] = [],
         caller: Traceback | None = None,
+        mz_service: str | None = None,
     ) -> None:
         """Run a string as a testdrive script.
 
@@ -1022,16 +1026,27 @@ class Composition:
             service: Optional name of the testdrive service to use.
             input: The string to execute.
             persistent: Whether a persistent testdrive container will be used.
+            caller: The python source line that invoked testdrive()
+            mz_service: The Materialize service name to target
         """
 
         caller = caller or getframeinfo(stack()[1][0])
+        args = args + [f"--source={caller.filename}:{caller.lineno}"]
 
-        args_with_source = args + [f"--source={caller.filename}:{caller.lineno}"]
+        if mz_service is not None:
+            args += [
+                f"--materialize-url=postgres://materialize@{mz_service}:6875",
+                f"--materialize-internal-url=postgres://mz_system@{mz_service}:6877",
+                f"--persist-consensus-url=postgres://root@{mz_service}:26257?options=--search_path=consensus",
+            ]
 
         if persistent:
-            self.exec(service, *args_with_source, stdin=input)
+            self.exec(service, *args, stdin=input)
         else:
-            self.run(service, *args_with_source, stdin=input)
+            assert (
+                mz_service is None
+            ), "testdrive(mz_service = ...) can only be used with persistent Testdrive containers."
+            self.run(service, *args, stdin=input)
 
     def enable_minio_versioning(self) -> None:
         self.up("minio")

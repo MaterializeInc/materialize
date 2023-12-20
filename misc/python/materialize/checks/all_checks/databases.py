@@ -18,10 +18,10 @@ class CheckDatabaseCreate(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT CREATEDB ON SYSTEM TO materialize
 
-                $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version<5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 ALTER ROLE materialize CREATEDB
 
                 > CREATE DATABASE to_be_created1;
@@ -30,10 +30,10 @@ class CheckDatabaseCreate(Check):
                 > INSERT INTO t1 VALUES (1);
                 """,
                 """
-                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT CREATEDB ON SYSTEM TO materialize
 
-                $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version<5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 ALTER ROLE materialize CREATEDB
 
                 > CREATE DATABASE to_be_created2;
@@ -90,7 +90,7 @@ class CheckDatabaseDrop(Check):
                 # When upgrading from old version without roles the database is
                 # owned by default_role, thus we have to change the owner
                 # before dropping it:
-                $[version>=4700] postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                $[version>=4700] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER DATABASE to_be_dropped OWNER TO materialize;
 
                 > DROP DATABASE to_be_dropped CASCADE;

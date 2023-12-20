@@ -669,6 +669,28 @@ steps:
               composition: platform-checks
               args: [--scenario=DropCreateDefaultReplica, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-persist-txn-toggle
+        label: "Checks + Toggle persist_txn"
+        timeout_in_minutes: 45
+        artifact_paths: junit_*.xml
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=PersistTxnToggle, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-persist-txn-fending
+        label: "Checks + persist_txn fencing"
+        timeout_in_minutes: 45
+        artifact_paths: junit_*.xml
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=PersistTxnFencing, "--seed=$BUILDKITE_JOB_ID"]
+
       - id: checks-upgrade-matrix
         label: "Random upgrades over the entire matrix"
         timeout_in_minutes: 600
