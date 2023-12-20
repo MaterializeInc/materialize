@@ -17,11 +17,17 @@ from materialize.scalability.endpoint import Endpoint
 
 POSTGRES_ENDPOINT_NAME = "postgres"
 
+TARGET_MATERIALIZE_LOCAL = "local"
+TARGET_MATERIALIZE_REMOTE = "remote"
+TARGET_POSTGRES = "postgres"
+TARGET_HEAD = "HEAD"
+
 
 class MaterializeRemote(Endpoint):
     """Connect to a remote Materialize instance using a psql URL"""
 
     def __init__(self, materialize_url: str) -> None:
+        super().__init__(specified_target=TARGET_MATERIALIZE_REMOTE)
         self.materialize_url = materialize_url
 
     def url(self) -> str:
@@ -38,7 +44,7 @@ class PostgresContainer(Endpoint):
     def __init__(self, composition: Composition) -> None:
         self.composition = composition
         self._port: int | None = None
-        super().__init__()
+        super().__init__(specified_target=TARGET_POSTGRES)
 
     def host(self) -> str:
         return "localhost"
@@ -67,6 +73,9 @@ class PostgresContainer(Endpoint):
 
 
 class MaterializeNonRemote(Endpoint):
+    def __init__(self, specified_target: str):
+        super().__init__(specified_target)
+
     def host(self) -> str:
         return "localhost"
 
@@ -92,6 +101,9 @@ class MaterializeNonRemote(Endpoint):
 class MaterializeLocal(MaterializeNonRemote):
     """Connect to a Materialize instance running on the local host"""
 
+    def __init__(self) -> None:
+        super().__init__(specified_target=TARGET_MATERIALIZE_LOCAL)
+
     def port(self) -> int:
         return 6875
 
@@ -110,6 +122,7 @@ class MaterializeContainer(MaterializeNonRemote):
         self,
         composition: Composition,
         specified_target: str,
+        resolved_target: str,
         image: str | None = None,
         alternative_image: str | None = None,
     ) -> None:
@@ -119,8 +132,11 @@ class MaterializeContainer(MaterializeNonRemote):
             alternative_image if image != alternative_image else None
         )
         self._port: int | None = None
-        self.specified_target = specified_target
-        super().__init__()
+        self._resolved_target = resolved_target
+        super().__init__(specified_target)
+
+    def resolved_target(self) -> str:
+        return self._resolved_target
 
     def port(self) -> int:
         assert self._port is not None

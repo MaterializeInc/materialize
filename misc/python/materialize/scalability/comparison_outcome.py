@@ -14,6 +14,7 @@ from materialize.scalability.df.df_totals import (
     DfTotalsExtended,
     concat_df_totals_extended,
 )
+from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.scalability_change import (
     Regression,
     ScalabilityChange,
@@ -29,6 +30,7 @@ class ComparisonOutcome:
         self.significant_improvements: list[ScalabilityImprovement] = []
         self.regression_df = DfTotalsExtended()
         self.significant_improvement_df = DfTotalsExtended()
+        self.endpoints_with_regressions: set[Endpoint] = set()
 
     def has_regressions(self) -> bool:
         assert len(self.regressions) == self.regression_df.length()
@@ -40,6 +42,9 @@ class ComparisonOutcome:
             == self.significant_improvement_df.length()
         )
         return len(self.significant_improvements) > 0
+
+    def has_scalability_changes(self) -> bool:
+        return self.has_regressions() or self.has_significant_improvements()
 
     def __str__(self) -> str:
         return f"{len(self.regressions)} regressions, {len(self.significant_improvements)} significant improvements"
@@ -60,17 +65,34 @@ class ComparisonOutcome:
         return "\n".join(f"* {x}" for x in entries)
 
     def merge(self, other: ComparisonOutcome) -> None:
-        self.regressions.extend(other.regressions)
-        self.significant_improvements.extend(other.significant_improvements)
-        self.append_regression_df(other.regression_df)
-        self.append_significant_improvement_df(other.significant_improvement_df)
+        self.append_regressions(
+            other.regressions,
+            other.significant_improvements,
+            other.regression_df,
+            other.significant_improvement_df,
+        )
 
-    def append_regression_df(self, regressions_data: DfTotalsExtended) -> None:
+    def append_regressions(
+        self,
+        regressions: list[Regression],
+        significant_improvements: list[ScalabilityImprovement],
+        regression_df: DfTotalsExtended,
+        significant_improvement_df: DfTotalsExtended,
+    ) -> None:
+        self.regressions.extend(regressions)
+        self.significant_improvements.extend(significant_improvements)
+        self._append_regression_df(regression_df)
+        self._append_significant_improvement_df(significant_improvement_df)
+
+        for regression in regressions:
+            self.endpoints_with_regressions.add(regression.endpoint)
+
+    def _append_regression_df(self, regressions_data: DfTotalsExtended) -> None:
         self.regression_df = concat_df_totals_extended(
             [self.regression_df, regressions_data]
         )
 
-    def append_significant_improvement_df(
+    def _append_significant_improvement_df(
         self, significant_improvements_data: DfTotalsExtended
     ) -> None:
         self.significant_improvement_df = concat_df_totals_extended(

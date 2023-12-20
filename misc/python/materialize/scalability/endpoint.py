@@ -16,6 +16,9 @@ class Endpoint:
 
     _version: str | None = None
 
+    def __init__(self, specified_target: str):
+        self._specified_target = specified_target
+
     def sql_connection(self) -> psycopg.connection.Connection[tuple[Any, ...]]:
         conn = psycopg.connect(self.url())
         conn.autocommit = True
@@ -25,6 +28,12 @@ class Endpoint:
         return (
             f"postgresql://{self.user()}:{self.password()}@{self.host()}:{self.port()}"
         )
+
+    def specified_target(self) -> str:
+        return self._specified_target
+
+    def resolved_target(self) -> str:
+        return self.specified_target()
 
     def host(self) -> str:
         raise NotImplementedError

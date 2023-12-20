@@ -26,6 +26,10 @@ from materialize.scalability.comparison_outcome import ComparisonOutcome
 from materialize.scalability.df.df_totals import DfTotalsExtended
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.endpoints import (
+    TARGET_HEAD,
+    TARGET_MATERIALIZE_LOCAL,
+    TARGET_MATERIALIZE_REMOTE,
+    TARGET_POSTGRES,
     MaterializeContainer,
     MaterializeLocal,
     MaterializeRemote,
@@ -38,6 +42,7 @@ from materialize.scalability.plot.plot import (
     plot_duration_by_endpoints_for_workload,
     plot_tps_per_connections,
 )
+from materialize.scalability.regression_assessment import RegressionAssessment
 from materialize.scalability.result_analyzer import ResultAnalyzer
 from materialize.scalability.result_analyzers import DefaultResultAnalyzer
 from materialize.scalability.schema import Schema, TransactionIsolation
@@ -207,13 +212,20 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     create_plots(benchmark_result, baseline_endpoint)
     upload_plots_to_buildkite()
 
+    regression_assessment = RegressionAssessment(
+        baseline_endpoint,
+        benchmark_result.overall_comparison_outcome,
+    )
+
     report_regression_result(
         baseline_endpoint,
         regression_threshold,
         benchmark_result.overall_comparison_outcome,
     )
 
-    if benchmark_result.overall_comparison_outcome.has_regressions():
+    report_assessment(regression_assessment)
+
+    if regression_assessment.has_unjustified_regressions():
         sys.exit(1)
 
 
@@ -239,34 +251,37 @@ def get_baseline_and_other_endpoints(
 ) -> tuple[Endpoint | None, list[Endpoint]]:
     baseline_endpoint: Endpoint | None = None
     other_endpoints: list[Endpoint] = []
-    for i, target in enumerate(args.target):
-        original_target = target
+    for i, specified_target in enumerate(args.target):
         endpoint: Endpoint | None = None
 
-        if target == "local":
+        if specified_target == TARGET_MATERIALIZE_LOCAL:
             endpoint = MaterializeLocal()
-        elif target == "remote":
+        elif specified_target == TARGET_MATERIALIZE_REMOTE:
             endpoint = MaterializeRemote(materialize_url=args.materialize_url[i])
-        elif target == "postgres":
+        elif specified_target == TARGET_POSTGRES:
             endpoint = PostgresContainer(composition=c)
-        elif target == "HEAD":
+        elif specified_target == TARGET_HEAD:
             endpoint = MaterializeContainer(
-                composition=c, specified_target=original_target
+                composition=c,
+                specified_target=specified_target,
+                resolved_target=specified_target,
             )
         else:
-            if target == "common-ancestor":
-                target = resolve_ancestor_image_tag(
+            resolved_target = specified_target
+            if specified_target == "common-ancestor":
+                resolved_target = resolve_ancestor_image_tag(
                     ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS
                 )
             endpoint = MaterializeContainer(
                 composition=c,
-                specified_target=original_target,
-                image=f"materialize/materialized:{target}",
+                specified_target=specified_target,
+                resolved_target=resolved_target,
+                image=f"materialize/materialized:{resolved_target}",
                 alternative_image="materialize/materialized:latest",
             )
         assert endpoint is not None
 
-        if original_target == regression_against_target:
+        if specified_target == regression_against_target:
             baseline_endpoint = endpoint
         else:
             other_endpoints.append(endpoint)
@@ -302,7 +317,8 @@ def report_regression_result(
 
     baseline_desc = endpoint_name_to_description(baseline_endpoint.try_load_version())
 
-    if outcome.has_regressions() or outcome.has_significant_improvements():
+    print("+++ Scalability changes")
+    if outcome.has_scalability_changes():
         print(
             f"{'ERROR' if outcome.has_regressions() else 'INFO'}: "
             f"The following scalability changes were detected "
@@ -316,6 +332,41 @@ def report_regression_result(
 
     else:
         print("No scalability changes were detected.")
+
+
+def report_assessment(regression_assessment: RegressionAssessment):
+    print("+++ Assessment of regressions")
+
+    if not regression_assessment.has_comparison_target():
+        print("No comparison was performed because not baseline was specified")
+        return
+
+    assert regression_assessment.baseline_endpoint is not None
+
+    if not regression_assessment.has_regressions():
+        print("No regressions were detected")
+        return
+
+    baseline_desc = endpoint_name_to_description(
+        regression_assessment.baseline_endpoint.try_load_version()
+    )
+    for (
+        endpoint_with_regression,
+        justification,
+    ) in regression_assessment.endpoints_with_regressions_and_justifications.items():
+        endpoint_desc = endpoint_name_to_description(
+            endpoint_with_regression.try_load_version()
+        )
+
+        if justification is None:
+            print(
+                f"* There are regressions between baseline {baseline_desc} and endpoint {endpoint_desc} that need to be checked."
+            )
+        else:
+            print(
+                f"* Although there are regressions between baseline {baseline_desc} and endpoint {endpoint_desc},"
+                f" they can be explained by the following commits that are marked as accepted regressions: {justification}."
+            )
 
 
 def create_result_analyzer(regression_threshold: float) -> ResultAnalyzer:

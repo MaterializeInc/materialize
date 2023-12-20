@@ -391,6 +391,35 @@ def is_valid_release_image(version: MzVersion) -> bool:
     return docker.image_of_release_version_exists(version)
 
 
+def get_commits_of_accepted_regressions_between_versions(
+    ancestor_overrides: dict[str, MzVersion],
+    since_version_exclusive: MzVersion,
+    to_version_inclusive: MzVersion,
+) -> list[str]:
+    """
+    Get commits of accepted regressions between both versions.
+    :param ancestor_overrides: one of #ANCESTOR_OVERRIDES_FOR_PERFORMANCE_REGRESSIONS, #ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS, #ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS
+    :return: commits
+    """
+
+    assert since_version_exclusive <= to_version_inclusive
+
+    commits = []
+
+    for (
+        regression_introducing_commit,
+        first_version_with_regression,
+    ) in ancestor_overrides.items():
+        if (
+            since_version_exclusive
+            < first_version_with_regression
+            <= to_version_inclusive
+        ):
+            commits.append(regression_introducing_commit)
+
+    return commits
+
+
 class VersionsFromDocs:
     """Materialize versions as listed in doc/user/content/versions
 
