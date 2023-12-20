@@ -7,33 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ kafka-create-topic topic=autospill
-
-> CREATE CONNECTION conn
-  FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT
-
-> CREATE SOURCE autospill
-  FROM KAFKA CONNECTION conn (TOPIC
-  'testdrive-autospill-${testdrive.seed}'
-  )
-  KEY FORMAT TEXT VALUE FORMAT TEXT
-  ENVELOPE UPSERT WITH (SIZE '1')
-
-
-$ kafka-ingest format=bytes topic=autospill key-format=bytes key-terminator=:
-bird:goose
-animal:whale
-
-> SELECT count(*) from autospill;
-2
-
-> SELECT
-  SUM(u.envelope_state_bytes) > 0
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
-  WHERE s.name = 'autospill'
-true
-
 $ set-from-sql var=previous-bytes
 SELECT
   (SUM(u.envelope_state_bytes))::text
