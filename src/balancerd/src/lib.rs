@@ -90,7 +90,7 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::response::IntoResponse;
 use axum::{routing, Router};
@@ -124,6 +124,7 @@ use crate::codec::{BackendMessage, FramedConn};
 pub const BUILD_INFO: BuildInfo = build_info!();
 
 pub struct BalancerConfig {
+    sigterm_wait: Option<Duration>,
     /// Info about which version of the code is running.
     build_version: Version,
     /// Listen address for internal HTTP health and metrics server.
@@ -142,6 +143,7 @@ pub struct BalancerConfig {
 impl BalancerConfig {
     pub fn new(
         build_info: &BuildInfo,
+        sigterm_wait: Option<Duration>,
         internal_http_listen_addr: SocketAddr,
         pgwire_listen_addr: SocketAddr,
         https_listen_addr: SocketAddr,
@@ -152,6 +154,7 @@ impl BalancerConfig {
     ) -> Self {
         Self {
             build_version: build_info.semver_version(),
+            sigterm_wait,
             internal_http_listen_addr,
             pgwire_listen_addr,
             https_listen_addr,
@@ -229,14 +232,21 @@ impl BalancerService {
         let metrics = ServerMetricsConfig::register_into(&self.cfg.metrics_registry);
 
         let mut set = JoinSet::new();
+        let mut server_handles = Vec::new();
+        let pgwire_addr = self.pgwire.0.local_addr();
+        let https_addr = self.https.0.local_addr();
+        let internal_http_addr = self.internal_http.0.local_addr();
         {
             let pgwire = PgwireBalancer {
                 resolver: Arc::new(self.cfg.resolver),
                 tls: pgwire_tls,
                 metrics: ServerMetrics::new(metrics.clone(), "pgwire"),
             };
+            let (handle, stream) = self.pgwire;
+            server_handles.push(handle);
             set.spawn_named(|| "pgwire_stream", async move {
-                mz_server_core::serve(self.pgwire.1, pgwire).await;
+                mz_server_core::serve(stream, pgwire, self.cfg.sigterm_wait).await;
+                warn!("pgwire server exited");
             });
         }
         {
@@ -245,8 +255,11 @@ impl BalancerService {
                 resolve_template: Arc::from(self.cfg.https_addr_template),
                 metrics: ServerMetrics::new(metrics, "https"),
             };
+            let (handle, stream) = self.https;
+            server_handles.push(handle);
             set.spawn_named(|| "https_stream", async move {
-                mz_server_core::serve(self.https.1, https).await;
+                mz_server_core::serve(stream, https, self.cfg.sigterm_wait).await;
+                warn!("https server exited");
             });
         }
         {
@@ -262,28 +275,38 @@ impl BalancerService {
                     routing::get(mz_http_util::handle_liveness_check),
                 )
                 .route("/api/readyz", routing::get(handle_readiness_check));
-
             let internal_http = InternalHttpServer { router };
+            let (handle, stream) = self.internal_http;
+            server_handles.push(handle);
             set.spawn_named(|| "internal_http_stream", async move {
-                mz_server_core::serve(self.internal_http.1, internal_http).await;
+                mz_server_core::serve(stream, internal_http, self.cfg.sigterm_wait).await;
+                warn!("internal_http server exited");
+            });
+        }
+        #[cfg(unix)]
+        {
+            let mut sigterm =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+            set.spawn_named(|| "sigterm_handler", async move {
+                sigterm.recv().await;
+                warn!("received signal TERM");
+                drop(server_handles);
             });
         }
 
         println!("balancerd {} listening...", BUILD_INFO.human_version());
         println!(" TLS enabled: {}", self.cfg.tls.is_some());
-        println!(" pgwire address: {}", self.pgwire.0.local_addr());
-        println!(" HTTPS address: {}", self.https.0.local_addr());
-        println!(
-            " internal HTTP address: {}",
-            self.internal_http.0.local_addr()
-        );
+        println!(" pgwire address: {}", pgwire_addr);
+        println!(" HTTPS address: {}", https_addr);
+        println!(" internal HTTP address: {}", internal_http_addr);
 
-        // The tasks should never exit, so complain if they do.
+        // Wait for all tasks to exit, which can happen on SIGTERM.
         while let Some(res) = set.join_next().await {
-            let _ = res?;
-            error!("serving task unexpectedly exited");
+            if let Err(err) = res {
+                error!("serving task failed: {err}")
+            }
         }
-        anyhow::bail!("serving tasks unexpectedly exited");
+        Ok(())
     }
 }
 
