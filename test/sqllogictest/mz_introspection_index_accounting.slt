@@ -22,7 +22,7 @@ SET CLUSTER TO mz_introspection
 query TT
 SELECT DISTINCT name, create_sql
 FROM mz_indexes
-WHERE cluster_id = 
+WHERE cluster_id =
   (SELECT id FROM mz_clusters WHERE name = 'mz_introspection')
 ----
 mz_roles_ind  CREATE␠INDEX␠"mz_roles_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_roles"␠("id")
@@ -104,7 +104,7 @@ FROM mz_indexes i
 LEFT JOIN mz_internal.mz_object_transitive_dependencies d ON i.id = d.object_id
 LEFT JOIN mz_objects o ON o.id = d.referenced_object_id
 JOIN mz_columns co on co.id = o.id
-WHERE cluster_id = 
+WHERE cluster_id =
   (SELECT id FROM mz_clusters WHERE name = 'mz_introspection')
 ----
 mz_roles  id
