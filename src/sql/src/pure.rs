@@ -25,7 +25,7 @@ use mz_ore::str::StrExt;
 use mz_postgres_util::replication::WalLevel;
 use mz_postgres_util::PostgresError;
 use mz_proto::RustType;
-use mz_repr::{strconv, GlobalId, Timestamp};
+use mz_repr::{strconv, GlobalId, Timestamp, RelationDesc, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::{visit_function, Visit};
 use mz_sql_parser::ast::visit_mut::{visit_expr_mut, VisitMut};
@@ -451,6 +451,9 @@ async fn purify_create_source(
         CreateSourceConnection::Postgres { .. } => {
             &mz_storage_types::sources::postgres::PG_PROGRESS_DESC
         }
+        CreateSourceConnection::MySql { .. } => {
+            &mz_storage_types::sources::mysql::MYSQL_PROGRESS_DESC
+        }
         CreateSourceConnection::LoadGenerator { .. } => {
             &mz_storage_types::sources::load_generator::LOAD_GEN_PROGRESS_DESC
         }
@@ -791,6 +794,47 @@ async fn purify_create_source(
                     details.into_proto().encode_to_vec(),
                 )))),
             })
+        }
+        CreateSourceConnection::MySql {
+            connection: _,
+            options: _,
+        } => {
+            // TODO(roshan): purify state from upstream to fill in MySqlSourceDetails
+            //
+            // TODO(roshan): properly process subsources
+            let mz_name = UnresolvedItemName::qualified(&[Ident::new("dummy").unwrap()]);
+            let subsource_name = UnresolvedItemName::qualified(&[
+                Ident::new("dummydb").unwrap(),
+                Ident::new("dummyschema").unwrap(),
+                Ident::new("dummy").unwrap(),
+            ]);
+
+            let desc = RelationDesc::empty().with_column("data", ScalarType::String.nullable(true));
+            let scx = StatementContext::new(None, &catalog);
+            let (columns, table_constraints) = scx.relation_desc_into_table_defs(&desc)?;
+
+            let transient_id = GlobalId::Transient(get_transient_subsource_id());
+
+            let subsource = scx.allocate_resolved_item_name(transient_id, mz_name.clone())?;
+
+            let targeted_subsources = vec![CreateSourceSubsource {
+                reference: subsource_name,
+                subsource: Some(DeferredItemName::Named(subsource)),
+            }];
+            *referenced_subsources = Some(ReferencedSubsources::SubsetTables(targeted_subsources));
+
+            // Create the subsource statement
+            let subsource = CreateSubsourceStatement {
+                name: mz_name,
+                columns,
+                constraints: table_constraints,
+                if_not_exists: false,
+                with_options: vec![CreateSubsourceOption {
+                    name: CreateSubsourceOptionName::References,
+                    value: Some(WithOptionValue::Value(Value::Boolean(true))),
+                }],
+            };
+            subsources.push((transient_id, subsource));
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
             let scx = StatementContext::new(None, &catalog);

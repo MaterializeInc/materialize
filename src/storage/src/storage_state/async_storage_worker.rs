@@ -28,8 +28,8 @@ use mz_service::local::Activatable;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, KafkaSourceConnection,
-    LoadGeneratorSourceConnection, PostgresSourceConnection, SourceConnection, SourceData,
-    SourceEnvelope, SourceTimestamp, TestScriptSourceConnection,
+    LoadGeneratorSourceConnection, MySqlSourceConnection, PostgresSourceConnection,
+    SourceConnection, SourceData, SourceEnvelope, SourceTimestamp, TestScriptSourceConnection,
 };
 use timely::order::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -350,6 +350,17 @@ impl<T: Timestamp + Lattice + Codec64 + Display> AsyncStorageWorker<T> {
                             }
                             GenericSourceConnection::Postgres(_) => {
                                 let uppers = reclock_resume_uppers::<PostgresSourceConnection, _>(
+                                    &id,
+                                    &persist_clients,
+                                    &ingestion_description,
+                                    as_of.clone(),
+                                    &resume_uppers,
+                                )
+                                .await;
+                                to_vec_row(uppers)
+                            }
+                            GenericSourceConnection::MySql(_) => {
+                                let uppers = reclock_resume_uppers::<MySqlSourceConnection, _>(
                                     &id,
                                     &persist_clients,
                                     &ingestion_description,

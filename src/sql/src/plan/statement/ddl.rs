@@ -61,6 +61,9 @@ use mz_storage_types::sources::envelope::{
 };
 use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
 use mz_storage_types::sources::load_generator::{LoadGenerator, LoadGeneratorSourceConnection};
+use mz_storage_types::sources::mysql::{
+    MySqlSourceConnection, MySqlSourceDetails, ProtoMySqlSourceDetails,
+};
 use mz_storage_types::sources::postgres::{
     PostgresSourceConnection, PostgresSourcePublicationDetails,
     ProtoPostgresSourcePublicationDetails,
@@ -84,10 +87,11 @@ use crate::ast::{
     CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
     CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DbzMode,
     DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, IndexOption,
-    IndexOptionName, KeyConstraint, LoadGeneratorOption, LoadGeneratorOptionName, PgConfigOption,
-    PgConfigOptionName, ProtobufSchema, QualifiedReplica, ReferencedSubsources, ReplicaDefinition,
-    ReplicaOption, ReplicaOptionName, RoleAttribute, SourceIncludeMetadata, Statement,
-    TableConstraint, UnresolvedDatabaseName, ViewDefinition,
+    IndexOptionName, KeyConstraint, LoadGeneratorOption, LoadGeneratorOptionName,
+    MySqlConfigOption, MySqlConfigOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema,
+    QualifiedReplica, ReferencedSubsources, ReplicaDefinition, ReplicaOption, ReplicaOptionName,
+    RoleAttribute, SourceIncludeMetadata, Statement, TableConstraint, UnresolvedDatabaseName,
+    ViewDefinition,
 };
 use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError, CatalogItem, CatalogItemType,
@@ -406,6 +410,8 @@ generate_extracted_config!(
     (Publication, String),
     (TextColumns, Vec::<UnresolvedItemName>, Default(vec![]))
 );
+
+generate_extracted_config!(MySqlConfigOption, (Details, String));
 
 pub fn plan_create_webhook_source(
     scx: &StatementContext,
@@ -960,6 +966,53 @@ pub fn plan_create_source(
                     publication_details,
                 });
             // The postgres source only outputs data to its subsources. The catalog object
+            // representing the source itself is just an empty relation with no columns
+            let encoding = SourceDataEncoding::Single(DataEncoding::new(
+                DataEncodingInner::RowCodec(RelationDesc::empty()),
+            ));
+            (connection, encoding, Some(available_subsources))
+        }
+        CreateSourceConnection::MySql {
+            connection,
+            options,
+        } => {
+            let connection_item = scx.get_item_by_resolved_name(connection)?;
+            let _connection = match connection_item.connection()? {
+                Connection::MySql(connection) => connection.clone(),
+                _ => sql_bail!(
+                    "{} is not a MySQL connection",
+                    scx.catalog.resolve_full_name(connection_item.name())
+                ),
+            };
+            let MySqlConfigOptionExtracted { details, seen: _ } = options.clone().try_into()?;
+
+            let details = details
+                .as_ref()
+                .ok_or_else(|| sql_err!("internal error: MySQL source missing details"))?;
+            let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
+            let details =
+                ProtoMySqlSourceDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
+            let details = MySqlSourceDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
+
+            let connection =
+                GenericSourceConnection::<ReferencedConnection>::from(MySqlSourceConnection {
+                    connection: connection_item.id(),
+                    connection_id: connection_item.id(),
+                    details,
+                });
+
+            // TODO(roshan): construct available subsources from the purified details
+            let mut available_subsources = BTreeMap::new();
+
+            // Pretend there is only one subsource named "dummydb.dummyschema.dummy"
+            let name = FullItemName {
+                database: RawDatabaseSpecifier::Name("dummydb".into()),
+                schema: "dummyschema".into(),
+                item: "dummy".into(),
+            };
+            available_subsources.insert(name, 1);
+
+            // The MySQL source only outputs data to its subsources. The catalog object
             // representing the source itself is just an empty relation with no columns
             let encoding = SourceDataEncoding::Single(DataEncoding::new(
                 DataEncodingInner::RowCodec(RelationDesc::empty()),

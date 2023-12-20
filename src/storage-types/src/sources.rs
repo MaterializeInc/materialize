@@ -60,12 +60,14 @@ pub mod encoding;
 pub mod envelope;
 pub mod kafka;
 pub mod load_generator;
+pub mod mysql;
 pub mod postgres;
 pub mod testscript;
 
 pub use crate::sources::envelope::SourceEnvelope;
 pub use crate::sources::kafka::KafkaSourceConnection;
 pub use crate::sources::load_generator::LoadGeneratorSourceConnection;
+pub use crate::sources::mysql::MySqlSourceConnection;
 pub use crate::sources::postgres::PostgresSourceConnection;
 pub use crate::sources::testscript::TestScriptSourceConnection;
 
@@ -791,6 +793,11 @@ impl<C: ConnectionAccess> SourceDesc<C> {
                 connection: GenericSourceConnection::Postgres(_),
                 ..
             } => false,
+            // MySQL can produce retractions (deletes)
+            SourceDesc {
+                connection: GenericSourceConnection::MySql(_),
+                ..
+            } => false,
             // Loadgen can produce retractions (deletes)
             SourceDesc {
                 connection: GenericSourceConnection::LoadGenerator(g),
@@ -865,6 +872,7 @@ impl<C: ConnectionAccess> crate::AlterCompatible for SourceDesc<C> {
 pub enum GenericSourceConnection<C: ConnectionAccess = InlinedConnection> {
     Kafka(KafkaSourceConnection<C>),
     Postgres(PostgresSourceConnection<C>),
+    MySql(MySqlSourceConnection<C>),
     LoadGenerator(LoadGeneratorSourceConnection),
     TestScript(TestScriptSourceConnection),
 }
@@ -878,6 +886,12 @@ impl<C: ConnectionAccess> From<KafkaSourceConnection<C>> for GenericSourceConnec
 impl<C: ConnectionAccess> From<PostgresSourceConnection<C>> for GenericSourceConnection<C> {
     fn from(conn: PostgresSourceConnection<C>) -> Self {
         Self::Postgres(conn)
+    }
+}
+
+impl<C: ConnectionAccess> From<MySqlSourceConnection<C>> for GenericSourceConnection<C> {
+    fn from(conn: MySqlSourceConnection<C>) -> Self {
+        Self::MySql(conn)
     }
 }
 
@@ -904,6 +918,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<GenericSourceConnection, R>
             GenericSourceConnection::Postgres(pg) => {
                 GenericSourceConnection::Postgres(pg.into_inline_connection(r))
             }
+            GenericSourceConnection::MySql(mysql) => {
+                GenericSourceConnection::MySql(mysql.into_inline_connection(r))
+            }
             GenericSourceConnection::LoadGenerator(lg) => {
                 GenericSourceConnection::LoadGenerator(lg)
             }
@@ -917,6 +934,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
         match self {
             Self::Kafka(conn) => conn.name(),
             Self::Postgres(conn) => conn.name(),
+            Self::MySql(conn) => conn.name(),
             Self::LoadGenerator(conn) => conn.name(),
             Self::TestScript(conn) => conn.name(),
         }
@@ -926,6 +944,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
         match self {
             Self::Kafka(conn) => conn.upstream_name(),
             Self::Postgres(conn) => conn.upstream_name(),
+            Self::MySql(conn) => conn.upstream_name(),
             Self::LoadGenerator(conn) => conn.upstream_name(),
             Self::TestScript(conn) => conn.upstream_name(),
         }
@@ -935,6 +954,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
         match self {
             Self::Kafka(conn) => conn.timestamp_desc(),
             Self::Postgres(conn) => conn.timestamp_desc(),
+            Self::MySql(conn) => conn.timestamp_desc(),
             Self::LoadGenerator(conn) => conn.timestamp_desc(),
             Self::TestScript(conn) => conn.timestamp_desc(),
         }
@@ -944,6 +964,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
         match self {
             Self::Kafka(conn) => conn.connection_id(),
             Self::Postgres(conn) => conn.connection_id(),
+            Self::MySql(conn) => conn.connection_id(),
             Self::LoadGenerator(conn) => conn.connection_id(),
             Self::TestScript(conn) => conn.connection_id(),
         }
@@ -953,6 +974,7 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
         match self {
             Self::Kafka(conn) => conn.metadata_columns(),
             Self::Postgres(conn) => conn.metadata_columns(),
+            Self::MySql(conn) => conn.metadata_columns(),
             Self::LoadGenerator(conn) => conn.metadata_columns(),
             Self::TestScript(conn) => conn.metadata_columns(),
         }
@@ -995,6 +1017,7 @@ impl RustType<ProtoSourceConnection> for GenericSourceConnection<InlinedConnecti
                 GenericSourceConnection::Postgres(postgres) => {
                     Kind::Postgres(postgres.into_proto())
                 }
+                GenericSourceConnection::MySql(mysql) => Kind::Mysql(mysql.into_proto()),
                 GenericSourceConnection::LoadGenerator(loadgen) => {
                     Kind::Loadgen(loadgen.into_proto())
                 }
@@ -1013,6 +1036,7 @@ impl RustType<ProtoSourceConnection> for GenericSourceConnection<InlinedConnecti
         Ok(match kind {
             Kind::Kafka(kafka) => GenericSourceConnection::Kafka(kafka.into_rust()?),
             Kind::Postgres(postgres) => GenericSourceConnection::Postgres(postgres.into_rust()?),
+            Kind::Mysql(mysql) => GenericSourceConnection::MySql(mysql.into_rust()?),
             Kind::Loadgen(loadgen) => GenericSourceConnection::LoadGenerator(loadgen.into_rust()?),
             Kind::Testscript(testscript) => {
                 GenericSourceConnection::TestScript(testscript.into_rust()?)
