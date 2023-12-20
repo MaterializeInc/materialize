@@ -12,6 +12,7 @@ use std::fmt;
 use mz_ore::str::StrExt;
 use mz_proto::TryFromProtoError;
 use mz_sql::catalog::CatalogError as SqlCatalogError;
+use mz_sql::session::vars::VarError;
 
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
@@ -54,6 +55,12 @@ pub enum ErrorKind {
     InvalidTemporarySchema,
     #[error("catalog item '{depender_name}' depends on system logging, but logging is disabled")]
     UnsatisfiableLoggingDependency { depender_name: String },
+    /// Attempted to create an object that has unstable dependencies.
+    #[error("cannot create {object_type} with unstable dependencies")]
+    UnstableDependency {
+        object_type: String,
+        unstable_dependencies: Vec<String>,
+    },
     #[error(transparent)]
     AmbiguousRename(#[from] AmbiguousRename),
     #[error("cannot rename type: {0}")]
@@ -81,6 +88,12 @@ pub enum ErrorKind {
     },
     #[error("cluster '{0}' is managed and cannot be directly modified")]
     ManagedCluster(String),
+    #[error(transparent)]
+    VarError(#[from] VarError),
+    #[error("unknown cluster replica size {size}")]
+    InvalidClusterReplicaSize { size: String, expected: Vec<String> },
+    #[error("internal error: {0}")]
+    Internal(String),
 }
 
 impl Error {
@@ -103,13 +116,27 @@ impl Error {
             ErrorKind::ReservedClusterName(_) => {
                 Some("The prefixes \"mz_\" and \"pg_\" are reserved for system clusters.".into())
             }
+            ErrorKind::UnstableDependency {unstable_dependencies, ..} => Some(
+                format!(
+                    "The object depends on the following unstable objects:\n    {}",
+                    unstable_dependencies.join("\n    "),
+                )
+            ),
+            ErrorKind::VarError(e) => e.detail(),
             _ => None,
         }
     }
 
     /// Reports a hint for the user about how the error could be fixed.
     pub fn hint(&self) -> Option<String> {
-        None
+        match &self.kind {
+            ErrorKind::VarError(e) => e.hint(),
+            ErrorKind::InvalidClusterReplicaSize { expected, .. } => Some(format!(
+                "Valid cluster replica sizes are: {}",
+                expected.join(", ")
+            )),
+            _ => None,
+        }
     }
 }
 
@@ -137,6 +164,13 @@ impl From<crate::durable::CatalogError> for Error {
             crate::durable::CatalogError::Catalog(e) => Error::new(ErrorKind::from(e)),
             crate::durable::CatalogError::Durable(e) => Error::new(ErrorKind::from(e)),
         }
+    }
+}
+
+impl From<VarError> for Error {
+    fn from(e: VarError) -> Self {
+        let kind: ErrorKind = e.into();
+        kind.into()
     }
 }
 

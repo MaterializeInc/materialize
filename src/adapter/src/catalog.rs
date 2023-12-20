@@ -1081,7 +1081,7 @@ impl Catalog {
         location: mz_catalog::durable::ReplicaLocation,
         allowed_sizes: &Vec<String>,
         allowed_availability_zones: Option<&[String]>,
-    ) -> Result<ReplicaLocation, AdapterError> {
+    ) -> Result<ReplicaLocation, Error> {
         self.state
             .concretize_replica_location(location, allowed_sizes, allowed_availability_zones)
     }
@@ -1090,7 +1090,7 @@ impl Catalog {
         &self,
         allowed_sizes: &[String],
         size: &String,
-    ) -> Result<(), AdapterError> {
+    ) -> Result<(), Error> {
         self.state.ensure_valid_replica_size(allowed_sizes, size)
     }
 

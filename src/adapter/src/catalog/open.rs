@@ -1119,19 +1119,23 @@ impl Catalog {
         for (name, value) in &system_parameter_defaults {
             match state.set_system_configuration_default(name, VarInput::Flat(value)) {
                 Ok(_) => (),
-                Err(AdapterError::VarError(VarError::UnknownParameter(name))) => {
+                Err(Error {
+                    kind: ErrorKind::VarError(VarError::UnknownParameter(name)),
+                }) => {
                     warn!(%name, "cannot load unknown system parameter from catalog storage to set default parameter");
                 }
-                Err(e) => return Err(e),
+                Err(e) => return Err(e.into()),
             };
         }
         for mz_catalog::durable::SystemConfiguration { name, value } in system_config {
             match state.insert_system_configuration(&name, VarInput::Flat(&value)) {
                 Ok(_) => (),
-                Err(AdapterError::VarError(VarError::UnknownParameter(name))) => {
+                Err(Error {
+                    kind: ErrorKind::VarError(VarError::UnknownParameter(name)),
+                }) => {
                     warn!(%name, "cannot load unknown system parameter from catalog storage to set configured parameter");
                 }
-                Err(e) => return Err(e),
+                Err(e) => return Err(e.into()),
             };
         }
         if let Some(remote_system_parameters) = remote_system_parameters {

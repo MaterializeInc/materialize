@@ -74,11 +74,6 @@ pub enum AdapterError {
         az: String,
         expected: Vec<String>,
     },
-    /// No such cluster replica size has been configured.
-    InvalidClusterReplicaSize {
-        size: String,
-        expected: Vec<String>,
-    },
     /// SET TRANSACTION ISOLATION LEVEL was called in the middle of a transaction.
     InvalidSetIsolationLevel,
     /// SET cluster was called in the middle of a transaction.
@@ -111,8 +106,6 @@ pub enum AdapterError {
     OperationRequiresTransaction(String),
     /// An error occurred while planning the statement.
     PlanError(PlanError),
-    /// An error occurred with a session variable.
-    VarError(VarError),
     /// The named prepared statement already exists.
     PreparedStatementExists(String),
     /// Wrapper around parsing error
@@ -184,11 +177,6 @@ pub enum AdapterError {
     Unstructured(anyhow::Error),
     /// The named feature is not supported and will (probably) not be.
     Unsupported(&'static str),
-    /// Attempted to create an object that has unstable dependencies.
-    UnstableDependency {
-        object_type: String,
-        unstable_dependencies: Vec<String>,
-    },
     /// Attempted to read from log sources without selecting a target replica.
     UntargetedLogRead {
         log_names: Vec<String>,
@@ -292,12 +280,7 @@ impl AdapterError {
                 "The object depends on the following log sources:\n    {}",
                 log_names.join("\n    "),
             )),
-            AdapterError::UnstableDependency { unstable_dependencies, .. } => Some(format!(
-                "The object depends on the following unstable objects:\n    {}",
-                unstable_dependencies.join("\n    "),
-            )),
             AdapterError::PlanError(e) => e.detail(),
-            AdapterError::VarError(e) => e.detail(),
             AdapterError::Unauthorized(unauthorized) => unauthorized.detail(),
             AdapterError::DependentObject(dependent_objects) => {
                 Some(dependent_objects
@@ -335,10 +318,6 @@ impl AdapterError {
                     format!("Valid availability zones are: {}", expected.join(", "))
                 })
             }
-            AdapterError::InvalidClusterReplicaSize { expected, size: _ } => Some(format!(
-                "Valid cluster replica sizes are: {}",
-                expected.join(", ")
-            )),
             AdapterError::InvalidStorageClusterSize { expected, .. } => {
                 Some(format!("Valid sizes are: {}", expected.join(", ")))
             }
@@ -366,7 +345,6 @@ impl AdapterError {
                     .into(),
             ),
             AdapterError::PlanError(e) => e.hint(),
-            AdapterError::VarError(e) => e.hint(),
             AdapterError::UnallowedOnCluster { .. } => Some(
                 "Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query."
                     .into(),
@@ -388,7 +366,19 @@ impl AdapterError {
             AdapterError::AbsurdSubscribeBounds { .. } => SqlState::DATA_EXCEPTION,
             AdapterError::AmbiguousSystemColumnReference => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::BadItemInStorageCluster { .. } => SqlState::FEATURE_NOT_SUPPORTED,
-            AdapterError::Catalog(_) => SqlState::INTERNAL_ERROR,
+            AdapterError::Catalog(e) => match &e.kind {
+                mz_catalog::memory::error::ErrorKind::VarError(e) => match e {
+                    VarError::ConstrainedParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
+                    VarError::FixedValueParameter(_) => SqlState::INVALID_PARAMETER_VALUE,
+                    VarError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
+                    VarError::InvalidParameterValue { .. } => SqlState::INVALID_PARAMETER_VALUE,
+                    VarError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
+                    VarError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,
+                    VarError::RequiresUnsafeMode { .. } => SqlState::CANT_CHANGE_RUNTIME_PARAM,
+                    VarError::RequiresFeatureFlag { .. } => SqlState::CANT_CHANGE_RUNTIME_PARAM,
+                },
+                _ => SqlState::INTERNAL_ERROR,
+            },
             AdapterError::ChangedPlan => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::DuplicateCursor(_) => SqlState::DUPLICATE_CURSOR,
             AdapterError::Eval(EvalError::CharacterNotValidForEncoding(_)) => {
@@ -408,7 +398,6 @@ impl AdapterError {
             AdapterError::IntrospectionDisabled { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidLogDependency { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidClusterReplicaAz { .. } => SqlState::FEATURE_NOT_SUPPORTED,
-            AdapterError::InvalidClusterReplicaSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::InvalidSetIsolationLevel => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterError::InvalidSetCluster => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterError::InvalidStorageClusterSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
@@ -464,7 +453,6 @@ impl AdapterError {
             AdapterError::UnknownClusterReplica { .. } => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnknownWebhookSource { .. } => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnrecognizedConfigurationParam(_) => SqlState::UNDEFINED_OBJECT,
-            AdapterError::UnstableDependency { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Unsupported(..) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Unstructured(_) => SqlState::INTERNAL_ERROR,
             AdapterError::UntargetedLogRead { .. } => SqlState::FEATURE_NOT_SUPPORTED,
@@ -481,16 +469,6 @@ impl AdapterError {
                 SqlState::INTERNAL_ERROR
             }
             AdapterError::DependentObject(_) => SqlState::DEPENDENT_OBJECTS_STILL_EXIST,
-            AdapterError::VarError(e) => match e {
-                VarError::ConstrainedParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
-                VarError::FixedValueParameter(_) => SqlState::INVALID_PARAMETER_VALUE,
-                VarError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
-                VarError::InvalidParameterValue { .. } => SqlState::INVALID_PARAMETER_VALUE,
-                VarError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
-                VarError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,
-                VarError::RequiresUnsafeMode { .. } => SqlState::CANT_CHANGE_RUNTIME_PARAM,
-                VarError::RequiresFeatureFlag { .. } => SqlState::CANT_CHANGE_RUNTIME_PARAM,
-            },
             AdapterError::InvalidAlter(_, _) => SqlState::FEATURE_NOT_SUPPORTED,
         }
     }
@@ -540,9 +518,6 @@ impl fmt::Display for AdapterError {
             AdapterError::InvalidClusterReplicaAz { az, expected: _ } => {
                 write!(f, "unknown cluster replica availability zone {az}",)
             }
-            AdapterError::InvalidClusterReplicaSize { size, expected: _ } => {
-                write!(f, "unknown cluster replica size {size}",)
-            }
             AdapterError::InvalidSetIsolationLevel => write!(
                 f,
                 "SET TRANSACTION ISOLATION LEVEL must be called before any query"
@@ -580,7 +555,6 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::ParseError(e) => e.fmt(f),
             AdapterError::PlanError(e) => e.fmt(f),
-            AdapterError::VarError(e) => e.fmt(f),
             AdapterError::PreparedStatementExists(name) => {
                 write!(f, "prepared statement {} already exists", name.quoted())
             }
@@ -677,9 +651,6 @@ impl fmt::Display for AdapterError {
                 "unrecognized configuration parameter {}",
                 setting_name.quoted()
             ),
-            AdapterError::UnstableDependency { object_type, .. } => {
-                write!(f, "cannot create {object_type} with unstable dependencies")
-            }
             AdapterError::UntargetedLogRead { .. } => {
                 f.write_str("log source reads must target a replica")
             }
@@ -833,7 +804,8 @@ impl From<mz_sql_parser::parser::ParserStatementError> for AdapterError {
 
 impl From<VarError> for AdapterError {
     fn from(e: VarError) -> Self {
-        AdapterError::VarError(e)
+        let e: mz_catalog::memory::error::Error = e.into();
+        e.into()
     }
 }
 
