@@ -195,10 +195,21 @@ impl Coordinator {
                     self.sequence_create_sink(ctx, plan, resolved_ids).await;
                 }
                 Plan::CreateView(plan) => {
-                    let result = self
-                        .sequence_create_view(ctx.session_mut(), plan, resolved_ids)
-                        .await;
-                    ctx.retire(result);
+                    if self
+                        .catalog()
+                        .system_config()
+                        .enable_off_thread_optimization()
+                    {
+                        let result = self
+                            .sequence_create_view_off_thread(ctx.session_mut(), plan, resolved_ids)
+                            .await;
+                        ctx.retire(result);
+                    } else {
+                        let result = self
+                            .sequence_create_view(ctx.session_mut(), plan, resolved_ids)
+                            .await;
+                        ctx.retire(result);
+                    }
                 }
                 Plan::CreateMaterializedView(plan) => {
                     self.sequence_create_materialized_view(ctx, plan, resolved_ids)
