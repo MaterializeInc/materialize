@@ -2571,33 +2571,22 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    /// Parse the name of a CREATE SUBSOURCE optional parameter
+    /// Parse the name of a CREATE SINK optional parameter
     fn parse_create_subsource_option_name(
         &mut self,
     ) -> Result<CreateSubsourceOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[PROGRESS, REFERENCES, RETAIN])? {
+        let name = match self.expect_one_of_keywords(&[PROGRESS, REFERENCES])? {
             PROGRESS => CreateSubsourceOptionName::Progress,
             REFERENCES => CreateSubsourceOptionName::References,
-            RETAIN => {
-                self.expect_keyword(HISTORY)?;
-                CreateSubsourceOptionName::RetainHistory
-            }
             _ => unreachable!(),
         };
         Ok(name)
     }
 
-    /// Parse a NAME = VALUE parameter for CREATE SUBSOURCE
+    /// Parse a NAME = VALUE parameter for CREATE SINK
     fn parse_create_subsource_option(&mut self) -> Result<CreateSubsourceOption<Raw>, ParserError> {
-        let name = self.parse_create_subsource_option_name()?;
-        if name == CreateSubsourceOptionName::RetainHistory {
-            return Ok(CreateSubsourceOption {
-                name,
-                value: self.parse_option_retain_history()?,
-            });
-        }
         Ok(CreateSubsourceOption {
-            name,
+            name: self.parse_create_subsource_option_name()?,
             value: self.parse_optional_option_value()?,
         })
     }

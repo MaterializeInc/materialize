@@ -1035,16 +1035,18 @@ impl_display_t!(ReferencedSubsources);
 pub enum CreateSubsourceOptionName {
     Progress,
     References,
-    RetainHistory,
 }
 
 impl AstDisplay for CreateSubsourceOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(match self {
-            CreateSubsourceOptionName::Progress => "PROGRESS",
-            CreateSubsourceOptionName::References => "REFERENCES",
-            CreateSubsourceOptionName::RetainHistory => "RETAIN HISTORY",
-        });
+        match self {
+            CreateSubsourceOptionName::Progress => {
+                f.write_str("PROGRESS");
+            }
+            CreateSubsourceOptionName::References => {
+                f.write_str("REFERENCES");
+            }
+        }
     }
 }
 

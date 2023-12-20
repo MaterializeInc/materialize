@@ -29,12 +29,11 @@ use mz_repr::{strconv, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn,
-    CreateSinkConnection, CreateSinkStatement, CreateSourceOptionName, CreateSubsourceOption,
-    CreateSubsourceOptionName, CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrSeedAvro,
-    CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, DeferredItemName, DocOnIdentifier,
-    DocOnSchema, Envelope, Ident, KafkaSourceConfigOption, KafkaSourceConfigOptionName,
-    PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, Statement,
-    UnresolvedItemName,
+    CreateSinkConnection, CreateSinkStatement, CreateSubsourceOption, CreateSubsourceOptionName,
+    CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf,
+    CsrSeedProtobufSchema, DbzMode, DeferredItemName, DocOnIdentifier, DocOnSchema, Envelope,
+    Ident, KafkaSourceConfigOption, KafkaSourceConfigOptionName, PgConfigOption,
+    PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, Statement, UnresolvedItemName,
 };
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::IntoInlineConnection;
@@ -409,19 +408,8 @@ async fn purify_create_source(
         include_metadata: _,
         referenced_subsources,
         progress_subsource,
-        with_options,
         ..
     } = &mut stmt;
-
-    let subsource_retain_history = with_options.iter().find_map(|o| {
-        if o.name != CreateSourceOptionName::RetainHistory {
-            return None;
-        }
-        Some(CreateSubsourceOption {
-            name: CreateSubsourceOptionName::RetainHistory,
-            value: o.value.clone(),
-        })
-    });
 
     // Disallow manually targetting subsources, this syntax is reserved for purification only
     named_subsource_err(progress_subsource)?;
@@ -925,13 +913,6 @@ async fn purify_create_source(
         }],
     };
     subsources.push((transient_id, subsource));
-
-    // Apply the outer source's RETAIN HISTORY option to all subsources.
-    for (_, subsource) in subsources.iter_mut() {
-        subsource
-            .with_options
-            .extend(subsource_retain_history.clone());
-    }
 
     purify_source_format(
         &catalog,
