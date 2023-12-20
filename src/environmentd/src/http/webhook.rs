@@ -12,8 +12,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use http::header::RETRY_AFTER;
-use mz_adapter::{AdapterError, AppendWebhookError, AppendWebhookResponse};
+use mz_adapter::{AdapterError, AppendWebhookError, AppendWebhookResponse, WebhookAppenderCache};
+use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::str::StrExt;
 use mz_repr::adt::jsonb::JsonbPacker;
 use mz_repr::{ColumnType, Datum, Row, ScalarType};
@@ -23,14 +23,10 @@ use mz_storage_types::controller::StorageError;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use bytes::Bytes;
-use http::{HeaderMap, HeaderValue, StatusCode};
+use http::StatusCode;
 use thiserror::Error;
 
 use crate::http::WebhookState;
-
-/// For temporary errors we return the `Retry-After` header, whose value is either an HTTP date, or
-/// number of seconds.
-const RETRY_AFTER_VALUE: HeaderValue = HeaderValue::from_static("5");
 
 pub async fn handle_webhook(
     State(WebhookState {
@@ -41,9 +37,6 @@ pub async fn handle_webhook(
     headers: http::HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    // Record the time we receive the request, for use if validation checks the current timestamp.
-    let received_at = adapter_client.now();
-
     // Collect headers into a map, while converting them into strings.
     let mut headers_s = BTreeMap::new();
     for (name, val) in headers.iter() {
@@ -57,6 +50,51 @@ pub async fn handle_webhook(
         }
     }
     let headers = Arc::new(headers_s);
+
+    // Append to the webhook source, retrying if we race with a concurrent `ALTER SOURCE` op.
+    Retry::default()
+        .max_tries(2)
+        .retry_async(|_| async {
+            let result = append_webhook(
+                &adapter_client,
+                &webhook_cache,
+                &database,
+                &schema,
+                &name,
+                &body,
+                &headers,
+            )
+            .await;
+
+            // Note: think carefully before adding more errors here, we need to make sure we don't
+            // append data more than once.
+            match result {
+                Ok(()) => RetryResult::Ok(()),
+                Err(e @ WebhookError::ChannelClosed) => RetryResult::RetryableErr(e),
+                Err(e) => RetryResult::FatalErr(e),
+            }
+        })
+        .await?;
+
+    Ok::<_, WebhookError>(())
+}
+
+/// Append the provided `body` and `headers` to the webhook source identified via `database`,
+/// `schema`, and `name`.
+async fn append_webhook(
+    adapter_client: &mz_adapter::Client,
+    webhook_cache: &WebhookAppenderCache,
+    database: &str,
+    schema: &str,
+    name: &str,
+    body: &Bytes,
+    headers: &Arc<BTreeMap<String, String>>,
+) -> Result<(), WebhookError> {
+    // Shenanigans to get the types working for the async retry.
+    let (database, schema, name) = (database.to_string(), schema.to_string(), name.to_string());
+
+    // Record the time we receive the request, for use if validation checks the current timestamp.
+    let received_at = adapter_client.now();
 
     // Get an appender for the provided object, if that object exists.
     let AppendWebhookResponse {
@@ -96,7 +134,7 @@ pub async fn handle_webhook(
     // If this source requires validation, then validate!
     if let Some(validator) = validator {
         let valid = validator
-            .eval(Bytes::clone(&body), Arc::clone(&headers), received_at)
+            .eval(Bytes::clone(body), Arc::clone(headers), received_at)
             .await?;
         if !valid {
             return Err(WebhookError::ValidationFailed);
@@ -104,12 +142,12 @@ pub async fn handle_webhook(
     }
 
     // Pack our body and headers into a Row.
-    let row = pack_row(body, &headers, body_ty, header_tys)?;
+    let row = pack_row(Bytes::clone(body), headers, body_ty, header_tys)?;
 
     // Send the row to get appended.
     tx.append(vec![(row, 1)]).await?;
 
-    Ok::<_, WebhookError>(())
+    Ok(())
 }
 
 /// Given the body and headers of a request, pack them into a [`Row`].
@@ -222,8 +260,8 @@ pub enum WebhookError {
     ValidationError,
     #[error("service unavailable")]
     Unavailable,
-    #[error("service temporarily unavailable, please retry")]
-    TemporarilyUnavailable,
+    #[error("internal service temporarily closed")]
+    ChannelClosed,
     #[error("internal storage failure! {0:?}")]
     InternalStorageError(StorageError),
     #[error("internal adapter failure! {0:?}")]
@@ -255,7 +293,7 @@ impl From<AppendWebhookError> for WebhookError {
                 ty: ScalarType::String,
                 msg: "invalid".to_string(),
             },
-            AppendWebhookError::TemporaryError => WebhookError::TemporarilyUnavailable,
+            AppendWebhookError::ChannelClosed => WebhookError::ChannelClosed,
             AppendWebhookError::StorageError(storage_err) => {
                 match storage_err {
                     // TODO(parkmycar): Maybe map this to a HTTP 410 Gone instead of 404?
@@ -291,15 +329,11 @@ impl IntoResponse for WebhookError {
             e @ WebhookError::Unavailable => {
                 (StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response()
             }
-            e @ WebhookError::TemporarilyUnavailable => {
-                let mut headers = HeaderMap::new();
-                headers.insert(RETRY_AFTER, RETRY_AFTER_VALUE);
-                (StatusCode::SERVICE_UNAVAILABLE, headers, e.to_string()).into_response()
-            }
             e @ WebhookError::InternalStorageError(StorageError::ResourceExhausted(_)) => {
                 (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response()
             }
-            e @ WebhookError::InternalStorageError(_)
+            e @ WebhookError::ChannelClosed
+            | e @ WebhookError::InternalStorageError(_)
             | e @ WebhookError::InternalAdapterError(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
             }

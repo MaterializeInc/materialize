@@ -38,8 +38,8 @@ pub enum AppendWebhookError {
     // including any more detail we might accidentally expose SECRETs.
     #[error("validation failed")]
     ValidationError,
-    #[error("temporary error, please retry")]
-    TemporaryError,
+    #[error("internal channel closed")]
+    ChannelClosed,
     #[error("internal storage failure! {0:?}")]
     StorageError(#[from] StorageError),
     // Note: we should _NEVER_ add more detail to this error, see above as to why.
@@ -249,7 +249,7 @@ impl WebhookAppender {
     /// Appends updates to the linked webhook source.
     pub async fn append(&self, updates: Vec<(Row, Diff)>) -> Result<(), AppendWebhookError> {
         if self.is_closed() {
-            return Err(AppendWebhookError::TemporaryError);
+            return Err(AppendWebhookError::ChannelClosed);
         }
         self.tx.append(updates).await?;
         Ok(())
