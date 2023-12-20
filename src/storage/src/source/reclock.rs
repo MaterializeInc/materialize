@@ -347,10 +347,6 @@ where
     /// exactly the same result with first compacting the remap trace to frontier F and then
     /// reclocking the collection.
     pub fn compact(&mut self, new_since: Antichain<IntoTime>) {
-        // Ignore compaction requests while we initialize
-        if !self.initialized() {
-            return;
-        }
         let inner = &mut *self.inner.borrow_mut();
         if !PartialOrder::less_equal(&self.since, &new_since) {
             panic!(
@@ -1207,6 +1203,38 @@ mod tests {
             .map(|(m, ts)| (m, ts.unwrap()))
             .collect_vec();
         assert_eq!(reclocked_msgs, &[(2, 1000.into())]);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_gh_22128() {
+        let mut follower: ReclockFollower<u32, u32> = ReclockFollower::new(Antichain::from_elem(0));
+
+        assert!(!follower.initialized());
+
+        // Create a follower and drop it immediately
+        let follower2 = follower.share();
+        drop(follower2);
+
+        // Now initialize the original follower and verify that it correctly compacts bindings
+        let batch = ReclockBatch {
+            updates: vec![(10, 0, 1), (15, 20, 1), (10, 20, -1)],
+            upper: Antichain::from_elem(40),
+        };
+        follower.push_trace_batch(batch);
+
+        // Sanity check that reclocking works. FromTime 12 maps to IntoTime 20
+        let msgs = vec![("foo", 12)];
+        let reclocked_msgs = follower
+            .reclock(msgs)
+            .map(|(m, ts)| (m, ts.unwrap()))
+            .collect_vec();
+        assert_eq!(reclocked_msgs, &[("foo", 20)]);
+
+        follower.compact(Antichain::from_elem(30));
+
+        // Now there should only be one binding in memory
+        assert_eq!(follower.size(), 1);
     }
 
     #[mz_ore::test(tokio::test)]
