@@ -1101,7 +1101,7 @@ impl<'a> Transaction<'a> {
     /// These are mirrored so that we can toggle the flag with Launch Darkly,
     /// but use it in boot before Launch Darkly is available.
     pub fn set_catalog_kind(&mut self, value: Option<CatalogKind>) -> Result<(), CatalogError> {
-        let value = value.map(|value| u64::from(value));
+        let value = value.map(u64::from);
         self.set_config(CATALOG_KIND_KEY.into(), value)?;
         Ok(())
     }
