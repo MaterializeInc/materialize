@@ -61,7 +61,7 @@ impl Coordinator {
 
         // Process the current stage and allow for processing the next.
         loop {
-            // Always verify peek validity. This is cheap, and prevents programming errors
+            // Always verify plan validity. This is cheap, and prevents programming errors
             // if we move any stages off thread.
             if let Some(validity) = stage.validity() {
                 return_if_err!(validity.check(self.catalog()), ctx);
