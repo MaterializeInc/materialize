@@ -5718,7 +5718,7 @@ pub enum CatalogKind {
 }
 
 impl CatalogKind {
-    fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             CatalogKind::Stash => "stash",
             CatalogKind::Persist => "persist",

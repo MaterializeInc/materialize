@@ -1064,10 +1064,21 @@ impl<'a> Transaction<'a> {
     }
 
     /// Set persisted configuration.
-    pub(crate) fn set_config(&mut self, key: String, value: u64) -> Result<(), CatalogError> {
-        let config = Config { key, value };
-        let (key, value) = config.into_key_value();
-        self.configs.set(key, Some(value))?;
+    pub(crate) fn set_config(
+        &mut self,
+        key: String,
+        value: Option<u64>,
+    ) -> Result<(), CatalogError> {
+        match value {
+            Some(value) => {
+                let config = Config { key, value };
+                let (key, value) = config.into_key_value();
+                self.configs.set(key, Some(value))?;
+            }
+            None => {
+                self.configs.set(ConfigKey { key }, None)?;
+            }
+        }
         Ok(())
     }
 
@@ -1080,7 +1091,7 @@ impl<'a> Transaction<'a> {
         &mut self,
         value: PersistTxnTablesImpl,
     ) -> Result<(), CatalogError> {
-        self.set_config(PERSIST_TXN_TABLES.into(), u64::from(value))?;
+        self.set_config(PERSIST_TXN_TABLES.into(), Some(u64::from(value)))?;
         Ok(())
     }
 
@@ -1089,19 +1100,20 @@ impl<'a> Transaction<'a> {
     ///
     /// These are mirrored so that we can toggle the flag with Launch Darkly,
     /// but use it in boot before Launch Darkly is available.
-    pub fn set_catalog_kind(&mut self, value: CatalogKind) -> Result<(), CatalogError> {
-        self.set_config(CATALOG_KIND_KEY.into(), u64::from(value))?;
+    pub fn set_catalog_kind(&mut self, value: Option<CatalogKind>) -> Result<(), CatalogError> {
+        let value = value.map(|value| u64::from(value));
+        self.set_config(CATALOG_KIND_KEY.into(), value)?;
         Ok(())
     }
 
     /// Updates the catalog `system_config_synced` "config" value to true.
     pub fn set_system_config_synced_once(&mut self) -> Result<(), CatalogError> {
-        self.set_config(SYSTEM_CONFIG_SYNCED_KEY.into(), 1)
+        self.set_config(SYSTEM_CONFIG_SYNCED_KEY.into(), Some(1))
     }
 
     /// Updates the catalog `tombstone` "config" value.
     pub fn set_tombstone(&mut self, value: bool) -> Result<(), CatalogError> {
-        self.set_config(TOMBSTONE_KEY.into(), if value { 1 } else { 0 })?;
+        self.set_config(TOMBSTONE_KEY.into(), Some(if value { 1 } else { 0 }))?;
         Ok(())
     }
 

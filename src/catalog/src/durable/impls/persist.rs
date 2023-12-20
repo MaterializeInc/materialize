@@ -236,7 +236,7 @@ impl UnopenedPersistCatalogState {
         let txn = if is_initialized {
             let mut txn = catalog.transaction().await?;
             if let Some(deploy_generation) = deploy_generation {
-                txn.set_config(DEPLOY_GENERATION.into(), deploy_generation)?;
+                txn.set_config(DEPLOY_GENERATION.into(), Some(deploy_generation))?;
             }
             txn
         } else {

@@ -59,7 +59,7 @@ pub(crate) const TOMBSTONE_KEY: &str = "tombstone";
 /// `catalog_kind` "system var" value. This is mirrored so that we
 /// can toggle the flag with Launch Darkly, but use it in boot before Launch
 /// Darkly is available.
-pub(crate) const CATALOG_KIND_KEY: &str = "catalog_kind";
+pub const CATALOG_KIND_KEY: &str = "catalog_kind";
 
 const USER_ID_ALLOC_KEY: &str = "user";
 const SYSTEM_ID_ALLOC_KEY: &str = "system";
