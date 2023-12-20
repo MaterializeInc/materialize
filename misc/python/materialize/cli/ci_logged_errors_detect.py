@@ -343,7 +343,7 @@ def get_known_issues_from_github() -> tuple[list[KnownIssue], list[str]]:
                 regex_pattern = re.compile(match.strip().encode("utf-8"))
             except:
                 unknown_errors.append(
-                    "[{issue.info['title']} (#{issue.info['number']})]({issue.info['html_url']}): Invalid regex in ci-regexp: {match.strip()}, ignoring"
+                    f"[{issue.info['title']} (#{issue.info['number']})]({issue.info['html_url']}): Invalid regex in ci-regexp: {match.strip()}, ignoring"
                 )
                 continue
 
