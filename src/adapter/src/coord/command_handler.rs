@@ -13,11 +13,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source};
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -51,7 +51,9 @@ use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
-use crate::webhook::{AppendWebhookResponse, AppendWebhookValidator};
+use crate::webhook::{
+    AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
+};
 use crate::{catalog, metrics, ExecuteContext};
 
 use super::ExecuteContextExtra;
@@ -116,15 +118,13 @@ impl Coordinator {
                     self.handle_privileged_cancel(conn_id);
                 }
 
-                Command::AppendWebhook {
+                Command::GetWebhook {
                     database,
                     schema,
                     name,
-                    conn_id,
-                    received_at,
                     tx,
                 } => {
-                    self.handle_append_webhook(database, schema, name, conn_id, received_at, tx);
+                    self.handle_get_webhook(database, schema, name, tx);
                 }
 
                 Command::GetSystemVars { conn_id, tx } => {
@@ -830,14 +830,14 @@ impl Coordinator {
         let _builtin_update_notify = self.builtin_table_update().defer(vec![update]);
     }
 
+    /// Returns the necessary metadata for appending to a webhook source, and a channel to send
+    /// rows.
     #[tracing::instrument(level = "debug", skip(self, tx))]
-    fn handle_append_webhook(
+    fn handle_get_webhook(
         &mut self,
         database: String,
         schema: String,
         name: String,
-        conn_id: ConnectionId,
-        received_at: DateTime<Utc>,
         tx: oneshot::Sender<Result<AppendWebhookResponse, AdapterError>>,
     ) {
         /// Attempts to resolve a Webhook source from a provided `database.schema.name` path.
@@ -845,12 +845,10 @@ impl Coordinator {
         /// Returns a struct that can be used to append data to the underlying storate collection, and the
         /// types we should cast the request to.
         fn resolve(
-            coord: &Coordinator,
+            coord: &mut Coordinator,
             database: String,
             schema: String,
             name: String,
-            conn_id: ConnectionId,
-            received_at: DateTime<Utc>,
         ) -> Result<AppendWebhookResponse, PartialItemName> {
             // Resolve our collection.
             let name = PartialItemName {
@@ -860,7 +858,7 @@ impl Coordinator {
             };
             let Ok(entry) = coord
                 .catalog()
-                .resolve_entry(None, &vec![], &name, &conn_id)
+                .resolve_entry(None, &vec![], &name, &SYSTEM_CONN_ID)
             else {
                 return Err(name);
             };
@@ -897,7 +895,6 @@ impl Coordinator {
                         AppendWebhookValidator::new(
                             validation,
                             coord.caching_secrets_reader.clone(),
-                            received_at,
                         )
                     });
                     (body, headers.clone(), validator)
@@ -911,22 +908,27 @@ impl Coordinator {
                 .storage
                 .monotonic_appender(entry.id())
                 .map_err(|_| name)?;
+            let invalidator = coord
+                .active_webhooks
+                .entry(entry.id())
+                .or_insert_with(WebhookAppenderInvalidator::new);
+            let tx = WebhookAppender::new(row_tx, invalidator.guard());
+
             Ok(AppendWebhookResponse {
-                tx: row_tx,
+                tx,
                 body_ty,
                 header_tys,
                 validator,
             })
         }
 
-        let response =
-            resolve(self, database, schema, name, conn_id, received_at).map_err(|name| {
-                AdapterError::UnknownWebhookSource {
-                    database: name.database.expect("provided"),
-                    schema: name.schema.expect("provided"),
-                    name: name.item,
-                }
-            });
+        let response = resolve(self, database, schema, name).map_err(|name| {
+            AdapterError::UnknownWebhookSource {
+                database: name.database.expect("provided"),
+                schema: name.schema.expect("provided"),
+                name: name.item,
+            }
+        });
         let _ = tx.send(response);
     }
 }

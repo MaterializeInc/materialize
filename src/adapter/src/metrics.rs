@@ -13,7 +13,7 @@ use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
 use mz_sql::session::user::User;
 use mz_sql_parser::ast::statement_kind_label_value;
-use prometheus::{HistogramVec, IntCounterVec, IntGaugeVec};
+use prometheus::{HistogramVec, IntCounter, IntCounterVec, IntGaugeVec};
 
 #[derive(Debug, Clone)]
 pub struct Metrics {
@@ -35,6 +35,7 @@ pub struct Metrics {
     pub optimization_notices: IntCounterVec,
     pub append_table_duration_seconds: HistogramVec,
     pub webhook_validation_reduce_failures: IntCounterVec,
+    pub webhook_get_appender: IntCounter,
 }
 
 impl Metrics {
@@ -131,7 +132,11 @@ impl Metrics {
                 name: "mz_webhook_validation_reduce_failures",
                 help: "Count of how many times we've failed to reduce a webhook source's CHECK statement.",
                 var_labels: ["reason"],
-            ))
+            )),
+            webhook_get_appender: registry.register(metric!(
+                name: "mz_webhook_get_appender_count",
+                help: "Count of getting a webhook appender from the Coordinator.",
+            )),
         }
     }
 }

@@ -356,6 +356,73 @@ $ webhook-append name=webhook_for_batch_events
 > SELECT COUNT(*) FROM webhook_for_batch_events_flattened
 8
 
+# Renaming a webhook source.
+
+> CREATE SOURCE webhook_foo IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+
+$ webhook-append name=webhook_foo
+aaa_1
+
+> SELECT body FROM webhook_foo;
+aaa_1
+
+> ALTER SOURCE webhook_foo RENAME TO webhook_bar
+
+$ webhook-append name=webhook_foo status=404
+aaa_2
+
+$ webhook-append name=webhook_bar
+bbb_1
+
+> SELECT body FROM webhook_bar;
+aaa_1
+bbb_1
+
+# Renaming the schema that contains a webhook source.
+
+> CREATE SCHEMA my_webhooks;
+
+> CREATE SOURCE my_webhooks.foo IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+
+> CREATE SOURCE my_webhooks.bar IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT TEXT
+
+$ webhook-append schema=my_webhooks name=foo
+foo-foo
+
+$ webhook-append schema=my_webhooks name=bar
+bar-bar
+
+> SELECT body FROM my_webhooks.foo
+foo-foo
+
+> SELECT body FROM my_webhooks.bar
+bar-bar
+
+> BEGIN;
+
+> ALTER SCHEMA my_webhooks RENAME TO other_webhooks;
+
+> ALTER SOURCE other_webhooks.bar RENAME TO baz;
+
+> COMMIT;
+
+$ webhook-append schema=other_webhooks name=foo
+foo-after
+
+$ webhook-append schema=other_webhooks name=baz
+baz-after
+
+> SELECT body FROM other_webhooks.foo
+foo-foo
+foo-after
+
+> SELECT body FROM other_webhooks.baz
+bar-bar
+baz-after
+
 # Dropping a webhook source should drop the underlying persist shards.
 
 $ set-from-sql var=webhook-source-id

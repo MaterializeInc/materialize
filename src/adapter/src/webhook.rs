@@ -8,21 +8,23 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
-use mz_repr::{ColumnType, Datum, Row, RowArena};
+use derivative::Derivative;
+use mz_repr::{ColumnType, Datum, Diff, Row, RowArena};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
 use mz_sql::plan::{WebhookHeaders, WebhookValidation, WebhookValidationSecret};
 use mz_storage_client::controller::MonotonicAppender;
+use mz_storage_types::controller::StorageError;
 use tokio::sync::Semaphore;
 
 use crate::optimize::dataflows::{prep_scalar_expr, ExprPrepStyle};
 
-/// Errors returns when running validation of a webhook request.
+/// Errors returns when attempting to append to a webhook.
 #[derive(thiserror::Error, Debug)]
 pub enum AppendWebhookError {
     // A secret that we need for validation has gone missing.
@@ -36,6 +38,10 @@ pub enum AppendWebhookError {
     // including any more detail we might accidentally expose SECRETs.
     #[error("validation failed")]
     ValidationError,
+    #[error("internal channel closed")]
+    ChannelClosed,
+    #[error("internal storage failure! {0:?}")]
+    StorageError(#[from] StorageError),
     // Note: we should _NEVER_ add more detail to this error, see above as to why.
     #[error("internal error when validating request")]
     InternalError,
@@ -44,22 +50,17 @@ pub enum AppendWebhookError {
 /// Contains all of the components necessary for running webhook validation.
 ///
 /// To actually validate a webhook request call [`AppendWebhookValidator::eval`].
+#[derive(Clone)]
 pub struct AppendWebhookValidator {
     validation: WebhookValidation,
     secrets_reader: CachingSecretsReader,
-    received_at: DateTime<Utc>,
 }
 
 impl AppendWebhookValidator {
-    pub fn new(
-        validation: WebhookValidation,
-        secrets_reader: CachingSecretsReader,
-        received_at: DateTime<Utc>,
-    ) -> Self {
+    pub fn new(validation: WebhookValidation, secrets_reader: CachingSecretsReader) -> Self {
         AppendWebhookValidator {
             validation,
             secrets_reader,
-            received_at,
         }
     }
 
@@ -67,11 +68,11 @@ impl AppendWebhookValidator {
         self,
         body: bytes::Bytes,
         headers: Arc<BTreeMap<String, String>>,
+        received_at: DateTime<Utc>,
     ) -> Result<bool, AppendWebhookError> {
         let AppendWebhookValidator {
             validation,
             secrets_reader,
-            received_at,
         } = self;
 
         let WebhookValidation {
@@ -217,21 +218,110 @@ impl AppendWebhookValidator {
     }
 }
 
+#[derive(Derivative, Clone)]
+#[derivative(Debug)]
 pub struct AppendWebhookResponse {
-    pub tx: MonotonicAppender,
+    /// Channel to monotonically append rows to a webhook source.
+    pub tx: WebhookAppender,
+    /// Column type for the `body` column.
     pub body_ty: ColumnType,
+    /// Types of the columns for the headers of a request.
     pub header_tys: WebhookHeaders,
+    /// Expression used to validate a webhook request.
+    #[derivative(Debug = "ignore")]
     pub validator: Option<AppendWebhookValidator>,
 }
 
-impl fmt::Debug for AppendWebhookResponse {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AppendWebhookResponse")
-            .field("tx", &self.tx)
-            .field("body_ty", &self.body_ty)
-            .field("header_tys", &self.header_tys)
-            .field("validate_expr", &"(...)")
-            .finish()
+/// A wrapper around [`MonotonicAppender`] that can get closed by the `Coordinator` if the webhook
+/// gets modified.
+#[derive(Clone, Debug)]
+pub struct WebhookAppender {
+    tx: MonotonicAppender,
+    guard: WebhookAppenderGuard,
+}
+
+impl WebhookAppender {
+    /// Checks if the [`WebhookAppender`] has closed.
+    pub fn is_closed(&self) -> bool {
+        self.guard.is_closed()
+    }
+
+    /// Appends updates to the linked webhook source.
+    pub async fn append(&self, updates: Vec<(Row, Diff)>) -> Result<(), AppendWebhookError> {
+        if self.is_closed() {
+            return Err(AppendWebhookError::ChannelClosed);
+        }
+        self.tx.append(updates).await?;
+        Ok(())
+    }
+
+    pub(crate) fn new(tx: MonotonicAppender, guard: WebhookAppenderGuard) -> Self {
+        WebhookAppender { tx, guard }
+    }
+}
+
+/// When a webhook, or it's containing schema and database, get modified we need to invalidate any
+/// outstanding [`WebhookAppender`]s. This is because `Adapter`s will cache [`WebhookAppender`]s to
+/// increase performance, and the (database, schema, name) tuple they cached an appender for is now
+/// incorrect.
+#[derive(Clone, Debug)]
+pub struct WebhookAppenderGuard {
+    is_closed: Arc<AtomicBool>,
+}
+
+impl WebhookAppenderGuard {
+    pub fn is_closed(&self) -> bool {
+        self.is_closed.load(Ordering::SeqCst)
+    }
+}
+
+/// A handle to invalidate [`WebhookAppender`]s. See the comment on [`WebhookAppenderGuard`] for
+/// more detail.
+///
+/// Note: to invalidate the associated [`WebhookAppender`]s, you must drop the corresponding
+/// [`WebhookAppenderInvalidator`].
+#[derive(Debug)]
+pub struct WebhookAppenderInvalidator {
+    is_closed: Arc<AtomicBool>,
+}
+// We want to enforce unique ownership over the ability to invalidate a `WebhookAppender`.
+static_assertions::assert_not_impl_all!(WebhookAppenderInvalidator: Clone);
+
+impl WebhookAppenderInvalidator {
+    pub(crate) fn new() -> WebhookAppenderInvalidator {
+        let is_closed = Arc::new(AtomicBool::new(false));
+        WebhookAppenderInvalidator { is_closed }
+    }
+
+    pub fn guard(&self) -> WebhookAppenderGuard {
+        WebhookAppenderGuard {
+            is_closed: Arc::clone(&self.is_closed),
+        }
+    }
+}
+
+impl Drop for WebhookAppenderInvalidator {
+    fn drop(&mut self) {
+        self.is_closed.store(true, Ordering::SeqCst);
+    }
+}
+
+pub type WebhookAppenderName = (String, String, String);
+
+/// A cache of [`WebhookAppender`]s and other metadata required for appending to a wbhook source.
+///
+/// Entries in the cache get invalidated when a [`WebhookAppender`] closes, at which point the
+/// entry should be dropped from the cache and a request made to the `Coordinator` for a new one.
+#[derive(Debug, Clone)]
+pub struct WebhookAppenderCache {
+    pub entries: Arc<tokio::sync::Mutex<BTreeMap<WebhookAppenderName, AppendWebhookResponse>>>,
+}
+
+impl WebhookAppenderCache {
+    pub fn new() -> Self {
+        WebhookAppenderCache {
+            entries: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+        }
     }
 }
 
