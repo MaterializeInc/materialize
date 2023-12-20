@@ -458,6 +458,9 @@ p+p {
 
     .warning,
     .private-preview {
+        // NOTE(benesch): please ensure these colors stay yellowish/orange.
+        // Private preview and warnings should indicate a moderate amount of
+        // caution--not serious danger, but nothing to overlook either.
         background: rgba(238, 134, 96, 0.05);
         border: 1px solid rgba(238, 134, 96, 0.2);
 
@@ -490,8 +493,8 @@ p+p {
         }
 
         &::after {
-            border-color: var(--bg) var(--bg) #fbe2d9 #fbe2d9;
-            background: #fbe2d9;
+            border-color: var(--bg) var(--bg) var(--note-after) var(--note-after);
+            background: var(--note-after);
         }
 
         .gutter {
@@ -500,17 +503,17 @@ p+p {
     }
 
     .public-preview {
-        background: #d8fad9;
-        border: 1px solid #c0d8c5;
+        background: var(--public-preview);
+        border: 1px solid var(--public-preview-border);
         color: var(--black);
 
         &::after {
-            border-color: var(--bg) var(--bg) #c0d8c5 #c0d8c5;
-            background: #c0d8c5;
+            border-color: var(--bg) var(--bg) var(--public-preview-after) var(--public-preview-after);
+            background: var(--public-preview-after);
         }
 
         .gutter {
-            color: #186477;
+            color: var(--public-preview-gutter);
         }
     }
 
