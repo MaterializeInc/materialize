@@ -34,7 +34,9 @@ alter_swap ::=
 alter_index ::=
   'ALTER' 'INDEX' name 'SET' 'ENABLED'
 alter_role ::=
-    'ALTER' 'ROLE' role_name 'WITH'? 'INHERIT'
+    'ALTER' 'ROLE' role_name ( alter_role_attributes | alter_role_variables )
+alter_role_attributes ::= 'WITH'? 'INHERIT'
+alter_role_variables ::= ('SET' variable_name ( 'TO' | '=' ) ( variable_value | 'DEFAULT' ) | 'RESET' variable_name)
 alter_secret ::=
   'ALTER' 'SECRET' 'IF EXISTS'? name AS value
 alter_sink ::=
