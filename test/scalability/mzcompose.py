@@ -59,7 +59,7 @@ SERVICES = [
     Materialized(
         image="materialize/materialized:latest",
         sanity_restart=False,
-        catalog_store="stash",
+        catalog_store="persist",
     ),
     Postgres(),
 ]
