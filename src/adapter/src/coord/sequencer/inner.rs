@@ -113,6 +113,8 @@ use crate::subscribe::ActiveSubscribe;
 use crate::util::{viewable_variables, ClientTransmitter, ComputeSinkId, ResultExt};
 use crate::{guard_write_critical_section, PeekResponseUnary, TimestampExplanation};
 
+mod create_materialized_view;
+
 /// Attempts to evaluate an expression. If an error is returned then the error is sent
 /// to the client and the function is exited.
 macro_rules! return_if_err {

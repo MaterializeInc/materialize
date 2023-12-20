@@ -201,10 +201,29 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::CreateMaterializedView(plan) => {
-                    let result = self
-                        .sequence_create_materialized_view(ctx.session_mut(), plan, resolved_ids)
-                        .await;
-                    ctx.retire(result);
+                    if self
+                        .catalog()
+                        .system_config()
+                        .enable_off_thread_optimization()
+                    {
+                        let result = self
+                            .sequence_create_materialized_view_off_thread(
+                                ctx.session_mut(),
+                                plan,
+                                resolved_ids,
+                            )
+                            .await;
+                        ctx.retire(result);
+                    } else {
+                        let result = self
+                            .sequence_create_materialized_view(
+                                ctx.session_mut(),
+                                plan,
+                                resolved_ids,
+                            )
+                            .await;
+                        ctx.retire(result);
+                    }
                 }
                 Plan::CreateIndex(plan) => {
                     let result = self
