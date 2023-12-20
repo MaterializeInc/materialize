@@ -671,17 +671,17 @@ pub enum PendingPeek {
 
 impl PendingPeek {
     /// Produces a corresponding log event.
-    pub fn as_log_event(&self, install: bool) -> ComputeEvent {
+    pub fn as_log_event(&self, installed: bool) -> ComputeEvent {
         let peek = self.peek();
         let peek_type = match self {
             PendingPeek::Index(_) => logging::compute::PeekType::Index,
             PendingPeek::Persist(_) => logging::compute::PeekType::Persist,
         };
-        ComputeEvent::Peek(
-            logging::compute::Peek::new(peek.target.id(), peek.timestamp, peek.uuid),
+        ComputeEvent::Peek {
+            peek: logging::compute::Peek::new(peek.target.id(), peek.timestamp, peek.uuid),
             peek_type,
-            install,
-        )
+            installed,
+        }
     }
 
     fn index(peek: Peek, mut trace_bundle: TraceBundle) -> Self {
