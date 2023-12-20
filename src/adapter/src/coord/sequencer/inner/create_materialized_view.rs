@@ -8,24 +8,25 @@
 // by the Apache License, Version 2.0.
 
 use mz_adapter_types::compaction::CompactionWindow;
+use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
 use mz_expr::CollectionPlan;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::{ObjectId, ResolvedIds};
-// Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
-use mz_catalog::memory::objects::CatalogItem;
 use mz_sql::plan;
-use mz_sql::plan::MaterializedView;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 
-use crate::catalog;
 use crate::command::ExecuteResponse;
-use crate::coord::timestamp_selection::TimestampProvider;
-use crate::coord::Coordinator;
+use crate::coord::sequencer::inner::return_if_err;
+use crate::coord::{
+    Coordinator, CreateMaterializedViewFinish, CreateMaterializedViewOptimize,
+    CreateMaterializedViewStage, CreateMaterializedViewValidate, Message, PlanValidity,
+};
 use crate::error::AdapterError;
-use crate::notice::AdapterNotice;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
+use crate::{catalog, AdapterNotice, ExecuteContext, TimestampProvider};
 
 use crate::util::ResultExt;
 
@@ -33,38 +34,85 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
     pub(crate) async fn sequence_create_materialized_view_off_thread(
         &mut self,
-        session: &mut Session,
+        ctx: ExecuteContext,
         plan: plan::CreateMaterializedViewPlan,
         resolved_ids: ResolvedIds,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        ::tracing::info!("sequence_create_materialized_view_off_thread");
+    ) {
+        self.sequence_create_materialized_view_stage(
+            ctx,
+            CreateMaterializedViewStage::Validate(CreateMaterializedViewValidate {
+                plan,
+                resolved_ids,
+            }),
+            OpenTelemetryContext::obtain(),
+        )
+        .await;
+    }
 
+    /// Processes as many peek stages as possible.
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) async fn sequence_create_materialized_view_stage(
+        &mut self,
+        mut ctx: ExecuteContext,
+        mut stage: CreateMaterializedViewStage,
+        otel_ctx: OpenTelemetryContext,
+    ) {
+        use CreateMaterializedViewStage::*;
+
+        // Process the current stage and allow for processing the next.
+        loop {
+            // Always verify peek validity. This is cheap, and prevents programming errors
+            // if we move any stages off thread.
+            if let Some(validity) = stage.validity() {
+                return_if_err!(validity.check(self.catalog()), ctx);
+            }
+
+            (ctx, stage) = match stage {
+                Validate(stage) => {
+                    let next = return_if_err!(
+                        self.create_materialized_view_validate(ctx.session(), stage),
+                        ctx
+                    );
+                    (ctx, CreateMaterializedViewStage::Optimize(next))
+                }
+                Optimize(stage) => {
+                    self.create_materialized_view_optimize(ctx, stage, otel_ctx)
+                        .await;
+                    return;
+                }
+                Finish(stage) => {
+                    let result = self.create_materialized_view_finish(&mut ctx, stage).await;
+                    ctx.retire(result);
+                    return;
+                }
+            }
+        }
+    }
+
+    fn create_materialized_view_validate(
+        &mut self,
+        session: &Session,
+        CreateMaterializedViewValidate { plan, resolved_ids }: CreateMaterializedViewValidate,
+    ) -> Result<CreateMaterializedViewOptimize, AdapterError> {
         let plan::CreateMaterializedViewPlan {
             name,
             materialized_view:
-                MaterializedView {
-                    create_sql,
-                    expr: raw_expr,
-                    column_names,
-                    cluster_id,
-                    non_null_assertions,
-                    compaction_window,
+                plan::MaterializedView {
+                    expr, cluster_id, ..
                 },
-            replace: _,
-            drop_ids,
-            if_not_exists,
             ambiguous_columns,
-        } = plan;
+            ..
+        } = &plan;
 
-        self.ensure_cluster_can_host_compute_item(&name, cluster_id)?;
+        self.ensure_cluster_can_host_compute_item(name, *cluster_id)?;
 
         // Validate any references in the materialized view's expression. We do
         // this on the unoptimized plan to better reflect what the user typed.
         // We want to reject queries that depend on log sources, for example,
         // even if we can *technically* optimize that reference away.
-        let expr_depends_on = raw_expr.depends_on();
+        let expr_depends_on = expr.depends_on();
         self.validate_timeline_context(expr_depends_on.iter().cloned())?;
-        self.validate_system_column_references(ambiguous_columns, &expr_depends_on)?;
+        self.validate_system_column_references(*ambiguous_columns, &expr_depends_on)?;
         // Materialized views are not allowed to depend on log sources, as replicas
         // are not producing the same definite collection for these.
         // TODO(teskje): Remove this check once arrangement-based log sources
@@ -81,13 +129,54 @@ impl Coordinator {
             });
         }
 
+        let validity = PlanValidity {
+            transient_revision: self.catalog().transient_revision(),
+            dependency_ids: expr_depends_on.clone(),
+            cluster_id: Some(*cluster_id),
+            replica_id: None,
+            role_metadata: session.role_metadata().clone(),
+        };
+
+        Ok(CreateMaterializedViewOptimize {
+            validity,
+            plan,
+            resolved_ids,
+        })
+    }
+
+    async fn create_materialized_view_optimize(
+        &mut self,
+        ctx: ExecuteContext,
+        CreateMaterializedViewOptimize {
+            validity,
+            plan,
+            resolved_ids,
+        }: CreateMaterializedViewOptimize,
+        otel_ctx: OpenTelemetryContext,
+    ) {
+        let plan::CreateMaterializedViewPlan {
+            name,
+            materialized_view:
+                plan::MaterializedView {
+                    column_names,
+                    cluster_id,
+                    non_null_assertions,
+                    ..
+                },
+            ..
+        } = &plan;
+
+        // Generate data structures that can be moved to another task where we will perform possibly
+        // expensive optimizations.
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+
         // Collect optimizer parameters.
         let compute_instance = self
-            .instance_snapshot(cluster_id)
+            .instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
-        let id = self.catalog_mut().allocate_user_id().await?;
-        let internal_view_id = self.allocate_transient_id()?;
-        let debug_name = self.catalog().resolve_full_name(&name, None).to_string();
+        let id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
+        let internal_view_id = return_if_err!(self.allocate_transient_id(), ctx);
+        let debug_name = self.catalog().resolve_full_name(name, None).to_string();
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
 
         // Build an optimizer for this MATERIALIZED VIEW.
@@ -102,12 +191,69 @@ impl Coordinator {
             optimizer_config,
         );
 
-        // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
-        let local_mir_plan = optimizer.optimize(raw_expr.clone())?;
-        let global_mir_plan = optimizer.optimize(local_mir_plan.clone())?;
-        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-        let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
+        let span = tracing::debug_span!("optimize create materielized view task");
 
+        mz_ore::task::spawn_blocking(
+            || "optimize create materielized view",
+            move || {
+                let _guard = span.enter();
+
+                // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
+                let raw_expr = plan.materialized_view.expr.clone();
+                let local_mir_plan = return_if_err!(optimizer.optimize(raw_expr), ctx);
+                let global_mir_plan =
+                    return_if_err!(optimizer.optimize(local_mir_plan.clone()), ctx);
+                // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                let global_lir_plan =
+                    return_if_err!(optimizer.optimize(global_mir_plan.clone()), ctx);
+
+                let stage = CreateMaterializedViewStage::Finish(CreateMaterializedViewFinish {
+                    validity,
+                    id,
+                    plan,
+                    resolved_ids,
+                    local_mir_plan,
+                    global_mir_plan,
+                    global_lir_plan,
+                });
+
+                let _ = internal_cmd_tx.send(Message::CreateMaterializedViewStageReady {
+                    ctx,
+                    otel_ctx,
+                    stage,
+                });
+            },
+        );
+    }
+
+    async fn create_materialized_view_finish(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        CreateMaterializedViewFinish {
+            id,
+            plan:
+                plan::CreateMaterializedViewPlan {
+                    name,
+                    materialized_view:
+                        plan::MaterializedView {
+                            create_sql,
+                            expr: raw_expr,
+                            cluster_id,
+                            non_null_assertions,
+                            compaction_window,
+                            ..
+                        },
+                    drop_ids,
+                    if_not_exists,
+                    ..
+                },
+            resolved_ids,
+            local_mir_plan,
+            global_mir_plan,
+            global_lir_plan,
+            ..
+        }: CreateMaterializedViewFinish,
+    ) -> Result<ExecuteResponse, AdapterError> {
         let mut ops = Vec::new();
         ops.extend(
             drop_ids
@@ -118,7 +264,7 @@ impl Coordinator {
             id,
             oid: self.catalog_mut().allocate_oid()?,
             name: name.clone(),
-            item: CatalogItem::MaterializedView(mz_catalog::memory::objects::MaterializedView {
+            item: CatalogItem::MaterializedView(MaterializedView {
                 create_sql,
                 raw_expr,
                 optimized_expr: local_mir_plan.expr(),
@@ -128,11 +274,11 @@ impl Coordinator {
                 non_null_assertions,
                 custom_logical_compaction_window: compaction_window,
             }),
-            owner_id: *session.current_role_id(),
+            owner_id: *ctx.session().current_role_id(),
         });
 
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
+            .catalog_transact_with_side_effects(Some(ctx.session()), ops, |coord| async {
                 // Save plan structures.
                 coord
                     .catalog_mut()
@@ -150,7 +296,7 @@ impl Coordinator {
                 df_desc.set_as_of(since.clone());
 
                 // Emit notices.
-                coord.emit_optimizer_notices(session, &df_meta.optimizer_notices);
+                coord.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
 
                 // Notices rendering
                 let df_meta = coord.catalog().render_notices(df_meta, Some(id));
@@ -216,10 +362,11 @@ impl Coordinator {
                 kind:
                     mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
-                session.add_notice(AdapterNotice::ObjectAlreadyExists {
-                    name: name.item,
-                    ty: "materialized view",
-                });
+                ctx.session()
+                    .add_notice(AdapterNotice::ObjectAlreadyExists {
+                        name: name.item,
+                        ty: "materialized view",
+                    });
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
             Err(err) => Err(err),
