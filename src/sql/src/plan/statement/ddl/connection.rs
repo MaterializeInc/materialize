@@ -24,8 +24,8 @@ use mz_storage_types::connections::aws::{AwsAssumeRole, AwsAuth, AwsConnection, 
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, CsrConnection, CsrConnectionHttpAuth,
-    KafkaConnection, KafkaSaslConfig, KafkaTlsConfig, PostgresConnection, SshConnection, SshTunnel,
-    StringOrSecret, TlsIdentity, Tunnel,
+    KafkaConnection, KafkaSaslConfig, KafkaTlsConfig, MySqlConnection, MySqlSslMode,
+    PostgresConnection, SshConnection, SshTunnel, StringOrSecret, TlsIdentity, Tunnel,
 };
 
 use crate::names::Aug;
@@ -132,6 +132,18 @@ pub(super) fn validate_options_per_connection_type(
             User,
         ],
         CreateConnectionType::Ssh => &[Host, Port, User],
+        CreateConnectionType::MySql => &[
+            AwsPrivatelink,
+            Host,
+            Password,
+            Port,
+            SshTunnel,
+            SslCertificate,
+            SslCertificateAuthority,
+            SslKey,
+            SslMode,
+            User,
+        ],
     };
 
     for o in permitted_options {
@@ -349,6 +361,54 @@ impl ConnectionOptionExtracted {
                 },
                 public_keys: None,
             }),
+            CreateConnectionType::MySql => {
+                scx.require_feature_flag(&crate::session::vars::ENABLE_MYSQL_SOURCE)?;
+
+                let cert = self.ssl_certificate;
+                let key = self.ssl_key.map(|secret| secret.into());
+                let tls_identity = match (cert, key) {
+                    (None, None) => None,
+                    (Some(cert), Some(key)) => Some(TlsIdentity { cert, key }),
+                    _ => sql_bail!(
+                        "invalid CONNECTION: both SSL KEY and SSL CERTIFICATE are required"
+                    ),
+                };
+                // Accepts the same SSL Mode values as the MySQL Client
+                // https://dev.mysql.com/doc/refman/8.0/en/connection-options.html#option_general_ssl-mode
+                let tls_mode = match self
+                    .ssl_mode
+                    .map(|f| f.to_uppercase())
+                    .as_ref()
+                    .map(|m| m.as_str())
+                {
+                    None | Some("DISABLED") => MySqlSslMode::Disabled,
+                    // "preferred" intentionally omitted because it has dubious security
+                    // properties.
+                    Some("REQUIRED") => MySqlSslMode::Required,
+                    Some("VERIFY_CA") | Some("VERIFY-CA") => MySqlSslMode::VerifyCa,
+                    Some("VERIFY_IDENTITY") | Some("VERIFY-IDENTITY") => {
+                        MySqlSslMode::VerifyIdentity
+                    }
+                    Some(m) => sql_bail!("invalid CONNECTION: unknown SSL MODE {}", m.quoted()),
+                };
+
+                let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
+
+                Connection::MySql(MySqlConnection {
+                    password: self.password.map(|password| password.into()),
+                    host: self
+                        .host
+                        .ok_or_else(|| sql_err!("HOST option is required"))?,
+                    port: self.port.unwrap_or(3306_u16),
+                    tunnel,
+                    tls_mode,
+                    tls_root_cert: self.ssl_certificate_authority,
+                    tls_identity,
+                    user: self
+                        .user
+                        .ok_or_else(|| sql_err!("USER option is required"))?,
+                })
+            }
         };
 
         Ok(connection)

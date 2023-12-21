@@ -2215,7 +2215,7 @@ impl<'a> Parser<'a> {
             _ => unreachable!(),
         };
         let connection_type =
-            match self.expect_one_of_keywords(&[AWS, KAFKA, CONFLUENT, POSTGRES, SSH])? {
+            match self.expect_one_of_keywords(&[AWS, KAFKA, CONFLUENT, POSTGRES, SSH, MYSQL])? {
                 AWS => {
                     if self.parse_keyword(PRIVATELINK) {
                         CreateConnectionType::AwsPrivatelink
@@ -2233,6 +2233,7 @@ impl<'a> Parser<'a> {
                     self.expect_keyword(TUNNEL)?;
                     CreateConnectionType::Ssh
                 }
+                MYSQL => CreateConnectionType::MySql,
                 _ => unreachable!(),
             };
         if expect_paren {

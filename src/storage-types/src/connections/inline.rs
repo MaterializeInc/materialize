@@ -80,6 +80,14 @@ pub trait ConnectionAccess:
         + Hash
         + Serialize
         + for<'a> Deserialize<'a>;
+    type MySql: Arbitrary
+        + Clone
+        + Debug
+        + Eq
+        + PartialEq
+        + Hash
+        + Serialize
+        + for<'a> Deserialize<'a>;
 }
 
 /// Expresses that the struct contains references to connections. Use a
@@ -93,6 +101,7 @@ impl ConnectionAccess for ReferencedConnection {
     type Pg = GlobalId;
     type Ssh = GlobalId;
     type Csr = GlobalId;
+    type MySql = GlobalId;
 }
 
 /// Expresses that the struct contains an inlined definition of a connection.
@@ -104,4 +113,5 @@ impl ConnectionAccess for InlinedConnection {
     type Pg = super::PostgresConnection;
     type Ssh = super::SshConnection;
     type Csr = super::CsrConnection;
+    type MySql = super::MySqlConnection;
 }

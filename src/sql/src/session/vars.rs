@@ -2179,6 +2179,13 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
+        name: enable_mysql_source,
+        desc: "Create a MySQL connection or source",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_expressions_in_limit_syntax,
         desc: "LIMIT <expr> syntax",
         default: false,

@@ -331,6 +331,21 @@ steps:
         agents:
           queue: linux-x86_64
 
+  - group: "MySQL tests"
+    key: mysql-tests
+    steps:
+      - id: mysql-cdc
+        label: MySQL CDC tests
+        depends_on: build-x86_64
+        timeout_in_minutes: 30
+        inputs: [test/mysql-cdc]
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: mysql-cdc
+        agents:
+          queue: linux-x86_64
+
   - group: "Postgres tests"
     key: postgres-tests
     steps:

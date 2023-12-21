@@ -3417,6 +3417,8 @@ pub fn plan_create_connection(
     let connection = connection_options_extracted.try_into_connection(scx, connection_type)?;
     if let Connection::Aws(_) = &connection {
         scx.require_feature_flag(&vars::ENABLE_AWS_CONNECTION)?;
+    } else if let Connection::MySql(_) = &connection {
+        scx.require_feature_flag(&vars::ENABLE_MYSQL_SOURCE)?;
     }
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
 
@@ -4858,6 +4860,7 @@ pub fn plan_alter_connection(
         Connection::Csr(_) => CreateConnectionType::Csr,
         Connection::Postgres(_) => CreateConnectionType::Postgres,
         Connection::Ssh(_) => CreateConnectionType::Ssh,
+        Connection::MySql(_) => CreateConnectionType::MySql,
     };
 
     // Collect all options irrespective of action taken on them.

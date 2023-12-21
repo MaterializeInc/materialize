@@ -60,7 +60,6 @@ kube-core = { version = "0.87.1", default-features = false, features = ["jsonpat
 libc = { version = "0.2.148", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.8", features = ["static"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
-lru = { version = "0.12.0" }
 memchr = { version = "2.5.0", features = ["use_std"] }
 mime_guess = { version = "2.0.3" }
 mio = { version = "0.8.8", features = ["net", "os-ext"] }
@@ -172,7 +171,6 @@ kube-core = { version = "0.87.1", default-features = false, features = ["jsonpat
 libc = { version = "0.2.148", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.8", features = ["static"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
-lru = { version = "0.12.0" }
 memchr = { version = "2.5.0", features = ["use_std"] }
 mime_guess = { version = "2.0.3" }
 mio = { version = "0.8.8", features = ["net", "os-ext"] }
