@@ -14,7 +14,7 @@ import sys
 
 from semver.version import Version
 
-from materialize import spawn
+from materialize import MZ_ROOT, spawn
 from materialize.git import checkout, get_branch_name, tag_annotated
 
 
@@ -50,7 +50,7 @@ def main():
         print(f"Checking out SHA {args.sha}")
         checkout(args.sha)
         print(f"Bumping version to {version}")
-        spawn.runv(["./bin/bump-version", version])
+        spawn.runv([MZ_ROOT / "bin" / "bump-version", version])
         print("Tagging version")
         tag_annotated(version)
         print("Pushing tag to Materialize repo")
