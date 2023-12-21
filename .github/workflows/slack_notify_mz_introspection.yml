@@ -48,7 +48,6 @@ jobs:
   notify:
     name: "Notify on mz_introspection index changes"
     runs-on: ubuntu-latest
-    if: ${{ !github.event.pull_request.draft }}
     steps:
       - name: "Path filter"
         id: filter
@@ -72,7 +71,7 @@ jobs:
       - name: "Escape PR title"
         id: escape-title
         run: |
-          PR_TITLE="${{ github.event.pull_request.title }}"
+          PR_TITLE='${{ github.event.pull_request.title }}'
           ESCAPED_PR_TITLE=$(echo $PR_TITLE | sed 's/"/\\"/g')
           echo "title=$ESCAPED_PR_TITLE" >> $GITHUB_OUTPUT
       - name: "Push to Slack"

@@ -58,7 +58,7 @@ jobs:
       - name: "Escape PR title"
         id: escape-title
         run: |
-          PR_TITLE="${{ github.event.pull_request.title }}"
+          PR_TITLE='${{ github.event.pull_request.title }}'
           ESCAPED_PR_TITLE=$(echo $PR_TITLE | sed 's/"/\\"/g')
           echo "title=$ESCAPED_PR_TITLE" >> $GITHUB_OUTPUT
       - name: "Push to Slack"
