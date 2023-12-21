@@ -151,6 +151,14 @@ impl Coordinator {
                     otel_ctx.attach_as_parent();
                     self.sequence_peek_stage(ctx, otel_ctx, stage).await;
                 }
+                Message::CreateIndexStageReady {
+                    ctx,
+                    otel_ctx,
+                    stage,
+                } => {
+                    otel_ctx.attach_as_parent();
+                    self.sequence_create_index_stage(ctx, stage, otel_ctx).await;
+                }
                 Message::CreateViewStageReady {
                     ctx,
                     otel_ctx,
