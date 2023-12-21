@@ -69,6 +69,12 @@ jobs:
           if git diff ${{ github.event.before }} ${{ github.sha }} "src/catalog/src/builtin.rs" | grep '^\+' | grep -i 'is_retained_metrics_collection'; then
             echo "changed=true" >> $GITHUB_OUTPUT
           fi
+      - name: "Escape PR title"
+        id: escape-title
+        run: |
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          ESCAPED_PR_TITLE=$("$PR_TITLE" | sed 's/"/\\"/g')
+          echo "changed=$ESCAPED_PR_TITLE" >> $GITHUB_OUTPUT
       - name: "Push to Slack"
         if: steps.filter.outputs.index-slt == 'true' || steps.check-retain-metrics.outputs.changed == 'true'
         uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
@@ -89,7 +95,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "• *PR:* <${{ github.event.pull_request.html_url }}|${{ github.event.pull_request.title }}>"
+                    "text": "• *PR:* <${{ github.event.pull_request.html_url }}|${{ steps.escape-title.outputs.title }}>"
                   }
                 },
                 {
