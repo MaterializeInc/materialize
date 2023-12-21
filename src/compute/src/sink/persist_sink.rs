@@ -30,6 +30,7 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::probe::{self, ProbeNotify};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{
@@ -55,6 +56,7 @@ where
         as_of: Antichain<Timestamp>,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
+        probes: Vec<probe::Handle<Timestamp>>,
     ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>,
@@ -72,6 +74,7 @@ where
             desired_collection,
             as_of,
             compute_state,
+            probes,
         )
     }
 }
@@ -82,6 +85,7 @@ pub(crate) fn persist_sink<G>(
     desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
     as_of: Antichain<Timestamp>,
     compute_state: &mut ComputeState,
+    probes: Vec<probe::Handle<Timestamp>>,
 ) -> Option<Rc<dyn Any>>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -116,6 +120,7 @@ where
             persist_collection,
             as_of,
             compute_state,
+            probes,
         ),
         token,
     )))
@@ -155,6 +160,7 @@ fn install_desired_into_persist<G>(
     persist_collection: Collection<G, Result<Row, DataflowError>, Diff>,
     as_of: Antichain<Timestamp>,
     compute_state: &mut crate::compute_state::ComputeState,
+    probes: Vec<probe::Handle<Timestamp>>,
 ) -> Option<Rc<dyn Any>>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -215,6 +221,8 @@ where
     );
 
     append_frontier_stream.connect_loop(persist_feedback_handle);
+
+    append_frontier_stream.probe_notify_with(probes);
 
     let token = Rc::new((mint_token, write_token, append_token));
 

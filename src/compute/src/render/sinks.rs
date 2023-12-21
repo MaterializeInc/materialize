@@ -23,6 +23,7 @@ use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::probe;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
@@ -45,6 +46,7 @@ where
         dependency_ids: BTreeSet<GlobalId>,
         sink_id: GlobalId,
         sink: &ComputeSinkDesc<CollectionMetadata>,
+        probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
         soft_assert_or_log!(
             sink.non_null_assertions.is_strictly_sorted(),
@@ -132,6 +134,7 @@ where
                     self.as_of_frontier.clone(),
                     ok_collection.enter_region(inner),
                     err_collection.enter_region(inner),
+                    probes,
                 );
 
                 if let Some(sink_token) = sink_token {
@@ -157,6 +160,7 @@ where
         as_of: Antichain<mz_repr::Timestamp>,
         sinked_collection: Collection<G, Row, Diff>,
         err_collection: Collection<G, DataflowError, Diff>,
+        probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = mz_repr::Timestamp>;
