@@ -15,7 +15,7 @@ import sys
 from semver.version import Version
 
 from materialize import spawn
-from materialize.git import checkout, tag_annotated, get_branch_name, push
+from materialize.git import checkout, tag_annotated, get_branch_name
 
 
 def main():
@@ -39,14 +39,11 @@ def main():
         "--remote",
         help="Git remote name of Materialize repo",
         type=str,
+        required=True,
     )
 
     args = parser.parse_args()
-
-    # Validate and format version.
-    version = args.version
-    version = f"v{Version.parse(version)}"
-
+    version = f"v{args.version}"
     current_branch = get_branch_name()
 
     try:
@@ -57,7 +54,7 @@ def main():
         print("Tagging version")
         tag_annotated(version)
         print("Pushing tag to Materialize repo")
-        push(remote=args.remote, tag=version)
+        spawn.runv(["git", "push", args.remote, version])
     finally:
         # The caller may have started in a detached HEAD state.
         if current_branch:
