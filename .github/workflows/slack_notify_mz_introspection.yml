@@ -35,7 +35,7 @@
 name: Slack Mz Introspection Council Notifications
 
 on:
-  pull_request_target:
+  pull_request:
     types:
       - opened
       - reopened
