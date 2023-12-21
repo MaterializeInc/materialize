@@ -151,6 +151,15 @@ impl Coordinator {
                     otel_ctx.attach_as_parent();
                     self.sequence_peek_stage(ctx, otel_ctx, stage).await;
                 }
+                Message::CreateMaterializedViewStageReady {
+                    ctx,
+                    otel_ctx,
+                    stage,
+                } => {
+                    otel_ctx.attach_as_parent();
+                    self.sequence_create_materialized_view_stage(ctx, stage, otel_ctx)
+                        .await;
+                }
                 Message::DrainStatementLog => {
                     self.drain_statement_log().await;
                 }

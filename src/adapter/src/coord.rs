@@ -114,7 +114,7 @@ use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::{Aug, ResolvedIds};
-use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
+use mz_sql::plan::{self, CopyFormat, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::{self, ConnectionCounter, OwnedVarInput, SystemVars};
@@ -236,6 +236,11 @@ pub enum Message<T = mz_repr::Timestamp> {
         otel_ctx: OpenTelemetryContext,
         stage: PeekStage,
     },
+    CreateMaterializedViewStageReady {
+        ctx: ExecuteContext,
+        otel_ctx: OpenTelemetryContext,
+        stage: CreateMaterializedViewStage,
+    },
     DrainStatementLog,
     PrivateLinkVpcEndpointEvents(BTreeMap<GlobalId, VpcEndpointEvent>),
 }
@@ -276,6 +281,9 @@ impl Message {
                 "execute_single_statement_transaction"
             }
             Message::PeekStageReady { .. } => "peek_stage_ready",
+            Message::CreateMaterializedViewStageReady { .. } => {
+                "create_materialized_view_stage_ready"
+            }
             Message::DrainStatementLog => "drain_statement_log",
             Message::AlterConnectionValidationReady(..) => "alter_connection_validation_ready",
             Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",
@@ -430,6 +438,47 @@ pub struct PeekStageFinish {
     real_time_recency_ts: Option<mz_repr::Timestamp>,
     optimizer: optimize::peek::Optimizer,
     global_mir_plan: optimize::peek::GlobalMirPlan,
+}
+
+#[derive(Debug)]
+pub enum CreateMaterializedViewStage {
+    Validate(CreateMaterializedViewValidate),
+    Optimize(CreateMaterializedViewOptimize),
+    Finish(CreateMaterializedViewFinish),
+}
+
+impl CreateMaterializedViewStage {
+    fn validity(&mut self) -> Option<&mut PlanValidity> {
+        match self {
+            Self::Validate(_) => None,
+            Self::Optimize(stage) => Some(&mut stage.validity),
+            Self::Finish(stage) => Some(&mut stage.validity),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CreateMaterializedViewValidate {
+    plan: plan::CreateMaterializedViewPlan,
+    resolved_ids: ResolvedIds,
+}
+
+#[derive(Debug)]
+pub struct CreateMaterializedViewOptimize {
+    validity: PlanValidity,
+    plan: plan::CreateMaterializedViewPlan,
+    resolved_ids: ResolvedIds,
+}
+
+#[derive(Debug)]
+pub struct CreateMaterializedViewFinish {
+    validity: PlanValidity,
+    id: GlobalId,
+    plan: plan::CreateMaterializedViewPlan,
+    resolved_ids: ResolvedIds,
+    local_mir_plan: optimize::materialized_view::LocalMirPlan,
+    global_mir_plan: optimize::materialized_view::GlobalMirPlan,
+    global_lir_plan: optimize::materialized_view::GlobalLirPlan,
 }
 
 /// An enum describing which cluster to run a statement on.

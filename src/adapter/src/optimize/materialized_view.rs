@@ -98,7 +98,7 @@ impl Optimizer {
 
 /// The (sealed intermediate) result after HIR ⇒ MIR lowering and decorrelation
 /// and MIR optimization.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LocalMirPlan {
     expr: MirRelationExpr,
 }
@@ -108,7 +108,7 @@ pub struct LocalMirPlan {
 /// 1. embedding a [`LocalMirPlan`] into a [`MirDataflowDescription`],
 /// 2. transitively inlining referenced views, and
 /// 3. jointly optimizing the `MIR` plans in the [`MirDataflowDescription`].
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct GlobalMirPlan {
     df_desc: MirDataflowDescription,
     df_meta: DataflowMetainfo,
@@ -126,7 +126,7 @@ impl GlobalMirPlan {
 
 /// The (final) result after MIR ⇒ LIR lowering and optimizing the resulting
 /// `DataflowDescription` with `LIR` plans.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct GlobalLirPlan {
     df_desc: LirDataflowDescription,
     df_meta: DataflowMetainfo,
