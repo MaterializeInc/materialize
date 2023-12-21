@@ -433,6 +433,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             replicas_selector: _,
             disk,
             disk_limit: _,
+            node_selector: _,
         }: ServiceConfig<'_>,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         let full_id = format!("{}-{}", self.namespace, id);

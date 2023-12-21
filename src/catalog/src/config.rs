@@ -137,6 +137,7 @@ impl Default for ClusterReplicaSizeMap {
                             workers: workers.into(),
                             credits_per_hour: 1.into(),
                             disabled: false,
+                            selectors: BTreeMap::default(),
                         },
                     )
                 })
@@ -155,6 +156,7 @@ impl Default for ClusterReplicaSizeMap {
                     workers: 1,
                     credits_per_hour: scale.into(),
                     disabled: false,
+                    selectors: BTreeMap::default(),
                 },
             );
 
@@ -168,6 +170,7 @@ impl Default for ClusterReplicaSizeMap {
                     workers: scale.into(),
                     credits_per_hour: scale.into(),
                     disabled: false,
+                    selectors: BTreeMap::default(),
                 },
             );
 
@@ -181,6 +184,7 @@ impl Default for ClusterReplicaSizeMap {
                     workers: 8,
                     credits_per_hour: 1.into(),
                     disabled: false,
+                    selectors: BTreeMap::default(),
                 },
             );
         }
@@ -195,6 +199,7 @@ impl Default for ClusterReplicaSizeMap {
                 workers: 4,
                 credits_per_hour: 2.into(),
                 disabled: false,
+                selectors: BTreeMap::default(),
             },
         );
 
@@ -208,6 +213,7 @@ impl Default for ClusterReplicaSizeMap {
                 workers: 0,
                 credits_per_hour: 0.into(),
                 disabled: true,
+                selectors: BTreeMap::default(),
             },
         );
         Self(inner)

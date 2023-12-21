@@ -293,6 +293,8 @@ pub struct ServiceConfig<'a> {
     pub disk: bool,
     /// The maximum amount of scratch disk space that the service is allowed to consume.
     pub disk_limit: Option<DiskLimit>,
+    /// Node selector for this service.
+    pub node_selector: BTreeMap<String, String>,
 }
 
 /// A named port associated with a service.
