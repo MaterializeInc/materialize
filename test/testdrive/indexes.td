@@ -336,7 +336,7 @@ mz_show_cluster_replicas_ind                                mz_show_cluster_repl
 mz_show_clusters_ind                                        mz_clusters                                  mz_introspection    {name}
 mz_show_columns_ind                                         mz_columns                                   mz_introspection    {id}
 mz_show_connections_ind                                     mz_connections                               mz_introspection    {schema_id}
-mz_show_databasez_ind                                       mz_databases                                 mz_introspection    {name}
+mz_show_databases_ind                                       mz_databases                                 mz_introspection    {name}
 mz_show_indexes_ind                                         mz_show_indexes                              mz_introspection    {schema_id}
 mz_show_materialized_views_ind                              mz_show_materialized_views                   mz_introspection    {schema_id}
 mz_show_schemas_ind                                         mz_schemas                                   mz_introspection    {database_id}

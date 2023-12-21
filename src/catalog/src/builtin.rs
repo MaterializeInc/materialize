@@ -5734,11 +5734,11 @@ JOIN root_times r USING (id)",
 };
 
 pub const MZ_SHOW_DATABASES_IND: BuiltinIndex = BuiltinIndex {
-    name: "mz_show_databasez_ind",
+    name: "mz_show_databases_ind",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "IN CLUSTER mz_introspection
 ON mz_catalog.mz_databases (name)",
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
 };
 
 pub const MZ_SHOW_SCHEMAS_IND: BuiltinIndex = BuiltinIndex {
