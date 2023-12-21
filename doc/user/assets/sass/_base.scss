@@ -101,7 +101,15 @@ body.dark {
     --shadow-default: 0 0.625rem 1.5rem 0 rgba(0, 0, 0, 0.4);
     --note: #fffad411;
     --note-border: #b9a61545;
+    --note-after: #fbe2d9;
     --note-gutter: #ffe600;
+    // NOTE(benesch): please ensure these colors stay blueish. Public preview
+    // requires a mild amount of caution. Importantly, green is not the right
+    // color, as that implies encouragement rather than caution.
+    --public-preview: #e9f7fb;
+    --public-preview-border: #c0d3d8;
+    --public-preview-after: #c0d3d8;
+    --public-preview-gutter: #186477;
 }
 
 body.light {
@@ -129,9 +137,17 @@ body.light {
     --body: var(--black-light);
     --highlight: var(--purple-dark);
 
-    --note: #fffad451;
+    --note: #fffad411;
     --note-border: #b9a61545;
+    --note-after: #fbe2d9;
     --note-gutter: #7b7b29;
+    // NOTE(benesch): please ensure these colors stay blueish. Public preview
+    // requires a mild amount of caution. Importantly, green is not the right
+    // color, as that implies encouragement rather than caution.
+    --public-preview: #e9f7fb;
+    --public-preview-border: #c0d3d8;
+    --public-preview-after: #c0d3d8;
+    --public-preview-gutter: #186477;
 }
 
 *,
