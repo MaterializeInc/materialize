@@ -1613,24 +1613,21 @@ fn source_sink_cluster_config(
     in_cluster: Option<&ResolvedClusterName>,
     size: Option<String>,
 ) -> Result<SourceSinkClusterConfig, PlanError> {
-    match (in_cluster, size) {
-        (None, None) => Ok(SourceSinkClusterConfig::Undefined),
-        (Some(in_cluster), None) => {
-            let cluster = scx.catalog.get_cluster(in_cluster.id);
-            // At most 1 replica
-            if cluster.replica_ids().len() > 1 {
-                sql_bail!("cannot create {ty} in cluster with more than one replica")
-            }
-
-            // We also don't allow more objects to be added to a cluster that is already
-            // linked to another object.
-            ensure_cluster_is_not_linked(scx, in_cluster.id)?;
-
-            Ok(SourceSinkClusterConfig::Existing { id: in_cluster.id })
-        }
-        (None, Some(size)) => Ok(SourceSinkClusterConfig::Linked { size }),
+    let cluster = match (in_cluster, size) {
+        (None, None) => scx.catalog.resolve_cluster(None)?,
+        (Some(in_cluster), None) => scx.catalog.get_cluster(in_cluster.id),
+        (None, Some(size)) => return Ok(SourceSinkClusterConfig::Linked { size }),
         _ => sql_bail!("only one of IN CLUSTER or SIZE can be set"),
+    };
+
+    if cluster.replica_ids().len() > 1 {
+        sql_bail!("cannot create {ty} in cluster with more than one replica")
     }
+    // Don't allow more objects to be added to a cluster that is already
+    // linked to another object.
+    ensure_cluster_is_not_linked(scx, cluster.id())?;
+
+    Ok(SourceSinkClusterConfig::Existing { id: cluster.id() })
 }
 
 generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default(true)));
