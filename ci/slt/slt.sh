@@ -24,7 +24,7 @@ tests=(
     test/sqllogictest/postgres/pgcrypto/*.slt \
 )
 
-sqllogictest -v --auto-index-selects --no-fail "$@" "${tests[@]}" | tee -a target/slt.log
+stdbuf --output=L --error=L sqllogictest -v --auto-index-selects --no-fail "$@" "${tests[@]}" | tee -a target/slt.log
 
 tests=(
     test/sqllogictest/*.slt \
@@ -73,8 +73,8 @@ for f in "${tests[@]}"; do
 done
 tests=("${temp[@]}")
 
-sqllogictest -v --auto-index-selects "$@" "${tests[@]}" | tee -a target/slt.log
-sqllogictest -v "$@" --replicas=2 "${tests_without_views_and_replica[@]}" | tee -a target/slt.log
+stdbuf --output=L --error=L sqllogictest -v --auto-index-selects "$@" "${tests[@]}" | tee -a target/slt.log
+stdbuf --output=L --error=L sqllogictest -v "$@" --replicas=2 "${tests_without_views_and_replica[@]}" | tee -a target/slt.log
 
 # Due to performance issues (see below), we pick two selected SLTs from
 # the SQLite corpus that we can reasonably run with --auto-index-selects
@@ -101,9 +101,9 @@ done
 tests=("${temp[@]}")
 
 # Run selected tests with --auto-index-selects
-sqllogictest -v --auto-index-selects --enable-table-keys "$@" "${tests_with_views[@]}" | tee -a target/slt.log
+stdbuf --output=L --error=L sqllogictest -v --auto-index-selects --enable-table-keys "$@" "${tests_with_views[@]}" | tee -a target/slt.log
 # Too slow to run with --auto-index-selects, can't run together with
 # --auto-transactions, no differences seen in previous run. We might want to
 # revisit and see if we can periodically test them, even if it takes 2-3 days
 # for the run to finish.
-sqllogictest -v --auto-transactions --auto-index-tables --enable-table-keys "$@" "${tests[@]}" | tee -a target/slt.log
+stdbuf --output=L --error=L sqllogictest -v --auto-transactions --auto-index-tables --enable-table-keys "$@" "${tests[@]}" | tee -a target/slt.log
