@@ -94,7 +94,9 @@ pub struct ComputeState {
     /// Max size in bytes of any result.
     max_result_size: u32,
     /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
-    pub dataflow_max_inflight_bytes: Option<usize>,
+    pub dataflow_max_inflight_bytes: usize,
+    /// Maximum number of bytes in-flight inside a single persist_source.
+    pub persist_source_max_inflight_bytes: Option<usize>,
     /// Specification for rendering linear joins.
     pub linear_join_spec: LinearJoinSpec,
     /// Metrics for this replica.
@@ -129,7 +131,8 @@ impl ComputeState {
             persist_clients,
             command_history,
             max_result_size: u32::MAX,
-            dataflow_max_inflight_bytes: None,
+            dataflow_max_inflight_bytes: usize::MAX,
+            persist_source_max_inflight_bytes: None,
             linear_join_spec: Default::default(),
             metrics,
             tracing_handle,
@@ -226,8 +229,10 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         if let Some(v) = max_result_size {
             self.compute_state.max_result_size = v;
         }
+        // TODO(#23897): Resolve the naming confusion here by switching to a different compute
+        // parameter and LD flag for the persist_source-internal backpressure.
         if let Some(v) = dataflow_max_inflight_bytes {
-            self.compute_state.dataflow_max_inflight_bytes = v;
+            self.compute_state.persist_source_max_inflight_bytes = v;
         }
         if let Some(v) = linear_join_yielding {
             self.compute_state.linear_join_spec.yielding = v;

@@ -342,6 +342,7 @@ where
                                     Antichain::new(),
                                     None,
                                     None,
+                                    None,
                                 );
                             let (tx_source_ok, tx_source_err) = (
                                 tx_source_ok_stream.as_collection(),
