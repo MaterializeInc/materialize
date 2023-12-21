@@ -544,6 +544,8 @@ impl CatalogState {
                 Datum::String(name),
                 Datum::String(source_desc_name),
                 Datum::from(connection_id.map(|id| id.to_string()).as_deref()),
+                // TODO: this will always be null when we remove the notion of
+                // linked clusters.
                 Datum::from(size),
                 Datum::from(envelope),
                 Datum::from(key_format),
