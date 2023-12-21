@@ -378,6 +378,7 @@ where
                         let mut datums_local = datums1.borrow();
                         datums_local.extend(datum_iter);
                         let key_len = datums_local.len();
+
                         // Merge results into the order they were asked for.
                         for typ in aggregate_types.iter() {
                             let datum = match typ {
@@ -388,26 +389,24 @@ where
                             let Some(datum) = datum else { return };
                             datums_local.push(datum);
                         }
-                        if mfp_after1
-                            .as_ref()
-                            .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
-                            .unwrap_or(Ok(true))
-                            == Ok(true)
+
+                        // If we did not have enough values to stitch together, then we do not
+                        // generate an output row. Not outputting here corresponds to the semantics
+                        // of an equi-join on the key, similarly to the proposal in PR #17013.
+                        //
+                        // Note that we also do not want to have anything left over to stich. If we
+                        // do, then we also have an error, reported elsewhere, and would violate
+                        // join semantics.
+                        if (accumulable.next(), hierarchical.next(), basic.next())
+                            == (None, None, None)
                         {
-                            // If we did not have enough values to stitch together, then we do not generate
-                            // an output row. Not outputting here corresponds to the semantics of an
-                            // equi-join on the key, similarly to the proposal in PR #17013.
-                            //
-                            // Note that we also do not want to have anything left over to stich.  If we do,
-                            // then we also have an error and would violate join semantics.
-                            if (accumulable.next(), hierarchical.next(), basic.next())
-                                == (None, None, None)
-                            {
-                                let binding = SharedRow::get();
-                                let mut row_builder = binding.borrow_mut();
-                                let mut row_packer = row_builder.packer();
-                                row_packer.extend(&datums_local[key_len..]);
-                                output.push((row_builder.clone(), 1));
+                            if let Some(row) = evaluate_mfp_after(
+                                &mfp_after1,
+                                &mut datums_local,
+                                &temp_storage,
+                                key_len,
+                            ) {
+                                output.push((row, 1));
                             }
                         }
                     }
@@ -574,6 +573,9 @@ where
                     let mut datums_local = datums1.borrow();
                     datums_local.extend(key.into_datum_iter(None));
 
+                    // Note that the key contains all the columns in a `Distinct` and that `mfp_after` is
+                    // required to preserve the key. Therefore, if `mfp_after` maps, then it must project
+                    // back to the key. As a consequence, we can treat `mfp_after` as a filter here.
                     if mfp_after1
                         .as_ref()
                         .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
@@ -603,11 +605,10 @@ where
                         let mut datums_local = datums2.borrow();
                         datums_local.extend(datum_iter);
 
-                        let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
-                        else {
-                            return;
-                        };
-                        output.push((e.into(), 1));
+                        if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
+                        {
+                            output.push((e.into(), 1));
+                        }
                     }
                 },
             );
@@ -673,17 +674,10 @@ where
                     datums_local.push(row.unpack_first());
                 }
 
-                if mfp_after1
-                    .as_ref()
-                    .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
-                    .unwrap_or(Ok(true))
-                    == Ok(true)
+                if let Some(row) =
+                    evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
                 {
-                    let binding = SharedRow::get();
-                    let mut row_builder = binding.borrow_mut();
-                    let mut row_packer = row_builder.packer();
-                    row_packer.extend(&datums_local[key_len..]);
-                    output.push((row_builder.clone(), 1));
+                    output.push((row, 1));
                 }
             }
         });
@@ -708,11 +702,10 @@ where
                             datums_local.push(row.unpack_first());
                         }
 
-                        let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
-                        else {
-                            return;
-                        };
-                        output.push((e.into(), 1));
+                        if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
+                        {
+                            output.push((e.into(), 1));
+                        }
                     },
                 )
                 .as_collection(|_, v| v.into_owned());
@@ -811,17 +804,11 @@ where
                         &temp_storage,
                     ),
                 );
-                if mfp_after1
-                    .as_ref()
-                    .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
-                    .unwrap_or(Ok(true))
-                    == Ok(true)
+
+                if let Some(row) =
+                    evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
                 {
-                    let binding = SharedRow::get();
-                    let mut row_builder = binding.borrow_mut();
-                    let mut row_packer = row_builder.packer();
-                    row_packer.extend(&datums_local[key_len..]);
-                    target.push((row_builder.clone(), 1));
+                    target.push((row, 1));
                 }
             }
         });
@@ -872,11 +859,10 @@ where
                                 &temp_storage,
                             ),
                         );
-                        let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
-                        else {
-                            return;
-                        };
-                        target.push((e.into(), 1));
+                        if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
+                        {
+                            target.push((e.into(), 1));
+                        }
                     },
                 )
                 .as_collection(|_, v| v.into_owned());
@@ -1075,12 +1061,11 @@ where
                                 });
                                 datums_local.push(func.eval(iter, &temp_storage));
                             }
-                            let Result::Err(e) =
+                            if let Result::Err(e) =
                                 mfp.evaluate_inner(&mut datums_local, &temp_storage)
-                            else {
-                                return;
-                            };
-                            target.push((e.into(), 1));
+                            {
+                                target.push((e.into(), 1));
+                            }
                         },
                     )
                     .as_collection(|_, v| v.into_owned())
@@ -1105,17 +1090,14 @@ where
                                 .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
                             datums_local.push(func.eval(iter, &temp_storage));
                         }
-                        if mfp_after1
-                            .as_ref()
-                            .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
-                            .unwrap_or(Ok(true))
-                            == Ok(true)
-                        {
-                            let binding = SharedRow::get();
-                            let mut row_builder = binding.borrow_mut();
-                            let mut row_packer = row_builder.packer();
-                            row_packer.extend(&datums_local[key_len..]);
-                            target.push((row_builder.clone(), 1));
+
+                        if let Some(row) = evaluate_mfp_after(
+                            &mfp_after1,
+                            &mut datums_local,
+                            &temp_storage,
+                            key_len,
+                        ) {
+                            target.push((row, 1));
                         }
                     }
                 })
@@ -1276,17 +1258,11 @@ where
                 for monoid in accum.iter() {
                     datums_local.extend(monoid.finalize().iter());
                 }
-                if mfp_after1
-                    .as_ref()
-                    .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
-                    .unwrap_or(Ok(true))
-                    == Ok(true)
+
+                if let Some(row) =
+                    evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
                 {
-                    let binding = SharedRow::get();
-                    let mut row_builder = binding.borrow_mut();
-                    let mut row_packer = row_builder.packer();
-                    row_packer.extend(&datums_local[key_len..]);
-                    output.push((row_builder.clone(), 1));
+                    output.push((row, 1));
                 }
             }
         });
@@ -1307,11 +1283,10 @@ where
                         for monoid in accum.iter() {
                             datums_local.extend(monoid.finalize().iter());
                         }
-                        let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
-                        else {
-                            return;
-                        };
-                        output.push((e.into(), 1));
+                        if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
+                        {
+                            output.push((e.into(), 1));
+                        }
                     }
                 })
                 .as_collection(|_k, v| v.clone());
@@ -1466,17 +1441,13 @@ where
                             datums_local.push(finalize_accum(&aggr.func, accum, total));
                         }
 
-                        if mfp_after1
-                            .as_ref()
-                            .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
-                            .unwrap_or(Ok(true))
-                            == Ok(true)
-                        {
-                            let binding = SharedRow::get();
-                            let mut row_builder = binding.borrow_mut();
-                            let mut row_packer = row_builder.packer();
-                            row_packer.extend(&datums_local[key_len..]);
-                            output.push((row_builder.clone(), 1));
+                        if let Some(row) = evaluate_mfp_after(
+                            &mfp_after1,
+                            &mut datums_local,
+                            &temp_storage,
+                            key_len,
+                        ) {
+                            output.push((row, 1));
                         }
                     }
                 },
@@ -1526,11 +1497,10 @@ where
                             datums_local.push(finalize_accum(&aggr.func, accum, total));
                         }
 
-                        let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
-                        else {
-                            return;
-                        };
-                        output.push((e.into(), 1));
+                        if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
+                        {
+                            output.push((e.into(), 1));
+                        }
                     }
                 },
             );
@@ -1538,6 +1508,36 @@ where
             arranged_output,
             arranged_errs.as_collection(|_key, error| error.into_owned()),
         )
+    }
+}
+
+/// Evaluates the fused MFP, if one exists, on a reconstructed `DatumVecBorrow`
+/// containing key and aggregate values, then returns a result `Row` or `None`
+/// if the MFP filters the result out.
+fn evaluate_mfp_after<'a, 'b>(
+    mfp_after: &'a Option<SafeMfpPlan>,
+    datums_local: &'b mut mz_repr::DatumVecBorrow<'a>,
+    temp_storage: &'a RowArena,
+    key_len: usize,
+) -> Option<Row> {
+    let binding = SharedRow::get();
+    let mut row_builder = binding.borrow_mut();
+    let mut row_packer = row_builder.packer();
+    // Apply MFP if it exists and pack a Row of
+    // aggregate values from `datums_local`.
+    if let Some(mfp) = mfp_after {
+        // It is fine to ignore errors here, as they are scanned
+        // for elsewhere if the MFP can error.
+        let Ok(Some(iter)) = mfp.evaluate_iter(datums_local, temp_storage) else {
+            return None;
+        };
+        // The `mfp_after` must preserve the key columns,
+        // so we can skip them to form aggregation results.
+        row_packer.extend(iter.skip(key_len));
+        Some(row_builder.clone())
+    } else {
+        row_packer.extend(&datums_local[key_len..]);
+        Some(row_builder.clone())
     }
 }
 

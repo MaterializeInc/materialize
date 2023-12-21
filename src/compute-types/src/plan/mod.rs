@@ -249,8 +249,8 @@ pub enum Plan<T = mz_repr::Timestamp> {
     /// Map, Filter, and Project operators.
     ///
     /// This stage contains work that we would ideally like to fuse to other plan
-    /// stages, but for practical reasons cannot. For example: reduce, threshold,
-    /// and topk stages are not able to absorb this operator.
+    /// stages, but for practical reasons cannot. For example: threshold, topk,
+    /// and sometimes reduce stages are not able to absorb this operator.
     Mfp {
         /// The input collection.
         input: Box<Plan<T>>,
@@ -315,7 +315,9 @@ pub enum Plan<T = mz_repr::Timestamp> {
         /// The particular arrangement of the input we expect to use,
         /// if any
         input_key: Option<Vec<MirScalarExpr>>,
-        /// An MFP that must be applied to results.
+        /// An MFP that must be applied to results. The projection part of this
+        /// MFP must preserve the key for the reduction; otherwise, the results
+        /// become undefined.
         mfp_after: MapFilterProject,
     },
     /// Key-based "Top K" operator, retaining the first K records in each group.
@@ -1562,16 +1564,13 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     .filter(f)
                     .project(0..input_arity);
                 mfp_push.optimize();
+
                 // We still need to perform the map and projection for the actual output.
                 let mfp_left = MapFilterProject::new(input_arity).map(m).project(p);
 
                 // Compose the non-pushed MFP components.
                 mfp = MapFilterProject::compose(mfp_left, mfp);
                 mfp.optimize();
-
-                if !mfp_push.is_identity() {
-                    println!("Non-identity MPF pushed into Reduce: {:?}", mfp_push);
-                }
 
                 (
                     Plan::Reduce {

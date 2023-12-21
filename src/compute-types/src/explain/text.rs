@@ -260,7 +260,6 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                         let key = CompactScalarSeq(key);
                         writeln!(f, "{}input_key={}", ctx.indent, key)?;
                     }
-                    // ATTENTION: This is probably incorrect; have someone fix.
                     if !mfp_after.is_identity() {
                         writeln!(f, "{}mfp_after", ctx.indent)?;
                         ctx.indented(|ctx| mfp_after.fmt_text(f, ctx))?;

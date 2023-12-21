@@ -665,7 +665,7 @@ Explained Query:
 
 EOF
 
-# Mfp, Get, Union, FlatMap chained from Reduce enforcer, no must_consolidate
+# Get, Union, FlatMap chained from Reduce enforcer, no must_consolidate
 statement ok
 CREATE VIEW single_time_monotonic_t AS
     SELECT b, a, COUNT(*) AS c FROM t GROUP BY b, a;
@@ -756,27 +756,30 @@ Explained Query:
           mfp_after
             project=(#0, #2)
           Union
-            Get::Collection l0
+            Get::Arrangement l0
               project=(#0, #1)
               filter=((1 = (#1 % 2)))
-              raw=true
-            Get::Collection l0
+              key=#0, #1
+              raw=false
+              arrangements[0]={ key=[#0, #1], permutation=id, thinning=(#2) }
+            Get::Arrangement l0
               project=(#0, #1)
               filter=((1 = (#2 % 2)))
-              raw=true
+              key=#0, #1
+              raw=false
+              arrangements[0]={ key=[#0, #1], permutation=id, thinning=(#2) }
     cte l0 =
-      Mfp
-        filter=((2 = (#2 + 1)))
-        input_key=#0, #1
-        Reduce::Accumulable
-          simple_aggrs[0]=(0, 0, count(*))
-          val_plan
-            project=(#2)
-            map=(true)
-          key_plan
-            project=(#1, #0)
-          Get::Collection materialize.public.t
-            raw=true
+      Reduce::Accumulable
+        simple_aggrs[0]=(0, 0, count(*))
+        val_plan
+          project=(#2)
+          map=(true)
+        key_plan
+          project=(#1, #0)
+        mfp_after
+          filter=((2 = (#2 + 1)))
+        Get::Collection materialize.public.t
+          raw=true
 
 Source materialize.public.t
   filter=((6 = (#0 + 1)))
@@ -948,7 +951,9 @@ Explained Query:
 
 EOF
 
-# Top-k can have no must_consolidate, not only min/max
+# Top-k can have no must_consolidate, not only min/max.
+# In addition, the lack of need for must_consolidate
+# propagates through Mfp to a higher-level min/max.
 query I
 SELECT MAX(max_a)
 FROM (
