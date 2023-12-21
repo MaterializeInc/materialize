@@ -3253,6 +3253,12 @@ impl SystemVars {
         self.propagate_var_change(MAX_CONNECTIONS.name.as_str());
     }
 
+    /// Returns the system default for the [`CLUSTER`] session variable. To know the active cluster
+    /// for the current session, you must check the [`SessionVars`].
+    pub fn default_cluster(&self) -> String {
+        self.expect_value(&CLUSTER).to_owned()
+    }
+
     /// Returns the value of the `max_kafka_connections` configuration parameter.
     pub fn max_kafka_connections(&self) -> u32 {
         *self.expect_value(&MAX_KAFKA_CONNECTIONS)

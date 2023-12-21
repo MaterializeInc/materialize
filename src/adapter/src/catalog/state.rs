@@ -216,11 +216,13 @@ impl CatalogState {
 
     pub fn for_sessionless_user(&self, role_id: RoleId) -> ConnCatalog {
         let (notices_tx, _notices_rx) = mpsc::unbounded_channel();
+        let cluster = self.system_configuration.default_cluster();
+
         ConnCatalog {
             state: Cow::Borrowed(self),
             unresolvable_ids: BTreeSet::new(),
             conn_id: SYSTEM_CONN_ID.clone(),
-            cluster: "quickstart".into(),
+            cluster,
             database: self
                 .resolve_database(DEFAULT_DATABASE_NAME)
                 .ok()

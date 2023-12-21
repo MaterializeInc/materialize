@@ -28,6 +28,6 @@ contains:unknown cluster 'quickstart'
 ! SELECT generate_series(0, 10)
 contains:unknown cluster 'quickstart'
 
-# to make it easier to run the test again, let's recreate the defaquickstartult cluster
+# to make it easier to run the test again, let's recreate the quickstart cluster
 $ postgres-execute connection=mz_system
 CREATE CLUSTER quickstart REPLICAS ()
