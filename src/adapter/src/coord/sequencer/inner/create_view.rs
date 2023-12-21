@@ -28,7 +28,7 @@ use crate::{catalog, AdapterNotice, ExecuteContext};
 
 impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) async fn sequence_create_view_off_thread(
+    pub(crate) async fn sequence_create_view(
         &mut self,
         ctx: ExecuteContext,
         plan: plan::CreateViewPlan,
