@@ -14,7 +14,7 @@ set -euo pipefail
 . misc/shlib/shlib.bash
 
 mzcompose() {
-    bin/ci-builder run stable bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
+    stdbuf --output=L --error=L bin/ci-builder run stable bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
 
 service=${BUILDKITE_PLUGIN_MZCOMPOSE_RUN:-default}
