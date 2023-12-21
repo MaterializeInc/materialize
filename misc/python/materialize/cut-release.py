@@ -15,7 +15,7 @@ import sys
 from semver.version import Version
 
 from materialize import spawn
-from materialize.git import checkout, tag_annotated, get_branch_name
+from materialize.git import checkout, get_branch_name, tag_annotated
 
 
 def main():
