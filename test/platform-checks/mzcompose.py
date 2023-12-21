@@ -88,7 +88,6 @@ SERVICES = [
         external_minio=True,
         sanity_restart=False,
         volumes_extra=["secrets:/share/secrets"],
-        catalog_store="stash",
     ),
     TestdriveService(
         default_timeout="300s",
