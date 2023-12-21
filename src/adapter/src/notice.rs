@@ -125,6 +125,10 @@ pub enum AdapterNotice {
     PerReplicaLogRead {
         log_names: Vec<String>,
     },
+    VarDefaultUpdated {
+        role: Option<String>,
+        var_name: Option<String>,
+    },
     Welcome(String),
 }
 
@@ -185,6 +189,7 @@ impl AdapterNotice {
             AdapterNotice::WebhookSourceCreated { .. } => Severity::Notice,
             AdapterNotice::DroppedInUseIndex { .. } => Severity::Notice,
             AdapterNotice::PerReplicaLogRead { .. } => Severity::Notice,
+            AdapterNotice::VarDefaultUpdated { .. } => Severity::Notice,
             AdapterNotice::Welcome(_) => Severity::Notice,
         }
     }
@@ -274,6 +279,7 @@ impl AdapterNotice {
             AdapterNotice::DroppedInUseIndex { .. } => SqlState::WARNING,
             AdapterNotice::WebhookSourceCreated { .. } => SqlState::WARNING,
             AdapterNotice::PerReplicaLogRead { .. } => SqlState::WARNING,
+            AdapterNotice::VarDefaultUpdated { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::Welcome(_) => SqlState::SUCCESSFUL_COMPLETION,
         }
     }
@@ -424,6 +430,20 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::PerReplicaLogRead { log_names } => {
                 write!(f, "Queried introspection relations: {}. Unlike other objects in Materialize, results from querying these objects depend on the current values of the `cluster` and `cluster_replica` session variables.", log_names.join(", "))
+            }
+            AdapterNotice::VarDefaultUpdated { role, var_name } => {
+                let vars = match var_name {
+                    Some(name) => format!("variable {} was", name.quoted()),
+                    None => "variables were".to_string(),
+                };
+                let target = match role {
+                    Some(role_name) => role_name.quoted().to_string(),
+                    None => "the system".to_string(),
+                };
+                write!(
+                    f,
+                    "{vars} updated for {target}, please reconnect to take effect"
+                )
             }
             AdapterNotice::Welcome(message) => message.fmt(f),
         }
