@@ -2844,10 +2844,3 @@ CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1', RETAIN HISTORY FOR '
 CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE = '1', RETAIN HISTORY = FOR '1s')
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("s")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Counter, options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("1"))) }, CreateSourceOption { name: RetainHistory, value: Some(RetainHistoryFor(String("1s"))) }], referenced_subsources: None, progress_subsource: None })
-
-parse-statement
-CREATE SUBSOURCE accounts (id pg_catalog.int8 NOT NULL, UNIQUE (id)) WITH (REFERENCES = true, RETAIN HISTORY = FOR '1h')
-----
-CREATE SUBSOURCE accounts (id pg_catalog.int8 NOT NULL, UNIQUE (id)) WITH (REFERENCES = true, RETAIN HISTORY = FOR '1h')
-=>
-CreateSubsource(CreateSubsourceStatement { name: UnresolvedItemName([Ident("accounts")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("pg_catalog"), Ident("int8")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }], constraints: [Unique { name: None, columns: [Ident("id")], is_primary: false, nulls_not_distinct: false }], if_not_exists: false, with_options: [CreateSubsourceOption { name: References, value: Some(Value(Boolean(true))) }, CreateSubsourceOption { name: RetainHistory, value: Some(RetainHistoryFor(String("1h"))) }] })

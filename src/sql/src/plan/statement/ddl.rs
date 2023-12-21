@@ -1295,8 +1295,7 @@ pub fn plan_create_source(
 generate_extracted_config!(
     CreateSubsourceOption,
     (Progress, bool, Default(false)),
-    (References, bool, Default(false)),
-    (RetainHistory, Duration)
+    (References, bool, Default(false))
 );
 
 pub fn plan_create_subsource(
@@ -1314,8 +1313,7 @@ pub fn plan_create_subsource(
     let CreateSubsourceOptionExtracted {
         progress,
         references,
-        retain_history,
-        seen: _,
+        ..
     } = with_options.clone().try_into()?;
 
     // This invariant is enforced during purification; we are responsible for
@@ -1432,13 +1430,6 @@ pub fn plan_create_subsource(
     let typ = RelationType::new(column_types).with_keys(keys);
     let desc = RelationDesc::new(typ, names);
 
-    let compaction_window = retain_history
-        .map(|cw| {
-            scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
-            Ok::<_, PlanError>(cw.try_into()?)
-        })
-        .transpose()?;
-
     let source = Source {
         create_sql,
         data_source: if progress {
@@ -1449,7 +1440,7 @@ pub fn plan_create_subsource(
             unreachable!("state prohibited above")
         },
         desc,
-        compaction_window,
+        compaction_window: None,
     };
 
     Ok(Plan::CreateSource(CreateSourcePlan {
