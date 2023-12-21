@@ -107,12 +107,14 @@ where
     F: Future<Output = PersistClient> + Send + 'static,
     G: Scope<Timestamp = T>,
 {
+    let unique_id = (name, passthrough.scope().addr()).hashed();
     let (txns, source_button) = txns_progress_source::<K, V, T, D, P, C, G>(
         passthrough.scope(),
         name,
         client_fn(),
         txns_id,
         data_id,
+        unique_id,
     );
     // Each of the `txns_frontiers` workers wants the full copy of the txns
     // shard (modulo filtered for data_id).
@@ -127,6 +129,7 @@ where
         as_of,
         data_key_schema,
         data_val_schema,
+        unique_id,
     );
     (passthrough, vec![source_button, frontiers_button])
 }
@@ -137,6 +140,7 @@ fn txns_progress_source<K, V, T, D, P, C, G>(
     client: impl Future<Output = PersistClient> + 'static,
     txns_id: ShardId,
     data_id: ShardId,
+    unique_id: u64,
 ) -> (Stream<G, (TxnsEntry, T, i64)>, PressOnDropButton)
 where
     K: Debug + Codec,
@@ -151,6 +155,7 @@ where
     let chosen_worker = usize::cast_from(name.hashed()) % scope.peers();
     let name = format!("txns_progress_source({})", name);
     let mut builder = AsyncOperatorBuilder::new(name.clone(), scope);
+    let name = format!("{} [{}]", name, unique_id);
     let (mut txns_output, txns_stream) = builder.new_output();
 
     let shutdown_button = builder.build(move |capabilities| async move {
@@ -207,6 +212,7 @@ fn txns_progress_frontiers<K, V, T, D, P, C, G>(
     as_of: T,
     data_key_schema: Arc<K::Schema>,
     data_val_schema: Arc<V::Schema>,
+    unique_id: u64,
 ) -> (Stream<G, P>, PressOnDropButton)
 where
     K: Debug + Codec,
@@ -219,6 +225,13 @@ where
 {
     let name = format!("txns_progress_frontiers({})", name);
     let mut builder = AsyncOperatorBuilder::new(name.clone(), passthrough.scope());
+    let name = format!(
+        "{} [{}] {}/{}",
+        name,
+        unique_id,
+        passthrough.scope().index(),
+        passthrough.scope().peers(),
+    );
     let (mut passthrough_output, passthrough_stream) = builder.new_output();
     let txns_input = builder.new_input_connection(&txns, Pipeline, vec![Antichain::new()]);
     let mut passthrough_input =
