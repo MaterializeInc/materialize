@@ -32,7 +32,7 @@ use crate::util::ResultExt;
 
 impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) async fn sequence_create_materialized_view_off_thread(
+    pub(crate) async fn sequence_create_materialized_view(
         &mut self,
         ctx: ExecuteContext,
         plan: plan::CreateMaterializedViewPlan,
