@@ -236,6 +236,11 @@ pub enum Message<T = mz_repr::Timestamp> {
         otel_ctx: OpenTelemetryContext,
         stage: PeekStage,
     },
+    CreateViewStageReady {
+        ctx: ExecuteContext,
+        otel_ctx: OpenTelemetryContext,
+        stage: CreateViewStage,
+    },
     CreateMaterializedViewStageReady {
         ctx: ExecuteContext,
         otel_ctx: OpenTelemetryContext,
@@ -281,6 +286,7 @@ impl Message {
                 "execute_single_statement_transaction"
             }
             Message::PeekStageReady { .. } => "peek_stage_ready",
+            Message::CreateViewStageReady { .. } => "create_view_stage_ready",
             Message::CreateMaterializedViewStageReady { .. } => {
                 "create_materialized_view_stage_ready"
             }
@@ -438,6 +444,45 @@ pub struct PeekStageFinish {
     real_time_recency_ts: Option<mz_repr::Timestamp>,
     optimizer: optimize::peek::Optimizer,
     global_mir_plan: optimize::peek::GlobalMirPlan,
+}
+
+#[derive(Debug)]
+pub enum CreateViewStage {
+    Validate(CreateViewValidate),
+    Optimize(CreateViewOptimize),
+    Finish(CreateViewFinish),
+}
+
+impl CreateViewStage {
+    fn validity(&mut self) -> Option<&mut PlanValidity> {
+        match self {
+            Self::Validate(_) => None,
+            Self::Optimize(stage) => Some(&mut stage.validity),
+            Self::Finish(stage) => Some(&mut stage.validity),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CreateViewValidate {
+    plan: plan::CreateViewPlan,
+    resolved_ids: ResolvedIds,
+}
+
+#[derive(Debug)]
+pub struct CreateViewOptimize {
+    validity: PlanValidity,
+    plan: plan::CreateViewPlan,
+    resolved_ids: ResolvedIds,
+}
+
+#[derive(Debug)]
+pub struct CreateViewFinish {
+    validity: PlanValidity,
+    id: GlobalId,
+    plan: plan::CreateViewPlan,
+    resolved_ids: ResolvedIds,
+    optimized_expr: OptimizedMirRelationExpr,
 }
 
 #[derive(Debug)]

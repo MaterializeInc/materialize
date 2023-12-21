@@ -195,10 +195,7 @@ impl Coordinator {
                     self.sequence_create_sink(ctx, plan, resolved_ids).await;
                 }
                 Plan::CreateView(plan) => {
-                    let result = self
-                        .sequence_create_view(ctx.session_mut(), plan, resolved_ids)
-                        .await;
-                    ctx.retire(result);
+                    self.sequence_create_view(ctx, plan, resolved_ids).await;
                 }
                 Plan::CreateMaterializedView(plan) => {
                     self.sequence_create_materialized_view(ctx, plan, resolved_ids)
