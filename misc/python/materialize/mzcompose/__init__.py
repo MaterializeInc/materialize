@@ -66,7 +66,6 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "storage_source_decode_fuel": "100000",
     # 128 MiB,
     "compute_dataflow_max_inflight_bytes": "134217728",
-    "enable_unified_clusters": "true",
     "enable_jemalloc_profiling": "true",
     "enable_comment": "true",
     "enable_sink_doc_on_option": "true",

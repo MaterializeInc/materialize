@@ -94,7 +94,6 @@ class MzStart(Action):
         c.sql(
             """
             ALTER CLUSTER default SET (MANAGED = false);
-            ALTER SYSTEM SET enable_unified_clusters = true;
             """,
             user="mz_system",
             port=6877,

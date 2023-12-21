@@ -14,11 +14,6 @@ mode cockroach
 # Start from a pristine state
 reset-server
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_unified_clusters = on;
-----
-COMPLETE 0
-
 statement ok
 CREATE CLUSTER c SIZE '1', REPLICATION FACTOR 2;
 
