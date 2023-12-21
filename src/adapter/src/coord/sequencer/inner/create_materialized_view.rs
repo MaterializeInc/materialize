@@ -95,7 +95,6 @@ impl Coordinator {
         CreateMaterializedViewValidate { plan, resolved_ids }: CreateMaterializedViewValidate,
     ) -> Result<CreateMaterializedViewOptimize, AdapterError> {
         let plan::CreateMaterializedViewPlan {
-            name,
             materialized_view:
                 plan::MaterializedView {
                     expr, cluster_id, ..
@@ -103,8 +102,6 @@ impl Coordinator {
             ambiguous_columns,
             ..
         } = &plan;
-
-        self.ensure_cluster_can_host_compute_item(name, *cluster_id)?;
 
         // Validate any references in the materialized view's expression. We do
         // this on the unoptimized plan to better reflect what the user typed.

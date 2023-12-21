@@ -86,12 +86,9 @@ impl Coordinator {
         CreateIndexValidate { plan, resolved_ids }: CreateIndexValidate,
     ) -> Result<CreateIndexOptimize, AdapterError> {
         let plan::CreateIndexPlan {
-            name,
             index: plan::Index { on, cluster_id, .. },
             ..
         } = &plan;
-
-        self.ensure_cluster_can_host_compute_item(name, *cluster_id)?;
 
         let validity = PlanValidity {
             transient_revision: self.catalog().transient_revision(),
