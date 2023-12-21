@@ -60,13 +60,16 @@ jobs:
               - 'test/sqllogictest/mz_introspection_index_accounting.slt'
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
       - name: "Check Retained Metric Changes"
         id: check-retain-metrics
         if: steps.filter.outputs.builtin-rs == 'true'
         run: |
           # Check for the text "is_retained_metrics_collection" modified in builtin.rs in the pull request
-          if git diff ${{ github.event.before }} ${{ github.sha }} "src/catalog/src/builtin.rs" | grep -i 'is_retained_metrics'; then
+          if git diff ${{ github.event.pull_request.base.sha }} -- 'src/catalog/src/builtin.rs' | grep -i 'is_retained_metrics'; then
             echo "changed=true" >> $GITHUB_OUTPUT
+            echo "cara success"
           fi
       - name: "Escape PR title"
         id: escape-title
