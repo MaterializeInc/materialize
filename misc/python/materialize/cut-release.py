@@ -31,7 +31,7 @@ def main():
     parser.add_argument(
         "--version",
         help="Version of release",
-        type=str,
+        type=Version.parse,
     )
     parser.add_argument(
         "--remote",
