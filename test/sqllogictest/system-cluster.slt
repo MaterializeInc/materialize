@@ -20,10 +20,10 @@ EXPLAIN SHOW DATABASES
 ----
 Explained Query (fast path):
   Project (#0)
-    ReadIndex on=mz_catalog.mz_databases mz_show_databases_ind=[*** full scan ***]
+    ReadIndex on=mz_catalog.mz_databases mz_show_databasez_ind=[*** full scan ***]
 
 Used Indexes:
-  - mz_internal.mz_show_databases_ind (*** full scan ***)
+  - mz_internal.mz_show_databasez_ind (*** full scan ***)
 
 EOF
 
