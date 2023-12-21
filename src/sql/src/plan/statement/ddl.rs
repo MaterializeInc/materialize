@@ -523,7 +523,7 @@ pub fn plan_create_webhook_source(
     let typ = RelationType::new(column_ty);
     let desc = RelationDesc::new(typ, column_names);
 
-    let cluster_config = source_sink_cluster_config(scx, Some(&in_cluster), None)?;
+    let cluster_config = source_sink_cluster_config(scx, "source", Some(&in_cluster), None)?;
 
     // Check for an object in the catalog with this same name
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
@@ -1190,7 +1190,7 @@ pub fn plan_create_source(
         }
     }
 
-    let cluster_config = source_sink_cluster_config(scx, in_cluster.as_ref(), size)?;
+    let cluster_config = source_sink_cluster_config(scx, "source", in_cluster.as_ref(), size)?;
 
     let timestamp_interval = match timestamp_interval {
         Some(duration) => {
@@ -1609,21 +1609,25 @@ fn get_encoding(
 
 fn source_sink_cluster_config(
     scx: &StatementContext,
+    ty: &'static str,
     in_cluster: Option<&ResolvedClusterName>,
     size: Option<String>,
 ) -> Result<SourceSinkClusterConfig, PlanError> {
-    match (in_cluster, size) {
-        (None, None) => Ok(SourceSinkClusterConfig::Undefined),
-        (Some(in_cluster), None) => {
-            // Don't allow more objects to be added to a cluster that is already
-            // linked to another object.
-            ensure_cluster_is_not_linked(scx, in_cluster.id)?;
-
-            Ok(SourceSinkClusterConfig::Existing { id: in_cluster.id })
-        }
-        (None, Some(size)) => Ok(SourceSinkClusterConfig::Linked { size }),
+    let cluster = match (in_cluster, size) {
+        (None, None) => scx.catalog.resolve_cluster(None)?,
+        (Some(in_cluster), None) => scx.catalog.get_cluster(in_cluster.id),
+        (None, Some(size)) => return Ok(SourceSinkClusterConfig::Linked { size }),
         _ => sql_bail!("only one of IN CLUSTER or SIZE can be set"),
+    };
+
+    if cluster.replica_ids().len() > 1 {
+        sql_bail!("cannot create {ty} in cluster with more than one replica")
     }
+    // Don't allow more objects to be added to a cluster that is already
+    // linked to another object.
+    ensure_cluster_is_not_linked(scx, cluster.id())?;
+
+    Ok(SourceSinkClusterConfig::Existing { id: cluster.id() })
 }
 
 generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default(true)));
@@ -2360,7 +2364,7 @@ pub fn plan_create_sink(
         seen: _,
     } = with_options.try_into()?;
 
-    let cluster_config = source_sink_cluster_config(scx, in_cluster.as_ref(), size)?;
+    let cluster_config = source_sink_cluster_config(scx, "sink", in_cluster.as_ref(), size)?;
 
     // WITH SNAPSHOT defaults to true
     let with_snapshot = snapshot.unwrap_or(true);
