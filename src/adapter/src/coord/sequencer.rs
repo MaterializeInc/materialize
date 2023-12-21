@@ -202,10 +202,21 @@ impl Coordinator {
                         .await;
                 }
                 Plan::CreateIndex(plan) => {
-                    let result = self
-                        .sequence_create_index(ctx.session_mut(), plan, resolved_ids)
-                        .await;
-                    ctx.retire(result);
+                    if self
+                        .catalog()
+                        .system_config()
+                        .enable_off_thread_optimization()
+                    {
+                        let result = self
+                            .sequence_create_index_off_thread(ctx.session_mut(), plan, resolved_ids)
+                            .await;
+                        ctx.retire(result);
+                    } else {
+                        let result = self
+                            .sequence_create_index(ctx.session_mut(), plan, resolved_ids)
+                            .await;
+                        ctx.retire(result);
+                    }
                 }
                 Plan::CreateType(plan) => {
                     let result = self
