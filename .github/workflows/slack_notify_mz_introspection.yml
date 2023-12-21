@@ -73,8 +73,8 @@ jobs:
         id: escape-title
         run: |
           PR_TITLE="${{ github.event.pull_request.title }}"
-          ESCAPED_PR_TITLE=$("$PR_TITLE" | sed 's/"/\\"/g')
-          echo "changed=$ESCAPED_PR_TITLE" >> $GITHUB_OUTPUT
+          ESCAPED_PR_TITLE=$(echo $PR_TITLE | sed 's/"/\\"/g')
+          echo "title=$ESCAPED_PR_TITLE" >> $GITHUB_OUTPUT
       - name: "Push to Slack"
         if: steps.filter.outputs.index-slt == 'true' || steps.check-retain-metrics.outputs.changed == 'true'
         uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
