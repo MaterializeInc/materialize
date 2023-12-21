@@ -2109,13 +2109,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_unified_clusters,
-        desc: "unified compute and storage cluster",
-        default: true,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_jemalloc_profiling,
         desc: "jemalloc heap memory profiling",
         default: true,

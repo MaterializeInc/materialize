@@ -126,18 +126,12 @@ contains:cannot modify linked cluster "materialize_public_lg1"
 > EXPLAIN SELECT * FROM v
 "Explained Query:\n  ReadStorage materialize.public.v\n"
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unified_clusters = false
-
 ! SELECT generate_series(0, 10)
 contains:cannot execute queries on cluster containing sources or sinks
 ! SUBSCRIBE v
 contains:cannot execute queries on cluster containing sources or sinks
 ! EXPLAIN SELECT * FROM v
 contains:cannot execute queries on cluster containing sources or sinks
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unified_clusters = true
 
 > SET cluster = default
 
