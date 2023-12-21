@@ -83,9 +83,11 @@ export_cov() {
       > coverage/"$BUILDKITE_JOB_ID"-"$(basename "$1")".lcov
 }
 
+ci_unimportant_heading "Down composition"
+run --mz-quiet down --volumes
+
 if [ -n "${CI_COVERAGE_ENABLED:-}" ] && [ -z "${BUILDKITE_MZCOMPOSE_PLUGIN_SKIP_COVERAGE:-}" ];  then
     ci_unimportant_heading "Generate coverage information"
-    run --mz-quiet down --volumes
 
     if [ -n "$(find . -name '*.profraw')" ]; then
         # Workaround for "invalid instrumentation profile data (file header is corrupt)"
