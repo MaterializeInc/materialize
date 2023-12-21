@@ -27,6 +27,7 @@ def main():
         "--sha",
         help="Chosen SHA of the release",
         type=str,
+        required=True,
     )
     parser.add_argument(
         "--version",
