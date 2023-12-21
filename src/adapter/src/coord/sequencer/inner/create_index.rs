@@ -29,13 +29,12 @@ use crate::{catalog, AdapterNotice, ExecuteContext, TimestampProvider};
 
 impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) async fn sequence_create_index_off_thread(
+    pub(crate) async fn sequence_create_index(
         &mut self,
         ctx: ExecuteContext,
         plan: plan::CreateIndexPlan,
         resolved_ids: ResolvedIds,
     ) {
-        ::tracing::info!("sequence_create_index_off_thread");
         self.sequence_create_index_stage(
             ctx,
             CreateIndexStage::Validate(CreateIndexValidate { plan, resolved_ids }),
