@@ -33,6 +33,7 @@ def main():
         "--version",
         help="Version of release",
         type=Version.parse,
+        required=True,
     )
     parser.add_argument(
         "--remote",
