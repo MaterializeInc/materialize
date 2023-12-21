@@ -75,6 +75,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use clap::clap_derive::ArgEnum;
+use clap::ValueEnum;
 use itertools::Itertools;
 use mz_adapter_types::timestamp_oracle::{
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_WAIT,
@@ -96,6 +98,7 @@ use mz_sql_parser::ident;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_tracing::CloneableEnvFilter;
 use once_cell::sync::Lazy;
+use proptest_derive::Arbitrary;
 use serde::Serialize;
 use uncased::UncasedStr;
 
@@ -709,6 +712,13 @@ const TIMESTAMP_ORACLE_IMPL: ServerVar<TimestampOracleImpl> = ServerVar {
     name: UncasedStr::new("timestamp_oracle"),
     value: TimestampOracleImpl::Catalog,
     description: "Backing implementation of TimestampOracle.",
+    internal: true,
+};
+
+pub const CATALOG_KIND_IMPL: ServerVar<Option<CatalogKind>> = ServerVar {
+    name: UncasedStr::new("catalog_kind"),
+    value: None,
+    description: "Backing implementation of catalog.",
     internal: true,
 };
 
@@ -2920,6 +2930,7 @@ impl SystemVars {
             .with_var(&PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP)
             .with_var(&PERSIST_FAST_PATH_LIMIT)
             .with_var(&PERSIST_TXN_TABLES)
+            .with_var(&CATALOG_KIND_IMPL)
             .with_var(&PERSIST_STATS_AUDIT_PERCENT)
             .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
             .with_var(&PERSIST_STATS_FILTER_ENABLED)
@@ -3462,6 +3473,10 @@ impl SystemVars {
 
     pub fn persist_txn_tables(&self) -> PersistTxnTablesImpl {
         *self.expect_value(&PERSIST_TXN_TABLES)
+    }
+
+    pub fn catalog_kind(&self) -> Option<CatalogKind> {
+        *self.expect_value(&CATALOG_KIND_IMPL)
     }
 
     pub fn persist_reader_lease_duration(&self) -> Duration {
@@ -5707,9 +5722,68 @@ impl Value for PersistTxnTablesImpl {
     }
 }
 
+#[derive(
+    ArgEnum,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    num_enum::TryFromPrimitive,
+    num_enum::IntoPrimitive,
+    Arbitrary,
+)]
+#[repr(u64)]
+pub enum CatalogKind {
+    Stash = 0,
+    Persist = 1,
+    Shadow = 2,
+}
+
+impl CatalogKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CatalogKind::Stash => "stash",
+            CatalogKind::Persist => "persist",
+            CatalogKind::Shadow => "shadow",
+        }
+    }
+
+    fn valid_values() -> Vec<&'static str> {
+        vec![
+            CatalogKind::Stash.as_str(),
+            CatalogKind::Persist.as_str(),
+            CatalogKind::Shadow.as_str(),
+        ]
+    }
+}
+
+impl Value for CatalogKind {
+    fn type_name() -> String {
+        "string".to_string()
+    }
+
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
+        CatalogKind::from_str(s, true).map_err(|_| VarError::ConstrainedParameter {
+            parameter: (&CATALOG_KIND_IMPL).into(),
+            values: input.to_vec(),
+            valid_values: Some(CatalogKind::valid_values()),
+        })
+    }
+
+    fn format(&self) -> String {
+        self.as_str().into()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[mz_ore::test]
     fn test_should_output_to_client() {
@@ -5745,6 +5819,17 @@ mod tests {
                         == expected
                 )
             }
+        }
+    }
+
+    proptest! {
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
+        fn catalog_kind_roundtrip(catalog_kind: CatalogKind) {
+            let s = catalog_kind.as_str();
+            let round = CatalogKind::from_str(s, true).expect("to roundtrip");
+
+            prop_assert_eq!(catalog_kind, round);
         }
     }
 }
