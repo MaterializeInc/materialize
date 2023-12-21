@@ -5576,6 +5576,66 @@ pub const MZ_CLUSTER_REPLICA_HISTORY: BuiltinView = BuiltinView {
     sensitivity: DataSensitivity::Public,
 };
 
+pub const MZ_HYDRATION_STATUSES: BuiltinView = BuiltinView {
+    name: "mz_hydration_statuses",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: None,
+    sql: r#"WITH
+-- Joining against the linearizable catalog tables ensures that this view
+-- always contains the set of installed objects, even when it depends
+-- on introspection relations that may received delayed updates.
+--
+-- Note that this view only includes objects that are maintained by dataflows.
+-- In particular, some source types (webhook, introspection, ...) are not and
+-- are therefore omitted.
+indexes AS (
+    SELECT
+        i.id AS object_id,
+        h.replica_id,
+        COALESCE(h.hydrated, false) AS hydrated
+    FROM mz_indexes i
+    LEFT JOIN mz_internal.mz_compute_hydration_statuses h
+        ON (h.object_id = i.id)
+),
+materialized_views AS (
+    SELECT
+        i.id AS object_id,
+        h.replica_id,
+        COALESCE(h.hydrated, false) AS hydrated
+    FROM mz_materialized_views i
+    LEFT JOIN mz_internal.mz_compute_hydration_statuses h
+        ON (h.object_id = i.id)
+),
+sources AS (
+    SELECT
+        s.id AS object_id,
+        r.id AS replica_id,
+        ss.rehydration_latency IS NOT NULL AS hydrated
+    FROM mz_sources s
+    LEFT JOIN mz_internal.mz_source_statistics ss USING (id)
+    JOIN mz_cluster_replicas r
+        ON (r.cluster_id = s.cluster_id)
+),
+sinks AS (
+    SELECT
+        s.id AS object_id,
+        r.id AS replica_id,
+        ss.status = 'running' AS hydrated
+    FROM mz_sinks s
+    LEFT JOIN mz_internal.mz_sink_statuses ss USING (id)
+    JOIN mz_cluster_replicas r
+        ON (r.cluster_id = s.cluster_id)
+)
+SELECT * FROM indexes
+UNION ALL
+SELECT * FROM materialized_views
+UNION ALL
+SELECT * FROM sources
+UNION ALL
+SELECT * FROM sinks"#,
+    sensitivity: DataSensitivity::Public,
+};
+
 pub const MZ_MATERIALIZATION_LAG: BuiltinView = BuiltinView {
     name: "mz_materialization_lag",
     schema: MZ_INTERNAL_SCHEMA,
@@ -6360,6 +6420,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_GLOBAL_FRONTIERS),
         Builtin::Source(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::Source(&MZ_COMPUTE_HYDRATION_STATUSES),
+        Builtin::View(&MZ_HYDRATION_STATUSES),
         Builtin::View(&MZ_MATERIALIZATION_LAG),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
