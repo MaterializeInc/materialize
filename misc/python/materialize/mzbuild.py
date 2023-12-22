@@ -780,6 +780,11 @@ class DependencySet:
             if returncode:
                 raise subprocess.CalledProcessError(returncode, push.args)
 
+    def check(self) -> bool:
+        """Check all publishable images in this dependency set exist on Docker
+        Hub. Don't try to download or build them."""
+        return all(dep.is_published_if_necessary() for dep in self)
+
     def __iter__(self) -> Iterator[ResolvedImage]:
         return iter(self._dependencies.values())
 
