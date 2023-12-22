@@ -54,7 +54,7 @@ detail: subsources referencing table: x, y
   FOR SCHEMAS (other);
 
 > SHOW sources
- mz_source          postgres  ${arg.default-storage-size} materialize_public_mz_source
+ mz_source          postgres  ${arg.default-replica-size} default
  mz_source_progress progress  <null> <null>
  t                  subsource <null> <null>
 

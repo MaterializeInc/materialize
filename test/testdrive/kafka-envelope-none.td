@@ -13,6 +13,7 @@ $ kafka-create-topic topic=missing_keys_or_values partitions=1
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE missing_keys_or_values
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-missing_keys_or_values-${testdrive.seed}')
   KEY FORMAT TEXT
   VALUE FORMAT TEXT

@@ -21,6 +21,7 @@ $ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\
   FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}'
 
 > CREATE SOURCE unit
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM TEST SCRIPT
   '[
     {"command": "emit", "key": "fish", "value": "value", "offset": 0},
@@ -41,6 +42,7 @@ fish2         hmm
 "                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.unit (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n"
 
 > CREATE SOURCE unit_terminated
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM TEST SCRIPT
   '[
     {"command": "emit", "key": "fish", "value": "value", "offset": 0},

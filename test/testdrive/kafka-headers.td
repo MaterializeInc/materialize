@@ -36,6 +36,7 @@ $ kafka-ingest format=avro topic=headers_src key-format=avro key-schema=${keysch
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE headers_src
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-headers_src-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
@@ -93,6 +94,7 @@ $ kafka-ingest format=avro topic=headers_also key-format=avro key-schema=${keysc
 {"key": "fish"} {"f1": "fishval", "f2": 1000}
 
 > CREATE SOURCE headers_also
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-headers_also-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
@@ -135,6 +137,7 @@ $ set schemaheaders={
 $ kafka-create-topic topic=headers_conflict
 
 ! CREATE SOURCE headers_conflict
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-headers_conflict-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
@@ -153,6 +156,7 @@ $ kafka-ingest format=avro topic=headers_conflict key-format=avro key-schema=${k
 
 # using AS to resolve it!
 > CREATE SOURCE headers_conflict2
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-headers_conflict-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
@@ -176,6 +180,7 @@ $ kafka-ingest format=avro topic=individual_headers key-format=avro key-schema=$
 {"key": "message_2"} {"f1": "fishval", "f2": 1000}
 
 > CREATE SOURCE individual_headers
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-individual_headers-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
@@ -192,6 +197,7 @@ message_2    message_2_header_1
 
 # test exposing header as byte array
 > CREATE SOURCE individual_headers_bytes
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-individual_headers-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
@@ -213,6 +219,7 @@ $ kafka-ingest format=avro topic=duplicate_individual_headers key-format=avro ke
 {"key": "message_3"} {"f1": "fishval", "f2": 1000}
 
 > CREATE SOURCE duplicate_individual_headers
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-duplicate_individual_headers-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
@@ -235,6 +242,7 @@ $ kafka-ingest format=avro topic=ill_formed_header key-format=avro key-schema=${
 {"key": "message_2"} {"f1": "fishval", "f2": 1000}
 
 > CREATE SOURCE ill_formed_header
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-ill_formed_header-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
@@ -258,6 +266,7 @@ contains:Found ill-formed byte sequence in header 'header1' that cannot be decod
 # Verify that the source is bricked when messages have missing headers
 
 > CREATE SOURCE missing_headers
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-individual_headers-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'

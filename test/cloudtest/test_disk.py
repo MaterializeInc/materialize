@@ -24,7 +24,7 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
             key1:val1
             key2:val2
 
-            > CREATE CLUSTER disk_cluster1
+            > CREATE CLUSTER testdrive_no_reset_disk_cluster1
                 REPLICAS (r1 (
                     SIZE '1', DISK = true
                 ))
@@ -32,7 +32,7 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
             > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
             > CREATE SOURCE source1
-              IN CLUSTER disk_cluster1
+              IN CLUSTER testdrive_no_reset_disk_cluster1
               FROM KAFKA CONNECTION kafka
               (TOPIC 'testdrive-test-${testdrive.seed}')
               KEY FORMAT TEXT
@@ -59,7 +59,7 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
     )
 
     cluster_id, replica_id = mz.environmentd.sql_query(
-        "SELECT r.cluster_id, r.id as replica_id FROM mz_cluster_replicas r, mz_clusters c WHERE c.id = r.cluster_id AND c.name = 'disk_cluster1';"
+        "SELECT r.cluster_id, r.id as replica_id FROM mz_cluster_replicas r, mz_clusters c WHERE c.id = r.cluster_id AND c.name = 'testdrive_no_reset_disk_cluster1';"
     )[0]
 
     source_global_id = mz.environmentd.sql_query(

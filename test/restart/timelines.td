@@ -96,7 +96,13 @@ $ kafka-ingest format=avro topic=foo schema=${schema}
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+# This test runs multiple times but does not drop all of its clusters before
+# each invocation, so we have to do this manually.
+> DROP CLUSTER IF EXISTS single_replica_cluster;
+> CREATE CLUSTER single_replica_cluster SIZE '${arg.default-replica-size}';
+
 > CREATE SOURCE data_foo
+  IN CLUSTER single_replica_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-foo-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
   WITH (TIMELINE 'user')

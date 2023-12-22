@@ -31,7 +31,9 @@ ALTER SYSTEM SET enable_sink_doc_on_option = true;
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE SINK sink1 FROM t
+> CREATE SINK sink1
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -47,10 +49,13 @@ ALTER SYSTEM SET enable_sink_doc_on_option = true;
   )
   ENVELOPE UPSERT;
 
+$ set-regex match=default|testdrive_single_replica_cluster replacement=<VARIABLE_OUTPUT>
 > SHOW CREATE SINK sink1;
 name                            create_sql
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.sink1 "CREATE SINK \"materialize\".\"public\".\"sink1\" FROM \"materialize\".\"public\".\"t\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-sink1-${testdrive.seed}') KEY (\"c2\") NOT ENFORCED FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" (DOC ON COLUMN \"materialize\".\"public\".\"t\".\"c1\" = 'doc on t.c1', VALUE DOC ON COLUMN \"materialize\".\"public\".\"t\".\"c2\" = 'value doc on t.c2', KEY DOC ON COLUMN \"materialize\".\"public\".\"t\".\"c2\" = 'key doc on t.c2', DOC ON COLUMN \"materialize\".\"public\".\"t\".\"c4\" = 'doc on t.c4', KEY DOC ON TYPE \"materialize\".\"public\".\"point\" = 'key doc on point', VALUE DOC ON TYPE \"materialize\".\"public\".\"point\" = 'value doc on point', KEY DOC ON TYPE \"materialize\".\"public\".\"t\" = 'key doc on t', VALUE DOC ON COLUMN \"materialize\".\"public\".\"point\".\"y\" = 'value doc on point.y', DOC ON TYPE \"materialize\".\"public\".\"point\" = 'comment on type point', DOC ON COLUMN \"materialize\".\"public\".\"point\".\"x\" = 'comment on column point.x', DOC ON TYPE \"materialize\".\"public\".\"t\" = 'comment on table t with a \\\\ \\', DOC ON COLUMN \"materialize\".\"public\".\"t\".\"c3_map[text=>text]\" = 'comment on column t.c3_map with a ''') ENVELOPE UPSERT"
+materialize.public.sink1 "CREATE SINK \"materialize\".\"public\".\"sink1\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM \"materialize\".\"public\".\"t\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-sink1-${testdrive.seed}') KEY (\"c2\") NOT ENFORCED FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" (DOC ON COLUMN \"materialize\".\"public\".\"t\".\"c1\" = 'doc on t.c1', VALUE DOC ON COLUMN \"materialize\".\"public\".\"t\".\"c2\" = 'value doc on t.c2', KEY DOC ON COLUMN \"materialize\".\"public\".\"t\".\"c2\" = 'key doc on t.c2', DOC ON COLUMN \"materialize\".\"public\".\"t\".\"c4\" = 'doc on t.c4', KEY DOC ON TYPE \"materialize\".\"public\".\"point\" = 'key doc on point', VALUE DOC ON TYPE \"materialize\".\"public\".\"point\" = 'value doc on point', KEY DOC ON TYPE \"materialize\".\"public\".\"t\" = 'key doc on t', VALUE DOC ON COLUMN \"materialize\".\"public\".\"point\".\"y\" = 'value doc on point.y', DOC ON TYPE \"materialize\".\"public\".\"point\" = 'comment on type point', DOC ON COLUMN \"materialize\".\"public\".\"point\".\"x\" = 'comment on column point.x', DOC ON TYPE \"materialize\".\"public\".\"t\" = 'comment on table t with a \\\\ \\', DOC ON COLUMN \"materialize\".\"public\".\"t\".\"c3_map[text=>text]\" = 'comment on column t.c3_map with a ''') ENVELOPE UPSERT"
+
+$ unset-regex
 
 $ schema-registry-verify schema-type=avro subject=testdrive-sink1-${testdrive.seed}-value
 {"type":"record","name":"envelope","doc":"comment on table t with a \\\\ \\","fields":[{"name":"c1","type":["null",{"type":"record","name":"record0","namespace":"com.materialize.sink","doc":"value doc on point","fields":[{"name":"x","type":["null","int"],"doc":"comment on column point.x"},{"name":"y","type":["null","int"],"doc":"value doc on point.y"}]}],"doc":"doc on t.c1"},{"name":"c2","type":"string","doc":"value doc on t.c2"},{"name":"c3_map_text__text_","type":["null",{"type":"map","values":["null","boolean"]}]},{"name":"c4","type":["null",{"type":"array","items":["null",{"type":"record","name":"record1","namespace":"com.materialize.sink","doc":"value doc on point","fields":[{"name":"x","type":["null","int"],"doc":"comment on column point.x"},{"name":"y","type":["null","int"],"doc":"value doc on point.y"}]}]}],"doc":"doc on t.c4"}]}
@@ -58,7 +63,9 @@ $ schema-registry-verify schema-type=avro subject=testdrive-sink1-${testdrive.se
 $ schema-registry-verify schema-type=avro subject=testdrive-sink1-${testdrive.seed}-key
 {"type":"record","name":"row","doc":"key doc on t","fields":[{"name":"c2","type":"string","doc":"key doc on t.c2"}]}
 
-> CREATE SINK sink2 FROM t
+> CREATE SINK sink2
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink2-${testdrive.seed}')
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -67,7 +74,9 @@ $ schema-registry-verify schema-type=avro subject=testdrive-sink1-${testdrive.se
 $ schema-registry-verify schema-type=avro subject=testdrive-sink2-${testdrive.seed}-value
 {"type":"record","name":"envelope","doc":"comment on table t with a \\\\ \\","fields":[{"name":"c1","type":["null",{"type":"record","name":"record0","namespace":"com.materialize.sink","doc":"comment on type point","fields":[{"name":"x","type":["null","int"],"doc":"comment on column point.x"},{"name":"y","type":["null","int"]}]}]},{"name":"c2","type":"string"},{"name":"c3_map_text__text_","type":["null",{"type":"map","values":["null","boolean"]}]},{"name":"c4","type":["null",{"type":"array","items":["null",{"type":"record","name":"record1","namespace":"com.materialize.sink","doc":"comment on type point","fields":[{"name":"x","type":["null","int"],"doc":"comment on column point.x"},{"name":"y","type":["null","int"]}]}]}],"doc":"comment on column t.c4 with an äöü"}]}
 
-> CREATE SINK sink3 FROM t
+> CREATE SINK sink3
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink3-${testdrive.seed}')
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -85,7 +94,9 @@ $ schema-registry-verify schema-type=avro subject=testdrive-sink3-${testdrive.se
 # Explain schema. Note that we intentionally use a sink name that already exists
 # to ensure that `EXPLAIN SCHEMA` doesn't complain if the specified sink name is
 # already in use.
-> EXPLAIN VALUE SCHEMA FOR CREATE SINK sink1 FROM t
+> EXPLAIN VALUE SCHEMA FOR CREATE SINK sink1
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink3-${testdrive.seed}')
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -95,7 +106,9 @@ $ schema-registry-verify schema-type=avro subject=testdrive-sink3-${testdrive.se
   ENVELOPE DEBEZIUM;
 "{\n  \"type\": \"record\",\n  \"name\": \"envelope\",\n  \"fields\": [\n    {\n      \"name\": \"before\",\n      \"type\": [\n        \"null\",\n        {\n          \"type\": \"record\",\n          \"name\": \"row\",\n          \"doc\": \"comment on table t with a \\\\\\\\ \\\\\",\n          \"fields\": [\n            {\n              \"name\": \"c1\",\n              \"type\": [\n                \"null\",\n                {\n                  \"type\": \"record\",\n                  \"name\": \"record0\",\n                  \"namespace\": \"com.materialize.sink\",\n                  \"doc\": \"comment on type point\",\n                  \"fields\": [\n                    {\n                      \"name\": \"x\",\n                      \"type\": [\n                        \"null\",\n                        \"int\"\n                      ],\n                      \"default\": null,\n                      \"doc\": \"comment on column point.x\"\n                    },\n                    {\n                      \"name\": \"y\",\n                      \"type\": [\n                        \"null\",\n                        \"int\"\n                      ],\n                      \"default\": null\n                    }\n                  ]\n                }\n              ],\n              \"default\": null\n            },\n            {\n              \"name\": \"c2\",\n              \"type\": \"string\"\n            },\n            {\n              \"name\": \"c3_map_text__text_\",\n              \"type\": [\n                \"null\",\n                {\n                  \"type\": \"map\",\n                  \"values\": [\n                    \"null\",\n                    \"boolean\"\n                  ]\n                }\n              ],\n              \"default\": null\n            },\n            {\n              \"name\": \"c4\",\n              \"type\": [\n                \"null\",\n                {\n                  \"type\": \"array\",\n                  \"items\": [\n                    \"null\",\n                    {\n                      \"type\": \"record\",\n                      \"name\": \"record1\",\n                      \"namespace\": \"com.materialize.sink\",\n                      \"doc\": \"comment on type point\",\n                      \"fields\": [\n                        {\n                          \"name\": \"x\",\n                          \"type\": [\n                            \"null\",\n                            \"int\"\n                          ],\n                          \"default\": null,\n                          \"doc\": \"comment on column point.x\"\n                        },\n                        {\n                          \"name\": \"y\",\n                          \"type\": [\n                            \"null\",\n                            \"int\"\n                          ],\n                          \"default\": null\n                        }\n                      ]\n                    }\n                  ]\n                }\n              ],\n              \"default\": null,\n              \"doc\": \"comment on column t.c4 with an äöü\"\n            }\n          ]\n        }\n      ],\n      \"default\": null\n    },\n    {\n      \"name\": \"after\",\n      \"type\": [\n        \"null\",\n        \"row\"\n      ],\n      \"default\": null\n    }\n  ]\n}"
 
-> EXPLAIN KEY SCHEMA AS JSON FOR CREATE SINK sink1 FROM t
+> EXPLAIN KEY SCHEMA AS JSON FOR CREATE SINK sink1
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink3-${testdrive.seed}')
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -105,7 +118,9 @@ $ schema-registry-verify schema-type=avro subject=testdrive-sink3-${testdrive.se
 # Updated comment is reflected right away in explain schema
 > COMMENT ON COLUMN t.c2 IS 'comment on t.c2';
 
-> EXPLAIN VALUE SCHEMA FOR CREATE SINK sink1 FROM t
+> EXPLAIN VALUE SCHEMA FOR CREATE SINK sink1
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink3-${testdrive.seed}')
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -117,7 +132,9 @@ $ schema-registry-verify schema-type=avro subject=testdrive-sink3-${testdrive.se
   ENVELOPE UPSERT;
 "{\n  \"type\": \"record\",\n  \"name\": \"envelope\",\n  \"doc\": \"body of the upsert\",\n  \"fields\": [\n    {\n      \"name\": \"c1\",\n      \"type\": [\n        \"null\",\n        {\n          \"type\": \"record\",\n          \"name\": \"record0\",\n          \"namespace\": \"com.materialize.sink\",\n          \"doc\": \"comment on type point\",\n          \"fields\": [\n            {\n              \"name\": \"x\",\n              \"type\": [\n                \"null\",\n                \"int\"\n              ],\n              \"default\": null,\n              \"doc\": \"comment on column point.x\"\n            },\n            {\n              \"name\": \"y\",\n              \"type\": [\n                \"null\",\n                \"int\"\n              ],\n              \"default\": null\n            }\n          ]\n        }\n      ],\n      \"default\": null\n    },\n    {\n      \"name\": \"c2\",\n      \"type\": \"string\",\n      \"doc\": \"comment on t.c2\"\n    },\n    {\n      \"name\": \"c3_map_text__text_\",\n      \"type\": [\n        \"null\",\n        {\n          \"type\": \"map\",\n          \"values\": [\n            \"null\",\n            \"boolean\"\n          ]\n        }\n      ],\n      \"default\": null\n    },\n    {\n      \"name\": \"c4\",\n      \"type\": [\n        \"null\",\n        {\n          \"type\": \"array\",\n          \"items\": [\n            \"null\",\n            {\n              \"type\": \"record\",\n              \"name\": \"record1\",\n              \"namespace\": \"com.materialize.sink\",\n              \"doc\": \"comment on type point\",\n              \"fields\": [\n                {\n                  \"name\": \"x\",\n                  \"type\": [\n                    \"null\",\n                    \"int\"\n                  ],\n                  \"default\": null,\n                  \"doc\": \"comment on column point.x\"\n                },\n                {\n                  \"name\": \"y\",\n                  \"type\": [\n                    \"null\",\n                    \"int\"\n                  ],\n                  \"default\": null\n                }\n              ]\n            }\n          ]\n        }\n      ],\n      \"default\": null,\n      \"doc\": \"comment on column t.c4 with an äöü\"\n    }\n  ]\n}"
 
-> EXPLAIN KEY SCHEMA FOR CREATE SINK sink1 FROM t
+> EXPLAIN KEY SCHEMA FOR CREATE SINK sink1
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink3-${testdrive.seed}')
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -130,7 +147,9 @@ $ schema-registry-verify schema-type=avro subject=testdrive-sink3-${testdrive.se
 "{\n  \"type\": \"record\",\n  \"name\": \"row\",\n  \"doc\": \"key of the upsert\",\n  \"fields\": [\n    {\n      \"name\": \"c2\",\n      \"type\": \"string\",\n      \"doc\": \"comment on t.c2\"\n    }\n  ]\n}"
 
 # Works without sink name
-> EXPLAIN KEY SCHEMA FOR CREATE SINK FROM t
+> EXPLAIN KEY SCHEMA FOR CREATE SINK
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink3-${testdrive.seed}')
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -143,7 +162,9 @@ $ schema-registry-verify schema-type=avro subject=testdrive-sink3-${testdrive.se
 "{\n  \"type\": \"record\",\n  \"name\": \"row\",\n  \"doc\": \"key of the upsert\",\n  \"fields\": [\n    {\n      \"name\": \"c2\",\n      \"type\": \"string\",\n      \"doc\": \"comment on t.c2\"\n    }\n  ]\n}"
 
 # errors
-! CREATE SINK bad_sink FROM t
+! CREATE SINK bad_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -153,7 +174,9 @@ $ schema-registry-verify schema-type=avro subject=testdrive-sink3-${testdrive.se
   ENVELOPE UPSERT
 contains: Expected identifier, found equals sign
 
-! CREATE SINK bad_sink FROM t
+! CREATE SINK bad_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -171,7 +194,9 @@ contains: column "t.bad_column" does not exist
   ENVELOPE UPSERT
 contains: unspecified name for sink
 
-! CREATE SINK bad_sink FROM t
+! CREATE SINK bad_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -181,7 +206,9 @@ contains: unspecified name for sink
   ENVELOPE UPSERT
 contains: unknown catalog item 'bad_table_name'
 
-! CREATE SINK bad_sink FROM t
+! CREATE SINK bad_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -191,7 +218,9 @@ contains: unknown catalog item 'bad_table_name'
   ENVELOPE UPSERT
 contains: option value: cannot be empty
 
-! CREATE SINK bad_sink FROM t
+! CREATE SINK bad_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -201,7 +230,9 @@ contains: option value: cannot be empty
   ENVELOPE UPSERT
 contains: need to specify an object and a column
 
-! CREATE SINK bad_sink FROM t
+! CREATE SINK bad_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -214,7 +245,9 @@ contains: cannot use value as string
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_sink_doc_on_option = false;
 
-! CREATE SINK not_enabled FROM t
+! CREATE SINK not_enabled
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -225,20 +258,26 @@ ALTER SYSTEM SET enable_sink_doc_on_option = false;
 contains: DOC ON option for sinks is not supported
 
 # If feature flag is off, automatic doc on options from comments will not be added
-> EXPLAIN VALUE SCHEMA FOR CREATE SINK doc_on_disabled FROM t
+> EXPLAIN VALUE SCHEMA FOR CREATE SINK doc_on_disabled
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-doc_on_disabled-${testdrive.seed}')
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
 "{\n  \"type\": \"record\",\n  \"name\": \"envelope\",\n  \"fields\": [\n    {\n      \"name\": \"c1\",\n      \"type\": [\n        \"null\",\n        {\n          \"type\": \"record\",\n          \"name\": \"record0\",\n          \"namespace\": \"com.materialize.sink\",\n          \"fields\": [\n            {\n              \"name\": \"x\",\n              \"type\": [\n                \"null\",\n                \"int\"\n              ]\n            },\n            {\n              \"name\": \"y\",\n              \"type\": [\n                \"null\",\n                \"int\"\n              ]\n            }\n          ]\n        }\n      ]\n    },\n    {\n      \"name\": \"c2\",\n      \"type\": \"string\"\n    },\n    {\n      \"name\": \"c3_map_text__text_\",\n      \"type\": [\n        \"null\",\n        {\n          \"type\": \"map\",\n          \"values\": [\n            \"null\",\n            \"boolean\"\n          ]\n        }\n      ]\n    },\n    {\n      \"name\": \"c4\",\n      \"type\": [\n        \"null\",\n        {\n          \"type\": \"array\",\n          \"items\": [\n            \"null\",\n            {\n              \"type\": \"record\",\n              \"name\": \"record1\",\n              \"namespace\": \"com.materialize.sink\",\n              \"fields\": [\n                {\n                  \"name\": \"x\",\n                  \"type\": [\n                    \"null\",\n                    \"int\"\n                  ]\n                },\n                {\n                  \"name\": \"y\",\n                  \"type\": [\n                    \"null\",\n                    \"int\"\n                  ]\n                }\n              ]\n            }\n          ]\n        }\n      ]\n    }\n  ]\n}"
 
-> CREATE SINK doc_on_disabled FROM t
+> CREATE SINK doc_on_disabled
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-doc_on_disabled-${testdrive.seed}')
   KEY (c2) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
 
+$ set-regex match=default|testdrive_single_replica_cluster replacement=<VARIABLE_OUTPUT>
 > SHOW CREATE SINK doc_on_disabled;
 name                            create_sql
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- "materialize.public.doc_on_disabled"  "CREATE SINK \"materialize\".\"public\".\"doc_on_disabled\" FROM \"materialize\".\"public\".\"t\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-doc_on_disabled-${testdrive.seed}') KEY (\"c2\") NOT ENFORCED FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" ENVELOPE UPSERT"
+ "materialize.public.doc_on_disabled"  "CREATE SINK \"materialize\".\"public\".\"doc_on_disabled\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM \"materialize\".\"public\".\"t\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-doc_on_disabled-${testdrive.seed}') KEY (\"c2\") NOT ENFORCED FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" ENVELOPE UPSERT"
+$ unset-regex

@@ -84,7 +84,9 @@ contains:unknown catalog item 'UID'
 
 > CREATE MATERIALIZED VIEW sort_messages (a) AS VALUES (2),(1),(3);
 
-> CREATE SINK sort_messages_sink FROM sort_messages
+> CREATE SINK sort_messages_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM sort_messages
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sort-messages-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -123,6 +125,7 @@ $ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${kafka-ingest-repea
 {"f1": "fish"}
 
 > CREATE SOURCE kafka_ingest_repeat_input
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-ingest-repeat-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
@@ -160,6 +163,7 @@ $ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-s
 "h" {"a": "h"}
 
 > CREATE SOURCE kafka_ingest_no_partition
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-ingest-no-partition-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
@@ -171,7 +175,9 @@ $ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-s
 
 > CREATE MATERIALIZED VIEW kafka_verify_regexp (a) AS VALUES ('u123'), ('u234');
 
-> CREATE SINK kafka_verify_regexp_sink FROM kafka_verify_regexp
+> CREATE SINK kafka_verify_regexp_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM kafka_verify_regexp
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-verify-regexp-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM

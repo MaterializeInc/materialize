@@ -25,7 +25,9 @@ ALTER SYSTEM SET enable_envelope_materialize = true
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE SINK data_sink FROM data
+> CREATE SINK data_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -119,10 +121,13 @@ $ kafka-create-topic topic=input
 # input is processed in consistency batches and not all at once
 
 > CREATE SOURCE input
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
-> CREATE SINK non_keyed_sink FROM input
+> CREATE SINK non_keyed_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'non-keyed-sink-${testdrive.seed}')
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -132,25 +137,33 @@ $ kafka-create-topic topic=input
 
 # the sinked relation has the natural primary key (a)
 
-> CREATE SINK non_keyed_sink_of_keyed_relation FROM input
+> CREATE SINK non_keyed_sink_of_keyed_relation
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'non-keyed-sink-of-keyed-relation-${testdrive.seed}')
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE SINK keyed_sink FROM input
+> CREATE SINK keyed_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'keyed-sink-${testdrive.seed}') KEY (a)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE SINK keyed_sink_of_keyed_relation FROM input
+> CREATE SINK keyed_sink_of_keyed_relation
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'keyed-sink-of-keyed-relation-${testdrive.seed}') KEY (b)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE SINK multi_keyed_sink FROM input
+> CREATE SINK multi_keyed_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'multi-keyed-sink-${testdrive.seed}') KEY (b, a)
   FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

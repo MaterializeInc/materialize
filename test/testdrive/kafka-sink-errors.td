@@ -20,14 +20,18 @@
     URL '${testdrive.schema-registry-url}'
   );
 
-! CREATE SINK invalid_key FROM v1
+! CREATE SINK invalid_key
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM v1
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
   KEY(f2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 contains:No such column: f2
 
-! CREATE SINK invalid_legacy_ids FROM v1
+! CREATE SINK invalid_legacy_ids
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM v1
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}', LEGACY IDS)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -37,12 +41,16 @@ contains:LEGACY IDs option is not supported
 # Sink dependencies
 #
 
-> CREATE SINK s1 FROM v1
+> CREATE SINK s1
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM v1
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-! CREATE SINK s2 FROM s1
+! CREATE SINK s2
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM s1
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -63,18 +71,24 @@ nonsense
 # FORMAT
 #
 
-! CREATE SINK invalid_format FROM v1
+! CREATE SINK invalid_format
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM v1
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
   ENVELOPE DEBEZIUM
 contains:sink without format not yet supported
 
-! CREATE SINK invalid_format FROM v1
+! CREATE SINK invalid_format
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM v1
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
   FORMAT NO_SUCH_FORMAT
   ENVELOPE DEBEZIUM
 contains:found identifier "no_such_format"
 
-! CREATE SINK invalid_envelope FROM v1
+! CREATE SINK invalid_envelope
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM v1
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
   FORMAT JSON
 contains:ENVELOPE clause is required

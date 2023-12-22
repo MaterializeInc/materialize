@@ -29,15 +29,18 @@ $ set schema={
   );
 
 > CREATE SOURCE s
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 ! CREATE SOURCE s
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-blah-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 contains:source "materialize.public.s" already exists
 
 > CREATE SOURCE IF NOT EXISTS s
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-blah-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
@@ -106,26 +109,35 @@ contains:unknown catalog item 'test2'
 contains:unknown catalog item 'test4'
 
 > CREATE SOURCE s
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
-> CREATE SINK s1 FROM s
+> CREATE SINK s1
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM s
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-! CREATE SINK s1 FROM s
+! CREATE SINK s1
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM s
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 contains:sink "materialize.public.s1" already exists
 
-> CREATE SINK IF NOT EXISTS s1 FROM s
+> CREATE SINK IF NOT EXISTS s1
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM s
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v2-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> CREATE SINK s2 FROM s
+> CREATE SINK s2
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM s
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-v3-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -244,6 +256,7 @@ contains:unknown catalog item 'i4'
 # Materialized source tests
 
 > CREATE SOURCE s3
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
@@ -266,6 +279,7 @@ contains:unknown catalog item 'j1'
 # Test cascade deletes all indexes associated with cascaded sources and views
 
 > CREATE SOURCE s4
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
@@ -302,6 +316,7 @@ contains:unknown catalog item 'j2'
 # Test that dropping indexes even with cascade does not cause the underlying source to be dropped
 
 > CREATE SOURCE s5
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 

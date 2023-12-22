@@ -15,6 +15,7 @@ ALTER SYSTEM SET enable_create_source_denylist_with_options = true
 > CREATE CONNECTION kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 ! CREATE SOURCE s
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 contains:Source format must be specified
 
@@ -38,12 +39,14 @@ contains:failed to lookup address information
 
 # Check that for all tables clause is rejected
 ! CREATE SOURCE bad_definition1
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'any_topic')
   FORMAT BYTES FOR ALL TABLES WITH (SIZE = '1');
 contains: FOR ALL TABLES is only valid for multi-output sources
 
 # Check that for tables() clause is rejected
 ! CREATE SOURCE bad_definition2
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'any_topic')
   FORMAT BYTES FOR TABLES (t1);
 contains: FOR TABLES (t1) is only valid for multi-output sources
@@ -51,6 +54,7 @@ contains: FOR TABLES (t1) is only valid for multi-output sources
 # Ensure the `TOPIC METADATA REFRESH INTERVAL` rejects too large and too
 # small values.
 ! CREATE SOURCE bad_topic_metadata_refresh_interval
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (
     TOPIC 'testdrive-thetopic-${testdrive.seed}',
     TOPIC METADATA REFRESH INTERVAL '-30s'
@@ -60,6 +64,7 @@ contains: FOR TABLES (t1) is only valid for multi-output sources
 contains:cannot convert negative interval to duration
 
 ! CREATE SOURCE bad_topic_metadata_refresh_interval
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (
     TOPIC 'testdrive-thetopic-${testdrive.seed}',
     TOPIC METADATA REFRESH INTERVAL '1hr 1ms'

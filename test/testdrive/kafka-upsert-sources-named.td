@@ -38,6 +38,7 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE avroavro
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-avroavro-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
@@ -64,6 +65,7 @@ $ kafka-ingest format=avro topic=single key-format=avro key-schema=${keyschemasi
 {"key": "fish" } {"f1": "fishval", "f2": 1000}
 
 > CREATE SOURCE single
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-single-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschemasingle}'

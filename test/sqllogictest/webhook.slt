@@ -363,13 +363,14 @@ CREATE SOURCE webhook_text_with_header_alias_as_body IN CLUSTER webhook_cluster 
 # Try creating a webhook source in a compute cluster.
 
 statement ok
-CREATE CLUSTER compute_cluster REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER cluster1 REPLICAS (r1 (SIZE '1'));
 
 statement ok
-CREATE MATERIALIZED VIEW mv1 IN CLUSTER compute_cluster AS SELECT name FROM mz_objects;
+CREATE MATERIALIZED VIEW mv1 IN CLUSTER cluster1 AS SELECT name FROM mz_objects;
 
+# Webhook on cluster alongside compute objects.
 statement ok
-CREATE SOURCE webhook_on_compute_cluster IN CLUSTER compute_cluster FROM WEBHOOK
+CREATE SOURCE webhook_on_cluster1 IN CLUSTER cluster1 FROM WEBHOOK
   BODY FORMAT BYTES;
 
 # Make sure we report webhook sources as running.
@@ -391,4 +392,4 @@ statement ok
 DROP CLUSTER webhook_cluster CASCADE;
 
 statement ok
-DROP CLUSTER compute_cluster CASCADE;
+DROP CLUSTER cluster1 CASCADE;

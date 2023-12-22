@@ -38,14 +38,14 @@ msg
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> CREATE CLUSTER many_cluster SIZE '2-2';
+
 > CREATE SOURCE many
+  IN CLUSTER many_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-many-${testdrive.seed}'
   )
   FORMAT BYTES
-  WITH (
-    SIZE '2-2'
-  )
 
 # NOTE: These queries are slow to succeed because the default metrics scraping
 # interval is 30 seconds.
