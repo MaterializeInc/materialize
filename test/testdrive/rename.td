@@ -191,13 +191,13 @@ renamed_sink
 name               type   size                            cluster
 -----------------------------------------------------------------
 mz_data_progress   progress  <null>                       <null>
-renamed_mz_data    kafka     ${arg.default-storage-size}  materialize_public_mz_data
+renamed_mz_data    kafka     ${arg.default-replica-size}  <VARIABLE_OUTPUT>
 
 # Sink was successfully renamed
 > SHOW SINKS
 name               type   size                            cluster
 -----------------------------------------------------------------
-renamed_sink       kafka  ${arg.default-storage-size}     materialize_public_sink1
+renamed_sink       kafka  ${arg.default-replica-size}     <VARIABLE_OUTPUT>
 
 # View was successfully renamed
 > SHOW VIEWS
@@ -234,7 +234,7 @@ materialize.public.dependent_view   "CREATE VIEW \"materialize\".\"public\".\"de
 > SHOW CREATE SINK renamed_sink
 name                            create_sql
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.renamed_sink "CREATE SINK \"materialize\".\"public\".\"renamed_sink\" FROM \"materialize\".\"public\".\"renamed_mz_data\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-snk1-${testdrive.seed}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" ENVELOPE DEBEZIUM"
+materialize.public.renamed_sink "CREATE SINK \"materialize\".\"public\".\"renamed_sink\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM \"materialize\".\"public\".\"renamed_mz_data\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-snk1-${testdrive.seed}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" ENVELOPE DEBEZIUM"
 
 # Simple dependencies with both fully qualified and unqualified item references are renamed
 > SHOW CREATE VIEW byzantine_view
@@ -857,12 +857,12 @@ renamed_j
 > SHOW CREATE SOURCE to_be_renamed.mz_data;
 name                                create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.to_be_renamed.mz_data  "CREATE SOURCE \"materialize\".\"to_be_renamed\".\"mz_data\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-data-rename-schema-${testdrive.seed}') FORMAT AVRO USING SCHEMA '{   \"name\": \"row\",   \"type\": \"record\",   \"fields\": [     {\"name\": \"a\", \"type\": \"long\"},     {\"name\": \"b\", \"type\": \"string\"}   ] }' EXPOSE PROGRESS AS \"materialize\".\"to_be_renamed\".\"mz_data_progress\""
+materialize.to_be_renamed.mz_data  "CREATE SOURCE \"materialize\".\"to_be_renamed\".\"mz_data\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-data-rename-schema-${testdrive.seed}') FORMAT AVRO USING SCHEMA '{   \"name\": \"row\",   \"type\": \"record\",   \"fields\": [     {\"name\": \"a\", \"type\": \"long\"},     {\"name\": \"b\", \"type\": \"string\"}   ] }' EXPOSE PROGRESS AS \"materialize\".\"to_be_renamed\".\"mz_data_progress\""
 
 > SHOW CREATE SINK to_be_renamed.sink1;
 name                                create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.to_be_renamed.sink1    "CREATE SINK \"materialize\".\"to_be_renamed\".\"sink1\" FROM \"materialize\".\"to_be_renamed\".\"mz_data\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-snk1-rename-schema-${testdrive.seed}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" ENVELOPE DEBEZIUM"
+materialize.to_be_renamed.sink1    "CREATE SINK \"materialize\".\"to_be_renamed\".\"sink1\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM \"materialize\".\"to_be_renamed\".\"mz_data\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-snk1-rename-schema-${testdrive.seed}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" ENVELOPE DEBEZIUM"
 
 # Make sure the create_sql got updated.
 
@@ -871,9 +871,9 @@ materialize.to_be_renamed.sink1    "CREATE SINK \"materialize\".\"to_be_renamed\
 > SHOW CREATE SOURCE foo_bar.mz_data;
 name                                create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.foo_bar.mz_data  "CREATE SOURCE \"materialize\".\"foo_bar\".\"mz_data\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-data-rename-schema-${testdrive.seed}') FORMAT AVRO USING SCHEMA '{   \"name\": \"row\",   \"type\": \"record\",   \"fields\": [     {\"name\": \"a\", \"type\": \"long\"},     {\"name\": \"b\", \"type\": \"string\"}   ] }' EXPOSE PROGRESS AS \"materialize\".\"foo_bar\".\"mz_data_progress\""
+materialize.foo_bar.mz_data  "CREATE SOURCE \"materialize\".\"foo_bar\".\"mz_data\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-data-rename-schema-${testdrive.seed}') FORMAT AVRO USING SCHEMA '{   \"name\": \"row\",   \"type\": \"record\",   \"fields\": [     {\"name\": \"a\", \"type\": \"long\"},     {\"name\": \"b\", \"type\": \"string\"}   ] }' EXPOSE PROGRESS AS \"materialize\".\"foo_bar\".\"mz_data_progress\""
 
 > SHOW CREATE SINK foo_bar.sink1;
 name                                create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.foo_bar.sink1    "CREATE SINK \"materialize\".\"foo_bar\".\"sink1\" FROM \"materialize\".\"foo_bar\".\"mz_data\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-snk1-rename-schema-${testdrive.seed}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" ENVELOPE DEBEZIUM"
+materialize.foo_bar.sink1    "CREATE SINK \"materialize\".\"foo_bar\".\"sink1\" IN CLUSTER \"<VARIABLE_OUTPUT>\" FROM \"materialize\".\"foo_bar\".\"mz_data\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-snk1-rename-schema-${testdrive.seed}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" ENVELOPE DEBEZIUM"

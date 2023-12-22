@@ -10,8 +10,12 @@
 >[version<8000] SHOW CREATE SINK upgrade_kafka_sink;
 "materialize.public.upgrade_kafka_sink" "CREATE SINK \"materialize\".\"public\".\"upgrade_kafka_sink\" FROM \"materialize\".\"public\".\"static_view\" INTO KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'upgrade-kafka-sink') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION \"materialize\".\"public\".\"csr_conn\" ENVELOPE DEBEZIUM"
 
+# Later versions of MZ do not create linked clusters
+$ skip-if
+SELECT mz_version_num() >= 8100;
+
 # Test that the "disk" option on the linked cluster defaults to false
-> SELECT cluster, replica FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_upgrade_kafka_sink'
+>SELECT cluster, replica FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_upgrade_kafka_sink'
 materialize_public_upgrade_kafka_sink  linked
 
 # NOTE: Due to the ('N' -> 'uN') migration of replica IDs in the audit log, we

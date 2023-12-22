@@ -40,7 +40,7 @@ def schemas() -> str:
 
 
 def cluster() -> str:
-    return "> CREATE CLUSTER identifiers REPLICAS (identifiers_r1 (SIZE '4'))\n"
+    return "> CREATE CLUSTER identifiers SIZE '4'\n"
 
 
 class Identifiers(Check):
@@ -173,9 +173,9 @@ class Identifiers(Check):
         {dq_print(self.ident["schema"])}
 
         > SHOW SINKS FROM {dq(self.ident["schema"])};
-        {dq_print(self.ident["sink0"])} kafka ${{arg.default-storage-size}} {dq_print(self.ident["db"] + "_" + self.ident["schema"] + "_" + self.ident["sink0"])}
-        {dq_print(self.ident["sink1"])} kafka ${{arg.default-storage-size}} {dq_print(self.ident["db"] + "_" + self.ident["schema"] + "_" + self.ident["sink1"])}
-        {dq_print(self.ident["sink2"])} kafka ${{arg.default-storage-size}} {dq_print(self.ident["db"] + "_" + self.ident["schema"] + "_" + self.ident["sink2"])}
+        {dq_print(self.ident["sink0"])} kafka 4 identifiers
+        {dq_print(self.ident["sink1"])} kafka 4 identifiers
+        {dq_print(self.ident["sink2"])} kafka 4 identifiers
 
         > SELECT * FROM {dq(self.ident["schema"])}.{dq(self.ident["mv0"])};
         3

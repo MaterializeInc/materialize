@@ -23,13 +23,15 @@ contains: unsupported scale factor -1
 > CREATE SOURCE gen FROM LOAD GENERATOR TPCH (SCALE FACTOR .01) FOR ALL TABLES
 
 $ set-from-sql var=source-size
-SELECT size FROM mz_sources WHERE name = 'gen'
+SELECT size FROM (
+    SHOW SOURCES
+) WHERE name = 'gen'
 
 > SHOW SOURCES
 name           type            size             cluster
 -------------------------------------------------------
  customer      subsource       <null>           <null>
- gen           load-generator  ${source-size}   materialize_public_gen
+ gen           load-generator  ${source-size}   default
  gen_progress  progress        <null>           <null>
  lineitem      subsource       <null>           <null>
  nation        subsource       <null>           <null>

@@ -107,9 +107,9 @@ name               type   size  cluster
 > SHOW SINKS
 name               type   size  cluster
 ---------------------------------------
-snk1             kafka  ${arg.default-storage-size}  materialize_public_snk1
-snk2             kafka  ${arg.default-storage-size}  materialize_public_snk2
-snk3             kafka  ${arg.default-storage-size}  materialize_public_snk3
+snk1             kafka  ${arg.default-replica-size}  default
+snk2             kafka  ${arg.default-replica-size}  default
+snk3             kafka  ${arg.default-replica-size}  default
 
 $ kafka-verify-data format=avro sink=materialize.public.snk1 sort-messages=true
 {"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "offset": [0, 0, 0, 0, 0, 0, 0, 1]}}}
@@ -201,15 +201,15 @@ $ kafka-verify-data format=avro sink=materialize.public.snk8 sort-messages=true
 > SHOW SINKS
 name               type   size  cluster
 ---------------------------------------
-snk1             kafka  ${arg.default-storage-size}  materialize_public_snk1
-snk2             kafka  ${arg.default-storage-size}  materialize_public_snk2
-snk3             kafka  ${arg.default-storage-size}  materialize_public_snk3
-snk4             kafka  ${arg.default-storage-size}  materialize_public_snk4
-snk5             kafka  ${arg.default-storage-size}  materialize_public_snk5
-snk6             kafka  ${arg.default-storage-size}  materialize_public_snk6
-snk7             kafka  ${arg.default-storage-size}  materialize_public_snk7
-snk8             kafka  ${arg.default-storage-size}  materialize_public_snk8
-snk_unsigned     kafka  ${arg.default-storage-size}  materialize_public_snk_unsigned
+snk1             kafka  ${arg.default-replica-size}  default
+snk2             kafka  ${arg.default-replica-size}  default
+snk3             kafka  ${arg.default-replica-size}  default
+snk4             kafka  ${arg.default-replica-size}  default
+snk5             kafka  ${arg.default-replica-size}  default
+snk6             kafka  ${arg.default-replica-size}  default
+snk7             kafka  ${arg.default-replica-size}  default
+snk8             kafka  ${arg.default-replica-size}  default
+snk_unsigned     kafka  ${arg.default-replica-size}  default
 
 # test already existing topic with non-default partition count
 $ kafka-create-topic topic=snk9 partitions=4
@@ -237,23 +237,23 @@ $ kafka-create-topic topic=snk9 partitions=4
 > SELECT size FROM mz_sinks WHERE name = 'sink_with_size'
 2
 
-# Including for sinks with default size
+# Unlinked sinks have null size
 > SELECT size FROM mz_sinks WHERE name = 'snk9'
-"${arg.default-storage-size}"
+<null>
 
 # Check that SHOW SINKS shows the size correctly
 > SHOW SINKS
 name               type   size  cluster
 ---------------------------------------
-snk1               kafka  ${arg.default-storage-size}  materialize_public_snk1
-snk2               kafka  ${arg.default-storage-size}  materialize_public_snk2
-snk3               kafka  ${arg.default-storage-size}  materialize_public_snk3
-snk4               kafka  ${arg.default-storage-size}  materialize_public_snk4
-snk5               kafka  ${arg.default-storage-size}  materialize_public_snk5
-snk6               kafka  ${arg.default-storage-size}  materialize_public_snk6
-snk7               kafka  ${arg.default-storage-size}  materialize_public_snk7
-snk8               kafka  ${arg.default-storage-size}  materialize_public_snk8
-snk9               kafka  ${arg.default-storage-size}  materialize_public_snk9
+snk1               kafka  ${arg.default-replica-size}  default
+snk2               kafka  ${arg.default-replica-size}  default
+snk3               kafka  ${arg.default-replica-size}  default
+snk4               kafka  ${arg.default-replica-size}  default
+snk5               kafka  ${arg.default-replica-size}  default
+snk6               kafka  ${arg.default-replica-size}  default
+snk7               kafka  ${arg.default-replica-size}  default
+snk8               kafka  ${arg.default-replica-size}  default
+snk9               kafka  ${arg.default-replica-size}  default
 sink_with_size     kafka  2                            materialize_public_sink_with_size
 sink_with_options  kafka  2                            materialize_public_sink_with_options
-snk_unsigned       kafka  ${arg.default-storage-size}  materialize_public_snk_unsigned
+snk_unsigned       kafka  ${arg.default-replica-size}  default

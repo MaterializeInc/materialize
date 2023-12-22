@@ -17,7 +17,7 @@ name          type           size                         cluster
 accounts      subsource      <null>                       <null>
 auctions      subsource      <null>                       <null>
 bids          subsource      <null>                       <null>
-demo          load-generator ${arg.default-storage-size}  materialize_public_demo
+demo          load-generator ${arg.default-replica-size}  default
 demo_progress progress       <null>                       <null>
 organizations subsource      <null>                       <null>
 users         subsource      <null>                       <null>

@@ -337,9 +337,9 @@ a  b
 > SHOW SOURCES
 name     type    size    cluster
 --------------------------------
-data              kafka     ${arg.default-storage-size}   materialize_public_data
+data              kafka     ${arg.default-replica-size}   default
 data_progress     progress  <null>                        <null>
-mat_data          kafka     ${arg.default-storage-size}   materialize_public_mat_data
+mat_data          kafka     ${arg.default-replica-size}   default
 mat_data_progress progress  <null>                        <null>
 
 # If there exists another index, dropping the primary index will not #

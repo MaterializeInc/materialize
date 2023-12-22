@@ -79,6 +79,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"--var=ssl-key={ssl_key}",
         f"--var=ssl-wrong-cert={ssl_wrong_cert}",
         f"--var=ssl-wrong-key={ssl_wrong_key}",
+        f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
         f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
         *args.filter,
     )

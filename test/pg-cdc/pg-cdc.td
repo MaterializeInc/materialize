@@ -291,7 +291,7 @@ create                subsource <null>  <null>
 escaped_text_table    subsource <null>  <null>
 large_text            subsource <null>  <null>
 multipart_pk          subsource <null>  <null>
-mz_source             postgres  ${arg.default-storage-size}  materialize_public_mz_source
+mz_source             postgres  ${arg.default-replica-size}  default
 mz_source_progress    progress  <null>  <null>
 nonpk_table           subsource <null>  <null>
 nulls_table           subsource <null>  <null>
@@ -710,7 +710,7 @@ contains:TEXT COLUMNS refers to table not currently being added
 
 > SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
 another_enum_table      subsource <null> <null>
-enum_source             postgres  ${arg.default-storage-size} materialize_public_enum_source
+enum_source             postgres  ${arg.default-replica-size} default
 enum_source_progress    progress  <null> <null>
 enum_table              subsource <null> <null>
 
@@ -753,7 +753,7 @@ true
   );
 
 > SHOW SOURCES
-another_source          postgres  ${arg.default-storage-size} materialize_public_another_source
+another_source          postgres  ${arg.default-replica-size} default
 another_source_progress progress  <null> <null>
 another_table           subsource <null> <null>
 

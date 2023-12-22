@@ -26,19 +26,16 @@ default           r1  ${arg.default-replica-size}
 mz_introspection  r1  1
 mz_system         r1  1
 
-# Test that creating a source without an explicit size creates a linked cluster
-# with the default size. (Unsafe mode only.)
+# Test that creating a source without an explicit size uses the default cluster.
 > CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
 > SELECT name FROM (SHOW CLUSTERS)
 default
 mz_introspection
 mz_system
-materialize_public_lg
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS)
 default                r1      ${arg.default-replica-size}
 mz_introspection       r1      1
 mz_system              r1      1
-materialize_public_lg  linked  ${arg.default-storage-size}
 > DROP SOURCE lg
 
 # Test that creating sources with an explicit size creates linked clusters, each
@@ -126,13 +123,6 @@ contains:cannot modify linked cluster "materialize_public_lg1"
 > EXPLAIN SELECT * FROM v
 "Explained Query:\n  ReadStorage materialize.public.v\n"
 
-! SELECT generate_series(0, 10)
-contains:cannot execute queries on cluster containing sources or sinks
-! SUBSCRIBE v
-contains:cannot execute queries on cluster containing sources or sinks
-! EXPLAIN SELECT * FROM v
-contains:cannot execute queries on cluster containing sources or sinks
-
 > SET cluster = default
 
 # Test that only the default clusters and replicas remain after dropping
@@ -148,21 +138,19 @@ default                 r1      ${arg.default-replica-size}
 mz_introspection        r1      1
 mz_system               r1      1
 
-# Test that creating a sink without an explicit size creates a linked cluster
-# with the default size. (Unsafe mode only.)
+# Test that creating a source without an explicit size uses the default cluster.
 > CREATE SINK snk FROM v
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM
+
 > SELECT name FROM (SHOW CLUSTERS)
 default
 mz_introspection
 mz_system
-materialize_public_snk
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS)
 default                 r1      ${arg.default-replica-size}
 mz_introspection        r1      1
 mz_system               r1      1
-materialize_public_snk  linked  ${arg.default-storage-size}
 > DROP SINK snk
 
 # Test that creating sinks with an explicit size creates linked clusters, each
@@ -232,10 +220,11 @@ mz_system               r1      1
 > CREATE SCHEMA schema1;
 > CREATE SCHEMA schema2;
 
-> CREATE SOURCE schema1.s1 FROM LOAD GENERATOR COUNTER
+> CREATE SOURCE schema1.s1 FROM LOAD GENERATOR COUNTER WITH (SIZE = '${arg.default-storage-size}')
 > CREATE SINK schema2.s1 FROM v
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM
+  WITH (SIZE = '${arg.default-storage-size}')
 
 > SELECT name FROM (SHOW CLUSTERS)
 default
@@ -256,10 +245,11 @@ materialize_schema2_s1  linked  ${arg.default-storage-size}
 
 # Test capitalizarion behavior
 
-> CREATE SOURCE "s1" FROM LOAD GENERATOR COUNTER
+> CREATE SOURCE "s1" FROM LOAD GENERATOR COUNTER WITH (SIZE = '${arg.default-storage-size}')
 > CREATE SINK "S1" FROM v
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM
+  WITH (SIZE = '${arg.default-storage-size}')
 
 > SELECT name FROM (SHOW CLUSTERS)
 default
@@ -272,8 +262,8 @@ materialize_public_S1
 default                 r1      ${arg.default-replica-size}
 mz_introspection        r1      1
 mz_system               r1      1
-materialize_public_s1  linked  ${arg.default-storage-size}
-materialize_public_S1  linked  ${arg.default-storage-size}
+materialize_public_s1  linked   ${arg.default-storage-size}
+materialize_public_S1  linked   ${arg.default-storage-size}
 
 > DROP SOURCE "s1";
 > DROP SINK "S1";
@@ -282,7 +272,7 @@ materialize_public_S1  linked  ${arg.default-storage-size}
 # selecting a name for the linked cluster
 
 > CREATE CLUSTER materialize_public_s1 REPLICAS (r1 (SIZE '1'));
-> CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER
+> CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER WITH (SIZE = '${arg.default-storage-size}')
 
 > SELECT name FROM (SHOW CLUSTERS)
 default
@@ -295,8 +285,8 @@ materialize_public_s11
 default                 r1      ${arg.default-replica-size}
 mz_introspection        r1      1
 mz_system               r1      1
-materialize_public_s1  r1  1
-materialize_public_s11 linked ${arg.default-storage-size}
+materialize_public_s1   r1      1
+materialize_public_s11  linked  ${arg.default-storage-size}
 
 > DROP CLUSTER materialize_public_s1;
 > DROP SOURCE s1;

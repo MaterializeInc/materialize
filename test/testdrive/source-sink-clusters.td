@@ -35,15 +35,12 @@ contains:only one of IN CLUSTER or SIZE can be set
 ! ALTER SOURCE loadgen SET (SIZE = '1')
 contains:cannot change the size of a source or sink created with IN CLUSTER
 
-# Create indexes and materialized views in a storage cluster is banned.
-! CREATE INDEX bad IN CLUSTER storage ON t (a)
-contains:cannot create this kind of item in a cluster that contains sources or sinks
-! CREATE MATERIALIZED VIEW bad IN CLUSTER storage AS SELECT 1
-contains:cannot create this kind of item in a cluster that contains sources or sinks
+# Create indexes and materialized views in a storage cluster.
+> CREATE INDEX idx IN CLUSTER storage ON t (a)
+> CREATE MATERIALIZED VIEW mv IN CLUSTER storage AS SELECT 1
 
 > CREATE CLUSTER REPLICA storage.r1 SIZE = '1'
 
-# Executing queries on a storage cluster is banned.
 > SELECT generate_series(1, 1)
 1
 
@@ -54,24 +51,11 @@ contains:cannot create more than one replica of a cluster containing sources or 
 # Creating indexes and materialized views in a cluster is permitted once the
 # source has been dropped.
 > DROP SOURCE loadgen;
-> CREATE INDEX idx IN CLUSTER storage ON t (a)
-> CREATE MATERIALIZED VIEW mv IN CLUSTER storage AS SELECT generate_series(1, 1)
-
-# As is running queries.
-> SELECT generate_series(1, 1)
-1
-
-# Recreating the source is banned.
-! CREATE SOURCE loadgen IN CLUSTER storage FROM LOAD GENERATOR COUNTER
-contains:cannot create source in cluster containing indexes or materialized views
 
 # Creating a second replica is now allowed.
 > CREATE CLUSTER REPLICA storage.r2 SIZE '1'
 
-# The source cannot be readded even after the index and materialized views
-# are dropped because of the second replica.
-> DROP INDEX idx
-> DROP MATERIALIZED VIEW mv
+# The source cannot be readded because of the second replica.
 ! CREATE SOURCE loadgen IN CLUSTER storage FROM LOAD GENERATOR COUNTER
 contains:cannot create source in cluster with more than one replica
 

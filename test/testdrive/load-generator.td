@@ -11,7 +11,7 @@
 
 > SHOW SOURCES
 accounts                subsource      <null>                         <null>
-auction_house           load-generator ${arg.default-storage-size}    materialize_public_auction_house
+auction_house           load-generator ${arg.default-replica-size}    default
 auction_house_progress  progress       <null>                         <null>
 auctions                subsource      <null>                         <null>
 bids                    subsource      <null>                         <null>
@@ -31,7 +31,7 @@ contains:LOAD GENERATOR source validation: FOR TABLES (..) unsupported
 
 > SHOW SOURCES FROM another;
 accounts                subsource      <null>                       <null>
-auction_house           load-generator ${arg.default-storage-size}  materialize_another_auction_house
+auction_house           load-generator ${arg.default-replica-size}  default
 auction_house_progress  progress       <null>                       <null>
 auctions                subsource      <null>                       <null>
 bids                    subsource      <null>                       <null>
