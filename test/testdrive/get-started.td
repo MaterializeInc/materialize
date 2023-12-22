@@ -9,7 +9,10 @@
 
 # This test verifies the get started page works.
 
-> CREATE SOURCE demo FROM LOAD GENERATOR AUCTION (TICK INTERVAL '50ms') FOR ALL TABLES
+> SET cluster TO ${arg.single-replica-cluster}
+
+> CREATE SOURCE demo
+  FROM LOAD GENERATOR AUCTION (TICK INTERVAL '50ms') FOR ALL TABLES
 
 > SHOW SOURCES
 name          type           size                         cluster
@@ -17,7 +20,7 @@ name          type           size                         cluster
 accounts      subsource      <null>                       <null>
 auctions      subsource      <null>                       <null>
 bids          subsource      <null>                       <null>
-demo          load-generator ${arg.default-storage-size}  materialize_public_demo
+demo          load-generator ${arg.default-replica-size}  ${arg.single-replica-cluster}
 demo_progress progress       <null>                       <null>
 organizations subsource      <null>                       <null>
 users         subsource      <null>                       <null>

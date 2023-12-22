@@ -24,7 +24,8 @@ $ protobuf-compile-descriptors inputs=maps.proto output=maps.pb set-var=maps-sch
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-! CREATE SOURCE maps FROM
-  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-maps-${testdrive.seed}')
+! CREATE SOURCE maps
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-maps-${testdrive.seed}')
   FORMAT PROTOBUF MESSAGE '.Maps' USING SCHEMA '${maps-schema}'
 contains:Protobuf map fields are not supported

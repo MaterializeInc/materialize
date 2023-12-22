@@ -16,7 +16,10 @@ $ kafka-create-topic topic=load-test partitions=4
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> CREATE CLUSTER single_replica_cluster SIZE '${arg.default-replica-size}';
+
 > CREATE SOURCE load_test
+  IN CLUSTER single_replica_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-load-test-${testdrive.seed}')
   FORMAT BYTES
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset

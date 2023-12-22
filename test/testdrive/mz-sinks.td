@@ -18,7 +18,9 @@
 
 > CREATE TABLE mz_sinks_table (name string);
 
-> CREATE SINK mz_sinks_debezium FROM mz_sinks_table
+> CREATE SINK mz_sinks_debezium
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM mz_sinks_table
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-mz-sinks-debezium-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
@@ -27,7 +29,9 @@
     SELECT name, count(name) from mz_sinks_table
     GROUP BY name;
 
-> CREATE SINK mz_sinks_upsert FROM mz_sinks_table_keyed
+> CREATE SINK mz_sinks_upsert
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM mz_sinks_table_keyed
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-mz-upsert-debezium-${testdrive.seed}')
   KEY (name)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

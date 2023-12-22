@@ -20,6 +20,7 @@ $ kafka-create-topic topic=headers_src
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 ! CREATE SOURCE headers_src
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-headers_src-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
@@ -29,6 +30,7 @@ $ kafka-create-topic topic=headers_src
 contains:INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)
 
 ! CREATE SOURCE headers_src
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-headers_src-${testdrive.seed}')
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
@@ -38,6 +40,7 @@ contains:INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)
 contains:INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)
 
 ! CREATE SOURCE headers_src
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER
   INCLUDE HEADERS
 contains:INCLUDE HEADERS with non-Kafka sources not supported

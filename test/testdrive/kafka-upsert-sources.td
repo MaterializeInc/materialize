@@ -47,6 +47,7 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
 {"key": "mammalmore"} {"f1":"moose", "f2": 2}
 
 > CREATE SOURCE avroavro
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avroavro-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
@@ -67,12 +68,14 @@ birdmore: {"f1":"geese", "f2": 2}
 mammal1: {"f1": "moose", "f2": 1}
 
 > CREATE SOURCE bytesavro
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textavro-${testdrive.seed}')
   KEY FORMAT BYTES
   VALUE FORMAT AVRO USING SCHEMA  '${schema}'
   ENVELOPE UPSERT
 
 > CREATE SOURCE textavro
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textavro-${testdrive.seed}')
   KEY FORMAT TEXT
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
@@ -109,23 +112,27 @@ mammal1:moose
 bìrd1:
 
 > CREATE SOURCE texttext
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
 
 > CREATE SOURCE textbytes
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT TEXT
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
 
 > CREATE SOURCE bytesbytes
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
 
 > CREATE SOURCE bytestext
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
   KEY FORMAT BYTES
   VALUE FORMAT TEXT
@@ -186,12 +193,14 @@ $ protobuf-compile-descriptors inputs=test.proto output=test.pb set-var=test-sch
 $ kafka-create-topic topic=textproto partitions=1
 
 > CREATE SOURCE textproto
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textproto-${testdrive.seed}')
   KEY FORMAT TEXT
   VALUE FORMAT PROTOBUF MESSAGE '.Test' USING SCHEMA '${test-schema}'
   ENVELOPE UPSERT
 
 > CREATE SOURCE bytesproto
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textproto-${testdrive.seed}')
   KEY FORMAT BYTES
   VALUE FORMAT PROTOBUF MESSAGE '.Test' USING SCHEMA '${test-schema}'
@@ -252,6 +261,7 @@ mammalmore:moose
 mammal1:
 
 > CREATE SOURCE nullkey
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-nullkey-${testdrive.seed}')
   KEY FORMAT TEXT
   VALUE FORMAT TEXT
@@ -297,6 +307,7 @@ $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${k
 {"f3": {"string": "earth"}, "f4":{"string": "dao"}}
 
 > CREATE SOURCE realtimeavroavro (f3, f4, f1, f2)
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}')
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -313,6 +324,7 @@ water     <null>  crocodile      7
 
 # Ensure that Upsert sources work with START OFFSET
 > CREATE SOURCE realtimeavroavro_ff
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}')
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -374,6 +386,7 @@ $ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=$
 {"k1": {"string": "boucherie"}, "k2": {"long": 5}} {"f1": {"string": "apple"}, "f2": {"long": 3}}
 
 > CREATE SOURCE realtimefilteravro
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-realtimefilteravro-${testdrive.seed}')
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -518,6 +531,7 @@ k1        k2
 librairie 10
 
 > CREATE SOURCE include_metadata
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}')
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -532,6 +546,7 @@ air       qi        chicken      47    0         12
 earth     dao       rhinoceros   211   0         11
 
 > CREATE SOURCE include_metadata_ts
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}')
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -563,6 +578,7 @@ $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json-
 "str":"hello"
 
 > CREATE SOURCE format_json
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-json-bytes-${testdrive.seed}')
   KEY FORMAT JSON
   VALUE FORMAT JSON

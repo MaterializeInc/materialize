@@ -100,6 +100,7 @@ $ kafka-create-topic topic=nums
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE nums
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-nums-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${nums-schema}'
   ENVELOPE MATERIALIZE
@@ -115,7 +116,9 @@ $ kafka-create-topic topic=nums
   );
 
 # Create a sink before we ingest any data, to ensure the sink starts AS OF 0
-> CREATE SINK nums_sink FROM nums
+> CREATE SINK nums_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM nums
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'nums-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -153,7 +156,9 @@ $ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.p
 # TODO(benesch): re-enable when we support `CREATE SINK ... AS OF`.
 # # Test that a Debezium sink created `AS OF 3` (the latest completed timestamp)
 # # is fully consolidated.
-# > CREATE SINK nums_sink FROM nums
+# > CREATE SINK nums_sink
+#   IN CLUSTER ${arg.single-replica-cluster}
+#   FROM nums
 #   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-nums-sink-${testdrive.seed}')
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 #   AS OF 3

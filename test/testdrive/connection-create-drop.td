@@ -81,6 +81,7 @@ materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"te
 > CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
 > CREATE SOURCE connection_source (first, second)
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION testconn (TOPIC 'testdrive-connection_test-${testdrive.seed}')
   FORMAT CSV WITH 2 COLUMNS
 
@@ -168,6 +169,7 @@ contains:CONFLUENT SCHEMA REGISTRY connections do not support SESSION TOKEN valu
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 ! CREATE SOURCE csr_source
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION csr_conn (TOPIC 'testdrive-csr_test-${testdrive.seed}')
     FORMAT AVRO
     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -175,6 +177,7 @@ contains:CONFLUENT SCHEMA REGISTRY connections do not support SESSION TOKEN valu
 contains:is not a KAFKA CONNECTION
 
 > CREATE SOURCE csr_source
+    IN CLUSTER ${arg.single-replica-cluster}
     FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-csr_test-${testdrive.seed}')
     FORMAT AVRO
     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -188,6 +191,7 @@ id creature
 > CREATE CONNECTION broker_connection TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
 > CREATE SOURCE two_connection_source
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION broker_connection (TOPIC 'testdrive-csr_test-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -203,11 +207,13 @@ contains:depended upon by source "csr_source"
 > DROP CONNECTION csr_conn CASCADE
 
 ! CREATE SOURCE should_fail
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION does_not_exist (TOPIC 'testdrive-error_topic-${testdrive.seed}')
   FORMAT TEXT
 contains: unknown catalog item 'does_not_exist'
 
 ! CREATE SOURCE should_fail
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-csr_test-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION does_not_exist
@@ -286,8 +292,9 @@ $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb messag
     URL '${testdrive.schema-registry-url}'
   )
 
-> CREATE SOURCE import_connection_csr FROM
-  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-import-csr-${testdrive.seed}')
+> CREATE SOURCE import_connection_csr
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-import-csr-${testdrive.seed}')
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION proto_csr
 
 > SELECT importee1::text, importee2::text FROM import_connection_csr

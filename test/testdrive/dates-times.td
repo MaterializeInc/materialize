@@ -52,8 +52,9 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE SOURCE data FROM
-  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+> CREATE SOURCE data
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE MATERIALIZED VIEW data_view as SELECT * from data
@@ -62,7 +63,9 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 1970-01-01 "1970-01-01 18:03:20" "1970-01-01 00:01:05"
 2019-08-27 "+51621-12-22 21:50:00" "2019-08-27 00:17:09"
 
-> CREATE SINK data_sink FROM data
+> CREATE SINK data_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-roundtrip-${testdrive.seed}')
   KEY (d) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -95,7 +98,9 @@ $ kafka-verify-data format=avro sink=materialize.public.data_sink sort-messages=
     '1970-01-01T00:00:00.123456'::timestamptz(5) AS tstz5,
     '1970-01-01T00:00:00.123456'::timestamptz(6) AS tstz6
 
-> CREATE SINK ts_precision_sink FROM ts_precision
+> CREATE SINK ts_precision_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM ts_precision
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-ts-precision-${testdrive.seed}')
   KEY (key) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

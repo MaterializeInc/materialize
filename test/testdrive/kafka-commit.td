@@ -24,6 +24,7 @@ three
 # `materialize-$ENVIRONMENTID-$CONNECTIONID-$SOURCEID`.
 
 > CREATE SOURCE topic
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION conn (
     TOPIC 'testdrive-topic-${testdrive.seed}'
   )
@@ -49,6 +50,7 @@ $ kafka-verify-commit consumer-group-id=${consumer-group-id} topic=topic partiti
 # Test than an arbitrary prefix can be prepended to the consumer group.
 
 > CREATE SOURCE topic
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION conn (
     TOPIC 'testdrive-topic-${testdrive.seed}',
     GROUP ID PREFIX 'OVERRIDE-'

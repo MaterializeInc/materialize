@@ -21,10 +21,12 @@ $ kafka-create-topic topic=input-system
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE source_system
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-system-${testdrive.seed}')
   FORMAT BYTES
 
 > CREATE SOURCE source_system_user
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-system-${testdrive.seed}')
   FORMAT BYTES
   WITH (TIMELINE '${testdrive.seed}-timelines')
@@ -119,11 +121,13 @@ $ kafka-ingest format=avro topic=input-cdcv2 schema=${schema}
 {"array":[{"data":{"id":5,"price":{"int":12}},"time":5,"diff":-1}]}
 
 > CREATE SOURCE source_cdcv2
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
 
 ! CREATE SOURCE source_cdcv2_system
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
@@ -131,12 +135,14 @@ $ kafka-ingest format=avro topic=input-cdcv2 schema=${schema}
 contains:unacceptable timeline name "mz_foo"
 
 > CREATE SOURCE source_cdcv2_system
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
   WITH (TIMELINE 'mz_epoch_ms')
 
 > CREATE SOURCE source_cdcv2_user
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE

@@ -168,6 +168,7 @@ $ kafka-ingest format=avro topic=avro-data schema=${reader-schema} timestamp=1
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE avro_data
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 
@@ -191,6 +192,7 @@ $ kafka-ingest format=avro topic=avro-data-no-registry schema=${reader-schema} c
 { "f0": {"f0_0": 9999, "f0_1": null}, "f1": {"long": 3456}, "f2": "Jokers", "f5": {"extra_variant": [0,1,2,3,4,5,6,7,8,9]}, "f6": {"key": 8372} }
 
 > CREATE SOURCE avro_data_no_registry
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-no-registry-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${reader-schema}' (CONFLUENT WIRE FORMAT = false)
 
@@ -205,6 +207,7 @@ $ kafka-ingest format=bytes topic=avro-corrupted-values timestamp=1
 garbage
 
 > CREATE SOURCE avro_corrupted_values
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-corrupted-values-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${reader-schema}'
 
@@ -218,6 +221,7 @@ $ kafka-ingest format=bytes topic=avro-corrupted-values2 timestamp=1
 garbage
 
 > CREATE SOURCE avro_corrupted_values2
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-corrupted-values2-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${reader-schema}' (CONFLUENT WIRE FORMAT = false)
 

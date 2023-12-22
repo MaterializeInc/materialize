@@ -26,19 +26,18 @@ mz_introspection  r1  1
 mz_system         r1  1
 quickstart        r1  ${arg.default-replica-size}
 
-# Test that creating a source without an explicit size creates a linked cluster
-# with the default size. (Unsafe mode only.)
+# Test that creating a source without an explicit size uses the default cluster.
 > CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
 > SELECT name FROM (SHOW CLUSTERS)
 mz_introspection
 mz_system
-materialize_public_lg
 quickstart
+
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS)
 mz_introspection       r1      1
 mz_system              r1      1
-materialize_public_lg  linked  ${arg.default-storage-size}
 quickstart             r1      ${arg.default-replica-size}
+
 > DROP SOURCE lg
 
 # Test that creating sources with an explicit size creates linked clusters, each
@@ -104,7 +103,8 @@ contains:cannot modify linked cluster "materialize_public_lg2"
 contains:cannot modify linked cluster "materialize_public_lg2"
 ! CREATE SOURCE lg_bad IN CLUSTER "materialize_public_lg1" FROM LOAD GENERATOR COUNTER
 contains:cannot modify linked cluster "materialize_public_lg1"
-! CREATE SINK snk_bad IN CLUSTER "materialize_public_lg1" FROM v
+! CREATE SINK snk_bad IN CLUSTER "materialize_public_lg1"
+  FROM v
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk-bad-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM
 contains:cannot modify linked cluster "materialize_public_lg1"
@@ -141,26 +141,10 @@ mz_introspection        r1      1
 mz_system               r1      1
 quickstart              r1      ${arg.default-replica-size}
 
-# Test that creating a sink without an explicit size creates a linked cluster
-# with the default size. (Unsafe mode only.)
-> CREATE SINK snk FROM v
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk-${testdrive.seed}')
-  FORMAT JSON ENVELOPE DEBEZIUM
-> SELECT name FROM (SHOW CLUSTERS)
-mz_introspection
-mz_system
-materialize_public_snk
-quickstart
-> SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS)
-mz_introspection        r1      1
-mz_system               r1      1
-materialize_public_snk  linked  ${arg.default-storage-size}
-quickstart              r1      ${arg.default-replica-size}
-> DROP SINK snk
-
 # Test that creating sinks with an explicit size creates linked clusters, each
 # with a replica named "linked" with the size specified in the sink.
-> CREATE SINK snk1 FROM v
+> CREATE SINK snk1
+  FROM v
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk1-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM WITH (SIZE = '1')
 > SELECT name FROM (SHOW CLUSTERS)
@@ -178,7 +162,8 @@ quickstart               r1      ${arg.default-replica-size}
   JOIN mz_clusters c ON c.id = s.cluster_id
   WHERE s.id LIKE 'u%'
 snk1  materialize_public_snk1
-> CREATE SINK snk2 FROM v
+> CREATE SINK snk2
+  FROM v
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM WITH (SIZE = '2')
 > SELECT name FROM (SHOW CLUSTERS)
@@ -225,10 +210,12 @@ quickstart              r1      ${arg.default-replica-size}
 > CREATE SCHEMA schema1;
 > CREATE SCHEMA schema2;
 
-> CREATE SOURCE schema1.s1 FROM LOAD GENERATOR COUNTER
-> CREATE SINK schema2.s1 FROM v
+> CREATE SOURCE schema1.s1 FROM LOAD GENERATOR COUNTER WITH (SIZE = '${arg.default-storage-size}')
+> CREATE SINK schema2.s1
+  FROM v
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM
+  WITH (SIZE = '${arg.default-storage-size}')
 
 > SELECT name FROM (SHOW CLUSTERS)
 mz_introspection
@@ -249,10 +236,12 @@ quickstart              r1      ${arg.default-replica-size}
 
 # Test capitalizarion behavior
 
-> CREATE SOURCE "s1" FROM LOAD GENERATOR COUNTER
-> CREATE SINK "S1" FROM v
+> CREATE SOURCE "s1" FROM LOAD GENERATOR COUNTER WITH (SIZE = '${arg.default-storage-size}')
+> CREATE SINK "S1"
+  FROM v
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM
+  WITH (SIZE = '${arg.default-storage-size}')
 
 > SELECT name FROM (SHOW CLUSTERS)
 mz_introspection
@@ -266,7 +255,7 @@ mz_introspection        r1      1
 mz_system               r1      1
 materialize_public_s1  linked  ${arg.default-storage-size}
 materialize_public_S1  linked  ${arg.default-storage-size}
-quickstart              r1      ${arg.default-replica-size}
+quickstart             r1      ${arg.default-replica-size}
 
 > DROP SOURCE "s1";
 > DROP SINK "S1";
@@ -275,20 +264,18 @@ quickstart              r1      ${arg.default-replica-size}
 # selecting a name for the linked cluster
 
 > CREATE CLUSTER materialize_public_s1 REPLICAS (r1 (SIZE '1'));
-> CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER
+> CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER WITH (SIZE = '${arg.default-storage-size}')
 
 > SELECT name FROM (SHOW CLUSTERS)
 mz_introspection
 mz_system
 materialize_public_s1
-materialize_public_s11
 quickstart
 
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS)
 mz_introspection        r1      1
 mz_system               r1      1
-materialize_public_s1  r1  1
-materialize_public_s11 linked ${arg.default-storage-size}
+materialize_public_s1   r1  1
 quickstart              r1      ${arg.default-replica-size}
 
 > DROP CLUSTER materialize_public_s1;

@@ -43,11 +43,14 @@ $ kafka-ingest format=avro topic=correctness-data key-format=avro key-schema=${k
 # get an AS_OF timestamp immediately, before the source has had the chance to produce data and
 # compact. This means that the sink will observe all the state changes.
 > CREATE SOURCE correctness_data
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-correctness-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
-> CREATE SINK correctness_sink FROM correctness_data
+> CREATE SINK correctness_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM correctness_data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-correctness-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM

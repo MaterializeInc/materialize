@@ -30,13 +30,17 @@ class JsonSource(Check):
                 $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json
                 "object":{"a":"b","c":"d"}
 
+                > CREATE CLUSTER single_replica_cluster SIZE '1';
+
                 > CREATE SOURCE format_jsonA
+                  IN CLUSTER single_replica_cluster
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-json-${testdrive.seed}')
                   KEY FORMAT JSON
                   VALUE FORMAT JSON
                   ENVELOPE UPSERT
 
                 > CREATE SOURCE format_jsonB
+                  IN CLUSTER single_replica_cluster
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-json-${testdrive.seed}')
                   KEY FORMAT JSON
                   VALUE FORMAT JSON
@@ -81,7 +85,7 @@ class JsonSource(Check):
                 "\\"str\\"" "\\"hello\\""
 
                 > SHOW CREATE SOURCE format_jsonB;
-                materialize.public.format_jsonb "CREATE SOURCE \\"materialize\\".\\"public\\".\\"format_jsonb\\" FROM KAFKA CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn\\" (TOPIC = 'testdrive-format-json-${testdrive.seed}') KEY FORMAT JSON VALUE FORMAT JSON ENVELOPE UPSERT EXPOSE PROGRESS AS \\"materialize\\".\\"public\\".\\"format_jsonb_progress\\""
+                materialize.public.format_jsonb "CREATE SOURCE \\"materialize\\".\\"public\\".\\"format_jsonb\\" IN CLUSTER \\"single_replica_cluster\\" FROM KAFKA CONNECTION \\"materialize\\".\\"public\\".\\"kafka_conn\\" (TOPIC = 'testdrive-format-json-${testdrive.seed}') KEY FORMAT JSON VALUE FORMAT JSON ENVELOPE UPSERT EXPOSE PROGRESS AS \\"materialize\\".\\"public\\".\\"format_jsonb_progress\\""
            """
             )
         )

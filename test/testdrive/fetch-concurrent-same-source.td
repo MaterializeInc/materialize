@@ -25,6 +25,7 @@ $ kafka-create-topic topic=fetch-concurrent-same-source
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE fetch_concurrent_same_source
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-fetch-concurrent-same-source-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
