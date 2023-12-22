@@ -1392,7 +1392,9 @@ impl Catalog {
                             coord_bail!("cannot set cluster of existing source");
                         }
                         PlanStorageClusterConfig::Linked { size } => Some((Size, size.clone())),
-                        PlanStorageClusterConfig::Undefined => None,
+                        PlanStorageClusterConfig::Undefined => {
+                            Some((Size, state.default_linked_cluster_size()))
+                        }
                     };
 
                     if let Some((name, value)) = new_cluster_option {
@@ -1489,7 +1491,9 @@ impl Catalog {
                             coord_bail!("cannot set cluster of existing source");
                         }
                         PlanStorageClusterConfig::Linked { size } => Some((Size, size.clone())),
-                        PlanStorageClusterConfig::Undefined => None,
+                        PlanStorageClusterConfig::Undefined => {
+                            Some((Size, state.default_linked_cluster_size()))
+                        }
                     };
 
                     if let Some((name, value)) = new_cluster_option {
