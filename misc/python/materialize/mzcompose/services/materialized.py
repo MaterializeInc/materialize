@@ -31,7 +31,7 @@ class Materialized(Service):
 
     def __init__(
         self,
-        name: str = "materialized",
+        name: str | None = None,
         image: str | None = None,
         environment_extra: list[str] = [],
         volumes_extra: list[str] = [],
@@ -54,6 +54,9 @@ class Materialized(Service):
         sanity_restart: bool = True,
         catalog_store: str | None = "shadow",
     ) -> None:
+        if name is None:
+            name = "materialized"
+
         depends_graph: dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
         }
@@ -149,7 +152,8 @@ class Materialized(Service):
                 "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus",
             ]
             environment += [
-                "MZ_TIMESTAMP_ORACLE_URL=postgres://root@cockroach:26257?options=--search_path=tsoracle"
+                "MZ_TIMESTAMP_ORACLE_URL=postgres://root@cockroach:26257?options=--search_path=tsoracle",
+                "MZ_NO_BUILTIN_COCKROACH=1",
             ]
 
         command += [

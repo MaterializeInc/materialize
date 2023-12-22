@@ -85,7 +85,7 @@ class SinkUpsert(Check):
             Testdrive(schemas() + dedent(s))
             for s in [
                 """
-                $[version>=5200] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version>=5200] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT SELECT ON sink_source_view TO materialize
                 GRANT USAGE ON CONNECTION kafka_conn TO materialize
                 GRANT USAGE ON CONNECTION csr_conn TO materialize
@@ -101,7 +101,7 @@ class SinkUpsert(Check):
                   ENVELOPE DEBEZIUM
                 """,
                 """
-                $[version>=5200] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version>=5200] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT SELECT ON sink_source_view TO materialize
                 GRANT USAGE ON CONNECTION kafka_conn TO materialize
                 GRANT USAGE ON CONNECTION csr_conn TO materialize
@@ -123,15 +123,15 @@ class SinkUpsert(Check):
         return Testdrive(
             dedent(
                 """
-                $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT SELECT ON sink_source_view TO materialize
                 GRANT USAGE ON CONNECTION kafka_conn TO materialize
                 GRANT USAGE ON CONNECTION csr_conn TO materialize
 
-                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT CREATECLUSTER ON SYSTEM TO materialize
 
-                $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version<5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 ALTER ROLE materialize CREATECLUSTER
 
                 > SELECT * FROM sink_source_view;
@@ -350,7 +350,7 @@ class SinkNullDefaults(Check):
             Testdrive(schemas_null() + dedent(s))
             for s in [
                 """
-                $[version>=5200] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version>=5200] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT SELECT ON sink_source_null_view TO materialize
                 GRANT USAGE ON CONNECTION kafka_conn TO materialize
                 GRANT USAGE ON CONNECTION csr_conn TO materialize
@@ -367,7 +367,7 @@ class SinkNullDefaults(Check):
                   ENVELOPE DEBEZIUM
                 """,
                 """
-                $[version>=5200] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version>=5200] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT SELECT ON sink_source_null_view TO materialize
                 GRANT USAGE ON CONNECTION kafka_conn TO materialize
                 GRANT USAGE ON CONNECTION csr_conn TO materialize
@@ -399,15 +399,15 @@ class SinkNullDefaults(Check):
                 $ schema-registry-verify schema-type=avro subject=sink-sink-null3-value
                 {"type":"record","name":"envelope","fields":[{"name":"before","type":["null",{"type":"record","name":"row","fields":[{"name":"l_k","type":"string"},{"name":"l_v1","type":["null","string"],"default":null},{"name":"l_v2","type":["null","long"],"default":null},{"name":"c","type":"long"}]}],"default":null},{"name":"after","type":["null","row"],"default":null}]}
 
-                $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT SELECT ON sink_source_null_view TO materialize
                 GRANT USAGE ON CONNECTION kafka_conn TO materialize
                 GRANT USAGE ON CONNECTION csr_conn TO materialize
 
-                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT CREATECLUSTER ON SYSTEM TO materialize
 
-                $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version<5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 ALTER ROLE materialize CREATECLUSTER
 
                 > SELECT * FROM sink_source_null_view;
@@ -606,7 +606,7 @@ class SinkComments(Check):
             Testdrive(schemas_null() + dedent(s))
             for s in [
                 """
-                $[version>=5200] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version>=5200] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT SELECT ON sink_source_comments_view TO materialize
                 GRANT USAGE ON CONNECTION kafka_conn TO materialize
                 GRANT USAGE ON CONNECTION csr_conn TO materialize
@@ -628,7 +628,7 @@ class SinkComments(Check):
                   ENVELOPE DEBEZIUM
                 """,
                 """
-                $[version>=5200] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version>=5200] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT SELECT ON sink_source_comments_view TO materialize
                 GRANT USAGE ON CONNECTION kafka_conn TO materialize
                 GRANT USAGE ON CONNECTION csr_conn TO materialize
@@ -674,15 +674,15 @@ class SinkComments(Check):
                 $ schema-registry-verify schema-type=avro subject=sink-sink-comments3-value
                 {"type":"record","name":"envelope","fields":[{"name":"before","type":["null",{"type":"record","name":"row","doc":"comment on view sink_source_comments_view","fields":[{"name":"l_k","type":"string"},{"name":"l_v1","type":["null","string"],"default":null,"doc":"doc on l_v1"},{"name":"l_v2","type":["null","long"],"default":null,"doc":"value doc on l_v2"},{"name":"c","type":"long"}]}],"default":null},{"name":"after","type":["null","row"],"default":null}]}
 
-                $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT SELECT ON sink_source_comments_view TO materialize
                 GRANT USAGE ON CONNECTION kafka_conn TO materialize
                 GRANT USAGE ON CONNECTION csr_conn TO materialize
 
-                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT CREATECLUSTER ON SYSTEM TO materialize
 
-                $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version<5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 ALTER ROLE materialize CREATECLUSTER
 
                 > SELECT * FROM sink_source_comments_view;

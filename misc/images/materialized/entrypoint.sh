@@ -28,19 +28,21 @@ hosted offering we run these services scaled across many machines.
 ********************************* WARNING ********************************
 EOF
 
-COCKROACH_SKIP_ENABLING_DIAGNOSTIC_REPORTING=true cockroach start-single-node \
-    --insecure \
-    --background \
-    --store=/mzdata/cockroach
+if [ -z "${MZ_NO_BUILTIN_COCKROACH:-}" ]; then
+  COCKROACH_SKIP_ENABLING_DIAGNOSTIC_REPORTING=true cockroach start-single-node \
+      --insecure \
+      --background \
+      --store=/mzdata/cockroach
 
-# See: https://github.com/cockroachdb/cockroach/issues/93892
-# See: https://github.com/MaterializeInc/materialize/issues/16726
-cockroach sql --insecure -e "SET CLUSTER SETTING sql.stats.forecasts.enabled = false"
+  # See: https://github.com/cockroachdb/cockroach/issues/93892
+  # See: https://github.com/MaterializeInc/materialize/issues/16726
+  cockroach sql --insecure -e "SET CLUSTER SETTING sql.stats.forecasts.enabled = false"
 
-cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS consensus"
-cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS storage"
-cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS adapter"
-cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS tsoracle"
+  cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS consensus"
+  cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS storage"
+  cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS adapter"
+  cockroach sql --insecure -e "CREATE SCHEMA IF NOT EXISTS tsoracle"
+fi
 
 if [[ ! -f /mzdata/environment-id ]]; then
   echo "docker-container-$(cat /proc/sys/kernel/random/uuid)-0" > /mzdata/environment-id

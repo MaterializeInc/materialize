@@ -37,7 +37,7 @@ class RenameTable(Check):
                 # When upgrading from old version without roles the table is
                 # owned by default_role, thus we have to change the owner
                 # before dropping it:
-                $[version>=4700] postgres-execute connection=postgres://mz_system:materialize@materialized:6877
+                $[version>=4700] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER TABLE rename_table2 OWNER TO materialize;
 
                 > INSERT INTO rename_table2 VALUES (4);
