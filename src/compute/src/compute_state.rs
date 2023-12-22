@@ -131,7 +131,7 @@ impl ComputeState {
             persist_clients,
             command_history,
             max_result_size: u32::MAX,
-            dataflow_max_inflight_bytes: usize::MAX,
+            dataflow_max_inflight_bytes: context.flow_control_bytes,
             persist_source_max_inflight_bytes: None,
             linear_join_spec: Default::default(),
             metrics,

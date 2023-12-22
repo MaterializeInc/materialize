@@ -207,6 +207,14 @@ struct Args {
     /// Optional memory limit (bytes) of the cluster replica
     #[clap(long)]
     announce_memory_limit: Option<usize>,
+
+    /// The `max_inflight_bytes` value to use for compute flow control.
+    ///
+    /// This is only meant as a temporary config for verification of an end-to-end compute
+    /// backpressure poc.
+    /// TODO(#23897): replace this with an LD option
+    #[clap(long, env = "COMPUTE_FLOW_CONTROL_BYTES")]
+    compute_flow_control_bytes: Option<usize>,
 }
 
 #[tokio::main]
@@ -367,6 +375,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         },
         ComputeInstanceContext {
             scratch_directory: args.scratch_directory,
+            flow_control_bytes: args.compute_flow_control_bytes.unwrap_or(usize::MAX),
         },
     )?;
     info!(

@@ -38,7 +38,7 @@ use timely::scheduling::{Scheduler, SyncActivator};
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::SendError;
-use tracing::trace;
+use tracing::{info, trace};
 
 use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
 use crate::logging::compute::ComputeEvent;
@@ -49,6 +49,8 @@ use crate::metrics::ComputeMetrics;
 pub struct ComputeInstanceContext {
     /// A directory that can be used for scratch work.
     pub scratch_directory: Option<PathBuf>,
+    /// The `max_inflight_bytes` value to use for compute flow control.
+    pub flow_control_bytes: usize,
 }
 
 /// Configures the server with compute-specific metrics.
@@ -73,6 +75,8 @@ pub fn serve(
     ),
     Error,
 > {
+    info!(?context, "starting the compute server");
+
     let metrics = ComputeMetrics::register_with(&config.metrics_registry);
     let compute_config = Config { metrics, context };
 
