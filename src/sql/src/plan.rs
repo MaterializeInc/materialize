@@ -777,7 +777,7 @@ pub struct SubscribePlan {
     pub output: SubscribeOutput,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SubscribeFrom {
     Id(GlobalId),
     Query {
