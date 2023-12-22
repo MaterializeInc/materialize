@@ -202,10 +202,7 @@ impl Coordinator {
                         .await;
                 }
                 Plan::CreateIndex(plan) => {
-                    let result = self
-                        .sequence_create_index(ctx.session_mut(), plan, resolved_ids)
-                        .await;
-                    ctx.retire(result);
+                    self.sequence_create_index(ctx, plan, resolved_ids).await;
                 }
                 Plan::CreateType(plan) => {
                     let result = self

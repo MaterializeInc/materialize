@@ -49,7 +49,7 @@ impl Coordinator {
         .await;
     }
 
-    /// Processes as many peek stages as possible.
+    /// Processes as many `create materialized view` stages as possible.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn sequence_create_materialized_view_stage(
         &mut self,
@@ -254,28 +254,28 @@ impl Coordinator {
             ..
         }: CreateMaterializedViewFinish,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let mut ops = Vec::new();
-        ops.extend(
+        let ops = itertools::chain(
             drop_ids
                 .into_iter()
                 .map(|id| catalog::Op::DropObject(ObjectId::Item(id))),
-        );
-        ops.push(catalog::Op::CreateItem {
-            id,
-            oid: self.catalog_mut().allocate_oid()?,
-            name: name.clone(),
-            item: CatalogItem::MaterializedView(MaterializedView {
-                create_sql,
-                raw_expr,
-                optimized_expr: local_mir_plan.expr(),
-                desc: global_lir_plan.desc().clone(),
-                resolved_ids,
-                cluster_id,
-                non_null_assertions,
-                custom_logical_compaction_window: compaction_window,
+            std::iter::once(catalog::Op::CreateItem {
+                id,
+                oid: self.catalog_mut().allocate_oid()?,
+                name: name.clone(),
+                item: CatalogItem::MaterializedView(MaterializedView {
+                    create_sql,
+                    raw_expr,
+                    optimized_expr: local_mir_plan.expr(),
+                    desc: global_lir_plan.desc().clone(),
+                    resolved_ids,
+                    cluster_id,
+                    non_null_assertions,
+                    custom_logical_compaction_window: compaction_window,
+                }),
+                owner_id: *ctx.session().current_role_id(),
             }),
-            owner_id: *ctx.session().current_role_id(),
-        });
+        )
+        .collect::<Vec<_>>();
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(ctx.session()), ops, |coord| async {
