@@ -292,10 +292,21 @@ impl Coordinator {
                     self.sequence_peek(ctx, plan, target_cluster).await;
                 }
                 Plan::Subscribe(plan) => {
-                    let result = self
-                        .sequence_subscribe(&mut ctx, plan, target_cluster)
-                        .await;
-                    ctx.retire(result);
+                    if self
+                        .catalog()
+                        .system_config()
+                        .enable_off_thread_optimization()
+                    {
+                        let result = self
+                            .sequence_subscribe_off_thread(&mut ctx, plan, target_cluster)
+                            .await;
+                        ctx.retire(result);
+                    } else {
+                        let result = self
+                            .sequence_subscribe(&mut ctx, plan, target_cluster)
+                            .await;
+                        ctx.retire(result);
+                    }
                 }
                 Plan::SideEffectingFunc(plan) => {
                     ctx.retire(self.sequence_side_effecting_func(plan));
