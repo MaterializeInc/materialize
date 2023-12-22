@@ -40,10 +40,11 @@ use serde::{Serialize, Serializer};
 use serde_json::{self, Map, Value};
 use tracing::{debug, warn};
 
+use crate::decode::build_ts_value;
 use crate::error::Error as AvroError;
 use crate::reader::SchemaResolver;
 use crate::types::{self, DecimalValue, Value as AvroValue};
-use crate::util::MapHelper;
+use crate::util::{MapHelper, TsUnit};
 
 pub fn resolve_schemas(
     writer_schema: &Schema,
@@ -317,14 +318,32 @@ pub enum SchemaPiece {
 impl SchemaPiece {
     /// Returns whether the schema node is "underlyingly" an Int (but possibly a logicalType typedef)
     pub fn is_underlying_int(&self) -> bool {
-        matches!(self, SchemaPiece::Int | SchemaPiece::Date)
+        self.underlying_int_value(0).is_some()
     }
     /// Returns whether the schema node is "underlyingly" an Int64 (but possibly a logicalType typedef)
     pub fn is_underlying_long(&self) -> bool {
-        matches!(
-            self,
-            SchemaPiece::Long | SchemaPiece::TimestampMilli | SchemaPiece::TimestampMicro
-        )
+        self.underlying_long_value(0).is_some()
+    }
+    /// Constructs an `avro::Value` if this is of underlying int type.
+    /// Guaranteed to be `Some` when `is_underlying_int` is `true`.
+    pub fn underlying_int_value(&self, int: i32) -> Option<Result<AvroValue, AvroError>> {
+        match self {
+            SchemaPiece::Int => Some(Ok(AvroValue::Int(int))),
+            // TODO[btv] - should we bounds-check the date here? We
+            // don't elsewhere... maybe we should everywhere.
+            SchemaPiece::Date => Some(Ok(AvroValue::Date(int))),
+            _ => None,
+        }
+    }
+    /// Constructs an `avro::Value` if this is of underlying long type.
+    /// Guaranteed to be `Some` when `is_underlying_long` is `true`.
+    pub fn underlying_long_value(&self, long: i64) -> Option<Result<AvroValue, AvroError>> {
+        match self {
+            SchemaPiece::Long => Some(Ok(AvroValue::Long(long))),
+            SchemaPiece::TimestampMilli => Some(build_ts_value(long, TsUnit::Millis)),
+            SchemaPiece::TimestampMicro => Some(build_ts_value(long, TsUnit::Micros)),
+            _ => None,
+        }
     }
 }
 
@@ -1706,41 +1725,47 @@ impl<'a> SchemaNode<'a> {
             },
             (Null, SchemaPiece::Null) => AvroValue::Null,
             (Bool(b), SchemaPiece::Boolean) => AvroValue::Boolean(*b),
-            (Number(n), piece) => match piece {
-                SchemaPiece::Int => {
-                    let i = n
-                        .as_i64()
-                        .and_then(|i| i32::try_from(i).ok())
-                        .ok_or_else(|| {
-                            ParseSchemaError(format!("{} is not a 32-bit integer", n))
+            (Number(n), piece) => {
+                match piece {
+                    piece if piece.is_underlying_int() => {
+                        let i =
+                            n.as_i64()
+                                .and_then(|i| i32::try_from(i).ok())
+                                .ok_or_else(|| {
+                                    ParseSchemaError(format!("{} is not a 32-bit integer", n))
+                                })?;
+                        piece.underlying_int_value(i).unwrap().map_err(|e| {
+                            ParseSchemaError(format!("invalid default int {i}: {e}"))
+                        })?
+                    }
+                    piece if piece.is_underlying_long() => {
+                        let i = n.as_i64().ok_or_else(|| {
+                            ParseSchemaError(format!("{} is not a 64-bit integer", n))
                         })?;
-                    AvroValue::Int(i)
+                        piece.underlying_long_value(i).unwrap().map_err(|e| {
+                            ParseSchemaError(format!("invalid default long {i}: {e}"))
+                        })?
+                    }
+                    SchemaPiece::Float => {
+                        let f = n.as_f64().ok_or_else(|| {
+                            ParseSchemaError(format!("{} is not a 32-bit float", n))
+                        })?;
+                        AvroValue::Float(f as f32)
+                    }
+                    SchemaPiece::Double => {
+                        let f = n.as_f64().ok_or_else(|| {
+                            ParseSchemaError(format!("{} is not a 64-bit float", n))
+                        })?;
+                        AvroValue::Double(f)
+                    }
+                    _ => {
+                        return Err(ParseSchemaError(format!(
+                            "Unexpected number in default: {}",
+                            n
+                        )))
+                    }
                 }
-                SchemaPiece::Long => {
-                    let i = n.as_i64().ok_or_else(|| {
-                        ParseSchemaError(format!("{} is not a 64-bit integer", n))
-                    })?;
-                    AvroValue::Long(i)
-                }
-                SchemaPiece::Float => {
-                    let f = n
-                        .as_f64()
-                        .ok_or_else(|| ParseSchemaError(format!("{} is not a 32-bit float", n)))?;
-                    AvroValue::Float(f as f32)
-                }
-                SchemaPiece::Double => {
-                    let f = n
-                        .as_f64()
-                        .ok_or_else(|| ParseSchemaError(format!("{} is not a 64-bit float", n)))?;
-                    AvroValue::Double(f)
-                }
-                _ => {
-                    return Err(ParseSchemaError(format!(
-                        "Unexpected number in default: {}",
-                        n
-                    )))
-                }
-            },
+            }
             (String(s), piece)
                 if s.eq_ignore_ascii_case("nan")
                     && (piece == &SchemaPiece::Float || piece == &SchemaPiece::Double) =>
