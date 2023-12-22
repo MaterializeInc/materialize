@@ -27,7 +27,7 @@ use crate::{optimize, AdapterNotice, ExecuteContext, TimelineContext};
 
 impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) async fn sequence_subscribe_off_thread(
+    pub(crate) async fn sequence_subscribe(
         &mut self,
         ctx: ExecuteContext,
         plan: plan::SubscribePlan,
