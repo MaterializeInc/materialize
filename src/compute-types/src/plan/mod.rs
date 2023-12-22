@@ -317,7 +317,8 @@ pub enum Plan<T = mz_repr::Timestamp> {
         input_key: Option<Vec<MirScalarExpr>>,
         /// An MFP that must be applied to results. The projection part of this
         /// MFP must preserve the key for the reduction; otherwise, the results
-        /// become undefined.
+        /// become undefined. Additionally, the MFP must be free from temporal
+        /// predicates so that it can be readily evaluated.
         mfp_after: MapFilterProject,
     },
     /// Key-based "Top K" operator, retaining the first K records in each group.

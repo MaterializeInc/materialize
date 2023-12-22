@@ -12,6 +12,8 @@
 # PR https://github.com/MaterializeInc/materialize/pull/23197
 #
 
+mode cockroach
+
 statement ok
 CREATE TABLE t (a int, b int);
 
@@ -30,8 +32,7 @@ HAVING ((COUNT(b) + 1) - a) > 2 AND (COUNT(b) + 1) / (1 + a) >= 1;
 query II
 SELECT * FROM mv_complex_mfp_accumulable;
 ----
-1
-7
+1 7
 
 query T multiline
 EXPLAIN PHYSICAL PLAN FOR
@@ -56,3 +57,138 @@ materialize.public.mv_complex_mfp_accumulable:
         raw=true
 
 EOF
+
+# Check that we treat errors properly.
+statement ok
+INSERT INTO t VALUES (-1, 3);
+
+query error division by zero
+SELECT * FROM mv_complex_mfp_accumulable;
+
+statement ok
+DELETE FROM t WHERE a = -1;
+
+query II
+SELECT * FROM mv_complex_mfp_accumulable;
+----
+1 7
+
+# We test variations of the scenario above to cover reduction types.
+statement ok
+CREATE MATERIALIZED VIEW mv_complex_mfp_basic_single AS
+SELECT a, LIST_AGG(b ORDER BY b DESC)::text
+FROM t
+GROUP BY a
+HAVING
+  ((LIST_AGG(b ORDER BY b DESC)[1] + 1) - a) > 2 AND
+  (LIST_AGG(b ORDER BY b DESC)[1] + 1) / (1 + a) >= 1;
+
+query IT
+SELECT * FROM mv_complex_mfp_basic_single;
+----
+1  {3,2,1}
+
+statement ok
+INSERT INTO t VALUES (-1, 3);
+
+query error division by zero
+SELECT * FROM mv_complex_mfp_basic_single;
+
+statement ok
+DELETE FROM t WHERE a = -1;
+
+query IT
+SELECT * FROM mv_complex_mfp_basic_single;
+----
+1  {3,2,1}
+
+statement ok
+CREATE MATERIALIZED VIEW mv_complex_mfp_basic_multiple AS
+SELECT a, LIST_AGG(b ORDER BY b DESC)::text
+FROM t
+GROUP BY a
+HAVING
+  ((ARRAY_AGG(b ORDER BY b DESC)[1] + 1) - a) > 2 AND
+  (ARRAY_AGG(b ORDER BY b DESC)[1] + 1) / (1 + a) >= 1;
+
+query IT
+SELECT * FROM mv_complex_mfp_basic_multiple;
+----
+1  {3,2,1}
+
+statement ok
+INSERT INTO t VALUES (-1, 3);
+
+query error division by zero
+SELECT * FROM mv_complex_mfp_basic_multiple;
+
+statement ok
+DELETE FROM t WHERE a = -1;
+
+query IT
+SELECT * FROM mv_complex_mfp_basic_multiple;
+----
+1  {3,2,1}
+
+statement ok
+CREATE MATERIALIZED VIEW mv_complex_mfp_bucketed AS
+SELECT a, MAX(b) + 1
+FROM t
+GROUP BY a
+HAVING ((MAX(b) + 1) - a) > 2 AND (MAX(b) + 1) / (1 + a) >= 1;
+
+query II
+SELECT * FROM mv_complex_mfp_bucketed;
+----
+1 4
+
+statement ok
+INSERT INTO t VALUES (-1, 3);
+
+query error division by zero
+SELECT * FROM mv_complex_mfp_bucketed;
+
+statement ok
+DELETE FROM t WHERE a = -1;
+
+query II
+SELECT * FROM mv_complex_mfp_bucketed;
+----
+1 4
+
+statement ok
+CREATE MATERIALIZED VIEW mv_complex_mfp_collation AS
+SELECT a, MAX(b) + 1
+FROM t
+GROUP BY a
+HAVING ((COUNT(b) + 1) - a) > 2 AND (COUNT(b) + 1) / (1 + a) >= 1;
+
+query II
+SELECT * FROM mv_complex_mfp_collation;
+----
+1 4
+
+statement ok
+INSERT INTO t VALUES (-1, 3);
+
+query error division by zero
+SELECT * FROM mv_complex_mfp_collation;
+
+statement ok
+DELETE FROM t WHERE a = -1;
+
+query II
+SELECT * FROM mv_complex_mfp_collation;
+----
+1 4
+
+# NOTE(vmarcos): Even though placement of an Mfp that has parts that can be
+# fused on top of a Reduce::Distinct is valid LIR, we should not at present produce
+# this pattern via SQL. To see why, note that if the MFP has parts that could be fused,
+# then it must preserve the reduction key, i.e., all columns for the distinct, and
+# the fusable parts need to be: (a) free of temporal filters; (b) only contain map
+# and filter (i.e., essentially be a predicate). So, these fusable parts could just as
+# well be applied to the input to the Reduce::Distinct, and the optimizer will just
+# perform predicate pushdown to filter the input before it gets arranged. Additionally,
+# if it were the case that we would lift the predicate to enable reuse, then that would
+# mean that we could not fuse it into the reduction anyway.
