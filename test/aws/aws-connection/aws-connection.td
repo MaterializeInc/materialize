@@ -18,13 +18,13 @@ ALTER SYSTEM SET enable_connection_validation_syntax = true;
 > CREATE CONNECTION aws_assume_role
   TO AWS (ASSUME ROLE ARN 'assume-role', ASSUME ROLE SESSION NAME 'session-name');
 
-$ set-from-sql var=conn_id
+$ set-from-sql var=conn-id
 SELECT id FROM mz_connections WHERE name = 'aws_assume_role';
 
-> SELECT * FROM mz_internal.mz_aws_connections WHERE id = '${conn_id}';
-id           endpoint  region  access_key_id  access_key_id_secret_id  assume_role_arn  assume_role_session_name  principal                                            external_id                                          example_trust_policy
+> SELECT * FROM mz_internal.mz_aws_connections WHERE id = '${conn-id}';
+id           endpoint  region  access_key_id  access_key_id_secret_id  secret_access_key_secret_id  session_token  session_token_secret_id  assume_role_arn  assume_role_session_name  principal                                   external_id                                          example_trust_policy
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-"${conn_id}" <null>    <null>  <null>         <null>                   assume-role      session-name              arn:aws:iam::123456789000:role/MaterializeConnection "mz_eb5cb59b-e2fe-41f3-87ca-d2176a495345_${conn_id}" "{\"Statement\":[{\"Action\":\"sts:AssumeRole\",\"Condition\":{\"StringEquals\":{\"sts:ExternalId\":\"mz_eb5cb59b-e2fe-41f3-87ca-d2176a495345_${conn_id}\"}},\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::123456789000:role/MaterializeConnection\"}}],\"Version\":\"2012-10-17\"}"
+"${conn-id}" <null>    <null>  <null>         <null>                   <null>                       <null>         <null>                   assume-role      session-name              arn:aws:iam::123456789000:role/MaterializeConnection "mz_eb5cb59b-e2fe-41f3-87ca-d2176a495345_${conn-id}" "{\"Statement\":[{\"Action\":\"sts:AssumeRole\",\"Condition\":{\"StringEquals\":{\"sts:ExternalId\":\"mz_eb5cb59b-e2fe-41f3-87ca-d2176a495345_${conn-id}\"}},\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"arn:aws:iam::123456789000:role/MaterializeConnection\"}}],\"Version\":\"2012-10-17\"}"
 
 # Test access credentials connections.
 
@@ -33,13 +33,16 @@ id           endpoint  region  access_key_id  access_key_id_secret_id  assume_ro
 > CREATE CONNECTION aws_credentials
   TO AWS (ACCESS KEY ID = 'access_key', SECRET ACCESS KEY = SECRET aws_secret_access_key);
 
-$ set-from-sql var=conn_id
+$ set-from-sql var=conn-id
 SELECT id FROM mz_connections WHERE name = 'aws_credentials';
 
-> SELECT * FROM mz_internal.mz_aws_connections WHERE id = '${conn_id}';
-id           endpoint  region  access_key_id  access_key_id_secret_id  assume_role_arn  assume_role_session_name  principal external_id example_trust_policy
--------------------------------------------------------------------------------------------------------------------------------------------------------------
-"${conn_id}" <null>   <null>   access_key     <null>                   <null>           <null>                    <null>    <null>      <null>
+$ set-from-sql var=secret-key-secret-id
+SELECT id FROM mz_secrets WHERE name = 'aws_secret_access_key';
+
+> SELECT * FROM mz_internal.mz_aws_connections WHERE id = '${conn-id}';
+id           endpoint  region  access_key_id  access_key_id_secret_id  secret_access_key_secret_id  session_token  session_token_secret_id  assume_role_arn  assume_role_session_name  principal  external_id  example_trust_policy
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+\${conn-id}  <null>   <null>   access_key     <null>                   ${secret-key-secret-id}      <null>         <null>                   <null>           <null>                    <null>     <null>       <null>
 
 # Test access credentials connections where the access key ID is also a secret.
 
@@ -48,16 +51,16 @@ id           endpoint  region  access_key_id  access_key_id_secret_id  assume_ro
 > CREATE CONNECTION aws_credentials_with_secret
   TO AWS (ACCESS KEY ID = SECRET aws_access_key_id, SECRET ACCESS KEY = SECRET aws_secret_access_key);
 
-$ set-from-sql var=conn_id
+$ set-from-sql var=conn-id
 SELECT id FROM mz_connections WHERE name = 'aws_credentials_with_secret';
 
-$ set-from-sql var=secret_id
+$ set-from-sql var=access-key-secret-id
 SELECT id FROM mz_secrets WHERE name = 'aws_access_key_id';
 
-> SELECT * FROM mz_internal.mz_aws_connections WHERE id = '${conn_id}';
-id           endpoint  region  access_key_id  access_key_id_secret_id  assume_role_arn  assume_role_session_name  principal external_id example_trust_policy
--------------------------------------------------------------------------------------------------------------------------------------------------------------
-"${conn_id}" <null>   <null>   <null>         "${secret_id}"           <null>           <null>                    <null>    <null>      <null>
+> SELECT * FROM mz_internal.mz_aws_connections WHERE id = '${conn-id}';
+id           endpoint  region  access_key_id  access_key_id_secret_id  secret_access_key_secret_id  session_token  session_token_secret_id  assume_role_arn  assume_role_session_name  principal  external_id  example_trust_policy
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+\${conn-id}  <null>   <null>   <null>         ${access-key-secret-id}  ${secret-key-secret-id}      <null>         <null>                   <null>           <null>                    <null>     <null>       <null>
 
 # TODO: tests for validating connections.
 
@@ -72,7 +75,7 @@ contains:must specify both ACCESS KEY ID and SECRET ACCESS KEY with optional SES
 contains:must specify both ACCESS KEY ID and SECRET ACCESS KEY with optional SESSION TOKEN
 
 ! CREATE CONNECTION conn
-  TO AWS (TOKEN = 'token');
+  TO AWS (SESSION TOKEN = 'token');
 contains:must specify both ACCESS KEY ID and SECRET ACCESS KEY with optional SESSION TOKEN
 
 ! CREATE CONNECTION conn

@@ -387,11 +387,11 @@ CREATE OR REPLACE MATERIALIZED VIEW v WITH (ASSERT NOT NULL a, ASSERT NOT NULL =
 CREATE OR REPLACE MATERIALIZED VIEW v WITH (ASSERT NOT NULL = a, ASSERT NOT NULL = b, RETAIN HISTORY = FOR '1s') AS SELECT 1
 
 parse-statement
-CREATE CONNECTION awsconn TO AWS (ACCESS KEY ID 'id', ENDPOINT 'endpoint', REGION 'region', SECRET ACCESS KEY 'key', TOKEN 'token')
+CREATE CONNECTION awsconn TO AWS (ACCESS KEY ID 'id', ENDPOINT 'endpoint', REGION 'region', SECRET ACCESS KEY 'key', SESSION TOKEN 'token')
 ----
-CREATE CONNECTION awsconn TO AWS (ACCESS KEY ID = 'id', ENDPOINT = 'endpoint', REGION = 'region', SECRET ACCESS KEY = 'key', TOKEN = 'token')
+CREATE CONNECTION awsconn TO AWS (ACCESS KEY ID = 'id', ENDPOINT = 'endpoint', REGION = 'region', SECRET ACCESS KEY = 'key', SESSION TOKEN = 'token')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("awsconn")]), connection_type: Aws, if_not_exists: false, values: [ConnectionOption { name: AccessKeyId, value: Some(Value(String("id"))) }, ConnectionOption { name: Endpoint, value: Some(Value(String("endpoint"))) }, ConnectionOption { name: Region, value: Some(Value(String("region"))) }, ConnectionOption { name: SecretAccessKey, value: Some(Value(String("key"))) }, ConnectionOption { name: Token, value: Some(Value(String("token"))) }], with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("awsconn")]), connection_type: Aws, if_not_exists: false, values: [ConnectionOption { name: AccessKeyId, value: Some(Value(String("id"))) }, ConnectionOption { name: Endpoint, value: Some(Value(String("endpoint"))) }, ConnectionOption { name: Region, value: Some(Value(String("region"))) }, ConnectionOption { name: SecretAccessKey, value: Some(Value(String("key"))) }, ConnectionOption { name: SessionToken, value: Some(Value(String("token"))) }], with_options: [] })
 
 parse-statement
 CREATE CONNECTION awsconn TO AWS (ASSUME ROLE ARN 'role-arn', ASSUME ROLE SESSION NAME 'session-name')
@@ -401,11 +401,11 @@ CREATE CONNECTION awsconn TO AWS (ASSUME ROLE ARN = 'role-arn', ASSUME ROLE SESS
 CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("awsconn")]), connection_type: Aws, if_not_exists: false, values: [ConnectionOption { name: AssumeRoleArn, value: Some(Value(String("role-arn"))) }, ConnectionOption { name: AssumeRoleSessionName, value: Some(Value(String("session-name"))) }], with_options: [] })
 
 parse-statement
-CREATE CONNECTION awsconn TO AWS (ACCESS KEY ID 'id', ENDPOINT 'endpoint', REGION 'region', ASSUME ROLE ARN 'role-arn', SECRET ACCESS KEY 'key', TOKEN 'token')
+CREATE CONNECTION awsconn TO AWS (ACCESS KEY ID 'id', ENDPOINT 'endpoint', REGION 'region', ASSUME ROLE ARN 'role-arn', SECRET ACCESS KEY 'key', SESSION TOKEN 'token')
 ----
-CREATE CONNECTION awsconn TO AWS (ACCESS KEY ID = 'id', ENDPOINT = 'endpoint', REGION = 'region', ASSUME ROLE ARN = 'role-arn', SECRET ACCESS KEY = 'key', TOKEN = 'token')
+CREATE CONNECTION awsconn TO AWS (ACCESS KEY ID = 'id', ENDPOINT = 'endpoint', REGION = 'region', ASSUME ROLE ARN = 'role-arn', SECRET ACCESS KEY = 'key', SESSION TOKEN = 'token')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("awsconn")]), connection_type: Aws, if_not_exists: false, values: [ConnectionOption { name: AccessKeyId, value: Some(Value(String("id"))) }, ConnectionOption { name: Endpoint, value: Some(Value(String("endpoint"))) }, ConnectionOption { name: Region, value: Some(Value(String("region"))) }, ConnectionOption { name: AssumeRoleArn, value: Some(Value(String("role-arn"))) }, ConnectionOption { name: SecretAccessKey, value: Some(Value(String("key"))) }, ConnectionOption { name: Token, value: Some(Value(String("token"))) }], with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("awsconn")]), connection_type: Aws, if_not_exists: false, values: [ConnectionOption { name: AccessKeyId, value: Some(Value(String("id"))) }, ConnectionOption { name: Endpoint, value: Some(Value(String("endpoint"))) }, ConnectionOption { name: Region, value: Some(Value(String("region"))) }, ConnectionOption { name: AssumeRoleArn, value: Some(Value(String("role-arn"))) }, ConnectionOption { name: SecretAccessKey, value: Some(Value(String("key"))) }, ConnectionOption { name: SessionToken, value: Some(Value(String("token"))) }], with_options: [] })
 
 parse-statement
 CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES ('use1-az1', 'use1-az4'))
