@@ -12,7 +12,9 @@
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_connection_validation_syntax = true
 
-> CREATE SOURCE with_subsources FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
+> CREATE SOURCE with_subsources
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 > SELECT
   top_level_s.name as source,

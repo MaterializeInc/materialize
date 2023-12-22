@@ -50,11 +50,13 @@ goofus,gallant
   );
 
 > CREATE SOURCE metrics_test_source (a, b)
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-metrics-test-${testdrive.seed}')
   FORMAT CSV WITH 2 COLUMNS
   INCLUDE OFFSET
 
 > CREATE SOURCE upsert
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )
@@ -72,7 +74,9 @@ birdmore      geese   56
 mammalmore    moose   2
 
 # Also test a source with multiple sub-sources.
-> CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
+> CREATE SOURCE auction_house
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 # NOTE: These queries are slow to succeed because the default metrics scraping
 # interval is 30 seconds.

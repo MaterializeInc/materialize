@@ -696,57 +696,6 @@ async fn test_statement_logging_unsampled_metrics() {
     assert_eq!(expected_total, metric_value);
 }
 
-// Test that sources and sinks require an explicit `SIZE` parameter outside of
-// unsafe mode.
-#[mz_ore::test]
-fn test_source_sink_size_required() {
-    let server = test_util::TestHarness::default().start_blocking();
-    let mut client = server.connect(postgres::NoTls).unwrap();
-
-    // Sources bail without an explicit size.
-    let result = client.batch_execute("CREATE SOURCE lg FROM LOAD GENERATOR COUNTER");
-    assert_eq!(
-        result.unwrap_err().unwrap_db_error().message(),
-        "must specify either cluster or size option"
-    );
-
-    // Sources work with an explicit size.
-    client
-        .batch_execute("CREATE SOURCE lg FROM LOAD GENERATOR COUNTER WITH (SIZE '1')")
-        .unwrap();
-
-    // `ALTER SOURCE ... RESET SIZE` is banned.
-    let result = client.batch_execute("ALTER SOURCE lg RESET (SIZE)");
-    assert_eq!(
-        result.unwrap_err().unwrap_db_error().message(),
-        "must specify either cluster or size option"
-    );
-
-    client
-        .batch_execute(&format!(
-            "CREATE CONNECTION conn TO KAFKA (BROKER '{}', SECURITY PROTOCOL PLAINTEXT)",
-            &*KAFKA_ADDRS,
-        ))
-        .unwrap();
-
-    // Sinks bail without an explicit size.
-    let result = client.batch_execute("CREATE SINK snk FROM mz_sources INTO KAFKA CONNECTION conn (TOPIC 'foo') FORMAT JSON ENVELOPE DEBEZIUM");
-    assert_eq!(
-        result.unwrap_err().unwrap_db_error().message(),
-        "must specify either cluster or size option"
-    );
-
-    // Sinks work with an explicit size.
-    client.batch_execute("CREATE SINK snk FROM mz_sources INTO KAFKA CONNECTION conn (TOPIC 'foo') FORMAT JSON ENVELOPE DEBEZIUM WITH (SIZE '1')").unwrap();
-
-    // `ALTER SINK ... RESET SIZE` is banned.
-    let result = client.batch_execute("ALTER SINK snk RESET (SIZE)");
-    assert_eq!(
-        result.unwrap_err().unwrap_db_error().message(),
-        "must specify either cluster or size option"
-    );
-}
-
 // Test the POST and WS server endpoints.
 #[mz_ore::test]
 fn test_http_sql() {

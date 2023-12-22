@@ -25,8 +25,9 @@ $ kafka-ingest topic=required format=protobuf descriptor-file=required.pb messag
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE SOURCE required FROM
-  KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-required-${testdrive.seed}')
+> CREATE SOURCE required
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-required-${testdrive.seed}')
   FORMAT PROTOBUF MESSAGE '.Required' USING SCHEMA '${required-schema}'
 
 > SELECT * FROM required

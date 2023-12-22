@@ -53,10 +53,13 @@ $ kafka-create-topic topic=status-history
 ## entries we expect.
 
 > CREATE SOURCE kafka_source
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-status-history-${testdrive.seed}')
   FORMAT TEXT
 
-> CREATE SINK kafka_sink FROM kafka_source
+> CREATE SINK kafka_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM kafka_source
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -115,10 +118,13 @@ $ kafka-verify-data format=avro sink=materialize.public.kafka_sink sort-messages
 ## Confirm that the tables report statuses for multiple sources and sinks.
 
 > CREATE SOURCE kafka_source_2
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-status-history-${testdrive.seed}')
   FORMAT TEXT
 
-> CREATE SINK kafka_sink_2 FROM kafka_source_2
+> CREATE SINK kafka_sink_2
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM kafka_source_2
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-2-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM

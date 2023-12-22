@@ -22,6 +22,7 @@ $ kafka-ingest format=avro topic=avro-types-uuid schema=${uuid} timestamp=1
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE avro_types_uuid
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-types-uuid-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${uuid}'
   ENVELOPE NONE

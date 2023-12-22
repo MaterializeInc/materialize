@@ -19,7 +19,6 @@ $ kafka-ingest key-format=bytes format=bytes key-terminator=: topic=topic0 repea
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-> DROP CLUSTER IF EXISTS to_recreate CASCADE;
 > CREATE CLUSTER to_recreate SIZE '1', REPLICATION FACTOR 1;
 
 > CREATE SOURCE source0
@@ -116,4 +115,6 @@ good_source     running   <null>
 source0         stalled  "kafka: topic was recreated: partition count regressed from 4 to 2"
 source1         stalled  "kafka: topic was recreated: high watermark of partition 0 regressed from 1 to 0"
 
-> DROP CLUSTER IF EXISTS to_recreate CASCADE;
+# Testdrive expects all sources to end in a healthy state, so manufacture that
+# by dropping sources.
+> DROP CLUSTER to_recreate CASCADE;

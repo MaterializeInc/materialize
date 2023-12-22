@@ -40,7 +40,7 @@ def schemas() -> str:
 
 
 def cluster() -> str:
-    return "> CREATE CLUSTER identifiers REPLICAS (identifiers_r1 (SIZE '4'))\n"
+    return "> CREATE CLUSTER identifiers SIZE '4'\n"
 
 
 class Identifiers(Check):
@@ -114,7 +114,9 @@ class Identifiers(Check):
               ENVELOPE UPSERT;
             > CREATE MATERIALIZED VIEW {dq(self.ident["source_view"])} IN CLUSTER default AS
               SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v, COUNT(*) AS c FROM {dq(self.ident["source"])} GROUP BY LEFT(key1, 2), LEFT(f1, 1);
-            > CREATE SINK {dq(self.ident["schema"])}.{dq(self.ident["sink0"])} FROM {dq(self.ident["source_view"])}
+            > CREATE SINK {dq(self.ident["schema"])}.{dq(self.ident["sink0"])}
+              IN CLUSTER identifiers
+              FROM {dq(self.ident["source_view"])}
               INTO KAFKA CONNECTION {dq(self.ident["kafka_conn"])} (TOPIC 'sink-sink-ident0')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {dq(self.ident["csr_conn"])}
               ENVELOPE DEBEZIUM;
@@ -140,7 +142,9 @@ class Identifiers(Check):
             > CREATE MATERIALIZED VIEW {dq(self.ident["schema"])}.{dq(self.ident["mv" + i])} IN CLUSTER default AS
               SELECT {dq(self.ident["column"])}, c2 as {dq(self.ident["alias"])} FROM {dq(self.ident["schema"])}.{dq(self.ident["table"])};
             > INSERT INTO {dq(self.ident["schema"])}.{dq(self.ident["table"])} VALUES ({sq(self.ident["value1"])}, LIST[{sq(self.ident["value2"])}]::{dq(self.ident["type"])});
-            > CREATE SINK {dq(self.ident["schema"])}.{dq(self.ident["sink" + i])} FROM {dq(self.ident["source_view"])}
+            > CREATE SINK {dq(self.ident["schema"])}.{dq(self.ident["sink" + i])}
+              IN CLUSTER identifiers
+              FROM {dq(self.ident["source_view"])}
               INTO KAFKA CONNECTION {dq(self.ident["kafka_conn"])} (TOPIC 'sink-sink-ident')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {dq(self.ident["csr_conn"])}
               ENVELOPE DEBEZIUM;
@@ -173,9 +177,9 @@ class Identifiers(Check):
         {dq_print(self.ident["schema"])}
 
         > SHOW SINKS FROM {dq(self.ident["schema"])};
-        {dq_print(self.ident["sink0"])} kafka ${{arg.default-storage-size}} {dq_print(self.ident["db"] + "_" + self.ident["schema"] + "_" + self.ident["sink0"])}
-        {dq_print(self.ident["sink1"])} kafka ${{arg.default-storage-size}} {dq_print(self.ident["db"] + "_" + self.ident["schema"] + "_" + self.ident["sink1"])}
-        {dq_print(self.ident["sink2"])} kafka ${{arg.default-storage-size}} {dq_print(self.ident["db"] + "_" + self.ident["schema"] + "_" + self.ident["sink2"])}
+        {dq_print(self.ident["sink0"])} kafka 4 identifiers
+        {dq_print(self.ident["sink1"])} kafka 4 identifiers
+        {dq_print(self.ident["sink2"])} kafka 4 identifiers
 
         > SELECT * FROM {dq(self.ident["schema"])}.{dq(self.ident["mv0"])};
         3

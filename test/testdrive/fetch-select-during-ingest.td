@@ -25,6 +25,7 @@ $ kafka-create-topic topic=tail-fetch-during-ingest
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE fetch_during_ingest
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-tail-fetch-during-ingest-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE

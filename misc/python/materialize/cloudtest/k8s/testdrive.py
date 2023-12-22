@@ -57,6 +57,7 @@ class TestdriveBase:
             f"--default-timeout={default_timeout}",
             f"--log-filter={log_filter}",
             "--var=replicas=1",
+            "--var=single-replica-cluster=default",
             "--var=default-storage-size=1",
             "--var=default-replica-size=1",
             *([f"--aws-region={self.aws_region}"] if self.aws_region else []),

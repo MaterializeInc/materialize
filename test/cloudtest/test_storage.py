@@ -76,13 +76,15 @@ def test_source_creation(mz: MaterializeApplication) -> None:
               FROM KAFKA CONNECTION kafka
               (TOPIC 'testdrive-test-${testdrive.seed}')
               FORMAT BYTES
-              ENVELOPE NONE;
+              ENVELOPE NONE
+              WITH (SIZE = '1');
 
             > CREATE SOURCE source2
               FROM KAFKA CONNECTION kafka
               (TOPIC 'testdrive-test-${testdrive.seed}')
               FORMAT BYTES
-              ENVELOPE NONE;
+              ENVELOPE NONE
+              WITH (SIZE = '1');
             """
         )
     )
@@ -113,7 +115,8 @@ def test_source_resizing(mz: MaterializeApplication) -> None:
               FROM KAFKA CONNECTION kafka
               (TOPIC 'testdrive-test-${testdrive.seed}')
               FORMAT BYTES
-              ENVELOPE NONE;
+              ENVELOPE NONE
+              WITH (SIZE = '1');
             """
         )
     )

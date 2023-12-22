@@ -101,11 +101,13 @@ $ kafka-ingest format=avro topic=bar schema=${schema}
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE data_foo
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-foo-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
   WITH (TIMELINE '${testdrive.seed}-timestamps-debezium-kafka')
 
 > CREATE SOURCE data_bar
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-bar-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
   WITH (TIMELINE '${testdrive.seed}-timestamps-debezium-kafka')

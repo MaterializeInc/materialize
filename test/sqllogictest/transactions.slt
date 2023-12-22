@@ -783,7 +783,7 @@ COMMIT
 simple
 SHOW SOURCES
 ----
-s,load-generator,1,materialize_public_s
+s,load-generator,2,default
 s_progress,progress,NULL,NULL
 COMPLETE 2
 
@@ -1166,9 +1166,9 @@ SELECT * FROM blue_mv1;
 query TT
 SELECT name, id FROM mz_clusters WHERE id LIKE 'u%';
 ----
-c u3
+c u2
 default u1
-blue_compute u4
+blue_compute u3
 
 statement ok
 BEGIN;

@@ -16,6 +16,7 @@ $ kafka-create-topic topic=t0 partitions=1
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 ! CREATE SOURCE too_many_offsets
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (
       TOPIC 'testdrive-t0-${testdrive.seed}',
       START OFFSET (100, 100)

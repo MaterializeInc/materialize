@@ -29,6 +29,7 @@ $ kafka-create-topic topic=data
   );
 
 > CREATE SOURCE data
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
@@ -144,7 +145,9 @@ a  b
 1  2
 
 # Cannot create sink from unmaterialized view.
-! CREATE SINK not_mat_sink2 FROM data_view
+! CREATE SINK not_mat_sink2
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM data_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-view2-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -156,7 +159,9 @@ contains:data_view is a view, which cannot be exported as a sink
 > CREATE DEFAULT INDEX ON test5
 
 # or from an indexed unmaterialized view
-! CREATE SINK not_mat_sink2 FROM test5
+! CREATE SINK not_mat_sink2
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM test5
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-view2-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -313,6 +318,7 @@ b  c
 $ kafka-create-topic topic=mat
 
 > CREATE SOURCE mat_data
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-mat-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
@@ -337,9 +343,9 @@ a  b
 > SHOW SOURCES
 name     type    size    cluster
 --------------------------------
-data              kafka     ${arg.default-storage-size}   materialize_public_data
+data              kafka     ${arg.default-replica-size}   ${arg.single-replica-cluster}
 data_progress     progress  <null>                        <null>
-mat_data          kafka     ${arg.default-storage-size}   materialize_public_mat_data
+mat_data          kafka     ${arg.default-replica-size}   ${arg.single-replica-cluster}
 mat_data_progress progress  <null>                        <null>
 
 # If there exists another index, dropping the primary index will not #

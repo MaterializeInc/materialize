@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Run the majority of this test on its own cluster to ensure it doesn't
+# interfere with any other tests.
+> CREATE CLUSTER arrangement_sharing REPLICAS (r1 (SIZE '${arg.default-replica-size}'))
+> SET CLUSTER TO arrangement_sharing
 > SET cluster_replica = r1
 
 # from attributes/mir_unique_keys.slt
@@ -564,8 +568,7 @@ ArrangeBy[[]]
 ReduceAccumulable
 
 > DROP TABLE t1 CASCADE
-> SET cluster=default
-> DROP CLUSTER linear_join CASCADE
+> SET cluster=arrangement_sharing
 
 # from negative-multiplicities.td
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
@@ -875,13 +878,13 @@ ReduceMinsMaxes
 "ReduceInaccumulable Error Check"
 "ReduceInaccumulable"
 
-> SET CLUSTER TO default
+> SET CLUSTER TO arrangement_sharing
 
 # Check dataflows of our logging infrastructure with log_logging
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET log_filter = 'debug'
-ALTER CLUSTER default SET (MANAGED = false);
-CREATE CLUSTER REPLICA default.replica SIZE = '2', INTROSPECTION DEBUGGING = true;
+ALTER CLUSTER arrangement_sharing SET (MANAGED = false);
+CREATE CLUSTER REPLICA arrangement_sharing.replica SIZE = '2', INTROSPECTION DEBUGGING = true;
 
 > SET cluster_replica = replica;
 
@@ -915,7 +918,3 @@ CREATE CLUSTER REPLICA default.replica SIZE = '2', INTROSPECTION DEBUGGING = tru
 "Arrange Timely(MessagesSent)"
 "Arrange Timely(Operates)"
 "Arrange Timely(Parks)"
-
-# Reset default cluster into its previous state so that other tests can expect it to be unchanged
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-DROP CLUSTER REPLICA default.replica
