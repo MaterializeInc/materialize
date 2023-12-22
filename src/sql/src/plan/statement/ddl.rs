@@ -559,7 +559,7 @@ pub fn plan_create_webhook_source(
 
 pub fn plan_create_source(
     scx: &StatementContext,
-    stmt: CreateSourceStatement<Aug>,
+    mut stmt: CreateSourceStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let CreateSourceStatement {
         name,
@@ -1190,8 +1190,6 @@ pub fn plan_create_source(
         }
     }
 
-    let cluster_config = source_sink_cluster_config(scx, "source", in_cluster.as_ref(), size)?;
-
     let timestamp_interval = match timestamp_interval {
         Some(duration) => {
             let min = scx.catalog.system_vars().min_timestamp_interval();
@@ -1246,6 +1244,18 @@ pub fn plan_create_source(
             name: full_name.to_string(),
             item_type: item.item_type(),
         });
+    }
+
+    let cluster_config = source_sink_cluster_config(scx, "source", in_cluster.as_ref(), size)?;
+    // If using the default cluster, ensure we record which cluster that is.
+    match &cluster_config {
+        SourceSinkClusterConfig::Existing { id } if stmt.in_cluster.is_none() => {
+            stmt.in_cluster = Some(ResolvedClusterName {
+                id: *id,
+                print_name: None,
+            })
+        }
+        _ => {}
     }
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSource(stmt))?;
@@ -2202,10 +2212,8 @@ generate_extracted_config!(CreateSinkOption, (Size, String), (Snapshot, bool));
 
 pub fn plan_create_sink(
     scx: &StatementContext,
-    stmt: CreateSinkStatement<Aug>,
+    mut stmt: CreateSinkStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt.clone()))?;
-
     let CreateSinkStatement {
         name,
         in_cluster,
@@ -2215,7 +2223,7 @@ pub fn plan_create_sink(
         envelope,
         if_not_exists,
         with_options,
-    } = stmt;
+    } = stmt.clone();
 
     const ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] =
         &[CreateSinkOptionName::Size, CreateSinkOptionName::Snapshot];
@@ -2364,10 +2372,22 @@ pub fn plan_create_sink(
         seen: _,
     } = with_options.try_into()?;
 
-    let cluster_config = source_sink_cluster_config(scx, "sink", in_cluster.as_ref(), size)?;
-
     // WITH SNAPSHOT defaults to true
     let with_snapshot = snapshot.unwrap_or(true);
+
+    let cluster_config = source_sink_cluster_config(scx, "sink", in_cluster.as_ref(), size)?;
+    // If using the default cluster, ensure we record which cluster that is.
+    match &cluster_config {
+        SourceSinkClusterConfig::Existing { id } if stmt.in_cluster.is_none() => {
+            stmt.in_cluster = Some(ResolvedClusterName {
+                id: *id,
+                print_name: None,
+            })
+        }
+        _ => {}
+    }
+
+    let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt))?;
 
     Ok(Plan::CreateSink(CreateSinkPlan {
         name,

@@ -74,7 +74,7 @@ pub(crate) async fn migrate(
 
     // Perform per-item AST migrations.
     let conn_cat = state.for_system_session();
-    rewrite_items(tx, &conn_cat, |_tx, _conn_cat, stmt| {
+    rewrite_items(tx, &conn_cat, |_tx, conn_cat, stmt| {
         let catalog_version = catalog_version.clone();
         Box::pin(async move {
             // Add per-item AST migrations below.
@@ -94,6 +94,7 @@ pub(crate) async fn migrate(
                 ast_rewrite_create_sink_into_kafka_options_0_80_0(stmt)?;
             }
             ast_rewrite_rewrite_type_schemas_0_81_0(stmt);
+            ast_rewrite_linked_cluster_sizes(stmt, &conn_cat.state);
 
             Ok(())
         })
@@ -322,6 +323,72 @@ fn ast_rewrite_rewrite_type_schemas_0_81_0(stmt: &mut Statement<Raw>) {
     }
 
     Rewriter.visit_statement_mut(stmt);
+}
+
+/// Rewrite all non-`pg_catalog` system types to have the correct schema.
+fn ast_rewrite_linked_cluster_sizes<'a>(
+    stmt: &'a mut Statement<Raw>,
+    state: &'a std::borrow::Cow<'a, CatalogState>,
+) {
+    use mz_sql::ast::visit_mut::VisitMut;
+
+    struct Rewriter<'a> {
+        state: &'a std::borrow::Cow<'a, CatalogState>,
+    }
+
+    impl<'ast> VisitMut<'ast, Raw> for Rewriter<'_> {
+        fn visit_create_source_statement_mut(
+            &mut self,
+            node: &'ast mut mz_sql_parser::ast::CreateSourceStatement<Raw>,
+        ) {
+            // If no specified cluster and no specified size, then this is an
+            // "old"-style source that used a linked cluster of the default
+            // size.
+            if node.in_cluster.is_none()
+                && !node
+                    .with_options
+                    .iter()
+                    .any(|o| o.name == mz_sql_parser::ast::CreateSourceOptionName::Size)
+            {
+                node.with_options
+                    .push(mz_sql_parser::ast::CreateSourceOption {
+                        name: mz_sql_parser::ast::CreateSourceOptionName::Size,
+                        value: Some(mz_sql_parser::ast::WithOptionValue::Value(
+                            mz_sql_parser::ast::Value::String(
+                                self.state.default_linked_cluster_size(),
+                            ),
+                        )),
+                    })
+            }
+            visit_mut::visit_create_source_statement_mut(self, node);
+        }
+        fn visit_create_sink_statement_mut(
+            &mut self,
+            node: &'ast mut mz_sql_parser::ast::CreateSinkStatement<Raw>,
+        ) {
+            // If no specified cluster and no specified size, then this is an
+            // "old"-style sink that used a linked cluster of the default size.
+            if node.in_cluster.is_none()
+                && !node
+                    .with_options
+                    .iter()
+                    .any(|o| o.name == mz_sql_parser::ast::CreateSinkOptionName::Size)
+            {
+                node.with_options
+                    .push(mz_sql_parser::ast::CreateSinkOption {
+                        name: mz_sql_parser::ast::CreateSinkOptionName::Size,
+                        value: Some(mz_sql_parser::ast::WithOptionValue::Value(
+                            mz_sql_parser::ast::Value::String(
+                                self.state.default_linked_cluster_size(),
+                            ),
+                        )),
+                    })
+            }
+            visit_mut::visit_create_sink_statement_mut(self, node);
+        }
+    }
+
+    Rewriter { state }.visit_statement_mut(stmt);
 }
 
 fn _add_to_audit_log(
