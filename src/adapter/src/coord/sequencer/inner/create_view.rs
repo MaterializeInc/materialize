@@ -42,7 +42,7 @@ impl Coordinator {
         .await;
     }
 
-    /// Processes as many peek stages as possible.
+    /// Processes as many `create view` stages as possible.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn sequence_create_view_stage(
         &mut self,
@@ -186,32 +186,30 @@ impl Coordinator {
             ..
         }: CreateViewFinish,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let oid = self.catalog_mut().allocate_oid()?;
-
-        let mut ops = vec![];
-        ops.extend(
+        let ops = itertools::chain(
             drop_ids
                 .iter()
                 .map(|id| catalog::Op::DropObject(ObjectId::Item(*id))),
-        );
-        ops.push(catalog::Op::CreateItem {
-            id,
-            oid,
-            name: name.clone(),
-            item: CatalogItem::View(View {
-                create_sql: create_sql.clone(),
-                raw_expr,
-                desc: RelationDesc::new(optimized_expr.typ(), column_names.clone()),
-                optimized_expr,
-                conn_id: if temporary {
-                    Some(ctx.session().conn_id().clone())
-                } else {
-                    None
-                },
-                resolved_ids: resolved_ids.clone(),
+            std::iter::once(catalog::Op::CreateItem {
+                id,
+                oid: self.catalog_mut().allocate_oid()?,
+                name: name.clone(),
+                item: CatalogItem::View(View {
+                    create_sql: create_sql.clone(),
+                    raw_expr,
+                    desc: RelationDesc::new(optimized_expr.typ(), column_names.clone()),
+                    optimized_expr,
+                    conn_id: if temporary {
+                        Some(ctx.session().conn_id().clone())
+                    } else {
+                        None
+                    },
+                    resolved_ids: resolved_ids.clone(),
+                }),
+                owner_id: *ctx.session().current_role_id(),
             }),
-            owner_id: *ctx.session().current_role_id(),
-        });
+        )
+        .collect::<Vec<_>>();
 
         match self.catalog_transact(Some(ctx.session()), ops).await {
             Ok(()) => Ok(ExecuteResponse::CreatedView),
