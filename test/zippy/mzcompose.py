@@ -114,13 +114,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--size",
-        type=int,
-        default=None,
-        help="SIZE to use for sources, sinks, materialized views and clusters",
-    )
-
-    parser.add_argument(
         "--cockroach-tag",
         type=str,
         default=Cockroach.DEFAULT_COCKROACH_TAG,
@@ -162,7 +155,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             },
         ),
         Materialized(
-            default_size=args.size or Materialized.Size.DEFAULT_SIZE,
             external_minio=True,
             external_cockroach=True,
             sanity_restart=False,
