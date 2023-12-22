@@ -15,7 +15,7 @@ SERVICES = [
     Service(
         name="js",
         config={
-            "image": "node:14.15.0",
+            "image": "node:20.10.0",
             "volumes": [
                 "../../../:/workdir",
             ],
