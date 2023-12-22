@@ -27,6 +27,7 @@ use mz_storage_types::errors::{
 };
 use mz_storage_types::parameters::StorageMaxInflightBytesConfig;
 use mz_storage_types::sources::encoding::*;
+use mz_storage_types::sources::envelope::{KeyEnvelope, NoneEnvelope, UpsertEnvelope, UpsertStyle};
 use mz_storage_types::sources::*;
 use mz_timely_util::builder_async::PressOnDropButton;
 use mz_timely_util::operator::CollectionExt;

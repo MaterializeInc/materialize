@@ -16,10 +16,11 @@ use mz_expr::EvalError;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row, Timestamp};
 use mz_storage_types::errors::{DataflowError, EnvelopeError};
-use mz_storage_types::sources::{
+use mz_storage_types::sources::envelope::{
     DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
-    DebeziumTransactionMetadata, MzOffset,
+    DebeziumTransactionMetadata,
 };
+use mz_storage_types::sources::MzOffset;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Capability, OkErr, Operator};
 use timely::dataflow::{Scope, ScopeParent};

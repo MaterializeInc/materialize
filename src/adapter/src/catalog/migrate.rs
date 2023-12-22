@@ -139,7 +139,7 @@ async fn ast_rewrite_postgres_source_timeline_id_0_80_0(
     use mz_sql_parser::ast::{PgConfigOption, PgConfigOptionName, Value, WithOptionValue};
     use mz_storage_types::connections::inline::IntoInlineConnection;
     use mz_storage_types::connections::PostgresConnection;
-    use mz_storage_types::sources::{
+    use mz_storage_types::sources::postgres::{
         PostgresSourcePublicationDetails, ProtoPostgresSourcePublicationDetails,
     };
     use prost::Message;

@@ -14,7 +14,8 @@ use std::{
 
 use mz_ore::now::to_datetime;
 use mz_repr::{Datum, Row};
-use mz_storage_types::sources::{Generator, MzOffset};
+use mz_storage_types::sources::load_generator::Generator;
+use mz_storage_types::sources::MzOffset;
 use rand::{distributions::Standard, rngs::SmallRng, Rng, SeedableRng};
 use timely::dataflow::operators::to_stream::Event;
 
