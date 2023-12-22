@@ -78,6 +78,8 @@ IGNORE_RE = re.compile(
     | cluster-clusterd[12]-1\ .*\ halting\ process:\ new\ timely\ configuration\ does\ not\ match\ existing\ timely\ configuration
     # Emitted by tests employing explicit mz_panic()
     | forced\ panic
+    # Emitted by broken_statements.slt in order to stop panic propagation, as 'forced panic' will unwantedly panic the `environmentd` thread.
+    | forced\ optimizer\ panic
     # Expected once compute cluster has panicked, brings no new information
     | timely\ communication\ error:
     # Expected once compute cluster has panicked, only happens in CI
@@ -86,8 +88,10 @@ IGNORE_RE = re.compile(
     | restart-materialized-1\ .*relation\ \\"fence\\"\ does\ not\ exist
     # Expected when CRDB is corrupted
     | restart-materialized-1\ .*relation\ "consensus"\ does\ not\ exist
-    # Will print a separate panic line which will be handled and contains the relevant information
+    # Will print a separate panic line which will be handled and contains the relevant information (old style) TODO(#24260): remove this
     | internal\ error:\ panic\ at\ the\ `.*`\ optimization\ stage
+    # Will print a separate panic line which will be handled and contains the relevant information (new style)
+    | internal\ error:\ unexpected\ panic\ during\ query\ optimization
     # redpanda INFO logging
     | larger\ sizes\ prevent\ running\ out\ of\ memory
     # Old versions won't support new parameters

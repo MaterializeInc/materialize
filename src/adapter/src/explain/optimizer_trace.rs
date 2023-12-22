@@ -44,6 +44,12 @@ use crate::explain::Explainable;
 /// the collected trace as a vector of [`TraceEntry`] instances.
 pub(crate) struct OptimizerTrace(dispatcher::Dispatch);
 
+impl std::fmt::Debug for OptimizerTrace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("OptimizerTrace").finish() // Skip the dispatch field
+    }
+}
+
 impl OptimizerTrace {
     /// Create a new [`OptimizerTrace`].
     ///

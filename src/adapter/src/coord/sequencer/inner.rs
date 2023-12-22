@@ -2559,21 +2559,37 @@ impl Coordinator {
         plan: plan::ExplainPlanPlan,
         target_cluster: TargetCluster,
     ) {
-        let result = match plan.explainee {
-            Explainee::Statement(_) => {
-                let result = self.explain_statement(&mut ctx, plan, target_cluster);
-                result.await
+        match &plan.explainee {
+            Explainee::Statement(stmt) => {
+                if self
+                    .catalog()
+                    .system_config()
+                    .enable_off_thread_optimization()
+                {
+                    match stmt {
+                        plan::ExplaineeStatement::CreateMaterializedView { .. } => {
+                            self.explain_create_materialized_view(ctx, plan).await;
+                        }
+                        _ => {
+                            let result =
+                                self.explain_statement(&mut ctx, plan, target_cluster).await;
+                            ctx.retire(result);
+                        }
+                    }
+                } else {
+                    let result = self.explain_statement(&mut ctx, plan, target_cluster).await;
+                    ctx.retire(result);
+                }
             }
             Explainee::MaterializedView(_) => {
                 let result = self.explain_materialized_view(&ctx, plan);
-                result
+                ctx.retire(result);
             }
             Explainee::Index(_) => {
                 let result = self.explain_index(&ctx, plan);
-                result
+                ctx.retire(result);
             }
         };
-        ctx.retire(result);
     }
 
     fn explain_materialized_view(

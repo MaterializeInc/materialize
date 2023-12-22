@@ -38,7 +38,7 @@ pub struct PlanTrace<T> {
 }
 
 /// A struct created as a reflection of a [`trace_plan`] call.
-#[allow(missing_debug_implementations)]
+#[derive(Debug)]
 pub struct TraceEntry<T> {
     /// The instant at which an entry was created.
     ///
