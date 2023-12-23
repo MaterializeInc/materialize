@@ -318,15 +318,15 @@ pub enum SchemaPiece {
 impl SchemaPiece {
     /// Returns whether the schema node is "underlyingly" an Int (but possibly a logicalType typedef)
     pub fn is_underlying_int(&self) -> bool {
-        self.underlying_int_value(0).is_some()
+        self.try_make_int_value(0).is_some()
     }
     /// Returns whether the schema node is "underlyingly" an Int64 (but possibly a logicalType typedef)
     pub fn is_underlying_long(&self) -> bool {
-        self.underlying_long_value(0).is_some()
+        self.try_make_long_value(0).is_some()
     }
     /// Constructs an `avro::Value` if this is of underlying int type.
     /// Guaranteed to be `Some` when `is_underlying_int` is `true`.
-    pub fn underlying_int_value(&self, int: i32) -> Option<Result<AvroValue, AvroError>> {
+    pub fn try_make_int_value(&self, int: i32) -> Option<Result<AvroValue, AvroError>> {
         match self {
             SchemaPiece::Int => Some(Ok(AvroValue::Int(int))),
             // TODO[btv] - should we bounds-check the date here? We
@@ -337,7 +337,7 @@ impl SchemaPiece {
     }
     /// Constructs an `avro::Value` if this is of underlying long type.
     /// Guaranteed to be `Some` when `is_underlying_long` is `true`.
-    pub fn underlying_long_value(&self, long: i64) -> Option<Result<AvroValue, AvroError>> {
+    pub fn try_make_long_value(&self, long: i64) -> Option<Result<AvroValue, AvroError>> {
         match self {
             SchemaPiece::Long => Some(Ok(AvroValue::Long(long))),
             SchemaPiece::TimestampMilli => Some(build_ts_value(long, TsUnit::Millis)),
@@ -1734,7 +1734,7 @@ impl<'a> SchemaNode<'a> {
                                 .ok_or_else(|| {
                                     ParseSchemaError(format!("{} is not a 32-bit integer", n))
                                 })?;
-                        piece.underlying_int_value(i).unwrap().map_err(|e| {
+                        piece.try_make_int_value(i).unwrap().map_err(|e| {
                             ParseSchemaError(format!("invalid default int {i}: {e}"))
                         })?
                     }
@@ -1742,7 +1742,7 @@ impl<'a> SchemaNode<'a> {
                         let i = n.as_i64().ok_or_else(|| {
                             ParseSchemaError(format!("{} is not a 64-bit integer", n))
                         })?;
-                        piece.underlying_long_value(i).unwrap().map_err(|e| {
+                        piece.try_make_long_value(i).unwrap().map_err(|e| {
                             ParseSchemaError(format!("invalid default long {i}: {e}"))
                         })?
                     }
