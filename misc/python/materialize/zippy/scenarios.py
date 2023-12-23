@@ -26,7 +26,13 @@ from materialize.zippy.kafka_actions import (
 )
 from materialize.zippy.kafka_capabilities import Envelope
 from materialize.zippy.minio_actions import MinioRestart, MinioStart
-from materialize.zippy.mz_actions import KillClusterd, MzRestart, MzStart, MzStop
+from materialize.zippy.mz_actions import (
+    KillClusterd,
+    MzRestart,
+    MzStart,
+    MzStartParameterized,
+    MzStop,
+)
 from materialize.zippy.peek_actions import PeekCancellation
 from materialize.zippy.pg_cdc_actions import CreatePostgresCdcTable
 from materialize.zippy.postgres_actions import (
@@ -140,6 +146,33 @@ class UserTables(Scenario):
             ValidateView: 20,
             DML: 30,
         }
+
+
+class UserTablesTogglePersistTxn(Scenario):
+    """A Zippy test using user tables with toggling persist_txn."""
+
+    def config(self) -> dict[ActionOrFactory, float]:
+        workload: dict[ActionOrFactory, float] = {
+            MzStop: 10,
+            CreateTableParameterized(): 10,
+            CreateViewParameterized(): 10,
+            ValidateTable: 10,
+            ValidateView: 10,
+            DML: 50,
+        }
+
+        starts: dict[ActionOrFactory, float] = {}
+        for persist_txn in ["off", "eager"]:
+            starts[
+                MzStartParameterized(
+                    additional_system_parameter_defaults={
+                        "persist_txn_tables": persist_txn
+                    }
+                )
+            ] = 1
+
+        workload.update(starts)
+        return workload
 
 
 class DebeziumPostgres(Scenario):

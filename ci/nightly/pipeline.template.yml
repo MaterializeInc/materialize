@@ -324,6 +324,17 @@ steps:
               composition: zippy
               args: [--scenario=UserTables, --actions=10000, --max-execution-time=30m]
 
+      - id: zippy-user-tables-persist-txn
+        label: "Zippy User Tables + toggle persist-txn"
+        timeout_in_minutes: 180
+        agents:
+          queue: linux-x86_64
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: zippy
+              args: [--scenario=UserTablesTogglePersistTxn, --actions=10000, --max-execution-time=30m]
+
       - id: zippy-postgres-cdc
         label: "Zippy Postgres CDC"
         timeout_in_minutes: 120

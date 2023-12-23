@@ -9,12 +9,38 @@
 
 
 from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.materialized import Materialized
 from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.crdb_capabilities import CockroachIsRunning
-from materialize.zippy.framework import Action, Capability
+from materialize.zippy.framework import Action, ActionFactory, Capabilities, Capability
 from materialize.zippy.minio_capabilities import MinioIsRunning
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.view_capabilities import ViewExists
+
+
+class MzStartParameterized(ActionFactory):
+    """Starts a Mz instance with custom paramters."""
+
+    @classmethod
+    def requires(cls) -> set[type[Capability]]:
+        return {CockroachIsRunning, MinioIsRunning}
+
+    @classmethod
+    def incompatible_with(cls) -> set[type[Capability]]:
+        return {MzIsRunning}
+
+    def __init__(
+        self, additional_system_parameter_defaults: dict[str, str] = {}
+    ) -> None:
+        self.additional_system_parameter_defaults = additional_system_parameter_defaults
+
+    def new(self, capabilities: Capabilities) -> list[Action]:
+        return [
+            MzStart(
+                capabilities=capabilities,
+                additional_system_parameter_defaults=self.additional_system_parameter_defaults,
+            )
+        ]
 
 
 class MzStart(Action):
@@ -28,8 +54,28 @@ class MzStart(Action):
     def incompatible_with(cls) -> set[type[Capability]]:
         return {MzIsRunning}
 
+    def __init__(
+        self,
+        capabilities: Capabilities,
+        additional_system_parameter_defaults: dict[str, str] = {},
+    ) -> None:
+        self.additional_system_parameter_defaults = additional_system_parameter_defaults
+        super().__init__(capabilities)
+
     def run(self, c: Composition) -> None:
-        c.up("materialized")
+        print(
+            f"Starting Mz with additional_system_parameter_defaults = {self.additional_system_parameter_defaults}"
+        )
+
+        with c.override(
+            Materialized(
+                external_minio=True,
+                external_cockroach=True,
+                sanity_restart=False,
+                additional_system_parameter_defaults=self.additional_system_parameter_defaults,
+            )
+        ):
+            c.up("materialized")
 
         for config_param in [
             "max_tables",
