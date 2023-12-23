@@ -229,7 +229,7 @@ u5  foo  true  1  1
 statement ok
 ALTER CLUSTER foo SET (REPLICATION FACTOR 2)
 
-statement error db error: ERROR: cannot create source in cluster with more than one replica
+statement error cannot create source in cluster with more than one replica
 CREATE SOURCE loadgen IN CLUSTER foo FROM LOAD GENERATOR COUNTER
 
 query TTT
@@ -387,7 +387,7 @@ CREATE CLUSTER foo SIZE '1', replication factor 1
 statement ok
 CREATE SOURCE loadgen IN CLUSTER foo FROM LOAD GENERATOR COUNTER
 
-statement error db error: ERROR: cannot create more than one replica of a cluster containing sources or sinks
+statement error cannot create more than one replica of a cluster containing sources or sinks
 ALTER CLUSTER foo SET (REPLICATION FACTOR 2)
 
 statement ok
