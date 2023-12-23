@@ -27,9 +27,8 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{adt::jsonb::Jsonb, Datum, Diff, GlobalId, Row};
 use mz_ssh_util::tunnel::SshTunnelStatus;
 use mz_storage_types::errors::ContextCreationError;
-use mz_storage_types::sources::{
-    KafkaMetadataKind, KafkaSourceConnection, MzOffset, SourceTimestamp,
-};
+use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
+use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use mz_timely_util::order::Partitioned;

@@ -580,8 +580,8 @@ impl Source {
                     Some("debezium")
                 }
                 SourceEnvelope::Upsert(upsert_envelope) => match upsert_envelope.style {
-                    mz_storage_types::sources::UpsertStyle::Default(_) => Some("upsert"),
-                    mz_storage_types::sources::UpsertStyle::Debezium { .. } => {
+                    mz_storage_types::sources::envelope::UpsertStyle::Default(_) => Some("upsert"),
+                    mz_storage_types::sources::envelope::UpsertStyle::Debezium { .. } => {
                         // NOTE(aljoscha): Should we somehow mark that this is
                         // using upsert internally? See note above about
                         // DEBEZIUM.

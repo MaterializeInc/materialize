@@ -9,7 +9,8 @@
 
 use mz_ore::now::NowFn;
 use mz_repr::{Datum, Row};
-use mz_storage_types::sources::{Generator, MzOffset};
+use mz_storage_types::sources::load_generator::Generator;
+use mz_storage_types::sources::MzOffset;
 use timely::dataflow::operators::to_stream::Event;
 
 pub struct Counter {

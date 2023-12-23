@@ -52,12 +52,17 @@ use mz_storage_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
     ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
 };
-use mz_storage_types::sources::{
-    GenericSourceConnection, KafkaMetadataKind, KafkaSourceConnection, KeyEnvelope, LoadGenerator,
-    LoadGeneratorSourceConnection, PostgresSourceConnection, PostgresSourcePublicationDetails,
-    ProtoPostgresSourcePublicationDetails, SourceConnection, SourceDesc, SourceEnvelope,
-    TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
+use mz_storage_types::sources::envelope::{
+    KeyEnvelope, SourceEnvelope, UnplannedSourceEnvelope, UpsertStyle,
 };
+use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
+use mz_storage_types::sources::load_generator::{LoadGenerator, LoadGeneratorSourceConnection};
+use mz_storage_types::sources::postgres::{
+    PostgresSourceConnection, PostgresSourcePublicationDetails,
+    ProtoPostgresSourcePublicationDetails,
+};
+use mz_storage_types::sources::testscript::TestScriptSourceConnection;
+use mz_storage_types::sources::{GenericSourceConnection, SourceConnection, SourceDesc, Timeline};
 use prost::Message;
 
 use crate::ast::display::AstDisplay;
