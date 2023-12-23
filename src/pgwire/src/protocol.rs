@@ -1019,10 +1019,7 @@ where
             let row_desc = portal.desc.relation_desc.clone();
             match &mut portal.state {
                 PortalState::NotStarted => {
-                    // Start a transaction if we aren't in one. Postgres does this both here and
-                    // in bind. We don't do it in bind because I'm not sure what purpose it would
-                    // serve us (i.e., I'm not aware of a pgtest that would differ between us and
-                    // Postgres).
+                    // Start a transaction if we aren't in one.
                     self.start_transaction(Some(1));
                     match self
                         .adapter_client
