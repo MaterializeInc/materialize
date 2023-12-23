@@ -90,11 +90,6 @@ pub enum AdapterError {
     },
     /// The selection value for a table mutation operation refers to an invalid object.
     InvalidTableMutationSelection,
-    /// An operation attempted to create an illegal item in a
-    /// storage-only cluster
-    BadItemInStorageCluster {
-        cluster_name: String,
-    },
     /// Expression violated a column's constraint
     ConstraintViolation(NotNullViolation),
     /// Transaction cluster was dropped in the middle of a transaction.
@@ -370,7 +365,6 @@ impl AdapterError {
             // range bounds
             AdapterError::AbsurdSubscribeBounds { .. } => SqlState::DATA_EXCEPTION,
             AdapterError::AmbiguousSystemColumnReference => SqlState::FEATURE_NOT_SUPPORTED,
-            AdapterError::BadItemInStorageCluster { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Catalog(e) => match &e.kind {
                 mz_catalog::memory::error::ErrorKind::VarError(e) => match e {
                     VarError::ConstrainedParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
@@ -518,9 +512,6 @@ impl fmt::Display for AdapterError {
             AdapterError::InvalidLogDependency { object_type, .. } => {
                 write!(f, "{object_type} objects cannot depend on log sources")
             }
-            AdapterError::BadItemInStorageCluster { .. } => f.write_str(
-                "cannot create this kind of item in a cluster that contains sources or sinks",
-            ),
             AdapterError::InvalidClusterReplicaAz { az, expected: _ } => {
                 write!(f, "unknown cluster replica availability zone {az}",)
             }
