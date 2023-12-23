@@ -148,7 +148,7 @@ const client = new Client({
 async function main() {
     await client.connect();
     const res = await client.query(
-        `CREATE SOURCE counter FROM LOAD GENERATOR COUNTER WITH (SIZE = '3xsmall');`
+        `CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;`
         );
     console.log(res);
 }

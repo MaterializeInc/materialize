@@ -73,25 +73,21 @@ Sources are the first step in most Materialize projects.
     CREATE SOURCE purchases
         FROM KAFKA CONNECTION ecommerce_kafka_connection (TOPIC 'mysql.shop.purchases')
         FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
-        ENVELOPE DEBEZIUM
-        WITH (SIZE = '3xsmall');
+        ENVELOPE DEBEZIUM;
 
     CREATE SOURCE items
         FROM KAFKA CONNECTION ecommerce_kafka_connection (TOPIC 'mysql.shop.items')
         FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
-        ENVELOPE DEBEZIUM
-        WITH (SIZE = '3xsmall');
+        ENVELOPE DEBEZIUM;
 
     CREATE SOURCE users
         FROM KAFKA CONNECTION ecommerce_kafka_connection (TOPIC 'mysql.shop.users')
         FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
-        ENVELOPE DEBEZIUM
-        WITH (SIZE = '3xsmall');
+        ENVELOPE DEBEZIUM;
 
     CREATE SOURCE json_pageviews
         FROM KAFKA CONNECTION ecommerce_kafka_connection (TOPIC 'pageviews')
-        FORMAT BYTES
-        WITH (SIZE = '3xsmall');
+        FORMAT BYTES;
     ```
 
     Now if you run `SHOW SOURCES;`, you should see the four sources we created:

@@ -53,9 +53,7 @@ Field                                | Value     | Description
 
 ### `WITH` options
 
-Field                                | Value     | Description
--------------------------------------|-----------|-------------------------------------
-`SIZE`                               | `text`    | The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`, `xlarge`. Required if the `IN CLUSTER` option is not specified.
+No options yet.
 
 ## Supported formats
 
@@ -81,8 +79,7 @@ To create a source that uses the standard key-value convention to support insert
 CREATE SOURCE kafka_upsert
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'events')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-  ENVELOPE UPSERT
-  WITH (SIZE = '3xsmall');
+  ENVELOPE UPSERT;
 ```
 
 Note that:
@@ -118,8 +115,7 @@ Materialize provides a dedicated envelope (`ENVELOPE DEBEZIUM`) to decode Kafka 
 CREATE SOURCE kafka_repl
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'pg_repl.public.table1')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-  ENVELOPE DEBEZIUM
-  WITH (SIZE = '3xsmall');
+  ENVELOPE DEBEZIUM;
 ```
 
 Any materialized view defined on top of this source will be incrementally updated as new change events stream in through Kafka, as a result of `INSERT`, `UPDATE` and `DELETE` operations in the original database.
@@ -190,8 +186,7 @@ CREATE SOURCE kafka_metadata
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   KEY FORMAT TEXT
   VALUE FORMAT TEXT
-  INCLUDE KEY AS renamed_id
-  WITH (SIZE = '3xsmall');
+  INCLUDE KEY AS renamed_id;
 ```
 
 Note that:
@@ -213,8 +208,7 @@ CREATE SOURCE kafka_metadata
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   INCLUDE HEADER 'c_id' AS client_id, HEADER 'key' AS encryption_key BYTES,
-  ENVELOPE NONE
-  WITH (SIZE = '3xsmall');
+  ENVELOPE NONE;
 ```
 
 Headers can be queried as any other column in the source:
@@ -249,8 +243,7 @@ CREATE SOURCE kafka_metadata
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'data')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   INCLUDE PARTITION, OFFSET, TIMESTAMP AS ts
-  ENVELOPE NONE
-  WITH (SIZE = '3xsmall');
+  ENVELOPE NONE;
 ```
 
 ```sql
@@ -275,8 +268,7 @@ CREATE SOURCE kafka_offset
     -- the second partition at 10, and the third partition at 100.
     START OFFSET (0, 10, 100)
   )
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-  WITH (SIZE = '3xsmall');
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
 ```
 
 Note that:
@@ -561,8 +553,7 @@ For step-by-step instructions on creating SSH tunnel connections and configuring
 ```sql
 CREATE SOURCE avro_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-  WITH (SIZE = '3xsmall');
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
 ```
 
 {{< /tab >}}
@@ -571,8 +562,7 @@ CREATE SOURCE avro_source
 ```sql
 CREATE SOURCE json_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT JSON
-  WITH (SIZE = '3xsmall');
+  FORMAT JSON;
 ```
 
 ```sql
@@ -597,8 +587,7 @@ manually, you can use [this **JSON parsing widget**](/sql/types/jsonb/#parsing)!
 ```sql
 CREATE SOURCE proto_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-  WITH (SIZE = '3xsmall');
+  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
 ```
 
 **Using an inline schema**
@@ -633,8 +622,7 @@ If you're not using a schema registry, you can use the `MESSAGE...SCHEMA` clause
   ```sql
   CREATE SOURCE proto_source
     FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-    FORMAT PROTOBUF MESSAGE 'Batch' USING SCHEMA '\x0a300a0d62696...'
-    WITH (SIZE = '3xsmall');
+    FORMAT PROTOBUF MESSAGE 'Batch' USING SCHEMA '\x0a300a0d62696...';
   ```
 
   For more details about Protobuf message names and descriptors, check the
@@ -647,8 +635,7 @@ If you're not using a schema registry, you can use the `MESSAGE...SCHEMA` clause
 CREATE SOURCE text_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT TEXT
-  ENVELOPE UPSERT
-  WITH (SIZE = '3xsmall');
+  ENVELOPE UPSERT;
 ```
 
 {{< /tab >}}
@@ -657,31 +644,11 @@ CREATE SOURCE text_source
 ```sql
 CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT CSV WITH 3 COLUMNS
-  WITH (SIZE = '3xsmall');
+  FORMAT CSV WITH 3 COLUMNS;
 ```
 
 {{< /tab >}}
 {{< /tabs >}}
-
-### Sizing a source
-
-To provision a specific amount of CPU and memory to a source on creation, use the `SIZE` option:
-
-```sql
-CREATE SOURCE avro_source
-  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-  WITH (SIZE = '3xsmall');
-```
-
-To resize the source after creation:
-
-```sql
-ALTER SOURCE avro_source SET (SIZE = 'large');
-```
-
-The smallest source size (`3xsmall`) is a resonable default to get started. For more details on sizing sources, check the [`CREATE SOURCE`](../#sizing-a-source) documentation page.
 
 ## Related pages
 

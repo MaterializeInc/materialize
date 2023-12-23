@@ -40,9 +40,7 @@ _src_name_  | The name for the source.
 
 ### `WITH` options
 
-Field                                | Value     | Description
--------------------------------------|-----------|-------------------------------------
-`SIZE`                               | `text`    | The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`, `xlarge`. Required if the `IN CLUSTER` option is not specified.
+No options yet.
 
 ## Description
 
@@ -208,8 +206,7 @@ To create a load generator source that emits the next number in the sequence eve
 ```sql
 CREATE SOURCE counter
   FROM LOAD GENERATOR COUNTER
-  (TICK INTERVAL '500ms')
-  WITH (SIZE = '3xsmall');
+  (TICK INTERVAL '500ms');
 ```
 
 To examine the counter:
@@ -233,8 +230,7 @@ To create a load generator source that simulates an auction house and emits new 
 CREATE SOURCE auction_house
   FROM LOAD GENERATOR AUCTION
   (TICK INTERVAL '1s')
-  FOR ALL TABLES
-  WITH (SIZE = '3xsmall');
+  FOR ALL TABLES;
 ```
 
 To display the created subsources:
@@ -274,8 +270,7 @@ To create a load generator source that simulates an online marketing campaign:
 ```sql
 CREATE SOURCE marketing
   FROM LOAD GENERATOR MARKETING
-  FOR ALL TABLES
-  WITH (SIZE = '3xsmall');
+  FOR ALL TABLES;
 ```
 
 To display the created subsources:
@@ -351,8 +346,7 @@ To create the load generator source and its associated subsources:
 ```sql
 CREATE SOURCE tpch
   FROM LOAD GENERATOR TPCH (SCALE FACTOR 1)
-  FOR ALL TABLES
-  WITH (SIZE = '2xsmall');
+  FOR ALL TABLES;
 ```
 
 To display the created subsources:
@@ -409,25 +403,6 @@ ORDER BY
  N            | O            | 74281600 |   111337230039 | 106883023012.04 | 112227399730.9018 |  25.49430183051871 | 38212.221432873834 | 0.03999775539657235 |     2913655
  R            | F            | 37770949 |    56610551077 |   54347734573.7 |  57066196254.4557 | 25.496431466814634 |  38213.68205054471 | 0.03997848687172654 |     1481421
 ```
-
-### Sizing a source
-
-To provision a specific amount of CPU and memory to a source on creation, use the `SIZE` option:
-
-```sql
-CREATE SOURCE auction_load
-  FROM LOAD GENERATOR AUCTION
-  FOR ALL TABLES
-  WITH (SIZE = '3xsmall');
-```
-
-To resize the source after creation:
-
-```sql
-ALTER SOURCE auction_load SET (SIZE = 'large');
-```
-
-The smallest source size (`3xsmall`) is a resonable default to get started. For more details on sizing sources, check the [`CREATE SOURCE`](../#sizing-a-source) documentation page.
 
 ## Related pages
 

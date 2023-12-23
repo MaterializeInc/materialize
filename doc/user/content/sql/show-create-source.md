@@ -25,7 +25,7 @@ SHOW CREATE SOURCE market_orders_raw;
 ```nofmt
                  name                 |                                      create_sql
 --------------------------------------+--------------------------------------------------------------------------------------------------------------
- materialize.public.market_orders_raw | CREATE SOURCE "materialize"."public"."market_orders_raw" FROM LOAD GENERATOR COUNTER WITH (SIZE = '3xsmall')
+ materialize.public.market_orders_raw | CREATE SOURCE "materialize"."public"."market_orders_raw" IN CLUSTER "c" FROM LOAD GENERATOR COUNTER
 ```
 
 ## Privileges

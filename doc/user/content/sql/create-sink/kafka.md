@@ -99,7 +99,6 @@ how documentation comments are added to the generated Avro schemas.
 Field                | Value  | Description
 ---------------------|--------|------------
 `SNAPSHOT`           | `bool` | Default: `true`. Whether to emit the consolidated results of the query before the sink was created at the start of the sink. To see only results after the sink is created, specify `WITH (SNAPSHOT = false)`.
-`SIZE`               | `text`    | The [size](#sizing-a-sink) for the sink. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`, `xlarge`. Required if the `IN CLUSTER` option is not specified.
 
 ## Formats
 
@@ -617,27 +616,6 @@ CREATE SINK avro_sink
 ```
 {{< /tab >}}
 {{< /tabs >}}
-
-#### Sizing a sink
-
-To provision a specific amount of CPU and memory to a sink on creation, use the `SIZE` option:
-
-```sql
-CREATE SINK avro_sink
-  FROM <source, table or mview>
-  INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_avro_topic')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-  ENVELOPE DEBEZIUM
-  WITH (SIZE = '3xsmall');
-```
-
-To resize the sink after creation:
-
-```sql
-ALTER SINK avro_sink SET (SIZE = 'large');
-```
-
-The smallest sink size (`3xsmall`) is a resonable default to get started. For more details on sizing sources, check the [`CREATE SINK`](../#sizing-a-sink) documentation page.
 
 #### Documentation comments
 

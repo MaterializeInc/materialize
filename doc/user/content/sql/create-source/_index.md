@@ -229,9 +229,9 @@ Debezium may produce duplicate records if the connector is interrupted. Material
 
 ### Sizing a source
 
-Some sources are low traffic and require relatively few resources to handle data ingestion, while others are high traffic and require hefty resource allocations. You choose the amount of CPU, memory, and disk available to a source using the `SIZE` option, and adjust the provisioned size after source creation using the [`ALTER SOURCE`](/sql/alter-source) command.
+Some sources are low traffic and require relatively few resources to handle data ingestion, while others are high traffic and require hefty resource allocations. The cluster in which you place a source determines the amount of CPU, memory, and disk available to the source.
 
-It's a good idea to size up a source when:
+It's a good idea to size up the cluster hosting a source when:
 
   * You want to **increase throughput**. Larger sources will typically ingest data
     faster, as there is more CPU available to read and decode data from the
@@ -247,17 +247,10 @@ It's a good idea to size up a source when:
     larger state sizes without sizing up. See the [`CREATE CLUSTER`: Disk](/sql/create-cluster#disk)
     documentation for more details.
 
-Sources that specify the `SIZE` option are linked to a single-purpose cluster
-dedicated to maintaining that source.
-
-You can also choose to place a source in an existing
-[cluster](/get-started/key-concepts/#clusters) by using the `IN CLUSTER` option.
-Sources in a cluster share the resource allocation of the cluster with all other
-objects in the cluster.
-
-Colocating multiple sources onto the same cluster can be more resource efficient
-when you have many low-traffic sources that occasionally need some burst
-capacity.
+Sources share the resource allocation of their cluster with all other objects in
+the cluster. Colocating multiple sources onto the same cluster can be more
+resource efficient when you have many low-traffic sources that occasionally need
+some burst capacity.
 
 ## Privileges
 

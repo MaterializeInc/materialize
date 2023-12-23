@@ -28,33 +28,21 @@ After an `ALTER SECRET` command is executed:
     use the new value of the secret. Sources and sinks may cache the old secret
     value for several weeks.
 
-    To force a running source or sink to refresh its secrets:
+    To force a running source or sink to refresh its secrets, drop and recreate
+    all replicas of the cluster hosting the source or sink.
 
-      * If the source or sink was created with the `IN CLUSTER` option, drop and
-        recreate all replicas of the cluster hosting the source or sink.
+    For a managed cluster:
 
-        For a managed cluster:
+    ```
+    ALTER CLUSTER storage_cluster SET (REPLICATION FACTOR = 0);
+    ALTER CLUSTER storage_cluster SET (REPLICATION FACTOR = 1);
+    ```
 
-        ```
-        ALTER CLUSTER storage_cluster SET (REPLICATION FACTOR = 0);
-        ALTER CLUSTER storage_cluster SET (REPLICATION FACTOR = 1);
-        ```
+    For an unmanaged cluster:
 
-        For an unmanaged cluster:
-
-        ```
-        DROP CLUSTER REPLICA storage_cluster.r1;
-        CREATE CLUSTER REPLICA storage_cluster.r1 (SIZE = '<original size>');
-        ```
-
-      * If the source or sink was created with the `SIZE` option, use [`ALTER
-        SOURCE`] or [`ALTER SINK`] to temporarily scale down the source and then
-        scale it back to its original size. For example, if source `s` is
-        currently running with size `small`:
-
-        ```sql
-        ALTER SOURCE src SET (SIZE = 'xsmall'); -- Any size that is not `small` will work.
-        ALTER SOURCE src SET (SIZE = 'small');
+    ```
+    DROP CLUSTER REPLICA storage_cluster.r1;
+    CREATE CLUSTER REPLICA storage_cluster.r1 (SIZE = '<original size>');
         ```
 
 ## Examples

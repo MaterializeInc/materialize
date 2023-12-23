@@ -34,8 +34,7 @@ statements:
 ```sql
 CREATE SOURCE json_source
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT BYTES
-  WITH (SIZE = '3xsmall');
+  FORMAT BYTES;
 ```
 
 {{< /tab >}}
@@ -60,8 +59,7 @@ statements:
 ```sql
 CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
-  FOR ALL TABLES
-  WITH (SIZE = '3xsmall');
+  FOR ALL TABLES;
 ```
 {{< /tab >}} {{< /tabs >}}
 
