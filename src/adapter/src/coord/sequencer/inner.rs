@@ -193,6 +193,15 @@ impl Coordinator {
                 _ => None,
             };
 
+            if let Some(cluster_id) = cluster_id {
+                if let Some(cluster) = self.catalog().try_get_cluster(cluster_id) {
+                    mz_ore::soft_assert_or_log!(
+                        cluster.replica_ids().len() <= 1,
+                        "cannot create source in cluster {cluster_id}; has >1 replicas"
+                    );
+                }
+            }
+
             // Attempt to reduce the `CHECK` expression, we timeout if this takes too long.
             if let mz_sql::plan::DataSourceDesc::Webhook {
                 validate_using: Some(validate),
@@ -743,6 +752,13 @@ impl Coordinator {
             .await,
             ctx
         );
+
+        if let Some(cluster) = self.catalog().try_get_cluster(cluster_id) {
+            mz_ore::soft_assert_or_log!(
+                cluster.replica_ids().len() <= 1,
+                "cannot create sink in cluster {cluster_id}; has >1 replicas"
+            );
+        }
 
         let catalog_sink = Sink {
             create_sql: sink.create_sql,
