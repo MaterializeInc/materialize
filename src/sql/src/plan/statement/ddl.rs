@@ -1623,11 +1623,13 @@ fn source_sink_cluster_config(
     in_cluster: Option<&ResolvedClusterName>,
     size: Option<String>,
 ) -> Result<SourceSinkClusterConfig, PlanError> {
-    let cluster = match (in_cluster, size) {
-        (None, None) => scx.catalog.resolve_cluster(None)?,
-        (Some(in_cluster), None) => scx.catalog.get_cluster(in_cluster.id),
-        (None, Some(size)) => return Ok(SourceSinkClusterConfig::Linked { size }),
-        _ => sql_bail!("only one of IN CLUSTER or SIZE can be set"),
+    if size.is_some() {
+        sql_bail!("specifying {ty} SIZE deprecated; use IN CLUSTER")
+    }
+
+    let cluster = match in_cluster {
+        None => scx.catalog.resolve_cluster(None)?,
+        Some(in_cluster) => scx.catalog.get_cluster(in_cluster.id),
     };
 
     if cluster.replica_ids().len() > 1 {
