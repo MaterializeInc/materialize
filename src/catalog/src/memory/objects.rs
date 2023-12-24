@@ -1926,6 +1926,12 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
     }
 
     fn linked_object_id(&self) -> Option<GlobalId> {
+        mz_ore::soft_assert_or_log!(
+            self.linked_object_id.is_none(),
+            "cluster {} still linked to {:?}",
+            self.id,
+            self.linked_object_id
+        );
         self.linked_object_id
     }
 
