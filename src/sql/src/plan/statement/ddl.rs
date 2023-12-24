@@ -117,9 +117,8 @@ use crate::plan::{
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
     DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
-    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source,
-    SourceSinkClusterConfig, Table, Type, VariableValue, View, WebhookHeaderFilters,
-    WebhookHeaders, WebhookValidation,
+    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, Type,
+    VariableValue, View, WebhookHeaderFilters, WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars;
 
@@ -523,7 +522,7 @@ pub fn plan_create_webhook_source(
     let typ = RelationType::new(column_ty);
     let desc = RelationDesc::new(typ, column_names);
 
-    let cluster_config = source_sink_cluster_config(scx, "source", Some(&in_cluster), None)?;
+    let in_cluster = source_sink_cluster_config(scx, "source", Some(&in_cluster), None)?;
 
     // Check for an object in the catalog with this same name
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
@@ -553,7 +552,7 @@ pub fn plan_create_webhook_source(
         },
         if_not_exists,
         timeline,
-        cluster_config,
+        in_cluster: Some(in_cluster),
     }))
 }
 
@@ -1246,16 +1245,12 @@ pub fn plan_create_source(
         });
     }
 
-    let cluster_config = source_sink_cluster_config(scx, "source", in_cluster.as_ref(), size)?;
-    // If using the default cluster, ensure we record which cluster that is.
-    match &cluster_config {
-        SourceSinkClusterConfig::Existing { id } if stmt.in_cluster.is_none() => {
-            stmt.in_cluster = Some(ResolvedClusterName {
-                id: *id,
-                print_name: None,
-            })
-        }
-        _ => {}
+    let in_cluster = source_sink_cluster_config(scx, "source", in_cluster.as_ref(), size)?;
+    if stmt.in_cluster.is_none() {
+        stmt.in_cluster = Some(ResolvedClusterName {
+            id: in_cluster,
+            print_name: None,
+        })
     }
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSource(stmt))?;
@@ -1303,7 +1298,7 @@ pub fn plan_create_source(
         source,
         if_not_exists,
         timeline,
-        cluster_config,
+        in_cluster: Some(in_cluster),
     }))
 }
 
@@ -1463,7 +1458,7 @@ pub fn plan_create_subsource(
         source,
         if_not_exists,
         timeline: Timeline::EpochMilliseconds,
-        cluster_config: SourceSinkClusterConfig::Undefined,
+        in_cluster: None,
     }))
 }
 
@@ -1622,7 +1617,7 @@ fn source_sink_cluster_config(
     ty: &'static str,
     in_cluster: Option<&ResolvedClusterName>,
     size: Option<String>,
-) -> Result<SourceSinkClusterConfig, PlanError> {
+) -> Result<ClusterId, PlanError> {
     if size.is_some() {
         sql_bail!("specifying {ty} SIZE deprecated; use IN CLUSTER")
     }
@@ -1636,7 +1631,7 @@ fn source_sink_cluster_config(
         sql_bail!("cannot create {ty} in cluster with more than one replica")
     }
 
-    Ok(SourceSinkClusterConfig::Existing { id: cluster.id() })
+    Ok(cluster.id())
 }
 
 generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default(true)));
@@ -2374,16 +2369,12 @@ pub fn plan_create_sink(
     // WITH SNAPSHOT defaults to true
     let with_snapshot = snapshot.unwrap_or(true);
 
-    let cluster_config = source_sink_cluster_config(scx, "sink", in_cluster.as_ref(), size)?;
-    // If using the default cluster, ensure we record which cluster that is.
-    match &cluster_config {
-        SourceSinkClusterConfig::Existing { id } if stmt.in_cluster.is_none() => {
-            stmt.in_cluster = Some(ResolvedClusterName {
-                id: *id,
-                print_name: None,
-            })
-        }
-        _ => {}
+    let in_cluster = source_sink_cluster_config(scx, "sink", in_cluster.as_ref(), size)?;
+    if stmt.in_cluster.is_none() {
+        stmt.in_cluster = Some(ResolvedClusterName {
+            id: in_cluster,
+            print_name: None,
+        })
     }
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt))?;
@@ -2398,7 +2389,7 @@ pub fn plan_create_sink(
         },
         with_snapshot,
         if_not_exists,
-        cluster_config,
+        in_cluster,
     }))
 }
 
