@@ -76,7 +76,10 @@ pub struct ReplicaAllocation {
     /// The number of credits per hour that the replica consumes.
     #[serde(deserialize_with = "mz_repr::adt::numeric::str_serde::deserialize")]
     pub credits_per_hour: Numeric,
-    /// Whether instances of this type can be created
+    /// Whether each process has exclusive access to its CPU cores.
+    #[serde(default)]
+    pub cpu_exclusive: bool,
+    /// Whether instances of this type can be created.
     #[serde(default)]
     pub disabled: bool,
     /// Additional node selectors.
@@ -115,6 +118,7 @@ fn test_replica_allocation_deserialization() {
             disabled: false,
             memory_limit: Some(MemoryLimit(ByteSize::gib(10))),
             cpu_limit: Some(CpuLimit::from_millicpus(1000)),
+            cpu_exclusive: false,
             scale: 16,
             workers: 1,
             selectors: BTreeMap::from([
@@ -132,6 +136,7 @@ fn test_replica_allocation_deserialization() {
             "scale": 0,
             "workers": 0,
             "credits_per_hour": "0",
+            "cpu_exclusive": true,
             "disabled": true
         }"#;
 
@@ -146,6 +151,7 @@ fn test_replica_allocation_deserialization() {
             disabled: true,
             memory_limit: Some(MemoryLimit(ByteSize::gib(0))),
             cpu_limit: Some(CpuLimit::from_millicpus(0)),
+            cpu_exclusive: true,
             scale: 0,
             workers: 0,
             selectors: Default::default(),
@@ -644,6 +650,9 @@ where
                                 "--announce-memory-limit={}",
                                 memory_limit.0.as_u64()
                             ));
+                        }
+                        if location.allocation.cpu_exclusive {
+                            args.push("--worker-core-affinity".into());
                         }
 
                         args.extend(secrets_args.clone());

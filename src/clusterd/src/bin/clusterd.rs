@@ -207,6 +207,14 @@ struct Args {
     /// Optional memory limit (bytes) of the cluster replica
     #[clap(long)]
     announce_memory_limit: Option<usize>,
+
+    /// Set core affinity for Timely workers.
+    ///
+    /// This flag should only be set if the process is provided with exclusive access to its
+    /// supplied CPU cores. If other processes are competing over the same cores, setting core
+    /// affinity might degrade dataflow performance rather than improving it.
+    #[clap(long)]
+    worker_core_affinity: bool,
 }
 
 #[tokio::main]
