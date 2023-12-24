@@ -145,7 +145,6 @@ pub enum Plan {
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
     AlterSetCluster(AlterSetClusterPlan),
-    AlterSink(AlterSinkPlan),
     AlterConnection(AlterConnectionPlan),
     AlterSource(AlterSourcePlan),
     PurifiedAlterSource {
@@ -221,7 +220,8 @@ impl Plan {
             StatementKind::AlterSetCluster => {
                 vec![PlanKind::AlterNoop, PlanKind::AlterSetCluster]
             }
-            StatementKind::AlterSink => vec![PlanKind::AlterNoop, PlanKind::AlterSink],
+            // TODO: If we ever support ALTER SINK again, this will need to be changed
+            StatementKind::AlterSink => vec![PlanKind::AlterNoop],
             StatementKind::AlterSource => vec![PlanKind::AlterNoop, PlanKind::AlterSource],
             StatementKind::AlterSystemReset => {
                 vec![PlanKind::AlterNoop, PlanKind::AlterSystemReset]
@@ -374,7 +374,6 @@ impl Plan {
             Plan::AlterSetCluster(_) => "alter set cluster",
             Plan::AlterIndexSetOptions(_) => "alter index",
             Plan::AlterIndexResetOptions(_) => "alter index",
-            Plan::AlterSink(_) => "alter sink",
             Plan::AlterConnection(_) => "alter connection",
             Plan::AlterSource(_) | Plan::PurifiedAlterSource { .. } => "alter source",
             Plan::AlterItemRename(_) => "rename item",
@@ -1022,12 +1021,6 @@ pub enum AlterOptionParameter<T = String> {
 }
 
 #[derive(Debug)]
-pub struct AlterSinkPlan {
-    pub id: GlobalId,
-    pub size: AlterOptionParameter,
-}
-
-#[derive(Debug)]
 pub enum AlterConnectionAction {
     RotateKeys,
     AlterOptions {
@@ -1045,7 +1038,6 @@ pub struct AlterConnectionPlan {
 
 #[derive(Debug)]
 pub enum AlterSourceAction {
-    Resize(AlterOptionParameter),
     DropSubsourceExports {
         to_drop: BTreeSet<GlobalId>,
     },

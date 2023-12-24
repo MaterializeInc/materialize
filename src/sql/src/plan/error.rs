@@ -239,6 +239,9 @@ pub enum PlanError {
         /// created
         hypothetical_replica_count: usize,
     },
+    AlterSourceSinkSizeUnsupported {
+        cluster: String,
+    },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -399,6 +402,11 @@ impl PlanError {
             | Self::InvalidRefreshEveryAlignedTo => {
                 Some("Calling `mz_now()` is allowed.".into())
             },
+            Self::AlterSourceSinkSizeUnsupported {
+                cluster,
+            } => {
+                Some(format!("Use ALTER CLUSTER {cluster} SET (SIZE ...)"))
+            }
             _ => None,
         }
     }
@@ -637,6 +645,11 @@ impl fmt::Display for PlanError {
             }
             Self::CreateReplicaFailStorageObjects {..} => {
                 write!(f, "cannot create more than one replica of a cluster containing sources or sinks")
+            },
+            Self::AlterSourceSinkSizeUnsupported {
+                ..
+            } => {
+                f.write_str("altering size of sources and sinks no longer supported")
             }
         }
     }

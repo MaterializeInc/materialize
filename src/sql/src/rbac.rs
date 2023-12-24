@@ -881,11 +881,6 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
-        Plan::AlterSink(plan::AlterSinkPlan { id, size: _ }) => RbacRequirements {
-            ownership: vec![ObjectId::Item(*id)],
-            item_usage: &CREATE_ITEM_USAGE,
-            ..Default::default()
-        },
         Plan::AlterConnection(plan::AlterConnectionPlan { id, action: _ }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id)],
             ..Default::default()
