@@ -13,9 +13,11 @@ use anyhow::{anyhow, bail};
 use aws_config::sts::AssumeRoleProvider;
 use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
 use aws_credential_types::Credentials;
+use aws_sdk_sts::error::SdkError;
+use aws_sdk_sts::operation::get_caller_identity::GetCallerIdentityError;
 use aws_types::region::Region;
 use aws_types::SdkConfig;
-
+use mz_ore::error::ErrorExt;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::GlobalId;
 use proptest_derive::Arbitrary;
@@ -341,15 +343,11 @@ impl AwsConnection {
         &self,
         id: GlobalId,
         storage_configuration: &StorageConfiguration,
-    ) -> Result<(), anyhow::Error> {
-        // TODO(mouli): Update this to return user friendly error in
-        // case of failure.
+    ) -> Result<(), AwsConnectionValidationError> {
         let aws_config = self
             .load_sdk_config(&storage_configuration.connection_context, id)
             .await?;
         let sts_client = aws_sdk_sts::Client::new(&aws_config);
-        // TODO(mouli): Update this to return user friendly error in
-        // case of failure.
         let _ = sts_client.get_caller_identity().send().await?;
 
         if let AwsAuth::AssumeRole(assume_role) = &self.auth {
@@ -368,14 +366,9 @@ impl AwsConnection {
             let aws_config = self.load_sdk_config_from_credentials(credentials).await?;
             let sts_client = aws_sdk_sts::Client::new(&aws_config);
             if sts_client.get_caller_identity().send().await.is_ok() {
-                // TODO(mouli): Return a structured `ValidateConnectionError``
-                // instead of `anyhow::Error`, so that we can include additional
-                // details and a hint.
-                bail!(
-                    "AWS connection role does not require an external ID; \
-                     this is INSECURE and allows any Materialize customer \
-                     access to your AWS account"
-                );
+                return Err(AwsConnectionValidationError::RoleDoesNotRequireExternalId {
+                    role_arn: assume_role.arn.clone(),
+                });
             }
         }
 
@@ -384,5 +377,38 @@ impl AwsConnection {
 
     pub(crate) fn validate_by_default(&self) -> bool {
         false
+    }
+}
+
+/// An error returned by `AwsConnection::validate`.
+#[derive(thiserror::Error, Debug)]
+pub enum AwsConnectionValidationError {
+    #[error("role trust policy does not require an external ID")]
+    RoleDoesNotRequireExternalId { role_arn: String },
+    #[error("{}", .0.display_with_causes())]
+    StsGetCallerIdentityError(#[from] SdkError<GetCallerIdentityError>),
+    #[error("{}", .0.display_with_causes())]
+    Other(#[from] anyhow::Error),
+}
+
+impl AwsConnectionValidationError {
+    /// Reports additional details about the error, if any are available.
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            AwsConnectionValidationError::RoleDoesNotRequireExternalId {
+                role_arn
+            } => Some(format!("The trust policy for the connection's role ({role_arn}) is insecure and allows any Materialize customer to assume the role.")),
+            _ => None
+        }
+    }
+
+    /// Reports a hint for the user about how the error could be fixed.
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            AwsConnectionValidationError::RoleDoesNotRequireExternalId { .. } => {
+                Some("See: https://materialize.com/s/aws-connection-role-trust-policy".into())
+            }
+            _ => None,
+        }
     }
 }

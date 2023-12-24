@@ -215,7 +215,16 @@ def test_assume_role(c: Composition, ctx: TestContext):
     try:
         c.sql("VALIDATE CONNECTION aws_assume_role")
     except ProgrammingError as e:
-        assert "AWS connection role does not require an external ID" in e.args[0]["M"]
+        # Ensure the top line error message is exactly what we expect.
+        assert "role trust policy does not require an external ID" == e.args[0]["M"]
+        # We're not as prescriptive about the detail/hint fields. Just ensure
+        # that the details include the exact ARN of the connection's role and
+        # that the hint includes a link to further documentation.
+        assert customer_role_arn in e.args[0]["D"]
+        assert (
+            "https://materialize.com/s/aws-connection-role-trust-policy"
+            in e.args[0]["H"]
+        )
     else:
         assert False, "connection validation unexpectedly succeeded"
 
