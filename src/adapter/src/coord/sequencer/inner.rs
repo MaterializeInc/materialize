@@ -4537,7 +4537,6 @@ impl Coordinator {
         };
 
         match action {
-            plan::AlterSourceAction::Resize(_size) => unreachable!("errors in planning"),
             plan::AlterSourceAction::DropSubsourceExports { to_drop } => {
                 mz_ore::soft_assert_or_log!(!to_drop.is_empty(), "`to_drop` is empty");
 

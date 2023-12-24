@@ -128,7 +128,6 @@ pub fn analyze_audited_statement(
         StatementKind::AlterIndex => Some((StatementAction::Alter, ObjectType::Index)),
         StatementKind::AlterRole => Some((StatementAction::Alter, ObjectType::Role)),
         StatementKind::AlterSecret => Some((StatementAction::Alter, ObjectType::Secret)),
-        StatementKind::AlterSink => Some((StatementAction::Alter, ObjectType::Sink)),
         StatementKind::AlterSource => Some((StatementAction::Alter, ObjectType::Source)),
         StatementKind::CreateCluster => Some((StatementAction::Create, ObjectType::Cluster)),
         StatementKind::CreateClusterReplica => {
