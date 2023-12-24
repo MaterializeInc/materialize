@@ -228,6 +228,9 @@ pub enum PlanError {
     LoadGeneratorSourcePurification(LoadGeneratorSourcePurificationError),
     CsrPurification(CsrPurificationError),
     MissingName(CatalogItemType),
+    AlterSourceSinkSizeUnsupported {
+        cluster: String,
+    },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -371,6 +374,11 @@ impl PlanError {
             Self::RecursiveTypeMismatch(..) => {
                 Some("You will need to rewrite or cast the query's expressions.".into())
             },
+            Self::AlterSourceSinkSizeUnsupported {
+                cluster,
+            } => {
+                Some(format!("Use ALTER CLUSTER {cluster} SET (SIZE ...)"))
+            }
             _ => None,
         }
     }
@@ -598,6 +606,11 @@ impl fmt::Display for PlanError {
             }
             Self::MissingName(item_type) => {
                 write!(f, "unspecified name for {item_type}")
+            }
+            Self::AlterSourceSinkSizeUnsupported {
+                ..
+            } => {
+                f.write_str("altering size of sources and sinks no longer supported")
             }
         }
     }

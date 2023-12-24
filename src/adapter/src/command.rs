@@ -585,7 +585,6 @@ impl ExecuteResponse {
             | AlterSchemaRename
             | AlterSchemaSwap
             | AlterSecret
-            | AlterSink
             | AlterConnection
             | AlterSource
             | PurifiedAlterSource => {
