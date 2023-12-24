@@ -15,9 +15,10 @@ use mz_catalog::durable::Transaction;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::namespaces::PG_CATALOG_SCHEMA;
+use mz_repr::GlobalId;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::catalog::NameReference;
-use mz_sql_parser::ast::{visit_mut, Ident, Raw, RawDataType, Statement};
+use mz_sql_parser::ast::{visit_mut, Ident, Raw, RawClusterName, RawDataType, Statement};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::GenericSourceConnection;
@@ -37,6 +38,7 @@ where
     F: for<'a> FnMut(
         &'a mut Transaction<'_>,
         &'a &ConnCatalog<'_>,
+        GlobalId,
         &'a mut Statement<Raw>,
     ) -> BoxFuture<'a, Result<(), anyhow::Error>>,
 {
@@ -45,7 +47,7 @@ where
     for mut item in items {
         let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
 
-        f(tx, &cat, &mut stmt).await?;
+        f(tx, &cat, item.id, &mut stmt).await?;
 
         item.create_sql = stmt.to_ast_string_stable();
 
@@ -74,7 +76,7 @@ pub(crate) async fn migrate(
 
     // Perform per-item AST migrations.
     let conn_cat = state.for_system_session();
-    rewrite_items(tx, &conn_cat, |_tx, conn_cat, stmt| {
+    rewrite_items(tx, &conn_cat, |tx, conn_cat, global_id, stmt| {
         let catalog_version = catalog_version.clone();
         Box::pin(async move {
             // Add per-item AST migrations below.
@@ -94,7 +96,7 @@ pub(crate) async fn migrate(
                 ast_rewrite_create_sink_into_kafka_options_0_80_0(stmt)?;
             }
             ast_rewrite_rewrite_type_schemas_0_81_0(stmt);
-            ast_rewrite_linked_cluster_sizes(stmt, &conn_cat.state);
+            ast_unlink_all_linked_clusters(tx, conn_cat, global_id, stmt)?;
 
             Ok(())
         })
@@ -325,40 +327,42 @@ fn ast_rewrite_rewrite_type_schemas_0_81_0(stmt: &mut Statement<Raw>) {
     Rewriter.visit_statement_mut(stmt);
 }
 
-/// Rewrite all non-`pg_catalog` system types to have the correct schema.
-fn ast_rewrite_linked_cluster_sizes<'a>(
+/// To deprecate the notion of linked clusters, convert all linked clusters into
+/// unlinked clusters.
+fn ast_unlink_all_linked_clusters<'a, 'b: 'a, 'c: 'a>(
+    txn: &'a mut Transaction<'b>,
+    conn_catalog: &'a &ConnCatalog<'c>,
+    id: GlobalId,
     stmt: &'a mut Statement<Raw>,
-    state: &'a std::borrow::Cow<'a, CatalogState>,
-) {
+) -> Result<(), anyhow::Error> {
     use mz_sql::ast::visit_mut::VisitMut;
 
-    struct Rewriter<'a> {
-        state: &'a std::borrow::Cow<'a, CatalogState>,
+    struct Rewriter<'a, 'b: 'a, 'c: 'a> {
+        txn: &'a mut Transaction<'b>,
+        conn_catalog: &'a ConnCatalog<'c>,
+        id: GlobalId,
+        status: Result<(), anyhow::Error>,
     }
 
-    impl<'ast> VisitMut<'ast, Raw> for Rewriter<'_> {
+    impl<'ast, 'a, 'b: 'a, 'c: 'a> VisitMut<'ast, Raw> for Rewriter<'a, 'b, 'c> {
         fn visit_create_source_statement_mut(
             &mut self,
             node: &'ast mut mz_sql_parser::ast::CreateSourceStatement<Raw>,
         ) {
-            // If no specified cluster and no specified size, then this is an
-            // "old"-style source that used a linked cluster of the default
-            // size.
-            if node.in_cluster.is_none()
-                && !node
-                    .with_options
-                    .iter()
-                    .any(|o| o.name == mz_sql_parser::ast::CreateSourceOptionName::Size)
-            {
+            if node.in_cluster.is_none() {
                 node.with_options
-                    .push(mz_sql_parser::ast::CreateSourceOption {
-                        name: mz_sql_parser::ast::CreateSourceOptionName::Size,
-                        value: Some(mz_sql_parser::ast::WithOptionValue::Value(
-                            mz_sql_parser::ast::Value::String(
-                                self.state.default_linked_cluster_size(),
-                            ),
-                        )),
-                    })
+                    .retain(|o| o.name != mz_sql_parser::ast::CreateSourceOptionName::Size);
+
+                let cluster_id = self.conn_catalog.state.clusters_by_linked_object_id[&self.id];
+                let mut cluster = self.conn_catalog.state.clusters_by_id[&cluster_id].clone();
+
+                node.in_cluster = Some(RawClusterName::Resolved(cluster.id.to_string()));
+
+                cluster.linked_object_id = None;
+                let r = self.txn.update_cluster(cluster.id, cluster.into());
+                if r.is_err() && self.status.is_ok() {
+                    self.status = r.map_err(|e| e.into());
+                }
             }
             visit_mut::visit_create_source_statement_mut(self, node);
         }
@@ -366,29 +370,37 @@ fn ast_rewrite_linked_cluster_sizes<'a>(
             &mut self,
             node: &'ast mut mz_sql_parser::ast::CreateSinkStatement<Raw>,
         ) {
-            // If no specified cluster and no specified size, then this is an
-            // "old"-style sink that used a linked cluster of the default size.
-            if node.in_cluster.is_none()
-                && !node
-                    .with_options
-                    .iter()
-                    .any(|o| o.name == mz_sql_parser::ast::CreateSinkOptionName::Size)
-            {
-                node.with_options
-                    .push(mz_sql_parser::ast::CreateSinkOption {
-                        name: mz_sql_parser::ast::CreateSinkOptionName::Size,
-                        value: Some(mz_sql_parser::ast::WithOptionValue::Value(
-                            mz_sql_parser::ast::Value::String(
-                                self.state.default_linked_cluster_size(),
-                            ),
-                        )),
-                    })
+            if node.in_cluster.is_none() {
+                if node.in_cluster.is_none() {
+                    node.with_options
+                        .retain(|o| o.name != mz_sql_parser::ast::CreateSinkOptionName::Size);
+
+                    let cluster_id = self.conn_catalog.state.clusters_by_linked_object_id[&self.id];
+                    let mut cluster = self.conn_catalog.state.clusters_by_id[&cluster_id].clone();
+
+                    node.in_cluster = Some(RawClusterName::Resolved(cluster.id.to_string()));
+
+                    cluster.linked_object_id = None;
+                    let r = self.txn.update_cluster(cluster.id, cluster.into());
+                    if r.is_err() && self.status.is_ok() {
+                        self.status = r.map_err(|e| e.into());
+                    }
+                }
             }
             visit_mut::visit_create_sink_statement_mut(self, node);
         }
     }
 
-    Rewriter { state }.visit_statement_mut(stmt);
+    let mut rewriter = Rewriter {
+        txn,
+        conn_catalog,
+        id,
+        status: Ok(()),
+    };
+
+    rewriter.visit_statement_mut(stmt);
+
+    rewriter.status
 }
 
 fn _add_to_audit_log(
