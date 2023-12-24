@@ -121,9 +121,8 @@ use crate::plan::{
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
     DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
-    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source,
-    SourceSinkClusterConfig, Table, Type, VariableValue, View, WebhookHeaderFilters,
-    WebhookHeaders, WebhookValidation,
+    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, Type,
+    VariableValue, View, WebhookHeaderFilters, WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars;
 use crate::session::vars::ENABLE_REFRESH_EVERY_MVS;
@@ -530,7 +529,7 @@ pub fn plan_create_webhook_source(
 
     // Webhook sources must currently specify the cluster on which they run, so
     // we don't need to wait to normalize the statement.
-    let cluster_config = source_sink_cluster_config(scx, "source", &mut Some(in_cluster), None)?;
+    let in_cluster = source_sink_cluster_config(scx, "source", &mut Some(in_cluster), None)?;
 
     // Check for an object in the catalog with this same name
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
@@ -560,7 +559,7 @@ pub fn plan_create_webhook_source(
         },
         if_not_exists,
         timeline,
-        cluster_config,
+        in_cluster: Some(in_cluster),
     }))
 }
 
@@ -1256,7 +1255,7 @@ pub fn plan_create_source(
     // We will rewrite the cluster if one is not provided, so we must use the
     // `in_cluster` value we plan to normalize when we canonicalize the create
     // statement.
-    let cluster_config = source_sink_cluster_config(scx, "source", &mut stmt.in_cluster, size)?;
+    let in_cluster = source_sink_cluster_config(scx, "source", &mut stmt.in_cluster, size)?;
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSource(stmt))?;
 
@@ -1303,7 +1302,7 @@ pub fn plan_create_source(
         source,
         if_not_exists,
         timeline,
-        cluster_config,
+        in_cluster: Some(in_cluster),
     }))
 }
 
@@ -1463,7 +1462,7 @@ pub fn plan_create_subsource(
         source,
         if_not_exists,
         timeline: Timeline::EpochMilliseconds,
-        cluster_config: SourceSinkClusterConfig::Undefined,
+        in_cluster: None,
     }))
 }
 
@@ -1627,7 +1626,7 @@ fn source_sink_cluster_config(
     ty: &'static str,
     in_cluster: &mut Option<ResolvedClusterName>,
     size: Option<String>,
-) -> Result<SourceSinkClusterConfig, PlanError> {
+) -> Result<ClusterId, PlanError> {
     if size.is_some() {
         sql_bail!("specifying {ty} SIZE deprecated; use IN CLUSTER")
     }
@@ -1648,7 +1647,7 @@ fn source_sink_cluster_config(
         sql_bail!("cannot create {ty} in cluster with more than one replica")
     }
 
-    Ok(SourceSinkClusterConfig::Existing { id: cluster.id() })
+    Ok(cluster.id())
 }
 
 generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default(true)));
@@ -2507,7 +2506,7 @@ pub fn plan_create_sink(
     // We will rewrite the cluster if one is not provided, so we must use the
     // `in_cluster` value we plan to normalize when we canonicalize the create
     // statement.
-    let cluster_config = source_sink_cluster_config(scx, "sink", &mut stmt.in_cluster, size)?;
+    let in_cluster = source_sink_cluster_config(scx, "sink", &mut stmt.in_cluster, size)?;
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt))?;
 
     Ok(Plan::CreateSink(CreateSinkPlan {
@@ -2520,7 +2519,7 @@ pub fn plan_create_sink(
         },
         with_snapshot,
         if_not_exists,
-        cluster_config,
+        in_cluster,
     }))
 }
 
