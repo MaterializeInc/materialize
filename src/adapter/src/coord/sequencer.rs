@@ -61,7 +61,6 @@ use crate::{ExecuteContext, ExecuteResponseKind};
 mod alter_set_cluster;
 mod cluster;
 mod inner;
-mod linked_cluster;
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 34KB. This would
@@ -410,10 +409,7 @@ impl Coordinator {
                     let result = self.sequence_alter_secret(ctx.session(), plan).await;
                     ctx.retire(result);
                 }
-                Plan::AlterSink(plan) => {
-                    let result = self.sequence_alter_sink(ctx.session(), plan).await;
-                    ctx.retire(result);
-                }
+                Plan::AlterSink(_plan) => unreachable!("errors in planning"),
                 Plan::PurifiedAlterSource {
                     alter_source,
                     subsources,

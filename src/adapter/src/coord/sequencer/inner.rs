@@ -54,10 +54,9 @@ use mz_catalog::memory::objects::{
     CatalogItem, Cluster, Connection, DataSourceDesc, Secret, Sink, Source, Table, Type,
 };
 use mz_sql::plan::{
-    AlterConnectionAction, AlterConnectionPlan, AlterOptionParameter, ExplainSinkSchemaPlan,
-    Explainee, Index, IndexOption, MutationKind, Params, Plan, PlannedAlterRoleOption,
-    PlannedRoleVariable, QueryWhen, SideEffectingFunc, SourceSinkClusterConfig, UpdatePrivilege,
-    VariableValue,
+    AlterConnectionAction, AlterConnectionPlan, ExplainSinkSchemaPlan, Explainee, Index,
+    IndexOption, MutationKind, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable,
+    QueryWhen, SideEffectingFunc, SourceSinkClusterConfig, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::user::UserKind;
 use mz_sql::session::vars::{
@@ -177,17 +176,8 @@ impl Coordinator {
             let name = plan.name.clone();
             let source_oid = self.catalog_mut().allocate_oid()?;
             let cluster_id = match plan.source.data_source {
-                mz_sql::plan::DataSourceDesc::Ingestion(_) => Some(
-                    self.create_linked_cluster_ops(
-                        source_id,
-                        &plan.name,
-                        &plan.cluster_config,
-                        &mut ops,
-                        session,
-                    )
-                    .await?,
-                ),
-                mz_sql::plan::DataSourceDesc::Webhook { .. } => {
+                mz_sql::plan::DataSourceDesc::Ingestion(_)
+                | mz_sql::plan::DataSourceDesc::Webhook { .. } => {
                     plan.cluster_config.cluster_id().cloned()
                 }
                 _ => None,
@@ -286,8 +276,6 @@ impl Coordinator {
                             unreachable!("cannot create sources with introspection data sources")
                         }
                     };
-
-                    coord.maybe_create_linked_cluster(source_id).await;
 
                     coord
                         .controller
@@ -741,17 +729,10 @@ impl Coordinator {
         let oid = return_if_err!(self.catalog_mut().allocate_oid(), ctx);
 
         let mut ops = vec![];
-        let cluster_id = return_if_err!(
-            self.create_linked_cluster_ops(
-                id,
-                &name,
-                &plan_cluster_config,
-                &mut ops,
-                ctx.session()
-            )
-            .await,
-            ctx
-        );
+        let cluster_id = match plan_cluster_config {
+            SourceSinkClusterConfig::Existing { id } => id,
+            _ => unreachable!("can only place sinks on existing clusters"),
+        };
 
         if let Some(cluster) = self.catalog().try_get_cluster(cluster_id) {
             mz_ore::soft_assert_or_log!(
@@ -818,8 +799,6 @@ impl Coordinator {
                 return;
             }
         };
-
-        self.maybe_create_linked_cluster(id).await;
 
         self.create_storage_export(id, &catalog_sink)
             .await
@@ -4341,26 +4320,6 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
     }
 
-    pub(super) async fn sequence_alter_sink(
-        &mut self,
-        session: &Session,
-        plan::AlterSinkPlan { id, size }: plan::AlterSinkPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let cluster_config = alter_storage_cluster_config(size);
-        if let Some(cluster_config) = cluster_config {
-            let mut ops = self.alter_linked_cluster_ops(id, &cluster_config).await?;
-            ops.push(catalog::Op::AlterSink {
-                id,
-                cluster_config: cluster_config.clone(),
-            });
-            self.catalog_transact(Some(session), ops).await?;
-
-            self.maybe_alter_linked_cluster(id).await;
-        }
-
-        Ok(ExecuteResponse::AlteredObject(ObjectType::Sink))
-    }
-
     pub(super) async fn sequence_alter_connection(
         &mut self,
         ctx: ExecuteContext,
@@ -4699,19 +4658,7 @@ impl Coordinator {
         };
 
         match action {
-            plan::AlterSourceAction::Resize(size) => {
-                let cluster_config = alter_storage_cluster_config(size);
-                if let Some(cluster_config) = cluster_config {
-                    let mut ops = self.alter_linked_cluster_ops(id, &cluster_config).await?;
-                    ops.push(catalog::Op::AlterSource {
-                        id,
-                        cluster_config: cluster_config.clone(),
-                    });
-                    self.catalog_transact(Some(session), ops).await?;
-
-                    self.maybe_alter_linked_cluster(id).await;
-                }
-            }
+            plan::AlterSourceAction::Resize(_size) => unreachable!("errors in planning"),
             plan::AlterSourceAction::DropSubsourceExports { to_drop } => {
                 mz_ore::soft_assert_or_log!(!to_drop.is_empty(), "`to_drop` is empty");
 
@@ -5849,16 +5796,6 @@ where
     Ok(vars
         .emit_introspection_query_notice()
         .then_some(AdapterNotice::PerReplicaLogRead { log_names }))
-}
-
-/// Return a [`SourceSinkClusterConfig`] based on the possibly altered
-/// parameters.
-fn alter_storage_cluster_config(size: AlterOptionParameter) -> Option<SourceSinkClusterConfig> {
-    match size {
-        AlterOptionParameter::Set(size) => Some(SourceSinkClusterConfig::Linked { size }),
-        AlterOptionParameter::Reset => Some(SourceSinkClusterConfig::Undefined),
-        AlterOptionParameter::Unchanged => None,
-    }
 }
 
 /// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
