@@ -356,8 +356,8 @@ The view is defined as the transitive closure of [`mz_object_dependencies`](#mz_
 
 ### `mz_notices`
 
-The `mz_notices` view contains a list of currently active optimizer notices
-emitted by the system.
+The `mz_notices` view contains a list of currently active notices emitted by the
+system.
 
 <!-- RELATION_SPEC mz_internal.mz_notices -->
 | Field                   | Type                         | Meaning                                                                                                                                           |
