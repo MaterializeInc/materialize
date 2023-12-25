@@ -26,7 +26,7 @@ tests.
 Field | Use
 ------|-----
 _src_name_  | The name for the source.
-**IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source. If not specified, the `SIZE` option must be specified.
+**IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source.
 **COUNTER**  | Use the [counter](#counter) load generator.
 **AUCTION**  | Use the [auction](#auction) load generator.
 **MARKETING**| Use the [marketing](#marketing) load generator.
@@ -37,10 +37,6 @@ _src_name_  | The name for the source.
 **MAX CARDINALITY** | Valid for the `COUNTER` generator. Causes the generator to delete old values to keep the collection at most a given size. Defaults to unlimited.
 **FOR ALL TABLES** | Creates subsources for all tables in the load generator.
 **EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress subsource for the source. If this is not specified, the subsource will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
-
-### `WITH` options
-
-No options yet.
 
 ## Description
 

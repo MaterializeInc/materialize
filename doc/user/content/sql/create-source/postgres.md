@@ -28,7 +28,7 @@ Field | Use
 ------|-----
 _src_name_  | The name for the source.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
-**IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source. If not specified, the `SIZE` option must be specified.
+**IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source.
 **CONNECTION** _connection_name_ | The name of the PostgreSQL connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgresql) documentation page.
 **FOR ALL TABLES** | Create subsources for all tables in the publication.
 **FOR SCHEMAS (** _schema_list_ **)** | Create subsources for specific schemas in the publication.
@@ -41,10 +41,6 @@ Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
 `PUBLICATION`                        | `text`    | **Required.** The PostgreSQL [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) (the replication data set containing the tables to be streamed to Materialize).
 `TEXT COLUMNS`                       | A list of names | Decode data as `text` for specific columns that contain PostgreSQL types that are unsupported in Materialize.
-
-### `WITH` options
-
-No options yet.
 
 ## Features
 
