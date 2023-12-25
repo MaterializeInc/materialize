@@ -21,7 +21,6 @@ $ kafka-create-topic topic=upsert
   )
   KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
-  WITH (SIZE = '1')
 
 > DROP CLUSTER IF EXISTS c1 CASCADE;
 

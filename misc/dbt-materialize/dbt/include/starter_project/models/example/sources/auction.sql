@@ -15,8 +15,10 @@
 
 {{ config(materialized='source') }}
 
+CREATE CLUSTER {{ this }}_cluster SIZE '3xsmall'
+
 CREATE SOURCE {{ this }}
+IN CLUSTER {{ this }}_cluster
 FROM LOAD GENERATOR AUCTION
 (TICK INTERVAL '1s')
 FOR ALL TABLES
-WITH (SIZE = '3xsmall')

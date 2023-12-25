@@ -29,17 +29,34 @@ COCKROACH_HEALTHCHECK_DISABLED = ServiceHealthcheck(
     start_period="30s",
 )
 
-TESTDRIVE_SCRIPT = dedent(
+INIT_SCRIPT = dedent(
     """
     # This source will persist throughout the CRDB rolling restart
-    > CREATE SOURCE IF NOT EXISTS s_old FROM LOAD GENERATOR COUNTER (TICK INTERVAL '0.1s') WITH (SIZE = '4-4');
+    > DROP CLUSTER IF EXISTS s_old_cluster CASCADE;
+    > CREATE CLUSTER s_old_cluster SIZE = '4-4';
+    > CREATE SOURCE s_old IN CLUSTER s_old_cluster FROM LOAD GENERATOR COUNTER (TICK INTERVAL '0.1s');
 
     > SELECT COUNT(*) > 1 FROM s_old;
     true
 
     # This source is recreated periodically
-    > DROP SOURCE IF EXISTS s_new CASCADE;
-    > CREATE SOURCE s_new FROM LOAD GENERATOR COUNTER (TICK INTERVAL '0.1s') WITH (SIZE ='4-4');
+    > DROP CLUSTER IF EXISTS s_new_cluster CASCADE;
+    > CREATE CLUSTER s_new_cluster SIZE ='4-4';
+    > CREATE SOURCE s_new IN CLUSTER s_new_cluster FROM LOAD GENERATOR COUNTER (TICK INTERVAL '0.1s');
+
+    > SELECT COUNT(*) > 1 FROM s_new;
+    true
+    """
+)
+
+VALIDATE_SCRIPT = dedent(
+    """
+    > SELECT COUNT(*) > 1 FROM s_old;
+    true
+
+    # This source is recreated periodically
+    > DROP SOURCE s_new CASCADE;
+    > CREATE SOURCE s_new IN CLUSTER s_new_cluster FROM LOAD GENERATOR COUNTER (TICK INTERVAL '0.1s');
 
     > SELECT COUNT(*) > 1 FROM s_new;
     true
@@ -151,14 +168,14 @@ def run_disruption(c: Composition, d: CrdbDisruption) -> None:
     c.up("materialized")
     c.up("testdrive", persistent=True)
 
+    # We expect the testdrive fragment to complete within Testdrive's default_timeout
+    # This will indicate that Mz has not hung for a prolonged period of time
+    # as a result of the disruption we just introduced
+    c.testdrive(input=INIT_SCRIPT)
+
     # Messing with cockroach node #0 borks the cluster permanently, so we start from node #1
     for id in range(1, CRDB_NODE_COUNT):
         d.disruption(c, id)
-
-        # We expect the testdrive fragment to complete within Testdrive's default_timeout
-        # This will indicate that Mz has not hung for a prolonged period of time
-        # as a result of the disruption we just introduced
-        c.testdrive(input=TESTDRIVE_SCRIPT)
 
         # Restart the node we just disrupted so that we can safely disrupt another node
         try:
@@ -169,4 +186,4 @@ def run_disruption(c: Composition, d: CrdbDisruption) -> None:
         c.up(f"cockroach{id}")
 
         # Confirm things continue to work after CRDB is back to full complement
-        c.testdrive(input=TESTDRIVE_SCRIPT)
+        c.testdrive(input=VALIDATE_SCRIPT)
