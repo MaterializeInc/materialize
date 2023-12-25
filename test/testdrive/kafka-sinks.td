@@ -219,27 +219,33 @@ $ kafka-create-topic topic=snk9 partitions=4
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-# create sink with SIZE set
-> CREATE SINK sink_with_size FROM src
+# create sink without specifying CLUSTER
+> CREATE SINK default_cluster_sink FROM src
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+
+# create sink with vestigial size specified
+! CREATE SINK sink_with_size FROM src
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
   WITH (SIZE = '2')
+contains:specifying sink SIZE deprecated; use IN CLUSTER
 
-# create sink with SIZE and SNAPSHOT set
-> CREATE SINK sink_with_options FROM src
+# create sink with SNAPSHOT set
+> CREATE SINK sink_with_options_cluster SIZE = '2';
+> CREATE SINK sink_with_options
+  IN CLUSTER sink_with_options_cluster
+  FROM src
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-  WITH (SIZE = '2', SNAPSHOT = false)
+  WITH (SNAPSHOT = false)
 
-# Check that the size is properly filled in the `mz_sinks` table
-> SELECT size FROM mz_sinks WHERE name = 'sink_with_size'
-2
-
-# Unlinked sinks have null size
-> SELECT size FROM mz_sinks WHERE name = 'snk9'
-<null>
+# All sinks are unlinked
+> SELECT bool_and(size IS NULL) FROM mz_sinks;
+true
 
 # Check that SHOW SINKS shows the size correctly
 > SHOW SINKS

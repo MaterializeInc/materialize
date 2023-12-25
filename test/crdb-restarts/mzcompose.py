@@ -32,14 +32,16 @@ COCKROACH_HEALTHCHECK_DISABLED = ServiceHealthcheck(
 TESTDRIVE_SCRIPT = dedent(
     """
     # This source will persist throughout the CRDB rolling restart
-    > CREATE SOURCE IF NOT EXISTS s_old FROM LOAD GENERATOR COUNTER (TICK INTERVAL '0.1s') WITH (SIZE = '4-4');
+    > CREATE CLUSTER IF NOT EXISTS s_old_cluster SIZE = '4-4' 
+    > CREATE SOURCE IF NOT EXISTS s_old IN CLUSTER s_old_cluster FROM LOAD GENERATOR COUNTER (TICK INTERVAL '0.1s');
 
     > SELECT COUNT(*) > 1 FROM s_old;
     true
 
     # This source is recreated periodically
     > DROP SOURCE IF EXISTS s_new CASCADE;
-    > CREATE SOURCE s_new FROM LOAD GENERATOR COUNTER (TICK INTERVAL '0.1s') WITH (SIZE ='4-4');
+    > CREATE CLUSTER IF NOT EXISTS s_new_cluster SIZE ='4-4';
+    > CREATE SOURCE s_new IN CLUSTER s_new_cluster FROM LOAD GENERATOR COUNTER (TICK INTERVAL '0.1s');
 
     > SELECT COUNT(*) > 1 FROM s_new;
     true

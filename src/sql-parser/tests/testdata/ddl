@@ -590,25 +590,25 @@ CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTE
 CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(false))) }] })
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES WITH (SIZE = 'xlarge')
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES
 ----
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (SIZE = 'xlarge')
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES
 =>
-CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Size, value: Some(Value(String("xlarge"))) }] })
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None }, format: Some(Bytes), envelope: None, with_options: [] })
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES WITH (SIZE = 'xlarge', SNAPSHOT = true)
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES WITH (SNAPSHOT = true)
 ----
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (SIZE = 'xlarge', SNAPSHOT = true)
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (SNAPSHOT = true)
 =>
-CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Size, value: Some(Value(String("xlarge"))) }, CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }] })
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }] })
 
 parse-statement
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES WITH (SIZE = 'xlarge', SNAPSHOT = true)
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT BYTES WITH (SNAPSHOT = true)
 ----
-CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (SIZE = 'xlarge', SNAPSHOT = true)
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') FORMAT BYTES WITH (SNAPSHOT = true)
 =>
-CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Size, value: Some(Value(String("xlarge"))) }, CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }] })
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None }, format: Some(Bytes), envelope: None, with_options: [CreateSinkOption { name: Snapshot, value: Some(Value(Boolean(true))) }] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC 'topic') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn2 (NULL DEFAULTS = TRUE) ENVELOPE UPSERT
@@ -2266,10 +2266,10 @@ CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') KEY FORMAT AVRO U
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaSourceConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, include_metadata: [Key { alias: None }, Timestamp { alias: None }, Partition { alias: Some(Ident("PART2")) }, Offset { alias: None }, Headers { alias: None }], format: KeyValue { key: Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("csr_conn")])), options: [] }, key_strategy: None, value_strategy: None, seed: None } }), value: Avro(Csr { csr_connection: CsrConnectionAvro { connection: CsrConnection { connection: Name(UnresolvedItemName([Ident("csr_conn")])), options: [] }, key_strategy: None, value_strategy: None, seed: Some(CsrSeedAvro { key_schema: Some("{\"some\": \"schema\"}"), value_schema: "123" }) } }) }, envelope: Some(None), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
-CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (SIZE large)
+CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE
 ----
 error: Expected CONNECTION, found BROKER
-CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE WITH (SIZE large)
+CREATE SOURCE golbat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE
                                 ^
 
 parse-statement
@@ -2348,11 +2348,11 @@ CREATE SOURCE ts FROM TEST SCRIPT 'foo.json'
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("ts")]), in_cluster: None, col_names: [], connection: TestScript { desc_json: "foo.json" }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') with (SIZE 'small', IGNORE KEYS 'true', TIMELINE 'timeline', TIMESTAMP INTERVAL 'interval')
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red') with (IGNORE KEYS 'true', TIMELINE 'timeline', TIMESTAMP INTERVAL 'interval')
 ----
-CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') WITH (SIZE = 'small', IGNORE KEYS = 'true', TIMELINE = 'timeline', TIMESTAMP INTERVAL = 'interval')
+CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red') WITH (IGNORE KEYS = 'true', TIMELINE = 'timeline', TIMESTAMP INTERVAL = 'interval')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }, CreateSourceOption { name: IgnoreKeys, value: Some(Value(String("true"))) }, CreateSourceOption { name: Timeline, value: Some(Value(String("timeline"))) }, CreateSourceOption { name: TimestampInterval, value: Some(Value(String("interval"))) }], referenced_subsources: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: IgnoreKeys, value: Some(Value(String("true"))) }, CreateSourceOption { name: Timeline, value: Some(Value(String("timeline"))) }, CreateSourceOption { name: TimestampInterval, value: Some(Value(String("interval"))) }], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
 ALTER SYSTEM SET wal_level TO logical
@@ -2488,60 +2488,60 @@ CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') 
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: Some(SubsetSchemas([Ident("one"), Ident("two")])), progress_subsource: None })
 
 parse-statement
-CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR ALL TABLES WITH (SIZE = 'small');
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR ALL TABLES;
 ----
-CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR ALL TABLES WITH (SIZE = 'small')
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR ALL TABLES
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(All), progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: Some(All), progress_subsource: None })
 
 parse-statement
-CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (TEXT COLUMNS = [foo, foo.bar, foo.bar.qux, foo.bar.qux.qax, foo.bar.qux.qax.baz], DETAILS = 'details') FOR ALL TABLES WITH (SIZE = 'small');
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (TEXT COLUMNS = [foo, foo.bar, foo.bar.qux, foo.bar.qux.qax, foo.bar.qux.qax.baz], DETAILS = 'details') FOR ALL TABLES;
 ----
-CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (TEXT COLUMNS = (foo, foo.bar, foo.bar.qux, foo.bar.qux.qax, foo.bar.qux.qax.baz), DETAILS = 'details') FOR ALL TABLES WITH (SIZE = 'small')
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (TEXT COLUMNS = (foo, foo.bar, foo.bar.qux, foo.bar.qux.qax, foo.bar.qux.qax.baz), DETAILS = 'details') FOR ALL TABLES
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: TextColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("foo")])), UnresolvedItemName(UnresolvedItemName([Ident("foo"), Ident("bar")])), UnresolvedItemName(UnresolvedItemName([Ident("foo"), Ident("bar"), Ident("qux")])), UnresolvedItemName(UnresolvedItemName([Ident("foo"), Ident("bar"), Ident("qux"), Ident("qax")])), UnresolvedItemName(UnresolvedItemName([Ident("foo"), Ident("bar"), Ident("qux"), Ident("qax"), Ident("baz")]))])) }, PgConfigOption { name: Details, value: Some(Value(String("details"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(All), progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: TextColumns, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("foo")])), UnresolvedItemName(UnresolvedItemName([Ident("foo"), Ident("bar")])), UnresolvedItemName(UnresolvedItemName([Ident("foo"), Ident("bar"), Ident("qux")])), UnresolvedItemName(UnresolvedItemName([Ident("foo"), Ident("bar"), Ident("qux"), Ident("qax")])), UnresolvedItemName(UnresolvedItemName([Ident("foo"), Ident("bar"), Ident("qux"), Ident("qax"), Ident("baz")]))])) }, PgConfigOption { name: Details, value: Some(Value(String("details"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: Some(All), progress_subsource: None })
 
 parse-statement
-CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES (foo, bar as qux, baz into zop) WITH (SIZE = 'small');
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES (foo, bar as qux, baz into zop);
 ----
-CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR TABLES (foo, bar AS qux, baz AS zop) WITH (SIZE = 'small')
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR TABLES (foo, bar AS qux, baz AS zop)
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(SubsetTables([CreateSourceSubsource { reference: UnresolvedItemName([Ident("foo")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("bar")]), subsource: Some(Deferred(UnresolvedItemName([Ident("qux")]))) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("baz")]), subsource: Some(Deferred(UnresolvedItemName([Ident("zop")]))) }])), progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: Some(SubsetTables([CreateSourceSubsource { reference: UnresolvedItemName([Ident("foo")]), subsource: None }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("bar")]), subsource: Some(Deferred(UnresolvedItemName([Ident("qux")]))) }, CreateSourceSubsource { reference: UnresolvedItemName([Ident("baz")]), subsource: Some(Deferred(UnresolvedItemName([Ident("zop")]))) }])), progress_subsource: None })
 
 parse-statement
-CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES ([s1 AS foo.bar]) WITH (SIZE = 'small');
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES ([s1 AS foo.bar]);
 ----
 error: Expected identifier, found left square bracket
-CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES ([s1 AS foo.bar]) WITH (SIZE = 'small');
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES ([s1 AS foo.bar]);
                                                                                           ^
 
 parse-statement
-CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES (baz AS [s1 AS foo.bar]) WITH (SIZE = 'small');
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES (baz AS [s1 AS foo.bar]);
 ----
-CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR TABLES (baz AS [s1 AS foo.bar]) WITH (SIZE = 'small')
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR TABLES (baz AS [s1 AS foo.bar])
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(SubsetTables([CreateSourceSubsource { reference: UnresolvedItemName([Ident("baz")]), subsource: Some(Named(Id("s1", UnresolvedItemName([Ident("foo"), Ident("bar")])))) }])), progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: Some(SubsetTables([CreateSourceSubsource { reference: UnresolvedItemName([Ident("baz")]), subsource: Some(Named(Id("s1", UnresolvedItemName([Ident("foo"), Ident("bar")])))) }])), progress_subsource: None })
 
 parse-statement
-CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES ([s1 AS foo.bar] AS baz) WITH (SIZE = 'small');
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES ([s1 AS foo.bar] AS baz);
 ----
 error: Expected identifier, found left square bracket
-CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES ([s1 AS foo.bar] AS baz) WITH (SIZE = 'small');
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES ([s1 AS foo.bar] AS baz);
                                                                                           ^
 
 parse-statement
-CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') WITH (SIZE = 'small') FOR ALL TABLES;
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR ALL TABLES;
 ----
-error: Expected end of statement, found FOR
-CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') WITH (SIZE = 'small') FOR ALL TABLES;
-                                                                                                    ^
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR ALL TABLES
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: Some(All), progress_subsource: None })
 
 parse-statement
-CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR ALL TABLES EXPOSE PROGRESS AS foo.bar WITH (SIZE = 'small');
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR ALL TABLES EXPOSE PROGRESS AS foo.bar;
 ----
-CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR ALL TABLES EXPOSE PROGRESS AS foo.bar WITH (SIZE = 'small')
+CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION = 'mz_source') FOR ALL TABLES EXPOSE PROGRESS AS foo.bar
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("small"))) }], referenced_subsources: Some(All), progress_subsource: Some(Deferred(UnresolvedItemName([Ident("foo"), Ident("bar")]))) })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("mz_source")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pg")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("mz_source"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: Some(All), progress_subsource: Some(Deferred(UnresolvedItemName([Ident("foo"), Ident("bar")]))) })
 
 parse-statement
 ALTER CLUSTER foo RENAME TO joe
@@ -2859,8 +2859,8 @@ CREATE SOURCE header2 FROM KAFKA CONNECTION conn (TOPIC = 'test') KEY FORMAT TEX
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("header2")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn")])), options: [KafkaSourceConfigOption { name: Topic, value: Some(Value(String("test"))) }] }, include_metadata: [Header { key: "header1", alias: Ident("h1"), use_bytes: false }, Header { key: "header2", alias: Ident("h2"), use_bytes: true }], format: KeyValue { key: Text, value: Json }, envelope: Some(Upsert), if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
-CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1', RETAIN HISTORY FOR '1s');
+CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY FOR '1s');
 ----
-CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE = '1', RETAIN HISTORY = FOR '1s')
+CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY = FOR '1s')
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("s")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Counter, options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: Size, value: Some(Value(String("1"))) }, CreateSourceOption { name: RetainHistory, value: Some(RetainHistoryFor(String("1s"))) }], referenced_subsources: None, progress_subsource: None })
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("s")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Counter, options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [CreateSourceOption { name: RetainHistory, value: Some(RetainHistoryFor(String("1s"))) }], referenced_subsources: None, progress_subsource: None })

@@ -63,16 +63,13 @@ statement ok
 DROP VIEW renamed
 
 statement ok
-CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
-
-statement ok
-ALTER SOURCE s SET (SIZE '2');
+CREATE SOURCE s FROM LOAD GENERATOR COUNTER;
 
 statement ok
 DROP SOURCE s;
 
 statement ok
-CREATE SOURCE multiplex FROM LOAD GENERATOR AUCTION FOR ALL TABLES WITH (SIZE '1');
+CREATE SOURCE multiplex FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 statement ok
 ALTER CLUSTER REPLICA foo.r RENAME TO s;
@@ -128,29 +125,20 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 37  drop  index  {"database":"materialize","id":"u6","item":"renamed_primary_idx","schema":"public"}  materialize
 38  drop  view  {"database":"materialize","id":"u2","item":"renamed","schema":"public"}  materialize
 39  create  source  {"database":"materialize","id":"u7","item":"s_progress","schema":"public","size":null,"type":"progress"}  materialize
-40  create  cluster  {"id":"u3","name":"materialize_public_s"}  materialize
-41  create  cluster-replica  {"billed_as":null,"cluster_id":"u3","cluster_name":"materialize_public_s","disk":true,"internal":false,"logical_size":"1","replica_id":"u3","replica_name":"linked"}  materialize
-42  create  source  {"database":"materialize","id":"u8","item":"s","schema":"public","size":"1","type":"load-generator"}  materialize
-43  drop  cluster-replica  {"cluster_id":"u3","cluster_name":"materialize_public_s","replica_id":"u3","replica_name":"linked"}  materialize
-44  create  cluster-replica  {"billed_as":null,"cluster_id":"u3","cluster_name":"materialize_public_s","disk":true,"internal":false,"logical_size":"2","replica_id":"u4","replica_name":"linked"}  materialize
-45  alter  source  {"database":"materialize","id":"u8","item":"s","new_size":"2","old_size":"1","schema":"public"}  materialize
-46  drop  source  {"database":"materialize","id":"u7","item":"s_progress","schema":"public"}  materialize
-47  drop  source  {"database":"materialize","id":"u8","item":"s","schema":"public"}  materialize
-48  drop  cluster-replica  {"cluster_id":"u3","cluster_name":"materialize_public_s","replica_id":"u4","replica_name":"linked"}  materialize
-49  drop  cluster  {"id":"u3","name":"materialize_public_s"}  materialize
-50  create  source  {"database":"materialize","id":"u9","item":"accounts","schema":"public","size":null,"type":"subsource"}  materialize
-51  create  source  {"database":"materialize","id":"u10","item":"auctions","schema":"public","size":null,"type":"subsource"}  materialize
-52  create  source  {"database":"materialize","id":"u11","item":"bids","schema":"public","size":null,"type":"subsource"}  materialize
-53  create  source  {"database":"materialize","id":"u12","item":"organizations","schema":"public","size":null,"type":"subsource"}  materialize
-54  create  source  {"database":"materialize","id":"u13","item":"users","schema":"public","size":null,"type":"subsource"}  materialize
-55  create  source  {"database":"materialize","id":"u14","item":"multiplex_progress","schema":"public","size":null,"type":"progress"}  materialize
-56  create  cluster  {"id":"u4","name":"materialize_public_multiplex"}  materialize
-57  create  cluster-replica  {"billed_as":null,"cluster_id":"u4","cluster_name":"materialize_public_multiplex","disk":true,"internal":false,"logical_size":"1","replica_id":"u5","replica_name":"linked"}  materialize
-58  create  source  {"database":"materialize","id":"u15","item":"multiplex","schema":"public","size":"1","type":"load-generator"}  materialize
-59  alter  cluster-replica  {"cluster_id":"u2","new_name":"s","old_name":"r","replica_id":"u2"}  materialize
-60  alter  cluster  {"id":"u2","new_name":"bar","old_name":"foo"}  materialize
-61  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"bar","replica_id":"u2","replica_name":"s"}  materialize
-62  drop  cluster  {"id":"u2","name":"bar"}  materialize
+40  create  source  {"database":"materialize","id":"u8","item":"s","schema":"public","size":null,"type":"load-generator"}  materialize
+41  drop  source  {"database":"materialize","id":"u7","item":"s_progress","schema":"public"}  materialize
+42  drop  source  {"database":"materialize","id":"u8","item":"s","schema":"public"}  materialize
+43  create  source  {"database":"materialize","id":"u9","item":"accounts","schema":"public","size":null,"type":"subsource"}  materialize
+44  create  source  {"database":"materialize","id":"u10","item":"auctions","schema":"public","size":null,"type":"subsource"}  materialize
+45  create  source  {"database":"materialize","id":"u11","item":"bids","schema":"public","size":null,"type":"subsource"}  materialize
+46  create  source  {"database":"materialize","id":"u12","item":"organizations","schema":"public","size":null,"type":"subsource"}  materialize
+47  create  source  {"database":"materialize","id":"u13","item":"users","schema":"public","size":null,"type":"subsource"}  materialize
+48  create  source  {"database":"materialize","id":"u14","item":"multiplex_progress","schema":"public","size":null,"type":"progress"}  materialize
+49  create  source  {"database":"materialize","id":"u15","item":"multiplex","schema":"public","size":null,"type":"load-generator"}  materialize
+50  alter  cluster-replica  {"cluster_id":"u2","new_name":"s","old_name":"r","replica_id":"u2"}  materialize
+51  alter  cluster  {"id":"u2","new_name":"bar","old_name":"foo"}  materialize
+52  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"bar","replica_id":"u2","replica_name":"s"}  materialize
+53  drop  cluster  {"id":"u2","name":"bar"}  materialize
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET unsafe_mock_audit_event_timestamp = 666
@@ -163,7 +151,7 @@ CREATE TABLE tt ()
 query ITTTTT
 SELECT id, event_type, object_type, details, user, occurred_at FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-63  create  table  {"database":"materialize","id":"u16","item":"tt","schema":"public"}  materialize  1970-01-01␠00:00:00.666+00
+54  create  table  {"database":"materialize","id":"u16","item":"tt","schema":"public"}  materialize  1970-01-01␠00:00:00.666+00
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM RESET unsafe_mock_audit_event_timestamp
@@ -183,9 +171,6 @@ SELECT replica_id, cluster_name, replica_name, size, created_at IS NOT NULL, dro
 ----
 u1  default  r1  2  true  false  NULL  1
 u2  foo  r  1  true  true  true  1
-u3  materialize_public_s  linked  1  true  true  true  1
-u4  materialize_public_s  linked  2  true  true  true  1
-u5  materialize_public_multiplex  linked  1  true  false  NULL  1
 
 simple conn=mz_system,user=mz_system
 CREATE ROLE r1;
@@ -200,7 +185,7 @@ COMPLETE 0
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-66  grant  table  {"grantee_id":"u3","grantor_id":"u1","object_id":"Iu3","privileges":"r"}  mz_system
+57  grant  table  {"grantee_id":"u3","grantor_id":"u1","object_id":"Iu3","privileges":"r"}  mz_system
 
 simple conn=mz_system,user=mz_system
 REVOKE SELECT ON t FROM r1;
@@ -210,7 +195,7 @@ COMPLETE 0
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-67  revoke  table  {"grantee_id":"u3","grantor_id":"u1","object_id":"Iu3","privileges":"r"}  mz_system
+58  revoke  table  {"grantee_id":"u3","grantor_id":"u1","object_id":"Iu3","privileges":"r"}  mz_system
 
 simple conn=mz_system,user=mz_system
 ALTER DEFAULT PRIVILEGES FOR ROLE r1 IN SCHEMA public GRANT SELECT ON TABLES to PUBLIC;
@@ -220,7 +205,7 @@ COMPLETE 0
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-68  grant  table  {"database_id":"u1","grantee_id":"p","privileges":"r","role_id":"u3","schema_id":"u3"}  mz_system
+59  grant  table  {"database_id":"u1","grantee_id":"p","privileges":"r","role_id":"u3","schema_id":"u3"}  mz_system
 
 simple conn=mz_system,user=mz_system
 ALTER DEFAULT PRIVILEGES FOR ROLE r1 IN SCHEMA public REVOKE SELECT ON TABLES FROM PUBLIC;
@@ -230,7 +215,7 @@ COMPLETE 0
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-69  revoke  table  {"database_id":"u1","grantee_id":"p","privileges":"r","role_id":"u3","schema_id":"u3"}  mz_system
+60  revoke  table  {"database_id":"u1","grantee_id":"p","privileges":"r","role_id":"u3","schema_id":"u3"}  mz_system
 
 statement ok
 CREATE TABLE t1 (a INT);
@@ -243,7 +228,7 @@ COMPLETE 0
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-71  alter  table  {"new_owner_id":"u3","object_id":"Iu17","old_owner_id":"u1"}  mz_system
+62  alter  table  {"new_owner_id":"u3","object_id":"Iu17","old_owner_id":"u1"}  mz_system
 
 # Test events for auto-created users, which have the username only in the event details, but not the user column.
 simple conn=c,user=new_user
@@ -255,4 +240,4 @@ COMPLETE 1
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-72  create  role  {"id":"u4","name":"new_user"}  NULL
+63  create  role  {"id":"u4","name":"new_user"}  NULL

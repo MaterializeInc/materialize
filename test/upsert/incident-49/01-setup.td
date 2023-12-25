@@ -35,12 +35,15 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
 > CREATE CONNECTION c_conn
   FOR CONFLUENT SCHEMA REGISTRY URL '${testdrive.schema-registry-url}'
 
+> CREATE CLUSTER upsert_cluster SIZE '1';
+
 > CREATE SOURCE upsert
+  IN CLUSTER upsert_cluster
   FROM KAFKA CONNECTION conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION c_conn
-  ENVELOPE UPSERT WITH (SIZE = '1')
+  ENVELOPE UPSERT
 
 > SELECT f2 from upsert
 1

@@ -528,21 +528,23 @@ true
 # Ensure we can start a source with more workers than the default max_wal_senders param (10)
 #
 
-> CREATE SOURCE large_cluster
-  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-  FOR TABLES ("pk_table" AS large_cluster_pk_table)
-  WITH (SIZE = '16');
+> CREATE CLUSTER large_cluster SIZE = '16';
 
-> SELECT * FROM large_cluster_pk_table;
+> CREATE SOURCE large_source
+  IN CLUSTER large_cluster
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
+  FOR TABLES ("pk_table" AS large_source_pk_table);
+
+> SELECT * FROM large_source_pk_table;
 13 three
 14 four
 2 two_two
 5 five
 
-> SELECT status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_cluster_pk_table';
+> SELECT status = 'running' FROM mz_internal.mz_source_statuses WHERE name = 'large_source_pk_table';
 true
 
-> DROP SOURCE large_cluster;
+> DROP SOURCE large_source;
 
 #
 # Remove all data on the Postgres side

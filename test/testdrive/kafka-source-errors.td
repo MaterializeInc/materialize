@@ -39,7 +39,7 @@ contains:failed to lookup address information
 # Check that for all tables clause is rejected
 ! CREATE SOURCE bad_definition1
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'any_topic')
-  FORMAT BYTES FOR ALL TABLES WITH (SIZE = '1');
+  FORMAT BYTES FOR ALL TABLES;
 contains: FOR ALL TABLES is only valid for multi-output sources
 
 # Check that for tables() clause is rejected
