@@ -9,15 +9,16 @@
 
 //! Provides tooling to handle `WITH` options.
 
+use mz_repr::adt::interval::Interval;
 use mz_repr::{strconv, GlobalId};
 use mz_sql_parser::ast::{Ident, KafkaBroker, ReplicaDefinition};
 use mz_storage_types::connections::StringOrSecret;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-use crate::ast::{AstInfo, IntervalValue, UnresolvedItemName, Value, WithOptionValue};
+use crate::ast::{AstInfo, UnresolvedItemName, Value, WithOptionValue};
 use crate::names::{ResolvedDataType, ResolvedItemName};
-use crate::plan::{Aug, PlanError};
+use crate::plan::{literal, Aug, PlanError};
 
 pub trait TryFromValue<T>: Sized {
     fn try_from_value(v: T) -> Result<Self, PlanError>;
@@ -162,21 +163,9 @@ impl ImpliedValue for StringOrSecret {
     }
 }
 
-// This conversion targets the standard library's `Duration` type rather than
-// the Materialize SQL-specific `Interval` type because, at the time of writing,
-// `Duration` was the desired Rust type for every interval-valued option.
-//
-// In the future, it would be reasonable to add an implementation that targets
-// `Interval` for options that want it as such, e.g., because they need to
-// support negative intervals.
 impl TryFromValue<Value> for Duration {
     fn try_from_value(v: Value) -> Result<Self, PlanError> {
-        let interval = match v {
-            Value::Interval(IntervalValue { value, .. })
-            | Value::Number(value)
-            | Value::String(value) => strconv::parse_interval(&value)?,
-            _ => sql_bail!("cannot use value as interval"),
-        };
+        let interval = Interval::try_from_value(v)?;
         Ok(interval.duration()?)
     }
     fn name() -> String {
@@ -185,6 +174,25 @@ impl TryFromValue<Value> for Duration {
 }
 
 impl ImpliedValue for Duration {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an interval value")
+    }
+}
+
+impl TryFromValue<Value> for Interval {
+    fn try_from_value(v: Value) -> Result<Self, PlanError> {
+        match v {
+            Value::Interval(value) => literal::plan_interval(&value),
+            Value::Number(value) | Value::String(value) => Ok(strconv::parse_interval(&value)?),
+            _ => sql_bail!("cannot use value as interval"),
+        }
+    }
+    fn name() -> String {
+        "interval".to_string()
+    }
+}
+
+impl ImpliedValue for Interval {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide an interval value")
     }
