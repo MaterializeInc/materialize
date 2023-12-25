@@ -180,7 +180,7 @@ fn test_statement_logging_immediate() {
         "CREATE SECRET s AS 'hunter2';",
         "DROP SECRET s;",
         "",
-        "CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (size='2')",
+        "CREATE SOURCE s FROM LOAD GENERATOR COUNTER",
         "PREPARE foo AS SELECT * FROM t",
         "EXECUTE foo",
         "BEGIN",

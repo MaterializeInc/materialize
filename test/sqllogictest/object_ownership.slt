@@ -309,7 +309,7 @@ ALTER INDEX jt_ind SET (LOGICAL COMPACTION WINDOW = 0)
 ## Sources
 
 statement ok
-CREATE SOURCE ms FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+CREATE SOURCE ms FROM LOAD GENERATOR COUNTER;
 
 query T
 SELECT mz_roles.name
@@ -342,16 +342,13 @@ SELECT mz_roles.name
 group_materialize
 
 statement ok
-ALTER SOURCE ms SET (SIZE = '4')
-
-statement ok
 ALTER SOURCE ms RENAME TO ICs
 
 statement ok
 DROP SOURCE ICs
 
 simple conn=joe,user=joe
-CREATE SOURCE js FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+CREATE SOURCE js FROM LOAD GENERATOR COUNTER;
 ----
 COMPLETE 0
 
@@ -380,7 +377,7 @@ ALTER SOURCE js RENAME TO cool
 statement error must be owner of SOURCE materialize.public.js
 ALTER SOURCE js OWNER TO group_materialize
 
-statement error must be owner of SOURCE materialize.public.js
+statement error db error: ERROR: altering size of sources and sinks no longer supported
 ALTER SOURCE js SET (SIZE = '4')
 
 ## Views
@@ -1237,7 +1234,7 @@ GRANT CREATE ON CLUSTER quickstart TO owner;
 COMPLETE 0
 
 simple conn=owner3,user=owner
-create SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+create SOURCE s FROM LOAD GENERATOR COUNTER;
 ----
 COMPLETE 0
 
@@ -1255,11 +1252,6 @@ owner: privileges granted on SOURCE "materialize.public.s" to owner
 owner: privileges on DATABASE "materialize" granted by mz_system
 owner: privileges on SCHEMA "materialize.public" granted by mz_system
 owner: privileges on CLUSTER "quickstart" granted by mz_system
-owner: owner of CLUSTER "materialize_public_s"
-owner: privileges granted on CLUSTER "materialize_public_s" to mz_support
-owner: privileges on CLUSTER "materialize_public_s" granted by owner
-owner: privileges granted on CLUSTER "materialize_public_s" to owner
-owner: owner of CLUSTER REPLICA "linked"
 owner: privileges on SYSTEM granted by mz_system
 
 simple conn=owner3,user=owner
@@ -2305,7 +2297,7 @@ COMPLETE 0
 # object and primary source owners.
 
 statement ok
-CREATE SOURCE s FROM LOAD GENERATOR AUCTION FOR ALL TABLES WITH (SIZE '1')
+CREATE SOURCE s FROM LOAD GENERATOR AUCTION FOR ALL TABLES
 
 query TT
 SELECT mz_sources.name, mz_roles.name
@@ -2328,7 +2320,7 @@ SELECT mz_clusters.name, mz_roles.name
   LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
   WHERE mz_clusters.name = 'materialize_public_s'
 ----
-materialize_public_s  materialize
+
 
 query TT
 SELECT mz_cluster_replicas.name, mz_roles.name
@@ -2337,9 +2329,9 @@ SELECT mz_cluster_replicas.name, mz_roles.name
   LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
   WHERE mz_clusters.name = 'materialize_public_s' AND mz_cluster_replicas.name = 'linked'
 ----
-linked  materialize
 
-statement error cannot modify linked cluster "materialize_public_s"
+
+statement error db error: ERROR: unknown cluster 'materialize_public_s'
 ALTER CLUSTER materialize_public_s OWNER TO joe
 
 statement error altering the owner of a cluster replica is not supported
@@ -2372,7 +2364,7 @@ SELECT mz_clusters.name, mz_roles.name
   LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
   WHERE mz_clusters.name = 'materialize_public_s'
 ----
-materialize_public_s  materialize
+
 
 query TT
 SELECT mz_cluster_replicas.name, mz_roles.name
@@ -2381,7 +2373,7 @@ SELECT mz_cluster_replicas.name, mz_roles.name
   LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
   WHERE mz_clusters.name = 'materialize_public_s' AND mz_cluster_replicas.name = 'linked'
 ----
-linked  materialize
+
 
 simple conn=mz_system,user=mz_system
 ALTER SOURCE s OWNER TO joe
@@ -2409,7 +2401,7 @@ SELECT mz_clusters.name, mz_roles.name
   LEFT JOIN mz_roles ON mz_clusters.owner_id = mz_roles.id
   WHERE mz_clusters.name = 'materialize_public_s'
 ----
-materialize_public_s  joe
+
 
 query TT
 SELECT mz_cluster_replicas.name, mz_roles.name
@@ -2418,7 +2410,7 @@ SELECT mz_cluster_replicas.name, mz_roles.name
   LEFT JOIN mz_roles ON mz_cluster_replicas.owner_id = mz_roles.id
   WHERE mz_clusters.name = 'materialize_public_s' AND mz_cluster_replicas.name = 'linked'
 ----
-linked  joe
+
 
 simple conn=mz_system,user=mz_system
 DROP SOURCE s
@@ -2876,22 +2868,8 @@ REVOKE CREATE ON SCHEMA public FROM joe
 ----
 COMPLETE 0
 
-## Test linked clusters
-
-statement ok
-CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1')
-
-query TT
-SELECT name, type FROM mz_objects WHERE name = 's'
-----
-s  source
-
 statement ok
 DROP OWNED BY materialize CASCADE
-
-query TT
-SELECT name, type FROM mz_objects WHERE name = 's'
-----
 
 # Test REASSIGN OWNED
 

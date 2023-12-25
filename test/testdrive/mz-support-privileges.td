@@ -13,7 +13,9 @@
 
 $ postgres-connect name=mz_support url=postgres://mz_support:materialize@${testdrive.materialize-internal-sql-addr}
 
-> CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES WITH (size = '1');
+> CREATE SOURCE auction_house
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 > CREATE VIEW v AS SELECT b.auction_id, b.buyer, b.amount, b.bid_time, u.org_id FROM bids b JOIN users u ON(b.buyer = u.id);
 

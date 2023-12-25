@@ -3544,7 +3544,7 @@ async fn test_retain_history() {
         .is_err());
     assert!(client
         .batch_execute(
-            "CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE = '1', RETAIN HISTORY = FOR '2s')",
+            "CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY = FOR '2s')",
         )
         .await
         .is_err());
@@ -3582,7 +3582,7 @@ async fn test_retain_history() {
         .unwrap();
     client
         .batch_execute(
-            "CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE = '1', RETAIN HISTORY = FOR '5s')",
+            "CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY = FOR '5s')",
         )
         .await
         .unwrap();
