@@ -640,6 +640,8 @@ impl Catalog {
 
     #[cfg(test)]
     pub async fn allocate_system_id(&self) -> Result<GlobalId, Error> {
+        use mz_ore::collections::CollectionExt;
+
         self.storage()
             .await
             .allocate_system_ids(1)
