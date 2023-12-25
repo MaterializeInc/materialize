@@ -198,12 +198,12 @@ class Copy(PreImage):
     def run(self) -> None:
         super().run()
         for src in self.inputs():
-            dst = self.path / self.destination / Path(src).relative_to(self.source)
+            dst = self.path / self.destination / src
             dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(self.rd.root / src, dst)
+            shutil.copy(self.rd.root / self.source / src, dst)
 
     def inputs(self) -> set[str]:
-        return set(git.expand_globs(self.rd.root, f"{self.source}/{self.matching}"))
+        return set(git.expand_globs(self.rd.root / self.source, self.matching))
 
 
 class CargoPreImage(PreImage):

@@ -74,7 +74,7 @@ def expand_globs(root: Path, *specs: Path | str) -> set[str]:
         "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git hash-object -t tree /dev/null
     )
     diff_files = spawn.capture(
-        ["git", "diff", "--name-only", "-z", empty_tree, "--", *specs],
+        ["git", "diff", "--name-only", "-z", "--relative", empty_tree, "--", *specs],
         cwd=root,
     )
 
