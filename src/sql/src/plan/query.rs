@@ -90,7 +90,7 @@ use crate::plan::typeconv::{self, CastContext};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::PlanError::InvalidWmrRecursionLimit;
 use crate::plan::{
-    transform_ast, Params, PlanContext, QueryWhen, ShowCreatePlan, WebhookValidation,
+    literal, transform_ast, Params, PlanContext, QueryWhen, ShowCreatePlan, WebhookValidation,
     WebhookValidationSecret,
 };
 use crate::session::vars::{self, FeatureFlag};
@@ -5217,22 +5217,8 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, PlanError> {
             false => (Datum::False, ScalarType::Bool),
             true => (Datum::True, ScalarType::Bool),
         },
-        Value::Interval(iv) => {
-            let leading_precision = parser_datetimefield_to_adt(iv.precision_high);
-            let mut i = strconv::parse_interval_w_disambiguator(
-                &iv.value,
-                match leading_precision {
-                    mz_repr::adt::datetime::DateTimeField::Hour
-                    | mz_repr::adt::datetime::DateTimeField::Minute => Some(leading_precision),
-                    _ => None,
-                },
-                parser_datetimefield_to_adt(iv.precision_low),
-            )?;
-            i.truncate_high_fields(parser_datetimefield_to_adt(iv.precision_high));
-            i.truncate_low_fields(
-                parser_datetimefield_to_adt(iv.precision_low),
-                iv.fsec_max_precision,
-            )?;
+        Value::Interval(i) => {
+            let i = literal::plan_interval(i)?;
             (Datum::Interval(i), ScalarType::Interval)
         }
         Value::String(s) => return Ok(CoercibleScalarExpr::LiteralString(s.clone())),
@@ -5456,27 +5442,6 @@ fn window_frame_bound_ast_to_expr(bound: &WindowFrameBound) -> mz_expr::WindowFr
         WindowFrameBound::Following(Some(offset)) => {
             mz_expr::WindowFrameBound::OffsetFollowing(*offset)
         }
-    }
-}
-
-// Implement these as two identical enums without From/Into impls so that they
-// have no cross-package dependencies, leaving that work up to this crate.
-fn parser_datetimefield_to_adt(
-    dtf: mz_sql_parser::ast::DateTimeField,
-) -> mz_repr::adt::datetime::DateTimeField {
-    use mz_sql_parser::ast::DateTimeField::*;
-    match dtf {
-        Millennium => mz_repr::adt::datetime::DateTimeField::Millennium,
-        Century => mz_repr::adt::datetime::DateTimeField::Century,
-        Decade => mz_repr::adt::datetime::DateTimeField::Decade,
-        Year => mz_repr::adt::datetime::DateTimeField::Year,
-        Month => mz_repr::adt::datetime::DateTimeField::Month,
-        Day => mz_repr::adt::datetime::DateTimeField::Day,
-        Hour => mz_repr::adt::datetime::DateTimeField::Hour,
-        Minute => mz_repr::adt::datetime::DateTimeField::Minute,
-        Second => mz_repr::adt::datetime::DateTimeField::Second,
-        Milliseconds => mz_repr::adt::datetime::DateTimeField::Milliseconds,
-        Microseconds => mz_repr::adt::datetime::DateTimeField::Microseconds,
     }
 }
 
