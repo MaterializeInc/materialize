@@ -571,7 +571,7 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
 
 /// Version of [`StateUpdateKind`] to allow reading/writing raw json from/to persist.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct StateUpdateKindRaw(Jsonb);
+pub struct StateUpdateKindRaw(Jsonb);
 
 impl From<StateUpdateKind> for StateUpdateKindRaw {
     fn from(value: StateUpdateKind) -> Self {
@@ -619,11 +619,12 @@ impl StateUpdateKindRaw {
 
 #[cfg(test)]
 mod tests {
-    use crate::durable::impls::persist::state_update::StateUpdateKindRaw;
-    use crate::durable::impls::persist::StateUpdateKind;
     use mz_persist_types::Codec;
     use mz_storage_types::sources::SourceData;
     use proptest::prelude::*;
+
+    use crate::durable::impls::persist::state_update::StateUpdateKindRaw;
+    use crate::durable::impls::persist::StateUpdateKind;
 
     proptest! {
         #[mz_ore::test]

@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 pub(crate) mod metrics;
-pub(crate) mod state_update;
+pub mod state_update;
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
