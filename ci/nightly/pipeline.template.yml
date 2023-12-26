@@ -75,7 +75,7 @@ steps:
                - common-ancestor
     - id: scalability-benchmark
       label: "Scalability benchmark against merge base or 'latest'"
-      timeout_in_minutes: 180
+      timeout_in_minutes: 600
       agents:
         queue: linux-x86_64-large
       artifact_paths: junit_*.xml
