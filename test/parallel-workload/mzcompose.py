@@ -67,10 +67,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     complexity = Complexity(args.complexity)
 
     if scenario in (Scenario.Kill, Scenario.BackupRestore):
-        catalog_store = "stash"
         sanity_restart = False
     else:
-        catalog_store = "shadow"
         sanity_restart = True
 
     with c.override(
@@ -79,7 +77,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             restart="on-failure",
             external_minio=True,
             ports=["6975:6875", "6976:6876", "6977:6877"],
-            catalog_store=catalog_store,
             sanity_restart=sanity_restart,
         )
     ):

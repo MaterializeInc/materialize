@@ -34,7 +34,6 @@ class Testdrive(Service):
         seed: int | None = None,
         consistent_seed: bool = False,
         postgres_stash: str | None = None,
-        validate_catalog_store: str | None = None,
         entrypoint: list[str] | None = None,
         entrypoint_extra: list[str] = [],
         environment: list[str] | None = None,
@@ -92,9 +91,6 @@ class Testdrive(Service):
             entrypoint.append(
                 f"--postgres-stash=postgres://root@{postgres_stash}:26257?options=--search_path=adapter"
             )
-
-        if validate_catalog_store:
-            entrypoint.append(f"--validate-catalog-store={validate_catalog_store}")
 
         if no_reset:
             entrypoint.append("--no-reset")
