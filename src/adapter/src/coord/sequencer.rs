@@ -292,10 +292,7 @@ impl Coordinator {
                     self.sequence_peek(ctx, plan, target_cluster).await;
                 }
                 Plan::Subscribe(plan) => {
-                    let result = self
-                        .sequence_subscribe(&mut ctx, plan, target_cluster)
-                        .await;
-                    ctx.retire(result);
+                    self.sequence_subscribe(ctx, plan, target_cluster).await;
                 }
                 Plan::SideEffectingFunc(plan) => {
                     ctx.retire(self.sequence_side_effecting_func(plan));
