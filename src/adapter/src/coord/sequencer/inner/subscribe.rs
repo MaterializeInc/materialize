@@ -145,10 +145,6 @@ impl Coordinator {
             timeline = TimelineContext::TimestampDependent;
         }
 
-        // TODO: this check is present in `sequence_create_index` / `sequence_create_materialized_view`
-        // Should we have it here as well?
-        // self.ensure_cluster_can_host_compute_item(name, *cluster_id)?;
-
         let validity = PlanValidity {
             transient_revision: self.catalog().transient_revision(),
             dependency_ids: depends_on,
@@ -357,7 +353,9 @@ impl Coordinator {
             conn_id: ctx.session().conn_id().clone(),
             channel: tx,
             emit_progress,
-            as_of: global_lir_plan.as_of(),
+            as_of: global_lir_plan
+                .as_of()
+                .expect("set to Some in an earlier stage"),
             arity: global_lir_plan.sink_desc().from_desc.arity(),
             cluster_id,
             depends_on: validity.dependency_ids,

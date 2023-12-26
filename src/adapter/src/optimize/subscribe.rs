@@ -135,8 +135,8 @@ impl GlobalLirPlan {
         *sink_id
     }
 
-    pub fn as_of(&self) -> Timestamp {
-        self.df_desc.as_of.clone().expect("as_of").into_element()
+    pub fn as_of(&self) -> Option<Timestamp> {
+        self.df_desc.as_of.clone().map(|as_of| as_of.into_element())
     }
 
     pub fn sink_desc(&self) -> &ComputeSinkDesc {
