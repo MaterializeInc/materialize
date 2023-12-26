@@ -54,16 +54,21 @@ class AwsConnection(Check):
         ]
 
     def validate(self) -> Testdrive:
-        # We just check that the connections are still safe to reference.
-        # The error is inconsistent depending on the way the check is being run.
+        # We can't actually run `VALIDATE CONNECTION` here because we don't have
+        # valid AWS credentials. So instead we settle for inspecting the system
+        # catalog and ensuring it contains the altered values.
         return Testdrive(
             dedent(
                 """
-                ! VALIDATE CONNECTION aws_assume_role;
-                regex:.*
+                > SELECT assume_role_arn FROM mz_internal.mz_aws_connections a
+                  JOIN mz_connections c ON a.id = c.id
+                  WHERE name = 'aws_assume_role'
+                assume-role-2
 
-                ! VALIDATE CONNECTION aws_credentials;
-                regex:.*
+                > SELECT access_key_id FROM mz_internal.mz_aws_connections a
+                  JOIN mz_connections c ON a.id = c.id
+                  WHERE name = 'aws_credentials'
+                access_key_2
                 """
             )
         )

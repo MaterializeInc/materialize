@@ -19,6 +19,7 @@ use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceReader};
 use mz_kafka_util::client::{BrokerRewrite, MzClientContext, MzKafkaError, TunnelingClientContext};
+use mz_ore::error::ErrorExt;
 use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
@@ -41,7 +42,7 @@ use tokio_postgres::config::SslMode;
 use url::Url;
 
 use crate::configuration::StorageConfiguration;
-use crate::connections::aws::AwsConnection;
+use crate::connections::aws::{AwsConnection, AwsConnectionValidationError};
 use crate::errors::{ContextCreationError, CsrConnectError};
 
 pub mod aws;
@@ -231,16 +232,17 @@ impl Connection<InlinedConnection> {
         &self,
         id: GlobalId,
         storage_configuration: &StorageConfiguration,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), ConnectionValidationError> {
         match self {
-            Connection::Kafka(conn) => conn.validate(id, storage_configuration).await,
-            Connection::Csr(conn) => conn.validate(id, storage_configuration).await,
-            Connection::Postgres(conn) => conn.validate(id, storage_configuration).await,
-            Connection::Ssh(conn) => conn.validate(id, storage_configuration).await,
-            Connection::Aws(conn) => conn.validate(id, storage_configuration).await,
-            Connection::AwsPrivatelink(conn) => conn.validate(id, storage_configuration).await,
-            Connection::MySql(conn) => conn.validate(id, storage_configuration).await,
+            Connection::Kafka(conn) => conn.validate(id, storage_configuration).await?,
+            Connection::Csr(conn) => conn.validate(id, storage_configuration).await?,
+            Connection::Postgres(conn) => conn.validate(id, storage_configuration).await?,
+            Connection::Ssh(conn) => conn.validate(id, storage_configuration).await?,
+            Connection::Aws(conn) => conn.validate(id, storage_configuration).await?,
+            Connection::AwsPrivatelink(conn) => conn.validate(id, storage_configuration).await?,
+            Connection::MySql(conn) => conn.validate(id, storage_configuration).await?,
         }
+        Ok(())
     }
 
     pub fn unwrap_kafka(self) -> <InlinedConnection as ConnectionAccess>::Kafka {
@@ -268,6 +270,33 @@ impl Connection<InlinedConnection> {
         match self {
             Self::Csr(conn) => conn,
             o => unreachable!("{o:?} is not a Kafka connection"),
+        }
+    }
+}
+
+/// An error returned by [`Connection::validate`].
+#[derive(thiserror::Error, Debug)]
+pub enum ConnectionValidationError {
+    #[error(transparent)]
+    Aws(#[from] AwsConnectionValidationError),
+    #[error("{}", .0.display_with_causes())]
+    Other(#[from] anyhow::Error),
+}
+
+impl ConnectionValidationError {
+    /// Reports additional details about the error, if any are available.
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            ConnectionValidationError::Aws(e) => e.detail(),
+            ConnectionValidationError::Other(_) => None,
+        }
+    }
+
+    /// Reports a hint for the user about how the error could be fixed.
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            ConnectionValidationError::Aws(e) => e.hint(),
+            ConnectionValidationError::Other(_) => None,
         }
     }
 }

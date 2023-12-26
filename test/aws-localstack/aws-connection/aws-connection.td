@@ -62,7 +62,7 @@ id           endpoint  region  access_key_id  access_key_id_secret_id  secret_ac
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 \${conn-id}  <null>   <null>   <null>         ${access-key-secret-id}  ${secret-key-secret-id}      <null>         <null>                   <null>           <null>                    <null>     <null>       <null>
 
-# TODO: tests for validating connections.
+# Tests for validating connections are in test/aws/.
 
 # Test invalid statements.
 
@@ -90,4 +90,4 @@ contains:cannot specify both ACCESS KEY ID and ASSUME ROLE ARN
   TO AWS (REGION 'us-east');
 contains:must specify either ASSUME ROLE ARN or ACCESS KEY ID and SECRET ACCESS KEY
 
-# TODO: tests for invalid IAM configuration.
+# Tests for invalid IAM configurations are in test/aws/.

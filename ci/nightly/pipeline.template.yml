@@ -395,15 +395,26 @@ steps:
   - group: AWS
     key: aws
     steps:
-      - id: aws-checks
-        label: AWS
+      - id: aws-real
+        label: AWS (Real)
+        timeout_in_minutes: 30
+        agents:
+          queue: linux-x86_64
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/scratch-aws-access: ~
+          - ./ci/plugins/mzcompose:
+              composition: aws
+
+      - id: aws-localstack
+        label: AWS (Localstack)
         timeout_in_minutes: 30
         agents:
           queue: linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
-              composition: aws
+              composition: aws-localstack
 
       - id: secrets-local-file
         label: "Secrets Local File"
