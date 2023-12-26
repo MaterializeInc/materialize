@@ -91,7 +91,7 @@ impl Coordinator {
             ..
         } = &plan;
 
-        self.ensure_cluster_can_host_compute_item(name, *cluster_id)?;
+        self.ensure_cluster_can_host_compute_object(Some(name), *cluster_id)?;
 
         let validity = PlanValidity {
             transient_revision: self.catalog().transient_revision(),

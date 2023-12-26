@@ -145,6 +145,8 @@ impl Coordinator {
             timeline = TimelineContext::TimestampDependent;
         }
 
+        self.ensure_cluster_can_host_compute_object(None, cluster_id)?;
+
         let validity = PlanValidity {
             transient_revision: self.catalog().transient_revision(),
             dependency_ids: depends_on,

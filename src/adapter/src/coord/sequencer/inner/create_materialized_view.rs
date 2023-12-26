@@ -104,7 +104,7 @@ impl Coordinator {
             ..
         } = &plan;
 
-        self.ensure_cluster_can_host_compute_item(name, *cluster_id)?;
+        self.ensure_cluster_can_host_compute_object(Some(name), *cluster_id)?;
 
         // Validate any references in the materialized view's expression. We do
         // this on the unoptimized plan to better reflect what the user typed.

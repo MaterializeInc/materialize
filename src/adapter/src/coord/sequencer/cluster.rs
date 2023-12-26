@@ -1073,18 +1073,23 @@ impl Coordinator {
         }
     }
 
-    /// Determine whether we can create a compute item in the specified cluster.
+    /// Determine whether we can create a compute object in the specified cluster.
     ///
     /// Returns `Ok` if the item can be created, and an error otherwise.
-    pub(crate) fn ensure_cluster_can_host_compute_item(
+    pub(crate) fn ensure_cluster_can_host_compute_object(
         &self,
-        name: &QualifiedItemName,
+        name: Option<&QualifiedItemName>,
         cluster_id: ClusterId,
     ) -> Result<(), AdapterError> {
-        let is_system_schema_specifier = self
-            .catalog()
-            .state()
-            .is_system_schema_specifier(&name.qualifiers.schema_spec);
+        let is_system_schema_specifier = if let Some(name) = name {
+            self.catalog()
+                .state()
+                .is_system_schema_specifier(&name.qualifiers.schema_spec)
+        } else {
+            // If there's no name then it must be some temporary/transient object and not a system
+            // item.
+            false
+        };
 
         let enable_unified_clusters = self
             .catalog()
