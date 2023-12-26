@@ -18,7 +18,7 @@ use mz_repr::{ColumnType, Datum, Diff, Row, RowArena};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
 use mz_sql::plan::{WebhookHeaders, WebhookValidation, WebhookValidationSecret};
-use mz_storage_client::controller::MonotonicAppender;
+use mz_storage_client::controller::WebhookAppender as OldMonotonicAppender;
 use mz_storage_types::controller::StorageError;
 use tokio::sync::Semaphore;
 
@@ -232,11 +232,11 @@ pub struct AppendWebhookResponse {
     pub validator: Option<AppendWebhookValidator>,
 }
 
-/// A wrapper around [`MonotonicAppender`] that can get closed by the `Coordinator` if the webhook
+/// A wrapper around [`WebhookAppender`] that can get closed by the `Coordinator` if the webhook
 /// gets modified.
 #[derive(Clone, Debug)]
 pub struct WebhookAppender {
-    tx: MonotonicAppender,
+    tx: OldMonotonicAppender,
     guard: WebhookAppenderGuard,
 }
 
@@ -255,7 +255,7 @@ impl WebhookAppender {
         Ok(())
     }
 
-    pub(crate) fn new(tx: MonotonicAppender, guard: WebhookAppenderGuard) -> Self {
+    pub(crate) fn new(tx: OldMonotonicAppender, guard: WebhookAppenderGuard) -> Self {
         WebhookAppender { tx, guard }
     }
 }

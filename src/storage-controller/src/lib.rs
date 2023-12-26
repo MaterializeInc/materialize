@@ -119,7 +119,7 @@ use mz_storage_client::client::{
 };
 use mz_storage_client::controller::{
     CollectionDescription, CollectionState, DataSource, DataSourceOther, ExportDescription,
-    ExportState, IntrospectionType, MonotonicAppender, SnapshotCursor, StorageController,
+    ExportState, IntrospectionType, SnapshotCursor, StorageController, WebhookAppender,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_types::collections as proto;
@@ -1228,9 +1228,9 @@ where
             .append(write_ts, advance_to, commands))
     }
 
-    fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError> {
+    fn webhook_appender(&self, id: GlobalId) -> Result<WebhookAppender, StorageError> {
         assert!(self.txns_init_run);
-        self.collection_manager.monotonic_appender(id)
+        self.collection_manager.webhook_appender(id)
     }
 
     // TODO(petrosagg): This signature is not very useful in the context of partially ordered times

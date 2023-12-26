@@ -104,7 +104,7 @@ In the coordinator we'll do the following:
 1. Map the `database`, `schema`, and `name` to a webhook source using the `Catalog`. Erroring if no
    object can be found or the object is not a webhook source.
 2. Get the sending side of a channel that can be used to send new data to the `StorageController`.
-   This would be using the new `StorageController::monotonic_appender(...)` detailed below.
+   This would be using the new `StorageController::webhook_appender(...)` detailed below.
 3. Spawn a new `tokio::task`, do all further work in this task and off the `Coordinator` thread.
 4. Decode the body of our request according to `BODY FORMAT`.
 5. Pack our data into a `Row`.
@@ -115,7 +115,7 @@ Today we expose a method [`append`](https://github.com/MaterializeInc/materializ
 on the `StorageController` trait, I would like to add a new method:
 
 ```
-pub async fn monotonic_appender(&self, id: GlobalId) -> CollectionAppender;
+pub async fn webhook_appender(&self, id: GlobalId) -> CollectionAppender;
 ```
 
 This new method would return a struct called `CollectionAppender`, which essentially acts as a

@@ -22,7 +22,7 @@ use mz_ore::task::AbortOnDropHandle;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::client::TimestamplessUpdate;
-use mz_storage_client::controller::MonotonicAppender;
+use mz_storage_client::controller::WebhookAppender;
 use timely::progress::Timestamp;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Duration, Instant};
@@ -147,19 +147,16 @@ where
         }
     }
 
-    /// Returns a [`MonotonicAppender`] that can be used to monotonically append updates to the
+    /// Returns a [`WebhookAppender`] that can be used to monotonically append updates to the
     /// collection correlated with `id`.
-    pub(super) fn monotonic_appender(
-        &self,
-        id: GlobalId,
-    ) -> Result<MonotonicAppender, StorageError> {
+    pub(super) fn webhook_appender(&self, id: GlobalId) -> Result<WebhookAppender, StorageError> {
         let guard = self.collections.lock().expect("CollectionManager panicked");
         let tx = guard
             .get(&id)
             .map(|(tx, _, _)| tx.clone())
             .ok_or(StorageError::IdentifierMissing(id))?;
 
-        Ok(MonotonicAppender::new(tx))
+        Ok(WebhookAppender::new(tx))
     }
 }
 

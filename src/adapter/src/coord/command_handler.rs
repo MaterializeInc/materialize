@@ -898,7 +898,7 @@ impl Coordinator {
             let row_tx = coord
                 .controller
                 .storage
-                .monotonic_appender(entry.id())
+                .webhook_appender(entry.id())
                 .map_err(|_| name)?;
             let invalidator = coord
                 .active_webhooks
