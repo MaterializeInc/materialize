@@ -1,3 +1,4 @@
+# Brennan was here
 [package]
 name = "mz-sql-parser"
 description = "The parser for Materialize's SQL dialect."
