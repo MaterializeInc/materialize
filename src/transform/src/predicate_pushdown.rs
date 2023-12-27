@@ -512,7 +512,7 @@ impl PredicatePushdown {
                     // `get_predicates` should now contain the intersection
                     // of predicates at each *use* of the binding. If it is
                     // non-empty, we can move those predicates to the value.
-                    Self::push_into_let_binding(get_predicates, id, value, &mut [body])?;
+                    Self::push_into_let_binding(get_predicates, id, value, &mut [body]);
 
                     // Continue recursively on the value.
                     self.action(value, get_predicates)
@@ -549,7 +549,7 @@ impl PredicatePushdown {
                         // `get_predicates`: We push a predicate into the value of a binding, only
                         // if all Gets of this Id have this same predicate on top of them.
                         if !ids_used_across_iterations.contains(id) {
-                            Self::push_into_let_binding(get_predicates, id, value, &mut users)?;
+                            Self::push_into_let_binding(get_predicates, id, value, &mut users);
                         }
 
                         // Predicate pushdown within a binding
@@ -814,12 +814,12 @@ impl PredicatePushdown {
         id: &LocalId,
         value: &mut MirRelationExpr,
         users: &mut [&mut MirRelationExpr],
-    ) -> Result<(), TransformError> {
+    ) {
         if let Some(list) = get_predicates.remove(&Id::Local(*id)) {
             if !list.is_empty() {
                 // Remove the predicates in `list` from the users.
                 for user in users {
-                    user.try_visit_mut_post::<_, TransformError>(&mut |e| {
+                    user.visit_pre_mut(|e| {
                         if let MirRelationExpr::Filter { input, predicates } = e {
                             if let MirRelationExpr::Get { id: get_id, .. } = **input {
                                 if get_id == Id::Local(*id) {
@@ -827,8 +827,7 @@ impl PredicatePushdown {
                                 }
                             }
                         }
-                        Ok(())
-                    })?;
+                    });
                 }
                 // Apply the predicates in `list` to value. Canonicalize
                 // `list` so that plans are always deterministic.
@@ -840,7 +839,6 @@ impl PredicatePushdown {
                 *value = value.take_dangerous().filter(list);
             }
         }
-        Ok(())
     }
 
     /// Returns `(<predicates to retain>, <predicates to push at each input>)`.
