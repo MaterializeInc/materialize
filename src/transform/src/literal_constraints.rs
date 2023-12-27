@@ -73,7 +73,7 @@ impl LiteralConstraints {
             let orig_mfp = mfp.clone();
 
             // Preparation for the literal constraints detection.
-            Self::inline_literal_constraints(&mut mfp)?;
+            Self::inline_literal_constraints(&mut mfp);
             Self::list_of_predicates_to_and_of_predicates(&mut mfp);
             Self::distribute_and_over_or(&mut mfp)?;
             Self::unary_and(&mut mfp);
@@ -529,22 +529,22 @@ impl LiteralConstraints {
 
     /// Makes the job of [LiteralConstraints::detect_literal_constraints] easier by undoing some CSE to
     /// reconstruct literal constraints.
-    fn inline_literal_constraints(mfp: &mut MapFilterProject) -> Result<(), RecursionLimitError> {
+    fn inline_literal_constraints(mfp: &mut MapFilterProject) {
         let mut should_inline = vec![false; mfp.input_arity + mfp.expressions.len()];
         // Mark those expressions for inlining that contain a subexpression of the form
         // `<xxx> = <lit>` or `<lit> = <xxx>`.
         for (i, e) in mfp.expressions.iter().enumerate() {
-            e.visit_post(&mut |s| {
+            e.visit_pre(|s| {
                 if s.any_expr_eq_literal().is_some() {
                     should_inline[i + mfp.input_arity] = true;
                 }
-            })?;
+            });
         }
         // Whenever
         // `<Column(i)> = <lit>` or `<lit> = <Column(i)>`
         // appears in a predicate, mark the ith expression to be inlined.
         for (_before, p) in mfp.predicates.iter() {
-            p.visit_post(&mut |e| {
+            p.visit_pre(|e| {
                 if let MirScalarExpr::CallBinary {
                     func: BinaryFunc::Eq,
                     expr1,
@@ -566,11 +566,10 @@ impl LiteralConstraints {
                         }
                     }
                 }
-            })?;
+            });
         }
         // Perform the marked inlinings.
         mfp.perform_inlining(should_inline);
-        Ok(())
     }
 
     /// MFPs have a Vec of predicates `[p1, p2, ...]`, which logically represents `p1 AND p2 AND ...`.
