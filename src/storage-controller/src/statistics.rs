@@ -26,7 +26,7 @@ use timely::progress::ChangeBatch;
 use timely::progress::Timestamp;
 use tokio::sync::oneshot;
 
-use crate::collection_mgmt::CollectionManager;
+use crate::persist_handles::PersistTableWriteWorker;
 
 /// An enum that tracks the lifecycle of statistics objects
 /// in the controller.
@@ -57,7 +57,7 @@ impl<T> StatsInitState<T> {
 /// that are consolidated in shared memory in the controller.
 pub(super) fn spawn_statistics_scraper<Stats, T>(
     statistics_collection_id: GlobalId,
-    collection_mgmt: CollectionManager<T>,
+    collection_mgmt: PersistTableWriteWorker<T>,
     shared_stats: Arc<Mutex<BTreeMap<GlobalId, StatsInitState<Stats>>>>,
 ) -> Box<dyn Any + Send + Sync>
 where
@@ -112,7 +112,7 @@ where
                     if !correction.is_empty() {
                         current_metrics.extend(correction.iter().cloned());
                         collection_mgmt
-                            .append_to_collection(statistics_collection_id, correction)
+                            .append_next_txn(statistics_collection_id, correction)
                             .await;
                     }
                 }

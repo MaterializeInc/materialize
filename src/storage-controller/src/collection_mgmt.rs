@@ -125,28 +125,6 @@ where
         }
     }
 
-    /// Appends `updates` to the collection correlated with `id`, does not wait for the append to
-    /// complete.
-    ///
-    /// # Panics
-    /// - If `id` does not belong to managed collections.
-    /// - If there is contention to write to the collection identified by `id`.
-    /// - If the collection closed.
-    pub(super) async fn append_to_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
-        if !updates.is_empty() {
-            // Get the update channel in a block to make sure the Mutex lock is scoped.
-            let update_tx = {
-                let guard = self.collections.lock().expect("CollectionManager panicked");
-                let (update_tx, _, _) = guard.get(&id).expect("id to exist");
-                update_tx.clone()
-            };
-
-            // Specifically _do not_ wait for the append to complete, just for it to be sent.
-            let (tx, _rx) = oneshot::channel();
-            update_tx.send((updates, tx)).await.expect("rx hung up");
-        }
-    }
-
     /// Returns a [`WebhookAppender`] that can be used to monotonically append updates to the
     /// collection correlated with `id`.
     pub(super) fn webhook_appender(&self, id: GlobalId) -> Result<WebhookAppender, StorageError> {

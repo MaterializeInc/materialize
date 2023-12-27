@@ -17,7 +17,7 @@ use mz_persist_types::Codec64;
 use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
 use timely::progress::Timestamp;
 
-use crate::collection_mgmt::CollectionManager;
+use crate::persist_handles::PersistTableWriteWorker;
 use crate::IntrospectionType;
 
 pub use mz_storage_client::healthcheck::*;
@@ -85,7 +85,7 @@ where
     T: Timestamp + Lattice + Codec64 + TimestampManipulation,
 {
     /// Managed collection interface
-    collection_manager: CollectionManager<T>,
+    collection_manager: PersistTableWriteWorker<T>,
     /// A list of introspection IDs for managed collections
     introspection_ids: Arc<std::sync::Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
     previous_statuses: BTreeMap<GlobalId, String>,
@@ -96,7 +96,7 @@ where
     T: Timestamp + Lattice + Codec64 + TimestampManipulation + From<EpochMillis>,
 {
     pub fn new(
-        collection_manager: CollectionManager<T>,
+        collection_manager: PersistTableWriteWorker<T>,
         introspection_ids: Arc<std::sync::Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
     ) -> Self {
         Self {
@@ -140,7 +140,7 @@ where
             .collect();
 
         self.collection_manager
-            .append_to_collection(
+            .append_next_txn(
                 source_status_history_id,
                 Self::pack_status_updates(new.clone()),
             )

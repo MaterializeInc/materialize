@@ -20,13 +20,14 @@ use futures::future::BoxFuture;
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
+use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::stats::SnapshotStats;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::ShardId;
 use mz_persist_txn::txns::{Tidy, TxnsHandle};
 use mz_persist_types::Codec64;
-use mz_repr::{Diff, GlobalId, TimestampManipulation};
+use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::client::{StorageResponse, TimestamplessUpdate, Update};
 use mz_storage_types::controller::TxnsCodecRow;
 use mz_storage_types::sources::SourceData;
@@ -242,6 +243,11 @@ enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
         updates: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
         tx: tokio::sync::oneshot::Sender<Result<(), StorageError>>,
     },
+    AppendNextTxn {
+        id: GlobalId,
+        updates: Vec<TimestamplessUpdate>,
+        tx: tokio::sync::oneshot::Sender<Result<(), StorageError>>,
+    },
     Shutdown,
 }
 
@@ -297,7 +303,9 @@ async fn append_work<T2: Timestamp + Lattice + Codec64>(
     }
 }
 
-impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWriteWorker<T> {
+impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation>
+    PersistTableWriteWorker<T>
+{
     pub(crate) fn new_legacy(
         frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
     ) -> Self {
@@ -313,6 +321,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
     }
 
     pub(crate) fn new_txns(
+        now_fn: NowFn,
         frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
         txns: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>,
         lazy_persist_txn_tables: bool,
@@ -321,11 +330,13 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
             tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd<T>)>();
         mz_ore::task::spawn(|| "PersistTableWriteWorker", async move {
             let mut worker = TxnsTableWorker {
+                now_fn,
                 lazy_persist_txn_tables,
                 frontier_responses,
                 txns,
                 write_handles: BTreeMap::new(),
                 tidy: Tidy::default(),
+                next_txn: Vec::new(),
             };
             worker.run(rx).await
         });
@@ -374,6 +385,27 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
             });
             rx
         }
+    }
+
+    /// Appends `updates` to the collection correlated with `id`, does not wait for the append to
+    /// complete.
+    ///
+    /// # Panics
+    /// - If `id` does not belong to managed collections.
+    /// - If there is contention to write to the collection identified by `id`.
+    /// - If the collection closed.
+    pub(crate) async fn append_next_txn(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+        if updates.is_empty() {
+            return;
+        }
+        // WIP take TimestamplessUpdate instead.
+        let updates = updates
+            .into_iter()
+            .map(|(row, diff)| TimestamplessUpdate { row, diff })
+            .collect();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.send(PersistTableWriteCmd::AppendNextTxn { id, updates, tx });
+        let () = rx.await.expect("WIP").expect("WIP");
     }
 
     /// Drops the handle associated with `id` from this worker.
@@ -475,6 +507,7 @@ async fn legacy_table_worker<T: Timestamp + Lattice + Codec64 + TimestampManipul
                     }
                     all_responses.push((ids, tx));
                 }
+                PersistTableWriteCmd::AppendNextTxn { .. } => todo!("WIP"),
                 PersistTableWriteCmd::Shutdown => shutdown = true,
             }
         }
@@ -511,19 +544,30 @@ async fn legacy_table_worker<T: Timestamp + Lattice + Codec64 + TimestampManipul
 }
 
 struct TxnsTableWorker<T: Timestamp + Lattice + TotalOrder + Codec64> {
+    now_fn: NowFn,
     lazy_persist_txn_tables: bool,
     frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
     txns: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>,
     write_handles: BTreeMap<GlobalId, ShardId>,
     tidy: Tidy,
+    next_txn: Vec<(
+        GlobalId,
+        Vec<TimestamplessUpdate>,
+        tokio::sync::oneshot::Sender<Result<(), StorageError>>,
+    )>,
 }
 
-impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T> {
+impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation>
+    TxnsTableWorker<T>
+{
     async fn run(
         &mut self,
         mut rx: tokio::sync::mpsc::UnboundedReceiver<(Span, PersistTableWriteCmd<T>)>,
     ) {
-        while let Some((span, command)) = rx.recv().await {
+        loop {
+            let Some((span, command)) = self.next_command(&mut rx).await else {
+                break;
+            };
             match command {
                 PersistTableWriteCmd::Register(register_ts, ids_handles) => {
                     self.register(register_ts, ids_handles)
@@ -544,6 +588,9 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                         .instrument(span)
                         .await
                 }
+                PersistTableWriteCmd::AppendNextTxn { id, updates, tx } => {
+                    self.append_next_txn(id, updates, tx)
+                }
                 PersistTableWriteCmd::Shutdown => {
                     tracing::info!("PersistTableWriteWorker shutting down via command");
                     return;
@@ -552,6 +599,38 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         }
 
         tracing::info!("PersistTableWriteWorker shutting down via input exhaustion");
+    }
+
+    async fn next_command(
+        &self,
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<(Span, PersistTableWriteCmd<T>)>,
+    ) -> Option<(Span, PersistTableWriteCmd<T>)> {
+        if self.next_txn.is_empty() {
+            return rx.recv().await;
+        }
+        if let Ok(cmd) = rx.try_recv() {
+            return Some(cmd);
+        }
+        tracing::info!(
+            "WIP flushing next_txn {:?}",
+            self.next_txn
+                .iter()
+                .map(|(id, _, _)| id)
+                .collect::<Vec<_>>()
+        );
+        // WIP real span
+        let span = Span::none();
+        // WIP real write_ts
+        let write_ts = T::from((self.now_fn)());
+        let advance_to = TimestampManipulation::step_forward(&write_ts);
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        let cmd = PersistTableWriteCmd::Append {
+            write_ts,
+            advance_to,
+            updates: Vec::new(),
+            tx,
+        };
+        Some((span, cmd))
     }
 
     async fn register(
@@ -668,7 +747,13 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         );
 
         let mut txn = self.txns.begin();
-        for (id, updates) in updates {
+        // WIP don't clone next_txn updates here. also need to send error if we
+        // don't know about the GlobalId?
+        let next_txn = self
+            .next_txn
+            .iter()
+            .map(|(id, updates, _)| (*id, updates.clone()));
+        for (id, updates) in updates.into_iter().chain(next_txn) {
             let Some(data_id) = self.write_handles.get(&id) else {
                 // HACK: When creating a table we get an append that includes it
                 // before it's been registered. When this happens there are no
@@ -696,6 +781,12 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                     apply.apply_eager(&mut self.txns).await
                 };
                 self.tidy.merge(tidy);
+
+                for (_, _, tx) in self.next_txn.drain(..) {
+                    // WIP okay for caller to hang up
+                    let _ = tx.send(Ok(()));
+                }
+
                 // Committing a txn advances the logical upper of _every_ data
                 // shard in the txns set, not just the ones that were written
                 // to, so send new upper information for all registered data
@@ -727,6 +818,21 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         };
         // It is not an error for the other end to hang up.
         let _ = tx.send(response);
+    }
+
+    fn append_next_txn(
+        &mut self,
+        id: GlobalId,
+        updates: Vec<TimestamplessUpdate>,
+        tx: tokio::sync::oneshot::Sender<Result<(), StorageError>>,
+    ) {
+        debug!(
+            "tables append_next_txn id={} len={} updates={:?}",
+            id,
+            updates.len(),
+            updates.iter().take(1).collect::<Vec<_>>()
+        );
+        self.next_txn.push((id, updates, tx))
     }
 
     fn send_new_uppers(&self, new_uppers: Vec<(GlobalId, Antichain<T>)>) {

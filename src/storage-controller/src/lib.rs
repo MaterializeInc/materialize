@@ -644,12 +644,13 @@ where
                 );
 
                 match description.data_source {
-                    DataSource::Introspection(_) | DataSource::Webhook => {
+                    DataSource::Webhook => {
                         debug!(desc = ?description, meta = ?metadata, "registering {} with persist monotonic worker", id);
                         self.persist_monotonic_worker.register(id, write);
                         self.collections.insert(id, collection_state);
                     }
-                    DataSource::Other(DataSourceOther::TableWrites) => {
+                    DataSource::Introspection(_)
+                    | DataSource::Other(DataSourceOther::TableWrites) => {
                         debug!(desc = ?description, meta = ?metadata, "registering {} with persist table worker", id);
                         table_registers.push((id, write, collection_state));
                     }
@@ -780,8 +781,6 @@ where
                         "cannot have multiple IDs for introspection type"
                     );
 
-                    self.collection_manager.register_collection(id);
-
                     match i {
                         IntrospectionType::ShardMapping => {
                             self.initialize_shard_mapping().await;
@@ -797,7 +796,7 @@ where
                             let scraper_token = statistics::spawn_statistics_scraper(
                                 id.clone(),
                                 // These do a shallow copy.
-                                self.collection_manager.clone(),
+                                self.persist_table_worker.clone(),
                                 Arc::clone(&self.source_statistics),
                             );
 
@@ -812,7 +811,7 @@ where
                             let scraper_token = statistics::spawn_statistics_scraper(
                                 id.clone(),
                                 // These do a shallow copy.
-                                self.collection_manager.clone(),
+                                self.persist_table_worker.clone(),
                                 Arc::clone(&self.sink_statistics),
                             );
 
@@ -2197,6 +2196,7 @@ where
             )
             .await;
             let worker = persist_handles::PersistTableWriteWorker::new_txns(
+                now.clone(),
                 tx.clone(),
                 txns,
                 lazy_persist_txn_tables,
@@ -2240,7 +2240,7 @@ where
         let introspection_ids = Arc::new(Mutex::new(BTreeMap::new()));
 
         let collection_status_manager = crate::healthcheck::CollectionStatusManager::new(
-            collection_manager.clone(),
+            persist_table_worker.clone(),
             Arc::clone(&introspection_ids),
         );
 
@@ -2495,9 +2495,7 @@ where
     #[tracing::instrument(level = "debug", skip(self, updates))]
     async fn append_to_managed_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
         assert!(self.txns_init_run);
-        self.collection_manager
-            .append_to_collection(id, updates)
-            .await;
+        self.persist_table_worker.append_next_txn(id, updates).await;
     }
 
     /// Initializes the data expressing which global IDs correspond to which
@@ -2854,10 +2852,10 @@ where
                 .await;
 
             match collection_desc.data_source {
-                DataSource::Introspection(_) | DataSource::Webhook => {
+                DataSource::Webhook => {
                     self.persist_monotonic_worker.update(id, write);
                 }
-                DataSource::Other(DataSourceOther::TableWrites) => {
+                DataSource::Introspection(_) | DataSource::Other(DataSourceOther::TableWrites) => {
                     self.persist_table_worker.update(id, write);
                 }
                 DataSource::Ingestion(_)
