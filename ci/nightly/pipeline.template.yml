@@ -780,7 +780,6 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: persist
               args: [--consensus=mem, --blob=mem, --persist-txn]
-        skip: "TODO(txn): Turn on before enabling by default/in production."
 
   - id: persistence-failpoints
     label: Persistence failpoints
