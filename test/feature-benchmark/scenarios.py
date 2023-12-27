@@ -972,6 +972,7 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
             f"""
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 > DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
+> DROP CLUSTER IF EXISTS source_cluster CASCADE
 
 >[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
 >[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
@@ -980,7 +981,10 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
   TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
   /* A */
 
+> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+
 > CREATE SOURCE s1
+  IN CLUSTER source_cluster
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-upsert-unique-${{testdrive.seed}}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE UPSERT

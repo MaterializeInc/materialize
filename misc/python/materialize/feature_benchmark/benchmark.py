@@ -28,6 +28,7 @@ class Benchmark:
         filter: Filter,
         termination_conditions: list[TerminationCondition],
         aggregation_class: type[Aggregation],
+        default_size: int,
         scale: str | None = None,
         measure_memory: bool = True,
     ) -> None:
@@ -39,6 +40,7 @@ class Benchmark:
         self._termination_conditions = termination_conditions
         self._performance_aggregation = aggregation_class()
         self._messages_aggregation = aggregation_class()
+        self._default_size = default_size
 
         if measure_memory:
             self._memory_aggregation = aggregation_class()
@@ -55,7 +57,7 @@ class Benchmark:
                 scale = float(self._scale)
 
         scenario_class = self._scenario
-        scenario = scenario_class(scale=scale)
+        scenario = scenario_class(scale=scale, default_size=self._default_size)
         name = scenario.name()
 
         print(

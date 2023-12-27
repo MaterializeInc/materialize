@@ -19,10 +19,11 @@ class RootScenario:
     SCALE: float = 6
     FIXED_SCALE: bool = False  # Will --scale=N have effect on the scenario
 
-    def __init__(self, scale: float) -> None:
+    def __init__(self, scale: float, default_size: int) -> None:
         self._name = self.__class__.__name__
         self._scale = scale
         self._n: int = int(10**scale)
+        self._default_size = default_size
 
     def shared(self) -> Action | list[Action] | None:
         return None
