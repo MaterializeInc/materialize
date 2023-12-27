@@ -23,7 +23,7 @@ from materialize.data_ingest.data_type import NUMBER_TYPES, Text, TextTextMap
 from materialize.data_ingest.query_error import QueryError
 from materialize.data_ingest.row import Operation
 from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.services.minio import MINIO_BLOB_URI
+from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.parallel_workload.database import (
     DB,
     MAX_CLUSTER_REPLICAS,
@@ -1229,7 +1229,7 @@ class BackupRestoreAction(Action):
                 "admin",
                 "--commit",
                 "restore-blob",
-                f"--blob-uri={MINIO_BLOB_URI}",
+                f"--blob-uri={minio_blob_uri()}",
                 "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
             )
             self.composition.up("materialized")

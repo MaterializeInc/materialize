@@ -12,6 +12,8 @@ import re
 from datetime import timedelta
 from enum import Enum
 
+import requests
+
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
@@ -30,6 +32,7 @@ from materialize.mzcompose.services.ssh_bastion_host import (
     setup_default_ssh_test_connection,
 )
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.zippy.framework import Test
 from materialize.zippy.scenarios import *  # noqa: F401 F403
@@ -52,6 +55,7 @@ SERVICES = [
     Prometheus(),
     SshBastionHost(),
     Persistcli(),
+    Toxiproxy(),
 ]
 
 
@@ -155,11 +159,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             },
         ),
         Materialized(
-            external_minio=True,
-            external_cockroach=True,
+            external_minio="toxiproxy",
+            external_cockroach="toxiproxy",
             sanity_restart=False,
         ),
     ):
+        toxiproxy_start(c)
+
         c.up("materialized")
 
         c.sql(
@@ -194,3 +200,47 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
         print("Running test...")
         test.run(c)
+
+
+def toxiproxy_start(c: Composition) -> None:
+    c.up("toxiproxy")
+
+    port = c.default_port("toxiproxy")
+    r = requests.post(
+        f"http://localhost:{port}/proxies",
+        json={
+            "name": "cockroach",
+            "listen": "0.0.0.0:26257",
+            "upstream": "cockroach:26257",
+            "enabled": True,
+        },
+    )
+    assert r.status_code == 201, r
+    r = requests.post(
+        f"http://localhost:{port}/proxies",
+        json={
+            "name": "minio",
+            "listen": "0.0.0.0:9000",
+            "upstream": "minio:9000",
+            "enabled": True,
+        },
+    )
+    assert r.status_code == 201, r
+    r = requests.post(
+        f"http://localhost:{port}/proxies/cockroach/toxics",
+        json={
+            "name": "cockroach",
+            "type": "latency",
+            "attributes": {"latency": 0, "jitter": 100},
+        },
+    )
+    assert r.status_code == 200, r
+    r = requests.post(
+        f"http://localhost:{port}/proxies/minio/toxics",
+        json={
+            "name": "minio",
+            "type": "latency",
+            "attributes": {"latency": 0, "jitter": 100},
+        },
+    )
+    assert r.status_code == 200, r
