@@ -104,7 +104,7 @@ impl NonNullable {
 /// True if the expression contains a "is null" test.
 fn scalar_contains_isnull(expr: &MirScalarExpr) -> bool {
     let mut result = false;
-    expr.visit_pre(&mut |e| {
+    expr.visit_pre(|e| {
         if let MirScalarExpr::CallUnary {
             func: UnaryFunc::IsNull(func::IsNull),
             ..

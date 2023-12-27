@@ -1119,14 +1119,14 @@ impl MapFilterProject {
         let mut reference_count = vec![0; input_arity + self.expressions.len()];
         // Increment reference counts for each use
         for expr in self.expressions.iter() {
-            expr.visit_pre(&mut |e| {
+            expr.visit_pre(|e| {
                 if let MirScalarExpr::Column(i) = e {
                     reference_count[*i] += 1;
                 }
             });
         }
         for (_, pred) in self.predicates.iter() {
-            pred.visit_pre(&mut |e| {
+            pred.visit_pre(|e| {
                 if let MirScalarExpr::Column(i) = e {
                     reference_count[*i] += 1;
                 }

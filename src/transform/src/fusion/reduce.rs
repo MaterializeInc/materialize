@@ -57,7 +57,7 @@ impl Reduce {
                 // Collect all columns referenced by outer
                 let mut outer_cols = vec![];
                 for expr in group_key.iter() {
-                    expr.visit_pre(&mut |e| {
+                    expr.visit_pre(|e| {
                         if let MirScalarExpr::Column(i) = e {
                             outer_cols.push(*i);
                         }

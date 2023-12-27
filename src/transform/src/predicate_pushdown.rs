@@ -304,7 +304,7 @@ impl PredicatePushdown {
                                 if !predicate.is_literal_err() || all_errors {
                                     let mut supported = true;
                                     let mut new_predicate = predicate.clone();
-                                    new_predicate.visit_pre(&mut |e| {
+                                    new_predicate.visit_pre(|e| {
                                         if let MirScalarExpr::Column(c) = e {
                                             if *c >= group_key.len() {
                                                 supported = false;
@@ -965,7 +965,7 @@ impl PredicatePushdown {
             let mut support = BTreeSet::new();
 
             // Seed with `map_exprs` support in `expr`.
-            expr.visit_pre(&mut |e| {
+            expr.visit_pre(|e| {
                 if let MirScalarExpr::Column(c) = e {
                     if *c >= input_arity {
                         support.insert(*c);
@@ -981,7 +981,7 @@ impl PredicatePushdown {
                 std::mem::swap(&mut workset, &mut buffer);
                 // Drain the `buffer` and update `support` and `workset`.
                 for c in buffer.drain(..) {
-                    map_exprs[c - input_arity].visit_pre(&mut |e| {
+                    map_exprs[c - input_arity].visit_pre(|e| {
                         if let MirScalarExpr::Column(c) = e {
                             if *c >= input_arity {
                                 if support.insert(*c) {

@@ -176,7 +176,7 @@ fn rank_complexity(expr: &MirScalarExpr) -> usize {
         return 0;
     }
     let mut non_literal_count = 1;
-    expr.visit_pre(&mut |e| {
+    expr.visit_pre(|e| {
         if !e.is_literal() {
             non_literal_count += 1
         }

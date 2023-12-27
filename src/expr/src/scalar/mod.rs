@@ -585,7 +585,7 @@ impl MirScalarExpr {
     }
 
     pub fn support_into(&self, support: &mut BTreeSet<usize>) {
-        self.visit_pre(&mut |e| {
+        self.visit_pre(|e| {
             if let MirScalarExpr::Column(i) = e {
                 support.insert(*i);
             }
@@ -1855,7 +1855,7 @@ impl MirScalarExpr {
     /// `UnmaterializableFunc::MzNow`.
     pub fn contains_temporal(&self) -> bool {
         let mut contains = false;
-        self.visit_pre(&mut |e| {
+        self.visit_pre(|e| {
             if let MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow) = e {
                 contains = true;
             }
@@ -1866,7 +1866,7 @@ impl MirScalarExpr {
     /// True iff the expression contains an `UnmaterializableFunc`.
     pub fn contains_unmaterializable(&self) -> bool {
         let mut contains = false;
-        self.visit_pre(&mut |e| {
+        self.visit_pre(|e| {
             if let MirScalarExpr::CallUnmaterializable(_) = e {
                 contains = true;
             }
@@ -1878,7 +1878,7 @@ impl MirScalarExpr {
     /// list.
     pub fn contains_unmaterializable_except(&self, exceptions: &[UnmaterializableFunc]) -> bool {
         let mut contains = false;
-        self.visit_pre(&mut |e| match e {
+        self.visit_pre(|e| match e {
             MirScalarExpr::CallUnmaterializable(f) if !exceptions.contains(f) => contains = true,
             _ => (),
         });
@@ -1888,7 +1888,7 @@ impl MirScalarExpr {
     /// True iff the expression contains a `Column`.
     pub fn contains_column(&self) -> bool {
         let mut contains = false;
-        self.visit_pre(&mut |e| {
+        self.visit_pre(|e| {
             if let MirScalarExpr::Column(_) = e {
                 contains = true;
             }
@@ -2111,7 +2111,7 @@ impl MirScalarExpr {
     }
 
     /// Visits all subexpressions in DFS preorder.
-    pub fn visit_pre<F>(&self, f: &mut F)
+    pub fn visit_pre<F>(&self, mut f: F)
     where
         F: FnMut(&Self),
     {
