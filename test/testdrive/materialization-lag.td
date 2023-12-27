@@ -64,8 +64,8 @@ true
   FROM mz_internal.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
   WHERE
-    local_lag > INTERVAL '2s' OR
-    global_lag > INTERVAL '2s'
+    local_lag > INTERVAL '3s' OR
+    global_lag > INTERVAL '3s'
 
 # When the source is down, there should be no visible lag either, as lag is
 # relative to the source frontiers.
@@ -76,8 +76,8 @@ true
   FROM mz_internal.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
   WHERE
-    local_lag > INTERVAL '2s' OR
-    global_lag > INTERVAL '2s'
+    local_lag > INTERVAL '3s' OR
+    global_lag > INTERVAL '3s'
 
 > ALTER CLUSTER source SET (REPLICATION FACTOR 1)
 
@@ -88,13 +88,13 @@ true
 > SELECT name
   FROM mz_internal.mz_materialization_lag
   JOIN mz_objects o ON (id = object_id)
-  WHERE local_lag > INTERVAL '2s'
+  WHERE local_lag > INTERVAL '3s'
 idx
 
 > SELECT name
   FROM mz_internal.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
-  WHERE global_lag > INTERVAL '2s'
+  WHERE global_lag > INTERVAL '3s'
 idx
 mv
 snk
@@ -107,8 +107,8 @@ snk
   FROM mz_internal.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
   WHERE
-    local_lag > INTERVAL '2s' OR
-    global_lag > INTERVAL '2s'
+    local_lag > INTERVAL '3s' OR
+    global_lag > INTERVAL '3s'
 
 # Bring down the sink cluster and observe resulting lag.
 
@@ -117,13 +117,13 @@ snk
 > SELECT name
   FROM mz_internal.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
-  WHERE local_lag > INTERVAL '2s'
+  WHERE local_lag > INTERVAL '3s'
 snk
 
 > SELECT name
   FROM mz_internal.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
-  WHERE global_lag > INTERVAL '2s'
+  WHERE global_lag > INTERVAL '3s'
 snk
 
 # Bringing up the sink cluster again should remove the lag.
@@ -134,8 +134,8 @@ snk
   FROM mz_internal.mz_materialization_lag
   JOIN mz_objects ON (id = object_id)
   WHERE
-    local_lag > INTERVAL '2s' OR
-    global_lag > INTERVAL '2s'
+    local_lag > INTERVAL '3s' OR
+    global_lag > INTERVAL '3s'
 
 # If a source has an empty frontier we can't compute a lag value anymore, so
 # the lag of dependant collections shows up as NULL instead.
