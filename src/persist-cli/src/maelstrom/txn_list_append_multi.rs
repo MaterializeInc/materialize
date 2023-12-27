@@ -21,7 +21,7 @@ use differential_dataflow::consolidation::consolidate_updates;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
-use mz_persist::location::{Blob, Consensus};
+use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHandle};
 use mz_persist_client::async_runtime::IsolatedRuntime;
 use mz_persist_client::cache::StateCache;
@@ -39,13 +39,13 @@ use tracing::{debug, info};
 
 use crate::maelstrom::api::{Body, MaelstromError, NodeId, ReqTxnOp, ResTxnOp};
 use crate::maelstrom::node::{Handle, Service};
-use crate::maelstrom::services::{CachingBlob, MaelstromBlob, MaelstromConsensus};
+use crate::maelstrom::services::{CachingBlob, MaelstromBlob, MaelstromConsensus, MaelstromOracle};
 use crate::maelstrom::Args;
 
 #[derive(Debug)]
 pub struct Transactor {
     txns_id: ShardId,
-    oracle: LocalOracle,
+    oracle: MaelstromOracle,
     client: PersistClient,
     txns: TxnsHandle<String, (), u64, i64>,
     tidy: Tidy,
@@ -53,9 +53,12 @@ pub struct Transactor {
 }
 
 impl Transactor {
-    pub async fn new(client: PersistClient, txns_id: ShardId) -> Result<Self, MaelstromError> {
-        let mut oracle = LocalOracle::new();
-        let init_ts = oracle.write_ts();
+    pub async fn new(
+        client: PersistClient,
+        txns_id: ShardId,
+        mut oracle: MaelstromOracle,
+    ) -> Result<Self, MaelstromError> {
+        let init_ts = oracle.read_ts().await? + 1;
         let txns = TxnsHandle::open(
             init_ts,
             client.clone(),
@@ -95,12 +98,11 @@ impl Transactor {
 
         // First create and register any data shards as necessary.
         for data_id in writes.keys().chain(read_ids.iter()) {
-            let init_ts = self.ensure_registered(data_id).await;
-            self.oracle.read_ts = std::cmp::max(self.oracle.read_ts, init_ts)
+            let _init_ts = self.ensure_registered(data_id).await;
         }
 
         // Run the core read+write, retry-at-a-higher-ts-on-conflict loop.
-        let mut read_ts = self.oracle.read_ts();
+        let mut read_ts = self.oracle.read_ts().await?;
         debug!("read ts {}", read_ts);
         let mut reads = self.read_at(read_ts, read_ids.iter()).await;
         if writes.is_empty() {
@@ -112,12 +114,15 @@ impl Transactor {
                     txn.write(&data_id, data, (), diff).await;
                 }
             }
-            let mut write_ts = self.oracle.write_ts();
+            // TODO: Figure out how to stay linearizable while getting this
+            // write_ts from the oracle instead.
+            let mut write_ts = read_ts + 1;
             debug!("write ts {}", write_ts);
             loop {
                 txn.tidy(std::mem::take(&mut self.tidy));
                 match txn.commit_at(&mut self.txns, write_ts).await {
                     Ok(maintenance) => {
+                        self.oracle.apply_write(write_ts).await?;
                         // Aggressively allow the txns shard to compact. To
                         // exercise more edge cases, do it before we apply the
                         // newly committed txn.
@@ -128,12 +133,15 @@ impl Transactor {
                         self.tidy.merge(tidy);
                         break;
                     }
-                    Err(_current) => {
+                    Err(current) => {
+                        // TODO: Make the ts selection in the loop match how we
+                        // think we're going to do this in prod. In particular,
+                        // using the upper of the txns shard instead of the
+                        // oracle is quite sus.
+                        write_ts = current;
                         // Have to redo our reads.
-                        read_ts = self.oracle.read_ts();
-                        debug!("read ts {}", read_ts);
-                        write_ts = self.oracle.write_ts();
-                        debug!("write ts {}", write_ts);
+                        read_ts = write_ts.checked_sub(1).expect("write_ts should be > 0");
+                        debug!("read ts {} write ts {}", read_ts, write_ts);
                         // TODO: Read this incrementally between the old and new
                         // read timestamps, instead.
                         reads = self.read_at(read_ts, read_ids.iter()).await;
@@ -205,10 +213,10 @@ impl Transactor {
     }
 
     // Returns the minimum timestamp at which this can be read.
-    async fn ensure_registered(&mut self, data_id: &ShardId) -> u64 {
+    async fn ensure_registered(&mut self, data_id: &ShardId) -> Result<u64, ExternalError> {
         // Already registered.
         if let Some((init_ts, _)) = self.data_reads.get(data_id) {
-            return *init_ts;
+            return Ok(*init_ts);
         }
 
         // Not registered
@@ -223,7 +231,7 @@ impl Transactor {
             .await
             .expect("data schema shouldn't change");
 
-        let mut init_ts = self.oracle.write_ts();
+        let mut init_ts = self.oracle.write_ts().await?;
         loop {
             let data_write = self
                 .client
@@ -238,16 +246,17 @@ impl Transactor {
             let res = self.txns.register(init_ts, [data_write]).await;
             match res {
                 Ok(_) => {
+                    self.oracle.apply_write(init_ts).await?;
                     self.data_reads.insert(*data_id, (init_ts, data_read));
-                    return init_ts;
+                    return Ok(init_ts);
                 }
                 Err(new_init_ts) => {
                     debug!(
                         "register {:.9} at {} mismatch current={}",
                         data_id, init_ts, new_init_ts
                     );
-                    assert!(init_ts < new_init_ts);
-                    init_ts = new_init_ts;
+                    init_ts = self.oracle.write_ts().await?;
+                    assert!(new_init_ts <= init_ts);
                     continue;
                 }
             }
@@ -422,7 +431,8 @@ impl Service for TransactorService {
             shared_states,
             pubsub_sender,
         )?;
-        let transactor = Transactor::new(client, shard_id).await?;
+        let oracle = MaelstromOracle::new(handle.clone()).await?;
+        let transactor = Transactor::new(client, shard_id, oracle).await?;
         let service = TransactorService(Arc::new(Mutex::new(transactor)));
         Ok(service)
     }
@@ -449,28 +459,5 @@ impl Service for TransactorService {
             }
             req => unimplemented!("unsupported req: {:?}", req),
         }
-    }
-}
-
-#[derive(Debug)]
-struct LocalOracle {
-    read_ts: u64,
-}
-
-impl LocalOracle {
-    fn new() -> Self {
-        LocalOracle { read_ts: 0 }
-    }
-}
-
-impl LocalOracle {
-    fn write_ts(&mut self) -> u64 {
-        // TODO(txn): Make this linearizable, potentially using the maelstrom
-        // "lin-tso" service
-        self.read_ts = self.read_ts + 1;
-        self.read_ts
-    }
-    fn read_ts(&mut self) -> u64 {
-        self.read_ts
     }
 }

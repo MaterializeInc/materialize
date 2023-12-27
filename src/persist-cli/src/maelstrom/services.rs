@@ -23,6 +23,7 @@ use mz_persist::location::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
+use tracing::debug;
 
 use crate::maelstrom::api::{ErrorCode, MaelstromError};
 use crate::maelstrom::node::Handle;
@@ -311,6 +312,138 @@ impl Blob for CachingBlob {
 
     async fn restore(&self, key: &str) -> Result<(), ExternalError> {
         self.blob.restore(key).await
+    }
+}
+
+#[derive(Debug)]
+pub struct MaelstromOracle {
+    read_ts: MaelstromOracleKey,
+    write_ts: MaelstromOracleKey,
+}
+
+#[derive(Debug)]
+pub struct MaelstromOracleKey {
+    handle: Handle,
+    key: String,
+    expected: u64,
+}
+
+// TODO: Make this implement ShareableTimestampOracle.
+impl MaelstromOracle {
+    pub async fn new(handle: Handle) -> Result<Self, ExternalError> {
+        let read_ts = MaelstromOracleKey::new(handle.clone(), "tso_read", 0).await?;
+        let write_ts = MaelstromOracleKey::new(handle.clone(), "tso_write", 1).await?;
+        Ok(MaelstromOracle { read_ts, write_ts })
+    }
+
+    pub async fn write_ts(&mut self) -> Result<u64, ExternalError> {
+        let prev = self.write_ts.cas(|expected| Some(expected + 1)).await?;
+        Ok(prev)
+    }
+
+    pub async fn peek_write_ts(&mut self) -> Result<u64, ExternalError> {
+        self.write_ts.peek().await
+    }
+
+    pub async fn read_ts(&mut self) -> Result<u64, ExternalError> {
+        self.read_ts.peek().await
+    }
+
+    pub async fn apply_write(&mut self, lower_bound: u64) -> Result<(), ExternalError> {
+        let write_prev = self
+            .write_ts
+            .cas(|expected| (expected < lower_bound).then_some(lower_bound))
+            .await?;
+        let read_prev = self
+            .read_ts
+            .cas(|expected| (expected < lower_bound).then_some(lower_bound))
+            .await?;
+        debug!(
+            "apply_write {} write_prev={} write_new={} read_prev={} read_new={}",
+            lower_bound, write_prev, self.write_ts.expected, read_prev, self.read_ts.expected
+        );
+        Ok(())
+    }
+}
+
+impl MaelstromOracleKey {
+    async fn new(handle: Handle, key: &str, init_ts: u64) -> Result<Self, ExternalError> {
+        let res = handle
+            .lin_kv_compare_and_set(
+                Value::from(key),
+                Value::Null,
+                Value::from(init_ts),
+                Some(true),
+            )
+            .await;
+        // Either of these answers indicate that we created the key.
+        match Self::cas_res(res)? {
+            CaSResult::Committed => {}
+            CaSResult::ExpectationMismatch => {}
+        }
+        Ok(MaelstromOracleKey {
+            handle,
+            key: key.to_owned(),
+            expected: init_ts,
+        })
+    }
+
+    fn cas_res(res: Result<(), MaelstromError>) -> Result<CaSResult, ExternalError> {
+        match res {
+            Ok(()) => Ok(CaSResult::Committed),
+            Err(MaelstromError {
+                code: ErrorCode::PreconditionFailed,
+                ..
+            }) => Ok(CaSResult::ExpectationMismatch),
+            Err(err) => Err(anyhow::Error::new(err).into()),
+        }
+    }
+
+    async fn peek(&mut self) -> Result<u64, ExternalError> {
+        let value = self
+            .handle
+            .lin_kv_read(Value::from(self.key.as_str()))
+            .await
+            .map_err(anyhow::Error::new)?
+            .expect("ts oracle should be initialized");
+        let current = value
+            .as_u64()
+            .ok_or_else(|| anyhow!("invalid {} value: {:?}", self.key, value))?;
+        assert!(self.expected <= current);
+        self.expected = current;
+        Ok(current)
+    }
+
+    async fn cas(&mut self, new_fn: impl Fn(u64) -> Option<u64>) -> Result<u64, ExternalError> {
+        loop {
+            let new = match new_fn(self.expected) {
+                Some(x) => x,
+                None => {
+                    // The latest cached value is good enough, early exit.
+                    return Ok(self.expected);
+                }
+            };
+            let res = self
+                .handle
+                .lin_kv_compare_and_set(
+                    Value::from(self.key.as_str()),
+                    Value::from(self.expected),
+                    Value::from(new),
+                    None,
+                )
+                .await;
+            match Self::cas_res(res)? {
+                CaSResult::Committed => {
+                    let prev = self.expected;
+                    self.expected = new;
+                    return Ok(prev);
+                }
+                CaSResult::ExpectationMismatch => {
+                    self.expected = self.peek().await?;
+                    continue;
+                }
+            };
+        }
     }
 }
 

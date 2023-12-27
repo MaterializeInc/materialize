@@ -787,7 +787,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: persist
-              args: [--consensus=mem, --blob=mem, --persist-txn]
+              args: [--node-count=4, --consensus=cockroach, --blob=maelstrom, --time-limit=300, --rate=500, --persist-txn]
 
   - id: persistence-failpoints
     label: Persistence failpoints
