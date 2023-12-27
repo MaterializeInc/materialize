@@ -1040,7 +1040,7 @@ impl PredicatePushdown {
                 }
             })?;
 
-            soft_assert_eq_no_log!(new_size, new_expr.size()?);
+            soft_assert_eq_no_log!(new_size, new_expr.size());
             if new_size <= size_limit {
                 Ok(Some(new_expr)) // We managed to stay within the limit.
             } else {

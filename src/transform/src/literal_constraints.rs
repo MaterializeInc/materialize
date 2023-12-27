@@ -84,7 +84,7 @@ impl LiteralConstraints {
                 mfp: &mut MapFilterProject,
                 orig_mfp: &MapFilterProject,
                 relation: &MirRelationExpr,
-            ) -> Result<(), RecursionLimitError> {
+            ) {
                 // undo list_of_predicates_to_and_of_predicates, distribute_and_over_or, unary_and
                 // (It undoes the latter 2 through `MirScalarExp::reduce`.)
                 LiteralConstraints::canonicalize_predicates(mfp, relation);
@@ -94,12 +94,11 @@ impl LiteralConstraints {
                 // so in those cases we might have a more complicated MFP than the original MFP
                 // (despite the removal of the literal constraints and/or contradicting OR args).
                 // So let's use the simpler one.
-                if LiteralConstraints::predicates_size(orig_mfp)?
-                    < LiteralConstraints::predicates_size(mfp)?
+                if LiteralConstraints::predicates_size(orig_mfp)
+                    < LiteralConstraints::predicates_size(mfp)
                 {
                     *mfp = orig_mfp.clone();
                 }
-                Ok(())
             }
 
             let removed_contradicting_or_args = Self::remove_impossible_or_args(&mut mfp)?;
@@ -114,7 +113,7 @@ impl LiteralConstraints {
                     // We didn't find a usable index, so no chance to remove literal constraints.
                     // But, we might have removed contradicting OR args.
                     if removed_contradicting_or_args {
-                        undo_preparation(&mut mfp, &orig_mfp, relation)?;
+                        undo_preparation(&mut mfp, &orig_mfp, relation);
                     } else {
                         // We didn't remove anything, so let's go with the original MFP.
                         mfp = orig_mfp;
@@ -128,7 +127,7 @@ impl LiteralConstraints {
                     {
                         // We were able to remove the literal constraints or contradicting OR args,
                         // so we would like to use this new MFP, so we try undoing the preparation.
-                        undo_preparation(&mut mfp, &orig_mfp, relation)?;
+                        undo_preparation(&mut mfp, &orig_mfp, relation);
                     } else {
                         // We were not able to remove the literal constraint, so `mfp` is
                         // equivalent to `orig_mfp`, but `orig_mfp` is often simpler (or the same).
@@ -636,7 +635,7 @@ impl LiteralConstraints {
         mfp.predicates.iter_mut().try_for_each(|(_, p)| {
             let mut old_p = MirScalarExpr::column(0);
             while old_p != *p {
-                let size = p.size()?;
+                let size = p.size();
                 // We might make the expression exponentially larger, so we should have some limit.
                 // Below 1000 (e.g., a single IN list of ~300 elements, or 3 IN lists of 4-5
                 // elements each), we are <10 ms for a single IN list, and even less for multiple IN
@@ -724,12 +723,12 @@ impl LiteralConstraints {
         }
     }
 
-    fn predicates_size(mfp: &MapFilterProject) -> Result<usize, RecursionLimitError> {
+    fn predicates_size(mfp: &MapFilterProject) -> usize {
         let mut sum = 0;
         for (_, p) in mfp.predicates.iter() {
-            sum = sum + p.size()?;
+            sum = sum + p.size();
         }
-        Ok(sum)
+        sum
     }
 }
 

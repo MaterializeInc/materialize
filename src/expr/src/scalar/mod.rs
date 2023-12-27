@@ -1903,12 +1903,13 @@ impl MirScalarExpr {
         contains
     }
 
-    pub fn size(&self) -> Result<usize, RecursionLimitError> {
+    /// The size of the expression as a tree.
+    pub fn size(&self) -> usize {
         let mut size = 0;
-        self.visit_post(&mut |_: &MirScalarExpr| {
+        self.visit_pre(&mut |_: &MirScalarExpr| {
             size += 1;
-        })?;
-        Ok(size)
+        });
+        size
     }
 }
 
