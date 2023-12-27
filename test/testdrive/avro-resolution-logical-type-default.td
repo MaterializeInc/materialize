@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 #
-# Attempt to resovle schemas with a logical type involving a default
+# Attempt to resolve schemas with a logical type involving a default
 #
 
 $ set writer={"type": "record", "name": "row", "fields": [ ] }
