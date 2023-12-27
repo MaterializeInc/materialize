@@ -1841,7 +1841,7 @@ where
         }
 
         let id = self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::Frontiers];
-        self.append_to_managed_collection(id, updates).await;
+        self.append_to_managed_collection(id, updates, true).await;
     }
 
     async fn record_replica_frontiers(
@@ -1902,7 +1902,7 @@ where
 
         let id =
             self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::ReplicaFrontiers];
-        self.append_to_managed_collection(id, updates).await;
+        self.append_to_managed_collection(id, updates, true).await;
     }
 
     async fn record_introspection_updates(
@@ -1911,7 +1911,7 @@ where
         updates: Vec<(Row, Diff)>,
     ) {
         let id = self.introspection_ids.lock().expect("poisoned")[&type_];
-        self.append_to_managed_collection(id, updates).await;
+        self.append_to_managed_collection(id, updates, true).await;
     }
 
     /// With the CRDB based timestamp oracle, there is no longer write timestamp
@@ -2483,7 +2483,7 @@ where
             .collect();
 
         if !updates.is_empty() {
-            self.append_to_managed_collection(id, updates).await;
+            self.append_to_managed_collection(id, updates, false).await;
         }
     }
 
@@ -2493,9 +2493,32 @@ where
     /// # Panics
     /// - If `id` is not registered as a managed collection.
     #[tracing::instrument(level = "debug", skip(self, updates))]
-    async fn append_to_managed_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+    async fn append_to_managed_collection(
+        &self,
+        id: GlobalId,
+        updates: Vec<(Row, Diff)>,
+        next_txn: bool,
+    ) {
         assert!(self.txns_init_run);
-        self.persist_table_worker.append_next_txn(id, updates).await;
+        if updates.is_empty() {
+            return;
+        }
+        if next_txn {
+            let () = self.persist_table_worker.append_next_txn(id, updates);
+        } else {
+            let write_ts = T::from((self.now)());
+            let advance_to = TimestampManipulation::step_forward(&write_ts);
+            let updates = updates
+                .into_iter()
+                .map(|(row, diff)| TimestamplessUpdate { row, diff })
+                .collect();
+            let () = self
+                .persist_table_worker
+                .append(write_ts, advance_to, vec![(id, updates)])
+                .await
+                .expect("WIP")
+                .expect("WIP");
+        }
     }
 
     /// Initializes the data expressing which global IDs correspond to which
@@ -2665,7 +2688,7 @@ where
             })
             .collect();
 
-        self.append_to_managed_collection(id, updates).await;
+        self.append_to_managed_collection(id, updates, false).await;
 
         Some(
             latest_row_per_id
@@ -2732,7 +2755,7 @@ where
             updates.push((row_buf.clone(), diff));
         }
 
-        self.append_to_managed_collection(id, updates).await;
+        self.append_to_managed_collection(id, updates, true).await;
     }
 
     /// Updates the on-disk and in-memory representation of `DurableCollectionMetadata` (i.e. KV

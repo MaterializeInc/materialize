@@ -269,6 +269,13 @@ where
         // error on the first attempt in tests.
         mut indeterminate: Option<Indeterminate>,
     ) -> Result<Result<(SeqNo, WriterMaintenance<T>), InvalidUsage<T>>, (SeqNo, Upper<T>)> {
+        tracing::info!(
+            "WIP CaA {:.9} {} {:?}->{:?}",
+            self.shard_id(),
+            self.applier.shard_metrics.name,
+            batch.desc.lower().elements(),
+            batch.desc.upper().elements()
+        );
         let metrics = Arc::clone(&self.applier.metrics);
         let lease_duration_ms = self
             .applier

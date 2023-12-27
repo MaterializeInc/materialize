@@ -394,18 +394,24 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
     /// - If `id` does not belong to managed collections.
     /// - If there is contention to write to the collection identified by `id`.
     /// - If the collection closed.
-    pub(crate) async fn append_next_txn(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+    pub(crate) fn append_next_txn(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
         if updates.is_empty() {
             return;
         }
+        // tracing::info!(
+        //     "WIP append_next_txn {} {}: {}",
+        //     id,
+        //     updates.len(),
+        //     std::backtrace::Backtrace::force_capture()
+        // );
         // WIP take TimestamplessUpdate instead.
         let updates = updates
             .into_iter()
             .map(|(row, diff)| TimestamplessUpdate { row, diff })
             .collect();
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let (tx, _rx) = tokio::sync::oneshot::channel();
         self.send(PersistTableWriteCmd::AppendNextTxn { id, updates, tx });
-        let () = rx.await.expect("WIP").expect("WIP");
+        // let () = rx.await.expect("WIP").expect("WIP");
     }
 
     /// Drops the handle associated with `id` from this worker.
@@ -605,7 +611,7 @@ impl<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulatio
         &self,
         rx: &mut tokio::sync::mpsc::UnboundedReceiver<(Span, PersistTableWriteCmd<T>)>,
     ) -> Option<(Span, PersistTableWriteCmd<T>)> {
-        if self.next_txn.is_empty() {
+        if self.next_txn.is_empty() || true {
             return rx.recv().await;
         }
         if let Ok(cmd) = rx.try_recv() {

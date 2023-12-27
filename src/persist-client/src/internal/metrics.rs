@@ -1415,6 +1415,7 @@ impl ShardsMetrics {
 #[derive(Debug)]
 pub struct ShardMetrics {
     pub shard_id: ShardId,
+    pub name: String,
     pub since: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     pub upper: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
     pub largest_batch_size: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
@@ -1457,6 +1458,7 @@ impl ShardMetrics {
         let shard = shard_id.to_string();
         ShardMetrics {
             shard_id: *shard_id,
+            name: name.to_owned(),
             since: shards_metrics
                 .since
                 .get_delete_on_drop_gauge(vec![shard.clone(), name.to_string()]),

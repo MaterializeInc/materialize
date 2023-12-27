@@ -112,8 +112,7 @@ where
                     if !correction.is_empty() {
                         current_metrics.extend(correction.iter().cloned());
                         collection_mgmt
-                            .append_next_txn(statistics_collection_id, correction)
-                            .await;
+                            .append_next_txn(statistics_collection_id, correction);
                     }
                 }
             }

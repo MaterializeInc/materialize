@@ -139,12 +139,10 @@ where
             .cloned()
             .collect();
 
-        self.collection_manager
-            .append_next_txn(
-                source_status_history_id,
-                Self::pack_status_updates(new.clone()),
-            )
-            .await;
+        self.collection_manager.append_next_txn(
+            source_status_history_id,
+            Self::pack_status_updates(new.clone()),
+        );
 
         self.previous_statuses
             .extend(new.into_iter().map(|r| (r.id, r.status_name)));

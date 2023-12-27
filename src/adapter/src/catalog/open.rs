@@ -485,6 +485,7 @@ impl Catalog {
                 let span = tracing::span!(tracing::Level::DEBUG, "builtin_non_indexes");
                 let _enter = span.enter();
                 for (builtin, id) in builtin_non_indexes {
+                    tracing::info!("WIP GlobalId {} is {}", id, builtin.name());
                     let schema_id = state.ambient_schemas_by_name[builtin.schema()];
                     let name = QualifiedItemName {
                         qualifiers: ItemQualifiers {
