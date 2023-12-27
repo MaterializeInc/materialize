@@ -14,7 +14,6 @@
 
 // TODO(frank): evaluate for redundancy with `column_knowledge`, or vice-versa.
 
-use mz_expr::visit::Visit;
 use mz_expr::{func, AggregateExpr, AggregateFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
 use mz_repr::{Datum, RelationType, ScalarType};
 
@@ -36,15 +35,15 @@ impl crate::Transform for NonNullable {
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
     ) -> Result<(), TransformError> {
-        let result = relation.try_visit_mut_pre(&mut |e| self.action(e));
+        let result = relation.visit_pre_mut(|e| self.action(e));
         mz_repr::explain::trace_plan(&*relation);
-        result
+        Ok(result)
     }
 }
 
 impl NonNullable {
     /// Harvests information about non-nullability of columns from sources.
-    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), TransformError> {
+    pub fn action(&self, relation: &mut MirRelationExpr) {
         match relation {
             MirRelationExpr::Map { input, scalars } => {
                 let contains_isnull = scalars
@@ -97,7 +96,6 @@ impl NonNullable {
             }
             _ => {}
         }
-        Ok(())
     }
 }
 
