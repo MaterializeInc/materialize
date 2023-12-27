@@ -70,7 +70,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     scenario = Scenario(args.scenario)
     complexity = Complexity(args.complexity)
 
-    if scenario in (Scenario.Kill, Scenario.BackupRestore):
+    if scenario in (Scenario.Kill, Scenario.BackupRestore, Scenario.TogglePersistTxn):
         catalog_store = "stash"
         sanity_restart = False
     else:
@@ -118,6 +118,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             args.naughty_identifiers,
             args.fast_startup,
             c,
+            catalog_store,
+            sanity_restart,
         )
         # TODO: Only ignore errors that will be handled by parallel-workload, not others
         # except Exception:

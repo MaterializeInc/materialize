@@ -65,6 +65,8 @@ def run(
     naughty_identifiers: bool,
     fast_startup: bool,
     composition: Composition | None,
+    catalog_store: str,
+    sanity_restart: bool,
 ) -> None:
     num_threads = num_threads or os.cpu_count() or 10
 
@@ -216,7 +218,7 @@ def run(
         assert composition, "Kill scenario only works in mzcompose"
         worker = Worker(
             worker_rng,
-            [KillAction(worker_rng, composition)],
+            [KillAction(worker_rng, composition, catalog_store, sanity_restart)],
             [1],
             end_time,
             autocommit=False,
@@ -226,6 +228,41 @@ def run(
         workers.append(worker)
         thread = threading.Thread(
             name="kill",
+            target=worker.run,
+            args=(host, ports["materialized"], "materialize", database),
+        )
+        thread.start()
+        threads.append(thread)
+    elif scenario == Scenario.TogglePersistTxn:
+
+        def toggle_persist_txn(params: dict[str, str]) -> dict[str, str]:
+            params["persist_txn_tables"] = (
+                "off" if params.get("persist_txn_tables") == "eager" else "eager"
+            )
+            return params
+
+        worker_rng = random.Random(rng.randrange(SEED_RANGE))
+        assert composition, "TogglePersistTxn scenario only works in mzcompose"
+        worker = Worker(
+            worker_rng,
+            [
+                KillAction(
+                    worker_rng,
+                    composition,
+                    catalog_store,
+                    sanity_restart,
+                    toggle_persist_txn,
+                )
+            ],
+            [1],
+            end_time,
+            autocommit=False,
+            system=False,
+            composition=composition,
+        )
+        workers.append(worker)
+        thread = threading.Thread(
+            name="toggle-persist-txn",
             target=worker.run,
             args=(host, ports["materialized"], "materialize", database),
         )
@@ -440,6 +477,8 @@ def main() -> int:
         args.naughty_identifiers,
         args.fast_startup,
         composition=None,  # only works in mzcompose
+        catalog_store="",  # only works in mzcompose
+        sanity_restart=False,  # only works in mzcompose
     )
     return 0
 
