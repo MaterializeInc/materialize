@@ -1060,6 +1060,7 @@ impl Stash {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Priority {
     Low,
+    #[allow(dead_code)]
     Normal,
     High,
 }
