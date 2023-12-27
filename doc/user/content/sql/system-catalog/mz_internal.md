@@ -73,7 +73,7 @@ sampling rate than the one set in this variable.
 | `session_id`              | [`uuid`]                     | An ID that is unique for each session.                                                                                                                                                                                                                                        |
 | `redacted_sql`            | [`text`]                     | The SQL text of the statement, in a normalized form, with all string and numeric literals hidden.                                                                                                                                                                             |
 | `prepared_at`             | [`timestamp with time zone`] | The time at which the statement was prepared.                                                                                                                                                                                                                                 |
-| `statement_kind`          | [`text`]                     | The _kind_ of the statement, e.g. `select` for a `SELECT` query, or `NULL` if the statement was empty.                                                                                                                                                                        |
+| `statement_type`          | [`text`]                     | The _type_ of the statement, e.g. `select` for a `SELECT` query, or `NULL` if the statement was empty.                                                                                                                                                                        |
 
 ### `mz_aws_connections`
 
