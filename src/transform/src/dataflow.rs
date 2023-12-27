@@ -18,7 +18,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDesc, DataflowDescription, IndexImport};
-use mz_expr::visit::Visit;
 use mz_expr::{
     AccessStrategy, CollectionPlan, Id, JoinImplementation, LocalId, MapFilterProject,
     MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
@@ -177,13 +176,13 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
             dataflow.objects_to_build[other]
                 .plan
                 .as_inner_mut()
-                .visit_mut_post(&mut |expr| {
+                .visit_pre_mut(|expr| {
                     if let MirRelationExpr::Get { id, .. } = expr {
                         if id == &Id::Global(global_id) {
                             *id = Id::Local(new_local);
                         }
                     }
-                })?;
+                });
 
             // With identifiers rewritten, we can replace `other` with
             // a `MirRelationExpr::Let` binding, whose value is `index` and
@@ -347,7 +346,7 @@ where
 
     for view in view_refs {
         // Update `Get` nodes to reflect any columns that have been projected away.
-        projection_pushdown.update_projection_around_get(view, &applied_projection)?;
+        projection_pushdown.update_projection_around_get(view, &applied_projection);
     }
 
     Ok(())
@@ -496,7 +495,7 @@ fn prune_and_annotate_dataflow_index_imports(
         build_desc
             .plan
             .as_inner()
-            .visit_post(&mut |expr: &MirRelationExpr| match expr {
+            .visit_pre(|expr: &MirRelationExpr| match expr {
                 MirRelationExpr::Get {
                     id: Id::Global(global_id),
                     typ,
@@ -516,7 +515,7 @@ fn prune_and_annotate_dataflow_index_imports(
                     );
                 }
                 _ => {}
-            })?;
+            });
     }
 
     // This will be a mapping of
@@ -648,7 +647,7 @@ id: {}, key: {:?}",
         build_desc
             .plan
             .as_inner_mut()
-            .visit_mut_post(&mut |expr: &mut MirRelationExpr| {
+            .visit_pre_mut(|expr: &mut MirRelationExpr| {
                 match expr {
                     MirRelationExpr::Get {
                         id: Id::Global(global_id),
@@ -681,7 +680,7 @@ id: {}, key: {:?}",
                     }
                     _ => {}
                 }
-            })?;
+            });
     }
 
     // Annotate index imports by their usage types
@@ -733,8 +732,10 @@ id: {}, key: {:?}",
         objects_to_build_ids.insert(id.clone());
     }
     for build_desc in dataflow.objects_to_build.iter_mut() {
-        build_desc.plan.as_inner_mut().visit_mut_post(
-            &mut |expr: &mut MirRelationExpr| match expr {
+        build_desc
+            .plan
+            .as_inner_mut()
+            .visit_pre_mut(|expr: &mut MirRelationExpr| match expr {
                 MirRelationExpr::Get {
                     id: Id::Global(global_id),
                     typ: _,
@@ -748,8 +749,7 @@ id: {}, key: {:?}",
                     _ => {}
                 },
                 _ => {}
-            },
-        )?;
+            });
     }
 
     // A sanity check that all Get annotations indicate indexes that are present in `index_imports`.
@@ -757,7 +757,7 @@ id: {}, key: {:?}",
         build_desc
             .plan
             .as_inner()
-            .visit_post(&mut |expr: &MirRelationExpr| match expr {
+            .visit_pre(|expr: &MirRelationExpr| match expr {
                 MirRelationExpr::Get {
                     id: Id::Global(_),
                     typ: _,
@@ -771,7 +771,7 @@ id: {}, key: {:?}",
                     }
                 }
                 _ => {}
-            })?;
+            });
     }
 
     mz_repr::explain::trace_plan(dataflow);

@@ -119,7 +119,7 @@ impl NonNullRequirements {
                     limits: _,
                 } => {
                     // Determine the recursive IDs in this LetRec binding.
-                    let rec_ids = MirRelationExpr::recursive_ids(ids, values)?;
+                    let rec_ids = MirRelationExpr::recursive_ids(ids, values);
 
                     // Seed the gets map with an empty vector for each ID.
                     for id in ids.iter() {

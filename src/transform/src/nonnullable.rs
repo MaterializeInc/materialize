@@ -14,7 +14,6 @@
 
 // TODO(frank): evaluate for redundancy with `column_knowledge`, or vice-versa.
 
-use itertools::Itertools;
 use mz_expr::visit::Visit;
 use mz_expr::{func, AggregateExpr, AggregateFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
 use mz_repr::{Datum, RelationType, ScalarType};
@@ -51,11 +50,11 @@ impl NonNullable {
                 let contains_isnull = scalars
                     .iter()
                     .map(scalar_contains_isnull)
-                    .fold_ok(false, |b1, b2| b1 || b2)?;
+                    .fold(false, |b1, b2| b1 || b2);
                 if contains_isnull {
                     let mut metadata = input.typ();
                     for scalar in scalars.iter_mut() {
-                        scalar_nonnullable(scalar, &metadata)?;
+                        scalar_nonnullable(scalar, &metadata);
                         let typ = scalar.typ(&metadata.column_types);
                         metadata.column_types.push(typ);
                     }
@@ -65,11 +64,11 @@ impl NonNullable {
                 let contains_isnull = predicates
                     .iter()
                     .map(scalar_contains_isnull)
-                    .fold_ok(false, |b1, b2| b1 || b2)?;
+                    .fold(false, |b1, b2| b1 || b2);
                 if contains_isnull {
                     let metadata = input.typ();
                     for predicate in predicates.iter_mut() {
-                        scalar_nonnullable(predicate, &metadata)?;
+                        scalar_nonnullable(predicate, &metadata);
                     }
                 }
             }
@@ -82,16 +81,16 @@ impl NonNullable {
             } => {
                 let contains_isnull_or_count = aggregates
                     .iter()
-                    .map::<Result<_, TransformError>, _>(|a| {
-                        let contains_null = scalar_contains_isnull(&(a).expr)?;
+                    .map(|a| {
+                        let contains_null = scalar_contains_isnull(&(a).expr);
                         let matches_count = matches!(&(a).func, AggregateFunc::Count);
-                        Ok(contains_null || matches_count)
+                        contains_null || matches_count
                     })
-                    .fold_ok(false, |b1, b2| b1 || b2)?;
+                    .fold(false, |b1, b2| b1 || b2);
                 if contains_isnull_or_count {
                     let metadata = input.typ();
                     for aggregate in aggregates.iter_mut() {
-                        scalar_nonnullable(&mut aggregate.expr, &metadata)?;
+                        scalar_nonnullable(&mut aggregate.expr, &metadata);
                         aggregate_nonnullable(aggregate, &metadata);
                     }
                 }
@@ -103,9 +102,9 @@ impl NonNullable {
 }
 
 /// True if the expression contains a "is null" test.
-fn scalar_contains_isnull(expr: &MirScalarExpr) -> Result<bool, TransformError> {
+fn scalar_contains_isnull(expr: &MirScalarExpr) -> bool {
     let mut result = false;
-    expr.visit_post(&mut |e| {
+    expr.visit_pre(&mut |e| {
         if let MirScalarExpr::CallUnary {
             func: UnaryFunc::IsNull(func::IsNull),
             ..
@@ -113,17 +112,14 @@ fn scalar_contains_isnull(expr: &MirScalarExpr) -> Result<bool, TransformError> 
         {
             result = true;
         }
-    })?;
-    Ok(result)
+    });
+    result
 }
 
 /// Transformations to scalar functions, based on nonnullability of columns.
-fn scalar_nonnullable(
-    expr: &mut MirScalarExpr,
-    metadata: &RelationType,
-) -> Result<(), TransformError> {
+fn scalar_nonnullable(expr: &mut MirScalarExpr, metadata: &RelationType) {
     // Tests for null can be replaced by "false" for non-nullable columns.
-    expr.visit_mut_post(&mut |e| {
+    expr.visit_pre_mut(|e| {
         if let MirScalarExpr::CallUnary {
             func: UnaryFunc::IsNull(func::IsNull),
             expr,
@@ -135,8 +131,7 @@ fn scalar_nonnullable(
                 }
             }
         }
-    })?;
-    Ok(())
+    });
 }
 
 /// Transformations to aggregation functions, based on nonnullability of columns.

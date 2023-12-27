@@ -144,7 +144,7 @@ pub fn normalize_subqueries<'a>(expr: &'a mut HirRelationExpr) -> Result<(), Rec
 fn id_gen(expr: &HirRelationExpr) -> Result<impl Iterator<Item = LocalId>, RecursionLimitError> {
     let mut max_id = 0_u64;
 
-    expr.visit_post(&mut |expr| {
+    expr.visit_pre(&mut |expr| {
         match expr {
             HirRelationExpr::Let { id, .. } => max_id = std::cmp::max(max_id, id.into()),
             _ => (),

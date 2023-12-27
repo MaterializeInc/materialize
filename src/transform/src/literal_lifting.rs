@@ -268,7 +268,7 @@ impl LiteralLifting {
                     limits: _,
                     body,
                 } => {
-                    let recursive_ids = MirRelationExpr::recursive_ids(ids, values)?;
+                    let recursive_ids = MirRelationExpr::recursive_ids(ids, values);
 
                     // Extend the context with empty `literals` vectors for all
                     // recursive IDs.

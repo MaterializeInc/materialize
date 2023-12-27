@@ -558,8 +558,7 @@ impl MirScalarExpr {
     /// strict permutation, and it only needs to have entries for
     /// each column referenced in `self`.
     pub fn permute(&mut self, permutation: &[usize]) {
-        #[allow(deprecated)]
-        self.visit_mut_post_nolimit(&mut |e| {
+        self.visit_pre_mut(|e| {
             if let MirScalarExpr::Column(old_i) = e {
                 *old_i = permutation[*old_i];
             }
@@ -572,8 +571,7 @@ impl MirScalarExpr {
     /// strict permutation, and it only needs to have entries for
     /// each column referenced in `self`.
     pub fn permute_map(&mut self, permutation: &BTreeMap<usize, usize>) {
-        #[allow(deprecated)]
-        self.visit_mut_post_nolimit(&mut |e| {
+        self.visit_pre_mut(|e| {
             if let MirScalarExpr::Column(old_i) = e {
                 *old_i = permutation[old_i];
             }
@@ -2121,6 +2119,15 @@ impl MirScalarExpr {
         while let Some(e) = worklist.pop() {
             f(e);
             worklist.extend(e.children().rev());
+        }
+    }
+
+    /// Iterative pre-order visitor.
+    pub fn visit_pre_mut<F: FnMut(&mut Self)>(&mut self, mut f: F) {
+        let mut worklist = vec![self];
+        while let Some(expr) = worklist.pop() {
+            f(expr);
+            worklist.extend(expr.children_mut().rev());
         }
     }
 }

@@ -304,13 +304,13 @@ impl PredicatePushdown {
                                 if !predicate.is_literal_err() || all_errors {
                                     let mut supported = true;
                                     let mut new_predicate = predicate.clone();
-                                    new_predicate.visit_mut_post(&mut |e| {
+                                    new_predicate.visit_pre(&mut |e| {
                                         if let MirScalarExpr::Column(c) = e {
                                             if *c >= group_key.len() {
                                                 supported = false;
                                             }
                                         }
-                                    })?;
+                                    });
                                     if supported {
                                         new_predicate.visit_mut_post(&mut |e| {
                                             if let MirScalarExpr::Column(i) = e {
@@ -527,7 +527,7 @@ impl PredicatePushdown {
                     // https://github.com/MaterializeInc/materialize/issues/18167#issuecomment-1477588262
 
                     // Pre-compute which Ids are used across iterations
-                    let ids_used_across_iterations = MirRelationExpr::recursive_ids(ids, values)?;
+                    let ids_used_across_iterations = MirRelationExpr::recursive_ids(ids, values);
 
                     // Predicate pushdown within the body
                     self.action(body, get_predicates)?;
@@ -965,13 +965,13 @@ impl PredicatePushdown {
             let mut support = BTreeSet::new();
 
             // Seed with `map_exprs` support in `expr`.
-            expr.visit_post(&mut |e| {
+            expr.visit_pre(&mut |e| {
                 if let MirScalarExpr::Column(c) = e {
                     if *c >= input_arity {
                         support.insert(*c);
                     }
                 }
-            })?;
+            });
 
             // Compute transitive closure of supports in `map_exprs`.
             let mut workset = support.iter().cloned().collect::<Vec<_>>();
@@ -981,7 +981,7 @@ impl PredicatePushdown {
                 std::mem::swap(&mut workset, &mut buffer);
                 // Drain the `buffer` and update `support` and `workset`.
                 for c in buffer.drain(..) {
-                    map_exprs[c - input_arity].visit_post(&mut |e| {
+                    map_exprs[c - input_arity].visit_pre(&mut |e| {
                         if let MirScalarExpr::Column(c) = e {
                             if *c >= input_arity {
                                 if support.insert(*c) {
@@ -989,7 +989,7 @@ impl PredicatePushdown {
                                 }
                             }
                         }
-                    })?;
+                    });
                 }
             }
             support
