@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.66"
 base64 = "0.13.1"
-clap = { version = "3.2.24", features = ["wrap_help", "env", "derive"] }
+clap = { version = "4.4.12", features = ["wrap_help", "env", "derive"] }
 derivative = "2.2.0"
 futures = "0.3.25"
 jsonwebtoken = "9.2.0"

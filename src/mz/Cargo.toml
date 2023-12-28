@@ -8,7 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 axum = { version = "0.6.20" }
-clap = { version = "3.2.24", features = [ "derive" ] }
+clap = { version = "4.4.12", features = [ "derive" ] }
 csv = "1.2.1"
 dirs = "5.0.0"
 indicatif = "0.17.2"

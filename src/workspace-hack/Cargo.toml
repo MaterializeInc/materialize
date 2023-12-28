@@ -31,7 +31,7 @@ bstr = { version = "0.2.14" }
 byteorder = { version = "1.4.3" }
 bytes = { version = "1.4.0", features = ["serde"] }
 chrono = { version = "0.4.25", default-features = false, features = ["alloc", "clock", "serde"] }
-clap = { version = "3.2.24", features = ["derive", "env", "wrap_help"] }
+clap = { version = "4.4.12", features = ["derive", "env", "wrap_help"] }
 console = { version = "0.15.5", default-features = false, features = ["ansi-parsing", "unicode-width"] }
 criterion = { version = "0.4.0", features = ["async_tokio", "html_reports"] }
 crossbeam-deque = { version = "0.8.3" }
@@ -143,7 +143,7 @@ byteorder = { version = "1.4.3" }
 bytes = { version = "1.4.0", features = ["serde"] }
 cc = { version = "1.0.83", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.25", default-features = false, features = ["alloc", "clock", "serde"] }
-clap = { version = "3.2.24", features = ["derive", "env", "wrap_help"] }
+clap = { version = "4.4.12", features = ["derive", "env", "wrap_help"] }
 console = { version = "0.15.5", default-features = false, features = ["ansi-parsing", "unicode-width"] }
 criterion = { version = "0.4.0", features = ["async_tokio", "html_reports"] }
 crossbeam-deque = { version = "0.8.3" }

@@ -10,7 +10,7 @@ publish = false
 anyhow = "1.0.66"
 bytes = "1.3.0"
 chrono = { version = "0.4.23", default-features = false, features = ["std"] }
-clap = { version = "3.2.24", features = ["derive"] }
+clap = { version = "4.4.12", features = ["derive"] }
 dec = "0.4.8"
 fallible-iterator = "0.2.0"
 futures = "0.3.25"
