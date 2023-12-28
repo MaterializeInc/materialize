@@ -21,6 +21,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::BoxStream;
+use healthcheck::RawStatusUpdate;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
@@ -1685,13 +1686,15 @@ where
         //
         // The locks are held for a short time, only while we do some hash map removals.
 
-        let mut updates = vec![];
+        let status_now = mz_ore::now::to_datetime((self.now)());
+
+        let mut dropped_sources = vec![];
         for id in pending_source_drops.drain(..) {
-            updates.push(id);
+            dropped_sources.push(RawStatusUpdate::dropped_status(id, status_now));
         }
 
         self.collection_status_manager
-            .drop_sources(updates, mz_ore::now::to_datetime((self.now)()))
+            .append_updates(dropped_sources, IntrospectionType::SourceStatusHistory)
             .await;
 
         {
@@ -1702,16 +1705,16 @@ where
         }
 
         // Record the drop status for all pending sink drops.
-        let mut updates = vec![];
+        let mut dropped_sinks = vec![];
         {
             let mut sink_statistics = self.sink_statistics.lock().expect("poisoned");
             for id in pending_sink_drops.drain(..) {
-                updates.push(id);
+                dropped_sinks.push(RawStatusUpdate::dropped_status(id, status_now));
                 sink_statistics.remove(&id);
             }
         }
         self.collection_status_manager
-            .drop_sinks(updates, mz_ore::now::to_datetime((self.now)()))
+            .append_updates(dropped_sinks, IntrospectionType::SinkStatusHistory)
             .await;
 
         Ok(updated_frontiers)
@@ -3224,10 +3227,13 @@ where
         }
 
         self.collection_status_manager
-            .append_source_updates(source_status_updates)
+            .append_updates(
+                source_status_updates,
+                IntrospectionType::SourceStatusHistory,
+            )
             .await;
         self.collection_status_manager
-            .append_sink_updates(sink_status_updates)
+            .append_updates(sink_status_updates, IntrospectionType::SinkStatusHistory)
             .await;
     }
 }
