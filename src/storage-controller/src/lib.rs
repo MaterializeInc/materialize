@@ -119,7 +119,8 @@ use mz_storage_client::client::{
 };
 use mz_storage_client::controller::{
     CollectionDescription, CollectionState, DataSource, DataSourceOther, ExportDescription,
-    ExportState, IntrospectionType, MonotonicAppender, SnapshotCursor, StorageController,
+    ExportState, IntrospectionManaged, IntrospectionType, MonotonicAppender, SnapshotCursor,
+    StorageController,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_types::collections as proto;
@@ -239,8 +240,8 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
 
     /// Facility for appending status updates for sources/sinks
     pub(crate) collection_status_manager: healthcheck::CollectionStatusManager<T>,
-    /// Tracks which collection is responsible for which [`IntrospectionType`].
-    pub(crate) introspection_ids: Arc<Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
+    /// Tracks which collection is responsible for which [`IntrospectionManaged`].
+    pub(crate) introspection_ids: Arc<Mutex<BTreeMap<IntrospectionManaged, GlobalId>>>,
     /// Tokens for tasks that drive updating introspection collections. Dropping
     /// this will make sure that any tasks (or other resources) will stop when
     /// needed.
@@ -770,6 +771,10 @@ where
                     client.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
                 }
                 DataSource::Introspection(i) => {
+                    let i = match i {
+                        IntrospectionType::Managed(i) => i,
+                    };
+
                     let prev = self
                         .introspection_ids
                         .lock()
@@ -783,14 +788,15 @@ where
                     self.collection_manager.register_collection(id);
 
                     match i {
-                        IntrospectionType::ShardMapping => {
+                        IntrospectionManaged::ShardMapping => {
                             self.initialize_shard_mapping().await;
                         }
-                        IntrospectionType::Frontiers | IntrospectionType::ReplicaFrontiers => {
+                        IntrospectionManaged::Frontiers
+                        | IntrospectionManaged::ReplicaFrontiers => {
                             // Set the collection to empty.
                             self.reconcile_managed_collection(id, vec![]).await;
                         }
-                        IntrospectionType::StorageSourceStatistics => {
+                        IntrospectionManaged::StorageSourceStatistics => {
                             // Set the collection to empty.
                             self.reconcile_managed_collection(id, vec![]).await;
 
@@ -805,7 +811,7 @@ where
                             // dropped, so that the internal task will stop.
                             self.introspection_tokens.insert(id, scraper_token);
                         }
-                        IntrospectionType::StorageSinkStatistics => {
+                        IntrospectionManaged::StorageSinkStatistics => {
                             // Set the collection to empty.
                             self.reconcile_managed_collection(id, vec![]).await;
 
@@ -820,19 +826,19 @@ where
                             // dropped, so that the internal task will stop.
                             self.introspection_tokens.insert(id, scraper_token);
                         }
-                        IntrospectionType::SourceStatusHistory => {
+                        IntrospectionManaged::SourceStatusHistory => {
                             self.partially_truncate_status_history(
-                                IntrospectionType::SourceStatusHistory,
+                                IntrospectionManaged::SourceStatusHistory,
                             )
                             .await;
                         }
-                        IntrospectionType::SinkStatusHistory => {
+                        IntrospectionManaged::SinkStatusHistory => {
                             self.partially_truncate_status_history(
-                                IntrospectionType::SinkStatusHistory,
+                                IntrospectionManaged::SinkStatusHistory,
                             )
                             .await;
                         }
-                        IntrospectionType::PrivatelinkConnectionStatusHistory => {
+                        IntrospectionManaged::PrivatelinkConnectionStatusHistory => {
                             // Truncate the private link connection status history table and
                             // store the latest timestamp for each id in the table.
                             let occurred_at_col =
@@ -842,7 +848,7 @@ where
                                     .0;
                             self.privatelink_status_table_latest = self
                                 .partially_truncate_status_history(
-                                    IntrospectionType::PrivatelinkConnectionStatusHistory,
+                                    IntrospectionManaged::PrivatelinkConnectionStatusHistory,
                                 )
                                 .await
                                 .and_then(|map| {
@@ -864,17 +870,17 @@ where
                         }
 
                         // Truncate compute-maintained collections.
-                        IntrospectionType::ComputeDependencies
-                        | IntrospectionType::ComputeReplicaHeartbeats
-                        | IntrospectionType::ComputeHydrationStatus => {
+                        IntrospectionManaged::ComputeDependencies
+                        | IntrospectionManaged::ComputeReplicaHeartbeats
+                        | IntrospectionManaged::ComputeHydrationStatus => {
                             self.reconcile_managed_collection(id, vec![]).await;
                         }
 
                         // Note [btv] - we don't truncate these, because that uses
                         // a huge amount of memory on environmentd startup.
-                        IntrospectionType::PreparedStatementHistory
-                        | IntrospectionType::StatementExecutionHistory
-                        | IntrospectionType::SessionHistory => {
+                        IntrospectionManaged::PreparedStatementHistory
+                        | IntrospectionManaged::StatementExecutionHistory
+                        | IntrospectionManaged::SessionHistory => {
                             // do nothing.
                         }
                     }
@@ -1841,7 +1847,7 @@ where
             push_update(id, old, -1);
         }
 
-        let id = self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::Frontiers];
+        let id = self.introspection_ids.lock().expect("poisoned")[&IntrospectionManaged::Frontiers];
         self.append_to_managed_collection(id, updates).await;
     }
 
@@ -1901,14 +1907,14 @@ where
             push_update(key, old, -1);
         }
 
-        let id =
-            self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::ReplicaFrontiers];
+        let id = self.introspection_ids.lock().expect("poisoned")
+            [&IntrospectionManaged::ReplicaFrontiers];
         self.append_to_managed_collection(id, updates).await;
     }
 
     async fn record_introspection_updates(
         &mut self,
-        type_: IntrospectionType,
+        type_: IntrospectionManaged,
         updates: Vec<(Row, Diff)>,
     ) {
         let id = self.introspection_ids.lock().expect("poisoned")[&type_];
@@ -2505,13 +2511,13 @@ where
     /// discover before the shard mapping collection exists.
     ///
     /// # Panics
-    /// - If `IntrospectionType::ShardMapping` is not associated with a
+    /// - If `IntrospectionManaged::ShardMapping` is not associated with a
     /// `GlobalId` in `self.introspection_ids`.
-    /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
+    /// - If `IntrospectionManaged::ShardMapping`'s `GlobalId` is not registered as
     ///   a managed collection.
     async fn initialize_shard_mapping(&mut self) {
-        let id =
-            self.introspection_ids.lock().expect("poisoned lock")[&IntrospectionType::ShardMapping];
+        let id = self.introspection_ids.lock().expect("poisoned lock")
+            [&IntrospectionManaged::ShardMapping];
 
         let mut row_buf = Row::default();
         let mut updates = Vec::with_capacity(self.collections.len());
@@ -2537,10 +2543,10 @@ where
     /// Returns a map with latest row per id
     async fn partially_truncate_status_history(
         &mut self,
-        collection: IntrospectionType,
+        collection: IntrospectionManaged,
     ) -> Option<BTreeMap<GlobalId, Row>> {
         let (keep_n, occurred_at_col, id_col) = match collection {
-            IntrospectionType::SourceStatusHistory => (
+            IntrospectionManaged::SourceStatusHistory => (
                 self.config.parameters.keep_n_source_status_history_entries,
                 healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("occurred_at"))
@@ -2551,7 +2557,7 @@ where
                     .expect("schema has not changed")
                     .0,
             ),
-            IntrospectionType::SinkStatusHistory => (
+            IntrospectionManaged::SinkStatusHistory => (
                 self.config.parameters.keep_n_sink_status_history_entries,
                 healthcheck::MZ_SINK_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("occurred_at"))
@@ -2562,7 +2568,7 @@ where
                     .expect("schema has not changed")
                     .0,
             ),
-            IntrospectionType::PrivatelinkConnectionStatusHistory => (
+            IntrospectionManaged::PrivatelinkConnectionStatusHistory => (
                 self.config
                     .parameters
                     .keep_n_privatelink_status_history_entries,
@@ -2694,13 +2700,13 @@ where
     /// entry.
     ///
     /// However, data is written iff we know of the `GlobalId` of the
-    /// `IntrospectionType::ShardMapping` collection; in other cases, data is
+    /// `IntrospectionManaged::ShardMapping` collection; in other cases, data is
     /// dropped on the floor. In these cases, the data is later written by
     /// [`Self::initialize_shard_mapping`].
     ///
     /// # Panics
     /// - If `self.collections` does not have an entry for `global_id`.
-    /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
+    /// - If `IntrospectionManaged::ShardMapping`'s `GlobalId` is not registered as
     ///   a managed collection.
     /// - If diff is any value other than `1` or `-1`.
     #[tracing::instrument(level = "debug", skip_all)]
@@ -2715,7 +2721,7 @@ where
             .introspection_ids
             .lock()
             .expect("poisoned")
-            .get(&IntrospectionType::ShardMapping)
+            .get(&IntrospectionManaged::ShardMapping)
         {
             Some(id) => *id,
             _ => return,

@@ -22,7 +22,7 @@ use mz_ore::task::AbortOnDropHandle;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
-use mz_storage_client::controller::IntrospectionType;
+use mz_storage_client::controller::IntrospectionManaged;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::select;
@@ -461,7 +461,7 @@ impl HydrationFlag {
     fn send(&self, updates: Vec<(Row, Diff)>) {
         let result = self
             .introspection_tx
-            .send((IntrospectionType::ComputeHydrationStatus, updates));
+            .send((IntrospectionManaged::ComputeHydrationStatus, updates));
 
         if result.is_err() {
             // The global controller holds on to the `introspection_rx`. So when we get here that
