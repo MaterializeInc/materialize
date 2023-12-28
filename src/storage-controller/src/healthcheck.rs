@@ -82,9 +82,14 @@ impl From<RawStatusUpdate> for Row {
 }
 
 /// A lightweight wrapper around [`CollectionManager`] that assists with
-/// appending status updates to to `mz_internal.mz_{source|status}_history`
+/// appending status updates to to introspection statuses.
+///
+/// This struct is meant to contain the logic of providing envelopes over data
+/// for introspection collections via [`IntrospectionStatusUpdate`]. If the
+/// introspection data does not need any kind of envelope (i.e. it is truly
+/// append only), you can instead use the collection manager directly.
 #[derive(Debug, Clone)]
-pub struct CollectionStatusManager<T>
+pub struct IntrospectionStatusManager<T>
 where
     T: Timestamp + Lattice + Codec64 + TimestampManipulation,
 {
@@ -230,7 +235,7 @@ impl IntrospectionStatusUpdate for PrivateLinkStatusUpdates {
     }
 }
 
-impl<T> CollectionStatusManager<T>
+impl<T> IntrospectionStatusManager<T>
 where
     T: Timestamp + Lattice + Codec64 + TimestampManipulation + From<EpochMillis>,
 {

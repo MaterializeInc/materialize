@@ -346,8 +346,8 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Interface for managed collections
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
 
-    /// Facility for appending status updates for sources/sinks
-    pub(crate) collection_status_manager: healthcheck::CollectionStatusManager<T>,
+    /// Facility for appending introspection statuses.
+    pub(crate) introspection_status_manager: healthcheck::IntrospectionStatusManager<T>,
     /// Tracks which collection is responsible for which [`IntrospectionType`].
     pub(crate) introspection_ids: Arc<Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
     /// Tokens for tasks that drive updating introspection collections. Dropping
@@ -934,7 +934,7 @@ where
                                 )
                                 .await;
 
-                            self.collection_status_manager
+                            self.introspection_status_manager
                                 .extend_previous_statuses(last_status_per_id.into_iter().flatten())
                         }
                         IntrospectionType::SinkStatusHistory => {
@@ -944,7 +944,7 @@ where
                                 )
                                 .await;
 
-                            self.collection_status_manager
+                            self.introspection_status_manager
                                 .extend_previous_statuses(last_status_per_id.into_iter().flatten())
                         }
                         IntrospectionType::PrivatelinkConnectionStatusHistory => {
@@ -954,7 +954,7 @@ where
                                 )
                                 .await;
 
-                            self.collection_status_manager
+                            self.introspection_status_manager
                                 .extend_previous_statuses(last_status_per_id.into_iter().flatten())
                         }
 
@@ -1884,7 +1884,7 @@ where
             updates.push(id);
         }
 
-        self.collection_status_manager
+        self.introspection_status_manager
             .drop_sources(updates, mz_ore::now::to_datetime((self.now)()))
             .await;
 
@@ -1904,7 +1904,7 @@ where
                 sink_statistics.remove(&id);
             }
         }
-        self.collection_status_manager
+        self.introspection_status_manager
             .drop_sinks(updates, mz_ore::now::to_datetime((self.now)()))
             .await;
 
@@ -2062,7 +2062,7 @@ where
     }
 
     async fn append_status_updates(&mut self, updates: Vec<Row>, type_: IntrospectionType) {
-        self.collection_status_manager
+        self.introspection_status_manager
             .append_rows(updates, type_)
             .await
     }
@@ -2390,7 +2390,7 @@ where
 
         let introspection_ids = Arc::new(Mutex::new(BTreeMap::new()));
 
-        let collection_status_manager = crate::healthcheck::CollectionStatusManager::new(
+        let introspection_status_manager = crate::healthcheck::IntrospectionStatusManager::new(
             collection_manager.clone(),
             Arc::clone(&introspection_ids),
         );
@@ -2409,7 +2409,7 @@ where
             stashed_response: None,
             pending_compaction_commands: vec![],
             collection_manager,
-            collection_status_manager,
+            introspection_status_manager,
             introspection_ids,
             introspection_tokens: BTreeMap::new(),
             now,
@@ -3465,14 +3465,14 @@ where
             }
         }
 
-        self.collection_status_manager
+        self.introspection_status_manager
             .append_rows(
                 source_status_updates,
                 IntrospectionType::SourceStatusHistory,
             )
             .await;
 
-        self.collection_status_manager
+        self.introspection_status_manager
             .append_rows(sink_status_updates, IntrospectionType::SinkStatusHistory)
             .await;
     }
