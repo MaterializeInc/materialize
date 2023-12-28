@@ -59,6 +59,7 @@ uuid = "1.2.2"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [dev-dependencies]
+base64 = "0.13.1"
 insta = "1.32"
 mz-postgres-util = { path = "../postgres-util" }
 rand = "0.8.5"

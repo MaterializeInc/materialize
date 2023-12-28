@@ -3695,6 +3695,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.13.1",
  "bytes",
  "bytesize",
  "chrono",

@@ -27,48 +27,136 @@
 //!    how we want them to exist. For example, if the version of the Catalog before we made our
 //!    changes was 15, we should now have `objects_v15.proto` and `objects_v16.proto`.
 //! 6. Add `v<CATALOG_VERSION>` to the call to the `objects!` macro in this file.
-//! 7. Add a new file to `catalog/src/durable/upgrade`, which is where we'll put the new migration
-//!    path.
+//! 7. Add a new file to `catalog/src/durable/upgrade/persist` and
+//!    `catalog/src/durable/upgrade/stash`, which is where we'll put the new migration path.
 //! 8. Write upgrade functions using the the two versions of the protos we now have, e.g.
 //!    `objects_v15.proto` and `objects_v16.proto`. In this migration code you __should not__
 //!    import any defaults or constants from elsewhere in the codebase, because then a future
 //!    change could then impact a previous migration. You need to write separate upgrade functions
 //!    for the stash catalog and the persist catalog.
 //! 9. Call your upgrade function in [`stash::upgrade()`] and [`persist::upgrade()`].
+//! 10. Run `cargo test --package mz-catalog --lib \
+//!     durable::upgrade::tests::generate_missing_snapshots -- --ignored` to generate a test file
+//!     for the new version.
 //!
 //! When in doubt, reach out to the Surfaces team, and we'll be more than happy to help :)
 
+#[cfg(test)]
+mod tests;
+
 use paste::paste;
+#[cfg(test)]
+use proptest::prelude::*;
+#[cfg(test)]
+use proptest::strategy::ValueTree;
+#[cfg(test)]
+use proptest_derive::Arbitrary;
+
+#[cfg(test)]
+use crate::durable::impls::persist::state_update::StateUpdateKindRaw;
+
+#[cfg(test)]
+const ENCODED_TEST_CASES: usize = 100;
 
 macro_rules! objects {
-        ( $( $x:ident ),* ) => {
-            paste! {
-                $(
-                    pub mod [<objects_ $x>] {
-                        include!(concat!(env!("OUT_DIR"), "/objects_", stringify!($x), ".rs"));
+    ( $( $x:ident ),* ) => {
+        paste! {
+            $(
+                pub mod [<objects_ $x>] {
+                    include!(concat!(env!("OUT_DIR"), "/objects_", stringify!($x), ".rs"));
 
-                        use crate::durable::impls::persist::state_update::StateUpdateKindRaw;
+                    use crate::durable::impls::persist::state_update::StateUpdateKindRaw;
 
-                        impl From<StateUpdateKind> for StateUpdateKindRaw {
-                            fn from(value: StateUpdateKind) -> Self {
-                                // TODO: This requires that the json->proto->json roundtrips
-                                // exactly, see #23908.
-                                StateUpdateKindRaw::from_serde(&value)
-                            }
-                        }
-
-                        impl TryFrom<StateUpdateKindRaw> for StateUpdateKind {
-                            type Error = String;
-
-                            fn try_from(value: StateUpdateKindRaw) -> Result<Self, Self::Error> {
-                                Ok(value.to_serde::<Self>())
-                            }
+                    impl From<StateUpdateKind> for StateUpdateKindRaw {
+                        fn from(value: StateUpdateKind) -> Self {
+                            // TODO: This requires that the json->proto->json roundtrips
+                            // exactly, see #23908.
+                            StateUpdateKindRaw::from_serde(&value)
                         }
                     }
+
+                    impl TryFrom<StateUpdateKindRaw> for StateUpdateKind {
+                        type Error = String;
+
+                        fn try_from(value: StateUpdateKindRaw) -> Result<Self, Self::Error> {
+                            Ok(value.to_serde::<Self>())
+                        }
+                    }
+                }
+            )*
+
+            // Generate test helpers for each version.
+
+            #[cfg(test)]
+            #[derive(Debug, Arbitrary)]
+            enum AllVersionsStateUpdateKind {
+                $(
+                    [<$x:upper>](crate::durable::upgrade::[<objects_ $x>]::StateUpdateKind),
                 )*
+            }
+
+            #[cfg(test)]
+            impl AllVersionsStateUpdateKind {
+                #[cfg(test)]
+                fn arbitrary_vec(version: &str) -> Result<Vec<Self>, String> {
+                    let mut runner = proptest::test_runner::TestRunner::deterministic();
+                    std::iter::repeat(())
+                        .filter_map(|_| AllVersionsStateUpdateKind::arbitrary(version, &mut runner).transpose())
+                        .take(ENCODED_TEST_CASES)
+                        .collect::<Result<_, _>>()
+                }
+
+                #[cfg(test)]
+                fn arbitrary(
+                    version: &str,
+                    runner: &mut proptest::test_runner::TestRunner,
+                ) -> Result<Option<Self>, String> {
+                    match version {
+                        $(
+                            concat!("objects_", stringify!($x)) => {
+                                let arbitrary_data =
+                                    crate::durable::upgrade::[<objects_ $x>]::StateUpdateKind::arbitrary()
+                                        .new_tree(runner)
+                                        .expect("unable to create arbitrary data")
+                                        .current();
+                                // Skip over generated data where kind is None because they are not interesting or
+                                // possible in production. Unfortunately any of the inner fields can still be None,
+                                // which is also not possible in production.
+                                // TODO(jkosh44) See if there's an arbitrary config that forces Some.
+                                let arbitrary_data = if arbitrary_data.kind.is_some() {
+                                    Some(Self::[<$x:upper>](arbitrary_data))
+                                } else {
+                                    None
+                                };
+                                Ok(arbitrary_data)
+                            }
+                        )*
+                        _ => Err(format!("unrecognized version {version} add enum variant")),
+                    }
+                }
+
+                #[cfg(test)]
+                fn try_from_raw(version: &str, raw: StateUpdateKindRaw) -> Result<Self, String> {
+                    match version {
+                        $(
+                            concat!("objects_", stringify!($x)) => Ok(Self::[<$x:upper>](raw.try_into()?)),
+                        )*
+                        _ => Err(format!("unrecognized version {version} add enum variant")),
+                    }
+                }
+
+                #[cfg(test)]
+                fn raw(self) -> StateUpdateKindRaw {
+                    match self {
+                        $(
+                            Self::[<$x:upper>](kind) => kind.into(),
+                        )*
+                    }
+                }
             }
         }
     }
+}
 
 objects!(v42, v43, v44, v45);
 
