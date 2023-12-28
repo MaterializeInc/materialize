@@ -65,7 +65,10 @@ fn test_proto_serialization_stability() {
             .map(|s| base64::decode_config(s, base64_config).expect("valid base64"))
             .map(|b| SourceData::decode(&b).expect("valid proto"))
             .map(StateUpdateKindRaw::from)
-            .map(|raw| AllVersionsStateUpdateKind::try_from_raw(&snapshot_file, raw).unwrap())
+            .map(|raw| {
+                AllVersionsStateUpdateKind::try_from_raw(&snapshot_file, raw)
+                    .expect("valid version and raw")
+            })
             .map(|kind| kind.raw())
             .map(SourceData::from);
 
@@ -113,9 +116,9 @@ fn generate_missing_encodings() {
             .create_new(true)
             .write(true)
             .open(format!("{}/{}.txt", *SNAPSHOT_DIRECTORY, to_encode))
-            .unwrap();
+            .expect("file exists");
         let encoded_datas = AllVersionsStateUpdateKind::arbitrary_vec(to_encode)
-            .unwrap()
+            .expect("valid version")
             .into_iter()
             .map(|kind| kind.raw())
             .map(SourceData::from)
@@ -137,7 +140,7 @@ fn generate_missing_encodings() {
 
 fn read_file_names<'a>(dir: &'a str, ext: &'a str) -> impl Iterator<Item = String> + 'a {
     fs::read_dir(dir)
-        .unwrap()
+        .expect("valid directory")
         // If we fail to read one file, fail everything.
         .collect::<Result<Vec<_>, _>>()
         .expect("unable to read directory")
