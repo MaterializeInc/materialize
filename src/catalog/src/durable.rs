@@ -32,7 +32,6 @@ use crate::durable::debug::{DebugCatalogState, Trace};
 pub use crate::durable::error::{CatalogError, DurableCatalogError};
 use crate::durable::impls::migrate::{CatalogMigrator, Direction};
 pub use crate::durable::impls::persist::metrics::Metrics;
-pub use crate::durable::impls::persist::state_update::StateUpdateKindRaw;
 use crate::durable::impls::persist::UnopenedPersistCatalogState;
 use crate::durable::impls::shadow::OpenableShadowCatalogState;
 use crate::durable::impls::stash::{OpenableConnection, TestOpenableConnection};
@@ -59,7 +58,7 @@ mod impls;
 pub mod initialize;
 pub mod objects;
 mod transaction;
-pub mod upgrade;
+mod upgrade;
 
 pub const DATABASE_ID_ALLOC_KEY: &str = "database";
 pub const SCHEMA_ID_ALLOC_KEY: &str = "schema";

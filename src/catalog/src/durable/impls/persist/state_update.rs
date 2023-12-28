@@ -571,7 +571,7 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
 
 /// Version of [`StateUpdateKind`] to allow reading/writing raw json from/to persist.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct StateUpdateKindRaw(Jsonb);
+pub(crate) struct StateUpdateKindRaw(Jsonb);
 
 impl From<StateUpdateKind> for StateUpdateKindRaw {
     fn from(value: StateUpdateKind) -> Self {
