@@ -238,10 +238,10 @@ macro_rules! all_versions {
             impl AllVersionsStateUpdateKind {
                 fn arbitrary_vec(version: &str) -> Result<Vec<Self>, String> {
                     let mut runner = proptest::test_runner::TestRunner::deterministic();
-                    Ok(iter::repeat(())
+                    iter::repeat(())
                         .filter_map(|_| AllVersionsStateUpdateKind::arbitrary(version, &mut runner).transpose())
                         .take(ENCODED_TEST_CASES)
-                        .collect::<Result<_, _>>()?)
+                        .collect::<Result<_, _>>()
                 }
 
                 fn arbitrary(
