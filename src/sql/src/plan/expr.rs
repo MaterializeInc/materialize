@@ -1329,7 +1329,7 @@ impl HirRelationExpr {
         }
     }
 
-    pub fn filter(mut self, preds: Vec<HirScalarExpr>) -> Self {
+    pub fn filter(mut self, mut preds: Vec<HirScalarExpr>) -> Self {
         if let HirRelationExpr::Filter {
             input: _,
             predicates,
@@ -1340,6 +1340,8 @@ impl HirRelationExpr {
             predicates.dedup();
             self
         } else {
+            preds.sort();
+            preds.dedup();
             HirRelationExpr::Filter {
                 input: Box::new(self),
                 predicates: preds,
