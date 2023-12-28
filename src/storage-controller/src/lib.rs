@@ -89,6 +89,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::BoxStream;
+use healthcheck::RawStatusUpdate;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
@@ -1750,13 +1751,14 @@ where
         //
         // The locks are held for a short time, only while we do some hash map removals.
 
-        let mut updates = vec![];
-        for id in pending_source_drops.drain(..) {
-            updates.push(id);
-        }
+        let status_now = mz_ore::now::to_datetime((self.now)());
 
+        let mut dropped_sources = vec![];
+        for id in pending_source_drops.drain(..) {
+            dropped_sources.push(Row::from(RawStatusUpdate::dropped_status(id, status_now)));
+        }
         self.introspection_status_manager
-            .drop_sources(updates, mz_ore::now::to_datetime((self.now)()))
+            .append_rows(IntrospectionType::SourceStatusHistory, dropped_sources)
             .await;
 
         {
@@ -1767,16 +1769,16 @@ where
         }
 
         // Record the drop status for all pending sink drops.
-        let mut updates = vec![];
+        let mut dropped_sinks = vec![];
         {
             let mut sink_statistics = self.sink_statistics.lock().expect("poisoned");
             for id in pending_sink_drops.drain(..) {
-                updates.push(id);
+                dropped_sinks.push(Row::from(RawStatusUpdate::dropped_status(id, status_now)));
                 sink_statistics.remove(&id);
             }
         }
         self.introspection_status_manager
-            .drop_sinks(updates, mz_ore::now::to_datetime((self.now)()))
+            .append_rows(IntrospectionType::SinkStatusHistory, dropped_sinks)
             .await;
 
         Ok(())

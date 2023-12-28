@@ -45,6 +45,17 @@ pub struct RawStatusUpdate {
 }
 
 impl RawStatusUpdate {
+    pub fn dropped_status(id: GlobalId, ts: DateTime<Utc>) -> RawStatusUpdate {
+        RawStatusUpdate {
+            id,
+            ts,
+            status_name: "dropped".to_string(),
+            error: None,
+            hints: Default::default(),
+            namespaced_errors: Default::default(),
+        }
+    }
+
     fn produce_new_status(prev: &str, new: &str) -> bool {
         match (prev, new) {
             // TODO(guswynn): Ideally only `failed` sources should not be marked as paused.
@@ -299,53 +310,6 @@ where
         };
 
         produce
-    }
-
-    async fn drop_items(
-        &mut self,
-        ids: Vec<GlobalId>,
-        ts: DateTime<Utc>,
-        type_: IntrospectionType,
-    ) {
-        self.append_rows(
-            ids.iter()
-                .map(|id| {
-                    Row::from(RawStatusUpdate {
-                        id: *id,
-                        ts,
-                        status_name: "dropped".to_string(),
-                        error: None,
-                        hints: Default::default(),
-                        namespaced_errors: Default::default(),
-                    })
-                })
-                .collect(),
-            type_,
-        )
-        .await;
-        // Note that don't remove the statuses from `previous_statuses`, as they will never be
-        // cleared from the history table
-        //
-        // TODO(guswynn): clean up dropped sources/sinks from status history tables, at some point.
-    }
-    /// Marks the sources as dropped.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the source status history collection is not registered in `introspection_ids`
-    pub async fn drop_sources(&mut self, ids: Vec<GlobalId>, ts: DateTime<Utc>) {
-        self.drop_items(ids, ts, IntrospectionType::SourceStatusHistory)
-            .await;
-    }
-
-    /// Marks the sinks as dropped.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the source status history collection is not registered in `introspection_ids`
-    pub async fn drop_sinks(&mut self, ids: Vec<GlobalId>, ts: DateTime<Utc>) {
-        self.drop_items(ids, ts, IntrospectionType::SinkStatusHistory)
-            .await;
     }
 }
 
