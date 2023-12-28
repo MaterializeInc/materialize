@@ -2286,7 +2286,7 @@ impl Coordinator {
             let mut transitive_compute_deps = BTreeSet::new();
             for id in id_bundle
                 .iter()
-                .flat_map(|id| self.catalog.state().transitive_dependencies(id))
+                .flat_map(|id| self.catalog.state().transitive_uses(id))
             {
                 match self.catalog.state().get_entry(&id).item() {
                     CatalogItem::Table(_) | CatalogItem::Source(_) => {

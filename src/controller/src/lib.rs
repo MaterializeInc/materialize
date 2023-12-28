@@ -339,13 +339,7 @@ where
                         .write_frontier
                         .borrow()
                 });
-            if frontier.less_equal(&t) {
-                println!("retaining {id:?} at time {t:?} for antichain {frontier:?}");
-                true
-            } else {
-                println!("not retaining {id:?} at time {t:?} for antichain {frontier:?}");
-                false
-            }
+            frontier.less_equal(&t)
         });
         if objects.is_empty() {
             self.immediate_watch_sets.push(token);
@@ -416,13 +410,6 @@ where
         &mut self,
         updates: &[(GlobalId, Antichain<T>)],
     ) -> Option<ControllerResponse<T>> {
-        let updates_to_log = updates
-            .iter()
-            .filter(|(id, _antichain)| id.is_user())
-            .collect::<Vec<_>>();
-        if !updates_to_log.is_empty() {
-            println!("Handling frontier updates: {updates_to_log:?}");
-        }
         let mut finished = vec![];
         for (id, antichain) in updates {
             if let Some(x) = self.watch_sets.get_mut(id) {

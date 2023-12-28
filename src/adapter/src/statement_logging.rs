@@ -28,10 +28,10 @@ pub enum StatementLifecycleEvent {
 impl StatementLifecycleEvent {
     pub fn as_str(&self) -> &str {
         match self {
-            Self::ExecutionBegan => "execution_began",
-            Self::StorageDependenciesFinished => "storage_dependencies_finished",
-            Self::ComputeDependenciesFinished => "compute_dependencies_finished",
-            Self::ExecutionFinished => "execution_finished",
+            Self::ExecutionBegan => "execution-began",
+            Self::StorageDependenciesFinished => "storage-dependencies-finished",
+            Self::ComputeDependenciesFinished => "compute-dependencies-finished",
+            Self::ExecutionFinished => "execution-finished",
         }
     }
 }

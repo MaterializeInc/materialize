@@ -2553,7 +2553,7 @@ pub static MZ_STATEMENT_LIFECYCLE_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| Bu
     schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("statement_id", ScalarType::Uuid.nullable(false))
-        .with_column("event_kind", ScalarType::String.nullable(false))
+        .with_column("event_type", ScalarType::String.nullable(false))
         .with_column(
             "occurred_at",
             ScalarType::TimestampTz { precision: None }.nullable(false),

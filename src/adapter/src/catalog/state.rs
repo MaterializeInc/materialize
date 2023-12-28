@@ -267,7 +267,11 @@ impl CatalogState {
         }
     }
 
-    pub fn transitive_dependencies(&self, id: GlobalId) -> impl Iterator<Item = GlobalId> + '_ {
+    /// Returns an iterator over the deduplicated identifiers of all
+    /// objects this catalog entry transitively depends on (where
+    /// "depends on" is meant in the sense of [`CatalogItem::uses`], rather than
+    /// [`CatalogItem::references`]).
+    pub fn transitive_uses(&self, id: GlobalId) -> impl Iterator<Item = GlobalId> + '_ {
         struct I<'a> {
             queue: VecDeque<GlobalId>,
             seen: BTreeSet<GlobalId>,
