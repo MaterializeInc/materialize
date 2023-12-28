@@ -153,7 +153,8 @@ fn test_proto_serialization_stability() {
 #[cfg_attr(miri, ignore)] // not an actual test
 #[ignore]
 /// This is not a real test, it is a helper to generate encoded catalog objects for other tests.
-/// When you want to generate new encodings, then uncomment `#[ignore]` and run this test.
+/// When you want to generate new encodings, then run
+/// `cargo test --package mz-catalog --test encoded generate_missing_encodings -- --ignored`.
 fn generate_missing_encodings() {
     let proto_directory = format!("{}/protos", env!("CARGO_MANIFEST_DIR"));
     let protos: BTreeSet<_> = read_file_names(&proto_directory, "proto")
