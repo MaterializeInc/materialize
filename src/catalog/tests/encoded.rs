@@ -121,15 +121,14 @@ fn test_proto_serialization_stability() {
         let encoded_bytes = fs::read(format!("{encoded_directory}/{encoded_file}.txt"))
             .expect("unable to read encoded file");
         let encoded_str = std::str::from_utf8(encoded_bytes.as_slice()).expect("valid UTF-8");
-        let decoded: Vec<_> = encoded_str
+        let decoded = encoded_str
             .lines()
             .map(|s| base64::decode_config(s, base64_config).expect("valid base64"))
             .map(|b| SourceData::decode(&b).expect("valid proto"))
             .map(StateUpdateKindRaw::from)
             .map(|raw| AllVersionsStateUpdateKind::try_from_raw(&encoded_file, raw).unwrap())
             .map(|kind| kind.raw())
-            .map(SourceData::from)
-            .collect();
+            .map(SourceData::from);
 
         // Reencode and compare the strings.
         let mut reencoded = String::new();
