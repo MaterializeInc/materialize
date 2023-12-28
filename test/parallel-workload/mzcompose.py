@@ -85,7 +85,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ports=["6975:6875", "6976:6876", "6977:6877"],
             catalog_store=catalog_store,
             sanity_restart=sanity_restart,
-        )
+        ),
+        Toxiproxy(seed=random.randrange(2**63)),
     ):
         toxiproxy_start(c)
         c.up(*service_names)

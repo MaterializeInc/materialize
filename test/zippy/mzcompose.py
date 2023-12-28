@@ -163,6 +163,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             external_cockroach="toxiproxy",
             sanity_restart=False,
         ),
+        # Override so seed gets respected
+        Toxiproxy(seed=random.randrange(2**63)),
     ):
         toxiproxy_start(c)
 
