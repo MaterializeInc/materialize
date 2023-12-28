@@ -22,7 +22,6 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
@@ -47,8 +46,7 @@ use crate::client::TimestamplessUpdate;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub enum IntrospectionType {
-    /// We're not responsible for appending to this collection automatically, but we should
-    /// automatically bump the write frontier from time to time.
+    PrivatelinkConnectionStatusHistory,
     SinkStatusHistory,
     SourceStatusHistory,
     ShardMapping,
@@ -70,9 +68,6 @@ pub enum IntrospectionType {
     ComputeDependencies,
     ComputeReplicaHeartbeats,
     ComputeHydrationStatus,
-
-    // Written by the Adapter for tracking AWS PrivateLink Connection Status History
-    PrivatelinkConnectionStatusHistory,
 }
 
 /// Describes how data is written to the collection.
@@ -523,6 +518,20 @@ pub trait StorageController: Debug {
         updates: Vec<(Row, Diff)>,
     );
 
+    /// Appends `updates` for the given introspection type.
+    ///
+    /// This method's implementation has the following capabilities:
+    /// - Only appends updates (i.e. the diffs of all rows become `1`)
+    /// - Can apply state management to incoming `Row`s based on the row's
+    ///   `GlobalId` to drop updates.
+    ///
+    /// This makes the implementation ideal for handling status-like
+    /// introspection updates.
+    ///
+    /// Rows passed in `updates` MUST have the correct schema for the given
+    /// introspection type, as readers rely on this and might panic otherwise.
+    async fn append_status_updates(&mut self, type_: IntrospectionType, updates: Vec<Row>);
+
     /// Resets the txns system to a set of invariants necessary for correctness.
     ///
     /// Must be called on boot before create_collections or the various appends.
@@ -535,10 +544,6 @@ pub trait StorageController: Debug {
     /// good and there is no possibility of the old code running concurrently
     /// with the new code.
     async fn init_txns(&mut self, init_ts: Self::Timestamp) -> Result<(), StorageError>;
-
-    /// Returns the timestamp of the latest row for each id in the
-    /// privatelink_connection_status_history table seen on startup
-    fn get_privatelink_status_table_latest(&self) -> &Option<BTreeMap<GlobalId, DateTime<Utc>>>;
 }
 
 /// State maintained about individual collections.
