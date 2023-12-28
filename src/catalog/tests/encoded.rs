@@ -77,14 +77,15 @@
 
 use std::collections::BTreeSet;
 use std::io::Write;
-use std::str::FromStr;
 use std::{fs, iter};
 
 use mz_catalog::durable::StateUpdateKindRaw;
 use mz_persist_types::Codec;
 use mz_storage_types::sources::SourceData;
+use paste::paste;
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
+use proptest_derive::Arbitrary;
 
 const ENCODED_TEST_CASES: usize = 100;
 
@@ -120,13 +121,13 @@ fn test_proto_serialization_stability() {
         let encoded_bytes = fs::read(format!("{encoded_directory}/{encoded_file}.txt"))
             .expect("unable to read encoded file");
         let encoded_str = std::str::from_utf8(encoded_bytes.as_slice()).expect("valid UTF-8");
-        let proto_version = ProtoVersion::from_str(&encoded_file).unwrap();
         let decoded: Vec<_> = encoded_str
             .lines()
             .map(|s| base64::decode_config(s, base64_config).expect("valid base64"))
             .map(|b| SourceData::decode(&b).expect("valid proto"))
             .map(StateUpdateKindRaw::from)
-            .map(|raw| proto_version.roundtrip(raw))
+            .map(|raw| AllVersionsStateUpdateKind::try_from_raw(&encoded_file, raw).unwrap())
+            .map(|kind| kind.raw())
             .map(SourceData::from)
             .collect();
 
@@ -177,15 +178,23 @@ fn generate_missing_encodings() {
             .write(true)
             .open(format!("{encoded_directory}/{to_encode}.txt"))
             .unwrap();
-        let raw_datas = ProtoVersion::from_str(to_encode).unwrap().arbitrary_raws();
-        for raw_data in raw_datas {
-            let source_data: SourceData = raw_data.into();
-            let mut buf = Vec::new();
-            source_data.encode(&mut buf);
-            let mut encoded = String::new();
-            base64::encode_config_buf(buf.as_slice(), base64_config, &mut encoded);
-
-            write!(&mut file, "{encoded}\n").expect("unable to write file");
+        let encoded_datas = AllVersionsStateUpdateKind::arbitrary_iter(to_encode)
+            .unwrap()
+            .into_iter()
+            .map(|kind| kind.raw())
+            .map(SourceData::from)
+            .map(|source_data| {
+                let mut buf = Vec::new();
+                source_data.encode(&mut buf);
+                buf
+            })
+            .map(|buf| {
+                let mut encoded = String::new();
+                base64::encode_config_buf(buf.as_slice(), base64_config, &mut encoded);
+                encoded
+            });
+        for encoded_data in encoded_datas {
+            write!(&mut file, "{encoded_data}\n").expect("unable to write file");
         }
     }
 }
@@ -217,104 +226,74 @@ fn read_file_names<'a>(dir: &'a str, ext: &'a str) -> impl Iterator<Item = Strin
         })
 }
 
-enum ProtoVersion {
-    V42,
-    V43,
-    V44,
-    V45,
-}
+macro_rules! all_versions {
+    ( $( $x:ident ),* ) => {
+        paste! {
+            #[derive(Debug, Arbitrary)]
+            enum AllVersionsStateUpdateKind {
+                $(
+                    [<$x:upper>](mz_catalog::durable::upgrade::[<objects_ $x>]::StateUpdateKind),
+                )*
+            }
 
-impl FromStr for ProtoVersion {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "objects_v42" => Ok(Self::V42),
-            "objects_v43" => Ok(Self::V43),
-            "objects_v44" => Ok(Self::V44),
-            "objects_v45" => Ok(Self::V45),
-
-            _ => Err(format!("unrecognized version {s} add enum variant")),
-        }
-    }
-}
-
-impl ProtoVersion {
-    /// Generate a vec of random [`StateUpdateKindRaw`].
-    fn arbitrary_raws(&self) -> Vec<StateUpdateKindRaw> {
-        let mut runner = proptest::test_runner::TestRunner::deterministic();
-        iter::repeat(())
-            .filter_map(|_| self.arbitrary_raw(&mut runner))
-            .take(ENCODED_TEST_CASES)
-            .collect()
-    }
-
-    fn arbitrary_raw(
-        &self,
-        runner: &mut proptest::test_runner::TestRunner,
-    ) -> Option<StateUpdateKindRaw> {
-        macro_rules! raw_data {
-            ($strategy:expr, $runner:expr) => {{
-                let arbitrary_data = $strategy
-                    .new_tree($runner)
-                    .expect("unable to create arbitrary data")
-                    .current();
-                // Skip over generated data where kind is None because they are not interesting or
-                // possible in production. Unfortunately any of the inner fields can still be None,
-                // which is also not possible in production.
-                // TODO(jkosh44) See if there's an arbitrary config that forces Some.
-                if arbitrary_data.kind.is_some() {
-                    let raw_data: StateUpdateKindRaw = arbitrary_data.into();
-                    Some(raw_data)
-                } else {
-                    None
+            impl AllVersionsStateUpdateKind {
+                fn arbitrary_iter(version: &str) -> Result<Vec<Self>, String> {
+                    let mut runner = proptest::test_runner::TestRunner::deterministic();
+                    Ok(iter::repeat(())
+                        .filter_map(|_| AllVersionsStateUpdateKind::arbitrary(version, &mut runner).transpose())
+                        .take(ENCODED_TEST_CASES)
+                        .collect::<Result<_, _>>()?)
                 }
-            }};
-        }
 
-        match self {
-            ProtoVersion::V42 => raw_data!(
-                mz_catalog::durable::upgrade::objects_v42::StateUpdateKind::arbitrary(),
-                runner
-            ),
-            ProtoVersion::V43 => raw_data!(
-                mz_catalog::durable::upgrade::objects_v43::StateUpdateKind::arbitrary(),
-                runner
-            ),
-            ProtoVersion::V44 => raw_data!(
-                mz_catalog::durable::upgrade::objects_v44::StateUpdateKind::arbitrary(),
-                runner
-            ),
-            ProtoVersion::V45 => raw_data!(
-                mz_catalog::durable::upgrade::objects_v45::StateUpdateKind::arbitrary(),
-                runner
-            ),
-        }
-    }
+                fn arbitrary(
+                    version: &str,
+                    runner: &mut proptest::test_runner::TestRunner,
+                ) -> Result<Option<Self>, String> {
+                    match version {
+                        $(
+                            concat!("objects_", stringify!($x)) => {
+                                let arbitrary_data =
+                                    mz_catalog::durable::upgrade::[<objects_ $x>]::StateUpdateKind::arbitrary()
+                                        .new_tree(runner)
+                                        .expect("unable to create arbitrary data")
+                                        .current();
+                                // Skip over generated data where kind is None because they are not interesting or
+                                // possible in production. Unfortunately any of the inner fields can still be None,
+                                // which is also not possible in production.
+                                // TODO(jkosh44) See if there's an arbitrary config that forces Some.
+                                let arbitrary_data = if arbitrary_data.kind.is_some() {
+                                    Some(Self::[<$x:upper>](arbitrary_data))
+                                } else {
+                                    None
+                                };
+                                Ok(arbitrary_data)
+                            }
+                        )*
+                        _ => Err(format!("unrecognized version {version} add enum variant")),
+                    }
+                }
 
-    /// Roundtrip [`StateUpdateKindRaw`] through a specific versioned protobuf `StateUpdateKind`.
-    fn roundtrip(&self, raw: StateUpdateKindRaw) -> StateUpdateKindRaw {
-        match self {
-            ProtoVersion::V42 => {
-                mz_catalog::durable::upgrade::objects_v42::StateUpdateKind::try_from(raw)
-                    .unwrap()
-                    .into()
-            }
-            ProtoVersion::V43 => {
-                mz_catalog::durable::upgrade::objects_v43::StateUpdateKind::try_from(raw)
-                    .unwrap()
-                    .into()
-            }
-            ProtoVersion::V44 => {
-                mz_catalog::durable::upgrade::objects_v44::StateUpdateKind::try_from(raw)
-                    .unwrap()
-                    .into()
-            }
-            ProtoVersion::V45 => {
-                mz_catalog::durable::upgrade::objects_v45::StateUpdateKind::try_from(raw)
-                    .unwrap()
-                    .into()
+                fn try_from_raw(version: &str, raw: StateUpdateKindRaw) -> Result<Self, String> {
+                    match version {
+                        $(
+                            concat!("objects_", stringify!($x)) => Ok(Self::[<$x:upper>](raw.try_into()?)),
+                        )*
+                        _ => Err(format!("unrecognized version {version} add enum variant")),
+                    }
+                }
+
+                fn raw(self) -> StateUpdateKindRaw {
+                    match self {
+                        $(
+                            Self::[<$x:upper>](kind) => kind.into(),
+                        )*
+                    }
+                }
             }
         }
-    }
+    };
 }
+
+// When new proto versions are added, then add that version to this macro call.
+// When old proto versions are removed, then remove them from this macro call.
+all_versions!(v42, v43, v44, v45);
