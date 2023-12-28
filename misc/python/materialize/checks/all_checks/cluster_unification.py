@@ -20,6 +20,9 @@ class UnifiedCluster(Check):
     def initialize(self) -> Testdrive:
         return Testdrive(
             """
+            $[version<8100] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            ALTER SYSTEM SET enable_unified_clusters = true
+
             > CREATE CLUSTER shared_cluster_compute_first SIZE '1', REPLICATION FACTOR 1;
             > CREATE CLUSTER shared_cluster_storage_first SIZE '1', REPLICATION FACTOR 1;
             """
