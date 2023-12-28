@@ -154,132 +154,126 @@ EXPLAIN DECORRELATED PLAN WITH(raw) AS JSON FOR
     "body": {
       "Union": {
         "base": {
-          "Union": {
-            "base": {
-              "Project": {
+          "Project": {
+            "input": {
+              "Map": {
                 "input": {
-                  "Map": {
-                    "input": {
-                      "Get": {
-                        "id": {
-                          "Local": 0
-                        },
-                        "typ": {
-                          "column_types": [],
-                          "keys": [
-                            []
-                          ]
-                        },
-                        "access_strategy": "UnknownOrLocal"
-                      }
+                  "Get": {
+                    "id": {
+                      "Local": 0
                     },
-                    "scalars": [
+                    "typ": {
+                      "column_types": [],
+                      "keys": [
+                        []
+                      ]
+                    },
+                    "access_strategy": "UnknownOrLocal"
+                  }
+                },
+                "scalars": [
+                  {
+                    "Literal": [
                       {
-                        "Literal": [
-                          {
-                            "Ok": {
-                              "data": [
-                                42,
-                                1
-                              ]
-                            }
-                          },
-                          {
-                            "scalar_type": "Int32",
-                            "nullable": false
-                          }
-                        ]
+                        "Ok": {
+                          "data": [
+                            42,
+                            1
+                          ]
+                        }
                       },
                       {
-                        "Literal": [
-                          {
-                            "Ok": {
-                              "data": [
-                                42,
-                                2
-                              ]
-                            }
-                          },
-                          {
-                            "scalar_type": "Int32",
-                            "nullable": false
-                          }
-                        ]
+                        "scalar_type": "Int32",
+                        "nullable": false
+                      }
+                    ]
+                  },
+                  {
+                    "Literal": [
+                      {
+                        "Ok": {
+                          "data": [
+                            42,
+                            2
+                          ]
+                        }
+                      },
+                      {
+                        "scalar_type": "Int32",
+                        "nullable": false
                       }
                     ]
                   }
-                },
-                "outputs": [
-                  0,
-                  1
                 ]
               }
             },
-            "inputs": [
-              {
-                "Project": {
-                  "input": {
-                    "Map": {
-                      "input": {
-                        "Get": {
-                          "id": {
-                            "Local": 0
-                          },
-                          "typ": {
-                            "column_types": [],
-                            "keys": [
-                              []
-                            ]
-                          },
-                          "access_strategy": "UnknownOrLocal"
-                        }
-                      },
-                      "scalars": [
-                        {
-                          "Literal": [
-                            {
-                              "Ok": {
-                                "data": [
-                                  42,
-                                  1
-                                ]
-                              }
-                            },
-                            {
-                              "scalar_type": "Int32",
-                              "nullable": false
-                            }
-                          ]
-                        },
-                        {
-                          "Literal": [
-                            {
-                              "Ok": {
-                                "data": [
-                                  42,
-                                  2
-                                ]
-                              }
-                            },
-                            {
-                              "scalar_type": "Int32",
-                              "nullable": false
-                            }
-                          ]
-                        }
-                      ]
-                    }
-                  },
-                  "outputs": [
-                    0,
-                    1
-                  ]
-                }
-              }
+            "outputs": [
+              0,
+              1
             ]
           }
         },
         "inputs": [
+          {
+            "Project": {
+              "input": {
+                "Map": {
+                  "input": {
+                    "Get": {
+                      "id": {
+                        "Local": 0
+                      },
+                      "typ": {
+                        "column_types": [],
+                        "keys": [
+                          []
+                        ]
+                      },
+                      "access_strategy": "UnknownOrLocal"
+                    }
+                  },
+                  "scalars": [
+                    {
+                      "Literal": [
+                        {
+                          "Ok": {
+                            "data": [
+                              42,
+                              1
+                            ]
+                          }
+                        },
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": false
+                        }
+                      ]
+                    },
+                    {
+                      "Literal": [
+                        {
+                          "Ok": {
+                            "data": [
+                              42,
+                              2
+                            ]
+                          }
+                        },
+                        {
+                          "scalar_type": "Int32",
+                          "nullable": false
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              "outputs": [
+                0,
+                1
+              ]
+            }
+          },
           {
             "Project": {
               "input": {
