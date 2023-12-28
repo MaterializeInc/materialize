@@ -177,7 +177,7 @@ fn generate_missing_encodings() {
             .write(true)
             .open(format!("{encoded_directory}/{to_encode}.txt"))
             .unwrap();
-        let encoded_datas = AllVersionsStateUpdateKind::arbitrary_iter(to_encode)
+        let encoded_datas = AllVersionsStateUpdateKind::arbitrary_vec(to_encode)
             .unwrap()
             .into_iter()
             .map(|kind| kind.raw())
@@ -236,7 +236,7 @@ macro_rules! all_versions {
             }
 
             impl AllVersionsStateUpdateKind {
-                fn arbitrary_iter(version: &str) -> Result<Vec<Self>, String> {
+                fn arbitrary_vec(version: &str) -> Result<Vec<Self>, String> {
                     let mut runner = proptest::test_runner::TestRunner::deterministic();
                     Ok(iter::repeat(())
                         .filter_map(|_| AllVersionsStateUpdateKind::arbitrary(version, &mut runner).transpose())
