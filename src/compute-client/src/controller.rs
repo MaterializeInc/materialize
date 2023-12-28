@@ -44,7 +44,7 @@ use mz_expr::RowSetFinishing;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Diff, GlobalId, Row};
-use mz_storage_client::controller::{IntrospectionType, StorageController};
+use mz_storage_client::controller::{IntrospectionManaged, StorageController};
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
@@ -70,7 +70,7 @@ mod replica;
 
 pub mod error;
 
-type IntrospectionUpdates = (IntrospectionType, Vec<(Row, Diff)>);
+type IntrospectionUpdates = (IntrospectionManaged, Vec<(Row, Diff)>);
 
 /// Responses from the compute controller.
 #[derive(Debug)]

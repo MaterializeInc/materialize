@@ -19,7 +19,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_sql::plan::Params;
 use mz_sql_parser::ast::{statement_kind_label_value, StatementKind};
-use mz_storage_client::controller::IntrospectionType;
+use mz_storage_client::controller::IntrospectionManaged;
 use qcell::QCell;
 use rand::SeedableRng;
 use rand::{distributions::Bernoulli, prelude::Distribution, thread_rng};
@@ -142,7 +142,7 @@ impl Coordinator {
                 .map(|update| (update, 1))
                 .collect();
 
-        use IntrospectionType::*;
+        use IntrospectionManaged::*;
         for (type_, updates) in [
             (SessionHistory, session_updates),
             (PreparedStatementHistory, prepared_statement_updates),

@@ -46,6 +46,11 @@ use crate::client::TimestamplessUpdate;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub enum IntrospectionType {
+    Managed(IntrospectionManaged),
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash, PartialOrd, Ord)]
+pub enum IntrospectionManaged {
     /// We're not responsible for appending to this collection automatically, but we should
     /// automatically bump the write frontier from time to time.
     SinkStatusHistory,
@@ -526,7 +531,7 @@ pub trait StorageController: Debug {
     /// as readers rely on this and might panic otherwise.
     async fn record_introspection_updates(
         &mut self,
-        type_: IntrospectionType,
+        type_: IntrospectionManaged,
         updates: Vec<(Row, Diff)>,
     );
 

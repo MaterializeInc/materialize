@@ -45,7 +45,7 @@ use mz_sql::session::user::{
     MZ_MONITOR_REDACTED_ROLE_ID, MZ_MONITOR_ROLE_ID, MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID,
     SUPPORT_USER_NAME, SYSTEM_USER_NAME,
 };
-use mz_storage_client::controller::IntrospectionType;
+use mz_storage_client::controller::{IntrospectionManaged, IntrospectionType};
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_PREPARED_STATEMENT_HISTORY_DESC,
     MZ_SESSION_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC,
@@ -132,7 +132,7 @@ pub struct BuiltinSource {
     pub name: &'static str,
     pub schema: &'static str,
     pub desc: RelationDesc,
-    pub data_source: Option<IntrospectionType>,
+    pub data_source: IntrospectionType,
     /// Whether the source's retention policy is controlled by
     /// the system variable `METRICS_RETENTION`
     pub is_retained_metrics_object: bool,
@@ -1927,7 +1927,7 @@ pub static MZ_OBJECT_DEPENDENCIES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTabl
 pub static MZ_COMPUTE_DEPENDENCIES: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_compute_dependencies",
     schema: MZ_INTERNAL_SCHEMA,
-    data_source: Some(IntrospectionType::ComputeDependencies),
+    data_source: IntrospectionType::Managed(IntrospectionManaged::ComputeDependencies),
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("dependency_id", ScalarType::String.nullable(false)),
@@ -1937,7 +1937,7 @@ pub static MZ_COMPUTE_DEPENDENCIES: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSo
 pub static MZ_COMPUTE_HYDRATION_STATUSES: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_compute_hydration_statuses",
     schema: MZ_INTERNAL_SCHEMA,
-    data_source: Some(IntrospectionType::ComputeHydrationStatus),
+    data_source: IntrospectionType::Managed(IntrospectionManaged::ComputeHydrationStatus),
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("replica_id", ScalarType::String.nullable(false))
@@ -2431,7 +2431,7 @@ pub static MZ_CLUSTER_REPLICA_SIZES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTa
 pub static MZ_CLUSTER_REPLICA_HEARTBEATS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_cluster_replica_heartbeats",
     schema: MZ_INTERNAL_SCHEMA,
-    data_source: Some(IntrospectionType::ComputeReplicaHeartbeats),
+    data_source: IntrospectionType::Managed(IntrospectionManaged::ComputeReplicaHeartbeats),
     desc: RelationDesc::empty()
         .with_column("replica_id", ScalarType::String.nullable(false))
         .with_column(
@@ -2462,7 +2462,7 @@ pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_source_status_history",
     schema: MZ_INTERNAL_SCHEMA,
-    data_source: Some(IntrospectionType::SourceStatusHistory),
+    data_source: IntrospectionType::Managed(IntrospectionManaged::SourceStatusHistory),
     desc: MZ_SOURCE_STATUS_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
@@ -2513,7 +2513,7 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUSES: Lazy<BuiltinView> = Lazy::new
 pub static MZ_STATEMENT_EXECUTION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_statement_execution_history",
     schema: MZ_INTERNAL_SCHEMA,
-    data_source: Some(IntrospectionType::StatementExecutionHistory),
+    data_source: IntrospectionType::Managed(IntrospectionManaged::StatementExecutionHistory),
     desc: MZ_STATEMENT_EXECUTION_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
     access: vec![MONITOR_SELECT],
@@ -2536,7 +2536,7 @@ FROM mz_internal.mz_statement_execution_history",
 pub static MZ_PREPARED_STATEMENT_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_prepared_statement_history",
     schema: MZ_INTERNAL_SCHEMA,
-    data_source: Some(IntrospectionType::PreparedStatementHistory),
+    data_source: IntrospectionType::Managed(IntrospectionManaged::PreparedStatementHistory),
     desc: MZ_PREPARED_STATEMENT_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
     access: vec![MONITOR_SELECT],
@@ -2556,7 +2556,7 @@ FROM mz_internal.mz_prepared_statement_history",
 pub static MZ_SESSION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_session_history",
     schema: MZ_INTERNAL_SCHEMA,
-    data_source: Some(IntrospectionType::SessionHistory),
+    data_source: IntrospectionType::Managed(IntrospectionManaged::SessionHistory),
     desc: MZ_SESSION_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
@@ -2690,7 +2690,7 @@ WHERE mz_sources.id NOT LIKE 's%';",
 pub static MZ_SINK_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_sink_status_history",
     schema: MZ_INTERNAL_SCHEMA,
-    data_source: Some(IntrospectionType::SinkStatusHistory),
+    data_source: IntrospectionType::Managed(IntrospectionManaged::SinkStatusHistory),
     desc: MZ_SINK_STATUS_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
@@ -2800,7 +2800,7 @@ pub static MZ_CLUSTER_REPLICA_METRICS: Lazy<BuiltinTable> = Lazy::new(|| Builtin
 pub static MZ_CLUSTER_REPLICA_FRONTIERS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_cluster_replica_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
-    data_source: Some(IntrospectionType::ReplicaFrontiers),
+    data_source: IntrospectionType::Managed(IntrospectionManaged::ReplicaFrontiers),
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("replica_id", ScalarType::String.nullable(false))
@@ -2812,7 +2812,7 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS: Lazy<BuiltinSource> = Lazy::new(|| Buil
 pub static MZ_FRONTIERS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_frontiers",
     schema: MZ_INTERNAL_SCHEMA,
-    data_source: Some(IntrospectionType::Frontiers),
+    data_source: IntrospectionType::Managed(IntrospectionManaged::Frontiers),
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("read_frontier", ScalarType::MzTimestamp.nullable(true))
@@ -2920,7 +2920,7 @@ pub static MZ_WEBHOOKS_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 pub static MZ_SOURCE_STATISTICS_PER_WORKER: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_source_statistics_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
-    data_source: Some(IntrospectionType::StorageSourceStatistics),
+    data_source: IntrospectionType::Managed(IntrospectionManaged::StorageSourceStatistics),
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("worker_id", ScalarType::UInt64.nullable(false))
@@ -2938,7 +2938,7 @@ pub static MZ_SOURCE_STATISTICS_PER_WORKER: Lazy<BuiltinSource> = Lazy::new(|| B
 pub static MZ_SINK_STATISTICS_PER_WORKER: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_sink_statistics_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
-    data_source: Some(IntrospectionType::StorageSinkStatistics),
+    data_source: IntrospectionType::Managed(IntrospectionManaged::StorageSinkStatistics),
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("worker_id", ScalarType::UInt64.nullable(false))
@@ -2953,7 +2953,7 @@ pub static MZ_SINK_STATISTICS_PER_WORKER: Lazy<BuiltinSource> = Lazy::new(|| Bui
 pub static MZ_STORAGE_SHARDS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_storage_shards",
     schema: MZ_INTERNAL_SCHEMA,
-    data_source: Some(IntrospectionType::ShardMapping),
+    data_source: IntrospectionType::Managed(IntrospectionManaged::ShardMapping),
     desc: RelationDesc::empty()
         .with_column("object_id", ScalarType::String.nullable(false))
         .with_column("shard_id", ScalarType::String.nullable(false)),
