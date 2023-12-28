@@ -439,7 +439,8 @@ pub struct Args {
         env = "ADAPTER_STASH_URL",
         value_name = "POSTGRES_URL",
         required_if_eq("catalog-store", "stash"),
-        required_if_eq("catalog-store", "shadow")
+        required_if_eq("catalog-store", "shadow"),
+        required_if_eq("catalog-store", "persist")
     )]
     adapter_stash_url: Option<String>,
     /// The backing durable store of the catalog.
@@ -946,8 +947,13 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         let catalog_config = match args.catalog_store {
             CatalogKind::Stash => CatalogConfig::Stash {
                 url: args.adapter_stash_url.expect("required for stash catalog"),
+                persist_clients,
+                metrics: Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry)),
             },
             CatalogKind::Persist => CatalogConfig::Persist {
+                url: args
+                    .adapter_stash_url
+                    .expect("required for persist catalog"),
                 persist_clients,
                 metrics: Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry)),
             },
