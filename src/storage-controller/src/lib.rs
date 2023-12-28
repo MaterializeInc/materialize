@@ -93,7 +93,6 @@ use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
-
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_persist_client::cache::PersistClientCache;
@@ -237,8 +236,8 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Interface for managed collections
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
 
-    /// Facility for appending status updates for sources/sinks
-    pub(crate) collection_status_manager: healthcheck::CollectionStatusManager<T>,
+    /// Facility for appending introspection statuses.
+    pub(crate) introspection_status_manager: healthcheck::IntrospectionStatusManager<T>,
     /// Tracks which collection is responsible for which [`IntrospectionType`].
     pub(crate) introspection_ids: Arc<Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
     /// Tokens for tasks that drive updating introspection collections. Dropping
@@ -821,16 +820,34 @@ where
                             self.introspection_tokens.insert(id, scraper_token);
                         }
                         IntrospectionType::SourceStatusHistory => {
-                            self.partially_truncate_status_history(
+                            let last_status_per_id = self
+                                .partially_truncate_status_history(
+                                    IntrospectionType::SourceStatusHistory,
+                                )
+                                .await;
+
+                            self.introspection_status_manager.extend_previous_statuses(
+                                last_status_per_id
+                                    .into_iter()
+                                    .map(|s| s.into_values())
+                                    .flatten(),
                                 IntrospectionType::SourceStatusHistory,
                             )
-                            .await;
                         }
                         IntrospectionType::SinkStatusHistory => {
-                            self.partially_truncate_status_history(
+                            let last_status_per_id = self
+                                .partially_truncate_status_history(
+                                    IntrospectionType::SinkStatusHistory,
+                                )
+                                .await;
+
+                            self.introspection_status_manager.extend_previous_statuses(
+                                last_status_per_id
+                                    .into_iter()
+                                    .map(|s| s.into_values())
+                                    .flatten(),
                                 IntrospectionType::SinkStatusHistory,
                             )
-                            .await;
                         }
                         IntrospectionType::PrivatelinkConnectionStatusHistory => {
                             // Truncate the private link connection status history table and
@@ -1738,7 +1755,7 @@ where
             updates.push(id);
         }
 
-        self.collection_status_manager
+        self.introspection_status_manager
             .drop_sources(updates, mz_ore::now::to_datetime((self.now)()))
             .await;
 
@@ -1758,7 +1775,7 @@ where
                 sink_statistics.remove(&id);
             }
         }
-        self.collection_status_manager
+        self.introspection_status_manager
             .drop_sinks(updates, mz_ore::now::to_datetime((self.now)()))
             .await;
 
@@ -2239,7 +2256,7 @@ where
 
         let introspection_ids = Arc::new(Mutex::new(BTreeMap::new()));
 
-        let collection_status_manager = crate::healthcheck::CollectionStatusManager::new(
+        let introspection_status_manager = crate::healthcheck::IntrospectionStatusManager::new(
             collection_manager.clone(),
             Arc::clone(&introspection_ids),
         );
@@ -2258,7 +2275,7 @@ where
             stashed_response: None,
             pending_compaction_commands: vec![],
             collection_manager,
-            collection_status_manager,
+            introspection_status_manager,
             introspection_ids,
             introspection_tokens: BTreeMap::new(),
             now,
@@ -2532,9 +2549,10 @@ where
         self.reconcile_managed_collection(id, updates).await;
     }
 
-    /// Effectively truncates the source status history shard except for the most recent updates
-    /// from each ID.
-    /// Returns a map with latest row per id
+    /// Effectively truncates the source status history shard except for the
+    /// most recent updates from each ID.
+    ///
+    /// Returns a map with latest unpacked row per id.
     async fn partially_truncate_status_history(
         &mut self,
         collection: IntrospectionType,
@@ -3305,6 +3323,7 @@ where
                 hints: update.hints,
                 namespaced_errors: update.namespaced_errors,
             };
+            let update: Row = update.into();
 
             if self.exports.contains_key(&id) {
                 sink_status_updates.push(update);
@@ -3313,11 +3332,15 @@ where
             }
         }
 
-        self.collection_status_manager
-            .append_source_updates(source_status_updates)
+        self.introspection_status_manager
+            .append_rows(
+                IntrospectionType::SourceStatusHistory,
+                source_status_updates,
+            )
             .await;
-        self.collection_status_manager
-            .append_sink_updates(sink_status_updates)
+
+        self.introspection_status_manager
+            .append_rows(IntrospectionType::SinkStatusHistory, sink_status_updates)
             .await;
     }
 }
