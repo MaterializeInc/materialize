@@ -255,9 +255,15 @@ pub enum CatalogConfig {
     Stash {
         /// The PostgreSQL URL for the adapter stash.
         url: String,
+        /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
+        persist_clients: Arc<PersistClientCache>,
+        /// Persist catalog metrics.
+        metrics: Arc<mz_catalog::durable::Metrics>,
     },
     /// The catalog contents are stored in persist.
     Persist {
+        /// The PostgreSQL URL for the adapter stash.
+        url: String,
         /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
         persist_clients: Arc<PersistClientCache>,
         /// Persist catalog metrics.
@@ -769,31 +775,53 @@ async fn catalog_opener(
     environment_id: &EnvironmentId,
 ) -> Result<Box<dyn OpenableDurableCatalogState>, anyhow::Error> {
     Ok(match catalog_config {
-        CatalogConfig::Stash { url } => {
+        CatalogConfig::Stash {
+            url,
+            persist_clients,
+            metrics,
+        } => {
             info!("Using stash backed catalog");
             let stash_factory =
                 mz_stash::StashFactory::from_metrics(Arc::clone(&controller_config.stash_metrics));
             let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(url)?)?;
-            Box::new(mz_catalog::durable::stash_backed_catalog_state(
-                StashConfig {
-                    stash_factory,
-                    stash_url: url.clone(),
-                    schema: None,
-                    tls,
-                },
-            ))
+            let persist_client = persist_clients
+                .open(controller_config.persist_location.clone())
+                .await?;
+            Box::new(
+                mz_catalog::durable::rollback_from_persist_to_stash_state(
+                    StashConfig {
+                        stash_factory,
+                        stash_url: url.clone(),
+                        schema: None,
+                        tls,
+                    },
+                    persist_client,
+                    environment_id.organization_id(),
+                    Arc::clone(metrics),
+                )
+                .await,
+            )
         }
         CatalogConfig::Persist {
+            url,
             persist_clients,
             metrics,
         } => {
             info!("Using persist backed catalog");
+            let stash_factory =
+                mz_stash::StashFactory::from_metrics(Arc::clone(&controller_config.stash_metrics));
+            let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(url)?)?;
             let persist_client = persist_clients
                 .open(controller_config.persist_location.clone())
                 .await?;
-
             Box::new(
-                mz_catalog::durable::persist_backed_catalog_state(
+                mz_catalog::durable::migrate_from_stash_to_persist_state(
+                    StashConfig {
+                        stash_factory,
+                        stash_url: url.clone(),
+                        schema: None,
+                        tls,
+                    },
                     persist_client,
                     environment_id.organization_id(),
                     Arc::clone(metrics),
