@@ -65,10 +65,24 @@ impl OpenableDurableCatalogState for CatalogMigrator {
             .openable_stash
             .open_savepoint(boot_ts.clone(), bootstrap_args, deploy_generation.clone())
             .await?;
+        let persist_initialized = self.openable_persist.is_initialized().await?;
         let persist = self
             .openable_persist
             .open_savepoint(boot_ts, bootstrap_args, deploy_generation)
-            .await?;
+            .await;
+
+        // If our target implementation is the stash, but persist is uninitialized, then we can
+        // still proceed with only using the stash.
+        if let Err(CatalogError::Durable(e)) = &persist {
+            if e.can_recover_with_write_mode()
+                && !persist_initialized
+                && self.direction == Direction::RollbackToStash
+            {
+                return Ok(stash);
+            }
+        }
+        let persist = persist?;
+
         Self::open_inner(stash, persist, self.direction).await
     }
 
