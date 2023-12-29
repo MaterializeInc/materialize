@@ -89,7 +89,6 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::BoxStream;
-use healthcheck::RawStatusUpdate;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
@@ -1736,7 +1735,7 @@ where
 
         let mut dropped_sources = vec![];
         for id in pending_source_drops.drain(..) {
-            dropped_sources.push(Row::from(RawStatusUpdate::dropped_status(id, status_now)));
+            dropped_sources.push(Row::from(StatusUpdate::dropped(id, status_now)));
         }
         self.introspection_status_manager
             .append_rows(IntrospectionType::SourceStatusHistory, dropped_sources)
@@ -1754,7 +1753,7 @@ where
         {
             let mut sink_statistics = self.sink_statistics.lock().expect("poisoned");
             for id in pending_sink_drops.drain(..) {
-                dropped_sinks.push(Row::from(RawStatusUpdate::dropped_status(id, status_now)));
+                dropped_sinks.push(Row::from(StatusUpdate::dropped(id, status_now)));
                 sink_statistics.remove(&id);
             }
         }
@@ -3299,15 +3298,7 @@ where
 
         for update in updates {
             let id = update.id;
-            let update = healthcheck::RawStatusUpdate {
-                id,
-                ts: update.timestamp,
-                status_name: update.status,
-                error: update.error,
-                hints: update.hints,
-                namespaced_errors: update.namespaced_errors,
-            };
-            let update: Row = update.into();
+            let update = Row::from(update);
 
             if self.exports.contains_key(&id) {
                 sink_status_updates.push(update);
