@@ -5738,6 +5738,8 @@ pub enum CatalogKind {
     Stash = 0,
     Persist = 1,
     Shadow = 2,
+    /// Escape hatch to use the stash directly without trying to rollover from persist.
+    LegacyStash = 3,
 }
 
 impl CatalogKind {
@@ -5746,6 +5748,7 @@ impl CatalogKind {
             CatalogKind::Stash => "stash",
             CatalogKind::Persist => "persist",
             CatalogKind::Shadow => "shadow",
+            CatalogKind::LegacyStash => "legacy-stash",
         }
     }
 
@@ -5754,6 +5757,7 @@ impl CatalogKind {
             CatalogKind::Stash.as_str(),
             CatalogKind::Persist.as_str(),
             CatalogKind::Shadow.as_str(),
+            CatalogKind::LegacyStash.as_str(),
         ]
     }
 }
