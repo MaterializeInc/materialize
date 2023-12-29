@@ -51,6 +51,7 @@ use crate::command::{
     Canceled, CatalogSnapshot, Command, ExecuteResponse, GetVariablesResponse, StartupResponse,
 };
 use crate::coord::appends::{Deferred, PendingWriteTxn};
+use crate::coord::optimizer::PlanOptimization;
 use crate::coord::peek::PendingPeek;
 use crate::coord::{ConnMeta, Coordinator, Message, PendingTxn, PurifiedStatementReady};
 use crate::error::AdapterError;
@@ -204,7 +205,7 @@ impl Coordinator {
                         }
                     };
 
-                    let plan = match self.optimize_plan(plan) {
+                    let plan = match self.optimize_plan(plan).execute() {
                         Ok(plan) => plan,
                         Err(e) => return ctx.retire(Err(e.into())),
                     };
@@ -771,16 +772,48 @@ impl Coordinator {
             }
 
             // All other statements are handled immediately.
-            _ => match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
-                Ok(plan) => {
-                    let plan = match self.optimize_plan(plan) {
-                        Ok(plan) => plan,
-                        Err(e) => return ctx.retire(Err(e.into())),
-                    };
-                    self.sequence_plan(ctx, plan, resolved_ids).await;
-                }
-                Err(e) => ctx.retire(Err(e)),
-            },
+            _ => {
+                self.execute_statement(stmt, params, resolved_ids, ctx)
+                    .await
+            }
+        }
+    }
+
+    #[tracing::instrument(level = "debug", skip(self, ctx))]
+    async fn execute_statement(
+        &mut self,
+        stmt: Statement<Aug>,
+        params: Params,
+        resolved_ids: ResolvedIds,
+        ctx: ExecuteContext,
+    ) {
+        let plan = match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
+            Ok(plan) => plan,
+            Err(e) => return ctx.retire(Err(e)),
+        };
+        match self.optimize_plan(plan) {
+            PlanOptimization::NoOp(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
+            PlanOptimization::Expensive(optimization_fn) => {
+                let internal_cmd_tx = self.internal_cmd_tx.clone();
+                let span = tracing::debug_span!("optimize plan task");
+                let otel_ctx = OpenTelemetryContext::obtain();
+                mz_ore::task::spawn_blocking(
+                    || "optimize plan",
+                    move || {
+                        let _guard = span.enter();
+                        let plan = match optimization_fn() {
+                            Ok(plan) => plan,
+                            Err(e) => return ctx.retire(Err(e.into())),
+                        };
+                        let _ = internal_cmd_tx.send(Message::OptimizationReady {
+                            ctx,
+                            otel_ctx,
+                            plan,
+                            resolved_ids,
+                        });
+                    },
+                );
+            }
         }
     }
 

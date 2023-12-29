@@ -114,7 +114,7 @@ use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::{Aug, ResolvedIds};
-use mz_sql::plan::{self, CopyFormat, CreateConnectionPlan, Params, QueryWhen};
+use mz_sql::plan::{self, CopyFormat, CreateConnectionPlan, Optimized, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::{self, ConnectionCounter, OwnedVarInput, SystemVars};
@@ -253,6 +253,12 @@ pub enum Message<T = mz_repr::Timestamp> {
         otel_ctx: OpenTelemetryContext,
         stage: SubscribeStage,
     },
+    OptimizationReady {
+        ctx: ExecuteContext,
+        otel_ctx: OpenTelemetryContext,
+        plan: mz_sql::plan::Plan<Optimized>,
+        resolved_ids: ResolvedIds,
+    },
     DrainStatementLog,
     PrivateLinkVpcEndpointEvents(Vec<VpcEndpointEvent>),
 }
@@ -298,6 +304,7 @@ impl Message {
                 "create_materialized_view_stage_ready"
             }
             Message::SubscribeStageReady { .. } => "subscribe_stage_ready",
+            Message::OptimizationReady { .. } => "optimization_ready",
             Message::DrainStatementLog => "drain_statement_log",
             Message::AlterConnectionValidationReady(..) => "alter_connection_validation_ready",
             Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",

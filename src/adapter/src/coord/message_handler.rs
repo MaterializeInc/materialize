@@ -178,6 +178,15 @@ impl Coordinator {
                     otel_ctx.attach_as_parent();
                     self.sequence_subscribe_stage(ctx, stage, otel_ctx).await;
                 }
+                Message::OptimizationReady {
+                    ctx,
+                    otel_ctx,
+                    plan,
+                    resolved_ids,
+                } => {
+                    otel_ctx.attach_as_parent();
+                    self.sequence_plan(ctx, plan, resolved_ids).await;
+                }
                 Message::DrainStatementLog => {
                     self.drain_statement_log().await;
                 }
@@ -489,7 +498,7 @@ impl Coordinator {
                 });
 
                 let plan = Plan::CreateSources(create_source_plans);
-                let plan = match self.optimize_plan(plan) {
+                let plan = match self.optimize_plan(plan).execute() {
                     Ok(plan) => plan,
                     Err(e) => return ctx.retire(Err(e.into())),
                 };
@@ -502,7 +511,7 @@ impl Coordinator {
                     alter_source,
                     subsources: create_source_plans,
                 };
-                let plan = match self.optimize_plan(plan) {
+                let plan = match self.optimize_plan(plan).execute() {
                     Ok(plan) => plan,
                     Err(e) => return ctx.retire(Err(e.into())),
                 };
@@ -510,7 +519,7 @@ impl Coordinator {
                     .await;
             }
             Ok(plan @ Plan::AlterNoop(..)) => {
-                let plan = match self.optimize_plan(plan) {
+                let plan = match self.optimize_plan(plan).execute() {
                     Ok(plan) => plan,
                     Err(e) => return ctx.retire(Err(e.into())),
                 };
@@ -523,7 +532,7 @@ impl Coordinator {
                     "CREATE SINK does not generate source plans"
                 );
 
-                let plan = match self.optimize_plan(plan) {
+                let plan = match self.optimize_plan(plan).execute() {
                     Ok(plan) => plan,
                     Err(e) => return ctx.retire(Err(e.into())),
                 };
