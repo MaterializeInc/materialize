@@ -105,25 +105,31 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     # Create a cluster and verify that tests pass.
     c.up("clusterd1")
     c.up("clusterd2")
-    c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
 
+    # Make sure cluster1 is owned by the system so it doesn't get dropped
+    # between testdrive runs.
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        """
+        ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
+
+        DROP CLUSTER IF EXISTS cluster1 CASCADE;
+
+        CREATE CLUSTER cluster1 REPLICAS (
+            replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
+                WORKERS 2
+            )
+        );
+
+        GRANT ALL ON CLUSTER cluster1 TO materialize;
+    """,
         port=6877,
         user="mz_system",
     )
 
-    c.sql(
-        """
-            CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
-            WORKERS 2
-        ));
-    """
-    )
     c.run("testdrive", *args.glob)
 
     # Add a replica to that cluster and verify that tests still pass.
@@ -131,19 +137,18 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("clusterd4")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
+        """
+        ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
 
-    c.sql(
-        """CREATE CLUSTER REPLICA cluster1.replica2
+        CREATE CLUSTER REPLICA cluster1.replica2
             STORAGECTL ADDRESSES ['clusterd3:2100', 'clusterd4:2100'],
             STORAGE ADDRESSES ['clusterd3:2103', 'clusterd4:2103'],
             COMPUTECTL ADDRESSES ['clusterd3:2101', 'clusterd4:2101'],
             COMPUTE ADDRESSES ['clusterd3:2102', 'clusterd4:2102'],
-            WORKERS 2
-    """
+            WORKERS 2;
+    """,
+        port=6877,
+        user="mz_system",
     )
     c.run("testdrive", *args.glob)
 
@@ -153,8 +158,10 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.run("testdrive", *args.glob)
 
     # Leave only replica 2 up and verify that tests still pass.
-    c.sql("DROP CLUSTER REPLICA cluster1.replica1")
+    c.sql("DROP CLUSTER REPLICA cluster1.replica1", port=6877, user="mz_system")
     c.run("testdrive", *args.glob)
+
+    c.sql("DROP CLUSTER cluster1 CASCADE", port=6877, user="mz_system")
 
 
 def workflow_test_invalid_compute_reuse(c: Composition) -> None:

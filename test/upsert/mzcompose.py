@@ -234,11 +234,6 @@ def workflow_rehydration(c: Composition) -> None:
 
 def workflow_failpoint(c: Composition) -> None:
     """Test behaviour when upsert state errors"""
-    print("Running failpoint workflow")
-
-    c.down(destroy_volumes=True)
-    c.up("materialized")
-    c.run("testdrive", "failpoint/01-setup.td")
 
     for failpoint in [
         (
@@ -260,11 +255,15 @@ def workflow_failpoint(c: Composition) -> None:
 def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> None:
     print(f">>> Running failpoint test for failpoint {failpoint}")
 
+    dependencies = ["zookeeper", "kafka", "materialized"]
+    c.kill("clusterd1")
+    c.up(*dependencies)
+    c.run("testdrive", "failpoint/00-reset.td")
     with c.override(
         Testdrive(no_reset=True, consistent_seed=True),
     ):
-        dependencies = ["zookeeper", "kafka", "clusterd1", "materialized"]
-        c.up(*dependencies)
+        c.run("testdrive", "failpoint/01-setup.td")
+        c.up("clusterd1")
         c.run("testdrive", "failpoint/02-source.td")
         c.kill("clusterd1")
 
@@ -284,9 +283,6 @@ def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> Non
         # Running without set failpoint
         c.up("clusterd1")
         c.run("testdrive", "failpoint/04-recover.td")
-
-    c.run("testdrive", "failpoint/05-reset.td")
-    c.kill("clusterd1")
 
 
 def workflow_incident_49(c: Composition) -> None:
@@ -377,7 +373,7 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
         return int(num_files)
 
     scenarios = [
-        ("drop-source.td", "DROP SOURCE dropped_upsert", True),
+        ("drop-source.td", "DROP SOURCE dropped_upsert", False),
         ("drop-cluster-cascade.td", "DROP CLUSTER c1 CASCADE", True),
         ("drop-source-in-cluster.td", "DROP SOURCE dropped_upsert", False),
     ]

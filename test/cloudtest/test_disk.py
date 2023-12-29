@@ -79,14 +79,6 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
     )
     assert source_global_id in on_disk_sources
 
-    mz.testdrive.run(
-        input=dedent(
-            """
-            > DROP CLUSTER disk_cluster1 CASCADE
-            """
-        )
-    )
-
 
 def test_always_use_disk_replica(mz: MaterializeApplication) -> None:
     """Testing `DISK = false, cluster_always_use_disk = true` cluster replicas"""
@@ -157,14 +149,6 @@ def test_always_use_disk_replica(mz: MaterializeApplication) -> None:
         "ls /scratch/storage/upsert",
     )
     assert source_global_id in on_disk_sources
-
-    mz.testdrive.run(
-        input=dedent(
-            """
-            > DROP CLUSTER disk_cluster2 CASCADE
-            """
-        )
-    )
 
 
 def test_no_disk_replica(mz: MaterializeApplication) -> None:
