@@ -430,6 +430,60 @@ impl State {
                 db_name,
             ))?;
         }
+
+        let inactive_user_clusters = "
+        WITH
+            -- Get all clusters running objects owned by users
+            active_clusters AS
+            (
+                SELECT DISTINCT cluster_id
+                FROM mz_catalog.mz_sources
+                WHERE owner_id LIKE 'u%'
+                UNION ALL
+                    SELECT DISTINCT cluster_id
+                    FROM mz_catalog.mz_sinks
+                    WHERE owner_id LIKE 'u%'
+                UNION ALL
+                    SELECT DISTINCT cluster_id
+                    FROM mz_catalog.mz_materialized_views
+                    WHERE owner_id LIKE 'u%'
+                UNION ALL
+                    SELECT DISTINCT cluster_id
+                    FROM mz_catalog.mz_indexes
+                    WHERE owner_id LIKE 'u%'
+                -- subscriptions don't have an owner
+                UNION ALL SELECT DISTINCT cluster_id FROM mz_internal.mz_subscriptions
+            )
+        -- Get all clusters owned by users that are not currently running any dataflows
+        SELECT name
+        FROM mz_catalog.mz_clusters
+        WHERE
+            id NOT IN ( SELECT cluster_id FROM active_clusters ) AND id LIKE 'u%'
+                AND
+            owner_id LIKE 'u%';";
+
+        let inactive_clusters = inner_client
+            .query(inactive_user_clusters, &[])
+            .await
+            .context("resetting materialize state: inactive_user_clusters")?;
+
+        if inactive_clusters.is_empty() {
+            println!("cleaning up user clusters from previous tests...")
+        }
+
+        for cluster_name in inactive_clusters {
+            let cluster_name: String = cluster_name.get(0);
+            if cluster_name.starts_with("testdrive_no_reset_") {
+                continue;
+            }
+            let query = format!("DROP CLUSTER {}", cluster_name);
+            sql::print_query(&query, None);
+            inner_client.batch_execute(&query).await.context(format!(
+                "resetting materialize state: DROP CLUSTER {}",
+                cluster_name,
+            ))?;
+        }
+
         inner_client
             .batch_execute("CREATE DATABASE materialize")
             .await
