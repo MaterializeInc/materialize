@@ -122,7 +122,7 @@ use crate::plan::{
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
     DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
     PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source,
-    SourceSinkClusterConfig, Table, Type, VariableValue, View, WebhookHeaderFilters,
+    SourceSinkClusterConfig, Table, Type, Unoptimized, VariableValue, View, WebhookHeaderFilters,
     WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars;
@@ -152,7 +152,7 @@ pub fn plan_create_database(
         name,
         if_not_exists,
     }: CreateDatabaseStatement,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     Ok(Plan::CreateDatabase(CreateDatabasePlan {
         name: normalize::ident(name.0),
         if_not_exists,
@@ -172,7 +172,7 @@ pub fn plan_create_schema(
         mut name,
         if_not_exists,
     }: CreateSchemaStatement,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     if name.0.len() > 2 {
         sql_bail!("schema name {} has more than two components", name);
     }
@@ -208,7 +208,7 @@ pub fn describe_create_table(
 pub fn plan_create_table(
     scx: &StatementContext,
     stmt: CreateTableStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let CreateTableStatement {
         name,
         columns,
@@ -411,7 +411,7 @@ generate_extracted_config!(
 pub fn plan_create_webhook_source(
     scx: &StatementContext,
     stmt: CreateWebhookSourceStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let create_sql =
         normalize::create_statement(scx, Statement::CreateWebhookSource(stmt.clone()))?;
 
@@ -565,7 +565,7 @@ pub fn plan_create_webhook_source(
 pub fn plan_create_source(
     scx: &StatementContext,
     stmt: CreateSourceStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let CreateSourceStatement {
         name,
         in_cluster,
@@ -1311,7 +1311,7 @@ generate_extracted_config!(
 pub fn plan_create_subsource(
     scx: &StatementContext,
     stmt: CreateSubsourceStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let CreateSubsourceStatement {
         name,
         columns,
@@ -1901,7 +1901,7 @@ pub fn plan_view(
     def: &mut ViewDefinition<Aug>,
     params: &Params,
     temporary: bool,
-) -> Result<(QualifiedItemName, View), PlanError> {
+) -> Result<(QualifiedItemName, View<Unoptimized>), PlanError> {
     let create_sql = normalize::create_statement(
         scx,
         Statement::CreateView(CreateViewStatement {
@@ -1963,7 +1963,7 @@ pub fn plan_create_view(
     scx: &StatementContext,
     mut stmt: CreateViewStatement<Aug>,
     params: &Params,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let CreateViewStatement {
         temporary,
         if_exists,
@@ -2040,7 +2040,7 @@ pub fn plan_create_materialized_view(
     scx: &StatementContext,
     mut stmt: CreateMaterializedViewStatement<Aug>,
     params: &Params,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let cluster_id = match &stmt.in_cluster {
         None => scx.resolve_cluster(None)?.id(),
         Some(in_cluster) => in_cluster.id,
@@ -2329,7 +2329,7 @@ generate_extracted_config!(CreateSinkOption, (Size, String), (Snapshot, bool));
 pub fn plan_create_sink(
     scx: &StatementContext,
     stmt: CreateSinkStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt.clone()))?;
 
     let CreateSinkStatement {
@@ -2789,7 +2789,7 @@ pub fn describe_create_index(
 pub fn plan_create_index(
     scx: &StatementContext,
     mut stmt: CreateIndexStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let CreateIndexStatement {
         name,
         on_name,
@@ -2937,7 +2937,7 @@ pub fn describe_create_type(
 pub fn plan_create_type(
     scx: &StatementContext,
     stmt: CreateTypeStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let create_sql = normalize::create_statement(scx, Statement::CreateType(stmt.clone()))?;
     let CreateTypeStatement { name, as_type, .. } = stmt;
 
@@ -3157,7 +3157,7 @@ pub fn describe_create_role(
 pub fn plan_create_role(
     _: &StatementContext,
     CreateRoleStatement { name, options }: CreateRoleStatement,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let attributes = plan_role_attributes(options)?;
     Ok(Plan::CreateRole(CreateRolePlan {
         name: normalize::ident(name),
@@ -3188,7 +3188,7 @@ generate_extracted_config!(
 pub fn plan_create_cluster(
     scx: &StatementContext,
     CreateClusterStatement { name, options }: CreateClusterStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let ClusterOptionExtracted {
         availability_zones,
         idle_arrangement_merge_effort,
@@ -3462,7 +3462,7 @@ pub fn plan_create_cluster_replica(
         definition: ReplicaDefinition { name, options },
         of_cluster,
     }: CreateClusterReplicaStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let cluster = scx
         .catalog
         .resolve_cluster(Some(&normalize::ident(of_cluster)))?;
@@ -3498,7 +3498,7 @@ pub fn describe_create_secret(
 pub fn plan_create_secret(
     scx: &StatementContext,
     stmt: CreateSecretStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let CreateSecretStatement {
         name,
         if_not_exists,
@@ -3536,7 +3536,7 @@ generate_extracted_config!(CreateConnectionOption, (Validate, bool));
 pub fn plan_create_connection(
     scx: &StatementContext,
     stmt: CreateConnectionStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let create_sql = normalize::create_statement(scx, Statement::CreateConnection(stmt.clone()))?;
     let CreateConnectionStatement {
         name,
@@ -3626,7 +3626,7 @@ pub fn plan_drop_objects(
         names,
         cascade,
     }: DropObjectsStatement,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     assert_ne!(
         object_type,
         mz_sql_parser::ast::ObjectType::Func,
@@ -3960,7 +3960,7 @@ pub fn plan_drop_owned(
         role_names,
         cascade,
     }: DropOwnedStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let role_ids: BTreeSet<_> = role_names.into_iter().map(|role| role.id).collect();
     let mut drop_ids = Vec::new();
     let mut privilege_revokes = Vec::new();
@@ -4223,7 +4223,7 @@ pub fn plan_alter_index_options(
         if_exists,
         action: actions,
     }: AlterIndexStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let index_name = normalize::unresolved_item_name(index_name)?;
     let entry = match scx.catalog.resolve_item(&index_name) {
         Ok(index) => index,
@@ -4278,7 +4278,7 @@ pub fn plan_alter_cluster(
         action,
         if_exists,
     }: AlterClusterStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let cluster = match resolve_cluster(scx, &name, if_exists)? {
         Some(entry) => entry,
         None => {
@@ -4432,7 +4432,7 @@ pub fn plan_alter_item_set_cluster(
         name,
         object_type,
     }: AlterSetClusterStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     scx.require_feature_flag(&vars::ENABLE_ALTER_SET_CLUSTER)?;
 
     let object_type = object_type.into();
@@ -4507,7 +4507,7 @@ pub fn plan_alter_object_rename(
         to_item_name,
         if_exists,
     }: AlterObjectRenameStatement,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let object_type = object_type.into();
     match (object_type, name) {
         (
@@ -4541,7 +4541,7 @@ pub fn plan_alter_schema_rename(
     name: UnresolvedSchemaName,
     to_schema_name: Ident,
     if_exists: bool,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let Some((db_spec, schema_spec)) = resolve_schema(scx, name.clone(), if_exists)? else {
         let object_type = ObjectType::Schema;
         scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
@@ -4578,7 +4578,7 @@ pub fn plan_alter_schema_swap<F>(
     name_a: UnresolvedSchemaName,
     name_b: Ident,
     gen_temp_suffix: F,
-) -> Result<Plan, PlanError>
+) -> Result<Plan<Unoptimized>, PlanError>
 where
     F: Fn(&dyn Fn(&str) -> bool) -> Result<String, PlanError>,
 {
@@ -4622,7 +4622,7 @@ pub fn plan_alter_item_rename(
     name: UnresolvedItemName,
     to_item_name: Ident,
     if_exists: bool,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     match resolve_item_or_type(scx, object_type, name.clone(), if_exists)? {
         Some(entry) => {
             let full_name = scx.catalog.resolve_full_name(entry.name());
@@ -4691,7 +4691,7 @@ pub fn plan_alter_cluster_rename(
     name: Ident,
     to_name: Ident,
     if_exists: bool,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     match resolve_cluster(scx, &name, if_exists)? {
         Some(entry) => Ok(Plan::AlterClusterRename(AlterClusterRenamePlan {
             id: entry.id(),
@@ -4714,7 +4714,7 @@ pub fn plan_alter_cluster_swap<F>(
     name_a: Ident,
     name_b: Ident,
     gen_temp_suffix: F,
-) -> Result<Plan, PlanError>
+) -> Result<Plan<Unoptimized>, PlanError>
 where
     F: Fn(&dyn Fn(&str) -> bool) -> Result<String, PlanError>,
 {
@@ -4749,7 +4749,7 @@ pub fn plan_alter_cluster_replica_rename(
     name: QualifiedReplica,
     to_item_name: Ident,
     if_exists: bool,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     match resolve_cluster_replica(scx, &name, if_exists)? {
         Some((cluster, replica)) => {
             ensure_cluster_is_not_managed(scx, cluster.id())?;
@@ -4786,7 +4786,7 @@ pub fn describe_alter_object_swap(
 pub fn plan_alter_object_swap(
     scx: &mut StatementContext,
     stmt: AlterObjectSwapStatement,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     scx.require_feature_flag(&vars::ENABLE_ALTER_SWAP)?;
 
     let AlterObjectSwapStatement {
@@ -4847,7 +4847,7 @@ pub fn describe_alter_secret_options(
 pub fn plan_alter_secret(
     scx: &mut StatementContext,
     stmt: AlterSecretStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let AlterSecretStatement {
         name,
         if_exists,
@@ -4893,7 +4893,7 @@ generate_extracted_config!(AlterConnectionOption, (Validate, bool));
 pub fn plan_alter_connection(
     scx: &StatementContext,
     stmt: AlterConnectionStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let AlterConnectionStatement {
         name,
         if_exists,
@@ -5078,7 +5078,7 @@ pub fn describe_alter_sink(
 pub fn plan_alter_sink(
     scx: &mut StatementContext,
     stmt: AlterSinkStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let AlterSinkStatement {
         sink_name,
         if_exists,
@@ -5158,7 +5158,7 @@ generate_extracted_config!(
 pub fn plan_alter_source(
     scx: &mut StatementContext,
     stmt: AlterSourceStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let AlterSourceStatement {
         source_name,
         if_exists,
@@ -5295,7 +5295,7 @@ pub fn describe_alter_system_set(
 pub fn plan_alter_system_set(
     _: &StatementContext,
     AlterSystemSetStatement { name, to }: AlterSystemSetStatement,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let name = name.to_string();
     Ok(Plan::AlterSystemSet(AlterSystemSetPlan {
         name,
@@ -5313,7 +5313,7 @@ pub fn describe_alter_system_reset(
 pub fn plan_alter_system_reset(
     _: &StatementContext,
     AlterSystemResetStatement { name }: AlterSystemResetStatement,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let name = name.to_string();
     Ok(Plan::AlterSystemReset(AlterSystemResetPlan { name }))
 }
@@ -5328,7 +5328,7 @@ pub fn describe_alter_system_reset_all(
 pub fn plan_alter_system_reset_all(
     _: &StatementContext,
     _: AlterSystemResetAllStatement,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     Ok(Plan::AlterSystemResetAll(AlterSystemResetAllPlan {}))
 }
 
@@ -5342,7 +5342,7 @@ pub fn describe_alter_role(
 pub fn plan_alter_role(
     scx: &StatementContext,
     AlterRoleStatement { name, option }: AlterRoleStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let option = match option {
         AlterRoleOption::Attributes(attrs) => {
             let attrs = plan_role_attributes(attrs)?;
@@ -5374,7 +5374,7 @@ pub fn describe_comment(
 pub fn plan_comment(
     scx: &mut StatementContext,
     stmt: CommentStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     const MAX_COMMENT_LENGTH: usize = 1024;
 
     scx.require_feature_flag(&vars::ENABLE_COMMENT)?;

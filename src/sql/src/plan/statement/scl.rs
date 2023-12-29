@@ -29,7 +29,7 @@ use crate::plan::with_options::TryFromValue;
 use crate::plan::{
     describe, query, ClosePlan, DeallocatePlan, DeclarePlan, ExecutePlan, ExecuteTimeout,
     FetchPlan, InspectShardPlan, Params, Plan, PlanError, PreparePlan, ResetVariablePlan,
-    SetVariablePlan, ShowVariablePlan, VariableValue,
+    SetVariablePlan, ShowVariablePlan, Unoptimized, VariableValue,
 };
 use crate::session::vars::SCHEMA_ALIAS;
 
@@ -47,7 +47,7 @@ pub fn plan_set_variable(
         variable,
         to,
     }: SetVariableStatement,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let value = plan_set_variable_to(to)?;
     Ok(Plan::SetVariable(SetVariablePlan {
         name: variable.into_string(),
@@ -84,7 +84,7 @@ pub fn describe_reset_variable(
 pub fn plan_reset_variable(
     _: &StatementContext,
     ResetVariableStatement { variable }: ResetVariableStatement,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     Ok(Plan::ResetVariable(ResetVariablePlan {
         name: variable.to_string(),
     }))
@@ -110,7 +110,7 @@ pub fn describe_show_variable(
 pub fn plan_show_variable(
     _: &StatementContext,
     ShowVariableStatement { variable }: ShowVariableStatement,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     if variable.as_str() == UncasedStr::new("ALL") {
         Ok(Plan::ShowAllVariables)
     } else {
@@ -131,7 +131,7 @@ pub fn describe_inspect_shard(
 pub fn plan_inspect_shard(
     _: &StatementContext,
     InspectShardStatement { id }: InspectShardStatement,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let id: GlobalId = id.parse().map_err(|_| sql_err!("invalid shard id"))?;
     Ok(Plan::InspectShard(InspectShardPlan { id }))
 }
@@ -146,7 +146,7 @@ pub fn describe_discard(
 pub fn plan_discard(
     _: &StatementContext,
     DiscardStatement { target }: DiscardStatement,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     match target {
         DiscardTarget::All => Ok(Plan::DiscardAll),
         DiscardTarget::Temp => Ok(Plan::DiscardTemp),
@@ -176,7 +176,7 @@ pub fn plan_declare(
     _: &StatementContext,
     DeclareStatement { name, stmt, sql }: DeclareStatement<Aug>,
     params: &Params,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     Ok(Plan::Declare(DeclarePlan {
         name: name.to_string(),
         stmt: *stmt,
@@ -201,7 +201,7 @@ pub fn plan_fetch(
         count,
         options,
     }: FetchStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let FetchOptionExtracted { timeout, .. } = options.try_into()?;
     let timeout = match timeout {
         Some(timeout) => {
@@ -231,7 +231,7 @@ pub fn describe_close(_: &StatementContext, _: CloseStatement) -> Result<Stateme
 pub fn plan_close(
     _: &StatementContext,
     CloseStatement { name }: CloseStatement,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     Ok(Plan::Close(ClosePlan {
         name: name.to_string(),
     }))
@@ -247,7 +247,7 @@ pub fn describe_prepare(
 pub fn plan_prepare(
     scx: &StatementContext,
     PrepareStatement { name, stmt, sql }: PrepareStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     // TODO: PREPARE supports specifying param types.
     let param_types = [];
     let (stmt_resolved, _) = names::resolve(scx.catalog, *stmt.clone())?;
@@ -275,14 +275,14 @@ pub fn describe_execute(
 pub fn plan_execute(
     scx: &StatementContext,
     stmt: ExecuteStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     Ok(plan_execute_desc(scx, stmt)?.1)
 }
 
 fn plan_execute_desc<'a>(
     scx: &'a StatementContext,
     ExecuteStatement { name, params }: ExecuteStatement<Aug>,
-) -> Result<(&'a StatementDesc, Plan), PlanError> {
+) -> Result<(&'a StatementDesc, Plan<Unoptimized>), PlanError> {
     let name = name.to_string();
     let desc = match scx.catalog.get_prepared_statement_desc(&name) {
         Some(desc) => desc,
@@ -308,7 +308,7 @@ pub fn describe_deallocate(
 pub fn plan_deallocate(
     _: &StatementContext,
     DeallocateStatement { name }: DeallocateStatement,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     Ok(Plan::Deallocate(DeallocatePlan {
         name: name.map(|name| name.to_string()),
     }))

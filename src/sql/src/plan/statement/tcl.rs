@@ -21,7 +21,7 @@ use crate::ast::{
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     AbortTransactionPlan, CommitTransactionPlan, Plan, PlanError, SetTransactionPlan,
-    StartTransactionPlan, TransactionType,
+    StartTransactionPlan, TransactionType, Unoptimized,
 };
 
 pub fn describe_start_transaction(
@@ -34,7 +34,7 @@ pub fn describe_start_transaction(
 pub fn plan_start_transaction(
     _: &StatementContext,
     StartTransactionStatement { modes }: StartTransactionStatement,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let (access, isolation_level) = verify_transaction_modes(modes)?;
     Ok(Plan::StartTransaction(StartTransactionPlan {
         access,
@@ -52,7 +52,7 @@ pub fn describe_set_transaction(
 pub fn plan_set_transaction(
     _: &StatementContext,
     SetTransactionStatement { local, modes }: SetTransactionStatement,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     Ok(Plan::SetTransaction(SetTransactionPlan { local, modes }))
 }
 
@@ -88,7 +88,7 @@ pub fn describe_rollback(
 pub fn plan_rollback(
     _: &StatementContext,
     RollbackStatement { chain }: RollbackStatement,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     verify_chain(chain)?;
     Ok(Plan::AbortTransaction(AbortTransactionPlan {
         transaction_type: TransactionType::Explicit,
@@ -105,7 +105,7 @@ pub fn describe_commit(
 pub fn plan_commit(
     _: &StatementContext,
     CommitStatement { chain }: CommitStatement,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     verify_chain(chain)?;
     Ok(Plan::CommitTransaction(CommitTransactionPlan {
         transaction_type: TransactionType::Explicit,

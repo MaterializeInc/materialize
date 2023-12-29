@@ -35,7 +35,9 @@ use crate::names::{
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
-use crate::plan::{query, with_options, Params, Plan, PlanContext, PlanKind};
+use crate::plan::{
+    generated_from, query, with_options, Params, Plan, PlanContext, PlanKind, Unoptimized,
+};
 use crate::session::vars::FeatureFlag;
 
 mod acl;
@@ -262,7 +264,7 @@ pub fn plan(
     stmt: Statement<Aug>,
     params: &Params,
     resolved_ids: &ResolvedIds,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let param_types = params
         .types
         .iter()
@@ -270,7 +272,7 @@ pub fn plan(
         .map(|(i, ty)| (i + 1, ty.clone()))
         .collect();
 
-    let permitted_plans = Plan::generated_from((&stmt).into());
+    let permitted_plans = generated_from((&stmt).into());
 
     let scx = &mut StatementContext {
         pcx,

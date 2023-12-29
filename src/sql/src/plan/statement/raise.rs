@@ -14,13 +14,16 @@
 
 use crate::ast::RaiseStatement;
 use crate::plan::statement::{StatementContext, StatementDesc};
-use crate::plan::{Plan, PlanError, RaisePlan};
+use crate::plan::{Plan, PlanError, RaisePlan, Unoptimized};
 
 pub fn describe_raise(_: &StatementContext, _: RaiseStatement) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
 
-pub fn plan_raise(scx: &StatementContext, r: RaiseStatement) -> Result<Plan, PlanError> {
+pub fn plan_raise(
+    scx: &StatementContext,
+    r: RaiseStatement,
+) -> Result<Plan<Unoptimized>, PlanError> {
     scx.require_feature_flag(&crate::session::vars::ENABLE_RAISE_STATEMENT)?;
     Ok(Plan::Raise(RaisePlan {
         severity: r.severity,

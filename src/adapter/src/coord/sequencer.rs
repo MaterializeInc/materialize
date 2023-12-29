@@ -24,7 +24,7 @@ use mz_sql::catalog::{CatalogCluster, CatalogError};
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
     self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlans,
-    FetchPlan, MutationKind, Params, Plan, PlanKind, QueryWhen, RaisePlan,
+    FetchPlan, MutationKind, Optimized, Params, Plan, PlanKind, QueryWhen, RaisePlan,
 };
 use mz_sql::rbac;
 use mz_sql_parser::ast::{Raw, Statement};
@@ -70,7 +70,7 @@ impl Coordinator {
     pub(crate) fn sequence_plan(
         &mut self,
         mut ctx: ExecuteContext,
-        plan: Plan,
+        plan: Plan<Optimized>,
         resolved_ids: ResolvedIds,
     ) -> LocalBoxFuture<'_, ()> {
         async move {

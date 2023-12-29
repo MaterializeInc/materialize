@@ -44,6 +44,7 @@ use crate::plan::statement::{ddl, StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{
     self, side_effecting_func, CreateSinkPlan, ExplainSinkSchemaPlan, ExplainTimestampPlan,
+    Unoptimized,
 };
 use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan,
@@ -84,7 +85,7 @@ pub fn plan_insert(
         returning,
     }: InsertStatement<Aug>,
     params: &Params,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let (id, mut expr, returning) =
         query::plan_insert_query(scx, table_name, columns, source, returning)?;
     expr.bind_parameters(params)?;
@@ -113,7 +114,7 @@ pub fn plan_delete(
     scx: &StatementContext,
     stmt: DeleteStatement<Aug>,
     params: &Params,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let rtw_plan = query::plan_delete_query(scx, stmt)?;
     plan_read_then_write(MutationKind::Delete, scx, params, rtw_plan)
 }
@@ -130,7 +131,7 @@ pub fn plan_update(
     scx: &StatementContext,
     stmt: UpdateStatement<Aug>,
     params: &Params,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let rtw_plan = query::plan_update_query(scx, stmt)?;
     plan_read_then_write(MutationKind::Update, scx, params, rtw_plan)
 }
@@ -145,7 +146,7 @@ pub fn plan_read_then_write(
         finishing,
         assignments,
     }: query::ReadThenWritePlan,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     selection.bind_parameters(params)?;
     let selection = selection.lower(scx.catalog.system_vars())?;
     let mut assignments_outer = BTreeMap::new();
@@ -183,7 +184,7 @@ pub fn plan_select(
     select: SelectStatement<Aug>,
     params: &Params,
     copy_to: Option<CopyFormat>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     if let Some(f) = side_effecting_func::plan_select_if_side_effecting(scx, &select, params)? {
         return Ok(Plan::SideEffectingFunc(f));
     }
@@ -270,7 +271,7 @@ pub fn plan_explain_plan(
         explainee,
     }: ExplainPlanStatement<Aug>,
     params: &Params,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     use crate::plan::ExplaineeStatement;
 
     let format = match format {
@@ -420,7 +421,7 @@ pub fn plan_explain_plan(
 pub fn plan_explain_schema(
     scx: &StatementContext,
     explain_schema: ExplainSinkSchemaStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let ExplainSinkSchemaStatement {
         schema_for,
         mut statement,
@@ -471,7 +472,7 @@ pub fn plan_explain_timestamp(
     scx: &StatementContext,
     ExplainTimestampStatement { format, select }: ExplainTimestampStatement<Aug>,
     params: &Params,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let format = match format {
         mz_sql_parser::ast::ExplainFormat::Text => ExplainFormat::Text,
         mz_sql_parser::ast::ExplainFormat::Json => ExplainFormat::Json,
@@ -609,7 +610,7 @@ pub fn plan_subscribe(
     }: SubscribeStatement<Aug>,
     params: &Params,
     copy_to: Option<CopyFormat>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let (from, desc, scope) = match relation {
         SubscribeRelation::Name(name) => {
             let entry = scx.get_item_by_resolved_name(&name)?;
@@ -789,7 +790,7 @@ fn plan_copy_from(
     columns: Vec<Ident>,
     format: CopyFormat,
     options: CopyOptionExtracted,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     fn only_available_with_csv<T>(option: Option<T>, param: &str) -> Result<(), PlanError> {
         match option {
             Some(_) => sql_bail!("COPY {} available only in CSV mode", param),
@@ -876,7 +877,7 @@ pub fn plan_copy(
         target,
         options,
     }: CopyStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let options = CopyOptionExtracted::try_from(options)?;
     let format = match options.format.to_lowercase().as_str() {
         "text" => CopyFormat::Text,

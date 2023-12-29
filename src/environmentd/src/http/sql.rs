@@ -37,7 +37,7 @@ use mz_repr::{Datum, RelationDesc, RowArena};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{Raw, Statement, StatementKind};
 use mz_sql::parse::StatementParseResult;
-use mz_sql::plan::Plan;
+use mz_sql::plan::generated_from;
 use serde::{Deserialize, Serialize};
 use tokio::{select, time};
 use tokio_postgres::error::SqlState;
@@ -933,7 +933,7 @@ async fn execute_request<S: ResultSender>(
         stmt: &Statement<Raw>,
     ) -> Result<(), Error> {
         let kind: StatementKind = stmt.into();
-        let execute_responses = Plan::generated_from(kind)
+        let execute_responses = generated_from(kind)
             .into_iter()
             .map(ExecuteResponse::generated_from)
             .flatten()

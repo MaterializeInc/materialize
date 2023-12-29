@@ -161,14 +161,6 @@ impl Coordinator {
                     otel_ctx.attach_as_parent();
                     self.sequence_create_index_stage(ctx, stage, otel_ctx).await;
                 }
-                Message::CreateViewStageReady {
-                    ctx,
-                    otel_ctx,
-                    stage,
-                } => {
-                    otel_ctx.attach_as_parent();
-                    self.sequence_create_view_stage(ctx, stage, otel_ctx).await;
-                }
                 Message::CreateMaterializedViewStageReady {
                     ctx,
                     otel_ctx,
@@ -496,26 +488,32 @@ impl Coordinator {
                     resolved_ids,
                 });
 
+                let plan = Plan::CreateSources(create_source_plans);
+                let plan = match self.optimize_plan(plan) {
+                    Ok(plan) => plan,
+                    Err(e) => return ctx.retire(Err(e.into())),
+                };
                 // Finally, sequence all plans in one go
-                self.sequence_plan(
-                    ctx,
-                    Plan::CreateSources(create_source_plans),
-                    ResolvedIds(BTreeSet::new()),
-                )
-                .await;
+                self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
+                    .await;
             }
             Ok(Plan::AlterSource(alter_source)) => {
-                self.sequence_plan(
-                    ctx,
-                    Plan::PurifiedAlterSource {
-                        alter_source,
-                        subsources: create_source_plans,
-                    },
-                    ResolvedIds(BTreeSet::new()),
-                )
-                .await;
+                let plan = Plan::PurifiedAlterSource {
+                    alter_source,
+                    subsources: create_source_plans,
+                };
+                let plan = match self.optimize_plan(plan) {
+                    Ok(plan) => plan,
+                    Err(e) => return ctx.retire(Err(e.into())),
+                };
+                self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
+                    .await;
             }
             Ok(plan @ Plan::AlterNoop(..)) => {
+                let plan = match self.optimize_plan(plan) {
+                    Ok(plan) => plan,
+                    Err(e) => return ctx.retire(Err(e.into())),
+                };
                 self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
                     .await
             }
@@ -525,6 +523,10 @@ impl Coordinator {
                     "CREATE SINK does not generate source plans"
                 );
 
+                let plan = match self.optimize_plan(plan) {
+                    Ok(plan) => plan,
+                    Err(e) => return ctx.retire(Err(e.into())),
+                };
                 self.sequence_plan(ctx, plan, resolved_ids).await
             }
             Ok(p) => {

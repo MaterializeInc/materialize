@@ -39,7 +39,8 @@ use crate::parse;
 use crate::plan::scope::Scope;
 use crate::plan::statement::{dml, StatementContext, StatementDesc};
 use crate::plan::{
-    query, transform_ast, HirRelationExpr, Params, Plan, PlanError, ShowColumnsPlan, ShowCreatePlan,
+    query, transform_ast, HirRelationExpr, Params, Plan, PlanError, ShowColumnsPlan,
+    ShowCreatePlan, Unoptimized,
 };
 
 pub fn describe_show_create_view(
@@ -844,7 +845,7 @@ impl<'a> ShowSelect<'a> {
     }
 
     /// Converts this `ShowSelect` into a [`Plan`].
-    pub fn plan(self) -> Result<Plan, PlanError> {
+    pub fn plan(self) -> Result<Plan<Unoptimized>, PlanError> {
         dml::plan_select(self.scx, self.stmt, &Params::empty(), None)
     }
 
@@ -865,7 +866,7 @@ impl<'a> ShowColumnsSelect<'a> {
         self.show_select.describe()
     }
 
-    pub fn plan(self) -> Result<Plan, PlanError> {
+    pub fn plan(self) -> Result<Plan<Unoptimized>, PlanError> {
         let select_plan = self.show_select.plan()?;
         match select_plan {
             Plan::Select(select_plan) => Ok(Plan::ShowColumns(ShowColumnsPlan {

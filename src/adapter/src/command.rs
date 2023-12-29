@@ -24,7 +24,7 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, Row};
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
-use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind};
+use mz_sql::plan::{generated_from, ExecuteTimeout, PlanKind};
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{OwnedVarInput, Var};
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
@@ -391,7 +391,7 @@ impl TryFrom<&Statement<Raw>> for ExecuteResponse {
 
     /// Returns Ok if this Statement always produces a single, trivial ExecuteResponse.
     fn try_from(stmt: &Statement<Raw>) -> Result<Self, Self::Error> {
-        let resp_kinds = Plan::generated_from(stmt.into())
+        let resp_kinds = generated_from(stmt.into())
             .into_iter()
             .map(ExecuteResponse::generated_from)
             .flatten()

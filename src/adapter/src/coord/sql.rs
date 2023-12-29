@@ -14,7 +14,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_ore::now::EpochMillis;
 use mz_repr::{GlobalId, ScalarType};
 use mz_sql::names::{Aug, ResolvedIds};
-use mz_sql::plan::{Params, StatementDesc};
+use mz_sql::plan::{Params, StatementDesc, Unoptimized};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{Raw, Statement, StatementKind};
 
@@ -33,7 +33,7 @@ impl Coordinator {
         stmt: mz_sql::ast::Statement<Aug>,
         params: &mz_sql::plan::Params,
         resolved_ids: &ResolvedIds,
-    ) -> Result<mz_sql::plan::Plan, AdapterError> {
+    ) -> Result<mz_sql::plan::Plan<Unoptimized>, AdapterError> {
         let pcx = session.pcx();
         let catalog = self.catalog().for_session(session);
         let plan = mz_sql::plan::plan(Some(pcx), &catalog, stmt, params, resolved_ids)?;

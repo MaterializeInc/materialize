@@ -31,8 +31,8 @@ use crate::names::{
 };
 use crate::plan;
 use crate::plan::{
-    DataSourceDesc, Explainee, MutationKind, Plan, SideEffectingFunc, SourceSinkClusterConfig,
-    UpdatePrivilege,
+    DataSourceDesc, Explainee, MutationKind, Optimized, Plan, SideEffectingFunc,
+    SourceSinkClusterConfig, UpdatePrivilege,
 };
 use crate::session::user::{
     RoleMetadata, MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER,
@@ -292,7 +292,7 @@ pub fn check_plan(
     active_conns: &BTreeMap<u32, RoleId>,
     role_metadata: &RoleMetadata,
     session_vars: &SessionVars,
-    plan: &Plan,
+    plan: &Plan<Optimized>,
     target_cluster_id: Option<ClusterId>,
     resolved_ids: &ResolvedIds,
 ) -> Result<(), UnauthorizedError> {
@@ -322,7 +322,7 @@ pub fn is_rbac_enabled_for_session(system_vars: &SystemVars, session_vars: &Sess
 /// Generates all requirements needed to execute a given plan.
 fn generate_rbac_requirements(
     catalog: &impl SessionCatalog,
-    plan: &Plan,
+    plan: &Plan<Optimized>,
     active_conns: &BTreeMap<u32, RoleId>,
     target_cluster_id: Option<ClusterId>,
     role_id: RoleId,

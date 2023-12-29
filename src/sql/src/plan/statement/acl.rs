@@ -33,7 +33,8 @@ use crate::plan::statement::ddl::{
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     AlterDefaultPrivilegesPlan, AlterNoopPlan, AlterOwnerPlan, GrantPrivilegesPlan, GrantRolePlan,
-    Plan, PlanNotice, ReassignOwnedPlan, RevokePrivilegesPlan, RevokeRolePlan, UpdatePrivilege,
+    Plan, PlanNotice, ReassignOwnedPlan, RevokePrivilegesPlan, RevokeRolePlan, Unoptimized,
+    UpdatePrivilege,
 };
 use crate::session::user::SYSTEM_USER;
 use mz_ore::str::StrExt;
@@ -62,7 +63,7 @@ pub fn plan_alter_owner(
         name,
         new_owner,
     }: AlterOwnerStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let object_type = object_type.into();
     match (object_type, name) {
         (ObjectType::Cluster, UnresolvedObjectName::Cluster(name)) => {
@@ -107,7 +108,7 @@ fn plan_alter_cluster_owner(
     if_exists: bool,
     name: Ident,
     new_owner: RoleId,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     match resolve_cluster(scx, &name, if_exists)? {
         Some(cluster) => {
             // Prevent changes to linked clusters.
@@ -135,7 +136,7 @@ fn plan_alter_database_owner(
     if_exists: bool,
     name: UnresolvedDatabaseName,
     new_owner: RoleId,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     match resolve_database(scx, &name, if_exists)? {
         Some(database) => Ok(Plan::AlterOwner(AlterOwnerPlan {
             id: ObjectId::Database(database.id()),
@@ -160,7 +161,7 @@ fn plan_alter_schema_owner(
     if_exists: bool,
     name: UnresolvedSchemaName,
     new_owner: RoleId,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     match resolve_schema(scx, name.clone(), if_exists)? {
         Some((database_spec, schema_spec)) => {
             if let ResolvedDatabaseSpecifier::Ambient = database_spec {
@@ -196,7 +197,7 @@ fn plan_alter_item_owner(
     if_exists: bool,
     name: UnresolvedItemName,
     new_owner: RoleId,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     match resolve_item_or_type(scx, object_type, name.clone(), if_exists)? {
         Some(item) => {
             if item.id().is_system() {
@@ -258,7 +259,7 @@ pub fn plan_grant_role(
         role_names,
         member_names,
     }: GrantRoleStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     // In PostgreSQL, the grantor must either be a role with ADMIN OPTION on the role being granted,
     // or the bootstrap superuser. We do not have ADMIN OPTION implemented and 'mz_system' is our
     // equivalent of the bootstrap superuser. Therefore the grantor is always 'mz_system'.
@@ -295,7 +296,7 @@ pub fn plan_revoke_role(
         role_names,
         member_names,
     }: RevokeRoleStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     // In PostgreSQL, the same role membership can be granted multiple times by different grantors.
     // When revoking a role membership, only the membership granted by the specified grantor is
     // revoked. The grantor must either be a role with ADMIN OPTION on the role being granted,
@@ -335,7 +336,7 @@ pub fn plan_grant_privileges(
         target,
         roles,
     }: GrantPrivilegesStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let plan = plan_update_privilege(scx, privileges, target, roles)?;
     Ok(Plan::GrantPrivileges(plan.into()))
 }
@@ -354,7 +355,7 @@ pub fn plan_revoke_privileges(
         target,
         roles,
     }: RevokePrivilegesStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let plan = plan_update_privilege(scx, privileges, target, roles)?;
     Ok(Plan::RevokePrivileges(plan.into()))
 }
@@ -607,7 +608,7 @@ pub fn plan_alter_default_privileges(
         target_objects,
         grant_or_revoke,
     }: AlterDefaultPrivilegesStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let object_type: ObjectType = (*grant_or_revoke.object_type()).into();
     match object_type {
         ObjectType::View | ObjectType::MaterializedView | ObjectType::Source => sql_bail!(
@@ -731,7 +732,7 @@ pub fn plan_reassign_owned(
         old_roles,
         new_role,
     }: ReassignOwnedStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     let old_roles: BTreeSet<_> = old_roles.into_iter().map(|role| role.id).collect();
     let mut reassign_ids: Vec<ObjectId> = Vec::new();
 

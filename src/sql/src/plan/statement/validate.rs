@@ -12,7 +12,7 @@
 use crate::ast::ValidateConnectionStatement;
 use crate::names::Aug;
 use crate::plan::statement::{StatementContext, StatementDesc};
-use crate::plan::{Plan, PlanError, ValidateConnectionPlan};
+use crate::plan::{Plan, PlanError, Unoptimized, ValidateConnectionPlan};
 use crate::session::vars;
 
 pub fn describe_validate_connection(
@@ -25,7 +25,7 @@ pub fn describe_validate_connection(
 pub fn plan_validate_connection(
     scx: &StatementContext,
     stmt: ValidateConnectionStatement<Aug>,
-) -> Result<Plan, PlanError> {
+) -> Result<Plan<Unoptimized>, PlanError> {
     scx.require_feature_flag(&vars::ENABLE_CONNECTION_VALIDATION_SYNTAX)?;
     let item = scx.get_item_by_resolved_name(&stmt.name)?;
 

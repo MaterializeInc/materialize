@@ -19,7 +19,7 @@ use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::task;
 use mz_ore::vec::VecExt;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_sql::plan::Plan;
+use mz_sql::plan::{Optimized, Plan};
 use mz_storage_client::client::TimestamplessUpdate;
 use tokio::sync::{oneshot, Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
 use tracing::{warn, Instrument, Span};
@@ -45,7 +45,7 @@ pub(crate) enum Deferred {
 pub(crate) struct DeferredPlan {
     #[derivative(Debug = "ignore")]
     pub ctx: ExecuteContext,
-    pub plan: Plan,
+    pub plan: Plan<Optimized>,
     pub validity: PlanValidity,
 }
 

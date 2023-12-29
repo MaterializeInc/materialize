@@ -204,6 +204,10 @@ impl Coordinator {
                         }
                     };
 
+                    let plan = match self.optimize_plan(plan) {
+                        Ok(plan) => plan,
+                        Err(e) => return ctx.retire(Err(e.into())),
+                    };
                     self.sequence_plan(ctx, plan, ResolvedIds(BTreeSet::new()))
                         .await;
                 }
@@ -768,7 +772,13 @@ impl Coordinator {
 
             // All other statements are handled immediately.
             _ => match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
-                Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
+                Ok(plan) => {
+                    let plan = match self.optimize_plan(plan) {
+                        Ok(plan) => plan,
+                        Err(e) => return ctx.retire(Err(e.into())),
+                    };
+                    self.sequence_plan(ctx, plan, resolved_ids).await;
+                }
                 Err(e) => ctx.retire(Err(e)),
             },
         }

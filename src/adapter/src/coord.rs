@@ -179,6 +179,7 @@ mod ddl;
 mod indexes;
 mod introspection;
 mod message_handler;
+mod optimizer;
 mod privatelink_status;
 mod read_policy;
 mod sequencer;
@@ -242,11 +243,6 @@ pub enum Message<T = mz_repr::Timestamp> {
         otel_ctx: OpenTelemetryContext,
         stage: CreateIndexStage,
     },
-    CreateViewStageReady {
-        ctx: ExecuteContext,
-        otel_ctx: OpenTelemetryContext,
-        stage: CreateViewStage,
-    },
     CreateMaterializedViewStageReady {
         ctx: ExecuteContext,
         otel_ctx: OpenTelemetryContext,
@@ -298,7 +294,6 @@ impl Message {
             }
             Message::PeekStageReady { .. } => "peek_stage_ready",
             Message::CreateIndexStageReady { .. } => "create_index_stage_ready",
-            Message::CreateViewStageReady { .. } => "create_view_stage_ready",
             Message::CreateMaterializedViewStageReady { .. } => {
                 "create_materialized_view_stage_ready"
             }
@@ -497,45 +492,6 @@ pub struct CreateIndexFinish {
     resolved_ids: ResolvedIds,
     global_mir_plan: optimize::index::GlobalMirPlan,
     global_lir_plan: optimize::index::GlobalLirPlan,
-}
-
-#[derive(Debug)]
-pub enum CreateViewStage {
-    Validate(CreateViewValidate),
-    Optimize(CreateViewOptimize),
-    Finish(CreateViewFinish),
-}
-
-impl CreateViewStage {
-    fn validity(&mut self) -> Option<&mut PlanValidity> {
-        match self {
-            Self::Validate(_) => None,
-            Self::Optimize(stage) => Some(&mut stage.validity),
-            Self::Finish(stage) => Some(&mut stage.validity),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct CreateViewValidate {
-    plan: plan::CreateViewPlan,
-    resolved_ids: ResolvedIds,
-}
-
-#[derive(Debug)]
-pub struct CreateViewOptimize {
-    validity: PlanValidity,
-    plan: plan::CreateViewPlan,
-    resolved_ids: ResolvedIds,
-}
-
-#[derive(Debug)]
-pub struct CreateViewFinish {
-    validity: PlanValidity,
-    id: GlobalId,
-    plan: plan::CreateViewPlan,
-    resolved_ids: ResolvedIds,
-    optimized_expr: OptimizedMirRelationExpr,
 }
 
 #[derive(Debug)]

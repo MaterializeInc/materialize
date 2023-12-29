@@ -22,7 +22,8 @@ use mz_expr::CollectionPlan;
 use mz_repr::GlobalId;
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{
-    ExplainPlanPlan, ExplainTimestampPlan, Explainee, ExplaineeStatement, Plan, SubscribeFrom,
+    ExplainPlanPlan, ExplainTimestampPlan, Explainee, ExplaineeStatement, Optimized, Plan,
+    SubscribeFrom,
 };
 use smallvec::SmallVec;
 
@@ -38,7 +39,7 @@ use mz_catalog::builtin::MZ_INTROSPECTION_CLUSTER;
 pub fn auto_run_on_introspection<'a, 's, 'p>(
     catalog: &'a ConnCatalog<'a>,
     session: &'s Session,
-    plan: &'p Plan,
+    plan: &'p Plan<Optimized>,
 ) -> TargetCluster {
     let (depends_on, could_run_expensive_function) = match plan {
         Plan::Select(plan) => (
@@ -192,7 +193,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
 /// we depend on any objects that we're not allowed to query from the cluster.
 pub fn check_cluster_restrictions(
     catalog: &impl SessionCatalog,
-    plan: &Plan,
+    plan: &Plan<Optimized>,
 ) -> Result<(), AdapterError> {
     // We only impose restrictions if the current cluster is the introspection cluster.
     let cluster = catalog.active_cluster();
