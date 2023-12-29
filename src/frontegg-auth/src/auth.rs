@@ -100,6 +100,7 @@ impl Authentication {
         // We validate with our own now function.
         let mut validation = Validation::new(Algorithm::RS256);
         validation.validate_exp = false;
+        validation.validate_aud = false;
         let validation_config = ValidationConfig {
             decoding_key: config.decoding_key,
             tenant_id: config.tenant_id,
