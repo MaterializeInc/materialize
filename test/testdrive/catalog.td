@@ -672,6 +672,7 @@ mz_show_sources
 mz_show_system_privileges
 mz_sink_statuses
 mz_source_statuses
+mz_aws_privatelink_connection_statuses
 mz_statement_execution_history_redacted
 
 > SET database = materialize

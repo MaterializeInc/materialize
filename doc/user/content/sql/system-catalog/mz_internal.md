@@ -109,6 +109,19 @@ the historical status for each AWS PrivateLink connection in the system.
 | `connection_id`   | `text`                     | The unique identifier of the AWS PrivateLink connection. Corresponds to [`mz_catalog.mz_connections.id`](../mz_catalog#mz_connections).   |
 | `status`          | `text`                     | The status of the connection: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, or `unknown`.                        |
 
+### `mz_aws_privatelink_connection_statuses`
+
+The `mz_aws_privatelink_connection_statuses` table contains a row describing
+the most recent status for each AWS PrivateLink connection in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_aws_privatelink_connection_statuses -->
+| Field | Type | Meaning |
+|-------|------|---------|
+| `id` | [`text`] | The ID of the connection. Corresponds to [`mz_catalog.mz_connections.id`](../mz_catalog#mz_sinks). |
+| `name` | [`text`] | The name of the connection.  |
+| `last_status_change_at` | [`timestamp with time zone`] | Wall-clock timestamp of the connection status change.|
+| `status` | [`text`] | | The status of the connection: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, or `unknown`. |
+
 ### `mz_cluster_replica_frontiers`
 
 The `mz_cluster_replica_frontiers` table describes the per-replica frontiers of
