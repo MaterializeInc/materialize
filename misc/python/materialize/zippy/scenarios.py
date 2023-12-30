@@ -162,7 +162,7 @@ class UserTablesTogglePersistTxn(Scenario):
         }
 
         starts: dict[ActionOrFactory, float] = {}
-        for persist_txn in ["off", "eager"]:
+        for persist_txn in ["off", "eager", "lazy"]:
             starts[
                 MzStartParameterized(
                     additional_system_parameter_defaults={

@@ -14,7 +14,7 @@ from materialize.checks.scenarios import Scenario
 
 
 class PersistTxnToggle(Scenario):
-    """Toggle persist_txn_tables between `off` and `eager`"""
+    """Toggle persist_txn_tables between `off`, `eager` and `lazy`"""
 
     def actions(self) -> list[Action]:
         return [
@@ -30,7 +30,8 @@ class PersistTxnToggle(Scenario):
             Manipulate(self, phase=1),
             KillMz(),
             StartMz(
-                self, additional_system_parameter_defaults={"persist_txn_tables": "off"}
+                self,
+                additional_system_parameter_defaults={"persist_txn_tables": "lazy"},
             ),
             Manipulate(self, phase=2),
             KillMz(),
@@ -68,10 +69,14 @@ class PersistTxnFencing(Scenario):
             ),
             Manipulate(self, phase=2, mz_service="mz_txn_tables_eager"),
             Validate(self, mz_service="mz_txn_tables_eager"),
-            StartMz(self, mz_service="mz_txn_tables_default"),
-            Validate(self, mz_service="mz_txn_tables_default"),
+            StartMz(
+                self,
+                additional_system_parameter_defaults={"persist_txn_tables": "lazy"},
+                mz_service="mz_txn_tables_lazy",
+            ),
+            Validate(self, mz_service="mz_txn_tables_lazy"),
             # Since we are creating Mz instances with a non-default name,
             # we need to perform explicit cleanup here
-            KillMz(mz_service="mz_txn_tables_default"),
+            KillMz(mz_service="mz_txn_tables_lazy"),
             Down(),
         ]
