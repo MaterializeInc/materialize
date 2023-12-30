@@ -188,7 +188,16 @@ impl Coordinator {
                     self.drain_statement_log().await;
                 }
                 Message::PrivateLinkVpcEndpointEvents(events) => {
-                    self.write_privatelink_status_updates(events).await;
+                    self.controller
+                        .storage
+                        .record_introspection_updates(
+                            mz_storage_client::controller::IntrospectionType::PrivatelinkConnectionStatusHistory,
+                            events
+                                .into_iter()
+                                .map(|e| (mz_repr::Row::from(e), 1))
+                                .collect(),
+                        )
+                        .await;
                 }
             }
         }
