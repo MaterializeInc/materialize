@@ -87,7 +87,6 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::BufMut;
-use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::BoxStream;
 use itertools::Itertools;
@@ -109,7 +108,6 @@ use mz_persist_txn::txns::TxnsHandle;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_stash::{self, AppendBatch, StashFactory, TypedCollection};
 use mz_stash_types::metrics::Metrics as StashMetrics;
@@ -2667,11 +2665,7 @@ where
 
     /// Effectively truncates the source status history shard except for the most recent updates
     /// from each ID.
-    /// Returns a map with latest row per id
-    async fn partially_truncate_status_history(
-        &mut self,
-        collection: IntrospectionType,
-    ) -> Option<BTreeMap<GlobalId, Row>> {
+    async fn partially_truncate_status_history(&mut self, collection: IntrospectionType) {
         let (keep_n, occurred_at_col, id_col) = match collection {
             IntrospectionType::SourceStatusHistory => (
                 self.config.parameters.keep_n_source_status_history_entries,
@@ -2721,16 +2715,12 @@ where
             }
             // If collection is closed or the frontier is the minimum, we cannot
             // or don't need to truncate (respectively).
-            _ => return None,
+            _ => return,
         };
 
         // BTreeMap<Id, MinHeap<(OccurredAt, Row)>>, to track the
         // earliest events for each id.
         let mut last_n_entries_per_id: BTreeMap<Datum, BinaryHeap<Reverse<(Datum, Vec<Datum>)>>> =
-            BTreeMap::new();
-
-        // BTreeMap to keep track of the row with the latest timestamp for each id
-        let mut latest_row_per_id: BTreeMap<Datum, (CheckedTimestamp<DateTime<Utc>>, Vec<Datum>)> =
             BTreeMap::new();
 
         // Consolidate the snapshot, so we can process it correctly below.
@@ -2753,15 +2743,6 @@ where
                 id,
                 collection
             );
-
-            // Keep track of the timestamp of the latest row per id
-            let timestamp = occurred_at.unwrap_timestamptz();
-            match latest_row_per_id.get(&id) {
-                Some(existing) if &existing.0 > &timestamp => {}
-                _ => {
-                    latest_row_per_id.insert(id, (timestamp, status_row.clone()));
-                }
-            }
 
             // Consider duplicated rows separately.
             for _ in 0..*diff {
@@ -2801,25 +2782,6 @@ where
             .collect();
 
         self.append_to_managed_collection(id, updates).await;
-
-        Some(
-            latest_row_per_id
-                .into_iter()
-                .filter_map(|(key, (_, row_vec))| {
-                    match GlobalId::from_str(key.unwrap_str()) {
-                        Ok(id) => {
-                            let mut packer = row_buf.packer();
-                            packer.extend(row_vec.into_iter());
-                            Some((id, row_buf.clone()))
-                        }
-                        // Ignore any rows that can't be unwrapped correctly
-                        Err(_) => None,
-                        // TODO(rjobanp): add a dropped status so we can ignore rows that are
-                        // no longer relevant (e.g. dropped connections/sources/sinks)
-                    }
-                })
-                .collect(),
-        )
     }
 
     /// Appends a new global ID, shard ID pair to the appropriate collection.
