@@ -701,7 +701,7 @@ steps:
               composition: platform-checks
               args: [--scenario=PersistTxnToggle, "--seed=$BUILDKITE_JOB_ID"]
 
-      - id: checks-persist-txn-fending
+      - id: checks-persist-txn-fencing
         label: "Checks + persist_txn fencing"
         timeout_in_minutes: 45
         artifact_paths: junit_*.xml
