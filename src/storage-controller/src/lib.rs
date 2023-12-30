@@ -395,10 +395,6 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// Write frontiers that have been recorded in the `ReplicaFrontiers` collection, kept to be
     /// able to retract old rows.
     recorded_replica_frontiers: BTreeMap<(GlobalId, ReplicaId), Antichain<T>>,
-
-    /// The latest timestamp for each id in the mz_privatelink_connection_status_history
-    /// table, read on startup by the adapter to initialize the privatelink vpce watch task
-    privatelink_status_table_latest: Option<BTreeMap<GlobalId, DateTime<Utc>>>,
 }
 
 #[async_trait(?Send)]
@@ -945,34 +941,10 @@ where
                             .await;
                         }
                         IntrospectionType::PrivatelinkConnectionStatusHistory => {
-                            // Truncate the private link connection status history table and
-                            // store the latest timestamp for each id in the table.
-                            let occurred_at_col =
-                                healthcheck::MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
-                                    .get_by_name(&ColumnName::from("occurred_at"))
-                                    .expect("schema has not changed")
-                                    .0;
-                            self.privatelink_status_table_latest = self
-                                .partially_truncate_status_history(
-                                    IntrospectionType::PrivatelinkConnectionStatusHistory,
-                                )
-                                .await
-                                .and_then(|map| {
-                                    Some(
-                                        map.into_iter()
-                                            .map(|(id, row)| {
-                                                (
-                                                    id,
-                                                    row.iter()
-                                                        .nth(occurred_at_col)
-                                                        .expect("schema has not changed")
-                                                        .unwrap_timestamptz()
-                                                        .into(),
-                                                )
-                                            })
-                                            .collect(),
-                                    )
-                                });
+                            self.partially_truncate_status_history(
+                                IntrospectionType::PrivatelinkConnectionStatusHistory,
+                            )
+                            .await;
                         }
 
                         // Truncate compute-maintained collections.
@@ -2198,10 +2170,6 @@ where
         self.txns_init_run = true;
         Ok(())
     }
-
-    fn get_privatelink_status_table_latest(&self) -> &Option<BTreeMap<GlobalId, DateTime<Utc>>> {
-        &self.privatelink_status_table_latest
-    }
 }
 
 /// A wrapper struct that presents the adapter token to a format that is understandable by persist
@@ -2442,7 +2410,6 @@ where
             metrics: StorageControllerMetrics::new(metrics_registry),
             recorded_frontiers: BTreeMap::new(),
             recorded_replica_frontiers: BTreeMap::new(),
-            privatelink_status_table_latest: None,
         }
     }
 
