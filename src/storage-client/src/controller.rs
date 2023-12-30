@@ -376,9 +376,9 @@ pub trait StorageController: Debug {
         commands: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
 
-    /// Returns a [`MonotonicAppender`] which is a channel that can be used to monotonically
+    /// Returns a [`WebhookAppender`] which is a channel that can be used to monotonically
     /// append to the specified [`GlobalId`].
-    fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError>;
+    fn webhook_appender(&self, id: GlobalId) -> Result<WebhookAppender, StorageError>;
 
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
     async fn snapshot(
@@ -658,18 +658,18 @@ impl<T: Timestamp> ExportState<T> {
 }
 /// A channel that allows you to append a set of updates to a pre-defined [`GlobalId`].
 ///
-/// See `CollectionManager::monotonic_appender` to acquire a [`MonotonicAppender`].
+/// See `CollectionManager::webhook_appender` to acquire a [`WebhookAppender`].
 #[derive(Clone, Debug)]
-pub struct MonotonicAppender {
+pub struct WebhookAppender {
     /// Channel that sends to a [`tokio::task`] which pushes updates to Persist.
     tx: mpsc::Sender<(Vec<(Row, Diff)>, oneshot::Sender<Result<(), StorageError>>)>,
 }
 
-impl MonotonicAppender {
+impl WebhookAppender {
     pub fn new(
         tx: mpsc::Sender<(Vec<(Row, Diff)>, oneshot::Sender<Result<(), StorageError>>)>,
     ) -> Self {
-        MonotonicAppender { tx }
+        WebhookAppender { tx }
     }
 
     pub async fn append(&self, updates: Vec<(Row, Diff)>) -> Result<(), StorageError> {

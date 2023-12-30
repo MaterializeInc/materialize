@@ -119,7 +119,7 @@ use mz_storage_client::client::{
 };
 use mz_storage_client::controller::{
     CollectionDescription, CollectionState, DataSource, DataSourceOther, ExportDescription,
-    ExportState, IntrospectionType, MonotonicAppender, SnapshotCursor, StorageController,
+    ExportState, IntrospectionType, SnapshotCursor, StorageController, WebhookAppender,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_types::collections as proto;
@@ -644,12 +644,13 @@ where
                 );
 
                 match description.data_source {
-                    DataSource::Introspection(_) | DataSource::Webhook => {
+                    DataSource::Webhook => {
                         debug!(desc = ?description, meta = ?metadata, "registering {} with persist monotonic worker", id);
                         self.persist_monotonic_worker.register(id, write);
                         self.collections.insert(id, collection_state);
                     }
-                    DataSource::Other(DataSourceOther::TableWrites) => {
+                    DataSource::Introspection(_)
+                    | DataSource::Other(DataSourceOther::TableWrites) => {
                         debug!(desc = ?description, meta = ?metadata, "registering {} with persist table worker", id);
                         table_registers.push((id, write, collection_state));
                     }
@@ -780,8 +781,6 @@ where
                         "cannot have multiple IDs for introspection type"
                     );
 
-                    self.collection_manager.register_collection(id);
-
                     match i {
                         IntrospectionType::ShardMapping => {
                             self.initialize_shard_mapping().await;
@@ -797,7 +796,7 @@ where
                             let scraper_token = statistics::spawn_statistics_scraper(
                                 id.clone(),
                                 // These do a shallow copy.
-                                self.collection_manager.clone(),
+                                self.persist_table_worker.clone(),
                                 Arc::clone(&self.source_statistics),
                             );
 
@@ -812,7 +811,7 @@ where
                             let scraper_token = statistics::spawn_statistics_scraper(
                                 id.clone(),
                                 // These do a shallow copy.
-                                self.collection_manager.clone(),
+                                self.persist_table_worker.clone(),
                                 Arc::clone(&self.sink_statistics),
                             );
 
@@ -1228,9 +1227,9 @@ where
             .append(write_ts, advance_to, commands))
     }
 
-    fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError> {
+    fn webhook_appender(&self, id: GlobalId) -> Result<WebhookAppender, StorageError> {
         assert!(self.txns_init_run);
-        self.collection_manager.monotonic_appender(id)
+        self.collection_manager.webhook_appender(id)
     }
 
     // TODO(petrosagg): This signature is not very useful in the context of partially ordered times
@@ -1842,7 +1841,7 @@ where
         }
 
         let id = self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::Frontiers];
-        self.append_to_managed_collection(id, updates).await;
+        self.append_to_managed_collection(id, updates, true).await;
     }
 
     async fn record_replica_frontiers(
@@ -1903,7 +1902,7 @@ where
 
         let id =
             self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::ReplicaFrontiers];
-        self.append_to_managed_collection(id, updates).await;
+        self.append_to_managed_collection(id, updates, true).await;
     }
 
     async fn record_introspection_updates(
@@ -1912,7 +1911,7 @@ where
         updates: Vec<(Row, Diff)>,
     ) {
         let id = self.introspection_ids.lock().expect("poisoned")[&type_];
-        self.append_to_managed_collection(id, updates).await;
+        self.append_to_managed_collection(id, updates, true).await;
     }
 
     /// With the CRDB based timestamp oracle, there is no longer write timestamp
@@ -2197,6 +2196,7 @@ where
             )
             .await;
             let worker = persist_handles::PersistTableWriteWorker::new_txns(
+                now.clone(),
                 tx.clone(),
                 txns,
                 lazy_persist_txn_tables,
@@ -2240,7 +2240,7 @@ where
         let introspection_ids = Arc::new(Mutex::new(BTreeMap::new()));
 
         let collection_status_manager = crate::healthcheck::CollectionStatusManager::new(
-            collection_manager.clone(),
+            persist_table_worker.clone(),
             Arc::clone(&introspection_ids),
         );
 
@@ -2483,7 +2483,7 @@ where
             .collect();
 
         if !updates.is_empty() {
-            self.append_to_managed_collection(id, updates).await;
+            self.append_to_managed_collection(id, updates, false).await;
         }
     }
 
@@ -2493,11 +2493,32 @@ where
     /// # Panics
     /// - If `id` is not registered as a managed collection.
     #[tracing::instrument(level = "debug", skip(self, updates))]
-    async fn append_to_managed_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
+    async fn append_to_managed_collection(
+        &self,
+        id: GlobalId,
+        updates: Vec<(Row, Diff)>,
+        next_txn: bool,
+    ) {
         assert!(self.txns_init_run);
-        self.collection_manager
-            .append_to_collection(id, updates)
-            .await;
+        if updates.is_empty() {
+            return;
+        }
+        if next_txn {
+            let () = self.persist_table_worker.append_next_txn(id, updates);
+        } else {
+            let write_ts = T::from((self.now)());
+            let advance_to = TimestampManipulation::step_forward(&write_ts);
+            let updates = updates
+                .into_iter()
+                .map(|(row, diff)| TimestamplessUpdate { row, diff })
+                .collect();
+            let () = self
+                .persist_table_worker
+                .append(write_ts, advance_to, vec![(id, updates)])
+                .await
+                .expect("WIP")
+                .expect("WIP");
+        }
     }
 
     /// Initializes the data expressing which global IDs correspond to which
@@ -2667,7 +2688,7 @@ where
             })
             .collect();
 
-        self.append_to_managed_collection(id, updates).await;
+        self.append_to_managed_collection(id, updates, false).await;
 
         Some(
             latest_row_per_id
@@ -2734,7 +2755,7 @@ where
             updates.push((row_buf.clone(), diff));
         }
 
-        self.append_to_managed_collection(id, updates).await;
+        self.append_to_managed_collection(id, updates, true).await;
     }
 
     /// Updates the on-disk and in-memory representation of `DurableCollectionMetadata` (i.e. KV
@@ -2854,10 +2875,10 @@ where
                 .await;
 
             match collection_desc.data_source {
-                DataSource::Introspection(_) | DataSource::Webhook => {
+                DataSource::Webhook => {
                     self.persist_monotonic_worker.update(id, write);
                 }
-                DataSource::Other(DataSourceOther::TableWrites) => {
+                DataSource::Introspection(_) | DataSource::Other(DataSourceOther::TableWrites) => {
                     self.persist_table_worker.update(id, write);
                 }
                 DataSource::Ingestion(_)

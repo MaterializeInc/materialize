@@ -22,7 +22,7 @@ use mz_ore::task::AbortOnDropHandle;
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::client::TimestamplessUpdate;
-use mz_storage_client::controller::MonotonicAppender;
+use mz_storage_client::controller::WebhookAppender;
 use timely::progress::Timestamp;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Duration, Instant};
@@ -125,41 +125,16 @@ where
         }
     }
 
-    /// Appends `updates` to the collection correlated with `id`, does not wait for the append to
-    /// complete.
-    ///
-    /// # Panics
-    /// - If `id` does not belong to managed collections.
-    /// - If there is contention to write to the collection identified by `id`.
-    /// - If the collection closed.
-    pub(super) async fn append_to_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
-        if !updates.is_empty() {
-            // Get the update channel in a block to make sure the Mutex lock is scoped.
-            let update_tx = {
-                let guard = self.collections.lock().expect("CollectionManager panicked");
-                let (update_tx, _, _) = guard.get(&id).expect("id to exist");
-                update_tx.clone()
-            };
-
-            // Specifically _do not_ wait for the append to complete, just for it to be sent.
-            let (tx, _rx) = oneshot::channel();
-            update_tx.send((updates, tx)).await.expect("rx hung up");
-        }
-    }
-
-    /// Returns a [`MonotonicAppender`] that can be used to monotonically append updates to the
+    /// Returns a [`WebhookAppender`] that can be used to monotonically append updates to the
     /// collection correlated with `id`.
-    pub(super) fn monotonic_appender(
-        &self,
-        id: GlobalId,
-    ) -> Result<MonotonicAppender, StorageError> {
+    pub(super) fn webhook_appender(&self, id: GlobalId) -> Result<WebhookAppender, StorageError> {
         let guard = self.collections.lock().expect("CollectionManager panicked");
         let tx = guard
             .get(&id)
             .map(|(tx, _, _)| tx.clone())
             .ok_or(StorageError::IdentifierMissing(id))?;
 
-        Ok(MonotonicAppender::new(tx))
+        Ok(WebhookAppender::new(tx))
     }
 }
 
