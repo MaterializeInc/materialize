@@ -948,7 +948,7 @@ where
                             // Truncate the private link connection status history table and
                             // store the latest timestamp for each id in the table.
                             let occurred_at_col =
-                                healthcheck::MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
+                                healthcheck::MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
                                     .get_by_name(&ColumnName::from("occurred_at"))
                                     .expect("schema has not changed")
                                     .0;
@@ -2732,11 +2732,11 @@ where
                 self.config
                     .parameters
                     .keep_n_privatelink_status_history_entries,
-                healthcheck::MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
+                healthcheck::MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("occurred_at"))
                     .expect("schema has not changed")
                     .0,
-                healthcheck::MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
+                healthcheck::MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("connection_id"))
                     .expect("schema has not changed")
                     .0,

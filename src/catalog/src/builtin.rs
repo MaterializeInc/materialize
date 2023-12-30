@@ -46,7 +46,7 @@ use mz_sql::session::user::{
 };
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{
-    MZ_PREPARED_STATEMENT_HISTORY_DESC, MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC,
+    MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_PREPARED_STATEMENT_HISTORY_DESC,
     MZ_SESSION_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC,
     MZ_STATEMENT_EXECUTION_HISTORY_DESC,
 };
@@ -2458,15 +2458,47 @@ pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinS
     sensitivity: DataSensitivity::Public,
 });
 
-pub static MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY: Lazy<BuiltinSource> =
+pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY: Lazy<BuiltinSource> =
     Lazy::new(|| BuiltinSource {
         name: "mz_aws_privatelink_connection_status_history",
         schema: MZ_INTERNAL_SCHEMA,
         data_source: Some(IntrospectionType::PrivatelinkConnectionStatusHistory),
-        desc: MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC.clone(),
+        desc: MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC.clone(),
         is_retained_metrics_object: false,
         sensitivity: DataSensitivity::Public,
     });
+
+pub const MZ_AWS_PRIVATELINK_CONNECTION_STATUSES: BuiltinView = BuiltinView {
+    name: "mz_aws_privatelink_connection_statuses",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: None,
+    sql: "
+    WITH statuses_w_last_status AS (
+        SELECT
+            connection_id,
+            occurred_at,
+            status,
+            lag(status) OVER (PARTITION BY connection_id ORDER BY occurred_at) AS last_status
+        FROM mz_internal.mz_aws_privatelink_connection_status_history
+    ),
+    latest_events AS (
+        -- Only take the most recent transition for each ID
+        SELECT DISTINCT ON(connection_id) connection_id, occurred_at, status
+        FROM statuses_w_last_status
+        -- Only keep first status transitions
+        WHERE status <> last_status OR last_status IS NULL
+        ORDER BY connection_id, occurred_at DESC
+    )
+    SELECT
+        conns.id,
+        name,
+        occurred_at as last_status_change_at,
+        status
+    FROM latest_events
+    JOIN mz_connections AS conns
+    ON conns.id = latest_events.connection_id",
+    sensitivity: DataSensitivity::Public,
+};
 
 pub static MZ_STATEMENT_EXECUTION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_statement_execution_history",
@@ -6409,7 +6441,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),
         Builtin::View(&MZ_SINK_STATUSES),
         Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
-        Builtin::Source(&MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY),
+        Builtin::Source(&MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY),
+        Builtin::View(&MZ_AWS_PRIVATELINK_CONNECTION_STATUSES),
         Builtin::Source(&MZ_STATEMENT_EXECUTION_HISTORY),
         Builtin::View(&MZ_STATEMENT_EXECUTION_HISTORY_REDACTED),
         Builtin::Source(&MZ_PREPARED_STATEMENT_HISTORY),

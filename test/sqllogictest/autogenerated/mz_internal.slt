@@ -81,6 +81,14 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  status  text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_aws_privatelink_connection_statuses' ORDER BY position
+----
+1  id  text
+2  name  text
+3  last_status_change_at  timestamp␠with␠time␠zone
+4  status  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_frontiers' ORDER BY position
 ----
 1  object_id  text
@@ -698,6 +706,7 @@ mz_arrangement_sizes
 mz_arrangement_sizes_per_worker
 mz_aws_connections
 mz_aws_privatelink_connection_status_history
+mz_aws_privatelink_connection_statuses
 mz_cluster_links
 mz_cluster_replica_frontiers
 mz_cluster_replica_heartbeats
