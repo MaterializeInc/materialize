@@ -171,6 +171,7 @@ case "$cmd" in
             --env AWS_SESSION_TOKEN
             --env CI
             --env CI_COVERAGE_ENABLED
+            --env CI_TEST_SELECTION
             --env CONFLUENT_CLOUD_DEVEX_KAFKA_PASSWORD
             --env CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME
             --env GITHUB_TOKEN
@@ -179,6 +180,7 @@ case "$cmd" in
             --env LAUNCHDARKLY_SDK_KEY
             --env NIGHTLY_CANARY_APP_PASSWORD
             --env MZ_CLI_APP_PASSWORD
+            --env MZ_SOFT_ASSERTIONS
             --env NO_COLOR
             --env NPM_TOKEN
             --env POLAR_SIGNALS_API_TOKEN
@@ -190,7 +192,6 @@ case "$cmd" in
             --env SCHEMA_REGISTRY_URL
             --env POSTGRES_URL
             --env COCKROACH_URL
-            --env MZ_SOFT_ASSERTIONS
         )
 
         if [[ $detach_container == "true" ]]; then
