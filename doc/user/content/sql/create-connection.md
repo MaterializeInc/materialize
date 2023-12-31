@@ -53,6 +53,12 @@ Field         | Value     | Description
 
 #### Permissions
 
+{{< warning >}}
+Failing to constrain the external ID in your role trust policy will allow
+other Materialize customers to assume your role and use AWS privileges you
+have granted the role!
+{{< /warning >}}
+
 When using role assumption-based authentication, you must configure a [trust
 policy] on the IAM role that permits Materialize to assume the role.
 
@@ -96,12 +102,6 @@ table:
 ```sql
 SELECT id, external_id, example_trust_policy FROM mz_internal.mz_aws_connections;
 ```
-
-{{< warning >}}
-Failing to constrain the external ID in your role trust policy will allow
-other Materialize customers to assume your role and use AWS privileges you
-have granted the role!
-{{< /warning >}}
 
 #### Examples
 
