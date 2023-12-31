@@ -678,7 +678,6 @@ where
     async fn ensure_transaction(&mut self, num_stmts: usize) -> Result<(), io::Error> {
         if self.txn_needs_commit {
             self.commit_transaction().await?;
-            self.txn_needs_commit = false;
         }
         // start_transaction can't error (but assert that just in case it changes in
         // the future.
@@ -838,6 +837,7 @@ where
     /// End a transaction and report to the user if an error occurred.
     #[instrument(level = "debug", skip_all)]
     async fn end_transaction(&mut self, action: EndTransactionAction) -> Result<(), io::Error> {
+        self.txn_needs_commit = false;
         let resp = self.adapter_client.end_transaction(action).await;
         if let Err(err) = resp {
             self.send(BackendMessage::ErrorResponse(
