@@ -97,10 +97,26 @@ pub struct ExchangePasswordForTokenResponse {
 impl Authentication {
     /// Creates a new frontegg auth.
     pub fn new(config: AuthenticationConfig, client: Client, registry: &MetricsRegistry) -> Self {
-        // We validate with our own now function.
         let mut validation = Validation::new(Algorithm::RS256);
+
+        // We validate the token expiration with our own now function.
         validation.validate_exp = false;
+
+        // We don't validate the audience because:
+        //
+        //   1. We don't have easy access to the expected audience ID here.
+        //
+        //   2. There is no meaningful security improvement to doing so, because
+        //      Frontegg always sets the audience to the ID of the workspace
+        //      that issued the token. Since we only trust the signing keys from
+        //      a single Frontegg workspace, the audience is redundant.
+        //
+        // See this conversation [0] from the Materialize–Frontegg shared Slack
+        // channel on 1 January 2024.
+        //
+        // [0]: https://materializeinc.slack.com/archives/C02940WNMRQ/p1704131331041669
         validation.validate_aud = false;
+
         let validation_config = ValidationConfig {
             decoding_key: config.decoding_key,
             tenant_id: config.tenant_id,
