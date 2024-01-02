@@ -115,7 +115,8 @@ class Materialized(Service):
 
         if external_minio:
             depends_graph["minio"] = {"condition": "service_healthy"}
-            address = "minio" if external_minio == True else external_minio
+            depends_graph["toxiproxy"] = {"condition": "service_healthy"}
+            address = "toxiyproxy"
             persist_blob_url = minio_blob_uri(address)
 
         if persist_blob_url:
@@ -148,7 +149,8 @@ class Materialized(Service):
         ]
 
         if external_cockroach:
-            address = "cockroach" if external_cockroach == True else external_cockroach
+            address = "toxiproxy"
+            depends_graph["toxiproxy"] = {"condition": "service_healthy"}
             depends_graph["cockroach"] = {"condition": "service_healthy"}
             command += [
                 f"--adapter-stash-url=postgres://root@{address}:26257?options=--search_path=adapter",

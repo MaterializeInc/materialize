@@ -37,6 +37,7 @@ from tempfile import TemporaryFile
 from typing import Any, TextIO, cast
 
 import pg8000
+import requests
 import sqlparse
 import yaml
 from pg8000 import Connection, Cursor
@@ -45,6 +46,7 @@ from materialize import MZ_ROOT, mzbuild, spawn, ui
 from materialize.mzcompose import loader
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.minio import minio_blob_uri
+from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.ui import UIError
 
 
@@ -95,6 +97,7 @@ class Composition:
         munge_services: bool = True,
         project_name: str | None = None,
     ):
+        self.toxiproxy_up = False
         self.name = name
         self.description = None
         self.repo = repo
@@ -133,7 +136,10 @@ class Composition:
                     name = name[len("workflow_") :].replace("_", "-")
                     self.workflows[name] = fn
 
-            for python_service in getattr(module, "SERVICES", []):
+            services = getattr(module, "SERVICES", [])
+            if not any(isinstance(service, Toxiproxy) for service in services):
+                services.append(Toxiproxy())
+            for python_service in services:
                 name = python_service.name
                 if name in self.compose["services"]:
                     raise UIError(f"service {name!r} specified more than once")
@@ -695,6 +701,50 @@ class Composition:
                 on the container with `Composition.exec`.
             max_tries: Number of tries on failure.
         """
+        if not self.toxiproxy_up:
+            self.toxiproxy_up = True
+            self.up("toxiproxy")
+
+            port = self.default_port("toxiproxy")
+            requests.post(
+                f"http://localhost:{port}/proxies",
+                json={
+                    "name": "cockroach",
+                    "listen": "0.0.0.0:26257",
+                    "upstream": "cockroach:26257",
+                    "enabled": True,
+                },
+            )
+            # assert r.status_code == 201, r
+            requests.post(
+                f"http://localhost:{port}/proxies",
+                json={
+                    "name": "minio",
+                    "listen": "0.0.0.0:9000",
+                    "upstream": "minio:9000",
+                    "enabled": True,
+                },
+            )
+            # assert r.status_code == 201, r
+            requests.post(
+                f"http://localhost:{port}/proxies/cockroach/toxics",
+                json={
+                    "name": "cockroach",
+                    "type": "latency",
+                    "attributes": {"latency": 0, "jitter": 100},
+                },
+            )
+            # assert r.status_code == 200, r
+            requests.post(
+                f"http://localhost:{port}/proxies/minio/toxics",
+                json={
+                    "name": "minio",
+                    "type": "latency",
+                    "attributes": {"latency": 0, "jitter": 100},
+                },
+            )
+            # assert r.status_code == 200, r
+
         if persistent:
             old_compose = copy.deepcopy(self.compose)
             for service in self.compose["services"].values():
