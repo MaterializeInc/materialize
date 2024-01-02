@@ -36,6 +36,7 @@ from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.zippy.framework import Test
 from materialize.zippy.scenarios import *  # noqa: F401 F403
+from materialize.zippy.scenarios import UserTables
 
 SERVICES = [
     Zookeeper(),
@@ -139,6 +140,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.observability:
         c.up("prometheus", "grafana")
 
+    jitter = 100 if issubclass(scenario_class, UserTables) else 0
+
     random.seed(args.seed)
 
     with c.override(
@@ -166,7 +169,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # Override so seed gets respected
         Toxiproxy(seed=random.randrange(2**63)),
     ):
-        toxiproxy_start(c)
+        toxiproxy_start(c, jitter)
 
         c.up("materialized")
 
@@ -204,7 +207,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         test.run(c)
 
 
-def toxiproxy_start(c: Composition) -> None:
+def toxiproxy_start(c: Composition, jitter: int) -> None:
     c.up("toxiproxy")
 
     port = c.default_port("toxiproxy")
@@ -233,7 +236,7 @@ def toxiproxy_start(c: Composition) -> None:
         json={
             "name": "cockroach",
             "type": "latency",
-            "attributes": {"latency": 0, "jitter": 100},
+            "attributes": {"latency": 0, "jitter": jitter},
         },
     )
     assert r.status_code == 200, r
@@ -242,7 +245,7 @@ def toxiproxy_start(c: Composition) -> None:
         json={
             "name": "minio",
             "type": "latency",
-            "attributes": {"latency": 0, "jitter": 100},
+            "attributes": {"latency": 0, "jitter": jitter},
         },
     )
     assert r.status_code == 200, r
