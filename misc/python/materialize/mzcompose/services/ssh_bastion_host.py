@@ -57,15 +57,17 @@ class SshBastionHost(Service):
         )
 
 
-def setup_default_ssh_test_connection(c: Composition, ssh_tunnel_name: str) -> None:
-
+def setup_default_ssh_test_connection(
+    c: Composition, ssh_tunnel_name: str, mz_service: str | None = None
+) -> None:
     c.sql(
         f"""
             CREATE CONNECTION IF NOT EXISTS {ssh_tunnel_name} TO SSH TUNNEL (
             HOST 'ssh-bastion-host',
             USER 'mz',
             PORT 22)
-        """
+        """,
+        service=mz_service,
     )
 
     public_key = c.sql_query(
@@ -73,7 +75,8 @@ def setup_default_ssh_test_connection(c: Composition, ssh_tunnel_name: str) -> N
             select public_key_1 from mz_ssh_tunnel_connections ssh \
             join mz_connections c on c.id = ssh.id
             where c.name = '{ssh_tunnel_name}';
-        """
+        """,
+        service=mz_service,
     )[0][0]
 
     c.exec(

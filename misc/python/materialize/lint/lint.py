@@ -27,6 +27,8 @@ MAIN_PATH = MZ_ROOT / "ci" / "test" / "lint-main"
 MAIN_CHECKS_PATH = MAIN_PATH / "checks"
 CHECK_BEFORE_PATH = MAIN_PATH / "before"
 CHECK_AFTER_PATH = MAIN_PATH / "after"
+OK = with_formatting("✓", COLOR_OK)
+FAIL = with_formattings("✗", [COLOR_ERROR, STYLE_BOLD])
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,6 +52,10 @@ def main() -> int:
     return return_code
 
 
+def prefix(ci: str = "---") -> str:
+    return ci + " " if buildkite.is_in_buildkite() else ""
+
+
 class LintManager:
     def __init__(self, print_duration: bool, verbose_output: bool):
         self.print_duration = print_duration
@@ -68,9 +74,10 @@ class LintManager:
 
         success = len(failed_checks) == 0
 
-        print("+++ Linting result")
         print(
-            "All checks successful." if success else f"Checks failed: {failed_checks}"
+            prefix("+++") + f"{OK} All checks successful"
+            if success
+            else f"{FAIL} Checks failed: {failed_checks}"
         )
 
         return 0 if success else 1
@@ -82,7 +89,9 @@ class LintManager:
         self, checks_path: Path, previous_failures: list[str]
     ) -> list[str]:
         if len(previous_failures) > 0:
-            print(f"--- Skipping checks in '{checks_path}' due to previous failures")
+            print(
+                f"{prefix()}Skipping checks in '{checks_path}' due to previous failures"
+            )
             return previous_failures
         else:
             return self.run_and_validate(checks_path)
@@ -102,11 +111,11 @@ class LintManager:
 
         threads = []
 
-        print(
-            f"--- Running {len(lint_files)} check(s) in {checks_path.relative_to(MZ_ROOT)}"
-        )
+        check = "check" if len(lint_files) == 1 else "checks"
 
-        status_printer_thread = StatusPrinterThread()
+        status_printer_thread = StatusPrinterThread(
+            f"{len(lint_files)} {check} in {checks_path.relative_to(MZ_ROOT)}"
+        )
         status_printer_thread.start()
 
         for lint_file in lint_files:
@@ -128,13 +137,11 @@ class LintManager:
                 else ""
             )
             if thread.success:
-                status = (
-                    f"({with_formatting('SUCCEEDED', COLOR_OK)}{formatted_duration})"
-                )
-                print(f"--- {thread.name} {status}")
+                status = f"{OK}{formatted_duration}"
+                print(f"{prefix('---')}{status} {thread.name}")
             else:
-                status = f"({with_formattings('FAILED', [COLOR_ERROR, STYLE_BOLD])}{formatted_duration})"
-                print(f"+++ {thread.name} {status}")
+                status = f"{FAIL}{formatted_duration}"
+                print(f"{prefix('+++')}{status} {thread.name}")
                 failed_checks.append(thread.name)
 
             if thread.has_output() and (not thread.success or self.verbose_output):
@@ -180,18 +187,24 @@ class LintingThread(threading.Thread):
 
 
 class StatusPrinterThread(threading.Thread):
-    def __init__(self) -> None:
+    def __init__(self, current_step: str) -> None:
         super().__init__(target=self.print_status, args=())
         self.active = not buildkite.is_in_buildkite()
+        self.current_step = current_step
 
     def print_status(self) -> None:
+        symbols = ["⣾", "⣷", "⣯", "⣟", "⡿", "⢿", "⣻", "⣽"]
+
+        i = 0
         while self.active:
-            print(".", end="", flush=True)
-            time.sleep(0.5)
+            print(f"\r\033[K{symbols[i]} {self.current_step}", end="", flush=True)
+            i = (i + 1) % len(symbols)
+            time.sleep(0.1)
 
     def stop(self) -> None:
         if self.active:
             self.active = False
+            print(f"\r\033[K{prefix()}{self.current_step}", end="", flush=True)
             print()
 
 

@@ -272,6 +272,10 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 name="MZ_AWS_PRIVATELINK_AVAILABILITY_ZONES", value="use1-az1,use1-az2"
             ),
             V1EnvVar(
+                name="MZ_AWS_CONNECTION_ROLE_ARN",
+                value="arn:aws:iam::123456789000:role/MaterializeConnection",
+            ),
+            V1EnvVar(
                 name="MZ_SYSTEM_PARAMETER_DEFAULT",
                 value=";".join(
                     [

@@ -1,14 +1,17 @@
 ---
 title: "ALTER CONNECTION"
-description: "`ALTER CONNECTION` changes the connection's configuration"
+description: "`ALTER CONNECTION` allows modifying the value of connection options and rotating secrets associated with connections"
 menu:
-    main:
-        parent: "commands"
+  main:
+    parent: 'commands'
 ---
 
-`ALTER CONNECTION` can:
+`ALTER CONNECTION` allows modifying the value of connection options and rotating
+secrets associated with connections. In particular, you can use this command
+to:
 
--   Modify the connection's parameters, such as the hostname to which it points.
+-   Modify the parameters of a connection, such as the hostname to which it
+    points.
 -   Rotate the key pairs associated with an [SSH tunnel connection].
 
 ## Syntax
@@ -20,7 +23,7 @@ menu:
 | _name_                    | The identifier of the connection you want to alter. |
 | **SET**...                | Sets the option to the specified value.             |
 | **DROP**..., **RESET**... | Resets the specified option to its default value.   |
-| **ROTATE KEYS**           | Rotate the key pairs.                               |
+| **ROTATE KEYS**           | Rotates the key pairs.                              |
 
 #### `WITH` options
 
@@ -32,13 +35,13 @@ menu:
 
 ### `SET`, `RESET`, `DROP`
 
-These subcommands let you change a connection's parameters.
+These subcommands let you modify the parameters of a connection.
 
--   **RESET** and **DROP** are synonyms and will return the parameter to its
+* **RESET** and **DROP** are synonyms and will return the parameter to its
     original state. For instance, if the connection has a default port, **DROP**
     will return it to the default value.
--   All provided changes are applied atomically.
--   The same parameter cannot have multiple modifications.
+* All provided changes are applied atomically.
+* The same parameter cannot have multiple modifications.
 
 For the available parameters for each type of connection, see [`CREATE
 CONNECTION`](/sql/create-connection).
@@ -62,8 +65,8 @@ a new public key.
 After executing `ROTATE KEYS`, you should update your SSH bastion server with
 the new public keys:
 
--   Remove the public key that was formely in the `public_key_1` column.
--   Add the new public key from the `public_key_2` column.
+* Remove the public key that was formely in the `public_key_1` column.
+* Add the new public key from the `public_key_2` column.
 
 Throughout the entire process, the SSH bastion server is configured to permit
 authentication from at least one of the keys that Materialize will authenticate

@@ -9,16 +9,24 @@
 
 //! This crate is responsible for durably storing and modifying the catalog contents.
 
-use async_trait::async_trait;
-use clap::clap_derive::ArgEnum;
-use mz_storage_types::controller::PersistTxnTablesImpl;
 use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::sync::Arc;
 use std::time::Duration;
-use uuid::Uuid;
 
+use async_trait::async_trait;
+use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
+use mz_controller_types::{ClusterId, ReplicaId};
+use mz_ore::collections::CollectionExt;
+use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::EpochMillis;
+use mz_persist_client::PersistClient;
+use mz_repr::GlobalId;
+use mz_sql::session::vars::CatalogKind;
 use mz_stash::DebugStashFactory;
+use mz_storage_types::controller::PersistTxnTablesImpl;
+use mz_storage_types::sources::Timeline;
+use uuid::Uuid;
 
 use crate::durable::debug::{DebugCatalogState, Trace};
 pub use crate::durable::error::{CatalogError, DurableCatalogError};
@@ -43,14 +51,6 @@ pub use crate::durable::objects::{
 };
 pub use crate::durable::transaction::Transaction;
 use crate::durable::transaction::TransactionBatch;
-use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
-use mz_controller_types::{ClusterId, ReplicaId};
-use mz_ore::collections::CollectionExt;
-use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::EpochMillis;
-use mz_persist_client::PersistClient;
-use mz_repr::GlobalId;
-use mz_storage_types::sources::Timeline;
 
 pub mod debug;
 mod error;
@@ -135,8 +135,19 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// Get the tombstone value of this instance.
     async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError>;
 
+    /// Get the `catalog_kind` config value of this instance.
+    ///
+    /// This mirrors the `catalog_kind` "system var" so that we can toggle
+    /// the flag with Launch Darkly, but use it in boot before Launch Darkly is
+    /// available.
+    async fn get_catalog_kind_config(&mut self) -> Result<Option<CatalogKind>, CatalogError>;
+
     /// Generate an unconsolidated [`Trace`] of catalog contents.
     async fn trace(&mut self) -> Result<Trace, CatalogError>;
+
+    /// Sets the kind of catalog opened to `catalog_kind` iff this `OpenableDurableCatalogState`
+    /// knows how to open a catalog of kind `catalog_kind`, otherwise does nothing.
+    fn set_catalog_kind(&mut self, catalog_kind: CatalogKind);
 
     /// Politely releases all external resources that can only be released in an async context.
     async fn expire(self: Box<Self>);
@@ -286,13 +297,6 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         let id = id.into_element();
         Ok(ReplicaId::User(id))
     }
-}
-
-#[derive(ArgEnum, Debug, Clone)]
-pub enum CatalogKind {
-    Stash,
-    Persist,
-    Shadow,
 }
 
 /// Creates a openable durable catalog state implemented using the stash.

@@ -17,6 +17,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
 use mz_compute_types::ComputeInstanceId;
+use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
 use mz_repr::explain::trace_plan;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
@@ -56,6 +57,19 @@ pub struct Optimizer {
     config: OptimizerConfig,
 }
 
+// A bogey `Debug` implementation that hides fields. This is needed to make the
+// `event!` call in `sequence_peek_stage` not emit a lot of data.
+//
+// For now, we skip almost all fields, but we might revisit that bit if it turns
+// out that we really need those for debugging purposes.
+impl std::fmt::Debug for Optimizer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Optimizer")
+            .field("config", &self.config)
+            .finish()
+    }
+}
+
 impl Optimizer {
     pub fn new(
         catalog: Arc<Catalog>,
@@ -81,6 +95,10 @@ impl Optimizer {
     pub fn cluster_id(&self) -> ComputeInstanceId {
         self.compute_instance.instance_id()
     }
+
+    pub fn up_to(&self) -> Option<Timestamp> {
+        self.up_to.clone()
+    }
 }
 
 /// The (sealed intermediate) result after:
@@ -88,7 +106,7 @@ impl Optimizer {
 /// 1. embedding a [`SubscribeFrom`] plan into a [`MirDataflowDescription`],
 /// 2. transitively inlining referenced views, and
 /// 3. jointly optimizing the `MIR` plans in the [`MirDataflowDescription`].
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct GlobalMirPlan<T: Clone> {
     df_desc: MirDataflowDescription,
     df_meta: DataflowMetainfo,
@@ -104,7 +122,7 @@ impl<T: Clone> GlobalMirPlan<T> {
 
 /// The (final) result after MIR ⇒ LIR lowering and optimizing the resulting
 /// `DataflowDescription` with `LIR` plans.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct GlobalLirPlan {
     df_desc: LirDataflowDescription,
     df_meta: DataflowMetainfo,
@@ -117,6 +135,10 @@ impl GlobalLirPlan {
         *sink_id
     }
 
+    pub fn as_of(&self) -> Option<Timestamp> {
+        self.df_desc.as_of.clone().map(|as_of| as_of.into_element())
+    }
+
     pub fn sink_desc(&self) -> &ComputeSinkDesc {
         let sink_exports = &self.df_desc.sink_exports;
         let sink_desc = sink_exports.values().next().expect("valid sink");
@@ -126,7 +148,7 @@ impl GlobalLirPlan {
 
 /// Marker type for [`GlobalMirPlan`] structs representing an optimization
 /// result without a resolved timestamp.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Unresolved;
 
 /// Marker type for [`GlobalMirPlan`] structs representing an optimization
@@ -134,7 +156,7 @@ pub struct Unresolved;
 ///
 /// The actual timestamp value is set in the [`MirDataflowDescription`] of the
 /// surrounding [`GlobalMirPlan`] when we call `resolve()`.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Resolved;
 
 impl Optimize<SubscribeFrom> for Optimizer {

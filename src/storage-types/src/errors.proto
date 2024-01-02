@@ -10,7 +10,6 @@
 syntax = "proto3";
 
 import "expr/src/scalar.proto";
-import "expr/src/id.proto";
 import "repr/src/global_id.proto";
 import "repr/src/row.proto";
 import "storage-types/src/shim.proto";

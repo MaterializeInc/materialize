@@ -1,5 +1,6 @@
 
 # cargo-vet config file
+default-criteria = "maintained-and-necessary"
 
 [cargo-vet]
 version = "0.8"
@@ -717,10 +718,6 @@ criteria = "safe-to-deploy"
 version = "0.3.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.jsonwebtoken]]
-version = "8.2.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.junit-report]]
 version = "0.8.3"
 criteria = "safe-to-deploy"
@@ -751,10 +748,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.kube-runtime]]
 version = "0.87.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.launchdarkly-server-sdk]]
-version = "1.0.0@git:31107de131a81c7edf4c830027b70c9b1e5382a0"
 criteria = "safe-to-deploy"
 
 [[exemptions.launchdarkly-server-sdk-evaluation]]
@@ -1011,10 +1004,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.pathdiff]]
 version = "0.2.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.pem]]
-version = "1.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.pem]]

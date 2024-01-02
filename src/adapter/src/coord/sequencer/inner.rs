@@ -79,7 +79,7 @@ use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
 use mz_transform::{EmptyStatisticsOracle, StatisticsOracle};
 use timely::progress::Antichain;
-use tokio::sync::{mpsc, oneshot, OwnedMutexGuard};
+use tokio::sync::{oneshot, OwnedMutexGuard};
 use tracing::instrument::WithSubscriber;
 use tracing::Instrument;
 use tracing::{event, warn, Level, Span};
@@ -104,17 +104,16 @@ use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
-use crate::optimize::dataflows::{
-    dataflow_import_id_bundle, prep_scalar_expr, EvalTime, ExprPrepStyle,
-};
+use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
-use crate::subscribe::ActiveSubscribe;
-use crate::util::{viewable_variables, ClientTransmitter, ComputeSinkId, ResultExt};
+use crate::util::{viewable_variables, ClientTransmitter, ResultExt};
 use crate::{guard_write_critical_section, PeekResponseUnary, TimestampExplanation};
 
+mod create_index;
 mod create_materialized_view;
 mod create_view;
+mod subscribe;
 
 /// Attempts to evaluate an expression. If an error is returned then the error is sent
 /// to the client and the function is exited.
@@ -853,141 +852,6 @@ impl Coordinator {
             Err(AdapterError::AmbiguousSystemColumnReference)
         } else {
             Ok(())
-        }
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
-    pub(super) async fn sequence_create_index(
-        &mut self,
-        session: &mut Session,
-        plan: plan::CreateIndexPlan,
-        resolved_ids: ResolvedIds,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let plan::CreateIndexPlan {
-            name,
-            index:
-                plan::Index {
-                    create_sql,
-                    on,
-                    keys,
-                    cluster_id,
-                },
-            options,
-            if_not_exists,
-        } = plan;
-
-        self.ensure_cluster_can_host_compute_item(&name, cluster_id)?;
-
-        // Collect optimizer parameters.
-        let compute_instance = self
-            .instance_snapshot(cluster_id)
-            .expect("compute instance does not exist");
-        let id = self.catalog_mut().allocate_user_id().await?;
-        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
-
-        // Build an optimizer for this INDEX.
-        let mut optimizer = optimize::index::Optimizer::new(
-            self.owned_catalog(),
-            compute_instance,
-            id,
-            optimizer_config,
-        );
-
-        // MIR ⇒ MIR optimization (global)
-        let index_plan = optimize::index::Index::new(&name, &on, &keys);
-        let global_mir_plan = optimizer.optimize(index_plan)?;
-        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-        let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
-
-        let index = mz_catalog::memory::objects::Index {
-            create_sql,
-            keys,
-            on,
-            conn_id: None,
-            resolved_ids,
-            cluster_id,
-            is_retained_metrics_object: false,
-            custom_logical_compaction_window: None,
-        };
-
-        let oid = self.catalog_mut().allocate_oid()?;
-        let on = self.catalog().get_entry(&index.on);
-        // Indexes have the same owner as their parent relation.
-        let owner_id = *on.owner_id();
-        let op = catalog::Op::CreateItem {
-            id,
-            oid,
-            name: name.clone(),
-            item: CatalogItem::Index(index),
-            owner_id,
-        };
-
-        let transact_result = self
-            .catalog_transact_with_side_effects(Some(session), vec![op], |coord| async {
-                // Save plan structures.
-                coord
-                    .catalog_mut()
-                    .set_optimized_plan(id, global_mir_plan.df_desc().clone());
-                coord
-                    .catalog_mut()
-                    .set_physical_plan(id, global_lir_plan.df_desc().clone());
-
-                let (mut df_desc, df_meta) = global_lir_plan.unapply();
-
-                // Timestamp selection
-                let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
-                let since = coord.least_valid_read(&id_bundle);
-                df_desc.set_as_of(since);
-
-                // Emit notices.
-                coord.emit_optimizer_notices(session, &df_meta.optimizer_notices);
-
-                // Notices rendering
-                let df_meta = coord.catalog().render_notices(df_meta, Some(id));
-                coord
-                    .catalog_mut()
-                    .set_dataflow_metainfo(id, df_meta.clone());
-
-                if coord.catalog().state().system_config().enable_mz_notices() {
-                    // Initialize a container for builtin table updates.
-                    let mut builtin_table_updates =
-                        Vec::with_capacity(df_meta.optimizer_notices.len());
-                    // Collect optimization hint updates.
-                    coord.catalog().pack_optimizer_notices(
-                        &mut builtin_table_updates,
-                        df_meta.optimizer_notices.iter(),
-                        1,
-                    );
-                    // Write collected optimization hints to the builtin tables.
-                    let builtin_updates_fut = coord
-                        .builtin_table_update()
-                        .execute(builtin_table_updates)
-                        .await;
-
-                    let ship_dataflow_fut = coord.ship_dataflow(df_desc, cluster_id);
-
-                    futures::future::join(builtin_updates_fut, ship_dataflow_fut).await;
-                } else {
-                    coord.ship_dataflow(df_desc, cluster_id).await;
-                }
-
-                coord.set_index_options(id, options).expect("index enabled");
-            })
-            .await;
-
-        match transact_result {
-            Ok(_) => Ok(ExecuteResponse::CreatedIndex),
-            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
-            })) if if_not_exists => {
-                session.add_notice(AdapterNotice::ObjectAlreadyExists {
-                    name: name.item,
-                    ty: "index",
-                });
-                Ok(ExecuteResponse::CreatedIndex)
-            }
-            Err(err) => Err(err),
         }
     }
 
@@ -1951,7 +1815,7 @@ impl Coordinator {
         .await;
     }
 
-    /// Processes as many peek stages as possible.
+    /// Processes as many `peek` stages as possible.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn sequence_peek_stage(
         &mut self,
@@ -2666,182 +2530,6 @@ impl Coordinator {
             Some(self.controller.recent_timestamp(source_ids))
         } else {
             None
-        }
-    }
-
-    pub(super) async fn sequence_subscribe(
-        &mut self,
-        ctx: &mut ExecuteContext,
-        plan: plan::SubscribePlan,
-        target_cluster: TargetCluster,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let plan::SubscribePlan {
-            from,
-            with_snapshot,
-            when,
-            copy_to,
-            emit_progress,
-            up_to,
-            output,
-        } = plan;
-
-        let cluster = self
-            .catalog()
-            .resolve_target_cluster(target_cluster, ctx.session())?;
-        let cluster_id = cluster.id;
-
-        let target_replica_name = ctx.session().vars().cluster_replica();
-        let mut target_replica = target_replica_name
-            .map(|name| {
-                cluster
-                    .replica_id(name)
-                    .ok_or(AdapterError::UnknownClusterReplica {
-                        cluster_name: cluster.name.clone(),
-                        replica_name: name.to_string(),
-                    })
-            })
-            .transpose()?;
-
-        // SUBSCRIBE AS OF, similar to peeks, doesn't need to worry about transaction
-        // timestamp semantics.
-        if when == QueryWhen::Immediately {
-            // If this isn't a SUBSCRIBE AS OF, the SUBSCRIBE can be in a transaction if it's the
-            // only operation.
-            ctx.session_mut()
-                .add_transaction_ops(TransactionOps::Subscribe)?;
-        }
-
-        let depends_on = from.depends_on();
-
-        // Run `check_log_reads` and emit notices.
-        let notices = check_log_reads(
-            self.catalog(),
-            cluster,
-            &depends_on,
-            &mut target_replica,
-            ctx.session().vars(),
-        )?;
-        ctx.session_mut().add_notices(notices);
-
-        // Determine timeline.
-        let mut timeline = self.validate_timeline_context(depends_on.clone())?;
-        if matches!(timeline, TimelineContext::TimestampIndependent) && from.contains_temporal() {
-            // If the from IDs are timestamp independent but the query contains temporal functions
-            // then the timeline context needs to be upgraded to timestamp dependent.
-            timeline = TimelineContext::TimestampDependent;
-        }
-
-        // Collect optimizer parameters.
-        let compute_instance = self
-            .instance_snapshot(cluster_id)
-            .expect("compute instance does not exist");
-        let id = self.allocate_transient_id()?;
-        let conn_id = ctx.session().conn_id().clone();
-        let up_to = up_to
-            .map(|expr| Coordinator::evaluate_when(self.catalog().state(), expr, ctx.session_mut()))
-            .transpose()?;
-        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
-
-        // Build an optimizer for this SUBSCRIBE.
-        let mut optimizer = optimize::subscribe::Optimizer::new(
-            self.owned_catalog(),
-            compute_instance,
-            id,
-            conn_id,
-            with_snapshot,
-            up_to,
-            optimizer_config,
-        );
-
-        // MIR ⇒ MIR optimization (global)
-        let global_mir_plan = optimizer.optimize(from)?;
-        // Timestamp selection
-        let oracle_read_ts = self.oracle_read_ts(&ctx.session, &timeline, &when).await;
-        let as_of = self
-            .determine_timestamp(
-                ctx.session(),
-                &global_mir_plan.id_bundle(optimizer.cluster_id()),
-                &when,
-                cluster_id,
-                &timeline,
-                oracle_read_ts,
-                None,
-            )
-            .await?
-            .timestamp_context
-            .timestamp_or_default();
-        if let Some(id) = ctx.extra().contents() {
-            self.set_statement_execution_timestamp(id, as_of);
-        }
-        if let Some(up_to) = up_to {
-            if as_of == up_to {
-                ctx.session_mut()
-                    .add_notice(AdapterNotice::EqualSubscribeBounds { bound: up_to });
-            } else if as_of > up_to {
-                return Err(AdapterError::AbsurdSubscribeBounds { as_of, up_to });
-            }
-        }
-        let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
-        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-        let global_lir_plan = optimizer.optimize(global_mir_plan.clone())?;
-
-        let sink_id = global_lir_plan.sink_id();
-
-        let (tx, rx) = mpsc::unbounded_channel();
-        let active_subscribe = ActiveSubscribe {
-            user: ctx.session().user().clone(),
-            conn_id: ctx.session().conn_id().clone(),
-            channel: tx,
-            emit_progress,
-            as_of,
-            arity: global_lir_plan.sink_desc().from_desc.arity(),
-            cluster_id,
-            depends_on: depends_on.into_iter().collect(),
-            start_time: self.now(),
-            dropping: false,
-            output,
-        };
-        active_subscribe.initialize();
-
-        let (df_desc, df_meta) = global_lir_plan.unapply();
-        // Emit notices.
-        self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
-
-        // Add metadata for the new SUBSCRIBE.
-        let write_notify_fut = self.add_active_subscribe(sink_id, active_subscribe).await;
-        // Ship dataflow.
-        let ship_dataflow_fut = self.ship_dataflow(df_desc, cluster_id);
-
-        // Both adding metadata for the new SUBSCRIBE and shipping the underlying dataflow, send
-        // requests to external services, which can take time, so we run them concurrently.
-        let ((), ()) = futures::future::join(write_notify_fut, ship_dataflow_fut).await;
-
-        if let Some(target) = target_replica {
-            self.controller
-                .compute
-                .set_subscribe_target_replica(cluster_id, sink_id, target)
-                .unwrap_or_terminate("cannot fail to set subscribe target replica");
-        }
-
-        self.active_conns
-            .get_mut(ctx.session().conn_id())
-            .expect("must exist for active sessions")
-            .drop_sinks
-            .push(ComputeSinkId {
-                cluster_id,
-                global_id: sink_id,
-            });
-
-        let resp = ExecuteResponse::Subscribing {
-            rx,
-            ctx_extra: std::mem::take(ctx.extra_mut()),
-        };
-        match copy_to {
-            None => Ok(resp),
-            Some(format) => Ok(ExecuteResponse::CopyTo {
-                format,
-                resp: Box::new(resp),
-            }),
         }
     }
 
@@ -4395,6 +4083,9 @@ impl Coordinator {
         let catalog = self.catalog().for_session(session);
         let role = catalog.get_role(&id);
 
+        // We'll send these notices to the user, if the operation is successful.
+        let mut notices = vec![];
+
         // Get the attributes and variables from the role, as they currently are.
         let mut attributes = role.attributes().clone();
         let mut vars = role.vars().clone();
@@ -4405,6 +4096,10 @@ impl Coordinator {
                 if let Some(inherit) = attrs.inherit {
                     attributes.inherit = inherit;
                 }
+
+                if let Some(notice) = self.should_emit_rbac_notice(session) {
+                    notices.push(notice);
+                }
             }
             PlannedAlterRoleOption::Variable(variable) => {
                 // Get the variable to make sure it's valid and visible.
@@ -4412,7 +4107,7 @@ impl Coordinator {
                     .vars()
                     .get(Some(catalog.system_vars()), variable.name())?;
 
-                match variable {
+                let var_name = match variable {
                     PlannedRoleVariable::Set { name, value } => {
                         // Update our persisted set.
                         match &value {
@@ -4427,12 +4122,20 @@ impl Coordinator {
                                 vars.insert(name.clone(), var);
                             }
                         };
+                        name
                     }
                     PlannedRoleVariable::Reset { name } => {
                         // Remove it from our persisted values.
                         vars.remove(&name);
+                        name
                     }
-                }
+                };
+
+                // Emit a notice that they need to reconnect to see the change take effect.
+                notices.push(AdapterNotice::VarDefaultUpdated {
+                    role: Some(name.clone()),
+                    var_name: Some(var_name),
+                })
             }
         }
 
@@ -4442,9 +4145,15 @@ impl Coordinator {
             attributes,
             vars: RoleVars { map: vars },
         };
-        self.catalog_transact(Some(session), vec![op])
+        let response = self
+            .catalog_transact(Some(session), vec![op])
             .await
-            .map(|_| ExecuteResponse::AlteredRole)
+            .map(|_| ExecuteResponse::AlteredRole)?;
+
+        // Send all of our queued notices.
+        session.add_notices(notices);
+
+        Ok(response)
     }
 
     pub(super) async fn sequence_alter_secret(
@@ -5359,12 +5068,19 @@ impl Coordinator {
         self.is_user_allowed_to_alter_system(session, Some(&name))?;
         let op = match value {
             plan::VariableValue::Values(values) => catalog::Op::UpdateSystemConfiguration {
-                name,
+                name: name.clone(),
                 value: OwnedVarInput::SqlSet(values),
             },
-            plan::VariableValue::Default => catalog::Op::ResetSystemConfiguration { name },
+            plan::VariableValue::Default => {
+                catalog::Op::ResetSystemConfiguration { name: name.clone() }
+            }
         };
         self.catalog_transact(Some(session), vec![op]).await?;
+
+        session.add_notice(AdapterNotice::VarDefaultUpdated {
+            role: None,
+            var_name: Some(name),
+        });
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
@@ -5374,8 +5090,12 @@ impl Coordinator {
         plan::AlterSystemResetPlan { name }: plan::AlterSystemResetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, Some(&name))?;
-        let op = catalog::Op::ResetSystemConfiguration { name };
+        let op = catalog::Op::ResetSystemConfiguration { name: name.clone() };
         self.catalog_transact(Some(session), vec![op]).await?;
+        session.add_notice(AdapterNotice::VarDefaultUpdated {
+            role: None,
+            var_name: Some(name),
+        });
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
@@ -5387,6 +5107,10 @@ impl Coordinator {
         self.is_user_allowed_to_alter_system(session, None)?;
         let op = catalog::Op::ResetAllSystemConfiguration;
         self.catalog_transact(Some(session), vec![op]).await?;
+        session.add_notice(AdapterNotice::VarDefaultUpdated {
+            role: None,
+            var_name: None,
+        });
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 

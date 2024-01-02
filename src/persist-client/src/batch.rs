@@ -152,6 +152,7 @@ where
     /// marks them as deleted.
     #[instrument(level = "debug", skip_all, fields(shard = %self.shard_id))]
     pub async fn delete(mut self) {
+        self.mark_consumed();
         if !self.batch_delete_enabled {
             return;
         }
@@ -167,7 +168,6 @@ where
             });
         }
         let () = deletes.collect().await;
-        self.batch.parts.clear();
     }
 
     /// Turns this [`Batch`] into a `HollowBatch`.

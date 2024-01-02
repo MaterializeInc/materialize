@@ -27,7 +27,7 @@ pub static MZ_PREPARED_STATEMENT_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(||
             "prepared_at",
             ScalarType::TimestampTz { precision: None }.nullable(false),
         )
-        .with_column("statement_kind", ScalarType::String.nullable(true))
+        .with_column("statement_type", ScalarType::String.nullable(true))
 });
 
 pub static MZ_SESSION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {

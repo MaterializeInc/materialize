@@ -29,7 +29,9 @@ class Executor:
     # persisted.
     system_settings: set[str] = set()
 
-    def testdrive(self, input: str, caller: Traceback | None = None) -> Any:
+    def testdrive(
+        self, input: str, caller: Traceback | None = None, mz_service: str | None = None
+    ) -> Any:
         assert False
 
     def mzcompose_composition(self) -> Composition:
@@ -49,8 +51,10 @@ class MzcomposeExecutor(Executor):
     def mzcompose_composition(self) -> Composition:
         return self.composition
 
-    def testdrive(self, input: str, caller: Traceback | None = None) -> None:
-        self.composition.testdrive(input, caller=caller)
+    def testdrive(
+        self, input: str, caller: Traceback | None = None, mz_service: str | None = None
+    ) -> None:
+        self.composition.testdrive(input, caller=caller, mz_service=mz_service)
 
 
 class MzcomposeExecutorParallel(MzcomposeExecutor):
@@ -58,14 +62,18 @@ class MzcomposeExecutorParallel(MzcomposeExecutor):
         self.composition = composition
         self.exception: BaseException | None = None
 
-    def testdrive(self, input: str, caller: Traceback | None = None) -> Any:
+    def testdrive(
+        self, input: str, caller: Traceback | None = None, mz_service: str | None = None
+    ) -> Any:
         thread = threading.Thread(target=self._testdrive, args=[input, caller])
         thread.start()
         return thread
 
-    def _testdrive(self, input: str, caller: Traceback | None = None) -> None:
+    def _testdrive(
+        self, input: str, caller: Traceback | None = None, mz_service: str | None = None
+    ) -> None:
         try:
-            self.composition.testdrive(input, caller=caller)
+            self.composition.testdrive(input, caller=caller, mz_service=mz_service)
         except BaseException as e:
             self.exception = e
 
@@ -85,7 +93,12 @@ class CloudtestExecutor(Executor):
     def cloudtest_application(self) -> MaterializeApplication:
         return self.application
 
-    def testdrive(self, input: str, caller: Traceback | None = None) -> None:
+    def testdrive(
+        self, input: str, caller: Traceback | None = None, mz_service: str | None = None
+    ) -> None:
+        assert (
+            mz_service is None
+        ), "CloudtestExecutor not yet compatible with custom mz_service names"
         self.application.testdrive.run(
             input=input, no_reset=True, seed=self.seed, caller=caller
         )

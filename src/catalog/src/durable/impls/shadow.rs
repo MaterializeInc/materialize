@@ -22,6 +22,7 @@ use mz_ore::now::EpochMillis;
 use mz_ore::soft_assert_eq_or_log;
 use mz_proto::RustType;
 use mz_repr::Timestamp;
+use mz_sql::session::vars::CatalogKind;
 use mz_storage_types::sources::Timeline;
 
 use crate::durable::debug::{DebugCatalogState, Trace};
@@ -157,8 +158,16 @@ where
         compare_and_return_async!(self, get_tombstone)
     }
 
+    async fn get_catalog_kind_config(&mut self) -> Result<Option<CatalogKind>, CatalogError> {
+        compare_and_return_async!(self, get_catalog_kind_config)
+    }
+
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         panic!("ShadowCatalog is not used for catalog-debug tool");
+    }
+
+    fn set_catalog_kind(&mut self, catalog_kind: CatalogKind) {
+        compare_and_return!(self, set_catalog_kind, catalog_kind)
     }
 
     async fn expire(self: Box<Self>) {

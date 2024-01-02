@@ -312,6 +312,8 @@ dependencies = [
  "aws-credential-types",
  "aws-http",
  "aws-runtime",
+ "aws-sdk-sso",
+ "aws-sdk-ssooidc",
  "aws-sdk-sts",
  "aws-smithy-async",
  "aws-smithy-http",
@@ -322,11 +324,14 @@ dependencies = [
  "aws-types",
  "bytes",
  "fastrand",
+ "hex",
  "http",
  "hyper",
+ "ring",
  "time",
  "tokio",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -427,6 +432,52 @@ dependencies = [
  "aws-types",
  "bytes",
  "fastrand",
+ "http",
+ "once_cell",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
+name = "aws-sdk-sso"
+version = "1.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86b1779a72c60d45e5699512310d7f6fb965fecc8f7419ce1b993b716f0026fd"
+dependencies = [
+ "aws-credential-types",
+ "aws-http",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "http",
+ "once_cell",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
+name = "aws-sdk-ssooidc"
+version = "1.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56ba4a42aa91acecd5ca43b330b5c8eb7f8808d720b6a6f796a35faa302fc73d"
+dependencies = [
+ "aws-credential-types",
+ "aws-http",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
  "http",
  "once_cell",
  "regex-lite",
@@ -599,6 +650,7 @@ dependencies = [
  "pin-project-lite",
  "tokio",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -2753,12 +2805,13 @@ dependencies = [
 
 [[package]]
 name = "jsonwebtoken"
-version = "8.2.0"
+version = "9.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09f4f04699947111ec1733e71778d763555737579e44b85844cae8e1940a1828"
+checksum = "5c7ea04a7c5c055c175f189b6dc6ba036fd62306b58c66c9f6389036c503a3f4"
 dependencies = [
- "base64 0.13.1",
- "pem 1.1.1",
+ "base64 0.21.5",
+ "js-sys",
+ "pem",
  "ring",
  "serde",
  "serde_json",
@@ -2835,7 +2888,7 @@ dependencies = [
  "k8s-openapi",
  "kube-core",
  "openssl",
- "pem 3.0.2",
+ "pem",
  "pin-project",
  "rand",
  "secrecy",
@@ -2911,7 +2964,7 @@ dependencies = [
 [[package]]
 name = "launchdarkly-server-sdk"
 version = "1.0.0"
-source = "git+https://github.com/MaterializeInc/rust-server-sdk#31107de131a81c7edf4c830027b70c9b1e5382a0"
+source = "git+https://github.com/MaterializeInc/rust-server-sdk#df1440c8b93a192d50470d1b258615febe52f1f8"
 dependencies = [
  "built",
  "chrono",
@@ -3308,7 +3361,7 @@ dependencies = [
  "mio",
  "mysql_common",
  "once_cell",
- "pem 3.0.2",
+ "pem",
  "percent-encoding",
  "pin-project",
  "rand",
@@ -3592,7 +3645,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "0.81.0-dev"
+version = "0.82.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3642,10 +3695,10 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.13.1",
  "bytes",
  "bytesize",
  "chrono",
- "clap",
  "derivative",
  "differential-dataflow",
  "fail",
@@ -3704,7 +3757,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "0.81.0-dev"
+version = "0.82.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -3854,7 +3907,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.81.0-dev"
+version = "0.82.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -4052,7 +4105,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.81.0-dev"
+version = "0.82.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -4699,7 +4752,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.81.0-dev"
+version = "0.82.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -5289,6 +5342,7 @@ dependencies = [
  "aws-sdk-sts",
  "bitflags 1.3.2",
  "chrono",
+ "clap",
  "datadriven",
  "enum-kinds",
  "fail",
@@ -5297,6 +5351,7 @@ dependencies = [
  "http",
  "itertools",
  "maplit",
+ "mysql_async",
  "mz-adapter-types",
  "mz-build-info",
  "mz-ccsr",
@@ -5306,6 +5361,7 @@ dependencies = [
  "mz-interchange",
  "mz-kafka-util",
  "mz-lowertest",
+ "mz-mysql-util",
  "mz-orchestrator",
  "mz-ore",
  "mz-persist-client",
@@ -5322,6 +5378,7 @@ dependencies = [
  "mz-ssh-util",
  "mz-storage-types",
  "mz-tracing",
+ "num_enum",
  "once_cell",
  "paste",
  "postgres_array",
@@ -5499,7 +5556,7 @@ dependencies = [
 
 [[package]]
 name = "mz-stash-debug"
-version = "0.81.0-dev"
+version = "0.82.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -5742,12 +5799,14 @@ dependencies = [
  "differential-dataflow",
  "fail",
  "itertools",
+ "mysql_async",
  "mz-aws-util",
  "mz-ccsr",
  "mz-cloud-resources",
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
+ "mz-mysql-util",
  "mz-ore",
  "mz-persist-client",
  "mz-persist-txn",
@@ -5814,7 +5873,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "0.81.0-dev"
+version = "0.82.0-dev"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -6512,15 +6571,6 @@ name = "peeking_take_while"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b17cddbe7ec3f8bc800887bab5e717348c95ea2ca0b1bf0837fb964dc67099"
-
-[[package]]
-name = "pem"
-version = "1.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8835c273a76a90455d7344889b0964598e3316e2a79ede8e36f16bdcf2228b8"
-dependencies = [
- "base64 0.13.1",
-]
 
 [[package]]
 name = "pem"
@@ -7399,17 +7449,16 @@ dependencies = [
 
 [[package]]
 name = "ring"
-version = "0.16.20"
+version = "0.17.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3053cf52e236a3ed746dfc745aa9cacf1b791d846bdaf412f60a8d7d6e17c8fc"
+checksum = "688c63d65483050968b2a8937f7995f443e27041a0f7700aa59b0822aedebb74"
 dependencies = [
  "cc",
+ "getrandom",
  "libc",
- "once_cell",
  "spin",
  "untrusted",
- "web-sys",
- "winapi",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -8128,9 +8177,9 @@ dependencies = [
 
 [[package]]
 name = "spin"
-version = "0.5.2"
+version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
+checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
 
 [[package]]
 name = "ssh-key"
@@ -9203,9 +9252,9 @@ checksum = "f28467d3e1d3c6586d8f25fa243f544f5800fec42d97032474e17222c2b75cfa"
 
 [[package]]
 name = "untrusted"
-version = "0.7.1"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a156c684c91ea7d62626509bce3cb4e1d9ed5c4d978f7b4352658f96a4c26b4a"
+checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "ureq"
@@ -9616,6 +9665,7 @@ version = "0.0.0"
 dependencies = [
  "ahash",
  "anyhow",
+ "aws-config",
  "aws-credential-types",
  "aws-runtime",
  "aws-sdk-sts",
@@ -9623,6 +9673,7 @@ dependencies = [
  "aws-smithy-async",
  "aws-smithy-http",
  "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
  "aws-smithy-types",
  "axum",
  "bitflags 2.4.1",
@@ -9662,7 +9713,6 @@ dependencies = [
  "libc",
  "libz-sys",
  "log",
- "lru",
  "memchr",
  "mime_guess",
  "mio",

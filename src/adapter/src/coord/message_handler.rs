@@ -151,6 +151,14 @@ impl Coordinator {
                     otel_ctx.attach_as_parent();
                     self.sequence_peek_stage(ctx, otel_ctx, stage).await;
                 }
+                Message::CreateIndexStageReady {
+                    ctx,
+                    otel_ctx,
+                    stage,
+                } => {
+                    otel_ctx.attach_as_parent();
+                    self.sequence_create_index_stage(ctx, stage, otel_ctx).await;
+                }
                 Message::CreateViewStageReady {
                     ctx,
                     otel_ctx,
@@ -167,6 +175,14 @@ impl Coordinator {
                     otel_ctx.attach_as_parent();
                     self.sequence_create_materialized_view_stage(ctx, stage, otel_ctx)
                         .await;
+                }
+                Message::SubscribeStageReady {
+                    ctx,
+                    otel_ctx,
+                    stage,
+                } => {
+                    otel_ctx.attach_as_parent();
+                    self.sequence_subscribe_stage(ctx, stage, otel_ctx).await;
                 }
                 Message::DrainStatementLog => {
                     self.drain_statement_log().await;

@@ -2222,6 +2222,7 @@ impl ConnectionResolver for CatalogState {
             Ssh(conn) => Ssh(conn),
             Aws(conn) => Aws(conn),
             AwsPrivatelink(conn) => AwsPrivatelink(conn),
+            MySql(conn) => MySql(conn.into_inline_connection(self)),
         }
     }
 }

@@ -73,7 +73,41 @@ sampling rate than the one set in this variable.
 | `session_id`              | [`uuid`]                     | An ID that is unique for each session.                                                                                                                                                                                                                                        |
 | `redacted_sql`            | [`text`]                     | The SQL text of the statement, in a normalized form, with all string and numeric literals hidden.                                                                                                                                                                             |
 | `prepared_at`             | [`timestamp with time zone`] | The time at which the statement was prepared.                                                                                                                                                                                                                                 |
-| `statement_kind`          | [`text`]                     | The _kind_ of the statement, e.g. `select` for a `SELECT` query, or `NULL` if the statement was empty.                                                                                                                                                                        |
+| `statement_type`          | [`text`]                     | The _type_ of the statement, e.g. `select` for a `SELECT` query, or `NULL` if the statement was empty.                                                                                                                                                                        |
+
+### `mz_aws_connections`
+
+The `mz_aws_connections` table contains a row for each AWS connection in the
+system.
+
+<!-- RELATION_SPEC mz_internal.mz_aws_connections -->
+| Field                         | Type      | Meaning
+|-------------------------------|-----------|--------
+| `id`                          | [`text`]  | The ID of the connection.
+| `endpoint`                    | [`text`]  | The value of the `ENDPOINT` option, if set.
+| `region`                      | [`text`]  | The value of the `REGION` option, if set.
+| `access_key_id`               | [`text`]  | The value of the `ACCESS KEY ID` option, if provided in line.
+| `access_key_id_secret_id`     | [`text`]  | The ID of the secret referenced by the `ACCESS KEY ID` option, if provided via a secret.
+| `secret_access_key_secret_id` | [`text`]  | The ID of the secret referenced by the `SECRET ACCESS KEY` option, if set.
+| `session_token`               | [`text`]  | The value of the `SESSION TOKEN` option, if provided in line.
+| `session_token_secret_id`     | [`text`]  | The ID of the secret referenced by the `SESSION TOKEN` option, if provided via a secret.
+| `assume_role_arn`             | [`text`]  | The value of the `ASSUME ROLE ARN` option, if set.
+| `assume_role_session_name`    | [`text`]  | The value of the `ASSUME ROLE SESSION NAME` option, if set.
+| `principal`                   | [`text`]  | The ARN of the AWS principal Materialize will use when assuming the provided role, if the connection is configured to use role assumption.
+| `external_id`                 | [`text`]  | The external ID Materialize will use when assuming the provided role, if the connection is configured to use role assumption.
+| `example_trust_policy`        | [`jsonb`] | An example of an IAM role trust policy that allows this connection's principal and external ID to assume the role.
+
+### `mz_aws_privatelink_connection_status_history`
+
+The `mz_aws_privatelink_connection_status_history` table contains a row describing
+the historical status for each AWS PrivateLink connection in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_aws_privatelink_connection_status_history -->
+| Field             | Type                       | Meaning                                                    |
+|-------------------|----------------------------|------------------------------------------------------------|
+| `occurred_at`     | `timestamp with time zone` | Wall-clock timestamp of the status change.       |
+| `connection_id`   | `text`                     | The unique identifier of the AWS PrivateLink connection. Corresponds to [`mz_catalog.mz_connections.id`](../mz_catalog#mz_connections).   |
+| `status`          | `text`                     | The status of the connection: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, or `unknown`.                        |
 
 ### `mz_cluster_replica_frontiers`
 
@@ -369,8 +403,8 @@ The view is defined as the transitive closure of [`mz_object_dependencies`](#mz_
 
 ### `mz_notices`
 
-The `mz_notices` view contains a list of currently active optimizer notices
-emitted by the system.
+The `mz_notices` view contains a list of currently active notices emitted by the
+system.
 
 <!-- RELATION_SPEC mz_internal.mz_notices -->
 | Field                   | Type                         | Meaning                                                                                                                                           |
@@ -779,20 +813,6 @@ messages and additional metadata helpful for debugging.
 | `status`       | [`text`]                        | The status of the source: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.              |
 | `error`        | [`text`]                        | If the source is in an error state, the error message.                                                             |
 | `details`      | [`jsonb`]                       | Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions. |
-
-
-### `mz_aws_privatelink_connection_status_history`
-
-The `mz_aws_privatelink_connection_status_history` table contains a row describing
-the historical status for each AWS PrivateLink connection in the system.
-
-<!-- RELATION_SPEC mz_internal.mz_aws_privatelink_connection_status_history -->
-| Field             | Type                       | Meaning                                                    |
-|-------------------|----------------------------|------------------------------------------------------------|
-| `occurred_at`     | `timestamp with time zone` | Wall-clock timestamp of the status change.       |
-| `connection_id`   | `text`                     | The unique identifier of the AWS PrivateLink connection. Corresponds to [`mz_catalog.mz_connections.id`](../mz_catalog#mz_connections).   |
-| `status`          | `text`                     | The status of the connection: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, or `unknown`.                        |
-
 
 <!--
 ### `mz_statement_execution_history`
@@ -1257,7 +1277,6 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aws_connections -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability_raw -->

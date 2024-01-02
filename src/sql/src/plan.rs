@@ -67,6 +67,7 @@ use crate::names::{
 pub(crate) mod error;
 pub(crate) mod explain;
 pub(crate) mod expr;
+pub(crate) mod literal;
 pub(crate) mod lowering;
 pub(crate) mod notice;
 pub(crate) mod plan_utils;
@@ -777,7 +778,7 @@ pub struct SubscribePlan {
     pub output: SubscribeOutput,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SubscribeFrom {
     Id(GlobalId),
     Query {

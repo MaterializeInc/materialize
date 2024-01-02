@@ -1102,7 +1102,11 @@ impl Coordinator {
                                 Connection::AwsPrivatelink(_) => {
                                     new_aws_privatelink_connections += 1
                                 }
-                                Connection::Csr(_) | Connection::Ssh(_) | Connection::Aws(_) => {}
+                                // TODO(roshan): Implement limits for MySQL
+                                Connection::Csr(_)
+                                | Connection::Ssh(_)
+                                | Connection::Aws(_)
+                                | Connection::MySql(_) => {}
                             }
                         }
                         CatalogItem::Table(_) => {
@@ -1254,7 +1258,11 @@ impl Coordinator {
                 Connection::AwsPrivatelink(_) => current_aws_privatelink_connections += 1,
                 Connection::Postgres(_) => current_postgres_connections += 1,
                 Connection::Kafka(_) => current_kafka_connections += 1,
-                Connection::Csr(_) | Connection::Ssh(_) | Connection::Aws(_) => {}
+                // TODO(roshan): Implement limits for MySQL
+                Connection::Csr(_)
+                | Connection::Ssh(_)
+                | Connection::Aws(_)
+                | Connection::MySql(_) => {}
             }
         }
         self.validate_resource_limit(

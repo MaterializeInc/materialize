@@ -101,7 +101,7 @@ impl Index {
 /// 1. embedding an [`Index`] into a [`MirDataflowDescription`],
 /// 2. transitively inlining referenced views, and
 /// 3. jointly optimizing the `MIR` plans in the [`MirDataflowDescription`].
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct GlobalMirPlan {
     df_desc: MirDataflowDescription,
     df_meta: DataflowMetainfo,
@@ -119,7 +119,7 @@ impl GlobalMirPlan {
 
 /// The (final) result after MIR ⇒ LIR lowering and optimizing the resulting
 /// `DataflowDescription` with `LIR` plans.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct GlobalLirPlan {
     df_desc: LirDataflowDescription,
     df_meta: DataflowMetainfo,

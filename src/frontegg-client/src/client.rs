@@ -268,13 +268,15 @@ impl Client {
         let jwks = self.get_jwks().await.map_err(|_| Error::FetchingJwks)?;
         let jwk = jwks.keys.first().ok_or_else(|| Error::EmptyJwks)?;
         let token = self.auth().await?;
+        let mut validation = Validation::new(Algorithm::RS256);
+        validation.validate_aud = false;
 
         let token_data = decode::<Claims>(
             &token,
             &DecodingKey::from_jwk(jwk).map_err(|_| Error::ConvertingJwks)?,
-            &Validation::new(Algorithm::RS256),
+            &validation,
         )
-        .map_err(|_| Error::DecodingClaims)?;
+        .map_err(Error::DecodingClaims)?;
 
         Ok(token_data.claims)
     }

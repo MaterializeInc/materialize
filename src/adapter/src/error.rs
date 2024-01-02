@@ -26,6 +26,7 @@ use mz_repr::NotNullViolation;
 use mz_sql::plan::PlanError;
 use mz_sql::rbac;
 use mz_sql::session::vars::VarError;
+use mz_storage_types::connections::ConnectionValidationError;
 use mz_storage_types::controller::StorageError;
 use smallvec::SmallVec;
 use tokio::sync::oneshot;
@@ -212,6 +213,8 @@ pub enum AdapterError {
     /// When performing an `ALTER` of some variety, re-planning the statement
     /// errored.
     InvalidAlter(&'static str, PlanError),
+    /// An error occurred while validating a connection.
+    ConnectionValidation(ConnectionValidationError),
 }
 
 impl AdapterError {
@@ -297,6 +300,7 @@ impl AdapterError {
             AdapterError::ReadOnlyTransaction => Some("SELECT queries cannot be combined with other query types, including SUBSCRIBE.".into()),
             AdapterError::InvalidAlter(_, e) => e.detail(),
             AdapterError::Optimizer(e) => e.detail(),
+            AdapterError::ConnectionValidation(e) => e.detail(),
             _ => None,
         }
     }
@@ -349,8 +353,9 @@ impl AdapterError {
                 "Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query."
                     .into(),
             ),
-            AdapterError::InvalidAlter(_, e) => e.detail(),
+            AdapterError::InvalidAlter(_, e) => e.hint(),
             AdapterError::Optimizer(e) => e.hint(),
+            AdapterError::ConnectionValidation(e) => e.hint(),
             _ => None,
         }
     }
@@ -470,6 +475,7 @@ impl AdapterError {
             }
             AdapterError::DependentObject(_) => SqlState::DEPENDENT_OBJECTS_STILL_EXIST,
             AdapterError::InvalidAlter(_, _) => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::ConnectionValidation(_) => SqlState::SYSTEM_ERROR,
         }
     }
 
@@ -682,6 +688,7 @@ impl fmt::Display for AdapterError {
             AdapterError::InvalidAlter(t, e) => {
                 write!(f, "invalid ALTER {t}: {e}")
             }
+            AdapterError::ConnectionValidation(e) => e.fmt(f),
         }
     }
 }
@@ -834,6 +841,12 @@ impl From<mz_sql::session::vars::ConnectionError> for AdapterError {
                 }
             }
         }
+    }
+}
+
+impl From<ConnectionValidationError> for AdapterError {
+    fn from(e: ConnectionValidationError) -> AdapterError {
+        AdapterError::ConnectionValidation(e)
     }
 }
 

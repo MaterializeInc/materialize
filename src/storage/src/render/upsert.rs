@@ -24,7 +24,7 @@ use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_storage_operators::metrics::BackpressureMetrics;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
-use mz_storage_types::sources::UpsertEnvelope;
+use mz_storage_types::sources::envelope::UpsertEnvelope;
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
     PressOnDropButton,

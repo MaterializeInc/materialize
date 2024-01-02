@@ -324,6 +324,17 @@ steps:
               composition: zippy
               args: [--scenario=UserTables, --actions=10000, --max-execution-time=30m]
 
+      - id: zippy-user-tables-persist-txn
+        label: "Zippy User Tables + toggle persist-txn"
+        timeout_in_minutes: 180
+        agents:
+          queue: linux-x86_64
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: zippy
+              args: [--scenario=UserTablesTogglePersistTxn, --actions=10000, --max-execution-time=30m]
+
       - id: zippy-postgres-cdc
         label: "Zippy Postgres CDC"
         timeout_in_minutes: 120
@@ -384,15 +395,26 @@ steps:
   - group: AWS
     key: aws
     steps:
-      - id: aws-checks
-        label: AWS
+      - id: aws-real
+        label: AWS (Real)
+        timeout_in_minutes: 30
+        agents:
+          queue: linux-x86_64
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/scratch-aws-access: ~
+          - ./ci/plugins/mzcompose:
+              composition: aws
+
+      - id: aws-localstack
+        label: AWS (Localstack)
         timeout_in_minutes: 30
         agents:
           queue: linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
-              composition: aws
+              composition: aws-localstack
 
       - id: secrets-local-file
         label: "Secrets Local File"
@@ -668,6 +690,28 @@ steps:
               composition: platform-checks
               args: [--scenario=DropCreateDefaultReplica, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-persist-txn-toggle
+        label: "Checks + Toggle persist_txn"
+        timeout_in_minutes: 45
+        artifact_paths: junit_*.xml
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=PersistTxnToggle, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-persist-txn-fencing
+        label: "Checks + persist_txn fencing"
+        timeout_in_minutes: 45
+        artifact_paths: junit_*.xml
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=PersistTxnFencing, "--seed=$BUILDKITE_JOB_ID"]
+
       - id: checks-upgrade-matrix
         label: "Random upgrades over the entire matrix"
         timeout_in_minutes: 600
@@ -736,7 +780,6 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: persist
               args: [--consensus=mem, --blob=mem, --persist-txn]
-        skip: "TODO(txn): Turn on before enabling by default/in production."
 
   - id: persistence-failpoints
     label: Persistence failpoints
@@ -1069,6 +1112,17 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: legacy-upgrade
           args: ["--versions-source=git"]
+    agents:
+      queue: linux-x86_64
+
+  - id: persist-txn-fencing
+    label: Persist-txn fencing
+    timeout_in_minutes: 60
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: persist-txn-fencing
+
     agents:
       queue: linux-x86_64
 
