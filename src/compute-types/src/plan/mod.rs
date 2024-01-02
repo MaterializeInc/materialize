@@ -1080,6 +1080,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         arrangements: &mut BTreeMap<Id, AvailableCollections>,
         debug_info: LirDebugInfo<'_>,
         enable_specialized_arrangements: bool,
+        enable_reduce_mfp_fusion: bool,
     ) -> Result<(Self, AvailableCollections), String> {
         // This function is recursive and can overflow its stack, so grow it if
         // needed. The growth here is unbounded. Our general solution for this problem
@@ -1096,6 +1097,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 arrangements,
                 debug_info,
                 enable_specialized_arrangements,
+                enable_reduce_mfp_fusion,
             )
         })
     }
@@ -1105,6 +1107,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         arrangements: &mut BTreeMap<Id, AvailableCollections>,
         debug_info: LirDebugInfo<'_>,
         enable_specialized_arrangements: bool,
+        enable_reduce_mfp_fusion: bool,
     ) -> Result<(Self, AvailableCollections), String> {
         // Extract a maximally large MapFilterProject from `expr`.
         // We will then try and push this in to the resulting expression.
@@ -1223,6 +1226,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     arrangements,
                     debug_info,
                     enable_specialized_arrangements,
+                    enable_reduce_mfp_fusion,
                 )?;
                 let pre_existing = arrangements.insert(Id::Local(*id), v_keys);
                 assert!(pre_existing.is_none());
@@ -1233,6 +1237,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     arrangements,
                     debug_info,
                     enable_specialized_arrangements,
+                    enable_reduce_mfp_fusion,
                 )?;
                 arrangements.remove(&Id::Local(*id));
                 // Return the plan, and any `body` arrangements.
@@ -1264,6 +1269,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                         arrangements,
                         debug_info,
                         enable_specialized_arrangements,
+                        enable_reduce_mfp_fusion,
                     )?;
                     // If `v_keys` does not contain an unarranged collection, we must form it.
                     if !v_keys.raw {
@@ -1324,6 +1330,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     arrangements,
                     debug_info,
                     enable_specialized_arrangements,
+                    enable_reduce_mfp_fusion,
                 )?;
                 for id in ids.iter() {
                     arrangements.remove(&Id::Local(*id));
@@ -1345,6 +1352,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     arrangements,
                     debug_info,
                     enable_specialized_arrangements,
+                    enable_reduce_mfp_fusion,
                 )?;
                 // This stage can absorb arbitrary MFP instances.
                 let mfp = mfp.take();
@@ -1395,6 +1403,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                         arrangements,
                         debug_info,
                         enable_specialized_arrangements,
+                        enable_reduce_mfp_fusion,
                     )?;
                     input_arities.push(input.arity());
                     plans.push(plan);
@@ -1526,6 +1535,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     arrangements,
                     debug_info,
                     enable_specialized_arrangements,
+                    enable_reduce_mfp_fusion,
                 )?;
                 let (input_key, permutation_and_new_arity) = if let Some((
                     input_key,
@@ -1550,39 +1560,51 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     ReducePlan::create_from(aggregates.clone(), *monotonic, *expected_group_size);
                 let output_keys = reduce_plan.keys(group_key.len(), output_arity);
                 // Return the plan, and the keys it produces.
+                if !enable_reduce_mfp_fusion {
+                    (
+                        Plan::Reduce {
+                            input: Box::new(input),
+                            key_val_plan,
+                            plan: reduce_plan,
+                            input_key,
+                            mfp_after: MapFilterProject::new(mfp.input_arity),
+                        },
+                        output_keys,
+                    )
+                } else {
+                    // extract temporal predicates, as we cannot push them into `Reduce`.
+                    let temporal_mfp = mfp.extract_temporal();
+                    let non_temporal = mfp;
+                    mfp = temporal_mfp;
 
-                // extract temporal predicates, as we cannot push them into `Reduce`.
-                let temporal_mfp = mfp.extract_temporal();
-                let non_temporal = mfp;
-                mfp = temporal_mfp;
+                    // TODO: ensure we do not attempt to project away the key, as we cannot accomplish this.
+                    // FOR NOW: Unpack MFP as MF followed by P' that removes all M column, then MP afterwards.
+                    let input_arity = non_temporal.input_arity;
+                    let (m, f, p) = non_temporal.into_map_filter_project();
+                    let mut mfp_push = MapFilterProject::new(input_arity)
+                        .map(m.clone())
+                        .filter(f)
+                        .project(0..input_arity);
+                    mfp_push.optimize();
 
-                // TODO: ensure we do not attempt to project away the key, as we cannot accomplish this.
-                // FOR NOW: Unpack MFP as MF followed by P' that removes all M column, then MP afterwards.
-                let input_arity = non_temporal.input_arity;
-                let (m, f, p) = non_temporal.into_map_filter_project();
-                let mut mfp_push = MapFilterProject::new(input_arity)
-                    .map(m.clone())
-                    .filter(f)
-                    .project(0..input_arity);
-                mfp_push.optimize();
+                    // We still need to perform the map and projection for the actual output.
+                    let mfp_left = MapFilterProject::new(input_arity).map(m).project(p);
 
-                // We still need to perform the map and projection for the actual output.
-                let mfp_left = MapFilterProject::new(input_arity).map(m).project(p);
+                    // Compose the non-pushed MFP components.
+                    mfp = MapFilterProject::compose(mfp_left, mfp);
+                    mfp.optimize();
 
-                // Compose the non-pushed MFP components.
-                mfp = MapFilterProject::compose(mfp_left, mfp);
-                mfp.optimize();
-
-                (
-                    Plan::Reduce {
-                        input: Box::new(input),
-                        key_val_plan,
-                        plan: reduce_plan,
-                        input_key,
-                        mfp_after: mfp_push,
-                    },
-                    output_keys,
-                )
+                    (
+                        Plan::Reduce {
+                            input: Box::new(input),
+                            key_val_plan,
+                            plan: reduce_plan,
+                            input_key,
+                            mfp_after: mfp_push,
+                        },
+                        output_keys,
+                    )
+                }
             }
             MirRelationExpr::TopK {
                 input,
@@ -1599,6 +1621,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     arrangements,
                     debug_info,
                     enable_specialized_arrangements,
+                    enable_reduce_mfp_fusion,
                 )?;
 
                 let top_k_plan = TopKPlan::create_from(
@@ -1634,6 +1657,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     arrangements,
                     debug_info,
                     enable_specialized_arrangements,
+                    enable_reduce_mfp_fusion,
                 )?;
 
                 // We don't have an MFP here -- install an operator to permute the
@@ -1658,6 +1682,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     arrangements,
                     debug_info,
                     enable_specialized_arrangements,
+                    enable_reduce_mfp_fusion,
                 )?;
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
@@ -1708,6 +1733,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     arrangements,
                     debug_info,
                     enable_specialized_arrangements,
+                    enable_reduce_mfp_fusion,
                 )?;
                 plans_keys.push((plan, keys));
                 for input in inputs.iter() {
@@ -1716,6 +1742,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         arrangements,
                         debug_info,
                         enable_specialized_arrangements,
+                        enable_reduce_mfp_fusion,
                     )?;
                     plans_keys.push((plan, keys));
                 }
@@ -1750,6 +1777,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     arrangements,
                     debug_info,
                     enable_specialized_arrangements,
+                    enable_reduce_mfp_fusion,
                 )?;
                 input_keys.types = types;
 
@@ -1888,9 +1916,14 @@ This is not expected to cause incorrect results, but could indicate a performanc
         desc: DataflowDescription<OptimizedMirRelationExpr>,
         enable_consolidate_after_union_negate: bool,
         enable_specialized_arrangements: bool,
+        enable_reduce_mfp_fusion: bool,
     ) -> Result<DataflowDescription<Self>, String> {
         // First, we lower the dataflow description from MIR to LIR.
-        let mut dataflow = Self::lower_dataflow(desc, enable_specialized_arrangements)?;
+        let mut dataflow = Self::lower_dataflow(
+            desc,
+            enable_specialized_arrangements,
+            enable_reduce_mfp_fusion,
+        )?;
 
         // Subsequently, we perform plan refinements for the dataflow.
         Self::refine_source_mfps(&mut dataflow);
@@ -1947,6 +1980,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     fn lower_dataflow(
         desc: DataflowDescription<OptimizedMirRelationExpr>,
         enable_specialized_arrangements: bool,
+        enable_reduce_mfp_fusion: bool,
     ) -> Result<DataflowDescription<Self>, String> {
         // Collect available arrangements by identifier.
         let mut arrangements = BTreeMap::new();
@@ -1994,6 +2028,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     id: build.id,
                 },
                 enable_specialized_arrangements,
+                enable_reduce_mfp_fusion,
             )?;
             arrangements.insert(Id::Global(build.id), keys);
             objects_to_build.push(BuildDesc { id: build.id, plan });

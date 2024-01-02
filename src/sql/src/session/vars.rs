@@ -2204,6 +2204,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: true,
     },
+    {
+        name: enable_reduce_mfp_fusion,
+        desc: "fusion of MFPs in reductions",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 /// Represents the input to a variable.
