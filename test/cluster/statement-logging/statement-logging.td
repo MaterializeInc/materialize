@@ -21,6 +21,9 @@ statement_logging_sample_rate
 ----
 1.0
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_statement_lifecycle_logging = true
+
 # Verify that we can get application names
 # that are set after session initialization
 > SET application_name TO my_app
@@ -142,6 +145,74 @@ default default my_app 1 {} success <null> <null> <null> true "SET cluster TO c"
 mz_introspection mz_introspection my_app 1 {} success <null> 1 constant true "SELECT 'beginning real test!'" "strict serializable" <null>
 mz_introspection mz_introspection my_app 1 {} success <null> 1 constant true "SELECT 'serializable'" serializable <null>
 mz_introspection mz_introspection my_app 1 {} success <null> 1 standard true "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" "strict serializable" true
+
+> WITH all_stmts AS (SELECT mseh.id, mseh.began_at, mpsh.sql FROM mz_internal.mz_statement_execution_history mseh JOIN mz_internal.mz_prepared_statement_history mpsh ON mseh.prepared_statement_id = mpsh.id),
+       test_begin AS (SELECT began_at FROM all_stmts WHERE sql = 'SELECT ''beginning real test!''' ORDER BY began_at DESC LIMIT 1)
+  SELECT sql, event_type FROM test_begin, mz_internal.mz_statement_lifecycle_history mslh
+  JOIN all_stmts ON mslh.statement_id = all_stmts.id
+  WHERE all_stmts.began_at >= test_begin.began_at AND all_stmts.sql NOT LIKE '%sduiahsdfuoiahsdf%'
+BEGIN execution-began
+BEGIN execution-finished
+COMMIT execution-began
+COMMIT execution-finished
+"CREATE CLUSTER c REPLICAS (r1 (size '1'))" execution-began
+"CREATE CLUSTER c REPLICAS (r1 (size '1'))" execution-finished
+"CREATE DEFAULT INDEX i ON t" execution-began
+"CREATE DEFAULT INDEX i ON t" execution-finished
+"CREATE TABLE t(f int)" execution-began
+"CREATE TABLE t(f int)" execution-finished
+"DECLARE c CURSOR FOR VALUES (1), (2)" execution-began
+"DECLARE c CURSOR FOR VALUES (1), (2)" execution-finished
+"DROP CLUSTER c" execution-began
+"DROP CLUSTER c" execution-finished
+"EXECUTE p('hello world')" compute-dependencies-finished
+"EXECUTE p('hello world')" execution-began
+"EXECUTE p('hello world')" execution-finished
+"EXECUTE p('hello world')" storage-dependencies-finished
+"FETCH c" compute-dependencies-finished
+"FETCH c" execution-began
+"FETCH c" execution-began
+"FETCH c" execution-began
+"FETCH c" execution-finished
+"FETCH c" execution-finished
+"FETCH c" execution-finished
+"FETCH c" storage-dependencies-finished
+"INSERT INTO t VALUES (1)" execution-began
+"INSERT INTO t VALUES (1)" execution-finished
+"PREPARE p AS values ($1)" execution-began
+"PREPARE p AS values ($1)" execution-finished
+"SELECT 'beginning real test!'" compute-dependencies-finished
+"SELECT 'beginning real test!'" execution-began
+"SELECT 'beginning real test!'" execution-finished
+"SELECT 'beginning real test!'" storage-dependencies-finished
+"SELECT 'serializable'" compute-dependencies-finished
+"SELECT 'serializable'" execution-began
+"SELECT 'serializable'" execution-finished
+"SELECT 'serializable'" storage-dependencies-finished
+"SELECT * FROM t" compute-dependencies-finished
+"SELECT * FROM t" execution-began
+"SELECT * FROM t" execution-finished
+"SELECT * FROM t" storage-dependencies-finished
+"SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" compute-dependencies-finished
+"SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" execution-began
+"SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" execution-finished
+"SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" storage-dependencies-finished
+"SELECT count(*) FROM t" compute-dependencies-finished
+"SELECT count(*) FROM t" compute-dependencies-finished
+"SELECT count(*) FROM t" execution-began
+"SELECT count(*) FROM t" execution-began
+"SELECT count(*) FROM t" execution-finished
+"SELECT count(*) FROM t" execution-finished
+"SELECT count(*) FROM t" storage-dependencies-finished
+"SELECT count(*) FROM t" storage-dependencies-finished
+"SELECT f/0 FROM t" compute-dependencies-finished
+"SELECT f/0 FROM t" execution-began
+"SELECT f/0 FROM t" execution-finished
+"SELECT f/0 FROM t" storage-dependencies-finished
+"SET cluster TO c" execution-began
+"SET cluster TO c" execution-finished
+"SET transaction_isolation TO serializable" execution-began
+"SET transaction_isolation TO serializable" execution-finished
 
 # Test that everything in a transaction has the same transaction ID
 

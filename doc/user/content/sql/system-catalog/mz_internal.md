@@ -848,7 +848,7 @@ and cannot be changed by users), the latter is used instead.
 | Field          | Type                         | Meaning                                                                                                                                                |
 |----------------|------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `statement_id` | [`uuid`]                     | The ID of the execution event. Corresponds to [`mz_statement_execution_history.id`](#mz_statement_execution_history)                                   |
-| `event_type`   | [`text`]                     | The type of lifecycle event, e.g. `'execution_began'`, `'storage-dependencies-finished'`, `'compute-dependencies-finished'`, or `'execution-finished'` |
+| `event_type`   | [`text`]                     | The type of lifecycle event, e.g. `'execution-began'`, `'storage-dependencies-finished'`, `'compute-dependencies-finished'`, or `'execution-finished'` |
 | `occurred_at`  | [`timestamp with time zone`] | The time at which the event took place.                                                                                                                |
 
 ### `mz_subscriptions`
