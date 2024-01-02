@@ -25,6 +25,7 @@ steps:
   - group: Builds
     key: builds
     steps:
+      # TODO(def-) Get rid of this for PRs once we don't have any x86-64 tests remaining
       - id: build-x86_64
         label: Build x86_64
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
@@ -44,10 +45,8 @@ steps:
         depends_on: []
         priority: 1
         timeout_in_minutes: 60
-        branches: "main v*.*"
         agents:
           queue: builder-linux-aarch64
-        coverage: skip
 
       - id: build-wasm
         label: Build WASM
@@ -57,6 +56,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 10
         agents:
+          # Error: no prebuilt wasm-opt binaries are available for this platform: Unrecognized target!
           queue: linux-x86_64-small
         coverage: skip
 
@@ -70,7 +70,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 30
         agents:
-          queue: linux-x86_64
+          queue: linux-aarch64
         if: "build.pull_request.id != null"
         coverage: skip
 
@@ -84,7 +84,7 @@ steps:
           - build-aarch64
         timeout_in_minutes: 10
         agents:
-          queue: linux-x86_64-small
+          queue: linux-aarch64-small
         coverage: skip
         # Fortify against intermittent DockerHub issues
         retry:
@@ -103,7 +103,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 10
         agents:
-          queue: linux-x86_64-small
+          queue: linux-aarch64-small
         coverage: skip
 
       - id: lint-slow
@@ -116,6 +116,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 30
         agents:
+          # note: the `x86_64-unknown-linux-gnu` target may not be installed
           queue: builder-linux-x86_64
         coverage: skip
 
@@ -145,7 +146,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 30
         agents:
-          queue: linux-x86_64-small
+          queue: linux-aarch64-small
         coverage: skip
 
       - id: vet-check
@@ -157,7 +158,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 5
         agents:
-          queue: linux-x86_64-small
+          queue: linux-aarch64-small
         coverage: skip
 
       - id: lint-docs
@@ -170,6 +171,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 30
         agents:
+          # hugo: command not found
           queue: linux-x86_64-small
         coverage: skip
 
@@ -180,6 +182,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 30
         agents:
+          # hugo: command not found
           queue: linux-x86_64-small
         coverage: skip
 
@@ -206,7 +209,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: cargo-test
         agents:
-          queue: builder-linux-x86_64
+          queue: builder-linux-aarch64
 
       - id: miri-test
         label: Miri test (fast)
@@ -220,12 +223,12 @@ steps:
               composition: cargo-test
               args: [--miri-fast]
         agents:
-          queue: builder-linux-x86_64
+          queue: builder-linux-aarch64
         coverage: skip
 
   - id: testdrive
     label: Testdrive %N
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/testdrive]
     parallelism: 6
@@ -237,11 +240,11 @@ steps:
           composition: testdrive
           args: [--aws-region=us-east-1]
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: cluster-tests
     label: Cluster tests %N
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     inputs: [test/cluster]
@@ -250,11 +253,11 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cluster
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: sqllogictest-fast
     label: Fast SQL logic tests %N
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     parallelism: 6
     inputs: [test/sqllogictest]
@@ -263,22 +266,22 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
     agents:
-      queue: linux-x86_64-small
+      queue: linux-aarch64-small
 
   - id: restarts
     label: Restart test
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: restart
     agents:
-      queue: linux-x86_64-small
+      queue: linux-aarch64-small
 
   - id: legacy-upgrade
     label: Legacy upgrade tests (last version from docs)
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 60
     artifact_paths: junit_*.xml
     plugins:
@@ -286,14 +289,14 @@ steps:
           composition: legacy-upgrade
           args: ["--versions-source=docs"]
     agents:
-      queue: linux-x86_64-small
+      queue: linux-aarch64-small
 
   - group: "Debezium tests"
     key: debezium-tests
     steps:
       - id: debezium-postgres
         label: Debezium Postgres tests
-        depends_on: build-x86_64
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/debezium]
         artifact_paths: junit_*.xml
@@ -302,11 +305,11 @@ steps:
               composition: debezium
               run: postgres
         agents:
-          queue: linux-x86_64-small
+          queue: linux-aarch64-small
 
       - id: debezium-sql-server
         label: Debezium SQL Server tests
-        depends_on: build-x86_64
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/debezium]
         artifact_paths: junit_*.xml
@@ -315,11 +318,13 @@ steps:
               composition: debezium
               run: sql-server
         agents:
+          # sql-server The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested
+          # See https://github.com/microsoft/mssql-docker/issues/802
           queue: linux-x86_64-small
 
       - id: debezium-mysql
         label: Debezium MySQL tests
-        depends_on: build-x86_64
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/debezium]
         artifact_paths: junit_*.xml
@@ -328,14 +333,14 @@ steps:
               composition: debezium
               run: mysql
         agents:
-          queue: linux-x86_64-small
+          queue: linux-aarch64-small
 
   - group: "MySQL tests"
     key: mysql-tests
     steps:
       - id: mysql-cdc
         label: MySQL CDC tests
-        depends_on: build-x86_64
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/mysql-cdc]
         artifact_paths: junit_*.xml
@@ -343,14 +348,14 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
         agents:
-          queue: linux-x86_64-small
+          queue: linux-aarch64-small
 
   - group: "Postgres tests"
     key: postgres-tests
     steps:
       - id: pg-cdc
         label: Postgres CDC tests
-        depends_on: build-x86_64
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc]
         artifact_paths: junit_*.xml
@@ -358,12 +363,12 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
         agents:
-          queue: linux-x86_64 # TODO(def-) Switch to small when #24324 is fixed
+          queue: linux-aarch64 # TODO(def-) Switch to small when #24324 is fixed
 
       - id: pg-cdc-resumption
         label: Postgres CDC resumption tests
         parallelism: 2
-        depends_on: build-x86_64
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc-resumption]
         artifact_paths: junit_*.xml
@@ -371,11 +376,11 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc-resumption
         agents:
-          queue: linux-x86_64-small
+          queue: linux-aarch64-small
 
   - id: ssh-connection
     label: SSH connection tests
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 20
     inputs: [test/ssh-connection]
     artifact_paths: junit_*.xml
@@ -383,25 +388,25 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: ssh-connection
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - group: "Kafka tests"
     key: kafka-tests
     steps:
       - id: kafka-resumption
         label: Kafka resumption tests
-        depends_on: build-x86_64
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
               composition: kafka-resumption
         agents:
-          queue: linux-x86_64-small
+          queue: linux-aarch64-small
 
       - id: kafka-auth
         label: Kafka auth test
-        depends_on: build-x86_64
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/kafka-auth/smoketest.td]
         artifact_paths: junit_*.xml
@@ -409,27 +414,27 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-auth
         agents:
-          queue: linux-x86_64-small
+          queue: linux-aarch64-small
 
       - id: kafka-exactly-once
         label: Kafka exactly-once tests
-        depends_on: build-x86_64
+        depends_on: build-aarch64
         timeout_in_minutes: 30
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
               composition: kafka-exactly-once
         agents:
-          queue: linux-x86_64-small
+          queue: linux-aarch64-small
 
   - id: zippy-kafka-sources-short
     label: "Short Zippy"
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     inputs: [misc/python/materialize/zippy]
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64-small
+      queue: linux-aarch64-small
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
@@ -440,13 +445,13 @@ steps:
     steps:
       - id: checks-restart-environmentd-clusterd-storage
         label: "Checks + restart of environmentd & storage clusterd (%N)"
-        depends_on: build-x86_64
+        depends_on: build-aarch64
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
         parallelism: 5
         artifact_paths: junit_*.xml
         agents:
-          queue: linux-x86_64
+          queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -454,13 +459,13 @@ steps:
 
       - id: checks-no-restart-no-upgrade
         label: "Checks without restart or upgrade"
-        depends_on: build-x86_64
+        depends_on: build-aarch64
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
         parallelism: 2
         artifact_paths: junit_*.xml
         agents:
-          queue: linux-x86_64
+          queue: linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -468,7 +473,7 @@ steps:
 
   - id: cloudtest
     label: Cloudtest %N
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     parallelism: 6
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
@@ -486,10 +491,10 @@ steps:
   - id: source-sink-errors
     label: "Source/Sink Error Reporting"
     artifact_paths: junit_*.xml
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     agents:
-      queue: linux-x86_64-small
+      queue: linux-aarch64-small
     plugins:
       - ./ci/plugins/mzcompose:
           composition: source-sink-errors
@@ -497,17 +502,17 @@ steps:
   - id: backup-restore
     label: "CRDB / Persist backup and restore"
     artifact_paths: junit_*.xml
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 10
     agents:
-      queue: linux-x86_64-small
+      queue: linux-aarch64-small
     plugins:
       - ./ci/plugins/mzcompose:
           composition: backup-restore
 
   - id: feature-benchmark-kafka-only
     label: "Feature benchmark (Kafka only)"
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 45
     artifact_paths: junit_*.xml
     plugins:
@@ -522,7 +527,7 @@ steps:
   # for an agent
   - id: replica-isolation
     label: Replica isolation
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 20
     inputs: [test/replica-isolation]
     artifact_paths: junit_*.xml
@@ -530,34 +535,34 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: replica-isolation
     agents:
-      queue: linux-x86_64-small
+      queue: linux-aarch64-small
 
   - id: persistence
     label: Persistence tests
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: persistence
     agents:
-      queue: linux-x86_64-small
+      queue: linux-aarch64-small
 
   - id: cluster-isolation
     label: Cluster isolation test
-    depends_on: build-x86_64
-    timeout_in_minutes: 10
+    depends_on: build-aarch64
+    timeout_in_minutes: 20
     inputs: [test/cluster-isolation]
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster-isolation
     agents:
-      queue: linux-x86_64-small
+      queue: linux-aarch64-small
 
   - id: chbench-demo
     label: chbench smoke test
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -565,23 +570,25 @@ steps:
           args: [--run-seconds=10, --wait]
     timeout_in_minutes: 30
     agents:
-      queue: linux-x86_64-small
+      queue: linux-aarch64-small
 
   - id: metabase-demo
     label: Metabase smoke test
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 10
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: metabase
     agents:
+      # metabase The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested
+      # See https://github.com/metabase/metabase/issues/13119
       queue: linux-x86_64-small
 
   - id: dbt-materialize
     label: dbt-materialize tests
-    depends_on: build-x86_64
-    timeout_in_minutes: 15
+    depends_on: build-aarch64
+    timeout_in_minutes: 20
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -592,17 +599,17 @@ steps:
   - id: storage-usage
     label: "Storage Usage Table Test"
     artifact_paths: junit_*.xml
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     agents:
-      queue: linux-x86_64-small
+      queue: linux-aarch64-small
     plugins:
       - ./ci/plugins/mzcompose:
           composition: storage-usage
 
   - id: tracing
     label: "Tracing Fast Path"
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 10
     inputs: [test/tracing]
     artifact_paths: junit_*.xml
@@ -610,7 +617,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: tracing
     agents:
-      queue: linux-x86_64-small
+      queue: linux-aarch64-small
 
   - id: persist-catalog-migration
     label: "Persist Catalog Migration"
@@ -718,7 +725,7 @@ steps:
     inputs: ["*"]
     priority: 1
     agents:
-      queue: builder-linux-x86_64
+      queue: linux-aarch64-large
     coverage: only
 
   - wait: ~
@@ -734,7 +741,7 @@ steps:
           job-uuid-file-pattern: _([^_]*).xml
     priority: 1
     agents:
-      queue: linux-x86_64-small
+      queue: linux-aarch64-small
 
   - wait: ~
 

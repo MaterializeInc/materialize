@@ -8,12 +8,12 @@
 # by the Apache License, Version 2.0.
 
 steps:
-  - id: build-x86_64
-    label: Build x86_64
-    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build x86_64
+  - id: build-aarch64
+    label: Build aarch64
+    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build aarch64
     timeout_in_minutes: 60
     agents:
-      queue: builder-linux-x86_64
+      queue: builder-linux-aarch64
     # Don't build for "trigger_job" source, which indicates that this release
     # qualification pipeline was triggered automatically by the tests pipeline
     # because there is a new tag on a v* branch. In this case we want to make
@@ -27,7 +27,7 @@ steps:
     timeout_in_minutes: 10
     if: build.source == "ui"
     agents:
-      queue: linux-x86_64-small
+      queue: linux-aarch64-small
 
   - wait: ~
 
@@ -39,7 +39,7 @@ steps:
       # 48h
       timeout_in_minutes: 2880
       agents:
-        queue: linux-x86_64-large
+        queue: linux-aarch64-large
       artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
@@ -51,7 +51,7 @@ steps:
       # 48h
       timeout_in_minutes: 2880
       agents:
-        queue: linux-x86_64-large
+        queue: linux-aarch64-large
       artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
@@ -62,7 +62,7 @@ steps:
       label: "Large Zippy PogresCdc"
       timeout_in_minutes: 2880
       agents:
-        queue: linux-x86_64-large
+        queue: linux-aarch64-large
       artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
@@ -73,7 +73,7 @@ steps:
       label: "Longer Zippy ClusterReplicas"
       timeout_in_minutes: 2880
       agents:
-        queue: linux-x86_64-large
+        queue: linux-aarch64-large
       artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
@@ -85,7 +85,7 @@ steps:
       label: "Large Zippy w/ user tables"
       timeout_in_minutes: 2880
       agents:
-        queue: linux-x86_64-large
+        queue: linux-aarch64-large
       artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
@@ -96,7 +96,7 @@ steps:
       label: "Longer Zippy Debezium Postgres"
       timeout_in_minutes: 2880
       agents:
-        queue: linux-x86_64
+        queue: linux-aarch64
       artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
@@ -107,7 +107,7 @@ steps:
       label: "Large-scale backup+restore"
       timeout_in_minutes: 2880
       agents:
-        queue: linux-x86_64
+        queue: linux-aarch64
       artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
@@ -119,7 +119,7 @@ steps:
       label: "Longer Zippy Kafka Parallel Insert"
       timeout_in_minutes: 2880
       agents:
-        queue: linux-x86_64-large
+        queue: linux-aarch64-large
       artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
@@ -130,7 +130,7 @@ steps:
     label: "Feature benchmark against 'latest' with --scale=+1"
     timeout_in_minutes: 2880
     agents:
-      queue: linux-x86_64-large
+      queue: linux-aarch64-large
     plugins:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark
@@ -144,7 +144,7 @@ steps:
       artifact_paths: junit_*.xml
       timeout_in_minutes: 120
       agents:
-        queue: linux-x86_64
+        queue: linux-aarch64
       plugins:
         - ./ci/plugins/mzcompose:
             composition: sqlsmith
@@ -155,7 +155,7 @@ steps:
       artifact_paths: junit_*.xml
       timeout_in_minutes: 120
       agents:
-        queue: linux-x86_64
+        queue: linux-aarch64
       plugins:
         - ./ci/plugins/mzcompose:
             composition: sqlsmith
@@ -174,4 +174,4 @@ steps:
           job-uuid-file-pattern: _([^_]*).xml
     priority: 1
     agents:
-      queue: linux-x86_64-small
+      queue: linux-aarch64-small
