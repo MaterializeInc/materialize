@@ -430,7 +430,8 @@ steps:
         timeout_in_minutes: 60
         artifact_paths: junit_*.xml
         agents:
-          queue: linux-x86_64
+          # A larger instance is needed due to frequent OOMs
+          queue: builder-linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -441,7 +442,8 @@ steps:
         timeout_in_minutes: 60
         artifact_paths: junit_*.xml
         agents:
-          queue: linux-x86_64
+          # A larger instance is needed due to frequent OOMs
+          queue: builder-linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -452,7 +454,7 @@ steps:
         timeout_in_minutes: 60
         artifact_paths: junit_*.xml
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -463,7 +465,7 @@ steps:
         timeout_in_minutes: 60
         artifact_paths: junit_*.xml
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -474,7 +476,7 @@ steps:
         timeout_in_minutes: 60
         artifact_paths: junit_*.xml
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -485,7 +487,7 @@ steps:
         timeout_in_minutes: 60
         artifact_paths: junit_*.xml
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -496,7 +498,7 @@ steps:
         skip: "Affected by #23882"
         timeout_in_minutes: 60
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -508,7 +510,7 @@ steps:
         skip: "Affected by #23882"
         timeout_in_minutes: 60
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -520,7 +522,7 @@ steps:
         skip: "Affected by #23882"
         timeout_in_minutes: 60
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -532,7 +534,7 @@ steps:
         skip: "Affected by #23882"
         timeout_in_minutes: 60
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -544,7 +546,7 @@ steps:
         skip: "Affected by #23882"
         timeout_in_minutes: 60
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -556,7 +558,7 @@ steps:
         skip: "Affected by #23882"
         timeout_in_minutes: 60
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -567,7 +569,7 @@ steps:
         label: "Checks upgrade, whole-Mz restart"
         timeout_in_minutes: 60
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -578,7 +580,7 @@ steps:
         label: "Checks upgrade from previous version, whole-Mz restart"
         timeout_in_minutes: 60
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -589,7 +591,7 @@ steps:
         label: "Checks upgrade across two versions"
         timeout_in_minutes: 60
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -600,7 +602,7 @@ steps:
         label: "Checks upgrade from X-2 directly to HEAD"
         timeout_in_minutes: 60
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -611,7 +613,7 @@ steps:
         label: "Checks upgrade across four versions"
         timeout_in_minutes: 60
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -622,7 +624,7 @@ steps:
         label: "Platform checks upgrade, restarting compute clusterd first"
         timeout_in_minutes: 60
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -633,7 +635,7 @@ steps:
         label: "Platform checks upgrade, restarting compute clusterd last"
         timeout_in_minutes: 60
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -645,7 +647,7 @@ steps:
         timeout_in_minutes: 45
         artifact_paths: junit_*.xml
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -656,7 +658,7 @@ steps:
         timeout_in_minutes: 45
         artifact_paths: junit_*.xml
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -667,7 +669,7 @@ steps:
         timeout_in_minutes: 45
         artifact_paths: junit_*.xml
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -678,7 +680,7 @@ steps:
         timeout_in_minutes: 45
         artifact_paths: junit_*.xml
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -689,7 +691,7 @@ steps:
         timeout_in_minutes: 45
         artifact_paths: junit_*.xml
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -700,7 +702,7 @@ steps:
         timeout_in_minutes: 45
         artifact_paths: junit_*.xml
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -721,7 +723,7 @@ steps:
         label: "Platform checks upgrade in Cloudtest/K8s"
         timeout_in_minutes: 60
         agents:
-          queue: linux-x86_64
+          queue: builder-linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
@@ -1065,6 +1067,18 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
               args: [--runtime=1500, --scenario=backup-restore, --naughty-identifiers]
+
+  - id: incident-70
+    label: "Test for incident 70"
+    timeout_in_minutes: 15
+    skip: "Affected by #15209"
+    agents:
+      queue: linux-x86_64-large
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cluster
+          run: test-incident-70
 
   - id: balancerd
     label: "Tests for balancerd"
