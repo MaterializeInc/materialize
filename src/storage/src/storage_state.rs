@@ -1263,7 +1263,7 @@ impl StorageState {
                                 export.id,
                                 &export.description.from_storage_metadata,
                                 export.description.from_storage_metadata.data_shard,
-                                export.description.as_of.clone(),
+                                export.description.as_of.frontier.clone(),
                                 Arc::clone(&self.persist_clients),
                             ),
                         );
@@ -1287,7 +1287,7 @@ impl StorageState {
                         Some(export_description) => {
                             // Update our knowledge of the `as_of`, in case we need to internally
                             // restart a sink in the future.
-                            export_description.as_of.clone_from(&frontier);
+                            export_description.as_of.downgrade(&frontier);
 
                             // Sinks maintain a read handle over their input data to ensure that we
                             // can restart at the `as_of` that we store and update in the export

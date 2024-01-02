@@ -45,6 +45,7 @@ use mz_storage_client::controller::ExportDescription;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_storage_types::read_policy::ReadPolicy;
+use mz_storage_types::sinks::SinkAsOf;
 use mz_storage_types::sources::GenericSourceConnection;
 use serde_json::json;
 use tracing::{event, warn, Level};
@@ -989,7 +990,11 @@ impl Coordinator {
             storage_ids: btreeset! {sink.from},
             compute_ids: btreemap! {},
         };
-        let as_of = self.least_valid_read(&id_bundle);
+        let min_as_of = self.least_valid_read(&id_bundle);
+        let as_of = SinkAsOf {
+            frontier: min_as_of,
+            strict: !sink.with_snapshot,
+        };
 
         let storage_sink_from_entry = self.catalog().get_entry(&sink.from);
         let storage_sink_desc = mz_storage_types::sinks::StorageSinkDesc {
@@ -1007,7 +1012,6 @@ impl Coordinator {
                 .into_inline_connection(self.catalog().state()),
             envelope: sink.envelope,
             as_of,
-            with_snapshot: sink.with_snapshot,
             status_id,
             from_storage_metadata: (),
         };

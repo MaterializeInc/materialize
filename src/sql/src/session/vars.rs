@@ -1151,15 +1151,6 @@ const KAFKA_FETCH_METADATA_TIMEOUT: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
-/// Controls the timeout when fetching kafka progress records. Defaults to 60s.
-const KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("kafka_progress_record_fetch_timeout"),
-    value: mz_kafka_util::client::DEFAULT_PROGRESS_RECORD_FETCH_TIMEOUT,
-    description: "Controls the timeout when fetching kafka progress records. \
-        Defaults to 60s.",
-    internal: true,
-};
-
 /// Controls the connection timeout to Cockroach.
 ///
 /// Used by persist as [`mz_persist_client::cfg::DynamicConfig::consensus_connect_timeout`].
@@ -2956,7 +2947,6 @@ impl SystemVars {
             .with_var(&KAFKA_TRANSACTION_TIMEOUT)
             .with_var(&KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT)
             .with_var(&KAFKA_FETCH_METADATA_TIMEOUT)
-            .with_var(&KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT)
             .with_var(&ENABLE_LAUNCHDARKLY)
             .with_var(&MAX_CONNECTIONS)
             .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
@@ -3566,11 +3556,6 @@ impl SystemVars {
     /// Returns the `kafka_fetch_metadata_timeout` configuration parameter.
     pub fn kafka_fetch_metadata_timeout(&self) -> Duration {
         *self.expect_value(&KAFKA_FETCH_METADATA_TIMEOUT)
-    }
-
-    /// Returns the `kafka_progress_record_fetch_timeout` configuration parameter.
-    pub fn kafka_progress_record_fetch_timeout(&self) -> Duration {
-        *self.expect_value(&KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT)
     }
 
     /// Returns the `crdb_connect_timeout` configuration parameter.
@@ -5465,7 +5450,6 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == KAFKA_TRANSACTION_TIMEOUT.name()
         || name == KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT.name()
         || name == KAFKA_FETCH_METADATA_TIMEOUT.name()
-        || name == KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
