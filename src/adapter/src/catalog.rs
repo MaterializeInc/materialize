@@ -31,15 +31,14 @@ use mz_catalog::builtin::{
     BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, BUILTINS,
     BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
 };
-use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config, StateConfig};
+use mz_catalog::config::{ClusterReplicaSizeMap, Config, StateConfig};
 use mz_catalog::durable::{
     test_bootstrap_args, DurableCatalogState, OpenableDurableCatalogState, StashConfig, Transaction,
 };
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
-    ClusterVariant, Connection, DataSourceDesc, Database, Func, Index, MaterializedView, Role,
-    Schema, Sink, Source, Type, View,
+    DataSourceDesc, Database, Index, MaterializedView, Role, Schema, Sink, Source,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_types::dataflows::DataflowDescription;

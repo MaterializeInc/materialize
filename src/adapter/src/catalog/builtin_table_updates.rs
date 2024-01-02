@@ -27,8 +27,12 @@ use mz_catalog::builtin::{
     MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS,
     MZ_WEBHOOKS_SOURCES,
 };
+use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::memory::error::{Error, ErrorKind};
-use mz_catalog::memory::objects::Table;
+use mz_catalog::memory::objects::{
+    CatalogItem, ClusterVariant, Connection, DataSourceDesc, Database, Func, Index,
+    MaterializedView, Sink, Table, Type, View,
+};
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
     ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
@@ -45,7 +49,10 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
 use mz_sql::ast::{CreateIndexStatement, Statement};
-use mz_sql::catalog::{CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, TypeCategory};
+use mz_sql::catalog::{
+    CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, DefaultPrivilegeObject,
+    TypeCategory,
+};
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{CommentObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -58,10 +65,7 @@ use mz_storage_types::sources::{
 };
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
-use crate::catalog::{
-    AwsPrincipalContext, CatalogItem, CatalogState, ClusterVariant, Connection, DataSourceDesc,
-    Database, DefaultPrivilegeObject, Func, Index, MaterializedView, Sink, Type, View,
-};
+use crate::catalog::CatalogState;
 use crate::coord::ConnMeta;
 use crate::subscribe::ActiveSubscribe;
 
