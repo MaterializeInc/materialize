@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
 use maplit::btreemap;
-use mz_kafka_util::client::{GetPartitionsError, MzClientContext, TimeoutConfig};
+use mz_kafka_util::client::{GetPartitionsError, MzClientContext, TunnelingClientContext};
 use mz_ore::collections::CollectionExt;
 use mz_ore::task;
 use mz_repr::Timestamp;
@@ -21,13 +21,11 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt};
 use mz_storage_types::sinks::KafkaSinkConnection;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
-use rdkafka::consumer::{BaseConsumer, Consumer};
+use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
 use rdkafka::message::ToBytes;
 use rdkafka::{ClientContext, Message, Offset, TopicPartitionList};
 use serde::{Deserialize, Serialize};
-use timely::progress::Antichain;
-use timely::PartialOrder;
 use tracing::{info, warn};
 
 use crate::sink::progress_key::ProgressKey;
@@ -201,37 +199,25 @@ pub enum TopicCleanupPolicy {
 /// If the topic does not exist, the function creates the topic with the
 /// provided `config`. Note that if the topic already exists, the function does
 /// *not* verify that the topic's configuration matches `config`.
-///
-/// Returns a boolean indicating whether the topic already existed.
-pub async fn ensure_kafka_topic(
-    connection: &KafkaSinkConnection,
-    storage_configuration: &StorageConfiguration,
+async fn ensure_kafka_topic<C>(
+    client: &AdminClient<C>,
     topic: &str,
     TopicConfig {
         mut partition_count,
         mut replication_factor,
         cleanup_policy,
     }: TopicConfig,
-) -> Result<bool, anyhow::Error> {
-    let client: AdminClient<_> = connection
-        .connection
-        .create_with_context(
-            storage_configuration,
-            MzClientContext::default(),
-            &BTreeMap::new(),
-        )
-        .await
-        .add_context("creating admin client failed")?;
+    fetch_timeout: Duration,
+) -> Result<(), anyhow::Error>
+where
+    C: ClientContext,
+{
     // if either partition count or replication factor should be defaulted to the broker's config
     // (signaled by a value of -1), explicitly poll the broker to discover the defaults.
     // Newer versions of Kafka can instead send create topic requests with -1 and have this happen
     // behind the scenes, but this is unsupported and will result in errors on pre-2.4 Kafka.
     if partition_count == -1 || replication_factor == -1 {
-        let fetch_timeout = storage_configuration
-            .parameters
-            .kafka_timeout_config
-            .fetch_metadata_timeout;
-        match discover_topic_configs(&client, topic, fetch_timeout).await {
+        match discover_topic_configs(client, topic, fetch_timeout).await {
             Ok(configs) => {
                 if partition_count == -1 {
                     partition_count = configs.partition_count;
@@ -274,12 +260,14 @@ pub async fn ensure_kafka_topic(
     }
 
     mz_kafka_util::admin::ensure_topic(
-        &client,
+        client,
         &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
         &kafka_topic,
     )
     .await
-    .with_context(|| format!("Error creating topic {} for sink", topic))
+    .with_context(|| format!("Error creating topic {} for sink", topic))?;
+
+    Ok(())
 }
 
 /// Publish value and optional key schemas for a given topic.
@@ -319,95 +307,96 @@ pub async fn publish_kafka_schemas(
     Ok((key_schema_id, value_schema_id))
 }
 
-/// This is the legacy struct that used to be emitted as part of a transactional produce and
-/// contains the largest timestamp within the batch committed. Since it is just a timestamp it
-/// cannot encode the fact that a sink has finished and deviates from upper frontier semantics.
-/// Materialize no longer produces this record but it's possible that we encounter this in topics
-/// written by older versions. In those cases we convert it into upper semantics by stepping the
-/// timestamp forward.
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
-pub struct LegacyProgressRecord {
-    pub timestamp: Timestamp,
-}
-
-/// This struct is emitted as part of a transactional produce, and contains the upper frontier of
-/// the batch committed. It is used to recover the frontier a sink needs to resume at.
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
-pub struct ProgressRecord {
-    pub frontier: Vec<Timestamp>,
-}
-
-/// Determines the latest progress record from the specified topic for the given
-/// progress key.
+/// Ensures that the Kafka sink's data and consistency collateral exist, as well
+/// as returning the last complete timestamp that the last incarnation of the
+/// sink committed to Kafka.
 ///
 /// IMPORTANT: to achieve exactly once guarantees, the producer that will resume
 /// production at the returned timestamp *must* have called `init_transactions`
 /// prior to calling this method.
-pub async fn determine_sink_resume_upper(
+///
+/// # Errors
+/// - If the [`KafkaSinkConnection`]'s consistency collateral exists and
+///   contains data for this sink, but the sink's data topic does not exist.
+pub async fn build_kafka(
     sink_id: mz_repr::GlobalId,
     connection: &KafkaSinkConnection,
     storage_configuration: &StorageConfiguration,
-) -> Result<Option<Antichain<Timestamp>>, ContextCreationError> {
-    // ****************************** WARNING ******************************
-    // Be VERY careful when editing the code in this function. It is very easy
-    // to accidentally introduce a correctness or liveness bug when refactoring
-    // this code.
-    // ****************************** WARNING ******************************
-
-    let TimeoutConfig {
-        fetch_metadata_timeout,
-        progress_record_fetch_timeout,
-        ..
-    } = storage_configuration.parameters.kafka_timeout_config;
-
+) -> Result<Option<Timestamp>, ContextCreationError> {
+    // Fetch the progress of the last incarnation of the sink, if any.
     let client_id = connection.client_id(&storage_configuration.connection_context, sink_id);
     let group_id = connection.progress_group_id(&storage_configuration.connection_context, sink_id);
     let progress_topic = connection
         .progress_topic(&storage_configuration.connection_context)
         .into_owned();
-    let progress_key = ProgressKey::new(sink_id);
-
-    let common_options = btreemap! {
-        // Consumer group ID, which may have been overridden by the user. librdkafka requires this,
-        // even though we'd prefer to disable the consumer group protocol entirely.
-        "group.id" => group_id,
-        // Allow Kafka monitoring tools to identify this consumer.
-        "client.id" => client_id,
-        "enable.auto.commit" => "false".into(),
-        "auto.offset.reset" => "earliest".into(),
-        // The fetch loop below needs EOF notifications to reliably detect that we have reached the
-        // high watermark.
-        "enable.partition.eof" => "true".into(),
-    };
-
-    // Construct two cliens in read committed and read uncommitted isolations respectively. See
-    // comment below for an explanation on why we need it.
-    let progress_client_read_committed: BaseConsumer<_> = {
-        let mut opts = common_options.clone();
-        opts.insert("isolation.level", "read_committed".into());
-        let ctx = MzClientContext::default();
+    // For details about the two clients constructed here, see
+    // `determine_latest_progress_record`.
+    let make_progress_client = |isolation_level: &'static str| async {
         connection
             .connection
-            .create_with_context(storage_configuration, ctx, &opts)
-            .await?
+            .create_with_context(
+                storage_configuration,
+                MzClientContext::default(),
+                &btreemap! {
+                    // Consumer group ID, which may have been overridden by the
+                    // user. librdkafka requires this, even though we'd prefer
+                    // to disable the consumer group protocol entirely.
+                    "group.id" => group_id.clone(),
+                    // Allow Kafka monitoring tools to identify this consumer.
+                    "client.id" => client_id.clone(),
+                    "isolation.level" => isolation_level.into(),
+                    "enable.auto.commit" => "false".into(),
+                    "auto.offset.reset" => "earliest".into(),
+                    "enable.partition.eof" => "true".into(),
+                },
+            )
+            .await
     };
+    let progress_client_read_committed = Arc::new(make_progress_client("read_committed").await?);
+    let progress_client_read_uncommitted =
+        Arc::new(make_progress_client("read_uncommitted").await?);
+    let latest_ts = determine_latest_progress_record(
+        format!("build_kafka_{}", sink_id),
+        Arc::clone(&progress_client_read_committed),
+        progress_client_read_uncommitted,
+        progress_topic.clone(),
+        ProgressKey::new(sink_id),
+        storage_configuration
+            .parameters
+            .kafka_timeout_config
+            .fetch_metadata_timeout,
+    )
+    .await
+    .check_ssh_status(progress_client_read_committed.client().context())?;
 
-    let progress_client_read_uncommitted: BaseConsumer<_> = {
-        let mut opts = common_options;
-        opts.insert("isolation.level", "read_uncommitted".into());
-        let ctx = MzClientContext::default();
-        connection
-            .connection
-            .create_with_context(storage_configuration, ctx, &opts)
-            .await?
-    };
+    let admin_client: AdminClient<_> = connection
+        .connection
+        .create_with_context(
+            storage_configuration,
+            MzClientContext::default(),
+            &BTreeMap::new(),
+        )
+        .await
+        .add_context("creating admin client failed")?;
 
-    let ctx = Arc::clone(progress_client_read_committed.client().context());
+    // If the progress topic existed and contained data for this sink, we expect
+    // the data topic to exist, as well. Note that we don't expect the converse
+    // to be true because we don't want to prevent users from creating topics
+    // before setting up their sinks.
+    let meta = admin_client
+        .inner()
+        .fetch_metadata(None, Duration::from_secs(10))
+        .check_ssh_status(admin_client.inner().context())
+        .add_context("fetching metadata")?;
+    if latest_ts.is_some() && !meta.topics().iter().any(|t| t.name() == connection.topic) {
+        Err(anyhow::anyhow!(
+            "sink progress data exists, but sink data topic is missing"
+        ))?;
+    }
 
-    // Ensure the progress topic exists.
+    // Create Kafka topics.
     ensure_kafka_topic(
-        connection,
-        storage_configuration,
+        &admin_client,
         &progress_topic,
         TopicConfig {
             partition_count: 1,
@@ -416,20 +405,100 @@ pub async fn determine_sink_resume_upper(
             replication_factor: -1,
             cleanup_policy: TopicCleanupPolicy::Compaction,
         },
+        storage_configuration
+            .parameters
+            .kafka_timeout_config
+            .fetch_metadata_timeout,
     )
     .await
+    .check_ssh_status(admin_client.inner().context())
     .add_context("error registering kafka progress topic for sink")?;
+    ensure_kafka_topic(
+        &admin_client,
+        &connection.topic,
+        // TODO: allow users to configure these parameters.
+        TopicConfig {
+            partition_count: -1,
+            replication_factor: -1,
+            cleanup_policy: TopicCleanupPolicy::Retention {
+                ms: None,
+                bytes: None,
+            },
+        },
+        storage_configuration
+            .parameters
+            .kafka_timeout_config
+            .fetch_metadata_timeout,
+    )
+    .await
+    .check_ssh_status(admin_client.inner().context())
+    .add_context("error registering kafka topic for sink")?;
 
-    let task_name = format!("get_latest_ts:{sink_id}");
-    task::spawn_blocking(|| task_name, move || {
-        let progress_topic = progress_topic.as_ref();
+    Ok(latest_ts)
+}
+
+#[derive(Serialize, Deserialize)]
+/// This struct is emitted as part of a transactional produce, and captures the information we
+/// need to resume the Kafka sink at the correct place in the sunk collection. (Currently, all
+/// we need is the timestamp... this is a record to make it easier to add more metadata in the
+/// future if needed.) It's encoded as JSON to make it easier to introspect while debugging, and
+/// because we expect it to remain small.
+///
+/// Unlike the old consistency topic, this is not intended to be a user-facing feature; it's there
+/// purely so the sink can maintain its transactional guarantees. Any future user-facing consistency
+/// information should be added elsewhere instead of overloading this record.
+pub struct ProgressRecord {
+    pub timestamp: Timestamp,
+}
+
+/// Determines the latest progress record from the specified topic for the given
+/// progress key.
+///
+/// IMPORTANT: to achieve exactly once guarantees, the producer that will resume
+/// production at the returned timestamp *must* have called `init_transactions`
+/// prior to calling this method.
+///
+/// IMPORTANT: the `progress_client` must have `enable.partition.eof` set to
+/// `true`.
+async fn determine_latest_progress_record(
+    name: String,
+    progress_client_read_committed: Arc<BaseConsumer<TunnelingClientContext<MzClientContext>>>,
+    progress_client_read_uncommitted: Arc<BaseConsumer<TunnelingClientContext<MzClientContext>>>,
+    progress_topic: String,
+    progress_key: ProgressKey,
+    fetch_timeout: Duration,
+) -> Result<Option<Timestamp>, anyhow::Error> {
+    // ****************************** WARNING ******************************
+    // Be VERY careful when editing the code in this function. It is very easy
+    // to accidentally introduce a correctness or liveness bug when refactoring
+    // this code.
+    // ****************************** WARNING ******************************
+
+    /// The timeout for reading records from the progress topic. Set to
+    /// something slightly longer than the idle transaction timeout (60s) to
+    /// wait out any stuck producers.
+    const PROGRESS_RECORD_FETCH_TIMEOUT: Duration = Duration::from_secs(90);
+
+    /// Retrieves the latest committed timestamp from the progress topic.
+    ///
+    /// Blocking so should always be called on background thread.
+    fn get_latest_ts<C>(
+        progress_client_read_committed: &BaseConsumer<C>,
+        progress_client_read_uncommitted: &BaseConsumer<C>,
+        progress_topic: &str,
+        progress_key: &ProgressKey,
+        fetch_timeout: Duration,
+    ) -> Result<Option<Timestamp>, anyhow::Error>
+    where
+        C: ConsumerContext,
+    {
         // Ensure the progress topic has exactly one partition. Kafka only
         // guarantees ordering within a single partition, and we need a strict
         // order on the progress messages we read and write.
         let partitions = match mz_kafka_util::client::get_partitions(
             progress_client_read_committed.client(),
             progress_topic,
-            fetch_metadata_timeout,
+            fetch_timeout,
         ) {
             Ok(partitions) => partitions,
             Err(GetPartitionsError::TopicDoesNotExist) => {
@@ -486,7 +555,7 @@ pub async fn determine_sink_resume_upper(
         //     unable to act on our stale information.
         //
         let (lo, hi) = progress_client_read_uncommitted
-            .fetch_watermarks(progress_topic, partition, fetch_metadata_timeout)
+            .fetch_watermarks(progress_topic, partition, fetch_timeout)
             .map_err(|e| {
                 anyhow!(
                     "Failed to fetch metadata while reading from progress topic: {}",
@@ -558,9 +627,9 @@ pub async fn determine_sink_resume_upper(
         // returning an error) if we have positive proof of a position at or
         // beyond the high water mark. To make this invariant easy to check, do
         // not use `break` in the body of the loop.
-        let mut last_upper = None;
+        let mut last_timestamp = None;
         while get_position()? < hi {
-            let message = match progress_client_read_committed.poll(progress_record_fetch_timeout) {
+            let message = match progress_client_read_committed.poll(PROGRESS_RECORD_FETCH_TIMEOUT) {
                 Some(Ok(message)) => message,
                 Some(Err(KafkaError::PartitionEOF(_))) => {
                     // No message, but the consumer's position may have advanced
@@ -583,65 +652,36 @@ pub async fn determine_sink_resume_upper(
                 continue;
             }
 
-            let Some(payload) = message.payload() else {
-                continue
-            };
-            let upper = match serde_json::from_slice::<ProgressRecord>(payload) {
-                Ok(progress) => Antichain::from(progress.frontier),
-                // If we fail to deserialize we might be reading a legacy progress record
-                Err(_) => match serde_json::from_slice::<LegacyProgressRecord>(payload) {
-                    Ok(legacy) => Antichain::from_elem(legacy.timestamp.step_forward()),
-                    Err(_) => match std::str::from_utf8(payload) {
-                        Ok(payload) => bail!("invalid progress record: {payload}"),
-                        Err(_) => bail!("invalid progress record bytes: {payload:?}"),
-                    },
-                },
-            };
-
-            match last_upper {
-                Some(last_upper) if !PartialOrder::less_equal(&last_upper, &upper) => {
+            let ProgressRecord { timestamp } =
+                serde_json::from_slice(message.payload().unwrap_or(&[]))?;
+            match last_timestamp {
+                Some(last_timestamp) if timestamp < last_timestamp => {
                     bail!(
-                        "upper regressed in topic {progress_topic}:{partition} \
-                        from {last_upper:?} to {upper:?}"
+                        "timestamp regressed in topic {progress_topic}:{partition} \
+                        from {last_timestamp} to {timestamp}"
                     );
                 }
-                _ => last_upper = Some(upper),
-            }
+                _ => last_timestamp = Some(timestamp),
+            };
         }
 
         // If we get here, we are assured that we've read all messages up to
         // the high water mark, and therefore `last_timestamp` contains the
         // most recent timestamp for the sink under consideration.
-        Ok(last_upper)
-    }).await.unwrap().check_ssh_status(&ctx)
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[mz_ore::test]
-    fn progress_record_migration() {
-        let empty_bytes = b"{}";
-        assert!(serde_json::from_slice::<ProgressRecord>(empty_bytes).is_err());
-        assert!(serde_json::from_slice::<LegacyProgressRecord>(empty_bytes).is_err());
-
-        let legacy_bytes = b"{\"timestamp\":1}";
-        assert!(serde_json::from_slice::<ProgressRecord>(legacy_bytes).is_err());
-        assert_eq!(
-            serde_json::from_slice::<LegacyProgressRecord>(legacy_bytes).unwrap(),
-            LegacyProgressRecord {
-                timestamp: 1.into()
-            }
-        );
-
-        let new_bytes = b"{\"frontier\":[1]}";
-        assert_eq!(
-            serde_json::from_slice::<ProgressRecord>(new_bytes).unwrap(),
-            ProgressRecord {
-                frontier: vec![1.into()]
-            }
-        );
-        assert!(serde_json::from_slice::<LegacyProgressRecord>(new_bytes).is_err());
+        Ok(last_timestamp)
     }
+
+    task::spawn_blocking(
+        || format!("get_latest_ts:{name}"),
+        move || {
+            get_latest_ts(
+                &progress_client_read_committed,
+                &progress_client_read_uncommitted,
+                &progress_topic,
+                &progress_key,
+                fetch_timeout,
+            )
+        },
+    )
+    .await?
 }

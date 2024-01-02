@@ -303,6 +303,7 @@ macro_rules! for_collections {
             }
             Usage::Storage => {
                 $macro!(storage::METADATA_COLLECTION);
+                $macro!(storage::METADATA_EXPORT);
             }
         }
     };

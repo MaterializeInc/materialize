@@ -2646,6 +2646,7 @@ fn kafka_sink_builder(
         connection: connection_id,
         format,
         topic: topic_name,
+        fuel: 10000,
         relation_key_indices,
         key_desc_and_indices,
         value_desc,
