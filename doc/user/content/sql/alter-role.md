@@ -22,7 +22,7 @@ _role_name_         | A name for the role.
 
 Field               | Use
 --------------------|-------------------------------------------------------------------------
-**INHERIT**         | Grants the role the ability to inheritance of privileges of other roles.
+**INHERIT**         | Grants the role the ability to inherit privileges of other roles.
 
 #### `alter_role_variables`
 
@@ -34,7 +34,7 @@ Field               | Use
 --------------------|-------------------------------------------------------------------------
 _variable_name_     | The name of the session variable to modify.
 _variable_value_    | The value to assign to the session variable.
-**DEFAULT**         | Reset the Role's value for this variable, to the system's default. Equivalent to `ALTER ROLE ... RESET`.
+**DEFAULT**         | Reset the value of the [session variable](/sql/show/#session-variables) for the specified role to the system's default. Equivalent to `ALTER ROLE ... RESET`.
 
 ## Details
 
@@ -55,12 +55,11 @@ privileges. See [GRANT PRIVILEGE](../grant-privilege) for more details.
 
 When RBAC is enabled a role must have the `CREATEROLE` system privilege to alter another role.
 
-Like PostgreSQL, when altering the variable for a Role only _new_ sessions will observe the default
-value. Also like PostgreSQL, Role variable defaults _do not get inherited_.
+Like PostgreSQL, altering the variable for a role only affects **new sessions**. Also like PostgreSQL, role variable defaults are **not inherited**.
 
 ## Examples
 
-#### Altering a Role's Attributes
+#### Altering the attributes of a role
 
 ```sql
 ALTER ROLE rj INHERIT;
@@ -72,7 +71,7 @@ SELECT name, inherit FROM mz_roles WHERE name = 'rj';
 rj  true
 ```
 
-#### Altering a Role's Variables
+#### Setting session variable defaults for a role
 
 ```sql
 SHOW cluster;
@@ -93,7 +92,7 @@ SHOW cluster;
 quickstart
 ```
 
-##### Non-inheritence
+##### Non-inheritance
 ```sql
 CREATE ROLE team;
 CREATE ROLE member;

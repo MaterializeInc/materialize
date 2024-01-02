@@ -1,14 +1,9 @@
 ## System variables
 
-Materialize reserves system variables for region-wide configuration. Although it's possible to
-`SHOW` system variables, you must [contact us](https://materialize.com/contact/) to set the value
-of most variables (e.g. increasing the maximum number of AWS PrivateLink connections in your
-region), but some system variables can be modified by any superuser (i.e. Frontegg admin).
+Materialize reserves system variables for region-wide configuration. You must [contact us](https://materialize.com/contact/) to set the value
+of _most_ variables to a different value than the provided default. System variables that can be modified by a _superuser_ (i.e. [`Organization Admin`](/manage/access-control/#role-based-access-control-rbac)) are marked as `Settable` below.
 
-A subset of [session variables](../set/#session-variables) can also have their region-wide default
-changed, using `ALTER SYSTEM SET`.
-
-Name                                        | Default value                                                         | Description                                                                                                            | Settable by superuser |
+Name                                        | Default value                                                         | Description                                                                                                            | Settable |
 --------------------------------------------|-----------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|-----------------------|
 allowed_cluster_replica_sizes               | `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`, `xlarge`  | The allowed sizes when creating a new cluster replica.                                                                 | No                    |
 enable_rbac_checks                          | `true`                                                                | Boolean flag indicating whether to apply RBAC checks before executing statements.                                      | Yes                   |

@@ -1,6 +1,6 @@
 ## Session variables
 
-Name                                        | Default value             |  Description                                                          | Override default with [`ALTER SYSTEM SET`](../alter-system-set)
+Name                                        | Default value             |  Description                                                          | [Settable](../alter-system-set)
 --------------------------------------------|---------------------------|-----------------------------------------------------------------------|--------------
 cluster                                     | `quickstart`              | The current cluster.                                                  | Yes
 cluster_replica                             |                           | The target cluster replica for `SELECT` queries.                      | Yes
@@ -10,7 +10,7 @@ transaction_isolation                       | `strict serializable`     | The tr
 
 #### Other session variables
 
-Name                                        | Default value             |  Description                                                                                                                                                           | Override default with [`ALTER SYSTEM SET`](../alter-system-set)
+Name                                        | Default value             |  Description                                                                                                                                                           | [Settable](../alter-system-set)
 --------------------------------------------|---------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------
 auto_route_introspection_queries            | `true`                    | Boolean flag indicating whether to force queries that depend only on system tables to run on the `mz_introspection` cluster for improved performance.                  | No
 application_name                            |                           | The application name to be reported in statistics and logs. This variable is typically set by an application upon connection to Materialize (e.g. `psql`).             | Yes
