@@ -29,7 +29,7 @@
 #     to ready-to-review.
 #   * The PR modifies the file 'test/sqllogictest/mz_introspection_index_accounting.slt',
 #     which is designed to detect new or modified mz_introspection indexes, OR
-#   * The PR changes the "is_retained_metrics_collection" field of any catalog object,
+#   * The PR changes the "is_retained_metrics..." field of any catalog object,
 #     as detected in the file 'src/catalog/src/builtin.rs'.
 
 name: Slack Mz Introspection Council Notifications
@@ -63,14 +63,14 @@ jobs:
         uses: actions/checkout@v4
       - name: "Check Retained Metric Changes"
         id: check-retain-metrics
-        if: steps.filter.outputs.builtin-rs = 'true'
+        if: steps.filter.outputs.builtin-rs == 'true'
         run: |
-          # Check for the text "is_retained_metrics_collection" modified in builtin.rs in the pull request
-          if git diff ${{ github.event.before }} ${{ github.sha }} "src/catalog/src/builtin.rs" | grep '^\+' | grep -i 'is_retained_metrics_collection'; then
+          # Check for the text "is_retained_metrics" modified in builtin.rs in the pull request
+          if git diff ${{ github.event.pull_request.base.sha }} -- 'src/catalog/src/builtin.rs' | grep -i 'is_retained_metrics'; then
             echo "changed=true" >> $GITHUB_OUTPUT
           fi
       - name: "Push to Slack"
-        if: steps.filter.outputs.index-slt = 'true' || steps.check-retain-metrics.outputs.changed == 'true'
+        if: steps.filter.outputs.index-slt == 'true' || steps.check-retain-metrics.outputs.changed == 'true'
         uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
         with:
           slack_token: ${{ secrets.SLACK_TOKEN }}
@@ -89,7 +89,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "• *PR:* <${{ github.event.pull_request.html_url }}|${{ github.event.pull_request.title }}>"
+                    "text": ${{ toJSON(format('• *PR:* <{0}|{1}>', github.event.pull_request.html_url, github.event.pull_request.title)) }}
                   }
                 },
                 {
