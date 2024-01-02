@@ -2095,7 +2095,7 @@ feature_flags!(
     {
         name: enable_role_vars,
         desc: "setting default session variables for a role",
-        default: false,
+        default: true,
         internal: true,
         enable_for_item_parsing: true,
     },
