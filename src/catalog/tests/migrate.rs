@@ -80,7 +80,8 @@ use mz_catalog::durable::objects::DurableType;
 use mz_catalog::durable::{
     migrate_from_stash_to_persist_state, persist_backed_catalog_state,
     rollback_from_persist_to_stash_state, stash_backed_catalog_state, test_bootstrap_args,
-    test_stash_config, Database, Metrics, OpenableDurableCatalogState, Role, TimelineTimestamp,
+    test_stash_config, CatalogError, Database, Metrics, OpenableDurableCatalogState, Role,
+    TimelineTimestamp,
 };
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NOW_ZERO;
@@ -1882,7 +1883,7 @@ async fn test_migration_panic_after_write_then_rollback() {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_savepoint() {
+async fn test_savepoint_persist_uninitialized() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
@@ -1948,6 +1949,31 @@ async fn test_savepoint() {
         database_key
     };
 
+    // Try to open a savepoint catalog using the migrate implementation.
+    {
+        let migrate_openable_state = Box::new(
+            migrate_from_stash_to_persist_state(
+                stash_config.clone(),
+                persist_client.clone(),
+                organization_id.clone(),
+                Arc::clone(&persist_metrics),
+            )
+            .await,
+        );
+        let open_err = migrate_openable_state
+            .open_savepoint(NOW_ZERO(), &test_bootstrap_args(), None)
+            .await
+            .unwrap_err();
+        let durable_err = match open_err {
+            CatalogError::Durable(e) => e,
+            CatalogError::Catalog(e) => panic!("unexpected err: {e:?}"),
+        };
+        assert!(
+            durable_err.can_recover_with_write_mode(),
+            "unexpected err: {durable_err:?}"
+        );
+    }
+
     // Open a writable catalog using the rollback implementation.
     {
         let rollback_openable_state = Box::new(
@@ -1966,6 +1992,132 @@ async fn test_savepoint() {
 
         // Check that the database no longer exists.
         let snapshot = stash_state.snapshot().await.unwrap();
+        let databases = snapshot.databases;
+        let database_value = databases.get(&database_key.into_proto());
+        assert_eq!(database_value, None);
+    }
+
+    debug_factory.drop().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_savepoint_stash_uninitialized() {
+    let (debug_factory, stash_config) = test_stash_config().await;
+    let persist_client = PersistClient::new_for_tests().await;
+    let organization_id = Uuid::new_v4();
+    let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+
+    // Initialize catalog only in persist.
+    {
+        let persist_openable_state = Box::new(
+            persist_backed_catalog_state(
+                persist_client.clone(),
+                organization_id.clone(),
+                Arc::clone(&persist_metrics),
+            )
+            .await,
+        );
+        let _persist_state = persist_openable_state
+            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .await
+            .unwrap();
+    }
+
+    // Open a savepoint catalog using the migrate implementation.
+    let database_key = {
+        let migrate_openable_state = Box::new(
+            migrate_from_stash_to_persist_state(
+                stash_config.clone(),
+                persist_client.clone(),
+                organization_id.clone(),
+                Arc::clone(&persist_metrics),
+            )
+            .await,
+        );
+        let mut persist_state = migrate_openable_state
+            .open_savepoint(NOW_ZERO(), &test_bootstrap_args(), None)
+            .await
+            .unwrap();
+
+        let mut database = Database {
+            // Temp placeholder.
+            id: DatabaseId::User(1),
+            name: "DB".to_string(),
+            owner_id: RoleId::User(1),
+            privileges: Vec::new(),
+        };
+
+        // Insert some database data.
+        let mut txn = persist_state.transaction().await.unwrap();
+        let database_id = txn
+            .insert_user_database(
+                &database.name,
+                database.owner_id.clone(),
+                database.privileges.clone(),
+            )
+            .unwrap();
+        database.id = database_id;
+        txn.commit().await.unwrap();
+        let database_key = database.clone().into_key_value().0;
+
+        // Check that the database can be read back.
+        let snapshot = persist_state.snapshot().await.unwrap();
+        let databases = snapshot.databases;
+        let database_value = databases
+            .get(&database_key.into_proto())
+            .expect("database should exist")
+            .clone();
+        let rolled_back_database =
+            Database::from_key_value(database_key.clone(), database_value.into_rust().unwrap());
+        assert_eq!(database, rolled_back_database);
+
+        database_key
+    };
+
+    // Try to open a savepoint catalog using the rollback implementation.
+    {
+        let rollback_openable_state = Box::new(
+            rollback_from_persist_to_stash_state(
+                stash_config.clone(),
+                persist_client.clone(),
+                organization_id.clone(),
+                Arc::clone(&persist_metrics),
+            )
+            .await,
+        );
+        let open_err = rollback_openable_state
+            .open_savepoint(NOW_ZERO(), &test_bootstrap_args(), None)
+            .await
+            .unwrap_err();
+        let durable_err = match open_err {
+            CatalogError::Durable(e) => e,
+            CatalogError::Catalog(e) => panic!("unexpected err: {e:?}"),
+        };
+        assert!(
+            durable_err.can_recover_with_write_mode(),
+            "unexpected err: {durable_err:?}"
+        );
+    }
+
+    // Open a writable catalog using the migrate implementation.
+    {
+        let migrate_openable_state = Box::new(
+            migrate_from_stash_to_persist_state(
+                stash_config.clone(),
+                persist_client.clone(),
+                organization_id.clone(),
+                Arc::clone(&persist_metrics),
+            )
+            .await,
+        );
+        let mut persist_state = migrate_openable_state
+            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .await
+            .unwrap();
+
+        // Check that the database no longer exists.
+        let snapshot = persist_state.snapshot().await.unwrap();
         let databases = snapshot.databases;
         let database_value = databases.get(&database_key.into_proto());
         assert_eq!(database_value, None);
