@@ -12,6 +12,7 @@
 use std::borrow::Cow;
 use std::fmt::Debug;
 
+use mz_ore::cast::CastFrom;
 use mz_persist_client::ShardId;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc};
@@ -37,9 +38,8 @@ pub struct StorageSinkDesc<S: StorageSinkDescFillState, T = mz_repr::Timestamp> 
     pub from: GlobalId,
     pub from_desc: RelationDesc,
     pub connection: StorageSinkConnection,
-    pub with_snapshot: bool,
     pub envelope: SinkEnvelope,
-    pub as_of: Antichain<T>,
+    pub as_of: SinkAsOf<T>,
     pub status_id: Option<<S as StorageSinkDescFillState>::StatusId>,
     pub from_storage_metadata: <S as StorageSinkDescFillState>::StorageMetadata,
 }
@@ -71,7 +71,6 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
             as_of: _,
             status_id,
             from_storage_metadata,
-            with_snapshot,
         } = self;
 
         let compatibility_checks = [
@@ -83,7 +82,6 @@ impl<S: Debug + StorageSinkDescFillState + PartialEq, T: Debug + PartialEq + Par
             ),
             (envelope == &other.envelope, "envelope"),
             (status_id == &other.status_id, "status_id"),
-            (with_snapshot == &other.with_snapshot, "with_snapshot"),
             (
                 from_storage_metadata == &other.from_storage_metadata,
                 "from_storage_metadata",
@@ -135,10 +133,9 @@ impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
             any::<RelationDesc>(),
             any::<StorageSinkConnection>(),
             any::<SinkEnvelope>(),
-            any::<Option<mz_repr::Timestamp>>(),
+            any::<SinkAsOf<mz_repr::Timestamp>>(),
             any::<Option<ShardId>>(),
             any::<CollectionMetadata>(),
-            any::<bool>(),
         )
             .prop_map(
                 |(
@@ -149,17 +146,15 @@ impl Arbitrary for StorageSinkDesc<MetadataFilled, mz_repr::Timestamp> {
                     as_of,
                     status_id,
                     from_storage_metadata,
-                    with_snapshot,
                 )| {
                     StorageSinkDesc {
                         from,
                         from_desc,
                         connection,
                         envelope,
-                        as_of: Antichain::from_iter(as_of),
+                        as_of,
                         status_id,
                         from_storage_metadata,
-                        with_snapshot,
                     }
                 },
             )
@@ -177,7 +172,6 @@ impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<MetadataFilled, mz_repr:
             as_of: Some(self.as_of.into_proto()),
             status_id: self.status_id.into_proto(),
             from_storage_metadata: Some(self.from_storage_metadata.into_proto()),
-            with_snapshot: self.with_snapshot,
         }
     }
 
@@ -200,7 +194,6 @@ impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<MetadataFilled, mz_repr:
             from_storage_metadata: proto
                 .from_storage_metadata
                 .into_rust_if_some("ProtoStorageSinkDesc::from_storage_metadata")?,
-            with_snapshot: proto.with_snapshot,
         })
     }
 }
@@ -230,6 +223,60 @@ impl RustType<ProtoSinkEnvelope> for SinkEnvelope {
         Ok(match kind {
             Kind::Debezium(()) => SinkEnvelope::Debezium,
             Kind::Upsert(()) => SinkEnvelope::Upsert,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SinkAsOf<T = mz_repr::Timestamp> {
+    pub frontier: Antichain<T>,
+    pub strict: bool,
+}
+
+impl<T: PartialOrder + Clone> SinkAsOf<T> {
+    /// Forwards the since frontier of this `SinkAsOf`. If it is already
+    /// sufficiently far advanced the downgrade is a no-op.
+    pub fn downgrade(&mut self, other_since: &Antichain<T>) {
+        if PartialOrder::less_than(&self.frontier, other_since) {
+            // TODO(aljoscha): Should this be meet_assign?
+            self.frontier.clone_from(other_since);
+            // If we're using the since, never read the snapshot
+            self.strict = true;
+        }
+    }
+}
+
+impl Arbitrary for SinkAsOf<mz_repr::Timestamp> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4),
+            any::<bool>(),
+        )
+            .prop_map(|(frontier, strict)| SinkAsOf {
+                frontier: Antichain::from(frontier),
+                strict,
+            })
+            .boxed()
+    }
+}
+
+impl RustType<ProtoSinkAsOf> for SinkAsOf<mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoSinkAsOf {
+        ProtoSinkAsOf {
+            frontier: Some(self.frontier.into_proto()),
+            strict: self.strict,
+        }
+    }
+
+    fn from_proto(proto: ProtoSinkAsOf) -> Result<Self, TryFromProtoError> {
+        Ok(SinkAsOf {
+            frontier: proto
+                .frontier
+                .into_rust_if_some("ProtoSinkAsOf::frontier")?,
+            strict: proto.strict,
         })
     }
 }
@@ -383,6 +430,7 @@ pub struct KafkaSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     pub value_desc: RelationDesc,
     pub topic: String,
+    pub fuel: usize,
     pub compression_type: KafkaSinkCompressionType,
     pub progress_group_id: KafkaIdStyle,
     pub transactional_id: KafkaIdStyle,
@@ -468,6 +516,7 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             key_desc_and_indices,
             value_desc,
             topic,
+            fuel,
             compression_type,
             progress_group_id,
             transactional_id,
@@ -486,6 +535,7 @@ impl<C: ConnectionAccess> KafkaSinkConnection<C> {
             ),
             (value_desc == &other.value_desc, "value_desc"),
             (topic == &other.topic, "topic"),
+            (fuel == &other.fuel, "fuel"),
             (
                 compression_type == &other.compression_type,
                 "compression_type",
@@ -527,6 +577,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             key_desc_and_indices,
             value_desc,
             topic,
+            fuel,
             compression_type,
             progress_group_id,
             transactional_id,
@@ -539,6 +590,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkConnection, R>
             key_desc_and_indices,
             value_desc,
             topic,
+            fuel,
             compression_type,
             progress_group_id,
             transactional_id,
@@ -593,6 +645,7 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
             relation_key_indices: self.relation_key_indices.into_proto(),
             value_desc: Some(self.value_desc.into_proto()),
             topic: self.topic.clone(),
+            fuel: u64::cast_from(self.fuel),
             compression_type: Some(match self.compression_type {
                 KafkaSinkCompressionType::None => CompressionType::None(()),
                 KafkaSinkCompressionType::Gzip => CompressionType::Gzip(()),
@@ -623,6 +676,7 @@ impl RustType<ProtoKafkaSinkConnectionV2> for KafkaSinkConnection {
                 .value_desc
                 .into_rust_if_some("ProtoKafkaSinkConnectionV2::value_desc")?,
             topic: proto.topic,
+            fuel: proto.fuel.into_rust()?,
             compression_type: match proto.compression_type {
                 Some(CompressionType::None(())) => KafkaSinkCompressionType::None,
                 Some(CompressionType::Gzip(())) => KafkaSinkCompressionType::Gzip,
