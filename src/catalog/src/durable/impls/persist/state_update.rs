@@ -576,6 +576,7 @@ pub(crate) struct StateUpdateKindRaw(Jsonb);
 impl From<StateUpdateKind> for StateUpdateKindRaw {
     fn from(value: StateUpdateKind) -> Self {
         let kind = value.into_proto();
+        let kind = kind.kind.expect("kind should be set");
         StateUpdateKindRaw::from_serde(&kind)
     }
 }
@@ -584,7 +585,8 @@ impl TryFrom<StateUpdateKindRaw> for StateUpdateKind {
     type Error = String;
 
     fn try_from(value: StateUpdateKindRaw) -> Result<Self, Self::Error> {
-        let kind = StateUpdateKindRaw(value.0).to_serde();
+        let kind: proto::state_update_kind::Kind = StateUpdateKindRaw(value.0).to_serde();
+        let kind = proto::StateUpdateKind { kind: Some(kind) };
         StateUpdateKind::from_proto(kind).map_err(|err| err.to_string())
     }
 }
