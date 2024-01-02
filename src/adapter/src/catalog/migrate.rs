@@ -335,7 +335,16 @@ fn persist_default_cluster_0_82_0(
     _conn_catalog: &ConnCatalog<'_>,
     _connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
-    txn.upsert_system_config("cluster", "default".to_string())?;
+    const CLUSTER_KEY: &str = "cluster";
+
+    // Only update the default cluster, if a user hasn't already overriden it.
+    let already_set = txn
+        .get_system_configurations()
+        .any(|config| config.name == CLUSTER_KEY);
+    if !already_set {
+        txn.upsert_system_config(CLUSTER_KEY, "default".to_string())?;
+    }
+
     Ok(())
 }
 
