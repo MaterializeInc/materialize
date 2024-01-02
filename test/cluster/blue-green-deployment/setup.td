@@ -19,11 +19,11 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
   COMPUTE ADDRESSES ['clusterd1:2102'],
   WORKERS 1))
 > CREATE CLUSTER prod_deploy REPLICAS (replica1 (
-  STORAGECTL ADDRESSES ['clusterd2:2100'],
-  STORAGE ADDRESSES ['clusterd2:2103'],
-  COMPUTECTL ADDRESSES ['clusterd2:2101'],
-  COMPUTE ADDRESSES ['clusterd2:2102'],
-  WORKERS 1))
+  STORAGECTL ADDRESSES ['clusterd2:2100', 'clusterd3:2100'],
+  STORAGE ADDRESSES ['clusterd2:2103', 'clusterd3:2103'],
+  COMPUTECTL ADDRESSES ['clusterd2:2101', 'clusterd3:2101'],
+  COMPUTE ADDRESSES ['clusterd2:2102', 'clusterd3:2102'],
+  WORKERS 2))
 > DROP SCHEMA IF EXISTS prod CASCADE
 > DROP SCHEMA IF EXISTS prod_deploy CASCADE
 
@@ -47,7 +47,8 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
     avg(l_quantity) AS avg_qty,
     avg(l_extendedprice) AS avg_price,
     avg(l_discount) AS avg_disc,
-    count(*) AS count_order
+    count(*) AS count_order,
+    'old' as state
   FROM
     prod.lineitem
   WHERE
@@ -93,3 +94,6 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
         SELECT id FROM ready_dataflows
     )
   SELECT * FROM pending_dataflows
+
+> SELECT state FROM prod.tpch_mv LIMIT 1
+old

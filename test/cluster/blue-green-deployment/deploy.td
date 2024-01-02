@@ -28,7 +28,8 @@
     avg(l_quantity) AS avg_qty,
     avg(l_extendedprice) AS avg_price,
     avg(l_discount) AS avg_disc,
-    count(*) AS count_order
+    count(*) AS count_order,
+    'new' as state
   FROM
     prod_deploy.lineitem
   WHERE
@@ -86,3 +87,6 @@
 
 > DROP CLUSTER prod_deploy CASCADE
 > DROP SCHEMA prod_deploy CASCADE
+
+> SELECT state FROM prod.tpch_mv LIMIT 1
+new

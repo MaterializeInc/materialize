@@ -3022,12 +3022,13 @@ def workflow_blue_green_deployment(
         c.up("materialized")
         c.up("clusterd1")
         c.up("clusterd2")
+        c.up("clusterd3")
         c.run("testdrive", "blue-green-deployment/setup.td")
 
         threads = [PropagatingThread(target=fn) for fn in (selects, subscribe)]
         for thread in threads:
             thread.start()
-        time.sleep(3)  # some time to make sure the queries run fine
+        time.sleep(10)  # some time to make sure the queries run fine
         try:
             c.run("testdrive", "blue-green-deployment/deploy.td")
         finally:
