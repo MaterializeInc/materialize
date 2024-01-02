@@ -414,7 +414,17 @@ SELECT col FROM (SELECT 1 AS col) t WHERE col = ANY(VALUES (1))
 1
 
 query I
+SELECT col FROM (SELECT 1 AS col) t WHERE col = ANY((VALUES (1)))
+----
+1
+
+query I
 SELECT col FROM (SELECT 1 AS col) t WHERE col IN(VALUES(1))
+----
+1
+
+query I
+SELECT col FROM (SELECT 1 AS col) t WHERE col IN(((VALUES(1))))
 ----
 1
 
