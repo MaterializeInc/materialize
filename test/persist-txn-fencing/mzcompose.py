@@ -151,6 +151,8 @@ def run_workload(c: Composition, workload: Workload) -> None:
                 additional_system_parameter_defaults={
                     "persist_txn_tables": mzs[mz_name]
                 },
+                # Shadow catalog can't gracefully handle fences.
+                catalog_store="stash",
             )
             for mz_name in mzs
         ]
