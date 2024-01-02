@@ -631,6 +631,7 @@ impl CatalogState {
                         "aws-privatelink"
                     }
                     mz_storage_types::connections::Connection::Ssh { .. } => "ssh-tunnel",
+                    mz_storage_types::connections::Connection::MySql { .. } => "mysql",
                 }),
                 Datum::String(&owner_id.to_string()),
                 privileges,
@@ -676,7 +677,8 @@ impl CatalogState {
                 }
             }
             mz_storage_types::connections::Connection::Csr(_)
-            | mz_storage_types::connections::Connection::Postgres(_) => (),
+            | mz_storage_types::connections::Connection::Postgres(_)
+            | mz_storage_types::connections::Connection::MySql(_) => (),
         };
         updates
     }
@@ -754,18 +756,29 @@ impl CatalogState {
 
         let mut access_key_id = None;
         let mut access_key_id_secret_id = None;
+        let mut secret_access_key_secret_id = None;
+        let mut session_token = None;
+        let mut session_token_secret_id = None;
         let mut assume_role_arn = None;
         let mut assume_role_session_name = None;
         let mut principal = None;
         let mut external_id = None;
         let mut example_trust_policy = None;
         match &aws_config.auth {
-            AwsAuth::Credentials(credentials) => match &credentials.access_key_id {
-                StringOrSecret::String(access_key) => access_key_id = Some(access_key.as_str()),
-                StringOrSecret::Secret(secret_id) => {
-                    access_key_id_secret_id = Some(secret_id.to_string())
+            AwsAuth::Credentials(credentials) => {
+                match &credentials.access_key_id {
+                    StringOrSecret::String(s) => access_key_id = Some(s.as_str()),
+                    StringOrSecret::Secret(s) => access_key_id_secret_id = Some(s.to_string()),
                 }
-            },
+                secret_access_key_secret_id = Some(credentials.secret_access_key.to_string());
+                match credentials.session_token.as_ref() {
+                    None => (),
+                    Some(StringOrSecret::String(s)) => session_token = Some(s.as_str()),
+                    Some(StringOrSecret::Secret(s)) => {
+                        session_token_secret_id = Some(s.to_string())
+                    }
+                }
+            }
             AwsAuth::AssumeRole(assume_role) => {
                 assume_role_arn = Some(assume_role.arn.as_str());
                 assume_role_session_name = assume_role.session_name.as_deref();
@@ -791,6 +804,9 @@ impl CatalogState {
             Datum::from(aws_config.region.as_deref()),
             Datum::from(access_key_id),
             Datum::from(access_key_id_secret_id.as_deref()),
+            Datum::from(secret_access_key_secret_id.as_deref()),
+            Datum::from(session_token),
+            Datum::from(session_token_secret_id.as_deref()),
             Datum::from(assume_role_arn),
             Datum::from(assume_role_session_name),
             Datum::from(principal),

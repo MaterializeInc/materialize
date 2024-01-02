@@ -195,6 +195,18 @@ fn main() -> anyhow::Result<()> {
     // 'as' is okay here because we're using it to define the type of the empty slice, which is
     // necessary since the method takes the slice as a generic arg.
     #[allow(clippy::as_conversions)]
+    // DO NOT change how JSON serialization works for these objects. The catalog relies on the JSON
+    // serialization of these objects remaining stable for a specific objects_vX version. If you
+    // want to change the JSON serialization format then follow these steps:
+    //
+    //   1. Create a new version of the `objects.proto` file.
+    //   2. Update the path of .proto files given to this compile block so that it is only the
+    //      previous .proto files.
+    //   3. Add a new `prost_build::Config::new()...compile_protos(...)` block that only compiles
+    //      the new and all future .proto files with the changed JSON serialization.
+    //
+    // Once we delete all the `.proto` that use the old JSON serialization, then we can delete
+    // the compile block for them as well.
     prost_build::Config::new()
         .btree_map(["."])
         .bytes(["."])

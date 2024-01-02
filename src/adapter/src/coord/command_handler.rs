@@ -472,14 +472,6 @@ impl Coordinator {
                         "DECLARE CURSOR".into(),
                     )));
                 }
-
-                // TODO(mjibson): The current code causes DDL statements (well, any statement
-                // that doesn't call `add_transaction_ops`) to execute outside of the extended
-                // protocol transaction. For example, executing in extended a SELECT, then
-                // CREATE, then SELECT, followed by a Sync would register the transaction
-                // as read only in the first SELECT, then the CREATE ignores the transaction
-                // ops, and the last SELECT will use the timestamp from the first. This isn't
-                // correct, but this is an edge case that we can fix later.
             }
 
             // Implicit or explicit transactions.

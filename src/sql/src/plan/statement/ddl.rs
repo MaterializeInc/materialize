@@ -52,12 +52,17 @@ use mz_storage_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
     ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
 };
-use mz_storage_types::sources::{
-    GenericSourceConnection, KafkaMetadataKind, KafkaSourceConnection, KeyEnvelope, LoadGenerator,
-    LoadGeneratorSourceConnection, PostgresSourceConnection, PostgresSourcePublicationDetails,
-    ProtoPostgresSourcePublicationDetails, SourceConnection, SourceDesc, SourceEnvelope,
-    TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
+use mz_storage_types::sources::envelope::{
+    KeyEnvelope, SourceEnvelope, UnplannedSourceEnvelope, UpsertStyle,
 };
+use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
+use mz_storage_types::sources::load_generator::{LoadGenerator, LoadGeneratorSourceConnection};
+use mz_storage_types::sources::postgres::{
+    PostgresSourceConnection, PostgresSourcePublicationDetails,
+    ProtoPostgresSourcePublicationDetails,
+};
+use mz_storage_types::sources::testscript::TestScriptSourceConnection;
+use mz_storage_types::sources::{GenericSourceConnection, SourceConnection, SourceDesc, Timeline};
 use prost::Message;
 
 use crate::ast::display::AstDisplay;
@@ -1611,7 +1616,11 @@ fn source_sink_cluster_config(
     match (in_cluster, size) {
         (None, None) => Ok(SourceSinkClusterConfig::Undefined),
         (Some(in_cluster), None) => {
-            ensure_cluster_can_host_storage_item(scx, in_cluster.id, ty)?;
+            let cluster = scx.catalog.get_cluster(in_cluster.id);
+            // At most 1 replica
+            if cluster.replica_ids().len() > 1 {
+                sql_bail!("cannot create {ty} in cluster with more than one replica")
+            }
 
             // We also don't allow more objects to be added to a cluster that is already
             // linked to another object.
@@ -3417,6 +3426,8 @@ pub fn plan_create_connection(
     let connection = connection_options_extracted.try_into_connection(scx, connection_type)?;
     if let Connection::Aws(_) = &connection {
         scx.require_feature_flag(&vars::ENABLE_AWS_CONNECTION)?;
+    } else if let Connection::MySql(_) = &connection {
+        scx.require_feature_flag(&vars::ENABLE_MYSQL_SOURCE)?;
     }
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
 
@@ -3629,31 +3640,6 @@ fn is_storage_cluster(scx: &StatementContext, cluster: &dyn CatalogCluster) -> b
             CatalogItemType::Source | CatalogItemType::Sink
         )
     })
-}
-
-/// Check that the cluster can host storage items.
-fn ensure_cluster_can_host_storage_item(
-    scx: &StatementContext,
-    cluster_id: ClusterId,
-    ty: &'static str,
-) -> Result<(), PlanError> {
-    let cluster = scx.catalog.get_cluster(cluster_id);
-    // At most 1 replica
-    if cluster.replica_ids().len() > 1 {
-        sql_bail!("cannot create {ty} in cluster with more than one replica")
-    }
-    let enable_unified_cluster = scx.catalog.system_vars().enable_unified_clusters();
-    let only_storage_objects = cluster.bound_objects().iter().all(|id| {
-        matches!(
-            scx.catalog.get_item(id).item_type(),
-            CatalogItemType::Source | CatalogItemType::Sink
-        )
-    });
-    // unified clusters or only storage objects on cluster
-    if !enable_unified_cluster && !only_storage_objects {
-        sql_bail!("cannot create {ty} in cluster containing indexes or materialized views");
-    }
-    Ok(())
 }
 
 fn plan_drop_cluster_replica(
@@ -4858,6 +4844,7 @@ pub fn plan_alter_connection(
         Connection::Csr(_) => CreateConnectionType::Csr,
         Connection::Postgres(_) => CreateConnectionType::Postgres,
         Connection::Ssh(_) => CreateConnectionType::Ssh,
+        Connection::MySql(_) => CreateConnectionType::MySql,
     };
 
     // Collect all options irrespective of action taken on them.

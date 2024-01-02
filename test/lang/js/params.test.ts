@@ -8,6 +8,8 @@
 // by the Apache License, Version 2.0.
 
 import { Client } from "pg";
+import QueryStream = require("pg-query-stream");
+const { pipeline } = require("node:stream/promises");
 
 const client = new Client({
   port: parseInt(process.env.PGPORT, 10) || 6875,
@@ -88,5 +90,40 @@ describe("query api", () => {
         }),
       );
     });
+  });
+});
+
+describe("query stream api", () => {
+  it("should work for result sets that fit in a single batch", async () => {
+    const queryStream = new QueryStream("SELECT generate_series(1, 2) v", [], {
+      batchSize: 3,
+    });
+
+    const rows = [];
+    for await (const row of client.query(queryStream)) {
+      rows.push(row);
+    }
+
+    expect(rows).toEqual([{ v: 1 }, { v: 2 }]);
+  });
+
+  it("should work for result sets that require multiple batches", async () => {
+    const queryStream = new QueryStream("SELECT generate_series(1, 6) v", [], {
+      batchSize: 3,
+    });
+
+    const rows = [];
+    for await (const row of client.query(queryStream)) {
+      rows.push(row);
+    }
+
+    expect(rows).toEqual([
+      { v: 1 },
+      { v: 2 },
+      { v: 3 },
+      { v: 4 },
+      { v: 5 },
+      { v: 6 },
+    ]);
   });
 });

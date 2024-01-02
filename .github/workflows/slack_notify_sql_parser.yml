@@ -56,12 +56,6 @@ jobs:
               - 'src/sql-lexer/**'
             system-catalog:
               - 'src/catalog/src/builtin.rs'
-      - name: "Escape PR title"
-        id: escape-title
-        run: |
-          PR_TITLE='${{ github.event.pull_request.title }}'
-          ESCAPED_PR_TITLE=$(echo $PR_TITLE | sed 's/"/\\"/g')
-          echo "title=$ESCAPED_PR_TITLE" >> $GITHUB_OUTPUT
       - name: "Push to Slack"
         if: steps.filter.outputs.sql-parser == 'true' || steps.filter.outputs.system-catalog == 'true'
         uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
@@ -82,7 +76,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "• *PR:* <${{ github.event.pull_request.html_url }}|${{ steps.escape-title.outputs.title }}>"
+                    "text": ${{ toJSON(format('• *PR:* <{0}|{1}>', github.event.pull_request.html_url, github.event.pull_request.title)) }}
                   }
                 },
                 {

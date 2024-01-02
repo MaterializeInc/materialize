@@ -100,7 +100,7 @@ use mz_catalog::durable::debug::{
     SystemPrivilegeCollection, TimestampCollection, Trace,
 };
 use mz_catalog::durable::{
-    persist_backed_catalog_state, stash_backed_catalog_state, BootstrapArgs, CatalogKind,
+    persist_backed_catalog_state, stash_backed_catalog_state, BootstrapArgs,
     OpenableDurableCatalogState, StashConfig,
 };
 use mz_ore::cli::{self, CliConfig};
@@ -113,7 +113,7 @@ use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::PersistLocation;
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::session::vars::ConnectionCounter;
+use mz_sql::session::vars::{CatalogKind, ConnectionCounter};
 use mz_stash::StashFactory;
 use mz_storage_types::connections::ConnectionContext;
 use once_cell::sync::Lazy;

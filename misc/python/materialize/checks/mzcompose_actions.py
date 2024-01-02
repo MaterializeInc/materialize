@@ -36,67 +36,80 @@ class StartMz(MzcomposeAction):
         tag: MzVersion | None = None,
         environment_extra: list[str] = [],
         system_parameter_defaults: dict[str, str] | None = None,
+        additional_system_parameter_defaults: dict[str, str] = {},
+        mz_service: str | None = None,
     ) -> None:
         self.tag = tag
         self.environment_extra = environment_extra
         self.system_parameter_defaults = system_parameter_defaults
+        self.additional_system_parameter_defaults = additional_system_parameter_defaults
         self.catalog_store = (
             "shadow"
             if scenario.base_version() >= MzVersion.parse_mz("v0.81.0-dev")
             else "stash"
         )
+        self.mz_service = mz_service
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
         image = f"materialize/materialized:{self.tag}" if self.tag is not None else None
-        print(f"Starting Mz using image {image}")
+        print(f"Starting Mz using image {image}, mz_service {self.mz_service}")
 
         # Before #22790, this parameter needs to be set to False to avoid a panic
         # Importantly, the environmentd must boot with the flag set to False, so we have to set it here
         # By the time ConfigureMz() arrives to run ALTER SYSTEM SET, it is already too late
         # to disable it, as problematic introspection dataflows have been created already
-        additional_system_parameter_defaults = (
-            {"enable_specialized_arrangements": "false"} if self.tag else None
-        )
+        if (
+            self.tag
+            and "enable_specialized_arrangements"
+            not in self.additional_system_parameter_defaults
+        ):
+            self.additional_system_parameter_defaults[
+                "enable_specialized_arrangements"
+            ] = "false"
 
         mz = Materialized(
+            name=self.mz_service,
             image=image,
             external_cockroach=True,
             external_minio=True,
             environment_extra=self.environment_extra,
             system_parameter_defaults=self.system_parameter_defaults,
-            additional_system_parameter_defaults=additional_system_parameter_defaults,
+            additional_system_parameter_defaults=self.additional_system_parameter_defaults,
             sanity_restart=False,
             catalog_store=self.catalog_store,
         )
 
         with c.override(mz):
-            c.up("materialized")
+            c.up("materialized" if self.mz_service is None else self.mz_service)
 
-        # This should live in ssh.py and alter_connection.py, but accessing the
-        # ssh bastion host from inside a check is not possible currently.
-        for i in range(4):
-            ssh_tunnel_name = f"ssh_tunnel_{i}"
-            setup_default_ssh_test_connection(c, ssh_tunnel_name)
+            # This should live in ssh.py and alter_connection.py, but accessing the
+            # ssh bastion host from inside a check is not possible currently.
+            for i in range(4):
+                ssh_tunnel_name = f"ssh_tunnel_{i}"
+                setup_default_ssh_test_connection(
+                    c, ssh_tunnel_name, mz_service=self.mz_service
+                )
 
-        mz_version = MzVersion.parse_mz(c.query_mz_version())
-        if self.tag:
-            assert (
-                self.tag == mz_version
-            ), f"Materialize version mismatch, expected {self.tag}, but got {mz_version}"
-        else:
-            version_cargo = MzVersion.parse_cargo()
-            assert (
-                version_cargo == mz_version
-            ), f"Materialize version mismatch, expected {version_cargo}, but got {mz_version}"
+            mz_version = MzVersion.parse_mz(c.query_mz_version(service=self.mz_service))
+            if self.tag:
+                assert (
+                    self.tag == mz_version
+                ), f"Materialize version mismatch, expected {self.tag}, but got {mz_version}"
+            else:
+                version_cargo = MzVersion.parse_cargo()
+                assert (
+                    version_cargo == mz_version
+                ), f"Materialize version mismatch, expected {version_cargo}, but got {mz_version}"
 
-        e.current_mz_version = mz_version
+            e.current_mz_version = mz_version
 
 
 class ConfigureMz(MzcomposeAction):
-    def __init__(self, scenario: "Scenario") -> None:
+    def __init__(self, scenario: "Scenario", mz_service: str | None = None) -> None:
         self.handle: Any | None = None
+        self.mz_service = mz_service
 
     def execute(self, e: Executor) -> None:
         input = dedent(
@@ -183,7 +196,7 @@ class ConfigureMz(MzcomposeAction):
             """
         )
 
-        self.handle = e.testdrive(input=input)
+        self.handle = e.testdrive(input=input, mz_service=self.mz_service)
         e.system_settings.update(system_settings)
 
     def join(self, e: Executor) -> None:
@@ -191,9 +204,20 @@ class ConfigureMz(MzcomposeAction):
 
 
 class KillMz(MzcomposeAction):
+    def __init__(self, mz_service: str = "materialized") -> None:
+        self.mz_service = mz_service
+
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
-        c.kill("materialized")
+
+        with c.override(Materialized(name=self.mz_service)):
+            c.kill(self.mz_service, wait=True)
+
+
+class Down(MzcomposeAction):
+    def execute(self, e: Executor) -> None:
+        c = e.mzcompose_composition()
+        c.down()
 
 
 class UseClusterdCompute(MzcomposeAction):

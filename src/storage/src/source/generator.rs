@@ -13,9 +13,10 @@ use std::time::Duration;
 use differential_dataflow::{AsCollection, Collection};
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Diff, Row};
-use mz_storage_types::sources::{
-    Generator, LoadGenerator, LoadGeneratorSourceConnection, MzOffset, SourceTimestamp,
+use mz_storage_types::sources::load_generator::{
+    Generator, LoadGenerator, LoadGeneratorSourceConnection,
 };
+use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use timely::dataflow::operators::to_stream::Event;
 use timely::dataflow::operators::ToStream;

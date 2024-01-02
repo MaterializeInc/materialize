@@ -18,7 +18,7 @@ class Privileges(Check):
     def _create_objects(self, i: int, expensive: bool = False) -> str:
         s = dedent(
             f"""
-            $ postgres-execute connection=postgres://materialize@materialized:6875/materialize
+            $ postgres-execute connection=postgres://materialize@${{testdrive.materialize-sql-addr}}
             CREATE DATABASE privilege_db{i}
             CREATE SCHEMA privilege_schema{i}
             CREATE CONNECTION privilege_kafka_conn{i} FOR KAFKA {self._kafka_broker()}
@@ -45,7 +45,7 @@ class Privileges(Check):
     def _grant_privileges(self, role: str, i: int, expensive: bool = False) -> str:
         s = dedent(
             f"""
-            $ postgres-execute connection=postgres://materialize@materialized:6875/materialize
+            $ postgres-execute connection=postgres://materialize@${{testdrive.materialize-sql-addr}}
             GRANT ALL PRIVILEGES ON DATABASE privilege_db{i} TO {role}
             GRANT ALL PRIVILEGES ON SCHEMA privilege_schema{i} TO {role}
             GRANT ALL PRIVILEGES ON CONNECTION privilege_kafka_conn{i} TO {role}
@@ -70,7 +70,7 @@ class Privileges(Check):
     def _revoke_privileges(self, role: str, i: int, expensive: bool = False) -> str:
         s = dedent(
             f"""
-                $ postgres-execute connection=postgres://materialize@materialized:6875/materialize
+                $ postgres-execute connection=postgres://materialize@${{testdrive.materialize-sql-addr}}
                 REVOKE ALL PRIVILEGES ON DATABASE privilege_db{i} FROM {role}
                 REVOKE ALL PRIVILEGES ON SCHEMA privilege_schema{i} FROM {role}
                 REVOKE ALL PRIVILEGES ON CONNECTION privilege_kafka_conn{i} FROM {role}
@@ -116,7 +116,7 @@ class Privileges(Check):
             f"DROP DATABASE privilege_db{i}",
         ]
         return (
-            "$ postgres-execute connection=postgres://materialize@materialized:6875/materialize\n"
+            "$ postgres-execute connection=postgres://materialize@${testdrive.materialize-sql-addr}/materialize\n"
             + "\n".join(cmds)
             + "\n"
         )
@@ -129,10 +129,10 @@ class Privileges(Check):
         return Testdrive(
             dedent(
                 """
-                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT CREATEROLE ON SYSTEM TO materialize
 
-                $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version<5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 ALTER ROLE materialize CREATEROLE
 
                 > CREATE ROLE role_1
@@ -150,10 +150,10 @@ class Privileges(Check):
             for s in [
                 dedent(
                     """
-                    $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                     GRANT CREATEROLE ON SYSTEM TO materialize
 
-                    $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    $[version<5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                     ALTER ROLE materialize CREATEROLE
                     """
                 )
@@ -163,10 +163,10 @@ class Privileges(Check):
                 + self._grant_privileges("role_2", 2),
                 dedent(
                     """
-                    $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                     GRANT CREATEROLE ON SYSTEM TO materialize
 
-                    $[version<5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                    $[version<5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                     ALTER ROLE materialize CREATEROLE
                     """
                 )

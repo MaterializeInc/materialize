@@ -1130,8 +1130,9 @@ class UnionsNested(Generator):
 class CaseWhen(Generator):
     # Originally this was working with 1000, but after moving lowering and
     # decorrelation from the `plan_~` to the `sequence_~` method we had to
-    # reduce it a bit in order to avoid overflowing the stack.
-    COUNT = 950
+    # reduce it a bit in order to avoid overflowing the stack. See 24076 for
+    # the latest occurence of this.
+    COUNT = 700
 
     @classmethod
     def body(cls) -> None:

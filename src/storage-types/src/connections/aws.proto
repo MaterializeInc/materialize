@@ -11,8 +11,6 @@
 
 syntax = "proto3";
 
-import "google/protobuf/empty.proto";
-
 import "repr/src/global_id.proto";
 import "storage-types/src/connections.proto";
 

@@ -9,10 +9,8 @@
 
 //! Timely operators for the crate
 
-use std::any::Any;
 use std::fmt::Debug;
 use std::future::Future;
-use std::rc::Rc;
 use std::sync::mpsc::TryRecvError;
 use std::sync::{mpsc, Arc};
 
@@ -483,7 +481,7 @@ pub struct DataSubscribe {
     capture: mpsc::Receiver<EventCore<u64, Vec<(String, u64, i64)>>>,
     output: Vec<(String, u64, i64)>,
 
-    _tokens: Rc<dyn Any>,
+    _tokens: Vec<PressOnDropButton>,
 }
 
 impl std::fmt::Debug for DataSubscribe {
@@ -546,7 +544,7 @@ impl DataSubscribe {
                 })
             });
             let data_stream = data_stream.probe_with(&mut data);
-            let (data_stream, txns_progress_token) =
+            let (data_stream, mut txns_progress_token) =
                 txns_progress::<String, (), u64, i64, _, TxnsCodecDefault, _, _>(
                     data_stream,
                     name,
@@ -558,7 +556,8 @@ impl DataSubscribe {
                     Arc::new(UnitSchema),
                 );
             let data_stream = data_stream.probe_with(&mut txns);
-            let tokens: Rc<dyn Any> = Rc::new((shard_source_token, txns_progress_token));
+            let mut tokens = shard_source_token;
+            tokens.append(&mut txns_progress_token);
             (data, txns, data_stream.capture(), tokens)
         });
         Self {

@@ -35,6 +35,7 @@ from materialize import buildkite, mzbuild, spawn
 from materialize.ci_util.trim_pipeline import permit_rerunning_successful_steps
 from materialize.mzcompose.composition import Composition
 from materialize.ui import UIError
+from materialize.xcompile import Arch
 
 from .deploy.deploy_util import rust_version
 
@@ -133,9 +134,14 @@ so it is executed.""",
 
     permit_rerunning_successful_steps(pipeline)
 
-    add_test_selection_block(pipeline, args.pipeline)
+    if test_selection := os.getenv("CI_TEST_SELECTION"):
+        trim_test_selection(pipeline, set(test_selection.split(",")))
+    else:
+        add_test_selection_block(pipeline, args.pipeline)
 
     check_depends_on(pipeline, args.pipeline)
+
+    trim_builds(pipeline, args.coverage)
 
     # Remove the Materialize-specific keys from the configuration that are
     # only used to inform how to trim the pipeline and for coverage runs.
@@ -229,6 +235,32 @@ def check_depends_on(pipeline: Any, pipeline_name: str) -> None:
             raise UIError(
                 f"Every step should have an explicit depends_on value, missing in: {step}"
             )
+
+    for step in pipeline["steps"]:
+        visit(step)
+        if "group" in step:
+            for inner_step in step.get("steps", []):
+                visit(inner_step)
+
+
+def trim_test_selection(pipeline: Any, steps_to_run: set[str]) -> None:
+    def visit(step: dict[str, Any]) -> None:
+        if (
+            step.get("id") not in steps_to_run
+            and "prompt" not in step
+            and "wait" not in step
+            and "group" not in step
+            and step.get("id")
+            not in (
+                "coverage-pr-analyze",
+                "analyze",
+                "build-x86_64",
+                "build-aarch64",
+                "build-wasm",
+            )
+            and not step.get("async")
+        ):
+            step["skip"] = True
 
     for step in pipeline["steps"]:
         visit(step)
@@ -388,6 +420,34 @@ def trim_tests_pipeline(pipeline: Any, coverage: bool) -> None:
         or ("group" in step and step["steps"])
         or step.get("id") in needed
     ]
+
+
+def trim_builds(pipeline: Any, coverage: bool) -> None:
+    """Trim unnecessary x86-64/aarch64 builds if all artifacts already exist."""
+
+    def builds_published(arch: Arch) -> bool:
+        repo = mzbuild.Repository(Path("."), arch=arch, coverage=coverage)
+        deps_publish = repo.resolve_dependencies(
+            image for image in repo if image.publish
+        )
+        return deps_publish.check()
+
+    def visit(step: dict[str, Any]) -> None:
+        if step.get("id") == "build-x86_64":
+            if builds_published(Arch.X86_64):
+                step["skip"] = True
+        if step.get("id") == "build-aarch64":
+            branch = os.environ["BUILDKITE_BRANCH"]
+            if (
+                branch == "main" or branch.startswith("v") and "." in branch
+            ) and builds_published(Arch.AARCH64):
+                step["skip"] = True
+
+    for step in pipeline["steps"]:
+        visit(step)
+        if "group" in step:
+            for inner_step in step.get("steps", []):
+                visit(inner_step)
 
 
 def have_paths_changed(globs: Iterable[str]) -> bool:

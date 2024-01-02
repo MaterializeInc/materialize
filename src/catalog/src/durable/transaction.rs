@@ -23,6 +23,7 @@ use mz_sql::catalog::{
 };
 use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+use mz_sql::session::vars::CatalogKind;
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_stash::TableTransaction;
 use mz_storage_types::controller::PersistTxnTablesImpl;
@@ -31,7 +32,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use crate::builtin::BuiltinLog;
-use crate::durable::initialize::{PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, TOMBSTONE_KEY};
+use crate::durable::initialize::{
+    CATALOG_KIND_KEY, PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, TOMBSTONE_KEY,
+};
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
     AuditLogKey, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
@@ -1061,10 +1064,21 @@ impl<'a> Transaction<'a> {
     }
 
     /// Set persisted configuration.
-    pub(crate) fn set_config(&mut self, key: String, value: u64) -> Result<(), CatalogError> {
-        let config = Config { key, value };
-        let (key, value) = config.into_key_value();
-        self.configs.set(key, Some(value))?;
+    pub(crate) fn set_config(
+        &mut self,
+        key: String,
+        value: Option<u64>,
+    ) -> Result<(), CatalogError> {
+        match value {
+            Some(value) => {
+                let config = Config { key, value };
+                let (key, value) = config.into_key_value();
+                self.configs.set(key, Some(value))?;
+            }
+            None => {
+                self.configs.set(ConfigKey { key }, None)?;
+            }
+        }
         Ok(())
     }
 
@@ -1077,18 +1091,29 @@ impl<'a> Transaction<'a> {
         &mut self,
         value: PersistTxnTablesImpl,
     ) -> Result<(), CatalogError> {
-        self.set_config(PERSIST_TXN_TABLES.into(), u64::from(value))?;
+        self.set_config(PERSIST_TXN_TABLES.into(), Some(u64::from(value)))?;
+        Ok(())
+    }
+
+    /// Updates the catalog `catalog_kind` "config" value to
+    /// match the `catalog_kind` "system var" value.
+    ///
+    /// These are mirrored so that we can toggle the flag with Launch Darkly,
+    /// but use it in boot before Launch Darkly is available.
+    pub fn set_catalog_kind(&mut self, value: Option<CatalogKind>) -> Result<(), CatalogError> {
+        let value = value.map(u64::from);
+        self.set_config(CATALOG_KIND_KEY.into(), value)?;
         Ok(())
     }
 
     /// Updates the catalog `system_config_synced` "config" value to true.
     pub fn set_system_config_synced_once(&mut self) -> Result<(), CatalogError> {
-        self.set_config(SYSTEM_CONFIG_SYNCED_KEY.into(), 1)
+        self.set_config(SYSTEM_CONFIG_SYNCED_KEY.into(), Some(1))
     }
 
     /// Updates the catalog `tombstone` "config" value.
     pub fn set_tombstone(&mut self, value: bool) -> Result<(), CatalogError> {
-        self.set_config(TOMBSTONE_KEY.into(), if value { 1 } else { 0 })?;
+        self.set_config(TOMBSTONE_KEY.into(), Some(if value { 1 } else { 0 }))?;
         Ok(())
     }
 

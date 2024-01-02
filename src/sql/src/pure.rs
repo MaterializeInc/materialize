@@ -39,9 +39,8 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::Connection;
 use mz_storage_types::errors::ContextCreationError;
-use mz_storage_types::sources::{
-    GenericSourceConnection, PostgresSourcePublicationDetails, SourceConnection,
-};
+use mz_storage_types::sources::postgres::PostgresSourcePublicationDetails;
+use mz_storage_types::sources::{GenericSourceConnection, SourceConnection};
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
@@ -433,13 +432,17 @@ async fn purify_create_source(
     let mut subsources = vec![];
 
     let progress_desc = match &connection {
-        CreateSourceConnection::Kafka { .. } => &mz_storage_types::sources::KAFKA_PROGRESS_DESC,
-        CreateSourceConnection::Postgres { .. } => &mz_storage_types::sources::PG_PROGRESS_DESC,
+        CreateSourceConnection::Kafka { .. } => {
+            &mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC
+        }
+        CreateSourceConnection::Postgres { .. } => {
+            &mz_storage_types::sources::postgres::PG_PROGRESS_DESC
+        }
         CreateSourceConnection::LoadGenerator { .. } => {
-            &mz_storage_types::sources::LOAD_GEN_PROGRESS_DESC
+            &mz_storage_types::sources::load_generator::LOAD_GEN_PROGRESS_DESC
         }
         CreateSourceConnection::TestScript { .. } => {
-            &mz_storage_types::sources::TEST_SCRIPT_PROGRESS_DESC
+            &mz_storage_types::sources::testscript::TEST_SCRIPT_PROGRESS_DESC
         }
     };
 

@@ -9,6 +9,8 @@
 
 use async_trait::async_trait;
 use mz_ore::now::EpochMillis;
+use mz_sql::session::vars::CatalogKind;
+use tracing::warn;
 
 use crate::durable::debug::{DebugCatalogState, Trace};
 use crate::durable::impls::persist::UnopenedPersistCatalogState;
@@ -26,10 +28,22 @@ use crate::durable::{
 // We don't have to worry about race conditions where a new writer updates the stash or persist
 // inbetween steps (1) and (2).
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Direction {
     MigrateToPersist,
     RollbackToStash,
+}
+
+impl TryFrom<CatalogKind> for Direction {
+    type Error = CatalogKind;
+
+    fn try_from(catalog_kind: CatalogKind) -> Result<Self, Self::Error> {
+        match catalog_kind {
+            CatalogKind::Stash => Ok(Direction::RollbackToStash),
+            CatalogKind::Persist => Ok(Direction::MigrateToPersist),
+            CatalogKind::Shadow => Err(catalog_kind),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -111,8 +125,28 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         self.openable_stash.get_tombstone().await
     }
 
+    async fn get_catalog_kind_config(&mut self) -> Result<Option<CatalogKind>, CatalogError> {
+        let tombstone = self.get_tombstone().await?;
+        if tombstone == Some(true) {
+            self.openable_persist.get_catalog_kind_config().await
+        } else {
+            self.openable_stash.get_catalog_kind_config().await
+        }
+    }
+
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         panic!("cannot get a trace with the migrate implementation")
+    }
+
+    fn set_catalog_kind(&mut self, catalog_kind: CatalogKind) {
+        let direction = match catalog_kind.try_into() {
+            Ok(direction) => direction,
+            Err(catalog_kind) => {
+                warn!("unable to set catalog kind to {catalog_kind:?}");
+                return;
+            }
+        };
+        self.direction = direction;
     }
 
     async fn expire(self: Box<Self>) {
@@ -210,5 +244,78 @@ impl CatalogMigrator {
         stash_txn.commit().await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_persist_client::PersistClient;
+    use mz_sql::session::vars::CatalogKind;
+    use uuid::Uuid;
+
+    use crate::durable::impls::migrate::Direction;
+    use crate::durable::{
+        migrate_from_stash_to_persist_state, rollback_from_persist_to_stash_state,
+        test_stash_config, Metrics, OpenableDurableCatalogState,
+    };
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_set_catalog_kind() {
+        let (debug_factory, stash_config) = test_stash_config().await;
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
+        let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+
+        {
+            let mut catalog = migrate_from_stash_to_persist_state(
+                stash_config.clone(),
+                persist_client.clone(),
+                organization_id.clone(),
+                Arc::clone(&persist_metrics),
+            )
+            .await;
+            assert_eq!(catalog.direction, Direction::MigrateToPersist);
+
+            catalog.set_catalog_kind(CatalogKind::Shadow);
+            assert_eq!(catalog.direction, Direction::MigrateToPersist);
+
+            catalog.set_catalog_kind(CatalogKind::Stash);
+            assert_eq!(catalog.direction, Direction::RollbackToStash);
+
+            catalog.set_catalog_kind(CatalogKind::Shadow);
+            assert_eq!(catalog.direction, Direction::RollbackToStash);
+
+            catalog.set_catalog_kind(CatalogKind::Persist);
+            assert_eq!(catalog.direction, Direction::MigrateToPersist);
+        }
+
+        {
+            let mut catalog = rollback_from_persist_to_stash_state(
+                stash_config.clone(),
+                persist_client.clone(),
+                organization_id.clone(),
+                Arc::clone(&persist_metrics),
+            )
+            .await;
+            assert_eq!(catalog.direction, Direction::RollbackToStash);
+
+            catalog.set_catalog_kind(CatalogKind::Shadow);
+            assert_eq!(catalog.direction, Direction::RollbackToStash);
+
+            catalog.set_catalog_kind(CatalogKind::Persist);
+            assert_eq!(catalog.direction, Direction::MigrateToPersist);
+
+            catalog.set_catalog_kind(CatalogKind::Shadow);
+            assert_eq!(catalog.direction, Direction::MigrateToPersist);
+
+            catalog.set_catalog_kind(CatalogKind::Stash);
+            assert_eq!(catalog.direction, Direction::RollbackToStash);
+        }
+
+        debug_factory.drop().await;
     }
 }

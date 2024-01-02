@@ -236,6 +236,11 @@ pub enum Message<T = mz_repr::Timestamp> {
         otel_ctx: OpenTelemetryContext,
         stage: PeekStage,
     },
+    CreateIndexStageReady {
+        ctx: ExecuteContext,
+        otel_ctx: OpenTelemetryContext,
+        stage: CreateIndexStage,
+    },
     CreateViewStageReady {
         ctx: ExecuteContext,
         otel_ctx: OpenTelemetryContext,
@@ -245,6 +250,11 @@ pub enum Message<T = mz_repr::Timestamp> {
         ctx: ExecuteContext,
         otel_ctx: OpenTelemetryContext,
         stage: CreateMaterializedViewStage,
+    },
+    SubscribeStageReady {
+        ctx: ExecuteContext,
+        otel_ctx: OpenTelemetryContext,
+        stage: SubscribeStage,
     },
     DrainStatementLog,
     PrivateLinkVpcEndpointEvents(BTreeMap<GlobalId, VpcEndpointEvent>),
@@ -286,10 +296,12 @@ impl Message {
                 "execute_single_statement_transaction"
             }
             Message::PeekStageReady { .. } => "peek_stage_ready",
+            Message::CreateIndexStageReady { .. } => "create_index_stage_ready",
             Message::CreateViewStageReady { .. } => "create_view_stage_ready",
             Message::CreateMaterializedViewStageReady { .. } => {
                 "create_materialized_view_stage_ready"
             }
+            Message::SubscribeStageReady { .. } => "subscribe_stage_ready",
             Message::DrainStatementLog => "drain_statement_log",
             Message::AlterConnectionValidationReady(..) => "alter_connection_validation_ready",
             Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",
@@ -447,6 +459,46 @@ pub struct PeekStageFinish {
 }
 
 #[derive(Debug)]
+pub enum CreateIndexStage {
+    Validate(CreateIndexValidate),
+    Optimize(CreateIndexOptimize),
+    Finish(CreateIndexFinish),
+}
+
+impl CreateIndexStage {
+    fn validity(&mut self) -> Option<&mut PlanValidity> {
+        match self {
+            Self::Validate(_) => None,
+            Self::Optimize(stage) => Some(&mut stage.validity),
+            Self::Finish(stage) => Some(&mut stage.validity),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CreateIndexValidate {
+    plan: plan::CreateIndexPlan,
+    resolved_ids: ResolvedIds,
+}
+
+#[derive(Debug)]
+pub struct CreateIndexOptimize {
+    validity: PlanValidity,
+    plan: plan::CreateIndexPlan,
+    resolved_ids: ResolvedIds,
+}
+
+#[derive(Debug)]
+pub struct CreateIndexFinish {
+    validity: PlanValidity,
+    id: GlobalId,
+    plan: plan::CreateIndexPlan,
+    resolved_ids: ResolvedIds,
+    global_mir_plan: optimize::index::GlobalMirPlan,
+    global_lir_plan: optimize::index::GlobalLirPlan,
+}
+
+#[derive(Debug)]
 pub enum CreateViewStage {
     Validate(CreateViewValidate),
     Optimize(CreateViewOptimize),
@@ -524,6 +576,65 @@ pub struct CreateMaterializedViewFinish {
     local_mir_plan: optimize::materialized_view::LocalMirPlan,
     global_mir_plan: optimize::materialized_view::GlobalMirPlan,
     global_lir_plan: optimize::materialized_view::GlobalLirPlan,
+}
+
+#[derive(Debug)]
+pub enum SubscribeStage {
+    Validate(SubscribeValidate),
+    OptimizeMir(SubscribeOptimizeMir),
+    Timestamp(SubscribeTimestamp),
+    OptimizeLir(SubscribeOptimizeLir),
+    Finish(SubscribeFinish),
+}
+
+impl SubscribeStage {
+    fn validity(&mut self) -> Option<&mut PlanValidity> {
+        match self {
+            Self::Validate(_) => None,
+            Self::OptimizeMir(stage) => Some(&mut stage.validity),
+            Self::Timestamp(stage) => Some(&mut stage.validity),
+            Self::OptimizeLir(stage) => Some(&mut stage.validity),
+            Self::Finish(stage) => Some(&mut stage.validity),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SubscribeValidate {
+    plan: plan::SubscribePlan,
+    target_cluster: TargetCluster,
+}
+
+#[derive(Debug)]
+pub struct SubscribeOptimizeMir {
+    validity: PlanValidity,
+    plan: plan::SubscribePlan,
+    timeline: TimelineContext,
+}
+
+#[derive(Debug)]
+pub struct SubscribeTimestamp {
+    validity: PlanValidity,
+    plan: plan::SubscribePlan,
+    timeline: TimelineContext,
+    optimizer: optimize::subscribe::Optimizer,
+    global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
+}
+
+#[derive(Debug)]
+pub struct SubscribeOptimizeLir {
+    validity: PlanValidity,
+    plan: plan::SubscribePlan,
+    optimizer: optimize::subscribe::Optimizer,
+    global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Resolved>,
+}
+
+#[derive(Debug)]
+pub struct SubscribeFinish {
+    validity: PlanValidity,
+    cluster_id: ComputeInstanceId,
+    plan: plan::SubscribePlan,
+    global_lir_plan: optimize::subscribe::GlobalLirPlan,
 }
 
 /// An enum describing which cluster to run a statement on.

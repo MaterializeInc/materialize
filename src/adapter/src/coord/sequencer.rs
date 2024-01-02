@@ -166,8 +166,8 @@ impl Coordinator {
                     let result = self
                         .sequence_create_role(Some(ctx.session().conn_id()), plan)
                         .await;
-                    if result.is_ok() {
-                        self.maybe_send_rbac_notice(ctx.session());
+                    if let Some(notice) = self.should_emit_rbac_notice(ctx.session()) {
+                        ctx.session().add_notice(notice);
                     }
                     ctx.retire(result);
                 }
@@ -202,10 +202,7 @@ impl Coordinator {
                         .await;
                 }
                 Plan::CreateIndex(plan) => {
-                    let result = self
-                        .sequence_create_index(ctx.session_mut(), plan, resolved_ids)
-                        .await;
-                    ctx.retire(result);
+                    self.sequence_create_index(ctx, plan, resolved_ids).await;
                 }
                 Plan::CreateType(plan) => {
                     let result = self
@@ -295,10 +292,7 @@ impl Coordinator {
                     self.sequence_peek(ctx, plan, target_cluster).await;
                 }
                 Plan::Subscribe(plan) => {
-                    let result = self
-                        .sequence_subscribe(&mut ctx, plan, target_cluster)
-                        .await;
-                    ctx.retire(result);
+                    self.sequence_subscribe(ctx, plan, target_cluster).await;
                 }
                 Plan::SideEffectingFunc(plan) => {
                     ctx.retire(self.sequence_side_effecting_func(plan));
@@ -404,9 +398,6 @@ impl Coordinator {
                 }
                 Plan::AlterRole(plan) => {
                     let result = self.sequence_alter_role(ctx.session_mut(), plan).await;
-                    if result.is_ok() {
-                        self.maybe_send_rbac_notice(ctx.session());
-                    }
                     ctx.retire(result);
                 }
                 Plan::AlterSecret(plan) => {
@@ -712,9 +703,11 @@ impl Coordinator {
         Ok(GlobalId::Transient(id))
     }
 
-    fn maybe_send_rbac_notice(&self, session: &Session) {
+    fn should_emit_rbac_notice(&self, session: &Session) -> Option<AdapterNotice> {
         if !rbac::is_rbac_enabled_for_session(self.catalog.system_config(), session.vars()) {
-            session.add_notice(AdapterNotice::RbacUserDisabled);
+            Some(AdapterNotice::RbacUserDisabled)
+        } else {
+            None
         }
     }
 

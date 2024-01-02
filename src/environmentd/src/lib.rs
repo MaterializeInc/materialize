@@ -91,6 +91,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
+use clap::ValueEnum;
 use futures::FutureExt;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
@@ -110,7 +111,9 @@ use mz_persist_client::usage::StorageUsageClient;
 use mz_secrets::SecretsController;
 use mz_server_core::{ConnectionStream, ListenerHandle, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
-use mz_sql::session::vars::{ConnectionCounter, Var, PERSIST_TXN_TABLES};
+use mz_sql::session::vars::{
+    CatalogKind, ConnectionCounter, Var, CATALOG_KIND_IMPL, PERSIST_TXN_TABLES,
+};
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::RecvError;
@@ -270,6 +273,16 @@ pub enum CatalogConfig {
     },
 }
 
+impl CatalogConfig {
+    fn catalog_kind(&self) -> CatalogKind {
+        match self {
+            CatalogConfig::Stash { .. } => CatalogKind::Stash,
+            CatalogConfig::Persist { .. } => CatalogKind::Persist,
+            CatalogConfig::Shadow { .. } => CatalogKind::Shadow,
+        }
+    }
+}
+
 /// Listeners for an `environmentd` server.
 pub struct Listeners {
     // Drop order matters for these fields.
@@ -391,6 +404,20 @@ impl Listeners {
         // Get the current timestamp so we can record when we booted.
         let boot_ts = (config.now)();
 
+        let catalog_kind_impl_default = config
+            .system_parameter_defaults
+            .get(CATALOG_KIND_IMPL.name())
+            .map(|x| {
+                CatalogKind::from_str(x, true).map_err(|err| {
+                    anyhow!(
+                        "failed to parse default for {}: {}",
+                        CATALOG_KIND_IMPL.name(),
+                        err
+                    )
+                })
+            })
+            .transpose()?;
+
         'leader_promotion: {
             let Some(deploy_generation) = config.deploy_generation else {
                 break 'leader_promotion;
@@ -404,7 +431,15 @@ impl Listeners {
             )
             .boxed()
             .await?;
-
+            let catalog_kind_impl_ld = openable_adapter_storage.get_catalog_kind_config().await?;
+            let catalog_kind_impl = catalog_kind_impl_reconcile(
+                catalog_kind_impl_ld,
+                catalog_kind_impl_default,
+                config.catalog_config.catalog_kind(),
+            );
+            if let Some(catalog_kind) = catalog_kind_impl {
+                openable_adapter_storage.set_catalog_kind(catalog_kind);
+            }
             if !openable_adapter_storage.is_initialized().await? {
                 tracing::info!("Catalog storage doesn't exist so there's no current deploy generation. We won't wait to be leader");
                 openable_adapter_storage.expire().await;
@@ -457,13 +492,22 @@ impl Listeners {
             }
         }
 
-        let openable_adapter_storage = catalog_opener(
+        let mut openable_adapter_storage = catalog_opener(
             &config.catalog_config,
             &config.controller,
             &config.environment_id,
         )
         .boxed()
         .await?;
+        let catalog_kind_impl_ld = openable_adapter_storage.get_catalog_kind_config().await?;
+        let catalog_kind_impl = catalog_kind_impl_reconcile(
+            catalog_kind_impl_ld,
+            catalog_kind_impl_default,
+            config.catalog_config.catalog_kind(),
+        );
+        if let Some(catalog_kind) = catalog_kind_impl {
+            openable_adapter_storage.set_catalog_kind(catalog_kind);
+        }
         let mut adapter_storage = openable_adapter_storage
             .open(
                 boot_ts,
@@ -783,6 +827,27 @@ async fn catalog_opener(
             )
         }
     })
+}
+
+fn catalog_kind_impl_reconcile(
+    catalog_kind_impl_ld: Option<CatalogKind>,
+    catalog_kind_impl_default: Option<CatalogKind>,
+    catalog_kind_impl_cli: CatalogKind,
+) -> Option<CatalogKind> {
+    let catalog_kind_impl = catalog_kind_impl_ld.or(catalog_kind_impl_default);
+    match catalog_kind_impl {
+        Some(catalog_kind_impl) if catalog_kind_impl != catalog_kind_impl_cli => {
+            info!(
+                "catalog_kind value of {:?} computed from default: {:?}, catalog: {:?}, and flag: {:?}",
+                catalog_kind_impl,
+                catalog_kind_impl_default,
+                catalog_kind_impl_ld,
+                catalog_kind_impl_cli,
+            );
+            Some(catalog_kind_impl)
+        }
+        _ => None,
+    }
 }
 
 /// A running `environmentd` server.

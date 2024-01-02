@@ -619,11 +619,12 @@ impl StateUpdateKindRaw {
 
 #[cfg(test)]
 mod tests {
-    use crate::durable::impls::persist::state_update::StateUpdateKindRaw;
-    use crate::durable::impls::persist::StateUpdateKind;
     use mz_persist_types::Codec;
     use mz_storage_types::sources::SourceData;
     use proptest::prelude::*;
+
+    use crate::durable::impls::persist::state_update::StateUpdateKindRaw;
+    use crate::durable::impls::persist::StateUpdateKind;
 
     proptest! {
         #[mz_ore::test]

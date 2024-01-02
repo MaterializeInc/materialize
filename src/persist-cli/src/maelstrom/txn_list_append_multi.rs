@@ -265,22 +265,37 @@ impl Transactor {
 
         let mut reads = BTreeMap::new();
         for data_id in data_ids {
-            // SUBTLE! Maelstrom txn-list-append requires that we be able to
-            // reconstruct the order in which we appended list items. To avoid
-            // needing to change the staged writes if our read_ts advances, we
-            // instead do something overly clever and use the update timestamps.
-            // To recover them, instead of grabbing a snapshot at the read_ts,
-            // we have to start a subscription at time 0 and walk it forward
-            // until we pass read_ts.
-            let mut subscribe =
-                DataSubscribe::new("maelstrom", self.client.clone(), self.txns_id, *data_id, 0);
-            while subscribe.progress() <= read_ts {
-                subscribe.step();
-            }
-            let data = subscribe.output().clone();
+            let data = Self::read_data_at(self.client.clone(), self.txns_id, *data_id, read_ts)
+                .await
+                .expect("read should finish");
             reads.insert(*data_id, data);
         }
         reads
+    }
+
+    fn read_data_at(
+        client: PersistClient,
+        txns_id: ShardId,
+        data_id: ShardId,
+        read_ts: u64,
+    ) -> mz_ore::task::JoinHandle<Vec<(String, u64, i64)>> {
+        mz_ore::task::spawn_blocking(
+            || format!("read_at {:.9} {}", data_id.to_string(), read_ts),
+            move || {
+                // SUBTLE! Maelstrom txn-list-append requires that we be able to
+                // reconstruct the order in which we appended list items. To avoid
+                // needing to change the staged writes if our read_ts advances, we
+                // instead do something overly clever and use the update timestamps.
+                // To recover them, instead of grabbing a snapshot at the read_ts,
+                // we have to start a subscription at time 0 and walk it forward
+                // until we pass read_ts.
+                let mut subscribe = DataSubscribe::new("maelstrom", client, txns_id, data_id, 0);
+                while subscribe.progress() <= read_ts {
+                    subscribe.step();
+                }
+                subscribe.output().clone()
+            },
+        )
     }
 
     // Constructs a ShardId that is stable per key (so each maelstrom process

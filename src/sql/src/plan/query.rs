@@ -90,7 +90,7 @@ use crate::plan::typeconv::{self, CastContext};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::PlanError::InvalidWmrRecursionLimit;
 use crate::plan::{
-    transform_ast, Params, PlanContext, QueryWhen, ShowCreatePlan, WebhookValidation,
+    literal, transform_ast, Params, PlanContext, QueryWhen, ShowCreatePlan, WebhookValidation,
     WebhookValidationSecret,
 };
 use crate::session::vars::{self, FeatureFlag};
@@ -1583,14 +1583,14 @@ pub fn plan_nested_query(
         group_size_hints,
     } = qcx.checked_recur_mut(|qcx| plan_query(qcx, q))?;
     if limit.is_some() || offset > 0 {
-        expr = HirRelationExpr::TopK {
-            input: Box::new(expr),
-            group_key: vec![],
-            order_key: order_by,
+        expr = HirRelationExpr::top_k(
+            expr,
+            vec![],
+            order_by,
             limit,
             offset,
-            expected_group_size: group_size_hints.limit_input_group_size,
-        };
+            group_size_hints.limit_input_group_size,
+        );
     }
     Ok((expr.project(project), scope))
 }
@@ -2455,14 +2455,15 @@ fn plan_view_select(
                 // columns in `ORDER BY` that are not part of the distinct key,
                 // if there are any, determine the ordering within each group,
                 // per PostgreSQL semantics.
-                relation_expr = HirRelationExpr::TopK {
-                    input: Box::new(relation_expr.map(map_exprs)),
-                    order_key: order_by.iter().skip(distinct_key.len()).cloned().collect(),
-                    group_key: distinct_key,
-                    limit: Some(HirScalarExpr::literal(Datum::Int64(1), ScalarType::Int64)),
-                    offset: 0,
-                    expected_group_size: group_size_hints.distinct_on_input_group_size,
-                }
+                let distinct_len = distinct_key.len();
+                relation_expr = HirRelationExpr::top_k(
+                    relation_expr.map(map_exprs),
+                    distinct_key,
+                    order_by.iter().skip(distinct_len).cloned().collect(),
+                    Some(HirScalarExpr::literal(Datum::Int64(1), ScalarType::Int64)),
+                    0,
+                    group_size_hints.distinct_on_input_group_size,
+                );
             }
         }
 
@@ -4299,14 +4300,14 @@ where
     let mut qcx = ecx.derived_query_context();
     let mut planned_query = plan_query(&mut qcx, query)?;
     if planned_query.limit.is_some() || planned_query.offset > 0 {
-        planned_query.expr = HirRelationExpr::TopK {
-            input: Box::new(planned_query.expr),
-            group_key: vec![],
-            order_key: planned_query.order_by.clone(),
-            limit: planned_query.limit,
-            offset: planned_query.offset,
-            expected_group_size: planned_query.group_size_hints.limit_input_group_size,
-        };
+        planned_query.expr = HirRelationExpr::top_k(
+            planned_query.expr,
+            vec![],
+            planned_query.order_by.clone(),
+            planned_query.limit,
+            planned_query.offset,
+            planned_query.group_size_hints.limit_input_group_size,
+        );
     }
 
     if planned_query.project.len() != 1 {
@@ -5217,22 +5218,8 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, PlanError> {
             false => (Datum::False, ScalarType::Bool),
             true => (Datum::True, ScalarType::Bool),
         },
-        Value::Interval(iv) => {
-            let leading_precision = parser_datetimefield_to_adt(iv.precision_high);
-            let mut i = strconv::parse_interval_w_disambiguator(
-                &iv.value,
-                match leading_precision {
-                    mz_repr::adt::datetime::DateTimeField::Hour
-                    | mz_repr::adt::datetime::DateTimeField::Minute => Some(leading_precision),
-                    _ => None,
-                },
-                parser_datetimefield_to_adt(iv.precision_low),
-            )?;
-            i.truncate_high_fields(parser_datetimefield_to_adt(iv.precision_high));
-            i.truncate_low_fields(
-                parser_datetimefield_to_adt(iv.precision_low),
-                iv.fsec_max_precision,
-            )?;
+        Value::Interval(i) => {
+            let i = literal::plan_interval(i)?;
             (Datum::Interval(i), ScalarType::Interval)
         }
         Value::String(s) => return Ok(CoercibleScalarExpr::LiteralString(s.clone())),
@@ -5456,27 +5443,6 @@ fn window_frame_bound_ast_to_expr(bound: &WindowFrameBound) -> mz_expr::WindowFr
         WindowFrameBound::Following(Some(offset)) => {
             mz_expr::WindowFrameBound::OffsetFollowing(*offset)
         }
-    }
-}
-
-// Implement these as two identical enums without From/Into impls so that they
-// have no cross-package dependencies, leaving that work up to this crate.
-fn parser_datetimefield_to_adt(
-    dtf: mz_sql_parser::ast::DateTimeField,
-) -> mz_repr::adt::datetime::DateTimeField {
-    use mz_sql_parser::ast::DateTimeField::*;
-    match dtf {
-        Millennium => mz_repr::adt::datetime::DateTimeField::Millennium,
-        Century => mz_repr::adt::datetime::DateTimeField::Century,
-        Decade => mz_repr::adt::datetime::DateTimeField::Decade,
-        Year => mz_repr::adt::datetime::DateTimeField::Year,
-        Month => mz_repr::adt::datetime::DateTimeField::Month,
-        Day => mz_repr::adt::datetime::DateTimeField::Day,
-        Hour => mz_repr::adt::datetime::DateTimeField::Hour,
-        Minute => mz_repr::adt::datetime::DateTimeField::Minute,
-        Second => mz_repr::adt::datetime::DateTimeField::Second,
-        Milliseconds => mz_repr::adt::datetime::DateTimeField::Milliseconds,
-        Microseconds => mz_repr::adt::datetime::DateTimeField::Microseconds,
     }
 }
 

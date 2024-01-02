@@ -160,9 +160,9 @@ $ kafka-ingest format=avro topic=csr_test key-format=avro key-schema=${keyschema
 
 ! CREATE CONNECTION csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}',
-    TOKEN = 'abc'
+    SESSION TOKEN = 'abc'
   );
-contains:CONFLUENT SCHEMA REGISTRY connections do not support TOKEN values
+contains:CONFLUENT SCHEMA REGISTRY connections do not support SESSION TOKEN values
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);

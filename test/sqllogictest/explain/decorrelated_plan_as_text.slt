@@ -57,15 +57,14 @@ EXPLAIN DECORRELATED PLAN AS TEXT FOR
 (SELECT 1, 2) UNION ALL (SELECT 1, 2) UNION ALL (SELECT 3, 4)
 ----
 Union
-  Union
-    Project (#0, #1)
-      Map (1, 2)
-        Constant
-          - ()
-    Project (#0, #1)
-      Map (1, 2)
-        Constant
-          - ()
+  Project (#0, #1)
+    Map (1, 2)
+      Constant
+        - ()
+  Project (#0, #1)
+    Map (1, 2)
+      Constant
+        - ()
   Project (#0, #1)
     Map (3, 4)
       Constant

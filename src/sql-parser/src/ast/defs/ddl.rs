@@ -695,7 +695,7 @@ pub enum ConnectionOptionName {
     SslCertificateAuthority,
     SslKey,
     SslMode,
-    Token,
+    SessionToken,
     Url,
     User,
 }
@@ -728,7 +728,7 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::SslCertificateAuthority => "SSL CERTIFICATE AUTHORITY",
             ConnectionOptionName::SslKey => "SSL KEY",
             ConnectionOptionName::SslMode => "SSL MODE",
-            ConnectionOptionName::Token => "TOKEN",
+            ConnectionOptionName::SessionToken => "SESSION TOKEN",
             ConnectionOptionName::Url => "URL",
             ConnectionOptionName::User => "USER",
         })
@@ -762,6 +762,7 @@ pub enum CreateConnectionType {
     Csr,
     Postgres,
     Ssh,
+    MySql,
 }
 
 impl AstDisplay for CreateConnectionType {
@@ -784,6 +785,9 @@ impl AstDisplay for CreateConnectionType {
             }
             Self::Ssh => {
                 f.write_str("SSH TUNNEL");
+            }
+            Self::MySql => {
+                f.write_str("MYSQL");
             }
         }
     }

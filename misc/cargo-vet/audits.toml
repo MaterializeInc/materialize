@@ -35,6 +35,16 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.6.0"
 
+[[audits.jsonwebtoken]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+delta = "8.3.0 -> 9.2.0"
+
+[[audits.launchdarkly-server-sdk]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+delta = "1.0.0 -> 1.0.0@git:df1440c8b93a192d50470d1b258615febe52f1f8"
+
 [[audits.nonzero_ext]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
@@ -59,6 +69,16 @@ version = "10.7.0"
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 delta = "0.3.5 -> 0.4.1"
+
+[[audits.ring]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+delta = "0.16.20 -> 0.17.7"
+
+[[audits.spin]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+delta = "0.5.2 -> 0.9.8"
 
 [[audits.tempfile]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
@@ -89,6 +109,11 @@ version = "0.12.0@git:de20aa88cc6df3de910e9befbe68408d31e287be"
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.12.0@git:de20aa88cc6df3de910e9befbe68408d31e287be"
+
+[[audits.untrusted]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "maintained-and-necessary"
+delta = "0.7.1 -> 0.9.0"
 
 [[trusted.abomonation]]
 criteria = "safe-to-deploy"
@@ -149,6 +174,18 @@ criteria = "maintained-and-necessary"
 user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
 start = "2022-06-22"
 end = "2024-12-17"
+
+[[trusted.aws-sdk-sso]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-22"
+end = "2024-12-24"
+
+[[trusted.aws-sdk-ssooidc]]
+criteria = "maintained-and-necessary"
+user-id = 160111 # AWS SDK Rust Bot (aws-sdk-rust-ci)
+start = "2022-06-23"
+end = "2024-12-24"
 
 [[trusted.aws-sdk-sts]]
 criteria = "maintained-and-necessary"
@@ -413,6 +450,12 @@ criteria = "safe-to-deploy"
 user-id = 1 # Alex Crichton (alexcrichton)
 start = "2019-03-04"
 end = "2024-11-16"
+
+[[trusted.launchdarkly-server-sdk]]
+criteria = "safe-to-deploy"
+user-id = 144672 # LaunchDarklyReleaseBot
+start = "2022-01-22"
+end = "2024-12-24"
 
 [[trusted.libc]]
 criteria = "safe-to-deploy"
