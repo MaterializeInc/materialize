@@ -47,6 +47,9 @@ const RECURSION_LIMIT: usize = 128;
 /// Maximum allowed size for a batch of statements in bytes: 1MB.
 pub const MAX_STATEMENT_BATCH_SIZE: usize = 1_000_000;
 
+/// Keywords that indicate the start of a (sub)query.
+const QUERY_START_KEYWORDS: &[Keyword] = &[WITH, SELECT, SHOW, TABLE, VALUES];
+
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
     ($parser:expr, $pos:expr, $MSG:expr) => {
@@ -363,16 +366,6 @@ impl<'a> Parser<'a> {
     fn parse_statement_inner(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
         match self.next_token() {
             Some(t) => match t {
-                Token::Keyword(SELECT)
-                | Token::Keyword(WITH)
-                | Token::Keyword(VALUES)
-                | Token::Keyword(TABLE) => {
-                    self.prev_token();
-                    Ok(Statement::Select(
-                        self.parse_select_statement()
-                            .map_parser_err(StatementKind::Select)?,
-                    ))
-                }
                 Token::Keyword(CREATE) => Ok(self.parse_create()?),
                 Token::Keyword(DISCARD) => Ok(self
                     .parse_discard()
@@ -449,6 +442,13 @@ impl<'a> Parser<'a> {
                 Token::Keyword(COMMENT) => Ok(self
                     .parse_comment()
                     .map_parser_err(StatementKind::Comment)?),
+                Token::Keyword(k) if QUERY_START_KEYWORDS.contains(&k) => {
+                    self.prev_token();
+                    Ok(Statement::Select(
+                        self.parse_select_statement()
+                            .map_parser_err(StatementKind::Select)?,
+                    ))
+                }
                 Token::Keyword(kw) => parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -623,7 +623,7 @@ impl<'a> Parser<'a> {
             }
             Token::Parameter(n) => Ok(Expr::Parameter(n)),
             Token::LParen => {
-                let expr = self.parse_parenthesized_expr()?;
+                let expr = self.parse_parenthesized_fragment()?.into_expr();
                 self.expect_token(&Token::RParen)?;
                 Ok(expr)
             }
@@ -633,10 +633,11 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    /// Parses an expression that appears in parentheses, like `(1 + 1)` or
-    /// `(SELECT 1)`. Assumes that the opening parenthesis has already been
-    /// parsed. Parses up to the closing parenthesis without consuming it.
-    fn parse_parenthesized_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
+    /// Parses an expression list that appears in parentheses, like `(1 + 1)`,
+    /// `(SELECT 1)`, or `(1, 2)`. Assumes that the opening parenthesis has
+    /// already been parsed. Parses up to the closing parenthesis without
+    /// consuming it.
+    fn parse_parenthesized_fragment(&mut self) -> Result<ParenthesizedFragment, ParserError> {
         // The SQL grammar has an irritating ambiguity that presents here.
         // Consider these two expression fragments:
         //
@@ -655,103 +656,65 @@ impl<'a> Parser<'a> {
         //
         // See also PostgreSQL's comments on the matter:
         // https://github.com/postgres/postgres/blob/42c63ab/src/backend/parser/gram.y#L11125-L11136
+        //
+        // Each call of this function handles one layer of parentheses. Before
+        // every call, the parser must be positioned after an opening
+        // parenthesis; upon non-error return, the parser will be positioned
+        // before the corresponding close parenthesis. Somewhat weirdly, the
+        // returned expression semantically includes the opening/closing
+        // parentheses, even though this function is not responsible for parsing
+        // them.
 
-        enum Either {
-            Query(Query<Raw>),
-            Expr(Expr<Raw>),
-        }
+        if self.peek_one_of_keywords(QUERY_START_KEYWORDS) {
+            // Easy case one: unambiguously a subquery.
+            Ok(ParenthesizedFragment::Query(self.parse_query()?))
+        } else if !self.consume_token(&Token::LParen) {
+            // Easy case two: unambiguously an expression.
+            let exprs = self.parse_comma_separated(Parser::parse_expr)?;
+            Ok(ParenthesizedFragment::Exprs(exprs))
+        } else {
+            // Hard case: we have an open parenthesis, and we need to decide
+            // whether it belongs to the inner expression or the outer
+            // expression.
 
-        impl Either {
-            fn into_expr(self) -> Expr<Raw> {
-                match self {
-                    Either::Query(query) => Expr::Subquery(Box::new(query)),
-                    Either::Expr(expr) => expr,
+            // Parse to the closing parenthesis.
+            let fragment = self.checked_recur_mut(Parser::parse_parenthesized_fragment)?;
+            self.expect_token(&Token::RParen)?;
+
+            // Decide if we need to associate any tokens after the closing
+            // parenthesis with what we've parsed so far.
+            match (fragment, self.peek_token()) {
+                // We have a subquery and the next token is a set operator or a
+                // closing parenthesis. That implies we have a partially-parsed
+                // subquery (or a syntax error). Hop into parsing a set
+                // expression where our subquery is the LHS of the set operator.
+                (
+                    ParenthesizedFragment::Query(query),
+                    Some(Token::RParen | Token::Keyword(UNION | INTERSECT | EXCEPT)),
+                ) => {
+                    let query = SetExpr::Query(Box::new(query));
+                    let ctes = CteBlock::empty();
+                    let body = self.parse_query_body_seeded(SetPrecedence::Zero, query)?;
+                    Ok(ParenthesizedFragment::Query(
+                        self.parse_query_tail(ctes, body)?,
+                    ))
                 }
-            }
 
-            fn nest(self) -> Either {
-                // Need to be careful to maintain expression nesting to preserve
-                // operator precedence. But there are no precedence concerns for
-                // queries, so we flatten to match parse_query's behavior.
-                match self {
-                    Either::Expr(expr) => Either::Expr(Expr::Nested(Box::new(expr))),
-                    Either::Query(_) => self,
-                }
-            }
-        }
-
-        // Recursive helper for parsing parenthesized expressions. Each call
-        // handles one layer of parentheses. Before every call, the parser must
-        // be positioned after an opening parenthesis; upon non-error return,
-        // the parser will be positioned before the corresponding close
-        // parenthesis. Somewhat weirdly, the returned expression semantically
-        // includes the opening/closing parentheses, even though this function
-        // is not responsible for parsing them.
-        fn parse(parser: &mut Parser) -> Result<Either, ParserError> {
-            if parser.peek_keyword(SELECT) || parser.peek_keyword(WITH) {
-                // Easy case one: unambiguously a subquery.
-                Ok(Either::Query(parser.parse_query()?))
-            } else if !parser.consume_token(&Token::LParen) {
-                // Easy case two: unambiguously an expression.
-                let exprs = parser.parse_comma_separated(Parser::parse_expr)?;
-                if exprs.len() == 1 {
-                    Ok(Either::Expr(Expr::Nested(Box::new(exprs.into_element()))))
-                } else {
-                    Ok(Either::Expr(Expr::Row { exprs }))
-                }
-            } else {
-                // Hard case: we have an open parenthesis, and we need to decide
-                // whether it belongs to the query or the expression.
-
-                // Parse to the closing parenthesis.
-                let either = parser.checked_recur_mut(parse)?;
-                parser.expect_token(&Token::RParen)?;
-
-                // Decide if we need to associate any tokens after the closing
-                // parenthesis with what we've parsed so far.
-                match (either, parser.peek_token()) {
-                    // The next token is another closing parenthesis. Can't
-                    // resolve the ambiguity yet. Return to let our caller
-                    // handle it.
-                    (either, Some(Token::RParen)) => Ok(either.nest()),
-
-                    // The next token is a comma, which means `either` was the
-                    // first expression in an implicit row constructor.
-                    (either, Some(Token::Comma)) => {
-                        let mut exprs = vec![either.into_expr()];
-                        while parser.consume_token(&Token::Comma) {
-                            exprs.push(parser.parse_expr()?);
-                        }
-                        Ok(Either::Expr(Expr::Row { exprs }))
+                // Otherwise, we have an expression. It may be only partially
+                // parsed. Hop into parsing an expression where `fragment` is
+                // the expression prefix. Then parse any additional
+                // comma-separated expressions.
+                (fragment, _) => {
+                    let prefix = fragment.into_expr();
+                    let expr = self.parse_subexpr_seeded(Precedence::Zero, prefix)?;
+                    let mut exprs = vec![expr];
+                    while self.consume_token(&Token::Comma) {
+                        exprs.push(self.parse_expr()?);
                     }
-
-                    // We have a subquery and the next token is a set operator.
-                    // That implies we have a partially-parsed subquery (or a
-                    // syntax error). Hop into parsing a set expression where
-                    // our subquery is the LHS of the set operator.
-                    (Either::Query(query), Some(Token::Keyword(kw)))
-                        if matches!(kw, UNION | INTERSECT | EXCEPT) =>
-                    {
-                        let query = SetExpr::Query(Box::new(query));
-                        let ctes = CteBlock::empty();
-                        let body = parser.parse_query_body_seeded(SetPrecedence::Zero, query)?;
-                        Ok(Either::Query(parser.parse_query_tail(ctes, body)?))
-                    }
-
-                    // The next token is something else. That implies we have a
-                    // partially-parsed expression (or a syntax error). Hop into
-                    // parsing an expression where `either` is the expression
-                    // prefix.
-                    (either, _) => {
-                        let prefix = either.into_expr();
-                        let expr = parser.parse_subexpr_seeded(Precedence::Zero, prefix)?;
-                        Ok(Either::Expr(expr).nest())
-                    }
+                    Ok(ParenthesizedFragment::Exprs(exprs))
                 }
             }
         }
-
-        Ok(parse(self)?.into_expr())
     }
 
     fn parse_function(&mut self, name: RawItemName) -> Result<Function<Raw>, ParserError> {
@@ -1155,40 +1118,47 @@ impl<'a> Parser<'a> {
             if let Some(kw) = self.parse_one_of_keywords(&[ANY, SOME, ALL]) {
                 self.expect_token(&Token::LParen)?;
 
-                let expr = if self.parse_one_of_keywords(&[SELECT, VALUES]).is_some() {
-                    self.prev_token();
-                    let subquery = self.parse_query()?;
-
-                    if kw == ALL {
-                        Expr::AllSubquery {
-                            left: Box::new(expr),
-                            op,
-                            right: Box::new(subquery),
+                let expr = match self.parse_parenthesized_fragment()? {
+                    ParenthesizedFragment::Exprs(exprs) => {
+                        if exprs.len() > 1 {
+                            return parser_err!(
+                                self,
+                                self.peek_pos(),
+                                "{kw} requires a single expression or subquery, not an expression list",
+                            );
                         }
-                    } else {
-                        Expr::AnySubquery {
-                            left: Box::new(expr),
-                            op,
-                            right: Box::new(subquery),
+                        let right = exprs.into_element();
+                        if kw == ALL {
+                            Expr::AllExpr {
+                                left: Box::new(expr),
+                                op,
+                                right: Box::new(right),
+                            }
+                        } else {
+                            Expr::AnyExpr {
+                                left: Box::new(expr),
+                                op,
+                                right: Box::new(right),
+                            }
                         }
                     }
-                } else {
-                    let right = self.parse_expr()?;
-
-                    if kw == ALL {
-                        Expr::AllExpr {
-                            left: Box::new(expr),
-                            op,
-                            right: Box::new(right),
-                        }
-                    } else {
-                        Expr::AnyExpr {
-                            left: Box::new(expr),
-                            op,
-                            right: Box::new(right),
+                    ParenthesizedFragment::Query(subquery) => {
+                        if kw == ALL {
+                            Expr::AllSubquery {
+                                left: Box::new(expr),
+                                op,
+                                right: Box::new(subquery),
+                            }
+                        } else {
+                            Expr::AnySubquery {
+                                left: Box::new(expr),
+                                op,
+                                right: Box::new(subquery),
+                            }
                         }
                     }
                 };
+
                 self.expect_token(&Token::RParen)?;
 
                 Ok(expr)
@@ -1426,22 +1396,17 @@ impl<'a> Parser<'a> {
     /// Parses the parens following the `[ NOT ] IN` operator
     fn parse_in(&mut self, expr: Expr<Raw>, negated: bool) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
-        let in_op = if self
-            .parse_one_of_keywords(&[SELECT, VALUES, WITH])
-            .is_some()
-        {
-            self.prev_token();
-            Expr::InSubquery {
+        let in_op = match self.parse_parenthesized_fragment()? {
+            ParenthesizedFragment::Exprs(list) => Expr::InList {
                 expr: Box::new(expr),
-                subquery: Box::new(self.parse_query()?),
+                list,
                 negated,
-            }
-        } else {
-            Expr::InList {
+            },
+            ParenthesizedFragment::Query(subquery) => Expr::InSubquery {
                 expr: Box::new(expr),
-                list: self.parse_comma_separated(Parser::parse_expr)?,
+                subquery: Box::new(subquery),
                 negated,
-            }
+            },
         };
         self.expect_token(&Token::RParen)?;
         Ok(in_op)
@@ -1560,6 +1525,13 @@ impl<'a> Parser<'a> {
             }
         }
         true
+    }
+
+    fn peek_one_of_keywords(&mut self, kws: &[Keyword]) -> bool {
+        match self.peek_token() {
+            Some(Token::Keyword(k)) => kws.contains(&k),
+            _ => false,
+        }
     }
 
     /// Return the nth token that has not yet been processed.
@@ -1683,10 +1655,10 @@ impl<'a> Parser<'a> {
     #[must_use]
     fn parse_one_of_keywords(&mut self, kws: &[Keyword]) -> Option<Keyword> {
         match self.peek_token() {
-            Some(Token::Keyword(k)) => kws.iter().find(|kw| **kw == k).map(|kw| {
+            Some(Token::Keyword(k)) if kws.contains(&k) => {
                 self.next_token();
-                *kw
-            }),
+                Some(k)
+            }
             _ => None,
         }
     }
@@ -8081,5 +8053,36 @@ impl<'a> Parser<'a> {
 impl CheckedRecursion for Parser<'_> {
     fn recursion_guard(&self) -> &RecursionGuard {
         &self.recursion_guard
+    }
+}
+
+/// Represents an expression or query (a "fragment") with parentheses around it,
+/// when it is unknown whether the fragment belongs to a larger expression or
+/// query.
+enum ParenthesizedFragment {
+    Query(Query<Raw>),
+    Exprs(Vec<Expr<Raw>>),
+}
+
+impl ParenthesizedFragment {
+    /// Force the fragment into an expression.
+    fn into_expr(self) -> Expr<Raw> {
+        match self {
+            ParenthesizedFragment::Exprs(exprs) => {
+                // The `ParenthesizedFragment` represents that there were
+                // parentheses surrounding `exprs`, so...
+                if exprs.len() == 1 {
+                    // ...if there was only one expression, the parentheses
+                    // were simple nesting...
+                    Expr::Nested(Box::new(exprs.into_element()))
+                } else {
+                    // ...and if there were multiple expressions, the
+                    // parentheses formed an implicit row constructor.
+                    Expr::Row { exprs }
+                }
+            }
+            // Queries become subquery expressions.
+            ParenthesizedFragment::Query(query) => Expr::Subquery(Box::new(query)),
+        }
     }
 }
