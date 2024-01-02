@@ -442,7 +442,7 @@ impl fmt::Display for AdapterNotice {
                 };
                 write!(
                     f,
-                    "{vars} updated for {target}, please reconnect to take effect"
+                    "{vars} updated for {target}, this will have no effect on the current session"
                 )
             }
             AdapterNotice::Welcome(message) => message.fmt(f),
