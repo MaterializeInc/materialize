@@ -567,6 +567,7 @@ mz_sink_status_history                       source <null>  <null>
 mz_source_statistics                         source <null>  <null>
 mz_source_status_history                     source <null>  <null>
 mz_statement_execution_history               source <null>  <null>
+mz_statement_lifecycle_history               source <null>  <null>
 mz_storage_shards                            source <null>  <null>
 
 > SHOW TABLES FROM mz_internal

@@ -845,6 +845,7 @@ and cannot be changed by users), the latter is used instead.
 
 ### `mz_statement_lifecycle_history`
 
+<!-- RELATION_SPEC mz_internal.mz_statement_lifecycle_history -->
 | Field          | Type                         | Meaning                                                                                                                                                |
 |----------------|------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `statement_id` | [`uuid`]                     | The ID of the execution event. Corresponds to [`mz_activity_log.id`](#mz_activity_log)                                   |
