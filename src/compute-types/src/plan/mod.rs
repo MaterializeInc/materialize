@@ -20,8 +20,8 @@ use mz_expr::{
     permutation_for_arrangement, CollectionPlan, EvalError, Id, JoinInputMapper, LetRecLimit,
     LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, TableFunc,
 };
-use mz_ore::soft_panic_or_log;
 use mz_ore::str::Indent;
+use mz_ore::{soft_assert_eq_or_log, soft_panic_or_log};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
@@ -1529,7 +1529,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 expected_group_size,
             } => {
                 let input_arity = input.arity();
-                let output_arity = group_key.len() + aggregates.len();
                 let (input, keys) = Self::from_mir(
                     input,
                     arrangements,
@@ -1558,53 +1557,32 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 );
                 let reduce_plan =
                     ReducePlan::create_from(aggregates.clone(), *monotonic, *expected_group_size);
-                let output_keys = reduce_plan.keys(group_key.len(), output_arity);
                 // Return the plan, and the keys it produces.
-                if !enable_reduce_mfp_fusion {
-                    (
-                        Plan::Reduce {
-                            input: Box::new(input),
-                            key_val_plan,
-                            plan: reduce_plan,
-                            input_key,
-                            mfp_after: MapFilterProject::new(mfp.input_arity),
-                        },
-                        output_keys,
-                    )
+                let mfp_after;
+                let output_arity;
+                if enable_reduce_mfp_fusion {
+                    (mfp_after, mfp, output_arity) =
+                        reduce_plan.extract_mfp_after(mfp, group_key.len());
                 } else {
-                    // extract temporal predicates, as we cannot push them into `Reduce`.
-                    let temporal_mfp = mfp.extract_temporal();
-                    let non_temporal = mfp;
-                    mfp = temporal_mfp;
-
-                    // TODO: ensure we do not attempt to project away the key, as we cannot accomplish this.
-                    // FOR NOW: Unpack MFP as MF followed by P' that removes all M column, then MP afterwards.
-                    let input_arity = non_temporal.input_arity;
-                    let (m, f, p) = non_temporal.into_map_filter_project();
-                    let mut mfp_push = MapFilterProject::new(input_arity)
-                        .map(m.clone())
-                        .filter(f)
-                        .project(0..input_arity);
-                    mfp_push.optimize();
-
-                    // We still need to perform the map and projection for the actual output.
-                    let mfp_left = MapFilterProject::new(input_arity).map(m).project(p);
-
-                    // Compose the non-pushed MFP components.
-                    mfp = MapFilterProject::compose(mfp_left, mfp);
-                    mfp.optimize();
-
-                    (
-                        Plan::Reduce {
-                            input: Box::new(input),
-                            key_val_plan,
-                            plan: reduce_plan,
-                            input_key,
-                            mfp_after: mfp_push,
-                        },
-                        output_keys,
-                    )
+                    mfp_after = MapFilterProject::new(mfp.input_arity);
+                    output_arity = group_key.len() + aggregates.len();
+                    soft_assert_eq_or_log!(
+                        mfp.input_arity,
+                        output_arity,
+                        "Output arity of reduce must match input arity for MFP on top of it"
+                    );
                 }
+                let output_keys = reduce_plan.keys(group_key.len(), output_arity);
+                (
+                    Plan::Reduce {
+                        input: Box::new(input),
+                        key_val_plan,
+                        plan: reduce_plan,
+                        input_key,
+                        mfp_after,
+                    },
+                    output_keys,
+                )
             }
             MirRelationExpr::TopK {
                 input,
