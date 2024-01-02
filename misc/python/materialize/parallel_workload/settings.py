@@ -28,6 +28,7 @@ class Scenario(Enum):
     Kill = "kill"
     Rename = "rename"
     BackupRestore = "backup-restore"
+    TogglePersistTxn = "toggle-persist-txn"
 
     @classmethod
     def _missing_(cls, value):

@@ -1072,6 +1072,17 @@ steps:
               composition: parallel-workload
               args: [--runtime=1500, --scenario=backup-restore, --naughty-identifiers]
 
+      - id: parallel-workload-persist-txn
+        label: "Parallel Workload (toggle persist-txn)"
+        artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
+        timeout_in_minutes: 60
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1500, --scenario=toggle-persist-txn]
+
   - id: incident-70
     label: "Test for incident 70"
     timeout_in_minutes: 15

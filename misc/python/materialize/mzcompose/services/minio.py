@@ -12,7 +12,9 @@ from materialize.mzcompose.service import (
     Service,
 )
 
-MINIO_BLOB_URI = "s3://minioadmin:minioadmin@persist/persist?endpoint=http://minio:9000/&region=minio"
+
+def minio_blob_uri(address: str = "minio") -> str:
+    return f"s3://minioadmin:minioadmin@persist/persist?endpoint=http://{address}:9000/&region=minio"
 
 
 class Minio(Service):

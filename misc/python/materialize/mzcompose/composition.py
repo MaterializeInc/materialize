@@ -44,7 +44,7 @@ from pg8000 import Connection, Cursor
 from materialize import MZ_ROOT, mzbuild, spawn, ui
 from materialize.mzcompose import loader
 from materialize.mzcompose.service import Service
-from materialize.mzcompose.services.minio import MINIO_BLOB_URI
+from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.ui import UIError
 
 
@@ -1103,7 +1103,7 @@ class Composition:
             "admin",
             "--commit",
             "restore-blob",
-            f"--blob-uri={MINIO_BLOB_URI}",
+            f"--blob-uri={minio_blob_uri()}",
             "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
         )
         self.up("materialized")
