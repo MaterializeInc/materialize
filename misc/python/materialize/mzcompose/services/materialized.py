@@ -6,8 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
-
+import time
 from copy import copy
 
 from materialize.mz_version import MzVersion
@@ -53,6 +52,14 @@ class Materialized(Service):
         soft_assertions: bool = True,
         sanity_restart: bool = True,
         catalog_store: str | None = "shadow",
+        # The current deploy generation should be greater than or equal to the previous value. So
+        # we use `time.monotonic_ns()` to generate values that meet this requirement.
+        # TODO(jkosh44) The value should also not be incremented if the version hasn't changed and
+        # always be incremented when the version has changed. This approach doesn't guarantee
+        # exactly these semantics but it's close enough to be useful for tests. In the future we
+        # should consider defaulting to None and creating targeted tests that exercise the deploy
+        # generation.
+        deploy_generation: int | None = time.monotonic_ns(),
     ) -> None:
         if name is None:
             name = "materialized"
@@ -76,6 +83,7 @@ class Materialized(Service):
             "MZ_AWS_CONNECTION_ROLE_ARN=arn:aws:iam::123456789000:role/MaterializeConnection",
             "MZ_AWS_EXTERNAL_ID_PREFIX=eb5cb59b-e2fe-41f3-87ca-d2176a495345",
             f"MZ_CATALOG_STORE={catalog_store}",
+            f"MZ_DEPLOY_GENERATION={deploy_generation}",
             # Please think twice before forwarding additional environment
             # variables from the host, as it's easy to write tests that are
             # then accidentally dependent on the state of the host machine.
