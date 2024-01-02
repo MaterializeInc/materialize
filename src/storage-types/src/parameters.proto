@@ -49,6 +49,7 @@ message ProtoPgSourceTcpTimeouts {
 }
 
 message ProtoKafkaTimeouts {
+    reserved 6;
     bool keepalive = 1;
     mz_proto.ProtoDuration socket_timeout = 2;
     mz_proto.ProtoDuration transaction_timeout = 5;
