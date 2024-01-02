@@ -21,6 +21,7 @@ pipeline.template.yml and the docstring on `trim_pipeline` below.
 
 import argparse
 import copy
+import hashlib
 import os
 import subprocess
 import sys
@@ -423,25 +424,41 @@ def trim_tests_pipeline(pipeline: Any, coverage: bool) -> None:
 
 
 def trim_builds(pipeline: Any, coverage: bool) -> None:
-    """Trim unnecessary x86-64/aarch64 builds if all artifacts already exist."""
+    """Trim unnecessary x86-64/aarch64 builds if all artifacts already exist. Also mark remaining builds with a unique concurrency group for the code state so that the same build doesn't happen multiple times."""
 
-    def builds_published(arch: Arch) -> bool:
+    def deps_publish(arch: Arch) -> mzbuild.DependencySet:
         repo = mzbuild.Repository(Path("."), arch=arch, coverage=coverage)
-        deps_publish = repo.resolve_dependencies(
-            image for image in repo if image.publish
-        )
-        return deps_publish.check()
+        return repo.resolve_dependencies(image for image in repo if image.publish)
+
+    def hash(deps: mzbuild.DependencySet) -> str:
+        h = hashlib.sha1()
+        for dep in deps:
+            h.update(dep.spec().encode())
+        return h.hexdigest()
 
     def visit(step: dict[str, Any]) -> None:
         if step.get("id") == "build-x86_64":
-            if builds_published(Arch.X86_64):
+            deps = deps_publish(Arch.X86_64)
+            if deps.check():
                 step["skip"] = True
+            else:
+                # Make sure that builds in different pipelines for the same
+                # hash at least don't run concurrently, leading to wasted
+                # resources.
+                step["concurrency"] = 1
+                step["concurrency_group"] = f"build-x86_64/{hash(deps)}"
         if step.get("id") == "build-aarch64":
             branch = os.environ["BUILDKITE_BRANCH"]
-            if (
-                branch == "main" or branch.startswith("v") and "." in branch
-            ) and builds_published(Arch.AARCH64):
-                step["skip"] = True
+            deps = deps_publish(Arch.AARCH64)
+            if branch == "main" or branch.startswith("v") and "." in branch:
+                if deps.check():
+                    step["skip"] = True
+                else:
+                    # Make sure that builds in different pipelines for the same
+                    # hash at least don't run concurrently, leading to wasted
+                    # resources.
+                    step["concurrency"] = 1
+                    step["concurrency_group"] = f"build-aarch64/{hash(deps)}"
 
     for step in pipeline["steps"]:
         visit(step)
