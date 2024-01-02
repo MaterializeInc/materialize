@@ -4083,6 +4083,9 @@ impl Coordinator {
         let catalog = self.catalog().for_session(session);
         let role = catalog.get_role(&id);
 
+        // We'll send these notices to the user, if the operation is successful.
+        let mut notices = vec![];
+
         // Get the attributes and variables from the role, as they currently are.
         let mut attributes = role.attributes().clone();
         let mut vars = role.vars().clone();
@@ -4093,6 +4096,10 @@ impl Coordinator {
                 if let Some(inherit) = attrs.inherit {
                     attributes.inherit = inherit;
                 }
+
+                if let Some(notice) = self.should_emit_rbac_notice(session) {
+                    notices.push(notice);
+                }
             }
             PlannedAlterRoleOption::Variable(variable) => {
                 // Get the variable to make sure it's valid and visible.
@@ -4100,7 +4107,7 @@ impl Coordinator {
                     .vars()
                     .get(Some(catalog.system_vars()), variable.name())?;
 
-                match variable {
+                let var_name = match variable {
                     PlannedRoleVariable::Set { name, value } => {
                         // Update our persisted set.
                         match &value {
@@ -4115,12 +4122,20 @@ impl Coordinator {
                                 vars.insert(name.clone(), var);
                             }
                         };
+                        name
                     }
                     PlannedRoleVariable::Reset { name } => {
                         // Remove it from our persisted values.
                         vars.remove(&name);
+                        name
                     }
-                }
+                };
+
+                // Emit a notice that they need to reconnect to see the change take effect.
+                notices.push(AdapterNotice::VarDefaultUpdated {
+                    role: Some(name.clone()),
+                    var_name: Some(var_name),
+                })
             }
         }
 
@@ -4130,9 +4145,15 @@ impl Coordinator {
             attributes,
             vars: RoleVars { map: vars },
         };
-        self.catalog_transact(Some(session), vec![op])
+        let response = self
+            .catalog_transact(Some(session), vec![op])
             .await
-            .map(|_| ExecuteResponse::AlteredRole)
+            .map(|_| ExecuteResponse::AlteredRole)?;
+
+        // Send all of our queued notices.
+        session.add_notices(notices);
+
+        Ok(response)
     }
 
     pub(super) async fn sequence_alter_secret(
@@ -5047,12 +5068,19 @@ impl Coordinator {
         self.is_user_allowed_to_alter_system(session, Some(&name))?;
         let op = match value {
             plan::VariableValue::Values(values) => catalog::Op::UpdateSystemConfiguration {
-                name,
+                name: name.clone(),
                 value: OwnedVarInput::SqlSet(values),
             },
-            plan::VariableValue::Default => catalog::Op::ResetSystemConfiguration { name },
+            plan::VariableValue::Default => {
+                catalog::Op::ResetSystemConfiguration { name: name.clone() }
+            }
         };
         self.catalog_transact(Some(session), vec![op]).await?;
+
+        session.add_notice(AdapterNotice::VarDefaultUpdated {
+            role: None,
+            var_name: Some(name),
+        });
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
@@ -5062,8 +5090,12 @@ impl Coordinator {
         plan::AlterSystemResetPlan { name }: plan::AlterSystemResetPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, Some(&name))?;
-        let op = catalog::Op::ResetSystemConfiguration { name };
+        let op = catalog::Op::ResetSystemConfiguration { name: name.clone() };
         self.catalog_transact(Some(session), vec![op]).await?;
+        session.add_notice(AdapterNotice::VarDefaultUpdated {
+            role: None,
+            var_name: Some(name),
+        });
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
@@ -5075,6 +5107,10 @@ impl Coordinator {
         self.is_user_allowed_to_alter_system(session, None)?;
         let op = catalog::Op::ResetAllSystemConfiguration;
         self.catalog_transact(Some(session), vec![op]).await?;
+        session.add_notice(AdapterNotice::VarDefaultUpdated {
+            role: None,
+            var_name: None,
+        });
         Ok(ExecuteResponse::AlteredSystemConfiguration)
     }
 
