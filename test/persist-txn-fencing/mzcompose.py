@@ -57,6 +57,8 @@ WORKLOADS = [
     Workload(name="off_to_eager_many_connections", concurrency=512),
 ]
 
+CATALOG_STORES = ["stash", "persist"]
+
 SERVICES = [
     Minio(setup_materialize=True),
     Cockroach(setup_materialize=True),
@@ -69,7 +71,8 @@ SERVICES = [
 def workflow_default(c: Composition) -> None:
     """Introduce a second Mz instance while a concurrent workload is running for the purpose of exercising fencing."""
     for workload in WORKLOADS:
-        run_workload(c, workload)
+        for catalog_store in CATALOG_STORES:
+            run_workload(c, workload, catalog_store)
 
 
 def execute_operation(
@@ -129,8 +132,8 @@ def execute_operation(
         )
 
 
-def run_workload(c: Composition, workload: Workload) -> None:
-    print(f"+++ Running workload {workload.name} ...")
+def run_workload(c: Composition, workload: Workload, catalog_store: str) -> None:
+    print(f"+++ Running workload {workload.name} with {catalog_store} catalog implementation ...")
     c.silent = True
 
     c.down(destroy_volumes=True)
@@ -141,100 +144,97 @@ def run_workload(c: Composition, workload: Workload) -> None:
         "mz_second": workload.persist_txn_second,
     }
 
-    # Run the test twice with each catalog implementation.
-    for catalog_store in ["stash", "persist"]:
-        print(f"+++ Running workload with {catalog_store} catalog implementation ...")
-        with c.override(
-            *[
-                Materialized(
-                    name=mz_name,
-                    external_cockroach=True,
-                    external_minio=True,
-                    sanity_restart=False,
-                    additional_system_parameter_defaults={
-                        "persist_txn_tables": mzs[mz_name]
-                    },
-                    catalog_store=catalog_store,
-                )
-                for mz_name in mzs
-            ]
-        ):
-            c.up("mz_first")
+    with c.override(
+        *[
+            Materialized(
+                name=mz_name,
+                external_cockroach=True,
+                external_minio=True,
+                sanity_restart=False,
+                additional_system_parameter_defaults={
+                    "persist_txn_tables": mzs[mz_name]
+                },
+                catalog_store=catalog_store,
+            )
+            for mz_name in mzs
+        ]
+    ):
+        c.up("mz_first")
 
+        c.sql(
+            """
+                ALTER SYSTEM SET max_tables = 1000;
+                ALTER SYSTEM SET max_materialized_views = 1000;
+            """,
+            port=6877,
+            user="mz_system",
+            service="mz_first",
+        )
+
+        print("+++ Creating database objects ...")
+        for table_id in range(workload.tables):
             c.sql(
-                """
-                    ALTER SYSTEM SET max_tables = 1000;
-                    ALTER SYSTEM SET max_materialized_views = 1000;
+                f"""
+                    CREATE TABLE IF NOT EXISTS table{table_id}(id INTEGER, subid INTEGER, mz_service STRING);
+                    CREATE MATERIALIZED VIEW view{table_id} AS SELECT DISTINCT id, subid, mz_service FROM table{table_id};
                 """,
-                port=6877,
-                user="mz_system",
                 service="mz_first",
             )
 
-            print("+++ Creating database objects ...")
-            for table_id in range(workload.tables):
-                c.sql(
+        print("+++ Running workload ...")
+        start = time.time()
+
+        # Schedule the start of the second Mz instance
+        operations = [(c, workload, Operation.START_SECOND_MZ, 0)]
+
+        # As well as all the other operations in the workload
+        operations = operations + [
+            (c, workload, workload.operation, id)
+            for id in range(workload.operation_count)
+        ]
+
+        with futures.ThreadPoolExecutor(
+            workload.concurrency,
+        ) as executor:
+            commits = executor.map(execute_operation, operations)
+
+        elapsed = time.time() - start
+        assert elapsed > (
+            workload.second_mz_delay * 2
+        ), f"Workload completed too soon - elapsed {elapsed}s is less than 2 x second_mz_delay({workload.second_mz_delay}s)"
+
+        print(
+            f"Workload completed in {elapsed} seconds, with second_mz_delay being {workload.second_mz_delay} seconds."
+        )
+
+        # Confirm that the first Mz has properly given up the ghost
+        mz_first_log = c.invoke("logs", "mz_first", capture=True)
+        assert (
+            "unable to confirm leadership" in mz_first_log.stdout
+            or "unexpected fence epoch" in mz_first_log.stdout
+        )
+
+        print("+++ Verifying committed transactions ...")
+        cursor = c.sql_cursor(service="mz_second")
+        for commit in commits:
+            if commit is None:
+                continue
+            for target in ["table", "view"]:
+                cursor.execute(
                     f"""
-                        CREATE TABLE IF NOT EXISTS table{table_id}(id INTEGER, subid INTEGER, mz_service STRING);
-                        CREATE MATERIALIZED VIEW view{table_id} AS SELECT DISTINCT id, subid, mz_service FROM table{table_id};
-                    """,
-                    service="mz_first",
+                    SELECT id, COUNT(*) AS transaction_size
+                    FROM {target}{commit.table_id}
+                    WHERE id = {commit.row_id}
+                    GROUP BY id
+                    """
                 )
+                result = cursor.fetchall()
+                assert len(result) == 1
+                assert (
+                    result[0][0] == commit.row_id
+                ), f"Unexpected result {result}; commit: {commit}; target {target}"
+                assert (
+                    result[0][1] == commit.transaction_size
+                ), f"Unexpected result {result}; commit: {commit}; target {target}"
 
-            print("+++ Running workload ...")
-            start = time.time()
-
-            # Schedule the start of the second Mz instance
-            operations = [(c, workload, Operation.START_SECOND_MZ, 0)]
-
-            # As well as all the other operations in the workload
-            operations = operations + [
-                (c, workload, workload.operation, id)
-                for id in range(workload.operation_count)
-            ]
-
-            with futures.ThreadPoolExecutor(
-                workload.concurrency,
-            ) as executor:
-                commits = executor.map(execute_operation, operations)
-
-            elapsed = time.time() - start
-            assert elapsed > (
-                workload.second_mz_delay * 2
-            ), f"Workload completed too soon - elapsed {elapsed}s is less than 2 x second_mz_delay({workload.second_mz_delay}s)"
-
-            print(
-                f"Workload completed in {elapsed} seconds, with second_mz_delay being {workload.second_mz_delay} seconds."
-            )
-
-            # Confirm that the first Mz has properly given up the ghost
-            mz_first_log = c.invoke("logs", "mz_first", capture=True)
-            assert (
-                "unable to confirm leadership" in mz_first_log.stdout
-                or "unexpected fence epoch" in mz_first_log.stdout
-            )
-
-            print("+++ Verifying committed transactions ...")
-            cursor = c.sql_cursor(service="mz_second")
-            for commit in commits:
-                if commit is None:
-                    continue
-                for target in ["table", "view"]:
-                    cursor.execute(
-                        f"""
-                        SELECT id, COUNT(*) AS transaction_size
-                        FROM {target}{commit.table_id}
-                        WHERE id = {commit.row_id}
-                        GROUP BY id
-                        """
-                    )
-                    result = cursor.fetchall()
-                    assert len(result) == 1
-                    assert (
-                        result[0][0] == commit.row_id
-                    ), f"Unexpected result {result}; commit: {commit}; target {target}"
-                    assert (
-                        result[0][1] == commit.transaction_size
-                    ), f"Unexpected result {result}; commit: {commit}; target {target}"
-
-            print("Verification complete.")
+        print("Verification complete.")
