@@ -441,7 +441,7 @@ pub struct Args {
         required_if_eq("catalog-store", "stash"),
         required_if_eq("catalog-store", "shadow"),
         required_if_eq("catalog-store", "persist"),
-        required_if_eq("catalog-store", "legacy-stash")
+        required_if_eq("catalog-store", "emergency-stash")
     )]
     adapter_stash_url: Option<String>,
     /// The backing durable store of the catalog.
@@ -962,10 +962,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 url: args.adapter_stash_url.expect("required for shadow catalog"),
                 persist_clients,
             },
-            CatalogKind::LegacyStash => CatalogConfig::LegacyStash {
+            CatalogKind::EmergencyStash => CatalogConfig::EmergencyStash {
                 url: args
                     .adapter_stash_url
-                    .expect("required for legacy-stash catalog"),
+                    .expect("required for emergency-stash catalog"),
             },
         };
         listeners

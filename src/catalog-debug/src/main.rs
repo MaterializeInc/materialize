@@ -242,8 +242,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             Box::new(persist_backed_catalog_state(persist_client, organization_id, metrics).await)
         }
         CatalogKind::Shadow => panic!("cannot use shadow catalog with catalog-debug tool"),
-        CatalogKind::LegacyStash => {
-            panic!("cannot use legacy stash variant with catalog-debug tool, use stash instead")
+        CatalogKind::EmergencyStash => {
+            panic!("cannot use emergency stash variant with catalog-debug tool, use stash instead")
         }
     };
 

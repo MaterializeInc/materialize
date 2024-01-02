@@ -429,7 +429,7 @@ async fn main() {
                     .clone()
                     .expect("required for shadow catalog"),
             },
-            CatalogKind::LegacyStash => panic!("legacy stash cannot be used with testdrive"),
+            CatalogKind::EmergencyStash => panic!("emergency stash cannot be used with testdrive"),
         }),
         None => None,
     };
