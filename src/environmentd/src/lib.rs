@@ -260,6 +260,11 @@ pub enum CatalogConfig {
         /// Persist catalog metrics.
         metrics: Arc<mz_catalog::durable::Metrics>,
     },
+    /// The catalog contents are stored the stash and we don't attempt to rollback from persist.
+    EmergencyStash {
+        /// The PostgreSQL URL for the adapter stash.
+        url: String,
+    },
     /// The catalog contents are stored in persist.
     Persist {
         /// The PostgreSQL URL for the adapter stash.
@@ -285,6 +290,7 @@ impl CatalogConfig {
             CatalogConfig::Stash { .. } => CatalogKind::Stash,
             CatalogConfig::Persist { .. } => CatalogKind::Persist,
             CatalogConfig::Shadow { .. } => CatalogKind::Shadow,
+            CatalogConfig::EmergencyStash { .. } => CatalogKind::EmergencyStash,
         }
     }
 }
@@ -801,6 +807,20 @@ async fn catalog_opener(
                 )
                 .await,
             )
+        }
+        CatalogConfig::EmergencyStash { url } => {
+            info!("Using emergency stash backed catalog");
+            let stash_factory =
+                mz_stash::StashFactory::from_metrics(Arc::clone(&controller_config.stash_metrics));
+            let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(url)?)?;
+            Box::new(mz_catalog::durable::stash_backed_catalog_state(
+                StashConfig {
+                    stash_factory,
+                    stash_url: url.clone(),
+                    schema: None,
+                    tls,
+                },
+            ))
         }
         CatalogConfig::Persist {
             url,

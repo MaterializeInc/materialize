@@ -440,7 +440,8 @@ pub struct Args {
         value_name = "POSTGRES_URL",
         required_if_eq("catalog-store", "stash"),
         required_if_eq("catalog-store", "shadow"),
-        required_if_eq("catalog-store", "persist")
+        required_if_eq("catalog-store", "persist"),
+        required_if_eq("catalog-store", "emergency-stash")
     )]
     adapter_stash_url: Option<String>,
     /// The backing durable store of the catalog.
@@ -960,6 +961,11 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             CatalogKind::Shadow => CatalogConfig::Shadow {
                 url: args.adapter_stash_url.expect("required for shadow catalog"),
                 persist_clients,
+            },
+            CatalogKind::EmergencyStash => CatalogConfig::EmergencyStash {
+                url: args
+                    .adapter_stash_url
+                    .expect("required for emergency-stash catalog"),
             },
         };
         listeners

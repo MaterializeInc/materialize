@@ -41,7 +41,7 @@ impl TryFrom<CatalogKind> for Direction {
         match catalog_kind {
             CatalogKind::Stash => Ok(Direction::RollbackToStash),
             CatalogKind::Persist => Ok(Direction::MigrateToPersist),
-            CatalogKind::Shadow => Err(catalog_kind),
+            CatalogKind::Shadow | CatalogKind::EmergencyStash => Err(catalog_kind),
         }
     }
 }
