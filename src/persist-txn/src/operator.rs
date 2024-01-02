@@ -108,14 +108,52 @@ where
     G: Scope<Timestamp = T>,
 {
     let unique_id = (name, passthrough.scope().addr()).hashed();
-    let (txns, source_button) = txns_progress_source::<K, V, T, D, P, C, G>(
-        passthrough.scope(),
-        name,
-        client_fn(),
-        txns_id,
-        data_id,
-        unique_id,
-    );
+    let client_f = client_fn();
+    let (txns, mut buttons) = if false {
+        let (txns, source_button) = txns_progress_source::<K, V, T, D, P, C, G>(
+            passthrough.scope(),
+            name,
+            client_fn(),
+            txns_id,
+            data_id,
+            unique_id,
+        );
+        (txns, vec![source_button])
+    } else {
+        let (txns, buttons) = passthrough.scope().scoped::<T, _, _>("hybrid", |scope| {
+            let (keys, vals) = C::schemas();
+            let (data_stream, token) = shard_source::<C::Key, C::Val, T, i64, _, _, _, _>(
+                scope,
+                name,
+                client_fn,
+                txns_id,
+                Some(Antichain::from_elem(as_of.clone())),
+                SnapshotMode::Include,
+                Antichain::new(),
+                false.then_some(|_, _: &_, _| unreachable!()),
+                Arc::new(keys),
+                Arc::new(vals),
+                // TODO: Get pushdown working again.
+                |_, _| true,
+                false.then_some(|| unreachable!()),
+            );
+            (data_stream.leave(), token)
+        });
+        let data_id = data_id.clone();
+        let txns = txns.flat_map(move |x| {
+            let mut ret = Vec::new();
+            for ((k, v), t, d) in x {
+                let (k, v) = (k.unwrap(), v.unwrap());
+                let e = C::decode(k, v);
+                if e.data_id() != &data_id {
+                    continue;
+                }
+                ret.push((e, t, d));
+            }
+            ret
+        });
+        (txns, buttons)
+    };
     // Each of the `txns_frontiers` workers wants the full copy of the txns
     // shard (modulo filtered for data_id).
     let txns = txns.broadcast();
@@ -123,7 +161,7 @@ where
         txns,
         passthrough,
         name,
-        client_fn(),
+        client_f,
         txns_id,
         data_id,
         as_of,
@@ -131,7 +169,8 @@ where
         data_val_schema,
         unique_id,
     );
-    (passthrough, vec![source_button, frontiers_button])
+    buttons.push(frontiers_button);
+    (passthrough, buttons)
 }
 
 fn txns_progress_source<K, V, T, D, P, C, G>(
@@ -236,6 +275,7 @@ where
         let state = TxnsCacheState::new(txns_id, T::minimum(), Some(data_id));
         let mut txns_cache = TxnsCacheTimely {
             name: name.clone(),
+            as_of: as_of.clone(),
             state,
             input: txns_input,
             buf: Vec::new(),
@@ -406,6 +446,7 @@ struct TxnsCacheTimely<
     P: Pull<BundleCore<T, Vec<(TxnsEntry, T, i64)>>> + 'static,
 > {
     name: String,
+    as_of: T,
     state: TxnsCacheState<T>,
     input: AsyncInputHandle<T, Vec<(TxnsEntry, T, i64)>, P>,
     buf: Vec<(TxnsEntry, T, i64)>,
@@ -450,6 +491,13 @@ where
                         .into_option()
                         .expect("nothing should close the txns shard");
                     debug!("{} got progress {:?}", self.name, progress);
+                    if progress <= self.as_of {
+                        // Ignore progress updates less than the as_of because
+                        // our timestamps are compacted during that period and
+                        // it tickles some (otherwise useful) internal invariant
+                        // checks.
+                        continue;
+                    }
                     self.state
                         .push_entries(std::mem::take(&mut self.buf), progress);
                 }
