@@ -205,7 +205,7 @@ def workflow_test_github_12251(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("materialized")
 
-    start_time = time.process_time()
+    start_time = time.time()
     try:
         c.sql(
             """
@@ -222,7 +222,7 @@ def workflow_test_github_12251(c: Composition) -> None:
         assert "statement timeout" in e.args[0]["M"], e
         # Ensure the statemenet_timeout setting is ~honored
         assert (
-            time.process_time() - start_time < 2
+            time.time() - start_time < 2
         ), "idle_in_transaction_session_timeout not respected"
     else:
         assert False, "unexpected success in test_github_12251"
@@ -2951,3 +2951,87 @@ def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -
         )
 
         c.run("testdrive", "statement-logging/statement-logging.td")
+
+
+class PropagatingThread(Thread):
+    def run(self):
+        self.exc = None
+        try:
+            self.ret = self._target(*self._args, **self._kwargs)  # type: ignore
+        except BaseException as e:
+            self.exc = e
+
+    def join(self, timeout=None):
+        super().join(timeout)
+        if self.exc:
+            raise self.exc
+        return self.ret
+
+
+def workflow_blue_green_deployment(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Blue/Green Deployment testing, see https://www.notion.so/materialize/Testing-Plan-Blue-Green-Deployments-01528a1eec3b42c3a25d5faaff7a9bf9#f53b51b110b044859bf954afc771c63a"""
+    c.down(destroy_volumes=True)
+
+    running = True
+
+    def selects():
+        runtimes = []
+        try:
+            with c.sql_cursor() as cursor:
+                while running:
+                    total_runtime = 0
+                    queries = [
+                        "SELECT * FROM prod.counter_mv",
+                        "SELECT max(counter) FROM prod.counter",
+                        "SELECT count(*) FROM prod.tpch_mv",
+                    ]
+
+                    for i, query in enumerate(queries):
+                        start_time = time.time()
+                        cursor.execute(query)
+                        assert int(cursor.fetchone()[0]) > 0
+                        runtime = time.time() - start_time
+                        assert runtime < 5, f"runtime: {runtime}"
+                        total_runtime += runtime
+                    runtimes.append(total_runtime)
+        finally:
+            print(f"Query runtimes: {runtimes}")
+
+    def subscribe():
+        cursor = c.sql_cursor()
+        while running:
+            cursor.execute("BEGIN")
+            cursor.execute(
+                "DECLARE subscribe CURSOR FOR SUBSCRIBE (SELECT * FROM prod.counter_mv)"
+            )
+            cursor.execute("FETCH ALL subscribe WITH (timeout='15s')")
+            assert int(cursor.fetchall()[-1][2]) > 0
+            cursor.execute("CLOSE subscribe")
+            cursor.execute("ROLLBACK")
+
+    with c.override(
+        Testdrive(
+            no_reset=True, default_timeout="300s"
+        ),  # pending dataflows can take a while
+        Clusterd(name="clusterd1"),
+        Clusterd(name="clusterd2"),
+        Materialized(),
+    ):
+        c.up("materialized")
+        c.up("clusterd1")
+        c.up("clusterd2")
+        c.up("clusterd3")
+        c.run("testdrive", "blue-green-deployment/setup.td")
+
+        threads = [PropagatingThread(target=fn) for fn in (selects, subscribe)]
+        for thread in threads:
+            thread.start()
+        time.sleep(10)  # some time to make sure the queries run fine
+        try:
+            c.run("testdrive", "blue-green-deployment/deploy.td")
+        finally:
+            running = False
+            for thread in threads:
+                thread.join()
