@@ -160,7 +160,7 @@ class ConfigureMz(MzcomposeAction):
             system_settings.add(
                 "GRANT CREATE ON SCHEMA materialize.public TO materialize;"
             )
-            if self.scenario.base_version() >= MzVersion.parse_mz("v0.81.0-dev"):
+            if self.scenario.base_version() >= MzVersion.parse_mz("v0.82.0-dev"):
                 cluster_name = "quickstart"
             else:
                 cluster_name = "default"
@@ -247,7 +247,7 @@ class UseClusterdCompute(MzcomposeAction):
                 port=6877,
                 user="mz_system",
             )
-        if self.base_version >= MzVersion.parse_mz("v0.81.0-dev"):
+        if self.base_version >= MzVersion.parse_mz("v0.82.0-dev"):
             cluster_name = "quickstart"
         else:
             cluster_name = "default"
@@ -335,7 +335,7 @@ class DropCreateDefaultReplica(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        if self.base_version >= MzVersion.parse_mz("v0.81.0-dev"):
+        if self.base_version >= MzVersion.parse_mz("v0.82.0-dev"):
             cluster_name = "quickstart"
         else:
             cluster_name = "default"

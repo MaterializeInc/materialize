@@ -486,8 +486,8 @@ impl State {
             .await?;
 
         let cluster = match version {
-            ..=8099 => "default",
-            8100.. => "quickstart",
+            ..=8199 => "default",
+            8200.. => "quickstart",
         };
         inner_client
             .batch_execute(&format!("GRANT USAGE ON CLUSTER {cluster} TO PUBLIC"))

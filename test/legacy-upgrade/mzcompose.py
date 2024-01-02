@@ -150,7 +150,7 @@ def test_upgrade_from_version(
 
     if from_version == "current_source" or MzVersion.parse_mz(
         from_version
-    ) >= MzVersion.parse_mz("v0.81.0-dev"):
+    ) >= MzVersion.parse_mz("v0.82.0-dev"):
         created_cluster = "quickstart"
     else:
         created_cluster = "default"

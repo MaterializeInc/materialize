@@ -52,7 +52,7 @@ class Check:
         """
         :return: name of the cluster created in all environments.
         """
-        if self.base_version >= MzVersion.parse_mz("v0.81.0-dev"):
+        if self.base_version >= MzVersion.parse_mz("v0.82.0-dev"):
             return "quickstart"
         else:
             return "default"
