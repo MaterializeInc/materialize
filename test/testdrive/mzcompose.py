@@ -97,7 +97,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.up(*dependencies)
 
         if args.replicas > 1:
-            c.sql("DROP CLUSTER default CASCADE", user="mz_system", port=6877)
+            c.sql("DROP CLUSTER quickstart CASCADE", user="mz_system", port=6877)
             # Make sure a replica named 'r1' always exists
             replica_names = [
                 "r1" if replica_id == 0 else f"replica{replica_id}"
@@ -108,7 +108,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 for replica_name in replica_names
             )
             c.sql(
-                f"CREATE CLUSTER default REPLICAS ({replica_string})",
+                f"CREATE CLUSTER quickstart REPLICAS ({replica_string})",
                 user="mz_system",
                 port=6877,
             )

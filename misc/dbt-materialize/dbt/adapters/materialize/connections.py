@@ -66,7 +66,7 @@ psycopg2.connect = connect
 
 @dataclass
 class MaterializeCredentials(PostgresCredentials):
-    cluster: Optional[str] = "default"
+    cluster: Optional[str] = "quickstart"
 
     @property
     def type(self):

@@ -295,7 +295,7 @@ SET cluster_replica = 'r1'
 query T
 SELECT current_setting('cluster') || '.' || current_setting('cluster_replica')
 ----
-default.r1
+quickstart.r1
 
 query T
 SELECT current_setting('max_tables')
@@ -468,7 +468,7 @@ ALTER ROLE parker SET cluster TO foo;
 query T
 SHOW cluster;
 ----
-default
+quickstart
 
 simple conn=parker_1,user=parker
 SHOW cluster;
@@ -493,7 +493,7 @@ COMPLETE 1
 simple conn=parker_2,user=parker
 SHOW cluster;
 ----
-default
+quickstart
 COMPLETE 1
 
 # Roles can alter their own variables.

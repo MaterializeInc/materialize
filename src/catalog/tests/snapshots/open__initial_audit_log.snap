@@ -133,7 +133,7 @@ expression: audit_log
             details: IdNameV1(
                 IdNameV1 {
                     id: "u1",
-                    name: "default",
+                    name: "quickstart",
                 },
             ),
             user: None,
@@ -165,7 +165,7 @@ expression: audit_log
             details: CreateClusterReplicaV1(
                 CreateClusterReplicaV1 {
                     cluster_id: "u1",
-                    cluster_name: "default",
+                    cluster_name: "quickstart",
                     replica_id: Some(
                         "u1",
                     ),

@@ -272,7 +272,7 @@ const CLIENT_MIN_MESSAGES: ServerVar<ClientSeverity> = ServerVar {
 pub const CLUSTER_VAR_NAME: &UncasedStr = UncasedStr::new("cluster");
 pub static CLUSTER: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     name: CLUSTER_VAR_NAME,
-    value: "default".to_string(),
+    value: "quickstart".to_string(),
     description: "Sets the current cluster (Materialize).",
     internal: false,
 });
@@ -3251,6 +3251,12 @@ impl SystemVars {
     /// the affected SystemVars.
     fn refresh_internal_state(&mut self) {
         self.propagate_var_change(MAX_CONNECTIONS.name.as_str());
+    }
+
+    /// Returns the system default for the [`CLUSTER`] session variable. To know the active cluster
+    /// for the current session, you must check the [`SessionVars`].
+    pub fn default_cluster(&self) -> String {
+        self.expect_value(&CLUSTER).to_owned()
     }
 
     /// Returns the value of the `max_kafka_connections` configuration parameter.

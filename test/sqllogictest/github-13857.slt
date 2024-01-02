@@ -15,7 +15,7 @@ ALTER SYSTEM SET enable_rbac_checks TO false;
 COMPLETE 0
 
 statement ok
-DROP CLUSTER default CASCADE
+DROP CLUSTER quickstart CASCADE
 
 statement ok
 CREATE CLUSTER test

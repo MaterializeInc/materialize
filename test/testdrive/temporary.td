@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-regex match=cluster1|default replacement=<CLUSTER_NAME>
+$ set-regex match=cluster1|quickstart replacement=<CLUSTER_NAME>
 
 > CREATE VIEW v AS VALUES (1, 'foo'), (2, 'bar'), (3, 'foo'), (1, 'bar')
 
@@ -115,7 +115,7 @@ contains:table "mz_temp.temp_t" already exists
 #  on_name    key_name            seq_in_index  column_name  expression  nullable
 #  name                 on          cluster         key
 # --------------------------------------------------------------------------------
-#  temp_t_primary_idx   d           default         {a, b}
+#  temp_t_primary_idx   d           quickstart      {a, b}
 
 > DROP TABLE temp_t
 

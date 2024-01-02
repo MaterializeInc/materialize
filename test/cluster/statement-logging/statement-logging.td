@@ -123,22 +123,22 @@ serializable
 <null> <null> my_app 1 {} success <null> <null> <null> true "SET transaction_isolation TO serializable" "strict serializable" <null>
 <null> c my_app 1 {} success <null> 1 standard true "SELECT count(*) FROM t" "strict serializable" true
 <null> c my_app 1 {} success <null> <null> <null> true "DROP CLUSTER c" "strict serializable" <null>
-default default my_app 1 {} error "Evaluation error: division by zero" <null> <null> true "SELECT f/0 FROM t" "strict serializable" true
-default default my_app 1 {} success <null> 1 constant true "EXECUTE p('hello world')" "strict serializable" <null>
-default default my_app 1 {} success <null> 1 fast-path true "SELECT * FROM t" "strict serializable" <null>
-default default my_app 1 {} success <null> 1 standard true "SELECT count(*) FROM t" "strict serializable" true
-default default my_app 1 {} success <null> 2 constant true "FETCH c" "strict serializable" <null>
-default default my_app 1 {} success <null> <null> <null> true BEGIN "strict serializable" <null>
-default default my_app 1 {} success <null> <null> <null> true COMMIT "strict serializable" <null>
-default default my_app 1 {} success <null> <null> <null> true "CREATE CLUSTER c REPLICAS (r1 (size '1'))" "strict serializable" <null>
-default default my_app 1 {} success <null> <null> <null> true "CREATE DEFAULT INDEX i ON t" "strict serializable" <null>
-default default my_app 1 {} success <null> <null> <null> true "CREATE TABLE t(f int)" "strict serializable" <null>
-default default my_app 1 {} success <null> <null> <null> true "DECLARE c CURSOR FOR VALUES (1), (2)" "strict serializable" <null>
-default default my_app 1 {} success <null> <null> <null> true "FETCH c" "strict serializable" <null>
-default default my_app 1 {} success <null> <null> <null> true "FETCH c" "strict serializable" <null>
-default default my_app 1 {} success <null> <null> <null> true "INSERT INTO t VALUES (1)" "strict serializable" <null>
-default default my_app 1 {} success <null> <null> <null> true "PREPARE p AS values ($1)" "strict serializable" <null>
-default default my_app 1 {} success <null> <null> <null> true "SET cluster TO c" "strict serializable" <null>
+quickstart quickstart my_app 1 {} error "Evaluation error: division by zero" <null> <null> true "SELECT f/0 FROM t" "strict serializable" true
+quickstart quickstart my_app 1 {} success <null> 1 constant true "EXECUTE p('hello world')" "strict serializable" <null>
+quickstart quickstart my_app 1 {} success <null> 1 fast-path true "SELECT * FROM t" "strict serializable" <null>
+quickstart quickstart my_app 1 {} success <null> 1 standard true "SELECT count(*) FROM t" "strict serializable" true
+quickstart quickstart my_app 1 {} success <null> 2 constant true "FETCH c" "strict serializable" <null>
+quickstart quickstart my_app 1 {} success <null> <null> <null> true BEGIN "strict serializable" <null>
+quickstart quickstart my_app 1 {} success <null> <null> <null> true COMMIT "strict serializable" <null>
+quickstart quickstart my_app 1 {} success <null> <null> <null> true "CREATE CLUSTER c REPLICAS (r1 (size '1'))" "strict serializable" <null>
+quickstart quickstart my_app 1 {} success <null> <null> <null> true "CREATE DEFAULT INDEX i ON t" "strict serializable" <null>
+quickstart quickstart my_app 1 {} success <null> <null> <null> true "CREATE TABLE t(f int)" "strict serializable" <null>
+quickstart quickstart my_app 1 {} success <null> <null> <null> true "DECLARE c CURSOR FOR VALUES (1), (2)" "strict serializable" <null>
+quickstart quickstart my_app 1 {} success <null> <null> <null> true "FETCH c" "strict serializable" <null>
+quickstart quickstart my_app 1 {} success <null> <null> <null> true "FETCH c" "strict serializable" <null>
+quickstart quickstart my_app 1 {} success <null> <null> <null> true "INSERT INTO t VALUES (1)" "strict serializable" <null>
+quickstart quickstart my_app 1 {} success <null> <null> <null> true "PREPARE p AS values ($1)" "strict serializable" <null>
+quickstart quickstart my_app 1 {} success <null> <null> <null> true "SET cluster TO c" "strict serializable" <null>
 mz_introspection mz_introspection my_app 1 {} success <null> 1 constant true "SELECT 'beginning real test!'" "strict serializable" <null>
 mz_introspection mz_introspection my_app 1 {} success <null> 1 constant true "SELECT 'serializable'" serializable <null>
 mz_introspection mz_introspection my_app 1 {} success <null> 1 standard true "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" "strict serializable" true

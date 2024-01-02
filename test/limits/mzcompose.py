@@ -1454,8 +1454,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         c.sql(
             f"""
-            DROP CLUSTER DEFAULT cascade;
-            CREATE CLUSTER default REPLICAS (
+            DROP CLUSTER quickstart cascade;
+            CREATE CLUSTER quickstart REPLICAS (
                 replica1 (
                     STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
                     STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],

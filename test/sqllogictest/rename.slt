@@ -159,7 +159,7 @@ query TT
 SHOW CREATE MATERIALIZED VIEW grand_friend.mv1;
 ----
 materialize.grand_friend.mv1
-CREATE MATERIALIZED VIEW "materialize"."grand_friend"."mv1" IN CLUSTER "default" AS SELECT "x" FROM "materialize"."enemy"."v1"
+CREATE MATERIALIZED VIEW "materialize"."grand_friend"."mv1" IN CLUSTER "quickstart" AS SELECT "x" FROM "materialize"."enemy"."v1"
 
 statement ok
 CREATE TABLE a1.t (y text);
@@ -210,7 +210,7 @@ query TT
 SHOW CREATE INDEX enemy.enemy_v2_idx
 ----
 materialize.enemy.enemy_v2_idx
-CREATE INDEX "enemy_v2_idx" IN CLUSTER "default" ON "materialize"."enemy"."v2" ("y", "x")
+CREATE INDEX "enemy_v2_idx" IN CLUSTER "quickstart" ON "materialize"."enemy"."v2" ("y", "x")
 
 statement ok
 ALTER SCHEMA b3 RENAME TO b4;
@@ -234,7 +234,7 @@ query TT
 SHOW CREATE INDEX friend_again.enemy_v2_idx
 ----
 materialize.friend_again.enemy_v2_idx
-CREATE INDEX "enemy_v2_idx" IN CLUSTER "default" ON "materialize"."friend_again"."v2" ("y", "x")
+CREATE INDEX "enemy_v2_idx" IN CLUSTER "quickstart" ON "materialize"."friend_again"."v2" ("y", "x")
 
 statement ok
 CREATE TABLE grand_friend.t1 (keys text);

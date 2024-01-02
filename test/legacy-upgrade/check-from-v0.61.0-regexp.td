@@ -11,4 +11,4 @@ $ skip-if
 SELECT mz_version_num() < 6100;
 
 > SHOW CREATE MATERIALIZED VIEW regexp_view;
-"materialize.public.regexp_view" "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"regexp_view\" IN CLUSTER \"default\" AS SELECT \"a\" NOT LIKE 'b' AS \"c1\", \"a\" ILIKE 'b' AS \"c2\", \"a\" ~ 'b' AS \"c3\", \"a\" ~* 'b' AS \"c4\", \"a\" !~ 'b' AS \"c5\", \"a\" !~* 'b' AS \"c6\" FROM \"materialize\".\"public\".\"regexp_table\""
+"materialize.public.regexp_view" "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"regexp_view\" IN CLUSTER \"${arg.created-cluster}\" AS SELECT \"a\" NOT LIKE 'b' AS \"c1\", \"a\" ILIKE 'b' AS \"c2\", \"a\" ~ 'b' AS \"c3\", \"a\" ~* 'b' AS \"c4\", \"a\" !~ 'b' AS \"c5\", \"a\" !~* 'b' AS \"c6\" FROM \"materialize\".\"public\".\"regexp_table\""

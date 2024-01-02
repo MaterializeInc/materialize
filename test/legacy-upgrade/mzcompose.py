@@ -148,12 +148,19 @@ def test_upgrade_from_version(
     else:
         c.up("materialized")
 
+    if from_version == "current_source" or MzVersion.parse_mz(
+        from_version
+    ) >= MzVersion.parse_mz("v0.82.0-dev"):
+        created_cluster = "quickstart"
+    else:
+        created_cluster = "default"
     temp_dir = f"--temp-dir=/share/tmp/upgrade-from-{from_version}"
     seed = f"--seed={random.getrandbits(32)}"
     c.run(
         "testdrive",
         "--no-reset",
         f"--var=upgrade-from-version={from_version}",
+        f"--var=created-cluster={created_cluster}",
         temp_dir,
         seed,
         f"create-in-{version_glob}-{filter}.td",
@@ -181,6 +188,7 @@ def test_upgrade_from_version(
             "--no-reset",
             f"--var=upgrade-from-version={from_version}",
             f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
+            f"--var=created-cluster={created_cluster}",
             temp_dir,
             seed,
             f"check-from-{version_glob}-{filter}.td",

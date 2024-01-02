@@ -417,10 +417,9 @@ impl Catalog {
             Catalog::load_system_configuration(
                 &mut state,
                 &mut txn,
-                config.system_parameter_defaults,
-                config.remote_system_parameters,
-            )
-            .await?;
+                &config.system_parameter_defaults,
+                config.remote_system_parameters.as_ref(),
+            )?;
 
             // Now that LD is loaded, set the intended catalog timeout.
             // TODO: Move this into the catalog constructor.
@@ -856,6 +855,14 @@ impl Catalog {
                 txn.set_catalog_content_version(config.build_info.version.to_string())?;
             }
 
+            // Re-load the system configuration in case it changed after the migrations.
+            Catalog::load_system_configuration(
+                &mut state,
+                &mut txn,
+                &config.system_parameter_defaults,
+                config.remote_system_parameters.as_ref(),
+            )?;
+
             let mut state = Catalog::load_catalog_items(&mut txn, &state)?;
 
             let mut builtin_migration_metadata = Catalog::generate_builtin_migration_metadata(
@@ -1108,15 +1115,15 @@ impl Catalog {
     ///
     /// # Errors
     #[tracing::instrument(level = "info", skip_all)]
-    async fn load_system_configuration(
+    fn load_system_configuration(
         state: &mut CatalogState,
         txn: &mut Transaction<'_>,
-        system_parameter_defaults: BTreeMap<String, String>,
-        remote_system_parameters: Option<BTreeMap<String, OwnedVarInput>>,
+        system_parameter_defaults: &BTreeMap<String, String>,
+        remote_system_parameters: Option<&BTreeMap<String, OwnedVarInput>>,
     ) -> Result<(), AdapterError> {
         let system_config = txn.get_system_configurations();
 
-        for (name, value) in &system_parameter_defaults {
+        for (name, value) in system_parameter_defaults {
             match state.set_system_configuration_default(name, VarInput::Flat(value)) {
                 Ok(_) => (),
                 Err(Error {
@@ -1140,7 +1147,7 @@ impl Catalog {
         }
         if let Some(remote_system_parameters) = remote_system_parameters {
             for (name, value) in remote_system_parameters {
-                Catalog::update_system_configuration(state, txn, &name, value.borrow())?;
+                Catalog::update_system_configuration(state, txn, name, value.borrow())?;
             }
             txn.set_system_config_synced_once()?;
         }

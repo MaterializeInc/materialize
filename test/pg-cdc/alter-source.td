@@ -235,8 +235,8 @@ INSERT INTO table_e VALUES (3, 'three');
 4
 
 > SHOW MATERIALIZED VIEWS
-mv_e default
-mv_f default
+mv_e quickstart
+mv_f quickstart
 
 # RESTRICT works
 ! ALTER SOURCE mz_source DROP SUBSOURCE IF EXISTS table_e;

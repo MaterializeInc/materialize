@@ -805,8 +805,8 @@ impl<'a> Runner<'a> {
             .batch_execute("CREATE DATABASE materialize")
             .await?;
 
-        // Ensure default cluster exists with one replica of size '1'. We don't
-        // destroy the existing default cluster replica if it exists, as turning
+        // Ensure quickstart cluster exists with one replica of size '1'. We don't
+        // destroy the existing quickstart cluster replica if it exists, as turning
         // on a cluster replica is exceptionally slow.
         let mut needs_default_cluster = true;
         for row in inner
@@ -815,7 +815,7 @@ impl<'a> Runner<'a> {
             .await?
         {
             match row.get("name") {
-                "default" => needs_default_cluster = false,
+                "quickstart" => needs_default_cluster = false,
                 name => {
                     inner
                         .system_client
@@ -827,7 +827,7 @@ impl<'a> Runner<'a> {
         if needs_default_cluster {
             inner
                 .system_client
-                .batch_execute("CREATE CLUSTER default REPLICAS ()")
+                .batch_execute("CREATE CLUSTER quickstart REPLICAS ()")
                 .await?;
         }
         let mut needs_default_replica = true;
@@ -835,7 +835,7 @@ impl<'a> Runner<'a> {
             .system_client
             .query(
                 "SELECT name, size FROM mz_cluster_replicas
-                 WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'default')",
+                 WHERE cluster_id = (SELECT id FROM mz_clusters WHERE name = 'quickstart')",
                 &[],
             )
             .await?
@@ -847,7 +847,7 @@ impl<'a> Runner<'a> {
             } else {
                 inner
                     .system_client
-                    .batch_execute(&format!("DROP CLUSTER REPLICA default.{}", name))
+                    .batch_execute(&format!("DROP CLUSTER REPLICA quickstart.{}", name))
                     .await?;
             }
         }
@@ -855,7 +855,7 @@ impl<'a> Runner<'a> {
             inner
                 .system_client
                 .batch_execute(&format!(
-                    "CREATE CLUSTER REPLICA default.r1 SIZE '{}'",
+                    "CREATE CLUSTER REPLICA quickstart.r1 SIZE '{}'",
                     self.config.replicas
                 ))
                 .await?;
@@ -876,11 +876,11 @@ impl<'a> Runner<'a> {
             .await?;
         inner
             .system_client
-            .batch_execute("GRANT USAGE ON CLUSTER default TO PUBLIC")
+            .batch_execute("GRANT USAGE ON CLUSTER quickstart TO PUBLIC")
             .await?;
         inner
             .system_client
-            .batch_execute("GRANT CREATE ON CLUSTER default TO materialize")
+            .batch_execute("GRANT CREATE ON CLUSTER quickstart TO materialize")
             .await?;
 
         // Some sqllogic tests require more than the default amount of tables, so we increase the

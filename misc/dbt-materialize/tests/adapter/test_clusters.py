@@ -64,7 +64,7 @@ where mv.id like 'u%'
 models_expected_clusters = """
 materialized_view_name,cluster_name,index_name,index_cluster_name
 override_cluster,not_default,,
-override_index_cluster,default,i_col_1_idx,not_default
+override_index_cluster,quickstart,i_col_1_idx,not_default
 override_cluster_and_index,not_default,c_i_col_1_idx,not_default
 """.lstrip()
 
@@ -111,13 +111,13 @@ class TestModelCluster:
     # not error if a user-provided cluster is specified as a connection or
     # model config, but will error otherwise.
     # See #17197: https://github.com/MaterializeInc/materialize/pull/17197
-    def test_materialize_drop_default(self, project):
-        project.run_sql("DROP CLUSTER default CASCADE")
+    def test_materialize_drop_quickstart(self, project):
+        project.run_sql("DROP CLUSTER quickstart CASCADE")
 
         run_dbt(["run", "--models", "override_cluster"], expect_pass=True)
         run_dbt(["run", "--models", "default_cluster"], expect_pass=False)
 
-        project.run_sql("CREATE CLUSTER default SIZE = '1'")
+        project.run_sql("CREATE CLUSTER quickstart SIZE = '1'")
 
 
 class TestProjectConfigCluster:

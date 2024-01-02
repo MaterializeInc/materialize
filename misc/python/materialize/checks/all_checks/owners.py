@@ -21,7 +21,7 @@ class Owners(Check):
             $[version>=5200] postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
             GRANT CREATE ON DATABASE materialize TO {role}
             GRANT CREATE ON SCHEMA materialize.public TO {role}
-            GRANT CREATE ON CLUSTER default TO {role}
+            GRANT CREATE ON CLUSTER {self._default_cluster()} TO {role}
             $[version>=5900] postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
             GRANT CREATEDB ON SYSTEM TO {role}
             $[version<5900] postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}

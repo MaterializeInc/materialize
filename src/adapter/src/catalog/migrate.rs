@@ -109,6 +109,12 @@ pub(crate) async fn migrate(
     ast_rewrite_postgres_source_timeline_id_0_80_0(tx, &conn_cat, connection_context.clone())
         .await?;
 
+    // In v0.82.0 we changed the 'default' cluster to be named 'quickstart'. For all _existing_
+    // customers we want to retain the cluster name of 'default'.
+    if catalog_version > Version::new(0, 0, 0) && catalog_version <= Version::new(0, 81, u64::MAX) {
+        persist_default_cluster_0_82_0(tx, &conn_cat, connection_context)?;
+    }
+
     info!(
         "migration from catalog version {:?} complete",
         catalog_version
@@ -322,6 +328,24 @@ fn ast_rewrite_rewrite_type_schemas_0_81_0(stmt: &mut Statement<Raw>) {
     }
 
     Rewriter.visit_statement_mut(stmt);
+}
+
+fn persist_default_cluster_0_82_0(
+    txn: &mut Transaction<'_>,
+    _conn_catalog: &ConnCatalog<'_>,
+    _connection_context: &ConnectionContext,
+) -> Result<(), anyhow::Error> {
+    const CLUSTER_KEY: &str = "cluster";
+
+    // Only update the default cluster, if a user hasn't already overriden it.
+    let already_set = txn
+        .get_system_configurations()
+        .any(|config| config.name == CLUSTER_KEY);
+    if !already_set {
+        txn.upsert_system_config(CLUSTER_KEY, "default".to_string())?;
+    }
+
+    Ok(())
 }
 
 fn _add_to_audit_log(

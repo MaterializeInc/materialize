@@ -2033,7 +2033,7 @@ async fn test_superuser_can_alter_cluster() {
         .await
         .unwrap()
         .get::<_, String>(0);
-    assert_eq!(default_cluster, "default");
+    assert_eq!(default_cluster, "quickstart");
 
     // External admins should be able to modify the system default cluster.
     superuser

@@ -16,41 +16,41 @@ $ set-sql-timeout duration=1s
 # Create a basic view for use throughout the test.
 > CREATE MATERIALIZED VIEW v AS SELECT 1 AS a
 
-# Test that only the default replicas exist at start.
+# Test that only the quickstart replicas exist at start.
 > SELECT name FROM (SHOW CLUSTERS)
-default
 mz_introspection
 mz_system
+quickstart
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS)
-default           r1  ${arg.default-replica-size}
 mz_introspection  r1  1
 mz_system         r1  1
+quickstart        r1  ${arg.default-replica-size}
 
 # Test that creating a source without an explicit size creates a linked cluster
 # with the default size. (Unsafe mode only.)
 > CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
 > SELECT name FROM (SHOW CLUSTERS)
-default
 mz_introspection
 mz_system
 materialize_public_lg
+quickstart
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS)
-default                r1      ${arg.default-replica-size}
 mz_introspection       r1      1
 mz_system              r1      1
 materialize_public_lg  linked  ${arg.default-storage-size}
+quickstart             r1      ${arg.default-replica-size}
 > DROP SOURCE lg
 
 # Test that creating sources with an explicit size creates linked clusters, each
 # with a replica named "linked" with the size specified in the source.
 > CREATE SOURCE lg1 FROM LOAD GENERATOR COUNTER WITH (SIZE = '1')
 > SELECT name FROM (SHOW CLUSTERS)
-default
 mz_introspection
 mz_system
 materialize_public_lg1
+quickstart
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS)
-default                 r1      ${arg.default-replica-size}
+quickstart              r1      ${arg.default-replica-size}
 mz_introspection        r1      1
 mz_system               r1      1
 materialize_public_lg1  linked  1
@@ -61,13 +61,13 @@ materialize_public_lg1  linked  1
 lg1  materialize_public_lg1
 > CREATE SOURCE lg2 FROM LOAD GENERATOR COUNTER WITH (SIZE = '2')
 > SELECT name FROM (SHOW CLUSTERS)
-default
+quickstart
 mz_introspection
 mz_system
 materialize_public_lg1
 materialize_public_lg2
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS)
-default                 r1      ${arg.default-replica-size}
+quickstart              r1      ${arg.default-replica-size}
 mz_introspection        r1      1
 mz_system               r1      1
 materialize_public_lg1  linked  1
@@ -126,20 +126,20 @@ contains:cannot modify linked cluster "materialize_public_lg1"
 > EXPLAIN SELECT * FROM v
 "Explained Query:\n  ReadStorage materialize.public.v\n"
 
-> SET cluster = default
+> SET cluster = quickstart
 
 # Test that only the default clusters and replicas remain after dropping
 # the sources.
 > DROP SOURCE lg1
 > DROP SOURCE lg2
 > SELECT name FROM (SHOW CLUSTERS)
-default
 mz_introspection
 mz_system
+quickstart
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS)
-default                 r1      ${arg.default-replica-size}
 mz_introspection        r1      1
 mz_system               r1      1
+quickstart              r1      ${arg.default-replica-size}
 
 # Test that creating a sink without an explicit size creates a linked cluster
 # with the default size. (Unsafe mode only.)
@@ -147,15 +147,15 @@ mz_system               r1      1
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM
 > SELECT name FROM (SHOW CLUSTERS)
-default
 mz_introspection
 mz_system
 materialize_public_snk
+quickstart
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS)
-default                 r1      ${arg.default-replica-size}
 mz_introspection        r1      1
 mz_system               r1      1
 materialize_public_snk  linked  ${arg.default-storage-size}
+quickstart              r1      ${arg.default-replica-size}
 > DROP SINK snk
 
 # Test that creating sinks with an explicit size creates linked clusters, each
@@ -164,15 +164,15 @@ materialize_public_snk  linked  ${arg.default-storage-size}
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk1-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM WITH (SIZE = '1')
 > SELECT name FROM (SHOW CLUSTERS)
-default
 mz_introspection
 mz_system
 materialize_public_snk1
+quickstart
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS)
-default                  r1      ${arg.default-replica-size}
 mz_introspection         r1      1
 mz_system                r1      1
 materialize_public_snk1  linked  1
+quickstart               r1      ${arg.default-replica-size}
 > SELECT s.name, c.name
   FROM mz_sinks s
   JOIN mz_clusters c ON c.id = s.cluster_id
@@ -182,17 +182,17 @@ snk1  materialize_public_snk1
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'snk-${testdrive.seed}')
   FORMAT JSON ENVELOPE DEBEZIUM WITH (SIZE = '2')
 > SELECT name FROM (SHOW CLUSTERS)
-default
 mz_introspection
 mz_system
 materialize_public_snk1
 materialize_public_snk2
+quickstart
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS)
-default                  r1      ${arg.default-replica-size}
 mz_introspection         r1      1
 mz_system                r1      1
 materialize_public_snk1  linked  1
 materialize_public_snk2  linked  2
+quickstart               r1      ${arg.default-replica-size}
 
 # Test altering the size of a sink.
 > ALTER SINK snk2 SET (SIZE = '4')
@@ -211,13 +211,13 @@ materialize_public_snk2  linked  ${arg.default-storage-size}
 > DROP SINK snk1
 > DROP SINK snk2
 > SELECT name FROM (SHOW CLUSTERS)
-default
 mz_introspection
 mz_system
+quickstart
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS)
-default                 r1      ${arg.default-replica-size}
 mz_introspection        r1      1
 mz_system               r1      1
+quickstart              r1      ${arg.default-replica-size}
 
 # Test that two objects with the same name create distinct clusters
 # as the schema name is included in the cluster name
@@ -231,18 +231,18 @@ mz_system               r1      1
   FORMAT JSON ENVELOPE DEBEZIUM
 
 > SELECT name FROM (SHOW CLUSTERS)
-default
 mz_introspection
 mz_system
 materialize_schema1_s1
 materialize_schema2_s1
+quickstart
 
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS)
-default                 r1      ${arg.default-replica-size}
 mz_introspection        r1      1
 mz_system               r1      1
 materialize_schema1_s1  linked  ${arg.default-storage-size}
 materialize_schema2_s1  linked  ${arg.default-storage-size}
+quickstart              r1      ${arg.default-replica-size}
 
 > DROP SCHEMA schema1 CASCADE;
 > DROP SCHEMA schema2 CASCADE;
@@ -255,18 +255,18 @@ materialize_schema2_s1  linked  ${arg.default-storage-size}
   FORMAT JSON ENVELOPE DEBEZIUM
 
 > SELECT name FROM (SHOW CLUSTERS)
-default
 mz_introspection
 mz_system
 materialize_public_s1
 materialize_public_S1
+quickstart
 
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS)
-default                 r1      ${arg.default-replica-size}
 mz_introspection        r1      1
 mz_system               r1      1
 materialize_public_s1  linked  ${arg.default-storage-size}
 materialize_public_S1  linked  ${arg.default-storage-size}
+quickstart              r1      ${arg.default-replica-size}
 
 > DROP SOURCE "s1";
 > DROP SINK "S1";
@@ -278,18 +278,18 @@ materialize_public_S1  linked  ${arg.default-storage-size}
 > CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER
 
 > SELECT name FROM (SHOW CLUSTERS)
-default
 mz_introspection
 mz_system
 materialize_public_s1
 materialize_public_s11
+quickstart
 
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS)
-default                 r1      ${arg.default-replica-size}
 mz_introspection        r1      1
 mz_system               r1      1
 materialize_public_s1  r1  1
 materialize_public_s11 linked ${arg.default-storage-size}
+quickstart              r1      ${arg.default-replica-size}
 
 > DROP CLUSTER materialize_public_s1;
 > DROP SOURCE s1;

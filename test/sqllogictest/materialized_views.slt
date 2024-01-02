@@ -79,7 +79,7 @@ query TT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
 name      cluster
-mv        default
+mv        quickstart
 other_mv  other
 
 statement ok
@@ -370,14 +370,14 @@ query TT colnames
 SHOW CREATE MATERIALIZED VIEW mv
 ----
 name                  create_sql
-materialize.public.mv CREATE␠MATERIALIZED␠VIEW␠"materialize"."public"."mv"␠IN␠CLUSTER␠"default"␠AS␠SELECT␠1
+materialize.public.mv CREATE␠MATERIALIZED␠VIEW␠"materialize"."public"."mv"␠IN␠CLUSTER␠"quickstart"␠AS␠SELECT␠1
 
 # Test: SHOW CREATE MATERIALIZED VIEW as mz_support
 
 simple conn=mz_introspection,user=mz_support
 SHOW CREATE MATERIALIZED VIEW mv
 ----
-materialize.public.mv,CREATE MATERIALIZED VIEW "materialize"."public"."mv" IN CLUSTER "default" AS SELECT 1
+materialize.public.mv,CREATE MATERIALIZED VIEW "materialize"."public"."mv" IN CLUSTER "quickstart" AS SELECT 1
 COMPLETE 1
 
 # Test: SHOW MATERIALIZED VIEWS
@@ -389,7 +389,7 @@ query TT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
 name      cluster
-mv        default
+mv        quickstart
 other_mv  other
 
 query TT colnames,rowsort
@@ -463,7 +463,7 @@ query TTTT colnames
 SHOW INDEXES ON mv
 ----
 name            on  cluster key
-mv_primary_idx  mv  default {?column?}
+mv_primary_idx  mv  quickstart {?column?}
 
 
 # Test: Creating materialized views that depend on log sources is forbidden.
