@@ -49,7 +49,7 @@ pub enum AdapterError {
     /// An error occurred in a catalog operation.
     Catalog(mz_catalog::memory::error::Error),
     /// The cached plan or descriptor changed.
-    ChangedPlan,
+    ChangedPlan(String),
     /// The cursor already exists.
     DuplicateCursor(String),
     /// An error while evaluating an expression.
@@ -390,7 +390,7 @@ impl AdapterError {
                 },
                 _ => SqlState::INTERNAL_ERROR,
             },
-            AdapterError::ChangedPlan => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::ChangedPlan(_) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::DuplicateCursor(_) => SqlState::DUPLICATE_CURSOR,
             AdapterError::Eval(EvalError::CharacterNotValidForEncoding(_)) => {
                 SqlState::PROGRAM_LIMIT_EXCEEDED
@@ -510,7 +510,7 @@ impl fmt::Display for AdapterError {
                     system objects"
                 )
             }
-            AdapterError::ChangedPlan => f.write_str("cached plan must not change result type"),
+            AdapterError::ChangedPlan(e) => write!(f, "{}", e),
             AdapterError::Catalog(e) => e.fmt(f),
             AdapterError::DuplicateCursor(name) => {
                 write!(f, "cursor {} already exists", name.quoted())

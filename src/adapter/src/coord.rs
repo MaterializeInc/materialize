@@ -677,12 +677,18 @@ impl PlanValidity {
         // so next check uses the above fast path.
         if let Some(cluster_id) = self.cluster_id {
             let Some(cluster) = catalog.try_get_cluster(cluster_id) else {
-                return Err(AdapterError::ChangedPlan);
+                return Err(AdapterError::ChangedPlan(format!(
+                    "cluster {} was removed",
+                    cluster_id
+                )));
             };
 
             if let Some(replica_id) = self.replica_id {
                 if cluster.replica(replica_id).is_none() {
-                    return Err(AdapterError::ChangedPlan);
+                    return Err(AdapterError::ChangedPlan(format!(
+                        "replica {} of cluster {} was removed",
+                        replica_id, cluster_id
+                    )));
                 }
             }
         }
@@ -692,7 +698,10 @@ impl PlanValidity {
         // - If an id was dropped, this will detect it and error.
         for id in &self.dependency_ids {
             if catalog.try_get_entry(id).is_none() {
-                return Err(AdapterError::ChangedPlan);
+                return Err(AdapterError::ChangedPlan(format!(
+                    "dependency {} was removed",
+                    id
+                )));
             }
         }
         if catalog
