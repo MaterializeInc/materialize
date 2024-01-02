@@ -15,10 +15,10 @@ use differential_dataflow::lattice::Lattice;
 use mz_ore::now::EpochMillis;
 use mz_persist_types::Codec64;
 use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
+use mz_storage_client::controller::IntrospectionManaged;
 use timely::progress::Timestamp;
 
 use crate::collection_mgmt::CollectionManager;
-use crate::IntrospectionType;
 
 pub use mz_storage_client::healthcheck::*;
 
@@ -87,7 +87,7 @@ where
     /// Managed collection interface
     collection_manager: CollectionManager<T>,
     /// A list of introspection IDs for managed collections
-    introspection_ids: Arc<std::sync::Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
+    introspection_ids: Arc<std::sync::Mutex<BTreeMap<IntrospectionManaged, GlobalId>>>,
     previous_statuses: BTreeMap<GlobalId, String>,
 }
 
@@ -97,7 +97,7 @@ where
 {
     pub fn new(
         collection_manager: CollectionManager<T>,
-        introspection_ids: Arc<std::sync::Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
+        introspection_ids: Arc<std::sync::Mutex<BTreeMap<IntrospectionManaged, GlobalId>>>,
     ) -> Self {
         Self {
             collection_manager,
@@ -113,7 +113,7 @@ where
             .collect()
     }
 
-    async fn append_updates(&mut self, updates: Vec<RawStatusUpdate>, type_: IntrospectionType) {
+    async fn append_updates(&mut self, updates: Vec<RawStatusUpdate>, type_: IntrospectionManaged) {
         let source_status_history_id = *self
             .introspection_ids
             .lock()
@@ -156,7 +156,7 @@ where
     ///
     /// Panics if the source status history collection is not registered in `introspection_ids`
     pub async fn append_source_updates(&mut self, updates: Vec<RawStatusUpdate>) {
-        self.append_updates(updates, IntrospectionType::SourceStatusHistory)
+        self.append_updates(updates, IntrospectionManaged::SourceStatusHistory)
             .await;
     }
 
@@ -166,7 +166,7 @@ where
     ///
     /// Panics if the sink status history collection is not registered in `introspection_ids`
     pub async fn append_sink_updates(&mut self, updates: Vec<RawStatusUpdate>) {
-        self.append_updates(updates, IntrospectionType::SinkStatusHistory)
+        self.append_updates(updates, IntrospectionManaged::SinkStatusHistory)
             .await;
     }
 
@@ -174,7 +174,7 @@ where
         &mut self,
         ids: Vec<GlobalId>,
         ts: DateTime<Utc>,
-        type_: IntrospectionType,
+        type_: IntrospectionManaged,
     ) {
         self.append_updates(
             ids.iter()
@@ -201,7 +201,7 @@ where
     ///
     /// Panics if the source status history collection is not registered in `introspection_ids`
     pub async fn drop_sources(&mut self, ids: Vec<GlobalId>, ts: DateTime<Utc>) {
-        self.drop_items(ids, ts, IntrospectionType::SourceStatusHistory)
+        self.drop_items(ids, ts, IntrospectionManaged::SourceStatusHistory)
             .await;
     }
 
@@ -211,7 +211,7 @@ where
     ///
     /// Panics if the source status history collection is not registered in `introspection_ids`
     pub async fn drop_sinks(&mut self, ids: Vec<GlobalId>, ts: DateTime<Utc>) {
-        self.drop_items(ids, ts, IntrospectionType::SinkStatusHistory)
+        self.drop_items(ids, ts, IntrospectionManaged::SinkStatusHistory)
             .await;
     }
 }

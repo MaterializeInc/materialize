@@ -26,7 +26,7 @@ use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Datum, Diff, GlobalId, Row};
-use mz_storage_client::controller::{IntrospectionType, StorageController};
+use mz_storage_client::controller::{IntrospectionManaged, StorageController};
 use mz_storage_types::read_policy::ReadPolicy;
 use thiserror::Error;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
@@ -201,7 +201,7 @@ impl<T> Instance<T> {
     /// Enqueue the given introspection updates for recording.
     fn deliver_introspection_updates(
         &mut self,
-        type_: IntrospectionType,
+        type_: IntrospectionManaged,
         updates: Vec<(Row, Diff)>,
     ) {
         self.introspection_tx
@@ -300,7 +300,7 @@ impl<T> Instance<T> {
             })
             .collect();
 
-        self.deliver_introspection_updates(IntrospectionType::ComputeDependencies, updates);
+        self.deliver_introspection_updates(IntrospectionManaged::ComputeDependencies, updates);
     }
 
     /// List compute collections that depend on the given collection.
@@ -483,7 +483,7 @@ where
         ]);
         updates.push((insertion, 1));
 
-        self.deliver_introspection_updates(IntrospectionType::ComputeReplicaHeartbeats, updates);
+        self.deliver_introspection_updates(IntrospectionManaged::ComputeReplicaHeartbeats, updates);
     }
 
     /// Assign a target replica to the identified subscribe.
@@ -603,7 +603,7 @@ where
                 Datum::TimestampTz(time.try_into().expect("must fit")),
             ]);
             self.compute.deliver_introspection_updates(
-                IntrospectionType::ComputeReplicaHeartbeats,
+                IntrospectionManaged::ComputeReplicaHeartbeats,
                 vec![(row, -1)],
             );
         }

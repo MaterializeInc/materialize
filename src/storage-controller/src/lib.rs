@@ -96,6 +96,7 @@ use mz_cluster_client::ReplicaId;
 
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::task::AbortOnDropHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ReadHandle;
@@ -119,7 +120,8 @@ use mz_storage_client::client::{
 };
 use mz_storage_client::controller::{
     CollectionDescription, CollectionState, DataSource, DataSourceOther, ExportDescription,
-    ExportState, IntrospectionType, MonotonicAppender, SnapshotCursor, StorageController,
+    ExportState, IntrospectionManaged, IntrospectionType, IntrospectionUnmanaged,
+    MonotonicAppender, SnapshotCursor, StorageController,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_types::collections as proto;
@@ -239,8 +241,8 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
 
     /// Facility for appending status updates for sources/sinks
     pub(crate) collection_status_manager: healthcheck::CollectionStatusManager<T>,
-    /// Tracks which collection is responsible for which [`IntrospectionType`].
-    pub(crate) introspection_ids: Arc<Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
+    /// Tracks which collection is responsible for which [`IntrospectionManaged`].
+    pub(crate) introspection_ids: Arc<Mutex<BTreeMap<IntrospectionManaged, GlobalId>>>,
     /// Tokens for tasks that drive updating introspection collections. Dropping
     /// this will make sure that any tasks (or other resources) will stop when
     /// needed.
@@ -289,6 +291,10 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     /// The latest timestamp for each id in the mz_privatelink_connection_status_history
     /// table, read on startup by the adapter to initialize the privatelink vpce watch task
     privatelink_status_table_latest: Option<BTreeMap<GlobalId, DateTime<Utc>>>,
+
+    /// WIP
+    catalog_shard_id: ShardId,
+    catalog_upper_task: Option<(GlobalId, AbortOnDropHandle<()>)>,
 }
 
 #[async_trait(?Send)]
@@ -454,13 +460,26 @@ where
         // each section.
         let mut entries = Vec::with_capacity(collections.len());
 
-        for (id, _desc) in &collections {
-            entries.push((
-                *id,
-                DurableCollectionMetadata {
-                    data_shard: ShardId::new(),
-                },
-            ))
+        for (id, desc) in &collections {
+            let data_shard = match desc.data_source {
+                DataSource::Introspection(IntrospectionType::Unmanaged(
+                    IntrospectionUnmanaged::Catalog,
+                )) => {
+                    tracing::warn!(
+                        "WIP using {} for catalog source shard id",
+                        self.catalog_shard_id
+                    );
+                    self.catalog_shard_id
+                }
+                DataSource::Ingestion(_)
+                | DataSource::Introspection(IntrospectionType::Managed(_))
+                | DataSource::Progress
+                | DataSource::Webhook
+                | DataSource::Other(DataSourceOther::TableWrites)
+                | DataSource::Other(DataSourceOther::Compute)
+                | DataSource::Other(DataSourceOther::Source) => ShardId::new(),
+            };
+            entries.push((*id, DurableCollectionMetadata { data_shard }))
         }
 
         // Perform all stash writes in a single transaction, to minimize transaction overhead and
@@ -644,7 +663,20 @@ where
                 );
 
                 match description.data_source {
-                    DataSource::Introspection(_) | DataSource::Webhook => {
+                    DataSource::Introspection(IntrospectionType::Unmanaged(
+                        IntrospectionUnmanaged::Catalog,
+                    )) => {
+                        warn!(desc = ?description, meta = ?metadata, "registering {} with an upper watch task", id);
+                        Self::maybe_start_catalog_upper_task(
+                            &mut self.catalog_upper_task,
+                            self.internal_response_sender.clone(),
+                            id,
+                            write,
+                        );
+                        self.collections.insert(id, collection_state);
+                    }
+                    DataSource::Introspection(IntrospectionType::Managed(_))
+                    | DataSource::Webhook => {
                         debug!(desc = ?description, meta = ?metadata, "registering {} with persist monotonic worker", id);
                         self.persist_monotonic_worker.register(id, write);
                         self.collections.insert(id, collection_state);
@@ -769,7 +801,7 @@ where
 
                     client.send(StorageCommand::RunIngestions(vec![augmented_ingestion]));
                 }
-                DataSource::Introspection(i) => {
+                DataSource::Introspection(IntrospectionType::Managed(i)) => {
                     let prev = self
                         .introspection_ids
                         .lock()
@@ -783,14 +815,15 @@ where
                     self.collection_manager.register_collection(id);
 
                     match i {
-                        IntrospectionType::ShardMapping => {
+                        IntrospectionManaged::ShardMapping => {
                             self.initialize_shard_mapping().await;
                         }
-                        IntrospectionType::Frontiers | IntrospectionType::ReplicaFrontiers => {
+                        IntrospectionManaged::Frontiers
+                        | IntrospectionManaged::ReplicaFrontiers => {
                             // Set the collection to empty.
                             self.reconcile_managed_collection(id, vec![]).await;
                         }
-                        IntrospectionType::StorageSourceStatistics => {
+                        IntrospectionManaged::StorageSourceStatistics => {
                             // Set the collection to empty.
                             self.reconcile_managed_collection(id, vec![]).await;
 
@@ -805,7 +838,7 @@ where
                             // dropped, so that the internal task will stop.
                             self.introspection_tokens.insert(id, scraper_token);
                         }
-                        IntrospectionType::StorageSinkStatistics => {
+                        IntrospectionManaged::StorageSinkStatistics => {
                             // Set the collection to empty.
                             self.reconcile_managed_collection(id, vec![]).await;
 
@@ -820,19 +853,19 @@ where
                             // dropped, so that the internal task will stop.
                             self.introspection_tokens.insert(id, scraper_token);
                         }
-                        IntrospectionType::SourceStatusHistory => {
+                        IntrospectionManaged::SourceStatusHistory => {
                             self.partially_truncate_status_history(
-                                IntrospectionType::SourceStatusHistory,
+                                IntrospectionManaged::SourceStatusHistory,
                             )
                             .await;
                         }
-                        IntrospectionType::SinkStatusHistory => {
+                        IntrospectionManaged::SinkStatusHistory => {
                             self.partially_truncate_status_history(
-                                IntrospectionType::SinkStatusHistory,
+                                IntrospectionManaged::SinkStatusHistory,
                             )
                             .await;
                         }
-                        IntrospectionType::PrivatelinkConnectionStatusHistory => {
+                        IntrospectionManaged::PrivatelinkConnectionStatusHistory => {
                             // Truncate the private link connection status history table and
                             // store the latest timestamp for each id in the table.
                             let occurred_at_col =
@@ -842,7 +875,7 @@ where
                                     .0;
                             self.privatelink_status_table_latest = self
                                 .partially_truncate_status_history(
-                                    IntrospectionType::PrivatelinkConnectionStatusHistory,
+                                    IntrospectionManaged::PrivatelinkConnectionStatusHistory,
                                 )
                                 .await
                                 .and_then(|map| {
@@ -864,17 +897,17 @@ where
                         }
 
                         // Truncate compute-maintained collections.
-                        IntrospectionType::ComputeDependencies
-                        | IntrospectionType::ComputeReplicaHeartbeats
-                        | IntrospectionType::ComputeHydrationStatus => {
+                        IntrospectionManaged::ComputeDependencies
+                        | IntrospectionManaged::ComputeReplicaHeartbeats
+                        | IntrospectionManaged::ComputeHydrationStatus => {
                             self.reconcile_managed_collection(id, vec![]).await;
                         }
 
                         // Note [btv] - we don't truncate these, because that uses
                         // a huge amount of memory on environmentd startup.
-                        IntrospectionType::PreparedStatementHistory
-                        | IntrospectionType::StatementExecutionHistory
-                        | IntrospectionType::SessionHistory => {
+                        IntrospectionManaged::PreparedStatementHistory
+                        | IntrospectionManaged::StatementExecutionHistory
+                        | IntrospectionManaged::SessionHistory => {
                             // do nothing.
                         }
                     }
@@ -883,7 +916,9 @@ where
                     // Register the collection so our manager knows about it.
                     self.collection_manager.register_collection(id);
                 }
-                DataSource::Progress | DataSource::Other(_) => {}
+                DataSource::Progress
+                | DataSource::Other(_)
+                | DataSource::Introspection(IntrospectionType::Unmanaged(_)) => {}
             }
         }
 
@@ -1841,7 +1876,7 @@ where
             push_update(id, old, -1);
         }
 
-        let id = self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::Frontiers];
+        let id = self.introspection_ids.lock().expect("poisoned")[&IntrospectionManaged::Frontiers];
         self.append_to_managed_collection(id, updates).await;
     }
 
@@ -1901,14 +1936,14 @@ where
             push_update(key, old, -1);
         }
 
-        let id =
-            self.introspection_ids.lock().expect("poisoned")[&IntrospectionType::ReplicaFrontiers];
+        let id = self.introspection_ids.lock().expect("poisoned")
+            [&IntrospectionManaged::ReplicaFrontiers];
         self.append_to_managed_collection(id, updates).await;
     }
 
     async fn record_introspection_updates(
         &mut self,
-        type_: IntrospectionType,
+        type_: IntrospectionManaged,
         updates: Vec<(Row, Diff)>,
     ) {
         let id = self.introspection_ids.lock().expect("poisoned")[&type_];
@@ -2098,7 +2133,12 @@ where
         metrics_registry: MetricsRegistry,
         persist_txn_tables: PersistTxnTablesImpl,
         connection_context: ConnectionContext,
+        catalog_shard_id: ShardId,
     ) -> Self {
+        tracing::warn!(
+            "WIP creating storage controller with catalog shard id {}",
+            catalog_shard_id
+        );
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         let tls = mz_tls_util::make_tls(
@@ -2277,6 +2317,8 @@ where
             recorded_frontiers: BTreeMap::new(),
             recorded_replica_frontiers: BTreeMap::new(),
             privatelink_status_table_latest: None,
+            catalog_shard_id,
+            catalog_upper_task: None,
         }
     }
 
@@ -2505,13 +2547,13 @@ where
     /// discover before the shard mapping collection exists.
     ///
     /// # Panics
-    /// - If `IntrospectionType::ShardMapping` is not associated with a
+    /// - If `IntrospectionManaged::ShardMapping` is not associated with a
     /// `GlobalId` in `self.introspection_ids`.
-    /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
+    /// - If `IntrospectionManaged::ShardMapping`'s `GlobalId` is not registered as
     ///   a managed collection.
     async fn initialize_shard_mapping(&mut self) {
-        let id =
-            self.introspection_ids.lock().expect("poisoned lock")[&IntrospectionType::ShardMapping];
+        let id = self.introspection_ids.lock().expect("poisoned lock")
+            [&IntrospectionManaged::ShardMapping];
 
         let mut row_buf = Row::default();
         let mut updates = Vec::with_capacity(self.collections.len());
@@ -2537,10 +2579,10 @@ where
     /// Returns a map with latest row per id
     async fn partially_truncate_status_history(
         &mut self,
-        collection: IntrospectionType,
+        collection: IntrospectionManaged,
     ) -> Option<BTreeMap<GlobalId, Row>> {
         let (keep_n, occurred_at_col, id_col) = match collection {
-            IntrospectionType::SourceStatusHistory => (
+            IntrospectionManaged::SourceStatusHistory => (
                 self.config.parameters.keep_n_source_status_history_entries,
                 healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("occurred_at"))
@@ -2551,7 +2593,7 @@ where
                     .expect("schema has not changed")
                     .0,
             ),
-            IntrospectionType::SinkStatusHistory => (
+            IntrospectionManaged::SinkStatusHistory => (
                 self.config.parameters.keep_n_sink_status_history_entries,
                 healthcheck::MZ_SINK_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("occurred_at"))
@@ -2562,7 +2604,7 @@ where
                     .expect("schema has not changed")
                     .0,
             ),
-            IntrospectionType::PrivatelinkConnectionStatusHistory => (
+            IntrospectionManaged::PrivatelinkConnectionStatusHistory => (
                 self.config
                     .parameters
                     .keep_n_privatelink_status_history_entries,
@@ -2694,13 +2736,13 @@ where
     /// entry.
     ///
     /// However, data is written iff we know of the `GlobalId` of the
-    /// `IntrospectionType::ShardMapping` collection; in other cases, data is
+    /// `IntrospectionManaged::ShardMapping` collection; in other cases, data is
     /// dropped on the floor. In these cases, the data is later written by
     /// [`Self::initialize_shard_mapping`].
     ///
     /// # Panics
     /// - If `self.collections` does not have an entry for `global_id`.
-    /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
+    /// - If `IntrospectionManaged::ShardMapping`'s `GlobalId` is not registered as
     ///   a managed collection.
     /// - If diff is any value other than `1` or `-1`.
     #[tracing::instrument(level = "debug", skip_all)]
@@ -2715,7 +2757,7 @@ where
             .introspection_ids
             .lock()
             .expect("poisoned")
-            .get(&IntrospectionType::ShardMapping)
+            .get(&IntrospectionManaged::ShardMapping)
         {
             Some(id) => *id,
             _ => return,
@@ -2854,7 +2896,7 @@ where
                 .await;
 
             match collection_desc.data_source {
-                DataSource::Introspection(_) | DataSource::Webhook => {
+                DataSource::Introspection(IntrospectionType::Managed(_)) | DataSource::Webhook => {
                     self.persist_monotonic_worker.update(id, write);
                 }
                 DataSource::Other(DataSourceOther::TableWrites) => {
@@ -2863,7 +2905,8 @@ where
                 DataSource::Ingestion(_)
                 | DataSource::Progress
                 | DataSource::Other(DataSourceOther::Compute)
-                | DataSource::Other(DataSourceOther::Source) => {
+                | DataSource::Other(DataSourceOther::Source)
+                | DataSource::Introspection(IntrospectionType::Unmanaged(_)) => {
                     // No-op.
                 }
             }
@@ -3319,5 +3362,38 @@ where
         self.collection_status_manager
             .append_sink_updates(sink_status_updates)
             .await;
+    }
+
+    fn maybe_start_catalog_upper_task(
+        catalog_upper_task: &mut Option<(GlobalId, AbortOnDropHandle<()>)>,
+        tx: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
+        id: GlobalId,
+        mut write: WriteHandle<SourceData, (), T, Diff>,
+    ) {
+        if let Some((prev_id, _task)) = catalog_upper_task.as_ref() {
+            assert_eq!(id, *prev_id);
+            return;
+        }
+        let mut upper = write.shared_upper();
+        tracing::warn!("WIP starting catalog upper task at {:?}", upper.elements());
+        let task = mz_ore::task::spawn(|| "storage controller upper watch", async move {
+            loop {
+                tracing::info!("WIP new catalog upper {:?}", upper.elements());
+                match tx.send(StorageResponse::FrontierUppers(vec![(id, upper.clone())])) {
+                    Ok(()) => {}
+                    Err(_) => {
+                        // Controller shut down.
+                        return;
+                    }
+                };
+                if upper.is_empty() {
+                    // Last upper we'll ever get.
+                    return;
+                }
+                write.wait_for_upper_past(&upper).await;
+                upper = write.shared_upper();
+            }
+        });
+        *catalog_upper_task = Some((id, task.abort_on_drop()));
     }
 }

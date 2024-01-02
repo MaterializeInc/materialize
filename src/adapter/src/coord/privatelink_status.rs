@@ -16,7 +16,7 @@ use mz_cloud_resources::VpcEndpointEvent;
 use mz_ore::future::OreStreamExt;
 use mz_ore::task::spawn;
 use mz_repr::{Datum, GlobalId, Row};
-use mz_storage_client::controller::IntrospectionType;
+use mz_storage_client::controller::IntrospectionManaged;
 
 use crate::coord::Coordinator;
 
@@ -100,7 +100,7 @@ impl Coordinator {
         self.controller
             .storage
             .record_introspection_updates(
-                IntrospectionType::PrivatelinkConnectionStatusHistory,
+                IntrospectionManaged::PrivatelinkConnectionStatusHistory,
                 updates,
             )
             .await;
