@@ -1029,9 +1029,12 @@ class DropClusterReplicaAction(Action):
             if len(cluster.replicas) <= 1:
                 return False
             replica = self.rng.choice(cluster.replicas)
-        with replica.lock:
+
+        with cluster.lock, replica.lock:
             # Was dropped while we were acquiring lock
             if replica not in cluster.replicas:
+                return False
+            if cluster not in exe.db.clusters:
                 return False
             # Avoid "has no replicas available to service request" error
             if len(cluster.replicas) <= 1:
