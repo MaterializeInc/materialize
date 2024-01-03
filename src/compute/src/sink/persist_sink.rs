@@ -1258,7 +1258,7 @@ where
                 data.swap(&mut buffer);
                 let mut cached_ts: Option<Timestamp> = None;
                 let mut cached_rounded_up_data_ts = None;
-                buffer.retain_mut(|(_d, ts, _r)| {
+                for (_d, ts, _r) in buffer.iter_mut() {
                     let rounded_up_data_ts = {
                         // We cache the rounded up timestamp for the last seen timestamp,
                         // because the rounding up has a non-negligible cost. Caching for
@@ -1275,14 +1275,14 @@ where
                     match rounded_up_data_ts {
                         Some(rounded_up_ts) => {
                             *ts = rounded_up_ts;
-                            true
                         }
                         None => {
-                            // This record is after the last refresh, so drop it.
-                            false
+                            // This record is after the last refresh, which is not possible because we set the dataflow
+                            // `until` to the last refresh.
+                            unreachable!("Received data after the last refresh");
                         }
                     }
-                });
+                }
                 consolidate_updates(&mut buffer); // Different timestamps might have been collapsed by the rounding.
                 buffer.shrink_to_fit();
 
@@ -1303,13 +1303,6 @@ where
             ///// todo: alter when we return none from round_up:
             // - only at REFRESH AT
             // - but for an overflow with EVERY, do a saturating add (because if the ts is close to u64::max, then it doesn't have a meaning anyway)
-
-            ////// todo: implement up_to for real:
-            // - we have to copy it over to the persist_sources of this dataflow, because then they drop their capabilities
-            //   and then the whole dataflow will shut down
-            //   - this will happen automatically if I simply write the last refresh time into the until of the dataflow, because that's wired up already into the sources (and index reads)
-            // - but the above eating of data should be still here, to eat that data that is somehow emitted by the source
-            //   ahead of the frontier, e.g., temporal filter
 
             let ac = frontiers.into_element();
             match ac.frontier().as_option() {
