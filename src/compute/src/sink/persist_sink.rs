@@ -42,6 +42,7 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use timely::PartialOrder;
 use tracing::trace;
 use mz_ore::soft_assert_or_log;
+use mz_timely_util::buffer::ConsolidateBuffer;
 
 use crate::compute_state::ComputeState;
 use crate::render::sinks::SinkRender;
@@ -1283,15 +1284,13 @@ where
                         }
                     }
                 }
-                consolidate_updates(&mut buffer); // Different timestamps might have been collapsed by the rounding.
-                buffer.shrink_to_fit();
 
                 match rounded_up_cap_ts {
                     Some(_) => {
-                        output_buf
-                            .activate()
-                            .session(&capability)
-                            .give_container(&mut buffer);
+                        // Use a ConsolidateBuffer, because different timestamps might have been collapsed by the
+                        // rounding.
+                        ConsolidateBuffer::new(&mut output_buf.activate(), 0)
+                            .give_iterator_at(capability, buffer.drain(..));
                     },
                     None => {
                         // We are after the last refresh.
