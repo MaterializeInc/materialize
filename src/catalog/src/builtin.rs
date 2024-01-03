@@ -2824,7 +2824,7 @@ pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSourc
         .with_column("messages_received", ScalarType::UInt64.nullable(false))
         .with_column("updates_staged", ScalarType::UInt64.nullable(false))
         .with_column("updates_committed", ScalarType::UInt64.nullable(false))
-        .with_column("bytes_received", ScalarType::UInt64.nullable(false))
+        .with_column("byttes_received", ScalarType::UInt64.nullable(false))
         .with_column("envelope_state_bytes", ScalarType::UInt64.nullable(false))
         .with_column("envelope_state_records", ScalarType::UInt64.nullable(false))
         .with_column("rehydration_latency", ScalarType::Interval.nullable(true)),
