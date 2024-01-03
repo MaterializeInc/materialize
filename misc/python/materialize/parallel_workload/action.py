@@ -1626,9 +1626,10 @@ class HttpPostAction(Action):
                     raise
             except QueryError as e:
                 # expected, see #20465
-                if exe.db.scenario != Scenario.Kill or (
-                    "404: no object was found at the path" not in e.msg
-                ):
+                if exe.db.scenario not in (
+                    Scenario.Kill,
+                    Scenario.TogglePersistTxn,
+                ) or ("404: no object was found at the path" not in e.msg):
                     raise e
         return True
 
