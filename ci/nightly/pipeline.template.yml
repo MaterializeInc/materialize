@@ -488,6 +488,7 @@ steps:
 
       - id: checks-backup-rollback
         label: "Checks + backup + rollback to previous"
+        skip: "Requires #18628 to be fixed"
         timeout_in_minutes: 60
         artifact_paths: junit_*.xml
         agents:
