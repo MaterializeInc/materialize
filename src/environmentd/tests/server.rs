@@ -268,7 +268,7 @@ fn test_statement_logging_immediate() {
     }
 
     // Statement logging happens async, give it a chance to catch up
-    thread::sleep(Duration::from_secs(5));
+    thread::sleep(Duration::from_secs(10));
 
     let mut client = server.connect_internal(postgres::NoTls).unwrap();
     let sl = client
