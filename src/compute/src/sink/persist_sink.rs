@@ -67,7 +67,7 @@ where
 
         // If any non-trivial `REFRESH` options were specified, round up timestamps.
         if let Some(refresh_schedule) = &sink.refresh_schedule {
-            desired_collection = round_up(desired_collection, refresh_schedule.clone());
+            desired_collection = apply_refresh(desired_collection, refresh_schedule.clone());
         }
 
         if sink.up_to != Antichain::default() {
@@ -1225,30 +1225,38 @@ where
 ///
 /// Note that this currently only works with 1-dim timestamps. (This is not an issue for WMR,
 /// because iteration numbers should disappear by the time the data gets to the Persist sink.)
-fn round_up<G>(
+fn apply_refresh<G>(
     coll: Collection<G, Result<Row, DataflowError>, Diff>,
     refresh_schedule: RefreshSchedule,
 ) -> Collection<G, Result<Row, DataflowError>, Diff>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    // We need to manage capabilities manually, because we'd like to round up frontiers as well as data: as soon as our
-    // input frontier passes a refresh time, we'll round it up to the next refresh time.
-    let mut builder = OperatorBuilder::new("round_up".to_string(), coll.scope());
+    // We need to disconnect the reachability graph and manage capabilities manually, because we'd like to round up
+    // frontiers as well as data: as soon as our input frontier passes a refresh time, we'll round it up to the next
+    // refresh time.
+    let mut builder = OperatorBuilder::new("apply_refresh".to_string(), coll.scope());
     let (mut output_buf, output_stream) = builder.new_output();
     let mut input = builder.new_input_connection(&coll.inner, Pipeline, vec![Antichain::new()]);
     builder.build(move |capabilities| {
+        // This capability directly controls this operator's output frontier (because we have disconnected the input
+        // above). We wrap it in an Option so we can drop it to advance to the empty output frontier when the last
+        // refresh is done. (We must be careful that we only ever emit output updates at times that are at or beyond
+        // this capability.)
         let mut capability = Some(capabilities.into_element());
         let mut buffer = Vec::new();
         move |frontiers| {
-            input.for_each(|cap, data| {
+            input.for_each(|input_cap, data| {
+                // Note that we can't use `input_cap` to get an output session because we might have advanced our output
+                // frontier already beyond the frontier of this capability.
+
                 // `capability` will be None if we are past the last refresh. We have made sure to not receive any
                 // data that is after the last refresh by setting the `until` of the dataflow to the last refresh.
                 let capability = capability
                     .as_mut()
                     .expect("should have a capability if we received data");
 
-                let rounded_up_cap_ts = refresh_schedule.round_up_timestamp(*cap.time());
+                let rounded_up_cap_ts = refresh_schedule.round_up_timestamp(*input_cap.time());
                 match rounded_up_cap_ts {
                     Some(rounded_up_ts) => {
                         capability.downgrade(&rounded_up_ts);
@@ -1301,10 +1309,14 @@ where
                 }
             });
 
+            // Round up the frontier.
+            // Note that `round_up_timestamp` is monotonic. This is needed to ensure that the timestamp (t) of any
+            // received data that has a larger timestamp than the original frontier (f) will get rounded up to a time
+            // that is at least at the rounded up frontier. In other words, monotonicity ensures that
+            // when `t >= f` then `round_up_timestamp(t) >= round_up_timestamp(f)`.
             let ac = frontiers.into_element();
             match ac.frontier().as_option() {
                 Some(ts) => {
-                    ////// todo: mention monotonicity of round_up
                     match refresh_schedule.round_up_timestamp(*ts) {
                         Some(rounded_up_ts) => {
                             capability.as_mut().unwrap().downgrade(&rounded_up_ts);

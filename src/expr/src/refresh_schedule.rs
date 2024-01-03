@@ -34,6 +34,7 @@ impl RefreshSchedule {
 
     /// Rounds up the timestamp to the time of the next refresh.
     /// Returns None if there is no next refresh.
+    /// Note that this fn is monotonic.
     pub fn round_up_timestamp(&self, timestamp: Timestamp) -> Option<Timestamp> {
         let next_every = self
             .everies
@@ -101,6 +102,7 @@ impl RefreshEvery {
                         ),
                 )
             };
+        // TODO: Downgrade these to non-logging soft asserts when we have built more confidence in the code.
         assert!(u64::from(result) >= u64::from(timestamp));
         assert!(u64::from(result) - u64::from(timestamp) <= interval);
         result
