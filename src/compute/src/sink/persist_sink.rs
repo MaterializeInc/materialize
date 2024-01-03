@@ -1246,6 +1246,8 @@ where
         let mut capability = Some(capabilities.into_element());
         let mut buffer = Vec::new();
         move |frontiers| {
+            let mut output_handle_core = output_buf.activate();
+            let mut output_buf = ConsolidateBuffer::new(&mut output_handle_core, 0);
             input.for_each(|input_cap, data| {
                 // Note that we can't use `input_cap` to get an output session because we might have advanced our output
                 // frontier already beyond the frontier of this capability.
@@ -1299,8 +1301,7 @@ where
                     Some(_) => {
                         // Use a ConsolidateBuffer, because different timestamps might have been collapsed by the
                         // rounding.
-                        ConsolidateBuffer::new(&mut output_buf.activate(), 0)
-                            .give_iterator_at(capability, buffer.drain(..));
+                        output_buf.give_iterator_at(capability, buffer.drain(..));
                     }
                     None => {
                         // We are after the last refresh.
