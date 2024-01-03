@@ -20,6 +20,11 @@ who = "Matt Arthur <matthewleearthur@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.26.0"
 
+[[audits.csv-async]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.2.6"
+
 [[audits.differential-dataflow]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
@@ -114,6 +119,16 @@ version = "0.12.0@git:de20aa88cc6df3de910e9befbe68408d31e287be"
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 delta = "0.7.1 -> 0.9.0"
+
+[[audits.zstd]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.13.0"
+
+[[audits.zstd-safe]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+delta = "6.0.6 -> 7.0.0"
 
 [[trusted.abomonation]]
 criteria = "safe-to-deploy"
