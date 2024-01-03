@@ -247,7 +247,7 @@ async fn replace_files(
     let mut key = vec![];
     let mut delete_stmt = format!(
         "DELETE FROM {}.{} WHERE ",
-        escape::escape_identifier(&schema),
+        escape::escape_identifier(schema),
         escape::escape_identifier(&table.name),
     );
     let mut p = 1;
@@ -264,7 +264,7 @@ async fn replace_files(
 
     let insert_stmt = format!(
         "INSERT INTO {}.{} ({}) VALUES ({})",
-        escape::escape_identifier(&schema),
+        escape::escape_identifier(schema),
         escape::escape_identifier(&table.name),
         table
             .columns
@@ -363,7 +363,7 @@ async fn update_files(
 
     let update_stmt = format!(
         "UPDATE {}.{} SET {} WHERE {}",
-        escape::escape_identifier(&schema),
+        escape::escape_identifier(schema),
         escape::escape_identifier(&table.name),
         assignments.join(","),
         filters.join(" AND "),

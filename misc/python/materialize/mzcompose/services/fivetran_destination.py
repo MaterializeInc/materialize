@@ -9,10 +9,14 @@
 
 from materialize.mzcompose.service import Service
 
+
 class FivetranDestination(Service):
     def __init__(self, volumes_extra: list[str] = []) -> None:
-        super().__init__(name="fivetran-destination", config={
-            "mzbuild": "fivetran-destination",
-            "ports": [6874],
-            "volumes": volumes_extra,
-        })
+        super().__init__(
+            name="fivetran-destination",
+            config={
+                "mzbuild": "fivetran-destination",
+                "ports": [6874],
+                "volumes": volumes_extra,
+            },
+        )

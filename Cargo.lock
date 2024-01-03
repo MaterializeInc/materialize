@@ -209,19 +209,6 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.3.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "942c7cd7ae39e91bde4820d74132e9862e62c2f386c3aa90ccf55949f5bad63a"
-dependencies = [
- "flate2",
- "futures-core",
- "memchr",
- "pin-project-lite",
- "tokio",
-]
-
-[[package]]
-name = "async-compression"
 version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc2d0cfb2a7388d34f590e76686704c494ed7aaceed62ee1ba35cbf363abc2a5"
@@ -4353,7 +4340,7 @@ name = "mz-fivetran-destination"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-compression 0.4.5",
+ "async-compression",
  "clap",
  "csv-async",
  "futures",
@@ -4371,6 +4358,7 @@ dependencies = [
  "tokio-postgres",
  "tonic",
  "tonic-build",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -5941,7 +5929,7 @@ name = "mz-testdrive"
 version = "0.82.0-dev"
 dependencies = [
  "anyhow",
- "async-compression 0.3.15",
+ "async-compression",
  "async-trait",
  "atty",
  "aws-config",
@@ -9736,6 +9724,7 @@ version = "0.0.0"
 dependencies = [
  "ahash",
  "anyhow",
+ "async-compression",
  "aws-config",
  "aws-credential-types",
  "aws-runtime",

@@ -35,8 +35,8 @@ impl<R> AsyncAesDecrypter<R> {
             crypter: Crypter::new(
                 Cipher::aes_256_cbc(),
                 openssl::symm::Mode::Decrypt,
-                &key,
-                Some(&iv),
+                key,
+                Some(iv),
             )?,
             buf: [0; BUF_SIZE + BLOCK_SIZE],
             pos: 0,
@@ -73,7 +73,7 @@ where
 
             // Decrypt the chunk in full and stash it in `me.buf`.
             me.pos = 0;
-            if read_buf.filled().len() > 0 {
+            if !read_buf.filled().is_empty() {
                 me.end = me.crypter.update(read_buf.filled(), &mut me.buf)?;
             } else {
                 me.end = me.crypter.finalize(&mut me.buf)?;

@@ -7,4 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-include!(concat!(env!("OUT_DIR"), "/fivetran_sdk.rs"));
+// Note(parkmycar): We wrap this in a `mod` block soley for the purpose of allowing lints for the
+// generated protobuf code.
+#[allow(clippy::enum_variant_names)]
+mod proto {
+    include!(concat!(env!("OUT_DIR"), "/fivetran_sdk.rs"));
+}
+pub use proto::*;
