@@ -69,9 +69,10 @@ macro_rules! objects {
 
                     impl From<StateUpdateKind> for StateUpdateKindRaw {
                         fn from(value: StateUpdateKind) -> Self {
+                            let kind = value.kind.expect("kind should be set");
                             // TODO: This requires that the json->proto->json roundtrips
                             // exactly, see #23908.
-                            StateUpdateKindRaw::from_serde(&value)
+                            StateUpdateKindRaw::from_serde(&kind)
                         }
                     }
 
@@ -79,7 +80,8 @@ macro_rules! objects {
                         type Error = String;
 
                         fn try_from(value: StateUpdateKindRaw) -> Result<Self, Self::Error> {
-                            Ok(value.to_serde::<Self>())
+                            let kind: state_update_kind::Kind = value.to_serde();
+                            Ok(StateUpdateKind { kind: Some(kind) })
                         }
                     }
                 }

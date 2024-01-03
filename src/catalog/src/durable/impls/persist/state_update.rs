@@ -585,7 +585,7 @@ impl TryFrom<StateUpdateKindRaw> for StateUpdateKind {
     type Error = String;
 
     fn try_from(value: StateUpdateKindRaw) -> Result<Self, Self::Error> {
-        let kind: proto::state_update_kind::Kind = StateUpdateKindRaw(value.0).to_serde();
+        let kind: proto::state_update_kind::Kind = value.to_serde();
         let kind = proto::StateUpdateKind { kind: Some(kind) };
         StateUpdateKind::from_proto(kind).map_err(|err| err.to_string())
     }
