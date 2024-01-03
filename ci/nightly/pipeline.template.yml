@@ -293,9 +293,7 @@ steps:
         label: "Zippy Kafka Sources"
         timeout_in_minutes: 120
         agents:
-          # Workload takes slightly more than 8Gb, so it OOMs
-          # on the instances from the linux-x86_64 queue
-          queue: builder-linux-x86_64
+          queue: linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -306,7 +304,7 @@ steps:
         label: "Zippy Kafka Parallel Insert"
         timeout_in_minutes: 120
         agents:
-          queue: builder-linux-x86_64
+          queue: linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -372,9 +370,7 @@ steps:
         label: "Zippy w/ latest CRDB"
         timeout_in_minutes: 120
         agents:
-          # Workload takes slightly more than 8Gb, so it OOMs
-          # on the instances from the linux-x86_64 queue
-          queue: builder-linux-x86_64
+          queue: linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -965,7 +961,7 @@ steps:
     timeout_in_minutes: 15
     artifact_paths: junit_*.xml
     agents:
-      queue: builder-linux-x86_64
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: pubsub-disruption
@@ -988,7 +984,7 @@ steps:
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-x86_64
+          queue: linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -999,7 +995,7 @@ steps:
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-x86_64
+          queue: linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1010,7 +1006,7 @@ steps:
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-x86_64
+          queue: linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1021,7 +1017,7 @@ steps:
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-x86_64
+          queue: linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1032,7 +1028,7 @@ steps:
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-x86_64
+          queue: linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1044,7 +1040,7 @@ steps:
         timeout_in_minutes: 60
         skip: "TODO(def-): Reenable when #2392 is fixed"
         agents:
-          queue: builder-linux-x86_64
+          queue: linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1055,7 +1051,7 @@ steps:
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-x86_64
+          queue: linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1067,7 +1063,7 @@ steps:
         timeout_in_minutes: 60
         skip: "TODO(def-): Properly stop all db actions during backup & restore"
         agents:
-          queue: builder-linux-x86_64
+          queue: linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
