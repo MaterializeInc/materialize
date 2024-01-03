@@ -41,6 +41,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use timely::PartialOrder;
 use tracing::trace;
+use mz_ore::soft_assert_or_log;
 
 use crate::compute_state::ComputeState;
 use crate::render::sinks::SinkRender;
@@ -1230,6 +1231,8 @@ fn round_up<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    // We need to manage capabilities manually, because we'd like to round up frontiers as well as data: as soon as our
+    // input frontier passes a refresh time, we'll round it up to the next refresh time.
     let mut builder = OperatorBuilder::new("round_up".to_string(), coll.scope());
     let (mut output_buf, output_stream) = builder.new_output();
     let mut input = builder.new_input_connection(&coll.inner, Pipeline, vec![Antichain::new()]);
@@ -1237,10 +1240,81 @@ where
         let mut capability = Some(capabilities.into_element());
         let mut buffer = Vec::new();
         move |frontiers| {
+            if let Some(ref mut capability) = &mut capability {
+                input.for_each(|cap, data| {
+
+                    let rounded_up_cap_ts = refresh_schedule.round_up_timestamp(*cap.time());
+                    match rounded_up_cap_ts {
+                        Some(rounded_up_ts) => {
+                            capability.downgrade(&rounded_up_ts);
+                        },
+                        None => {
+                            // We are after the last refresh.
+                        }
+                    }
+
+                    data.swap(&mut buffer);
+                    let mut cached_ts: Option<Timestamp> = None;
+                    let mut cached_rounded_up_data_ts = None;
+                    buffer.retain_mut(|(_d, ts, _r)| {
+                        let rounded_up_data_ts = {
+                            // We cache the rounded up timestamp for the last seen timestamp,
+                            // because the rounding up has a non-negligible cost. Caching for
+                            // just the 1 last timestamp helps already, because in some common
+                            // cases, we'll be seeing a lot of identical timestamps, e.g.,
+                            // during a rehydration, or when we have much more than 1000 records
+                            // during a single second.
+                            if cached_ts != Some(*ts) {
+                                cached_ts = Some(*ts);
+                                cached_rounded_up_data_ts = refresh_schedule.round_up_timestamp(*ts);
+                            }
+                            cached_rounded_up_data_ts
+                        };
+                        match rounded_up_data_ts {
+                            Some(rounded_up_ts) => {
+                                *ts = rounded_up_ts;
+                                true
+                            }
+                            None => {
+                                // This record is after the last refresh, so drop it.
+                                false
+                            }
+                        }
+                    });
+                    consolidate_updates(&mut buffer); // Different timestamps might have been collapsed by the rounding.
+                    buffer.shrink_to_fit();
+
+                    match rounded_up_cap_ts {
+                        Some(_) => {
+                            output_buf
+                                .activate()
+                                .session(&capability)
+                                .give_container(&mut buffer);
+                        },
+                        None => {
+                            // We are after the last refresh.
+                            soft_assert_or_log!(buffer.is_empty(), "We should have dropped all data");
+                        }
+                    }
+                });
+            }
+
+            ///// todo: alter when we return none from round_up:
+            // - only at REFRESH AT
+            // - but for an overflow with EVERY, do a saturating add (because if the ts is close to u64::max, then it doesn't have a meaning anyway)
+
+            ////// todo: implement up_to for real:
+            // - we have to copy it over to the persist_sources of this dataflow, because then they drop their capabilities
+            //   and then the whole dataflow will shut down
+            //   - this will happen automatically if I simply write the last refresh time into the until of the dataflow, because that's wired up already into the sources (and index reads)
+            // - but the above eating of data should be still here, to eat that data that is somehow emitted by the source
+            //   ahead of the frontier, e.g., temporal filter
+
             let ac = frontiers.into_element();
-            match ac.frontier().to_owned().into_option() {
+            match ac.frontier().as_option() {
                 Some(ts) => {
-                    match refresh_schedule.round_up_timestamp(ts) {
+                    ////// todo: mention monotonicity of round_up
+                    match refresh_schedule.round_up_timestamp(*ts) {
                         Some(rounded_up_ts) => {
                             capability.as_mut().unwrap().downgrade(&rounded_up_ts);
                         }
@@ -1254,43 +1328,6 @@ where
                 None => {
                     capability = None;
                 }
-            }
-            if let Some(capability) = &capability {
-                input.for_each(|_cap, data| {
-                    data.swap(&mut buffer);
-                    let mut cached_ts: Option<Timestamp> = None;
-                    let mut cached_rounded_up_ts = None;
-                    buffer.retain_mut(|(_d, ts, _r)| {
-                        let rounded_up_ts = {
-                            // We cache the rounded up timestamp for the last seen timestamp,
-                            // because the rounding up has a non-negligible cost. Caching for
-                            // just the 1 last timestamp helps already, because in some common
-                            // cases, we'll be seeing a lot of identical timestamps, e.g.,
-                            // during a rehydration, or when we have much more than 1000 records
-                            // during a single second.
-                            let some_ts_clone = Some(ts.clone());
-                            if cached_ts != some_ts_clone {
-                                cached_ts = some_ts_clone;
-                                cached_rounded_up_ts = refresh_schedule.round_up_timestamp(*ts);
-                            }
-                            cached_rounded_up_ts
-                        };
-                        match rounded_up_ts {
-                            Some(rounded_up_ts) => {
-                                *ts = rounded_up_ts;
-                                true
-                            }
-                            None => {
-                                // This record is after the last refresh, so drop it.
-                                false
-                            }
-                        }
-                    });
-                    output_buf
-                        .activate()
-                        .session(&capability)
-                        .give_container(&mut buffer);
-                });
             }
         }
     });
