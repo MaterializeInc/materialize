@@ -27,7 +27,7 @@ steps:
     timeout_in_minutes: 10
     if: build.source == "ui"
     agents:
-      queue: linux
+      queue: linux-x86_64
 
   - wait: ~
 
