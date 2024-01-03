@@ -53,6 +53,11 @@ impl RefreshSchedule {
         // is smaller than any Some.
         next_every.into_iter().chain(next_at).min()
     }
+
+    /// /////////////todo: comment
+    pub fn last_refresh(&self) -> Option<Timestamp> {
+        self.ats.iter().max().cloned()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]

@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
 use mz_expr::CollectionPlan;
@@ -288,7 +289,7 @@ impl Coordinator {
             // But for MVs with non-trivial REFRESH schedules, it's important to set the
             // `as_of` to the first refresh. This is because we'd like queries on the MV to
             // block until the first refresh (rather than to show an empty MV).
-            if let Some(refresh_schedule) = refresh_schedule {
+            if let Some(refresh_schedule) = &refresh_schedule {
                 if let Some(ts) = as_of.as_option() {
                     let Some(rounded_up_ts) = refresh_schedule.round_up_timestamp(*ts) else {
                         return Err(AdapterError::MaterializedViewWouldNeverRefresh(name.item));
@@ -301,6 +302,12 @@ impl Coordinator {
             }
             as_of
         };
+
+        // If we have a refresh schedule that has a last refresh, then set the `until` to the last refresh.
+        // (If the `try_step_forward` fails, then no need to set an `until`, because it's not possible to get any data
+        // beyond that last refresh time, because there are no times beyond that time.)
+        let until =
+            refresh_schedule.map(|refresh_schedule| refresh_schedule.last_refresh().map(|last_refresh| last_refresh.try_step_forward())).flatten().flatten();
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(ctx.session()), ops, |coord| async {
@@ -316,6 +323,10 @@ impl Coordinator {
                 let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
                 df_desc.set_as_of(as_of.clone());
+
+                if let Some(until) = until {
+                    df_desc.until.meet_assign(&Antichain::from_elem(until));
+                }
 
                 // Emit notices.
                 coord.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);

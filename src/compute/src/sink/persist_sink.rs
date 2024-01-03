@@ -1241,7 +1241,9 @@ where
         let mut buffer = Vec::new();
         move |frontiers| {
             input.for_each(|cap, data| {
-                let capability = capability.as_mut().expect("We shouldn't have received data if the capability is empty");
+                // `capability` will be None if we are past the last refresh. We have made sure to not receive any
+                // data that is after the last refresh by setting the `until` of the dataflow to the last refresh.
+                let capability = capability.as_mut().expect("should have a capability if we received data");
 
                 let rounded_up_cap_ts = refresh_schedule.round_up_timestamp(*cap.time());
                 match rounded_up_cap_ts {
@@ -1318,8 +1320,7 @@ where
                             capability.as_mut().unwrap().downgrade(&rounded_up_ts);
                         }
                         None => {
-                            // We are past the last refresh. Drop the capability to signal that we
-                            // are done.
+                            // We are past the last refresh. Drop the capability to signal that we are done.
                             capability = None;
                         }
                     }
