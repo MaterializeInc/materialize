@@ -1239,6 +1239,26 @@ const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY: ServerVar<bool> = ServerVar
     internal: true,
 };
 
+/// The interval to submit statistics to `mz_source_statistics` and `mz_sink_statistics`.
+const STORAGE_STATISTICS_INTERVAL: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("storage_statistics_interval"),
+    value: mz_storage_types::parameters::STATISTICS_INTERVAL_DEFAULT,
+    description: "The interval to submit statistics to `mz_source_statistics` \
+        and `mz_sink_statistics` (Materialize).",
+    internal: true,
+};
+
+/// The interval to collect statistics for `mz_source_statistics` and `mz_sink_statistics` in
+/// clusterd. Controls the accuracy of metrics.
+const STORAGE_STATISTICS_COLLECTION_INTERVAL: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("storage_statistics_collection_interval"),
+    value: mz_storage_types::parameters::STATISTICS_COLLECTION_INTERVAL_DEFAULT,
+    description: "The interval to collect statistics for `mz_source_statistics` \
+        and `mz_sink_statistics` in clusterd. Controls the accuracy of metrics \
+        (Materialize).",
+    internal: true,
+};
+
 /// Controls [`mz_persist_client::cfg::PersistConfig::sink_minimum_batch_updates`].
 const PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_sink_minimum_batch_updates"),
@@ -2914,6 +2934,8 @@ impl SystemVars {
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY)
+            .with_var(&STORAGE_STATISTICS_INTERVAL)
+            .with_var(&STORAGE_STATISTICS_COLLECTION_INTERVAL)
             .with_var(&STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION)
             .with_var(&STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
@@ -3609,6 +3631,16 @@ impl SystemVars {
     /// Returns the `storage_dataflow_max_inflight_bytes_disk_only` configuration parameter.
     pub fn storage_dataflow_max_inflight_bytes_disk_only(&self) -> bool {
         *self.expect_value(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY)
+    }
+
+    /// Returns the `storage_statistics_interval` configuration parameter.
+    pub fn storage_statistics_interval(&self) -> Duration {
+        *self.expect_value(&STORAGE_STATISTICS_INTERVAL)
+    }
+
+    /// Returns the `storage_statistics_collection_interval` configuration parameter.
+    pub fn storage_statistics_collection_interval(&self) -> Duration {
+        *self.expect_value(&STORAGE_STATISTICS_COLLECTION_INTERVAL)
     }
 
     /// Returns the `persist_sink_minimum_batch_updates` configuration parameter.
