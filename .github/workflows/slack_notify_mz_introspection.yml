@@ -40,6 +40,7 @@ on:
       - opened
       - reopened
       - ready_for_review
+      - edited
     paths:
       - src/catalog/src/builtin.rs
       - test/sqllogictest/mz_introspection_index_accounting.slt
@@ -60,15 +61,16 @@ jobs:
               - 'test/sqllogictest/mz_introspection_index_accounting.slt'
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          path: main
       - name: "Check Retained Metric Changes"
         id: check-retain-metrics
         if: steps.filter.outputs.builtin-rs == 'true'
         run: |
-          echo "changed=true" >> $GITHUB_OUTPUT
-          # # Check for the text "is_retained_metrics" modified in builtin.rs in the pull request
-          # if git diff ${{ github.event.pull_request.base.sha }} -- 'src/catalog/src/builtin.rs' | grep -i 'is_retained_metrics'; then
-          #   echo "changed=true" >> "$GITHUB_OUTPUT"
-          # fi
+          # Check for the text "is_retained_metrics" modified in builtin.rs in the pull request
+          if git diff main... -- 'src/catalog/src/builtin.rs' | grep -i 'is_retained_metrics'; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
       - name: "Push to Slack"
         if: steps.filter.outputs.index-slt == 'true' || steps.check-retain-metrics.outputs.changed == 'true'
         uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
