@@ -794,11 +794,11 @@ class Composition:
                 "Sanity Restart skipped because Mz not in services or `sanity_restart` label not set"
             )
 
-    def capture_logs(self) -> None:
+    def capture_logs(self, *services: str) -> None:
         # Capture logs into services.log since they will be lost otherwise
         # after dowing a composition.
         with open(MZ_ROOT / "services.log", "a") as f:
-            self.invoke("logs", "--no-color", capture=f)
+            self.invoke("logs", "--no-color", *services, capture=f)
 
     def down(
         self,

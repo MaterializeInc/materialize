@@ -61,7 +61,9 @@ class UpgradeEntireMz(Scenario):
             StartMz(self, tag=self.base_version()),
             Initialize(self),
             Manipulate(self, phase=1),
-            KillMz(),
+            KillMz(
+                capture_logs=True
+            ),  #  We always use True here otherwise docker-compose will lose the pre-upgrade logs
             StartMz(self, tag=None),
             Manipulate(self, phase=2),
             Validate(self),
@@ -95,11 +97,11 @@ class UpgradeEntireMzTwoVersions(Scenario):
             StartMz(self, tag=self.base_version()),
             Initialize(self),
             # Upgrade to last_version
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(self, tag=get_last_version()),
             Manipulate(self, phase=1),
             # Upgrade to current source
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(self, tag=None),
             Manipulate(self, phase=2),
             Validate(self),
@@ -124,7 +126,7 @@ class UpgradeEntireMzSkipVersion(Scenario):
             Initialize(self),
             Manipulate(self, phase=1),
             # Upgrade directly to current source
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(self, tag=None),
             Manipulate(self, phase=2),
             Validate(self),
@@ -154,15 +156,15 @@ class UpgradeEntireMzFourVersions(Scenario):
         return [
             StartMz(self, tag=self.minor_versions[3]),
             Initialize(self),
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(self, tag=self.minor_versions[2]),
             Manipulate(self, phase=1),
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(self, tag=get_previous_version()),
             Manipulate(self, phase=2),
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(self, tag=get_last_version()),
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(self, tag=None),
             Validate(self),
             KillMz(),
@@ -193,7 +195,7 @@ class UpgradeClusterdComputeLast(Scenario):
             UseClusterdCompute(self),
             Initialize(self),
             Manipulate(self, phase=1),
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(self, tag=None),
             # No useful work can be done while clusterd is old-version
             # and environmentd is new-version. So we proceed
@@ -201,7 +203,7 @@ class UpgradeClusterdComputeLast(Scenario):
             # We sleep here to allow some period of coexistence, even
             # though we are not issuing queries during that time.
             Sleep(10),
-            KillClusterdCompute(),
+            KillClusterdCompute(capture_logs=True),
             StartClusterdCompute(tag=None),
             Manipulate(self, phase=2),
             Validate(self),
@@ -225,7 +227,7 @@ class UpgradeClusterdComputeFirst(Scenario):
             UseClusterdCompute(self),
             Initialize(self),
             Manipulate(self, phase=1),
-            KillClusterdCompute(),
+            KillClusterdCompute(capture_logs=True),
             StartClusterdCompute(tag=None),
             # No useful work can be done while clusterd is new-version
             # and environmentd is old-version. So we
