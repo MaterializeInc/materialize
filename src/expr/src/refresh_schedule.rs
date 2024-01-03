@@ -68,15 +68,16 @@ pub struct RefreshEvery {
 impl RefreshEvery {
     /// Rounds up the timestamp to the time of the next refresh, according to the given periodic refresh schedule.
     /// It saturates, i.e., if the rounding would make it overflow, then it returns the maximum possible timestamp.
+    ///
+    /// # Panics
+    /// - if the refresh interval converted to milliseconds cast to u64 overflows;
+    /// - if the interval is 0.
     pub fn round_up_timestamp(&self, timestamp: Timestamp) -> Timestamp {
         let RefreshEvery {
             interval,
             aligned_to,
         } = self;
-        // Planning ensured that
-        // - The interval can be max 27 days, so the cast to u64 won't overflow. //////// todo: can be larger in the meantime. Maybe add a check in planning that it's not larger than 10 years or something.
-        // - The interval is positive, so the cast to u64 won't underflow.
-        let interval: u64 = interval.as_millis().try_into().unwrap();
+        let interval = u64::try_from(interval.as_millis()).unwrap();
         // Rounds up `x` to the nearest multiple of `interval`.
         let round_up_to_multiple_of_interval = |x: u64| -> u64 {
             assert_ne!(x, 0);
