@@ -246,12 +246,13 @@ def check_depends_on(pipeline: Any, pipeline_name: str) -> None:
 
 def trim_test_selection(pipeline: Any, steps_to_run: set[str]) -> None:
     def visit(step: dict[str, Any]) -> None:
+        ident = step.get("id") or step.get("command")
         if (
-            step.get("id") not in steps_to_run
+            ident not in steps_to_run
             and "prompt" not in step
             and "wait" not in step
             and "group" not in step
-            and step.get("id")
+            and ident
             not in (
                 "coverage-pr-analyze",
                 "analyze",
