@@ -28,6 +28,7 @@ use mz_service::local::LocalClient;
 use timely::communication::initialize::WorkerGuards;
 use timely::execute::execute_from;
 use timely::WorkerConfig;
+use timely::worker::ProgressMode;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -223,6 +224,7 @@ where
             worker_config.set::<ExertionLogic>("differential/default_exert_logic".to_string(), arc);
         }
 
+        let worker_config = worker_config.progress_mode(ProgressMode::Eager);
         let worker_guards = execute_from(builders, other, worker_config, move |timely_worker| {
             let timely_worker_index = timely_worker.index();
             let _tokio_guard = tokio_executor.enter();
