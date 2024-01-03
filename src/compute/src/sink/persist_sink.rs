@@ -65,7 +65,7 @@ where
     {
         let mut desired_collection = sinked_collection.map(Ok).concat(&err_collection.map(Err));
 
-        // If any non-trivial `REFRESH` options were specified, round up timestamps.
+        // If a `RefreshSchedule` was specified, round up timestamps.
         if let Some(refresh_schedule) = &sink.refresh_schedule {
             desired_collection = apply_refresh(desired_collection, refresh_schedule.clone());
         }
