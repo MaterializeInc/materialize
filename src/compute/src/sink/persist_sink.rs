@@ -1301,7 +1301,9 @@ where
                     Some(_) => {
                         // Use a ConsolidateBuffer, because different timestamps might have been collapsed by the
                         // rounding.
-                        output_buf.give_iterator_at(capability, buffer.drain(..));
+                        for record in buffer.drain(..) {
+                            output_buf.give_at(capability, record);
+                        }
                     }
                     None => {
                         // We are after the last refresh.

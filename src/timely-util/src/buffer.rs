@@ -84,19 +84,6 @@ where
         }
     }
 
-    #[inline]
-    /// Provides an iterator of elements to the buffer, using a pre-fabricated capability. Note that the capability
-    /// must be valid for the associated output.
-    pub fn give_iterator_at<I: Iterator<Item = (D, T, R)>>(
-        &mut self,
-        cap: &Capability<T>,
-        iter: I,
-    ) {
-        for item in iter {
-            self.give_at(cap, item);
-        }
-    }
-
     /// Give an element to the buffer
     pub fn give(&mut self, cap: &InputCapability<T>, data: (D, T, R)) {
         // Retain a cap for the current time, which will be used on flush.
