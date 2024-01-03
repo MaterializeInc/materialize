@@ -38,9 +38,7 @@ impl RefreshSchedule {
         let next_every = self
             .everies
             .iter()
-            // We use a `filter_map` here to simply discard such refreshes where the timestamp
-            // overflowed, since the system would never reach that time anyway.
-            .filter_map(|refresh_every| refresh_every.round_up_timestamp(timestamp))
+            .map(|refresh_every| refresh_every.round_up_timestamp(timestamp))
             .min();
         let next_at = self
             .ats
@@ -67,11 +65,9 @@ pub struct RefreshEvery {
 }
 
 impl RefreshEvery {
-    /// Rounds up the timestamp to the time of the next refresh, according to the given periodic
-    /// refresh schedule.
-    ///
-    /// Returns None if an overflow happens.
-    pub fn round_up_timestamp(&self, timestamp: Timestamp) -> Option<Timestamp> {
+    /// Rounds up the timestamp to the time of the next refresh, according to the given periodic refresh schedule.
+    /// It saturates, i.e., if the rounding would make it overflow, then it returns the maximum possible timestamp.
+    pub fn round_up_timestamp(&self, timestamp: Timestamp) -> Timestamp {
         let RefreshEvery {
             interval,
             aligned_to,
@@ -81,17 +77,17 @@ impl RefreshEvery {
         // - The interval is positive, so the cast to u64 won't underflow.
         let interval: u64 = interval.as_millis().try_into().unwrap();
         // Rounds up `x` to the nearest multiple of `interval`.
-        let round_up_to_multiple_of_interval = |x: u64| -> Option<u64> {
+        let round_up_to_multiple_of_interval = |x: u64| -> u64 {
             assert_ne!(x, 0);
-            (((x - 1) / interval).checked_add(1)?).checked_mul(interval)
+            (((x - 1) / interval) + 1).saturating_mul(interval)
         };
         // Rounds down `x` to the nearest multiple of `interval`.
         let round_down_to_multiple_of_interval = |x: u64| -> u64 { x / interval * interval };
         let result =
             if timestamp > *aligned_to {
-                Timestamp::new(u64::from(aligned_to).checked_add(
-                    round_up_to_multiple_of_interval(u64::from(timestamp) - u64::from(aligned_to))?,
-                )?)
+                Timestamp::new(u64::from(aligned_to).saturating_add(
+                    round_up_to_multiple_of_interval(u64::from(timestamp) - u64::from(aligned_to)),
+                ))
             } else {
                 // Note: `timestamp == aligned_to` has to be handled here, because in the other branch
                 // `x - 1` would underflow.
@@ -107,7 +103,7 @@ impl RefreshEvery {
             };
         assert!(u64::from(result) >= u64::from(timestamp));
         assert!(u64::from(result) - u64::from(timestamp) <= interval);
-        Some(result)
+        result
     }
 }
 

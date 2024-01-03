@@ -1301,10 +1301,6 @@ where
                 }
             });
 
-            ///// todo: alter when we return none from round_up:
-            // - only at REFRESH AT
-            // - but for an overflow with EVERY, do a saturating add (because if the ts is close to u64::max, then it doesn't have a meaning anyway)
-
             let ac = frontiers.into_element();
             match ac.frontier().as_option() {
                 Some(ts) => {
