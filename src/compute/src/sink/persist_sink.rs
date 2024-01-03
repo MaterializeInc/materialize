@@ -1240,64 +1240,63 @@ where
         let mut capability = Some(capabilities.into_element());
         let mut buffer = Vec::new();
         move |frontiers| {
-            if let Some(ref mut capability) = &mut capability {
-                input.for_each(|cap, data| {
+            input.for_each(|cap, data| {
+                let capability = capability.as_mut().expect("We shouldn't have received data if the capability is empty");
 
-                    let rounded_up_cap_ts = refresh_schedule.round_up_timestamp(*cap.time());
-                    match rounded_up_cap_ts {
-                        Some(rounded_up_ts) => {
-                            capability.downgrade(&rounded_up_ts);
-                        },
-                        None => {
-                            // We are after the last refresh.
-                        }
+                let rounded_up_cap_ts = refresh_schedule.round_up_timestamp(*cap.time());
+                match rounded_up_cap_ts {
+                    Some(rounded_up_ts) => {
+                        capability.downgrade(&rounded_up_ts);
+                    },
+                    None => {
+                        // We are after the last refresh.
                     }
+                }
 
-                    data.swap(&mut buffer);
-                    let mut cached_ts: Option<Timestamp> = None;
-                    let mut cached_rounded_up_data_ts = None;
-                    buffer.retain_mut(|(_d, ts, _r)| {
-                        let rounded_up_data_ts = {
-                            // We cache the rounded up timestamp for the last seen timestamp,
-                            // because the rounding up has a non-negligible cost. Caching for
-                            // just the 1 last timestamp helps already, because in some common
-                            // cases, we'll be seeing a lot of identical timestamps, e.g.,
-                            // during a rehydration, or when we have much more than 1000 records
-                            // during a single second.
-                            if cached_ts != Some(*ts) {
-                                cached_ts = Some(*ts);
-                                cached_rounded_up_data_ts = refresh_schedule.round_up_timestamp(*ts);
-                            }
-                            cached_rounded_up_data_ts
-                        };
-                        match rounded_up_data_ts {
-                            Some(rounded_up_ts) => {
-                                *ts = rounded_up_ts;
-                                true
-                            }
-                            None => {
-                                // This record is after the last refresh, so drop it.
-                                false
-                            }
+                data.swap(&mut buffer);
+                let mut cached_ts: Option<Timestamp> = None;
+                let mut cached_rounded_up_data_ts = None;
+                buffer.retain_mut(|(_d, ts, _r)| {
+                    let rounded_up_data_ts = {
+                        // We cache the rounded up timestamp for the last seen timestamp,
+                        // because the rounding up has a non-negligible cost. Caching for
+                        // just the 1 last timestamp helps already, because in some common
+                        // cases, we'll be seeing a lot of identical timestamps, e.g.,
+                        // during a rehydration, or when we have much more than 1000 records
+                        // during a single second.
+                        if cached_ts != Some(*ts) {
+                            cached_ts = Some(*ts);
+                            cached_rounded_up_data_ts = refresh_schedule.round_up_timestamp(*ts);
                         }
-                    });
-                    consolidate_updates(&mut buffer); // Different timestamps might have been collapsed by the rounding.
-                    buffer.shrink_to_fit();
-
-                    match rounded_up_cap_ts {
-                        Some(_) => {
-                            output_buf
-                                .activate()
-                                .session(&capability)
-                                .give_container(&mut buffer);
-                        },
+                        cached_rounded_up_data_ts
+                    };
+                    match rounded_up_data_ts {
+                        Some(rounded_up_ts) => {
+                            *ts = rounded_up_ts;
+                            true
+                        }
                         None => {
-                            // We are after the last refresh.
-                            soft_assert_or_log!(buffer.is_empty(), "We should have dropped all data");
+                            // This record is after the last refresh, so drop it.
+                            false
                         }
                     }
                 });
-            }
+                consolidate_updates(&mut buffer); // Different timestamps might have been collapsed by the rounding.
+                buffer.shrink_to_fit();
+
+                match rounded_up_cap_ts {
+                    Some(_) => {
+                        output_buf
+                            .activate()
+                            .session(&capability)
+                            .give_container(&mut buffer);
+                    },
+                    None => {
+                        // We are after the last refresh.
+                        soft_assert_or_log!(buffer.is_empty(), "We should have dropped all data");
+                    }
+                }
+            });
 
             ///// todo: alter when we return none from round_up:
             // - only at REFRESH AT
