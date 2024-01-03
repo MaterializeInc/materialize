@@ -2813,8 +2813,8 @@ pub static MZ_WEBHOOKS_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 
 // These will be replaced with per-replica tables once source/sink multiplexing on
 // a single cluster is supported.
-pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
-    name: "mz_source_statistics",
+pub static MZ_SOURCE_STATISTICS_RAW: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_source_statistics_raw",
     schema: MZ_INTERNAL_SCHEMA,
     data_source: Some(IntrospectionType::StorageSourceStatistics),
     desc: RelationDesc::empty()
@@ -2831,8 +2831,8 @@ pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSourc
     is_retained_metrics_object: true,
     sensitivity: DataSensitivity::Public,
 });
-pub static MZ_SINK_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
-    name: "mz_sink_statistics",
+pub static MZ_SINK_STATISTICS_RAW: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_sink_statistics_raw",
     schema: MZ_INTERNAL_SCHEMA,
     data_source: Some(IntrospectionType::StorageSinkStatistics),
     desc: RelationDesc::empty()
@@ -5618,7 +5618,7 @@ sources AS (
         r.id AS replica_id,
         ss.rehydration_latency IS NOT NULL AS hydrated
     FROM mz_sources s
-    LEFT JOIN mz_internal.mz_source_statistics_agg_view ss USING (id)
+    LEFT JOIN mz_internal.mz_source_statistics ss USING (id)
     JOIN mz_cluster_replicas r
         ON (r.cluster_id = s.cluster_id)
 ),
@@ -5947,8 +5947,8 @@ ON mz_internal.mz_sink_status_history (sink_id)",
     is_retained_metrics_object: false,
 };
 
-pub const MZ_SOURCE_STATISTICS_AGG_VIEW: BuiltinView = BuiltinView {
-    name: "mz_source_statistics_agg_view",
+pub const MZ_SOURCE_STATISTICS: BuiltinView = BuiltinView {
+    name: "mz_source_statistics",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
     // everything but `params`
@@ -5967,7 +5967,7 @@ SELECT
         WHEN bool_or(rehydration_latency IS NULL) THEN NULL
         ELSE MAX(rehydration_latency)
     END AS rehydration_latency
-FROM mz_internal.mz_source_statistics
+FROM mz_internal.mz_source_statistics_raw
 GROUP BY id",
     sensitivity: DataSensitivity::Public,
 };
@@ -5976,12 +5976,12 @@ pub const MZ_SOURCE_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_source_statistics_ind",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "IN CLUSTER mz_introspection
-ON mz_internal.mz_source_statistics_agg_view (id)",
+ON mz_internal.mz_source_statistics (id)",
     is_retained_metrics_object: true,
 };
 
-pub const MZ_SINK_STATISTICS_AGG_VIEW: BuiltinView = BuiltinView {
-    name: "mz_sink_statistics_agg_view",
+pub const MZ_SINK_STATISTICS: BuiltinView = BuiltinView {
+    name: "mz_sink_statistics",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
     // everything but `params`
@@ -5992,7 +5992,7 @@ SELECT
     SUM(messages_committed) AS messages_committed,
     SUM(bytes_staged) AS bytes_staged,
     SUM(bytes_committed) AS bytes_committed
-FROM mz_internal.mz_sink_statistics
+FROM mz_internal.mz_sink_statistics_raw
 GROUP BY id",
     sensitivity: DataSensitivity::Public,
 };
@@ -6001,7 +6001,7 @@ pub const MZ_SINK_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_sink_statistics_ind",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "IN CLUSTER mz_introspection
-ON mz_internal.mz_sink_statistics_agg_view (id)",
+ON mz_internal.mz_sink_statistics (id)",
     is_retained_metrics_object: true,
 };
 
@@ -6461,11 +6461,11 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_ACTIVITY_LOG_REDACTED),
         Builtin::View(&MZ_SOURCE_STATUSES),
         Builtin::Source(&MZ_STORAGE_SHARDS),
-        Builtin::Source(&MZ_SOURCE_STATISTICS),
-        Builtin::Source(&MZ_SINK_STATISTICS),
-        Builtin::View(&MZ_SOURCE_STATISTICS_AGG_VIEW),
+        Builtin::Source(&MZ_SOURCE_STATISTICS_RAW),
+        Builtin::Source(&MZ_SINK_STATISTICS_RAW),
+        Builtin::View(&MZ_SOURCE_STATISTICS),
         Builtin::Index(&MZ_SOURCE_STATISTICS_IND),
-        Builtin::View(&MZ_SINK_STATISTICS_AGG_VIEW),
+        Builtin::View(&MZ_SINK_STATISTICS),
         Builtin::Index(&MZ_SINK_STATISTICS_IND),
         Builtin::View(&MZ_STORAGE_USAGE),
         Builtin::Source(&MZ_FRONTIERS),

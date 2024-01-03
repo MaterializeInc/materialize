@@ -1239,22 +1239,22 @@ const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY: ServerVar<bool> = ServerVar
     internal: true,
 };
 
-/// The interval to submit statistics to `mz_source_statistics` and `mz_sink_statistics`.
+/// The interval to submit statistics to `mz_source_statistics_raw` and `mz_sink_statistics_raw`.
 const STORAGE_STATISTICS_INTERVAL: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("storage_statistics_interval"),
     value: mz_storage_types::parameters::STATISTICS_INTERVAL_DEFAULT,
-    description: "The interval to submit statistics to `mz_source_statistics` \
+    description: "The interval to submit statistics to `mz_source_statistics_raw` \
         and `mz_sink_statistics` (Materialize).",
     internal: true,
 };
 
-/// The interval to collect statistics for `mz_source_statistics` and `mz_sink_statistics` in
+/// The interval to collect statistics for `mz_source_statistics_raw` and `mz_sink_statistics_raw` in
 /// clusterd. Controls the accuracy of metrics.
 const STORAGE_STATISTICS_COLLECTION_INTERVAL: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("storage_statistics_collection_interval"),
     value: mz_storage_types::parameters::STATISTICS_COLLECTION_INTERVAL_DEFAULT,
-    description: "The interval to collect statistics for `mz_source_statistics` \
-        and `mz_sink_statistics` in clusterd. Controls the accuracy of metrics \
+    description: "The interval to collect statistics for `mz_source_statistics_raw` \
+        and `mz_sink_statistics_raw` in clusterd. Controls the accuracy of metrics \
         (Materialize).",
     internal: true,
 };
