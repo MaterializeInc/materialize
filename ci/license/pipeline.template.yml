@@ -12,4 +12,4 @@ steps:
     timeout_in_minutes: 10
     command: ci/license/bump-change-date.sh
     agents:
-      queue: linux
+      queue: linux-x86_64
