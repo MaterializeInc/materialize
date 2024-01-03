@@ -40,7 +40,7 @@ impl RefreshSchedule {
             .iter()
             // We use a `filter_map` here to simply discard such refreshes where the timestamp
             // overflowed, since the system would never reach that time anyway.
-            .filter_map(|refresh_every| refresh_every.round_up(timestamp))
+            .filter_map(|refresh_every| refresh_every.round_up_timestamp(timestamp))
             .min();
         let next_at = self
             .ats
@@ -54,7 +54,7 @@ impl RefreshSchedule {
         next_every.into_iter().chain(next_at).min()
     }
 
-    /// /////////////todo: comment
+    /// Returns the time of the last refresh. Returns None if there is no last refresh (e.g., for a periodic refresh).
     pub fn last_refresh(&self) -> Option<Timestamp> {
         self.ats.iter().max().cloned()
     }
@@ -71,7 +71,7 @@ impl RefreshEvery {
     /// refresh schedule.
     ///
     /// Returns None if an overflow happens.
-    pub fn round_up(&self, timestamp: Timestamp) -> Option<Timestamp> {
+    pub fn round_up_timestamp(&self, timestamp: Timestamp) -> Option<Timestamp> {
         let RefreshEvery {
             interval,
             aligned_to,
