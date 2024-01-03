@@ -218,7 +218,8 @@ mod tests {
             test(Some(5434532600), 5434532599);
             test(Some(5434532600), 5434532600);
             test(Some(5434532700), 5434532601);
-            test(None, u64::MAX);
+            test(Some(u64::MAX), u64::MAX - 1);
+            test(Some(u64::MAX), u64::MAX);
         }
         {
             let schedule = RefreshSchedule {
@@ -243,7 +244,8 @@ mod tests {
             test(Some(542), 541);
             test(Some(542), 542);
             test(Some(642), 543);
-            test(None, u64::MAX);
+            test(Some(u64::MAX), u64::MAX - 1);
+            test(Some(u64::MAX), u64::MAX);
         }
         {
             let schedule = RefreshSchedule {
@@ -306,7 +308,8 @@ mod tests {
             test(Some(123456), 123443);
             test(Some(123456), 123456);
             test(Some(123500), 123457);
-            test(None, u64::MAX);
+            test(Some(u64::MAX), u64::MAX - 1);
+            test(Some(u64::MAX), u64::MAX);
         }
     }
 }
