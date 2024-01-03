@@ -1258,16 +1258,6 @@ where
                     .as_mut()
                     .expect("should have a capability if we received data");
 
-                let rounded_up_cap_ts = refresh_schedule.round_up_timestamp(*input_cap.time());
-                match rounded_up_cap_ts {
-                    Some(rounded_up_ts) => {
-                        capability.downgrade(&rounded_up_ts);
-                    }
-                    None => {
-                        // We are after the last refresh.
-                    }
-                }
-
                 data.swap(&mut buffer);
                 let mut cached_ts: Option<Timestamp> = None;
                 let mut cached_rounded_up_data_ts = None;
@@ -1297,7 +1287,7 @@ where
                     }
                 }
 
-                match rounded_up_cap_ts {
+                match refresh_schedule.round_up_timestamp(*input_cap.time()) {
                     Some(_) => {
                         // Use a ConsolidateBuffer, because different timestamps might have been collapsed by the
                         // rounding.
