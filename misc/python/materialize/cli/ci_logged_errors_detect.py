@@ -94,6 +94,7 @@ IGNORE_RE = re.compile(
     | (platform-checks|legacy-upgrade|upgrade-matrix|feature-benchmark)-materialized-.* \| .*cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
     # Fencing warnings are OK in fencing test
     | persist-txn-fencing-mz_first-.* \| .*unexpected\ fence\ epoch
+    | persist-txn-fencing-mz_first-.* \| .*fenced\ by\ new\ catalog\ upper
     # For platform-checks upgrade tests
     | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage(\ to\ set\ (default|configured)\ parameter)?
     | internal\ error:\ no\ AWS\ external\ ID\ prefix\ configured
