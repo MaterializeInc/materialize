@@ -2822,9 +2822,9 @@ pub static MZ_SOURCE_STATISTICS_RAW: Lazy<BuiltinSource> = Lazy::new(|| BuiltinS
         .with_column("worker_id", ScalarType::UInt64.nullable(false))
         .with_column("snapshot_committed", ScalarType::Bool.nullable(false))
         .with_column("messages_received", ScalarType::UInt64.nullable(false))
+        .with_column("bytes_received", ScalarType::UInt64.nullable(false))
         .with_column("updates_staged", ScalarType::UInt64.nullable(false))
         .with_column("updates_committed", ScalarType::UInt64.nullable(false))
-        .with_column("bytes_received", ScalarType::UInt64.nullable(false))
         .with_column("envelope_state_bytes", ScalarType::UInt64.nullable(false))
         .with_column("envelope_state_records", ScalarType::UInt64.nullable(false))
         .with_column("rehydration_latency", ScalarType::Interval.nullable(true)),
@@ -5956,16 +5956,16 @@ pub const MZ_SOURCE_STATISTICS: BuiltinView = BuiltinView {
 SELECT
     id,
     bool_and(snapshot_committed) as snapshot_committed,
-    SUM(messages_received) AS messages_received,
-    SUM(bytes_received) AS bytes_received,
-    SUM(updates_staged) AS updates_staged,
-    SUM(updates_committed) AS updates_committed,
-    SUM(envelope_state_bytes) AS envelope_state_bytes,
-    SUM(envelope_state_records) AS envelope_state_records,
+    SUM(messages_received)::uint8 AS messages_received,
+    SUM(bytes_received)::uint8 AS bytes_received,
+    SUM(updates_staged)::uint8 AS updates_staged,
+    SUM(updates_committed)::uint8 AS updates_committed,
+    SUM(envelope_state_bytes)::uint8 AS envelope_state_bytes,
+    SUM(envelope_state_records)::uint8 AS envelope_state_records,
     -- Ensure we aggregate to NULL when not all workers are done rehydrating.
     CASE
         WHEN bool_or(rehydration_latency IS NULL) THEN NULL
-        ELSE MAX(rehydration_latency)
+        ELSE MAX(rehydration_latency)::interval
     END AS rehydration_latency
 FROM mz_internal.mz_source_statistics_raw
 GROUP BY id",
@@ -5988,10 +5988,10 @@ pub const MZ_SINK_STATISTICS: BuiltinView = BuiltinView {
     sql: "
 SELECT
     id,
-    SUM(messages_staged) AS messages_staged,
-    SUM(messages_committed) AS messages_committed,
-    SUM(bytes_staged) AS bytes_staged,
-    SUM(bytes_committed) AS bytes_committed
+    SUM(messages_staged)::uint8 AS messages_staged,
+    SUM(messages_committed)::uint8 AS messages_committed,
+    SUM(bytes_staged)::uint8 AS bytes_staged,
+    SUM(bytes_committed)::uint8 AS bytes_committed
 FROM mz_internal.mz_sink_statistics_raw
 GROUP BY id",
     sensitivity: DataSensitivity::Public,

@@ -447,9 +447,9 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 2  worker_id  uint8
 3  snapshot_committed  boolean
 4  messages_received  uint8
-5  updates_staged  uint8
-6  updates_committed  uint8
-7  bytes_received  uint8
+5  bytes_received  uint8
+6  updates_staged  uint8
+7  updates_committed  uint8
 8  envelope_state_bytes  uint8
 9  envelope_state_records  uint8
 10  rehydration_latency  interval
@@ -460,9 +460,9 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 1  id  text
 2  snapshot_committed  boolean
 3  messages_received  uint8
-4  updates_staged  uint8
-5  updates_committed  uint8
-6  bytes_received  uint8
+4  bytes_received  uint8
+5  updates_staged  uint8
+6  updates_committed  uint8
 7  envelope_state_bytes  uint8
 8  envelope_state_records  uint8
 9  rehydration_latency  interval
