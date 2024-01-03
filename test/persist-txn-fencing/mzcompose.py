@@ -133,7 +133,9 @@ def execute_operation(
 
 
 def run_workload(c: Composition, workload: Workload, catalog_store: str) -> None:
-    print(f"+++ Running workload {workload.name} with {catalog_store} catalog implementation ...")
+    print(
+        f"+++ Running workload {workload.name} with {catalog_store} catalog implementation ..."
+    )
     c.silent = True
 
     c.down(destroy_volumes=True)
@@ -212,6 +214,7 @@ def run_workload(c: Composition, workload: Workload, catalog_store: str) -> None
         assert (
             "unable to confirm leadership" in mz_first_log.stdout
             or "unexpected fence epoch" in mz_first_log.stdout
+            or "fenced by new catalog upper" in mz_first_log.stdout
         )
 
         print("+++ Verifying committed transactions ...")
