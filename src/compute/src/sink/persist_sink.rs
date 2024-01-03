@@ -20,6 +20,7 @@ use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::{CollectionExt, HashMap};
+use mz_ore::soft_assert_or_log;
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
@@ -30,6 +31,7 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
+use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
@@ -41,8 +43,6 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use timely::PartialOrder;
 use tracing::trace;
-use mz_ore::soft_assert_or_log;
-use mz_timely_util::buffer::ConsolidateBuffer;
 
 use crate::compute_state::ComputeState;
 use crate::render::sinks::SinkRender;
@@ -1244,13 +1244,15 @@ where
             input.for_each(|cap, data| {
                 // `capability` will be None if we are past the last refresh. We have made sure to not receive any
                 // data that is after the last refresh by setting the `until` of the dataflow to the last refresh.
-                let capability = capability.as_mut().expect("should have a capability if we received data");
+                let capability = capability
+                    .as_mut()
+                    .expect("should have a capability if we received data");
 
                 let rounded_up_cap_ts = refresh_schedule.round_up_timestamp(*cap.time());
                 match rounded_up_cap_ts {
                     Some(rounded_up_ts) => {
                         capability.downgrade(&rounded_up_ts);
-                    },
+                    }
                     None => {
                         // We are after the last refresh.
                     }
@@ -1291,7 +1293,7 @@ where
                         // rounding.
                         ConsolidateBuffer::new(&mut output_buf.activate(), 0)
                             .give_iterator_at(capability, buffer.drain(..));
-                    },
+                    }
                     None => {
                         // We are after the last refresh.
                         soft_assert_or_log!(buffer.is_empty(), "We should have dropped all data");
