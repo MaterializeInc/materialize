@@ -575,7 +575,8 @@ impl JoinImplementation {
                     }
                 }
                 // If we can't plan a delta join, plan a differential join.
-                Err(..) => {
+                Err(err) => {
+                    tracing::error!("delta planning failed: {err}");
                     tracing::debug!(
                         plan = ?differential_query_plan,
                         "picking differential query plan (delta planning failed)");
