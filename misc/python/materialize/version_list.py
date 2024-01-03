@@ -41,6 +41,9 @@ INVALID_VERSIONS = {
     MzVersion.parse_mz("v0.57.2"),
     MzVersion.parse_mz("v0.57.5"),
     MzVersion.parse_mz("v0.57.6"),
+    MzVersion.parse_mz("v0.81.0"),  # incompatible for upgrades
+    MzVersion.parse_mz("v0.81.1"),  # incompatible for upgrades
+    MzVersion.parse_mz("v0.81.2"),  # incompatible for upgrades
 }
 
 _SKIP_IMAGE_CHECK_BELOW_THIS_VERSION = MzVersion.parse_mz("v0.77.0")
