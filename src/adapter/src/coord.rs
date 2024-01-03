@@ -161,6 +161,7 @@ use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
 use mz_catalog::durable::DurableCatalogState;
+use mz_expr::refresh_schedule::RefreshSchedule;
 
 use self::statement_logging::{StatementLogging, StatementLoggingId};
 
@@ -1558,8 +1559,27 @@ impl Coordinator {
                         .clone();
 
                     // Timestamp selection
-                    let as_of = self.bootstrap_materialized_view_as_of(&df_desc, mview.cluster_id);
+                    let as_of = self.bootstrap_materialized_view_as_of(
+                        &df_desc,
+                        mview.cluster_id,
+                        &mview.refresh_schedule,
+                    );
                     df_desc.set_as_of(as_of);
+
+                    // If we have a refresh schedule that has a last refresh, then set the `until` to the last refresh.
+                    let until = mview
+                        .refresh_schedule
+                        .as_ref()
+                        .map(|refresh_schedule| {
+                            refresh_schedule
+                                .last_refresh()
+                                .map(|last_refresh| last_refresh.try_step_forward())
+                        })
+                        .flatten()
+                        .flatten();
+                    if let Some(until) = until {
+                        df_desc.until.meet_assign(&Antichain::from_elem(until));
+                    }
 
                     let df_meta = self
                         .catalog()
@@ -2155,6 +2175,7 @@ impl Coordinator {
         &self,
         dataflow: &DataflowDescription<Plan>,
         cluster_id: ComputeInstanceId,
+        refresh_schedule: &Option<RefreshSchedule>,
     ) -> Antichain<Timestamp> {
         // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
         // the `since`s of all dependencies.
@@ -2173,11 +2194,25 @@ impl Coordinator {
         let write_frontier = self.storage_write_frontier(*sink_id);
 
         // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
-        let as_of = if write_frontier.is_empty() {
+        let mut as_of = if write_frontier.is_empty() {
             min_as_of.clone()
         } else {
             min_as_of.join(write_frontier)
         };
+
+        // If we have a RefreshSchedule, then round up the `as_of` to the next refresh.
+        // Note that in many cases the `as_of` would already be at this refresh, because the `write_frontier` will be
+        // usually there. However, it can happen that we restart after the MV was created in the catalog but before
+        // its upper was initialized in persist.
+        if let Some(refresh_schedule) = &refresh_schedule {
+            if let Some(rounded_up_ts) =
+                refresh_schedule.round_up_timestamp(*as_of.as_option().expect("as_of is non-empty"))
+            {
+                as_of = Antichain::from_elem(rounded_up_ts);
+            } else {
+                // We are past the last refresh. Let's not move the as_of.
+            }
+        }
 
         tracing::info!(
             export_ids = %dataflow.display_export_ids(),
