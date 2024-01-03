@@ -379,21 +379,7 @@ impl Interval {
 
     /// Computes the total number of milliseconds in the interval. Discards fractional milliseconds!
     pub fn as_milliseconds(&self) -> i128 {
-        // unwrap is safe because i32::MAX/i32::MIN number of months will not overflow an i128 when
-        // converted to milliseconds.
-        Self::convert_date_time_unit(
-            DateTimeField::Month,
-            DateTimeField::Milliseconds,
-            i128::from(self.months),
-        ).unwrap() +
-        // unwrap is safe because i32::MAX/i32::MIN number of days will not overflow an i128 when
-        // converted to milliseconds.
-        Self::convert_date_time_unit(
-            DateTimeField::Day,
-            DateTimeField::Milliseconds,
-            i128::from(self.days),
-        ).unwrap() +
-        i128::from(self.micros) / 1000
+        self.as_microseconds() / 1000
     }
 
     /// Converts this `Interval`'s duration into `chrono::Duration`.
