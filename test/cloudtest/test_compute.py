@@ -99,3 +99,42 @@ def test_cluster_shutdown(mz: MaterializeApplication, failpoint: str) -> None:
     not_exists(resource=compute_svcs["shutdown_replica2"])
 
     mz.set_environmentd_failpoints("")
+
+
+def get_value_from_label(
+    mz: MaterializeApplication, cluster_id: str, replica_id: str, jsonpath: str
+) -> str:
+    return mz.kubectl(
+        "get",
+        "pods",
+        f"--selector=cluster.environmentd.materialize.cloud/cluster-id={cluster_id},cluster.environmentd.materialize.cloud/replica-id={replica_id}",
+        "-o",
+        "jsonpath='{.items[*]." + jsonpath + "}'",
+    )
+
+
+def get_node_selector(
+    mz: MaterializeApplication, cluster_id: str, replica_id: str
+) -> str:
+    return get_value_from_label(mz, cluster_id, replica_id, "spec.nodeSelector")
+
+
+def test_disk_label(mz: MaterializeApplication) -> None:
+    """Test that cluster replicas have the correct materialize.cloud/disk labels"""
+
+    for value in ("true", "false"):
+        mz.environmentd.sql(
+            f"CREATE CLUSTER disk_{value} MANAGED, SIZE = '2-1', DISK = {value}"
+        )
+
+        (cluster_id, replica_id) = mz.environmentd.sql_query(
+            f"SELECT mz_clusters.id, mz_cluster_replicas.id FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'disk_{value}'"
+        )[0]
+        assert cluster_id is not None
+        assert replica_id is not None
+
+        node_selectors = get_node_selector(mz, cluster_id, replica_id)
+        assert (
+            node_selectors
+            == f'\'{{"materialize.cloud/disk":"{value}"}} {{"materialize.cloud/disk":"{value}"}}\''
+        ), node_selectors
