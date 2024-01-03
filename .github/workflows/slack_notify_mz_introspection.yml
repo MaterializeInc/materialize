@@ -35,7 +35,7 @@
 name: Slack Mz Introspection Council Notifications
 
 on:
-  pull_request_target:
+  pull_request:
     types:
       - opened
       - reopened
@@ -48,7 +48,6 @@ jobs:
   notify:
     name: "Notify on mz_introspection index changes"
     runs-on: ubuntu-latest
-    if: ${{ !github.event.pull_request.draft }}
     steps:
       - name: "Path filter"
         id: filter
@@ -65,10 +64,11 @@ jobs:
         id: check-retain-metrics
         if: steps.filter.outputs.builtin-rs == 'true'
         run: |
-          # Check for the text "is_retained_metrics" modified in builtin.rs in the pull request
-          if git diff ${{ github.event.pull_request.base.sha }} -- 'src/catalog/src/builtin.rs' | grep -i 'is_retained_metrics'; then
-            echo "changed=true" >> $GITHUB_OUTPUT
-          fi
+          echo "changed=true" >> $GITHUB_OUTPUT
+          # # Check for the text "is_retained_metrics" modified in builtin.rs in the pull request
+          # if git diff ${{ github.event.pull_request.base.sha }} -- 'src/catalog/src/builtin.rs' | grep -i 'is_retained_metrics'; then
+          #   echo "changed=true" >> "$GITHUB_OUTPUT"
+          # fi
       - name: "Push to Slack"
         if: steps.filter.outputs.index-slt == 'true' || steps.check-retain-metrics.outputs.changed == 'true'
         uses: actions-ecosystem/action-slack-notifier@fc778468d09c43a6f4d1b8cccaca59766656996a
