@@ -62,13 +62,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          path: main
+          fetch-depth: 10
       - name: "Check Retained Metric Changes"
         id: check-retain-metrics
         if: steps.filter.outputs.builtin-rs == 'true'
         run: |
           # Check for the text "is_retained_metrics" modified in builtin.rs in the pull request
-          if git diff main... -- 'src/catalog/src/builtin.rs' | grep -i 'is_retained_metrics'; then
+          if git diff HEAD^..HEAD -- 'src/catalog/src/builtin.rs' | grep -i 'is_retained_metrics'; then
             echo "changed=true" >> $GITHUB_OUTPUT
           fi
       - name: "Push to Slack"
