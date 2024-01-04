@@ -891,11 +891,7 @@ where
                 mfp_after,
             } => {
                 let input = self.render_plan(*input);
-                let mfp_option = if mfp_after.is_identity() {
-                    None
-                } else {
-                    Some(mfp_after)
-                };
+                let mfp_option = (!mfp_after.is_identity()).then_some(mfp_after);
                 self.render_reduce(input, key_val_plan, plan, input_key, mfp_option)
             }
             Plan::TopK { input, top_k_plan } => {

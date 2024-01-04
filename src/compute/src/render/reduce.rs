@@ -71,9 +71,9 @@ where
         // Convert `mfp_after` to an actionable plan.
         let mfp_after = mfp_after.map(|m| {
             m.into_plan()
-                .expect("MFP planning failed")
+                .expect("MFP planning must succeed")
                 .into_nontemporal()
-                .expect("Reduce presented with temporal predicates")
+                .expect("Fused Reduce MFPs do not have temporal predicates")
         });
 
         input.scope().region_named("Reduce", |inner| {
@@ -334,7 +334,7 @@ where
         let mut datums1 = DatumVec::new();
         let mut datums2 = DatumVec::new();
         let mfp_after1 = mfp_after.clone();
-        let mfp_after2 = mfp_after;
+        let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
         let aggregate_types_err = aggregate_types.clone();
         let (oks, errs) = differential_dataflow::collection::concatenate(scope, to_concat)
@@ -476,11 +476,8 @@ where
 
                     // Finally, if `mfp_after` can produce errors, then we should also report
                     // these here.
-                    if let Some(Result::Err(e)) = mfp_after2
-                        .as_ref()
-                        .filter(|mfp| mfp.could_error())
-                        .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
-                    {
+                    let Some(mfp) = &mfp_after2 else { return };
+                    if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
                         output.push((e.into(), 1));
                     }
                 },
@@ -561,7 +558,7 @@ where
         let mut datums1 = DatumVec::new();
         let mut datums2 = DatumVec::new();
         let mfp_after1 = mfp_after.clone();
-        let mfp_after2 = mfp_after;
+        let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
         let (output, errors) = collection
             .mz_arrange::<T1>(&input_name)
@@ -599,16 +596,14 @@ where
                         return;
                     }
                     // If `mfp_after` can error, then evaluate it here.
-                    if let Some(mfp) = mfp_after2.as_ref().filter(|mfp| mfp.could_error()) {
-                        let temp_storage = RowArena::new();
-                        let datum_iter = key.into_datum_iter(None);
-                        let mut datums_local = datums2.borrow();
-                        datums_local.extend(datum_iter);
+                    let Some(mfp) = &mfp_after2 else { return };
+                    let temp_storage = RowArena::new();
+                    let datum_iter = key.into_datum_iter(None);
+                    let mut datums_local = datums2.borrow();
+                    datums_local.extend(datum_iter);
 
-                        if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
-                        {
-                            output.push((e.into(), 1));
-                        }
+                    if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
+                        output.push((e.into(), 1));
                     }
                 },
             );
@@ -656,7 +651,7 @@ where
         let mut datums1 = DatumVec::new();
         let mut datums2 = DatumVec::new();
         let mfp_after1 = mfp_after.clone();
-        let mfp_after2 = mfp_after;
+        let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
         let arranged =
             differential_dataflow::collection::concatenate(&mut input.scope(), to_collect)
@@ -686,7 +681,7 @@ where
         // `mz_timely_util::reduce::ReduceExt::reduce_pair` here because we only
         // conditionally render the second component of the reduction pair.
         let validation_errs = err_output.expect("expected to validate in at least one aggregate");
-        if let Some(mfp) = mfp_after2.filter(|mfp| mfp.could_error()) {
+        if let Some(mfp) = mfp_after2 {
             let mfp_errs = arranged
                 .mz_reduce_abelian::<_, RowErrSpine<_, _>>(
                     "ReduceFuseBasic Error Check",
@@ -775,7 +770,7 @@ where
         let mut datums1 = DatumVec::new();
         let mut datums2 = DatumVec::new();
         let mfp_after1 = mfp_after.clone();
-        let mfp_after2 = mfp_after;
+        let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
         let func2 = func.clone();
 
         let arranged = partial.mz_arrange::<RowRowSpine<_, _>>("Arranged ReduceInaccumulable");
@@ -817,7 +812,6 @@ where
         // we then wouldn't be able to do this error check conditionally.  See its documentation for the
         // rationale around using a second reduction here.
         let must_validate = validating && err_output.is_none();
-        let mfp_after2 = mfp_after2.filter(|mfp| mfp.could_error());
         if must_validate || mfp_after2.is_some() {
             let error_logger = self.error_logger();
 
@@ -1011,7 +1005,7 @@ where
             let mut datums1 = DatumVec::new();
             let mut datums2 = DatumVec::new();
             let mfp_after1 = mfp_after.clone();
-            let mfp_after2 = mfp_after;
+            let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
             let aggr_funcs2 = aggr_funcs.clone();
 
             // Build a series of stages for the reduction
@@ -1025,7 +1019,6 @@ where
             // but we then wouldn't be able to do this error check conditionally.  See its documentation
             // for the rationale around using a second reduction here.
             let must_validate = err_output.is_none();
-            let mfp_after2 = mfp_after2.filter(|mfp| mfp.could_error());
             if must_validate || mfp_after2.is_some() {
                 let errs = arranged
                     .mz_reduce_abelian::<_, RowErrSpine<_, _>>(
@@ -1242,7 +1235,7 @@ where
         let mut datums1 = DatumVec::new();
         let mut datums2 = DatumVec::new();
         let mfp_after1 = mfp_after.clone();
-        let mfp_after2 = mfp_after;
+        let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
         let partial: KeyCollection<_, _, _> = partial.into();
         let arranged = partial
@@ -1271,7 +1264,7 @@ where
         // to scan for these potential errors. Note that we cannot directly use
         // `mz_timely_util::reduce::ReduceExt::reduce_pair` here because we only
         // conditionally render the second component of the reduction pair.
-        if let Some(mfp) = mfp_after2.filter(|mfp| mfp.could_error()) {
+        if let Some(mfp) = mfp_after2 {
             let mfp_errs = arranged
                 .mz_reduce_abelian::<_, RowErrSpine<_, _>>("ReduceMonotonic Error Check", {
                     move |key, input, output| {
@@ -1418,7 +1411,7 @@ where
         let mut datums1 = DatumVec::new();
         let mut datums2 = DatumVec::new();
         let mfp_after1 = mfp_after.clone();
-        let mfp_after2 = mfp_after;
+        let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
         let full_aggrs2 = full_aggrs.clone();
 
         let error_logger = self.error_logger();
@@ -1488,19 +1481,17 @@ where
                     }
 
                     // If `mfp_after` can error, then evaluate it here.
-                    if let Some(mfp) = mfp_after2.as_ref().filter(|mfp| mfp.could_error()) {
-                        let temp_storage = RowArena::new();
-                        let datum_iter = key.into_datum_iter(None);
-                        let mut datums_local = datums2.borrow();
-                        datums_local.extend(datum_iter);
-                        for (aggr, accum) in full_aggrs2.iter().zip(accums) {
-                            datums_local.push(finalize_accum(&aggr.func, accum, total));
-                        }
+                    let Some(mfp) = &mfp_after2 else { return };
+                    let temp_storage = RowArena::new();
+                    let datum_iter = key.into_datum_iter(None);
+                    let mut datums_local = datums2.borrow();
+                    datums_local.extend(datum_iter);
+                    for (aggr, accum) in full_aggrs2.iter().zip(accums) {
+                        datums_local.push(finalize_accum(&aggr.func, accum, total));
+                    }
 
-                        if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
-                        {
-                            output.push((e.into(), 1));
-                        }
+                    if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
+                        output.push((e.into(), 1));
                     }
                 },
             );
@@ -1526,7 +1517,7 @@ fn evaluate_mfp_after<'a, 'b>(
     // Apply MFP if it exists and pack a Row of
     // aggregate values from `datums_local`.
     if let Some(mfp) = mfp_after {
-        // It is fine to ignore errors here, as they are scanned
+        // It must ignore errors here, but they are scanned
         // for elsewhere if the MFP can error.
         let Ok(Some(iter)) = mfp.evaluate_iter(datums_local, temp_storage) else {
             return None;
