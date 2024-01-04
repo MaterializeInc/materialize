@@ -10,7 +10,6 @@
 pub(crate) mod metrics;
 pub(crate) mod state_update;
 
-use std::cmp::max;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::future::Future;
@@ -25,7 +24,7 @@ use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsFutureExt;
-use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::now::EpochMillis;
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::{
     soft_assert_eq_or_log, soft_assert_ne_or_log, soft_assert_no_log, soft_assert_or_log,
@@ -110,8 +109,6 @@ pub struct UnopenedPersistCatalogState {
     snapshot_cache: Option<(Timestamp, Vec<StateUpdate<StateUpdateKindRaw>>)>,
     /// The epoch of the catalog, if one exists.
     epoch: Option<Epoch>,
-    /// A now generation function.
-    now: NowFn,
     /// Metrics for the persist catalog.
     metrics: Arc<Metrics>,
 }
@@ -130,7 +127,6 @@ impl UnopenedPersistCatalogState {
     pub(crate) async fn new(
         persist_client: PersistClient,
         organization_id: Uuid,
-        now: NowFn,
         metrics: Arc<Metrics>,
     ) -> UnopenedPersistCatalogState {
         const SEED: usize = 1;
@@ -170,7 +166,6 @@ impl UnopenedPersistCatalogState {
             shard_id,
             snapshot_cache: None,
             metrics,
-            now,
             epoch,
         }
     }
@@ -258,7 +253,6 @@ impl UnopenedPersistCatalogState {
             shard_id: self.shard_id,
             upper: Timestamp::minimum(),
             epoch: current_epoch,
-            now: self.now,
             // Initialize empty in-memory state.
             snapshot: Snapshot::empty(),
             metrics: self.metrics,
@@ -617,8 +611,6 @@ pub struct PersistCatalogState {
     upper: Timestamp,
     /// The epoch of this catalog.
     epoch: Epoch,
-    /// A now generation function.
-    now: NowFn,
     /// A cache of the entire catalogs state.
     snapshot: Snapshot,
     /// Metrics for the persist catalog.
@@ -1057,10 +1049,7 @@ impl DurableCatalogState for PersistCatalogState {
             }
 
             let current_upper = catalog.upper.clone();
-            // Persist compaction expects the timestamps to move at a rate somewhat similar to real
-            // time. So to help with compaction we set the next upper to the current time, if it's
-            // greater than `current_upper.step_forward()`.
-            let next_upper = max(current_upper.step_forward(), (catalog.now)().into());
+            let next_upper = current_upper.step_forward();
 
             let updates = StateUpdate::from_txn_batch(txn_batch, current_upper);
             debug!("committing updates: {updates:?}");
