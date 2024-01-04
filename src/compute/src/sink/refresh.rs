@@ -31,28 +31,29 @@ where
     G: Scope<Timestamp = Timestamp>,
     D: Data,
 {
-    // We need to disconnect the reachability graph and manage capabilities manually, because we'd like to round up
-    // frontiers as well as data: as soon as our input frontier passes a refresh time, we'll round it up to the next
-    // refresh time.
+    // We need to disconnect the reachability graph and manage capabilities manually, because we'd
+    // like to round up frontiers as well as data: as soon as our input frontier passes a refresh
+    // time, we'll round it up to the next refresh time.
     let mut builder = OperatorBuilder::new("apply_refresh".to_string(), coll.scope());
     let (mut output_buf, output_stream) = builder.new_output();
     let mut input = builder.new_input_connection(&coll.inner, Pipeline, vec![Antichain::new()]);
     builder.build(move |capabilities| {
-        // This capability directly controls this operator's output frontier (because we have disconnected the input
-        // above). We wrap it in an Option so we can drop it to advance to the empty output frontier when the last
-        // refresh is done. (We must be careful that we only ever emit output updates at times that are at or beyond
-        // this capability.)
-        let mut capability = capabilities.into_iter().next(); // (We have only one input.)
+        // This capability directly controls this operator's output frontier (because we have
+        // disconnected the input above). We wrap it in an Option so we can drop it to advance to
+        // the empty output frontier when the last refresh is done. (We must be careful that we only
+        // ever emit output updates at times that are at or beyond this capability.)
+        let mut capability = capabilities.into_iter().next(); // (We have 1 one input.)
         let mut buffer = Vec::new();
         move |frontiers| {
             let mut output_handle_core = output_buf.activate();
             let mut output_buf = ConsolidateBuffer::new(&mut output_handle_core, 0);
             input.for_each(|input_cap, data| {
-                // Note that we can't use `input_cap` to get an output session because we might have advanced our output
-                // frontier already beyond the frontier of this capability.
+                // Note that we can't use `input_cap` to get an output session because we might have
+                // advanced our output frontier already beyond the frontier of this capability.
 
-                // `capability` will be None if we are past the last refresh. We have made sure to not receive any
-                // data that is after the last refresh by setting the `until` of the dataflow to the last refresh.
+                // `capability` will be None if we are past the last refresh. We have made sure to
+                // not receive any data that is after the last refresh by setting the `until` of the
+                // dataflow to the last refresh.
                 let Some(capability) = capability.as_mut() else {
                     soft_panic_or_log!(
                         "should have a capability if we received data. input_cap: {:?}, frontier: {:?}",
@@ -84,8 +85,8 @@ where
                             output_buf.give_at(capability, (d, rounded_up_ts, r));
                         }
                         None => {
-                            // This record is after the last refresh, which is not possible because we set the dataflow
-                            // `until` to the last refresh.
+                            // This record is after the last refresh, which is not possible because
+                            // we set the dataflow `until` to the last refresh.
                             soft_panic_or_log!("Received data after the last refresh");
                         }
                     }
@@ -93,11 +94,12 @@ where
             });
 
             // Round up the frontier.
-            // Note that `round_up_timestamp` is monotonic. This is needed to ensure that the timestamp (t) of any
-            // received data that has a larger timestamp than the original frontier (f) will get rounded up to a time
-            // that is at least at the rounded up frontier. In other words, monotonicity ensures that
+            // Note that `round_up_timestamp` is monotonic. This is needed to ensure that the
+            // timestamp (t) of any received data that has a larger timestamp than the original
+            // frontier (f) will get rounded up to a time that is at least at the rounded up
+            // frontier. In other words, monotonicity ensures that
             // when `t >= f` then `round_up_timestamp(t) >= round_up_timestamp(f)`.
-            match frontiers[0].frontier().as_option() { // (We have only one input, so only one frontier.)
+            match frontiers[0].frontier().as_option() { // (We have only 1 input, so only 1 frontier.)
                 Some(ts) => {
                     match refresh_schedule.round_up_timestamp(*ts) {
                         Some(rounded_up_ts) => {
@@ -107,7 +109,8 @@ where
                                 .downgrade(&rounded_up_ts);
                         }
                         None => {
-                            // We are past the last refresh. Drop the capability to signal that we are done.
+                            // We are past the last refresh. Drop the capability to signal that we
+                            // are done.
                             capability = None;
                             // We can only get here if we see the frontier advancing to a time after
                             // the last refresh, but not empty, which would be a bug somewhere in
