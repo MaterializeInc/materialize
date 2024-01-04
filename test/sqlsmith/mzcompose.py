@@ -108,6 +108,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             CREATE MATERIALIZED VIEW mv AS SELECT a + b AS col1, c + d AS col2, e + f AS col3, g AS col4 FROM t;
             CREATE MATERIALIZED VIEW mv2 AS SELECT count(*) FROM mv;
             CREATE DEFAULT INDEX ON mv;
+
+            CREATE MATERIALIZED VIEW mv3 WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM counter;
+            CREATE DEFAULT INDEX ON mv3;
             """,
             service=mz_server,
         )
