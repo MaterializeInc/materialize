@@ -293,8 +293,8 @@ class View(DBObject):
             rng.choice(
                 [
                     "ON COMMIT",
-                    f"EVERY '{rng.randint(0, 60)} seconds {rng.randint(0, 60)} minutes'",
-                    f"EVERY '{rng.randint(0, 60)} seconds {rng.randint(0, 60)} minutes' ALIGNED TO (mz_now())",
+                    f"EVERY '{rng.randint(1, 60)} seconds {rng.randint(0, 60)} minutes'",
+                    f"EVERY '{rng.randint(1, 60)} seconds {rng.randint(0, 60)} minutes' ALIGNED TO (mz_now())",
                     f"AT mz_now()::string::int8 + {rng.randint(0, 3600000)}",
                 ]
             )
