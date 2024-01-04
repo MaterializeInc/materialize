@@ -26,6 +26,7 @@ import re
 import ssl
 import subprocess
 import sys
+import threading
 import time
 import traceback
 from collections import OrderedDict
@@ -103,6 +104,7 @@ class Composition:
         self.silent = silent
         self.workflows: dict[str, Callable[..., None]] = {}
         self.test_results: OrderedDict[str, Composition.TestResult] = OrderedDict()
+        self.files = {}
 
         if name in self.repo.compositions:
             self.path = self.repo.compositions[name]
@@ -164,9 +166,7 @@ class Composition:
         if munge_services:
             self.dependencies = self._munge_services(self.compose["services"].items())
 
-        # Emit the munged configuration to a temporary file so that we can later
-        # pass it to Docker Compose.
-        self._write_compose()
+        self.files = {}
 
     def _munge_services(
         self, services: list[tuple[str, dict]]
@@ -234,12 +234,6 @@ class Composition:
 
         return deps
 
-    def _write_compose(self) -> None:
-        new_file = TemporaryFile(mode="w")
-        os.set_inheritable(new_file.fileno(), True)
-        yaml.dump(self.compose, new_file)
-        self.file = new_file
-
     def invoke(
         self,
         *args: str,
@@ -274,8 +268,15 @@ class Composition:
             ("--project-name", self.project_name) if self.project_name else ()
         )
 
-        # Make sure file doesn't get changed/deleted while we use it
-        file = self.file
+        # One file per thread to make sure we don't try to read a file which is
+        # not seeked to 0, leading to "empty compose file" errors
+        thread_id = threading.get_ident()
+        file = self.files.get(thread_id)
+        if not file:
+            file = TemporaryFile(mode="w")
+            os.set_inheritable(file.fileno(), True)
+            yaml.dump(self.compose, file)
+            self.files[thread_id] = file
 
         ret = None
         for retry in range(1, max_tries + 1):
@@ -400,7 +401,7 @@ class Composition:
         # config for an `mzbuild` config.
         deps.acquire()
 
-        self._write_compose()
+        self.files = {}
 
         # Ensure image freshness
         self.pull_if_variable([service.name for service in services])
@@ -430,7 +431,7 @@ class Composition:
 
             # Restore the old composition.
             self.compose = old_compose
-            self._write_compose()
+            self.files = {}
 
     @contextmanager
     def test_case(self, name: str) -> Iterator[None]:
@@ -702,7 +703,7 @@ class Composition:
             for service in self.compose["services"].values():
                 service["entrypoint"] = ["sleep", "infinity"]
                 service["command"] = []
-            self._write_compose()
+            self.files = {}
 
         self.invoke(
             "up",
@@ -714,7 +715,7 @@ class Composition:
 
         if persistent:
             self.compose = old_compose  # type: ignore
-            self._write_compose()
+            self.files = {}
 
     def validate_sources_sinks_clusters(self) -> str | None:
         """Validate that all sources, sinks & clusters are in a good state"""
