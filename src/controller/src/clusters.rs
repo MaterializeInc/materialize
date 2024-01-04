@@ -345,6 +345,7 @@ where
     pub async fn create_replicas(
         &mut self,
         replicas: Vec<CreateReplicaConfig>,
+        enable_worker_core_affinity: bool,
     ) -> Result<(), anyhow::Error> {
         /// A intermediate struct to hold info about a replica, to avoid
         /// a large tuple.
@@ -404,7 +405,13 @@ where
                     ReplicaLocation::Managed(m) => {
                         let workers = m.allocation.workers;
                         let (service, metrics_task_join_handle) = this
-                            .provision_replica(cluster_id, replica_id, role, m)
+                            .provision_replica(
+                                cluster_id,
+                                replica_id,
+                                role,
+                                m,
+                                enable_worker_core_affinity,
+                            )
                             .await?;
                         let storage_location = ClusterReplicaLocation {
                             ctl_addrs: service.addresses("storagectl"),
@@ -596,6 +603,7 @@ where
         replica_id: ReplicaId,
         role: ClusterRole,
         location: ManagedReplicaLocation,
+        enable_worker_core_affinity: bool,
     ) -> Result<(Box<dyn Service>, AbortOnDropHandle<()>), anyhow::Error> {
         let service_name = generate_replica_service_name(cluster_id, replica_id);
         let role_label = match role {
@@ -651,7 +659,7 @@ where
                                 memory_limit.0.as_u64()
                             ));
                         }
-                        if location.allocation.cpu_exclusive {
+                        if location.allocation.cpu_exclusive && enable_worker_core_affinity {
                             args.push("--worker-core-affinity".into());
                         }
 

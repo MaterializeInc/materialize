@@ -1319,7 +1319,11 @@ impl Coordinator {
                 });
             }
         }
-        self.controller.create_replicas(replicas_to_start).await?;
+        let enable_worker_core_affinity =
+            self.catalog().system_config().enable_worker_core_affinity();
+        self.controller
+            .create_replicas(replicas_to_start, enable_worker_core_affinity)
+            .await?;
 
         debug!("coordinator init: migrating builtin objects");
         // Migrate builtin objects.
