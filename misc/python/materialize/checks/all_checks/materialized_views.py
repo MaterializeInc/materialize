@@ -181,3 +181,76 @@ class MaterializedViewsAssertNotNull(Check):
            """
             )
         )
+
+
+class MaterializedViewsRefresh(Check):
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version >= MzVersion.parse_mz("v0.82.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > CREATE TABLE refresh_table (x INT);
+                > INSERT INTO refresh_table VALUES (1);
+                > CREATE MATERIALIZED VIEW refresh_view_2s_1 WITH (REFRESH EVERY '2 seconds') AS SELECT DISTINCT(x) FROM refresh_table;
+                > CREATE MATERIALIZED VIEW refresh_view_at_1 WITH (REFRESH AT mz_now()::string::int8) AS SELECT DISTINCT(x) FROM refresh_table;
+            """
+            )
+        )
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                > INSERT INTO refresh_table VALUES (2);
+                > CREATE MATERIALIZED VIEW refresh_view_2s_2 WITH (REFRESH EVERY '2 seconds') AS SELECT DISTINCT(x) FROM refresh_table;
+                > CREATE MATERIALIZED VIEW refresh_view_at_2 WITH (REFRESH AT mz_now()::string::int8) AS SELECT DISTINCT(x) FROM refresh_table;
+                """,
+                """
+                > INSERT INTO refresh_table VALUES (3);
+                > CREATE MATERIALIZED VIEW refresh_view_2s_3 WITH (REFRESH EVERY '2 seconds') AS SELECT DISTINCT(x) FROM refresh_table;
+                > CREATE MATERIALIZED VIEW refresh_view_at_3 WITH (REFRESH AT mz_now()::string::int8) AS SELECT DISTINCT(x) FROM refresh_table;
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > INSERT INTO refresh_table VALUES (4);
+
+                > SELECT * FROM refresh_view_2s_1
+                1
+                2
+                3
+                4
+
+                > SELECT * FROM refresh_view_2s_2
+                1
+                2
+                3
+                4
+
+                > SELECT * FROM refresh_view_2s_3
+                1
+                2
+                3
+                4
+
+                > SELECT * FROM refresh_view_at_1
+                1
+
+                > SELECT * FROM refresh_view_at_2
+                1
+                2
+
+                > SELECT * FROM refresh_view_at_3
+                1
+                2
+                3
+           """
+            )
+        )
