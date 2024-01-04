@@ -1534,11 +1534,10 @@ fn evaluate_mfp_after<'a, 'b>(
         // The `mfp_after` must preserve the key columns,
         // so we can skip them to form aggregation results.
         row_packer.extend(iter.skip(key_len));
-        Some(row_builder.clone())
     } else {
         row_packer.extend(&datums_local[key_len..]);
-        Some(row_builder.clone())
     }
+    Some(row_builder.clone())
 }
 
 fn accumulable_zero(aggr_func: &AggregateFunc) -> Accum {

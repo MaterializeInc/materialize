@@ -1564,8 +1564,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     (mfp_after, mfp, output_arity) =
                         reduce_plan.extract_mfp_after(mfp, group_key.len());
                 } else {
-                    mfp_after = MapFilterProject::new(mfp.input_arity);
-                    output_arity = group_key.len() + aggregates.len();
+                    (mfp_after, output_arity) = (
+                        MapFilterProject::new(mfp.input_arity),
+                        group_key.len() + aggregates.len(),
+                    );
                     soft_assert_eq_or_log!(
                         mfp.input_arity,
                         output_arity,

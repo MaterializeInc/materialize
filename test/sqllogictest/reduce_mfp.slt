@@ -151,6 +151,34 @@ SELECT * FROM mv_complex_mfp_basic_single;
 1  {3,2,1}
 
 statement ok
+CREATE MATERIALIZED VIEW mv_complex_mfp_basic_distinct_single AS
+SELECT a, LIST_AGG(DISTINCT b ORDER BY b DESC)::text
+FROM t
+GROUP BY a
+HAVING
+  ((LIST_AGG(DISTINCT b ORDER BY b DESC)[1] + 1) - a) > 2 AND
+  (LIST_AGG(DISTINCT b ORDER BY b DESC)[1] + 1) / (1 + a) >= 1;
+
+query IT
+SELECT * FROM mv_complex_mfp_basic_distinct_single;
+----
+1  {3,2,1}
+
+statement ok
+INSERT INTO t VALUES (-1, 3);
+
+query error division by zero
+SELECT * FROM mv_complex_mfp_basic_distinct_single;
+
+statement ok
+DELETE FROM t WHERE a = -1;
+
+query IT
+SELECT * FROM mv_complex_mfp_basic_distinct_single;
+----
+1  {3,2,1}
+
+statement ok
 CREATE MATERIALIZED VIEW mv_complex_mfp_basic_multiple AS
 SELECT a, LIST_AGG(b ORDER BY b DESC)::text
 FROM t
@@ -190,17 +218,40 @@ SELECT * FROM mv_complex_mfp_bucketed;
 ----
 1 4
 
+# Note we use a one-shot SELECT to cover the monotonic case.
+query II
+SELECT a, MAX(b) + 1
+FROM t
+GROUP BY a
+HAVING ((MAX(b) + 1) - a) > 2 AND (MAX(b) + 1) / (1 + a) >= 1;
+----
+1 4
+
 statement ok
 INSERT INTO t VALUES (-1, 3);
 
 query error division by zero
 SELECT * FROM mv_complex_mfp_bucketed;
 
+query error division by zero
+SELECT a, MAX(b) + 1
+FROM t
+GROUP BY a
+HAVING ((MAX(b) + 1) - a) > 2 AND (MAX(b) + 1) / (1 + a) >= 1;
+
 statement ok
 DELETE FROM t WHERE a = -1;
 
 query II
 SELECT * FROM mv_complex_mfp_bucketed;
+----
+1 4
+
+query II
+SELECT a, MAX(b) + 1
+FROM t
+GROUP BY a
+HAVING ((MAX(b) + 1) - a) > 2 AND (MAX(b) + 1) / (1 + a) >= 1;
 ----
 1 4
 
