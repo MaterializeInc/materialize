@@ -708,9 +708,9 @@ only includes rows where the current role is a direct or indirect member of `gra
 | `grantee`        | [`text`] | The role that the privilege was granted to. |
 | `privilege_type` | [`text`] | They type of privilege granted.             |
 
-### `mz_sink_statistics`
+### `mz_sink_statistics_raw`
 
-The `mz_sink_statistics` table contains statistics for each worker thread of
+The `mz_sink_statistics_raw` table contains statistics for each worker thread of
 each sink in the system.
 
 Materialize does not make any guarantees about the exactness or freshness of
@@ -729,7 +729,7 @@ the system are restarted.
 
 ### `mz_sink_statistics`
 
-The `mz_source_statistics` view contains statistics about each sink. It is an aggregated form of `mz_sink_statistics_raw`.
+The `mz_sink_statistics` view contains statistics about each sink. It is an aggregated form of `mz_sink_statistics_raw`.
 
 Materialize does not make any guarantees about the exactness or freshness of
 these statistics. They are occasionally reset to zero as internal components of
@@ -778,7 +778,7 @@ messages and additional metadata helpful for debugging.
 
 ### `mz_source_statistics_raw`
 
-The `mz_source_statistics` table contains statistics for each worker thread of
+The `mz_source_statistics_raw` table contains statistics for each worker thread of
 each source in the system.
 
 Materialize does not make any guarantees about the exactness or freshness of

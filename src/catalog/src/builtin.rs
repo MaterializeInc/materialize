@@ -5947,11 +5947,14 @@ ON mz_internal.mz_sink_status_history (sink_id)",
     is_retained_metrics_object: false,
 };
 
+// In both `mz_source_statistics` and `mz_sink_statistics` we cast the `SUM` of
+// uint8's to `uint8` instead of leaving them as `numeric`. This is because we want to
+// save index space, and we don't expect the sum to be > 2^63
+// (even if a source with 2000 workers, that each produce 400 terabytes in a month ~ 2^61).
 pub const MZ_SOURCE_STATISTICS: BuiltinView = BuiltinView {
     name: "mz_source_statistics",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    // everything but `params`
     sql: "
 SELECT
     id,
@@ -5984,7 +5987,6 @@ pub const MZ_SINK_STATISTICS: BuiltinView = BuiltinView {
     name: "mz_sink_statistics",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    // everything but `params`
     sql: "
 SELECT
     id,
