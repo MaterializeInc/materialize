@@ -307,13 +307,8 @@ impl Coordinator {
         // (If the `try_step_forward` fails, then no need to set an `until`, because it's not possible to get any data
         // beyond that last refresh time, because there are no times beyond that time.)
         let until = refresh_schedule
-            .map(|refresh_schedule| {
-                refresh_schedule
-                    .last_refresh()
-                    .map(|last_refresh| last_refresh.try_step_forward())
-            })
-            .flatten()
-            .flatten();
+            .and_then(|s| s.last_refresh())
+            .and_then(|r| r.try_step_forward());
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(ctx.session()), ops, |coord| async {

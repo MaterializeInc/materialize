@@ -1570,13 +1570,8 @@ impl Coordinator {
                     let until = mview
                         .refresh_schedule
                         .as_ref()
-                        .map(|refresh_schedule| {
-                            refresh_schedule
-                                .last_refresh()
-                                .map(|last_refresh| last_refresh.try_step_forward())
-                        })
-                        .flatten()
-                        .flatten();
+                        .and_then(|s| s.last_refresh())
+                        .and_then(|r| r.try_step_forward());
                     if let Some(until) = until {
                         df_desc.until.meet_assign(&Antichain::from_elem(until));
                     }
