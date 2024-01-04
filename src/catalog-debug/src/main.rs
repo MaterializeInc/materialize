@@ -238,8 +238,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             };
             let persist_client = persist_clients.open(persist_location).await?;
             let organization_id = args.organization_id.expect("required for persist");
+            let now = SYSTEM_TIME.clone();
             let metrics = Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry));
-            Box::new(persist_backed_catalog_state(persist_client, organization_id, metrics).await)
+            Box::new(
+                persist_backed_catalog_state(persist_client, organization_id, now, metrics).await,
+            )
         }
         CatalogKind::Shadow => panic!("cannot use shadow catalog with catalog-debug tool"),
         CatalogKind::EmergencyStash => {

@@ -10,6 +10,7 @@
 pub(crate) mod metrics;
 pub(crate) mod state_update;
 
+use std::cmp::max;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::future::Future;
@@ -24,7 +25,7 @@ use itertools::Itertools;
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsFutureExt;
-use mz_ore::now::EpochMillis;
+use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::{
     soft_assert_eq_or_log, soft_assert_ne_or_log, soft_assert_no_log, soft_assert_or_log,
@@ -72,6 +73,9 @@ pub(crate) type Timestamp = mz_repr::Timestamp;
 /// `new_unchecked` is safe to call with a non-zero value.
 const MIN_EPOCH: Epoch = unsafe { Epoch::new_unchecked(1) };
 
+/// Human readable shard name.
+const SHARD_NAME: &str = "catalog";
+
 /// Durable catalog mode that dictates the effect of mutable operations.
 #[derive(Debug)]
 enum Mode {
@@ -106,6 +110,8 @@ pub struct UnopenedPersistCatalogState {
     snapshot_cache: Option<(Timestamp, Vec<StateUpdate<StateUpdateKindRaw>>)>,
     /// The epoch of the catalog, if one exists.
     epoch: Option<Epoch>,
+    /// A now generation function.
+    now: NowFn,
     /// Metrics for the persist catalog.
     metrics: Arc<Metrics>,
 }
@@ -124,6 +130,7 @@ impl UnopenedPersistCatalogState {
     pub(crate) async fn new(
         persist_client: PersistClient,
         organization_id: Uuid,
+        now: NowFn,
         metrics: Arc<Metrics>,
     ) -> UnopenedPersistCatalogState {
         const SEED: usize = 1;
@@ -135,7 +142,10 @@ impl UnopenedPersistCatalogState {
                 // TODO: We may need to use a different critical reader
                 // id for this if we want to be able to introspect it via SQL.
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
-                diagnostics(),
+                Diagnostics {
+                    shard_name: SHARD_NAME.to_string(),
+                    handle_purpose: "durable catalog state critical since".to_string(),
+                },
             )
             .await
             .expect("invalid usage");
@@ -144,7 +154,10 @@ impl UnopenedPersistCatalogState {
                 shard_id,
                 Arc::new(PersistCatalogState::desc()),
                 Arc::new(UnitSchema::default()),
-                diagnostics(),
+                Diagnostics {
+                    shard_name: SHARD_NAME.to_string(),
+                    handle_purpose: "durable catalog state handles".to_string(),
+                },
             )
             .await
             .expect("invalid usage");
@@ -157,6 +170,7 @@ impl UnopenedPersistCatalogState {
             shard_id,
             snapshot_cache: None,
             metrics,
+            now,
             epoch,
         }
     }
@@ -244,6 +258,7 @@ impl UnopenedPersistCatalogState {
             shard_id: self.shard_id,
             upper: Timestamp::minimum(),
             epoch: current_epoch,
+            now: self.now,
             // Initialize empty in-memory state.
             snapshot: Snapshot::empty(),
             metrics: self.metrics,
@@ -602,6 +617,8 @@ pub struct PersistCatalogState {
     upper: Timestamp,
     /// The epoch of this catalog.
     epoch: Epoch,
+    /// A now generation function.
+    now: NowFn,
     /// A cache of the entire catalogs state.
     snapshot: Snapshot,
     /// Metrics for the persist catalog.
@@ -850,7 +867,10 @@ impl PersistCatalogState {
                 self.shard_id,
                 Arc::new(PersistCatalogState::desc()),
                 Arc::new(UnitSchema::default()),
-                diagnostics(),
+                Diagnostics {
+                    shard_name: SHARD_NAME.to_string(),
+                    handle_purpose: "durable catalog state temporary reader".to_string(),
+                },
             )
             .await
             .expect("invalid usage")
@@ -1037,7 +1057,10 @@ impl DurableCatalogState for PersistCatalogState {
             }
 
             let current_upper = catalog.upper.clone();
-            let next_upper = current_upper.step_forward();
+            // Persist compaction expects the timestamps to move at a rate somewhat similar to real
+            // time. So to help with compaction we set the next upper to the current time, if it's
+            // greater than `current_upper.step_forward()`.
+            let next_upper = max(current_upper.step_forward(), (catalog.now)().into());
 
             let updates = StateUpdate::from_txn_batch(txn_batch, current_upper);
             debug!("committing updates: {updates:?}");
@@ -1161,14 +1184,6 @@ impl DurableCatalogState for PersistCatalogState {
         let ids = txn.get_and_increment_id_by(id_type.to_string(), amount)?;
         txn.commit().await?;
         Ok(ids)
-    }
-}
-
-/// Generate a diagnostic to use when connecting to persist.
-fn diagnostics() -> Diagnostics {
-    Diagnostics {
-        shard_name: "catalog".to_string(),
-        handle_purpose: "durable catalog state".to_string(),
     }
 }
 

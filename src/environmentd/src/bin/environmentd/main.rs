@@ -949,6 +949,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             CatalogKind::Stash => CatalogConfig::Stash {
                 url: args.adapter_stash_url.expect("required for stash catalog"),
                 persist_clients,
+                now: now.clone(),
                 metrics: Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry)),
             },
             CatalogKind::Persist => CatalogConfig::Persist {
@@ -956,6 +957,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     .adapter_stash_url
                     .expect("required for persist catalog"),
                 persist_clients,
+                now: now.clone(),
                 metrics: Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry)),
             },
             CatalogKind::Shadow => CatalogConfig::Shadow {

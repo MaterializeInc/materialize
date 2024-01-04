@@ -258,6 +258,8 @@ impl CatalogMigrator {
         stash_txn.set_tombstone(false)?;
         stash_txn.commit().await?;
 
+        persist.expire().await;
+
         Ok(())
     }
 }
@@ -267,6 +269,7 @@ mod tests {
     use std::sync::Arc;
 
     use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::now::SYSTEM_TIME;
     use mz_persist_client::PersistClient;
     use mz_sql::session::vars::CatalogKind;
     use uuid::Uuid;
@@ -283,6 +286,7 @@ mod tests {
         let (debug_factory, stash_config) = test_stash_config().await;
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
+        let now = SYSTEM_TIME.clone();
         let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
         {
@@ -290,6 +294,7 @@ mod tests {
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await;
@@ -313,6 +318,7 @@ mod tests {
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
+                now,
                 Arc::clone(&persist_metrics),
             )
             .await;

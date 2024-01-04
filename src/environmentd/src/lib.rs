@@ -257,6 +257,8 @@ pub enum CatalogConfig {
         url: String,
         /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
         persist_clients: Arc<PersistClientCache>,
+        /// A now generation function.
+        now: NowFn,
         /// Persist catalog metrics.
         metrics: Arc<mz_catalog::durable::Metrics>,
     },
@@ -271,6 +273,8 @@ pub enum CatalogConfig {
         url: String,
         /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
         persist_clients: Arc<PersistClientCache>,
+        /// A now generation function.
+        now: NowFn,
         /// Persist catalog metrics.
         metrics: Arc<mz_catalog::durable::Metrics>,
     },
@@ -788,6 +792,7 @@ async fn catalog_opener(
         CatalogConfig::Stash {
             url,
             persist_clients,
+            now,
             metrics,
         } => {
             let stash_factory =
@@ -806,6 +811,7 @@ async fn catalog_opener(
                     },
                     persist_client,
                     environment_id.organization_id(),
+                    now.clone(),
                     Arc::clone(metrics),
                 )
                 .await,
@@ -827,6 +833,7 @@ async fn catalog_opener(
         CatalogConfig::Persist {
             url,
             persist_clients,
+            now,
             metrics,
         } => {
             let stash_factory =
@@ -845,6 +852,7 @@ async fn catalog_opener(
                     },
                     persist_client,
                     environment_id.organization_id(),
+                    now.clone(),
                     Arc::clone(metrics),
                 )
                 .await,

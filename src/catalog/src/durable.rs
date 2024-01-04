@@ -19,7 +19,7 @@ use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::EpochMillis;
+use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_persist_client::PersistClient;
 use mz_repr::GlobalId;
 use mz_sql::session::vars::CatalogKind;
@@ -316,9 +316,10 @@ pub fn test_stash_backed_catalog_state(
 pub async fn persist_backed_catalog_state(
     persist_client: PersistClient,
     organization_id: Uuid,
+    now: NowFn,
     metrics: Arc<Metrics>,
 ) -> UnopenedPersistCatalogState {
-    UnopenedPersistCatalogState::new(persist_client, organization_id, metrics).await
+    UnopenedPersistCatalogState::new(persist_client, organization_id, now, metrics).await
 }
 
 /// Creates an openable durable catalog state implemented using persist that is meant to be used in
@@ -328,7 +329,8 @@ pub async fn test_persist_backed_catalog_state(
     organization_id: Uuid,
 ) -> UnopenedPersistCatalogState {
     let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
-    persist_backed_catalog_state(persist_client, organization_id, metrics).await
+    let now = SYSTEM_TIME.clone();
+    persist_backed_catalog_state(persist_client, organization_id, now, metrics).await
 }
 
 /// Creates an openable durable catalog state implemented using both the stash and persist, that
@@ -352,11 +354,12 @@ pub async fn migrate_from_stash_to_persist_state(
     stash_config: StashConfig,
     persist_client: PersistClient,
     organization_id: Uuid,
+    now: NowFn,
     persist_metrics: Arc<Metrics>,
 ) -> CatalogMigrator {
     let openable_stash = stash_backed_catalog_state(stash_config);
     let openable_persist =
-        persist_backed_catalog_state(persist_client, organization_id, persist_metrics).await;
+        persist_backed_catalog_state(persist_client, organization_id, now, persist_metrics).await;
     CatalogMigrator::new(
         openable_stash,
         openable_persist,
@@ -370,11 +373,12 @@ pub async fn rollback_from_persist_to_stash_state(
     stash_config: StashConfig,
     persist_client: PersistClient,
     organization_id: Uuid,
+    now: NowFn,
     persist_metrics: Arc<Metrics>,
 ) -> CatalogMigrator {
     let openable_stash = stash_backed_catalog_state(stash_config);
     let openable_persist =
-        persist_backed_catalog_state(persist_client, organization_id, persist_metrics).await;
+        persist_backed_catalog_state(persist_client, organization_id, now, persist_metrics).await;
     CatalogMigrator::new(openable_stash, openable_persist, Direction::RollbackToStash)
 }
 

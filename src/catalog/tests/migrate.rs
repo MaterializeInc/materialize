@@ -83,7 +83,7 @@ use mz_catalog::durable::{
     test_stash_config, Database, Metrics, OpenableDurableCatalogState, Role, TimelineTimestamp,
 };
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::NOW_ZERO;
+use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist_client::PersistClient;
 use mz_proto::{ProtoType, RustType};
 use mz_repr::role_id::RoleId;
@@ -100,6 +100,7 @@ async fn test_migration() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
+    let now = SYSTEM_TIME.clone();
     let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut role = Role {
@@ -155,6 +156,7 @@ async fn test_migration() {
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -189,6 +191,7 @@ async fn test_migration() {
             persist_backed_catalog_state(
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -228,6 +231,7 @@ async fn test_migration() {
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -267,6 +271,7 @@ async fn test_migration() {
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -360,6 +365,7 @@ async fn test_migration() {
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -413,6 +419,7 @@ async fn test_migration_panic_after_stash_fence_then_migrate() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
+    let now = SYSTEM_TIME.clone();
     let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut role = Role {
@@ -453,6 +460,7 @@ async fn test_migration_panic_after_stash_fence_then_migrate() {
         let stash_config = stash_config.clone();
         let persist_client = persist_client.clone();
         let organization_id = organization_id.clone();
+        let now = now.clone();
         let persist_metrics = Arc::clone(&persist_metrics);
         let handle = mz_ore::task::spawn(|| "migrate-panic", async move {
             hide_panic_stack_trace();
@@ -461,6 +469,7 @@ async fn test_migration_panic_after_stash_fence_then_migrate() {
                     stash_config,
                     persist_client,
                     organization_id,
+                    now,
                     persist_metrics,
                 )
                 .await,
@@ -481,6 +490,7 @@ async fn test_migration_panic_after_stash_fence_then_migrate() {
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -506,6 +516,7 @@ async fn test_migration_panic_after_stash_fence_then_migrate() {
             persist_backed_catalog_state(
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -538,6 +549,7 @@ async fn test_migration_panic_after_stash_fence_then_rollback() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
+    let now = SYSTEM_TIME.clone();
     let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut role = Role {
@@ -578,6 +590,7 @@ async fn test_migration_panic_after_stash_fence_then_rollback() {
         let stash_config = stash_config.clone();
         let persist_client = persist_client.clone();
         let organization_id = organization_id.clone();
+        let now = now.clone();
         let persist_metrics = Arc::clone(&persist_metrics);
         let handle = mz_ore::task::spawn(|| "migrate-panic", async move {
             hide_panic_stack_trace();
@@ -586,6 +599,7 @@ async fn test_migration_panic_after_stash_fence_then_rollback() {
                     stash_config,
                     persist_client,
                     organization_id,
+                    now,
                     persist_metrics,
                 )
                 .await,
@@ -606,6 +620,7 @@ async fn test_migration_panic_after_stash_fence_then_rollback() {
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -656,6 +671,7 @@ async fn test_rollback_panic_after_stash_fence_then_migrate() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
+    let now = SYSTEM_TIME.clone();
     let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut role = Role {
@@ -702,6 +718,7 @@ async fn test_rollback_panic_after_stash_fence_then_migrate() {
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -736,6 +753,7 @@ async fn test_rollback_panic_after_stash_fence_then_migrate() {
         let stash_config = stash_config.clone();
         let persist_client = persist_client.clone();
         let organization_id = organization_id.clone();
+        let now = now.clone();
         let persist_metrics = Arc::clone(&persist_metrics);
         let handle = mz_ore::task::spawn(|| "migrate-panic", async move {
             hide_panic_stack_trace();
@@ -744,6 +762,7 @@ async fn test_rollback_panic_after_stash_fence_then_migrate() {
                     stash_config,
                     persist_client,
                     organization_id,
+                    now,
                     persist_metrics,
                 )
                 .await,
@@ -764,6 +783,7 @@ async fn test_rollback_panic_after_stash_fence_then_migrate() {
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -802,6 +822,7 @@ async fn test_rollback_panic_after_stash_fence_then_migrate() {
             persist_backed_catalog_state(
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -846,6 +867,7 @@ async fn test_rollback_panic_after_stash_fence_then_rollback() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
+    let now = SYSTEM_TIME.clone();
     let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut role = Role {
@@ -892,6 +914,7 @@ async fn test_rollback_panic_after_stash_fence_then_rollback() {
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -926,6 +949,7 @@ async fn test_rollback_panic_after_stash_fence_then_rollback() {
         let stash_config = stash_config.clone();
         let persist_client = persist_client.clone();
         let organization_id = organization_id.clone();
+        let now = now.clone();
         let persist_metrics = Arc::clone(&persist_metrics);
         let handle = mz_ore::task::spawn(|| "migrate-panic", async move {
             hide_panic_stack_trace();
@@ -934,6 +958,7 @@ async fn test_rollback_panic_after_stash_fence_then_rollback() {
                     stash_config,
                     persist_client,
                     organization_id,
+                    now,
                     persist_metrics,
                 )
                 .await,
@@ -954,6 +979,7 @@ async fn test_rollback_panic_after_stash_fence_then_rollback() {
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -1029,6 +1055,7 @@ async fn test_migration_panic_after_fence_then_migrate() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
+    let now = SYSTEM_TIME.clone();
     let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut role = Role {
@@ -1069,6 +1096,7 @@ async fn test_migration_panic_after_fence_then_migrate() {
         let stash_config = stash_config.clone();
         let persist_client = persist_client.clone();
         let organization_id = organization_id.clone();
+        let now = now.clone();
         let persist_metrics = Arc::clone(&persist_metrics);
         let handle = mz_ore::task::spawn(|| "migrate-panic", async move {
             hide_panic_stack_trace();
@@ -1077,6 +1105,7 @@ async fn test_migration_panic_after_fence_then_migrate() {
                     stash_config,
                     persist_client,
                     organization_id,
+                    now,
                     persist_metrics,
                 )
                 .await,
@@ -1097,6 +1126,7 @@ async fn test_migration_panic_after_fence_then_migrate() {
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -1122,6 +1152,7 @@ async fn test_migration_panic_after_fence_then_migrate() {
             persist_backed_catalog_state(
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -1154,6 +1185,7 @@ async fn test_migration_panic_after_fence_then_rollback() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
+    let now = SYSTEM_TIME.clone();
     let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut role = Role {
@@ -1194,6 +1226,7 @@ async fn test_migration_panic_after_fence_then_rollback() {
         let stash_config = stash_config.clone();
         let persist_client = persist_client.clone();
         let organization_id = organization_id.clone();
+        let now = now.clone();
         let persist_metrics = Arc::clone(&persist_metrics);
         let handle = mz_ore::task::spawn(|| "migrate-panic", async move {
             hide_panic_stack_trace();
@@ -1202,6 +1235,7 @@ async fn test_migration_panic_after_fence_then_rollback() {
                     stash_config,
                     persist_client,
                     organization_id,
+                    now,
                     persist_metrics,
                 )
                 .await,
@@ -1222,6 +1256,7 @@ async fn test_migration_panic_after_fence_then_rollback() {
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -1272,6 +1307,7 @@ async fn test_rollback_panic_after_fence_then_migrate() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
+    let now = SYSTEM_TIME.clone();
     let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut role = Role {
@@ -1318,6 +1354,7 @@ async fn test_rollback_panic_after_fence_then_migrate() {
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -1352,6 +1389,7 @@ async fn test_rollback_panic_after_fence_then_migrate() {
         let stash_config = stash_config.clone();
         let persist_client = persist_client.clone();
         let organization_id = organization_id.clone();
+        let now = now.clone();
         let persist_metrics = Arc::clone(&persist_metrics);
         let handle = mz_ore::task::spawn(|| "migrate-panic", async move {
             hide_panic_stack_trace();
@@ -1360,6 +1398,7 @@ async fn test_rollback_panic_after_fence_then_migrate() {
                     stash_config,
                     persist_client,
                     organization_id,
+                    now,
                     persist_metrics,
                 )
                 .await,
@@ -1380,6 +1419,7 @@ async fn test_rollback_panic_after_fence_then_migrate() {
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -1418,6 +1458,7 @@ async fn test_rollback_panic_after_fence_then_migrate() {
             persist_backed_catalog_state(
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -1462,6 +1503,7 @@ async fn test_rollback_panic_after_fence_then_rollback() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
+    let now = SYSTEM_TIME.clone();
     let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut role = Role {
@@ -1508,6 +1550,7 @@ async fn test_rollback_panic_after_fence_then_rollback() {
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -1542,6 +1585,7 @@ async fn test_rollback_panic_after_fence_then_rollback() {
         let stash_config = stash_config.clone();
         let persist_client = persist_client.clone();
         let organization_id = organization_id.clone();
+        let now = now.clone();
         let persist_metrics = Arc::clone(&persist_metrics);
         let handle = mz_ore::task::spawn(|| "migrate-panic", async move {
             hide_panic_stack_trace();
@@ -1550,6 +1594,7 @@ async fn test_rollback_panic_after_fence_then_rollback() {
                     stash_config,
                     persist_client,
                     organization_id,
+                    now,
                     persist_metrics,
                 )
                 .await,
@@ -1570,6 +1615,7 @@ async fn test_rollback_panic_after_fence_then_rollback() {
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -1645,6 +1691,7 @@ async fn test_migration_panic_after_write_then_migrate() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
+    let now = SYSTEM_TIME.clone();
     let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut role = Role {
@@ -1685,6 +1732,7 @@ async fn test_migration_panic_after_write_then_migrate() {
         let stash_config = stash_config.clone();
         let persist_client = persist_client.clone();
         let organization_id = organization_id.clone();
+        let now = now.clone();
         let persist_metrics = Arc::clone(&persist_metrics);
         let handle = mz_ore::task::spawn(|| "migrate-panic", async move {
             hide_panic_stack_trace();
@@ -1693,6 +1741,7 @@ async fn test_migration_panic_after_write_then_migrate() {
                     stash_config,
                     persist_client,
                     organization_id,
+                    now,
                     persist_metrics,
                 )
                 .await,
@@ -1713,6 +1762,7 @@ async fn test_migration_panic_after_write_then_migrate() {
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -1738,6 +1788,7 @@ async fn test_migration_panic_after_write_then_migrate() {
             persist_backed_catalog_state(
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -1770,6 +1821,7 @@ async fn test_migration_panic_after_write_then_rollback() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
+    let now = SYSTEM_TIME.clone();
     let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut role = Role {
@@ -1810,6 +1862,7 @@ async fn test_migration_panic_after_write_then_rollback() {
         let stash_config = stash_config.clone();
         let persist_client = persist_client.clone();
         let organization_id = organization_id.clone();
+        let now = now.clone();
         let persist_metrics = Arc::clone(&persist_metrics);
         let handle = mz_ore::task::spawn(|| "migrate-panic", async move {
             hide_panic_stack_trace();
@@ -1818,6 +1871,7 @@ async fn test_migration_panic_after_write_then_rollback() {
                     stash_config,
                     persist_client,
                     organization_id,
+                    now,
                     persist_metrics,
                 )
                 .await,
@@ -1838,6 +1892,7 @@ async fn test_migration_panic_after_write_then_rollback() {
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -1886,6 +1941,7 @@ async fn test_savepoint() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
+    let now = SYSTEM_TIME.clone();
     let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     // Initialize catalog only in the stash.
@@ -1904,6 +1960,7 @@ async fn test_savepoint() {
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
@@ -1955,6 +2012,7 @@ async fn test_savepoint() {
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
+                now.clone(),
                 Arc::clone(&persist_metrics),
             )
             .await,
