@@ -1184,8 +1184,7 @@ impl Consolidator {
         // priority to high. Otherwise we can get into a state where the consolidator is never able
         // to finish consolidating and the stash grows without bound.
         if attempt >= HIGH_PRIORITY_ATTEMPT_THRESHOLD {
-            tx.batch_execute(&format!("SET TRANSACTION PRIORITY HIGH;"))
-                .await?;
+            tx.batch_execute("SET TRANSACTION PRIORITY HIGH;").await?;
         }
         let deleted = match since.borrow().as_option() {
             Some(since) => {
