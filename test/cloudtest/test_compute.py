@@ -141,7 +141,6 @@ def test_disk_label(mz: MaterializeApplication) -> None:
             == f'\'{{"materialize.cloud/disk":"{value}"}} {{"materialize.cloud/disk":"{value}"}}\''
         ), node_selectors
 
-    for value in ("true", "false"):
         mz.environmentd.sql(f"DROP CLUSTER disk_{value} CASCADE")
 
 
@@ -171,6 +170,14 @@ def test_cluster_replica_sizes(mz: MaterializeApplication) -> None:
             "disk_limit": "10GiB",
             "credits_per_hour": "0",
         },
+        "2-1": {
+            "scale": 2,
+            "workers": 1,
+            "cpu_limit": 2,
+            "memory_limit": "8GiB",
+            "disk_limit": "10GiB",
+            "credits_per_hour": "0",
+        },
     }
 
     stateful_set = [
@@ -185,7 +192,10 @@ def test_cluster_replica_sizes(mz: MaterializeApplication) -> None:
     stateful_set.replace()
     mz.wait_for_sql()
 
-    for key, value in cluster_replica_size_map.items():
+    for key, value in {
+        "small": cluster_replica_size_map["small"],
+        "medium": cluster_replica_size_map["medium"],
+    }.items():
         mz.environmentd.sql(f"CREATE CLUSTER scale_{key} MANAGED, SIZE = '{key}'")
         (cluster_id, replica_id) = mz.environmentd.sql_query(
             f"SELECT mz_clusters.id, mz_cluster_replicas.id FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'scale_{key}'"
@@ -199,5 +209,4 @@ def test_cluster_replica_sizes(mz: MaterializeApplication) -> None:
             node_selectors == expected
         ), f"actual: {node_selectors}, but expected {expected}"
 
-    for key, value in cluster_replica_size_map.items():
         mz.environmentd.sql(f"DROP CLUSTER scale_{key} CASCADE")
