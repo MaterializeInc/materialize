@@ -146,7 +146,7 @@ contains:unacceptable timeline name "mz_foo"
 
 > CREATE VIEW input_values_view AS VALUES (1), (2), (3);
 
-> CREATE MATERIALIZED VIEW input_values_mview AS VALUES (1), (2), (3);
+> CREATE MATERIALIZED VIEW input_values_mview WITH (REFRESH EVERY '2 seconds') AS VALUES (1), (2), (3);
 
 ! CREATE MATERIALIZED VIEW must_fail (a, b, c) AS SELECT * FROM source_system, source_cdcv2;
 contains:multiple timelines within one dataflow are not supported
@@ -196,8 +196,8 @@ contains:multiple timelines within one dataflow are not supported
 > CREATE MATERIALIZED VIEW source_system_cdcv2_user (a, b, c) AS SELECT * FROM source_system_user, source_cdcv2_user;
 
 # CDCv2 can only be joined with system time stuff if specified
-> CREATE MATERIALIZED VIEW source_cdcv2_table_system AS SELECT * FROM source_cdcv2_system, input_table;
-! CREATE MATERIALIZED VIEW must_fail AS SELECT * FROM source_cdcv2, input_table;
+> CREATE MATERIALIZED VIEW source_cdcv2_table_system WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM source_cdcv2_system, input_table;
+! CREATE MATERIALIZED VIEW must_fail WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM source_cdcv2, input_table;
 contains:multiple timelines within one dataflow are not supported
 
 # Verify that if the transaction starts on some timeline (epoch ms here),

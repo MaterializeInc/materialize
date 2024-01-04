@@ -40,7 +40,7 @@ class OptimizerNotices(Check):
             for s in [
                 f"""
                 # emits one "index too wide" notice
-                > CREATE MATERIALIZED VIEW {SCHEMA}.mv1 AS SELECT x, y FROM {SCHEMA}.t1 WHERE x = 5;
+                > CREATE MATERIALIZED VIEW {SCHEMA}.mv1 WITH (REFRESH EVERY '2 seconds') AS SELECT x, y FROM {SCHEMA}.t1 WHERE x = 5;
                 """,
                 f"""
                 # emits one "index too wide" notice one "index key empty" notice

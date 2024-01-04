@@ -32,7 +32,7 @@ class UpsertManyUpdates(Check):
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
-                > CREATE MATERIALIZED VIEW upsert_many_updates_view AS
+                > CREATE MATERIALIZED VIEW upsert_many_updates_view WITH (REFRESH EVERY '2 seconds') AS
                   SELECT f1 FROM upsert_many_updates
                 """
             )

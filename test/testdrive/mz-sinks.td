@@ -23,7 +23,7 @@
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
-> CREATE MATERIALIZED VIEW mz_sinks_table_keyed AS
+> CREATE MATERIALIZED VIEW mz_sinks_table_keyed WITH (REFRESH EVERY '2 seconds') AS
     SELECT name, count(name) from mz_sinks_table
     GROUP BY name;
 

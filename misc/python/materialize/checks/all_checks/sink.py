@@ -70,7 +70,7 @@ class SinkUpsert(Check):
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
-                > CREATE MATERIALIZED VIEW sink_source_view AS SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v, COUNT(*) AS c FROM sink_source GROUP BY LEFT(key1, 2), LEFT(f1, 1);
+                > CREATE MATERIALIZED VIEW sink_source_view WITH (REFRESH EVERY '2 seconds') AS SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v, COUNT(*) AS c FROM sink_source GROUP BY LEFT(key1, 2), LEFT(f1, 1);
 
                 > CREATE SINK sink_sink1 FROM sink_source_view
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink1')
@@ -225,7 +225,7 @@ class SinkTables(Check):
                 > SET statement_timeout = '120s';
                 > INSERT INTO sink_large_transaction_table SELECT generate_series, REPEAT('x', 1024) FROM generate_series(1, 100000);
 
-                > CREATE MATERIALIZED VIEW sink_large_transaction_view AS SELECT f1 - 1 AS f1 , f2 FROM sink_large_transaction_table;
+                > CREATE MATERIALIZED VIEW sink_large_transaction_view WITH (REFRESH EVERY '2 seconds') AS SELECT f1 - 1 AS f1 , f2 FROM sink_large_transaction_table;
 
                 > CREATE SINK sink_large_transaction_sink1 FROM sink_large_transaction_view
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-large-transaction-sink-${testdrive.seed}')
@@ -334,7 +334,7 @@ class SinkNullDefaults(Check):
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
-                > CREATE MATERIALIZED VIEW sink_source_null_view AS SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v1, f2 / 100 AS l_v2, COUNT(*) AS c FROM sink_source_null GROUP BY LEFT(key1, 2), LEFT(f1, 1), f2 / 100;
+                > CREATE MATERIALIZED VIEW sink_source_null_view WITH (REFRESH EVERY '2 seconds') AS SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v1, f2 / 100 AS l_v2, COUNT(*) AS c FROM sink_source_null GROUP BY LEFT(key1, 2), LEFT(f1, 1), f2 / 100;
 
                 > CREATE SINK sink_sink_null1 FROM sink_source_null_view
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-null1')
@@ -583,7 +583,7 @@ class SinkComments(Check):
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
-                > CREATE MATERIALIZED VIEW sink_source_comments_view AS SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v1, f2 / 100 AS l_v2, COUNT(*) AS c FROM sink_source_comments GROUP BY LEFT(key1, 2), LEFT(f1, 1), f2 / 100
+                > CREATE MATERIALIZED VIEW sink_source_comments_view WITH (REFRESH EVERY '2 seconds') AS SELECT LEFT(key1, 2) as l_k, LEFT(f1, 1) AS l_v1, f2 / 100 AS l_v2, COUNT(*) AS c FROM sink_source_comments GROUP BY LEFT(key1, 2), LEFT(f1, 1), f2 / 100
 
                 > COMMENT ON MATERIALIZED VIEW sink_source_comments_view IS 'comment on view sink_source_comments_view'
 

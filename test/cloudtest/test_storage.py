@@ -183,7 +183,7 @@ def test_source_shutdown(mz: MaterializeApplication, failpoint: bool) -> None:
               ENVELOPE NONE;
 
             # Those two objects do not currently create storage clusters
-            # > CREATE MATERIALIZED VIEW view1 AS SELECT COUNT(*) FROM source1;
+            # > CREATE MATERIALIZED VIEW view1 WITH (REFRESH EVERY '2 seconds') AS SELECT COUNT(*) FROM source1;
 
             # > CREATE SINK sink1
             #  FROM view1

@@ -14,7 +14,7 @@ SELECT ${arg.replicas} > 1;
 $ set-sql-timeout duration=1s
 
 # Create a basic view for use throughout the test.
-> CREATE MATERIALIZED VIEW v AS SELECT 1 AS a
+> CREATE MATERIALIZED VIEW v WITH (REFRESH EVERY '2 seconds') AS SELECT 1 AS a
 
 # Test that only the quickstart replicas exist at start.
 > SELECT name FROM (SHOW CLUSTERS)

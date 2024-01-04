@@ -20,7 +20,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > CREATE TABLE deletes (f1 INTEGER);
 
-> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM inserts EXCEPT ALL SELECT * FROM deletes;
+> CREATE MATERIALIZED VIEW v1 WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM inserts EXCEPT ALL SELECT * FROM deletes;
 
 > SELECT * FROM v1;
 123

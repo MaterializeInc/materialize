@@ -32,7 +32,7 @@ class UpsertManyRows(Check):
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
-                > CREATE MATERIALIZED VIEW upsert_many_rows_view AS
+                > CREATE MATERIALIZED VIEW upsert_many_rows_view WITH (REFRESH EVERY '2 seconds') AS
                   SELECT f1, COUNT(*) AS count_rows, COUNT(DISTINCT key1) AS count_keys
                   FROM upsert_many_rows
                   GROUP BY f1

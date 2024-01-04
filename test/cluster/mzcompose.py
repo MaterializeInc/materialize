@@ -417,7 +417,7 @@ def workflow_test_github_15535(c: Composition) -> None:
         ));
         SET cluster = cluster1;
         CREATE TABLE t (a int);
-        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+        CREATE MATERIALIZED VIEW mv WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM t;
         -- wait for the dataflow to be ready
         SELECT * FROM mv;
         """
@@ -646,7 +646,7 @@ def workflow_test_github_15496(c: Composition) -> None:
             -- Set data for test up.
             SET cluster = cluster1;
             CREATE TABLE base (data bigint, diff bigint);
-            CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
+            CREATE MATERIALIZED VIEW data WITH (REFRESH EVERY '2 seconds') AS SELECT data FROM base, repeat_row(diff);
             INSERT INTO base VALUES (1, 1);
             INSERT INTO base VALUES (1, -1), (1, -1);
 
@@ -654,7 +654,7 @@ def workflow_test_github_15496(c: Composition) -> None:
             -- Note that we employ below a query hint to hit the case of not yet
             -- generating a SQL-level error, given the partial fix to bucketed
             -- aggregates introduced in PR #17918.
-            CREATE MATERIALIZED VIEW sum_and_max AS
+            CREATE MATERIALIZED VIEW sum_and_max WITH (REFRESH EVERY '2 seconds') AS
             SELECT SUM(data), MAX(data) FROM data OPTIONS (AGGREGATE INPUT GROUP SIZE = 1);
             """
         )
@@ -724,7 +724,7 @@ def workflow_test_github_17177(c: Composition) -> None:
 
             > CREATE TABLE base (data float, diff bigint);
 
-            > CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
+            > CREATE MATERIALIZED VIEW data WITH (REFRESH EVERY '2 seconds') AS SELECT data FROM base, repeat_row(diff);
 
             > INSERT INTO base VALUES (1.00, 1);
 
@@ -798,15 +798,15 @@ def workflow_test_github_17510(c: Composition) -> None:
             -- Set data for test up
             SET cluster = cluster1;
             CREATE TABLE base (data2 uint2, data4 uint4, data8 uint8, diff bigint);
-            CREATE MATERIALIZED VIEW data AS
+            CREATE MATERIALIZED VIEW data WITH (REFRESH EVERY '2 seconds') AS
               SELECT data2, data4, data8
               FROM base, repeat_row(diff);
-            CREATE MATERIALIZED VIEW sum_types AS
+            CREATE MATERIALIZED VIEW sum_types WITH (REFRESH EVERY '2 seconds') AS
               SELECT SUM(data2) AS sum2, SUM(data4) AS sum4, SUM(data8) AS sum8
               FROM data;
             INSERT INTO base VALUES (1, 1, 1, 1);
             INSERT INTO base VALUES (1, 1, 1, -1), (1, 1, 1, -1);
-            CREATE MATERIALIZED VIEW constant_sums AS
+            CREATE MATERIALIZED VIEW constant_sums WITH (REFRESH EVERY '2 seconds') AS
               SELECT SUM(data2) AS sum2, SUM(data4) AS sum4, SUM(data8) AS sum8
               FROM (
                   SELECT * FROM (
@@ -816,7 +816,7 @@ def workflow_test_github_17510(c: Composition) -> None:
                   ) AS base (data2, data4, data8, diff),
                   repeat_row(diff)
               );
-              CREATE MATERIALIZED VIEW constant_wrapped_sums AS
+              CREATE MATERIALIZED VIEW constant_wrapped_sums WITH (REFRESH EVERY '2 seconds') AS
               SELECT SUM(data2) AS sum2, SUM(data4) AS sum4, SUM(data8) AS sum8
               FROM (
                   SELECT * FROM (
@@ -972,14 +972,14 @@ def workflow_test_github_17509(c: Composition) -> None:
             -- Set data for test up.
             SET cluster = cluster1;
             CREATE TABLE base (data bigint, diff bigint);
-            CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
+            CREATE MATERIALIZED VIEW data WITH (REFRESH EVERY '2 seconds') AS SELECT data FROM base, repeat_row(diff);
             INSERT INTO base VALUES (1, 1);
             INSERT INTO base VALUES (1, -1), (1, -1);
 
             -- Create materialized views to ensure non-monotonic rendering.
-            CREATE MATERIALIZED VIEW max_data AS
+            CREATE MATERIALIZED VIEW max_data WITH (REFRESH EVERY '2 seconds') AS
             SELECT MAX(data) FROM data;
-            CREATE MATERIALIZED VIEW max_group_by_data AS
+            CREATE MATERIALIZED VIEW max_group_by_data WITH (REFRESH EVERY '2 seconds') AS
             SELECT data, MAX(data) FROM data GROUP BY data;
             """
         )
@@ -1066,7 +1066,7 @@ def workflow_test_github_19610(c: Composition) -> None:
             -- Set data for test up.
             SET cluster = cluster1;
             CREATE TABLE base (data bigint, diff bigint);
-            CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
+            CREATE MATERIALIZED VIEW data WITH (REFRESH EVERY '2 seconds') AS SELECT data FROM base, repeat_row(diff);
             INSERT INTO base VALUES (1, 6);
             INSERT INTO base VALUES (1, -3), (1, -2);
             INSERT INTO base VALUES (2, 3), (2, 2);
@@ -1263,7 +1263,7 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
             -- Set data for test up.
             SET cluster = cluster1;
             CREATE TABLE base (data bigint, diff bigint);
-            CREATE MATERIALIZED VIEW data AS SELECT data FROM base, repeat_row(diff);
+            CREATE MATERIALIZED VIEW data WITH (REFRESH EVERY '2 seconds') AS SELECT data FROM base, repeat_row(diff);
             INSERT INTO base VALUES (1, 6);
             INSERT INTO base VALUES (1, -3), (1, -2);
             INSERT INTO base VALUES (2, 3), (2, 2);
@@ -1801,10 +1801,10 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
 
         -- materialized view on table
         CREATE TABLE t2 (a int);
-        CREATE MATERIALIZED VIEW mv1 AS SELECT a + 1 FROM t2;
+        CREATE MATERIALIZED VIEW mv1 WITH (REFRESH EVERY '2 seconds') AS SELECT a + 1 FROM t2;
 
         -- materialized view on index
-        CREATE MATERIALIZED VIEW mv2 AS SELECT a + 1 FROM t1;
+        CREATE MATERIALIZED VIEW mv2 WITH (REFRESH EVERY '2 seconds') AS SELECT a + 1 FROM t1;
         """
     )
 
@@ -1873,10 +1873,10 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
 
         -- materialized view on table
         CREATE TABLE t2 (a int);
-        CREATE MATERIALIZED VIEW mv1 AS SELECT a + 1 FROM t2;
+        CREATE MATERIALIZED VIEW mv1 WITH (REFRESH EVERY '2 seconds') AS SELECT a + 1 FROM t2;
 
         -- materialized view on index
-        CREATE MATERIALIZED VIEW mv2 AS SELECT a + 1 FROM t1;
+        CREATE MATERIALIZED VIEW mv2 WITH (REFRESH EVERY '2 seconds') AS SELECT a + 1 FROM t1;
         """
     )
 
@@ -2059,7 +2059,7 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
     cursor.execute("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM t")
     t_since = extract_since_ts(cursor.fetchall()[0][0])
 
-    cursor.execute("CREATE MATERIALIZED VIEW mv AS SELECT * FROM t")
+    cursor.execute("CREATE MATERIALIZED VIEW mv WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM t")
     cursor.execute("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM mv")
     mv_since = extract_since_ts(cursor.fetchall()[0][0])
 
@@ -2305,7 +2305,7 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         INSERT INTO t SELECT generate_series(1, 10);
 
         CREATE INDEX idx ON t (a);
-        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+        CREATE MATERIALIZED VIEW mv WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM t;
 
         SELECT * FROM t;
         SELECT * FROM mv;
@@ -2400,7 +2400,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
         INSERT INTO t SELECT generate_series(1, 10);
 
         CREATE INDEX idx ON t (a);
-        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+        CREATE MATERIALIZED VIEW mv WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM t;
 
         SELECT * FROM t;
         SELECT * FROM mv;
@@ -2905,7 +2905,7 @@ def workflow_test_github_23246(c: Composition, parser: WorkflowArgumentParser) -
             INSERT INTO t VALUES (1);
 
             CREATE DEFAULT INDEX ON t;
-            CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+            CREATE MATERIALIZED VIEW mv WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM t;
             """
         )
 

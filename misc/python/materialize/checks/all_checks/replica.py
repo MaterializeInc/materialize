@@ -27,7 +27,7 @@ class CreateReplica(Check):
 
                 > SET cluster=create_replica
                 > CREATE DEFAULT INDEX ON create_replica_table;
-                > CREATE MATERIALIZED VIEW create_replica_view AS SELECT SUM(f1) FROM create_replica_table;
+                > CREATE MATERIALIZED VIEW create_replica_view WITH (REFRESH EVERY '2 seconds') AS SELECT SUM(f1) FROM create_replica_table;
 
                 > CREATE CLUSTER REPLICA create_replica.replica1 SIZE '2-2'
                 """,
@@ -98,7 +98,7 @@ class DropReplica(Check):
 
                 > SET cluster=drop_replica
                 > CREATE DEFAULT INDEX ON drop_replica_table;
-                > CREATE MATERIALIZED VIEW drop_replica_view AS SELECT COUNT(f1) FROM drop_replica_table;
+                > CREATE MATERIALIZED VIEW drop_replica_view WITH (REFRESH EVERY '2 seconds') AS SELECT COUNT(f1) FROM drop_replica_table;
 
                 > INSERT INTO drop_replica_table VALUES (2);
                 > CREATE CLUSTER REPLICA drop_replica.replica1 SIZE '2-2';
@@ -190,7 +190,7 @@ class ReplicaAnnotations(Check):
 
                 > SET cluster=replica_annotations
 
-                > CREATE MATERIALIZED VIEW replica_annotations_mv AS SELECT name FROM mz_tables LIMIT 1;
+                > CREATE MATERIALIZED VIEW replica_annotations_mv WITH (REFRESH EVERY '2 seconds') AS SELECT name FROM mz_tables LIMIT 1;
                 > CREATE DEFAULT INDEX ON replica_annotations_mv;
 
                 > SELECT COUNT(*) > 0 FROM replica_annotations_mv;

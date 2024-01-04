@@ -75,7 +75,7 @@ $ kafka-verify-data format=avro sink=materialize.public.data_sink sort-messages=
 {"d": 0} {"d": 0, "ts_millis": 65000000, "ts_micros": 65000000}
 {"d": 18135} {"d": 18135, "ts_millis": 1566865029000000, "ts_micros": 1566865029000000}
 
-> CREATE MATERIALIZED VIEW ts_precision AS
+> CREATE MATERIALIZED VIEW ts_precision WITH (REFRESH EVERY '2 seconds') AS
   SELECT
     TRUE AS key,
     '1970-01-01T00:00:00.123456'::timestamp AS ts,

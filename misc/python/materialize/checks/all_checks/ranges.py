@@ -67,7 +67,7 @@ class Range(Check):
 
     def manipulate(self) -> list[Testdrive]:
         manipulation = """
-                > CREATE MATERIALIZED VIEW $view_name$ AS
+                > CREATE MATERIALIZED VIEW $view_name$ WITH (REFRESH EVERY '2 seconds') AS
                   SELECT
                     index,
                     i4_range,

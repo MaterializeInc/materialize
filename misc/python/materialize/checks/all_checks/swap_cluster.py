@@ -39,19 +39,19 @@ class SwapCluster(Check):
 
                 > SET cluster=swap_cluster1
                 > CREATE DEFAULT INDEX ON swap_cluster1_table;
-                > CREATE MATERIALIZED VIEW swap_cluster1_view AS SELECT SUM(f1) FROM swap_cluster1_table;
+                > CREATE MATERIALIZED VIEW swap_cluster1_view WITH (REFRESH EVERY '2 seconds') AS SELECT SUM(f1) FROM swap_cluster1_table;
 
                 > SET cluster=swap_cluster2
                 > CREATE DEFAULT INDEX ON swap_cluster2_table;
-                > CREATE MATERIALIZED VIEW swap_cluster2_view AS SELECT SUM(f1) FROM swap_cluster2_table;
+                > CREATE MATERIALIZED VIEW swap_cluster2_view WITH (REFRESH EVERY '2 seconds') AS SELECT SUM(f1) FROM swap_cluster2_table;
 
                 > SET cluster=swap_cluster3
                 > CREATE DEFAULT INDEX ON swap_cluster3_table;
-                > CREATE MATERIALIZED VIEW swap_cluster3_view AS SELECT SUM(f1) FROM swap_cluster3_table;
+                > CREATE MATERIALIZED VIEW swap_cluster3_view WITH (REFRESH EVERY '2 seconds') AS SELECT SUM(f1) FROM swap_cluster3_table;
 
                 > SET cluster=swap_cluster4
                 > CREATE DEFAULT INDEX ON swap_cluster4_table;
-                > CREATE MATERIALIZED VIEW swap_cluster4_view AS SELECT SUM(f1) FROM swap_cluster4_table;
+                > CREATE MATERIALIZED VIEW swap_cluster4_view WITH (REFRESH EVERY '2 seconds') AS SELECT SUM(f1) FROM swap_cluster4_table;
                 """
             )
         )

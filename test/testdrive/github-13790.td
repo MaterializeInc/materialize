@@ -18,7 +18,7 @@ SELECT '${arg.default-replica-size}' != '4-4'
 
 > CREATE TABLE t (a int)
 
-> CREATE MATERIALIZED VIEW mv AS SELECT * FROM t
+> CREATE MATERIALIZED VIEW mv WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM t
 
 # Note: We rely on testdrive's retry behavior here, as it takes some time for
 # the logging to catch up.

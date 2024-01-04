@@ -22,7 +22,7 @@
 $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
 
 # Create a collection with an empty frontier to subscribe from.
-> CREATE MATERIALIZED VIEW mv AS SELECT 1 AS a
+> CREATE MATERIALIZED VIEW mv WITH (REFRESH EVERY '2 seconds') AS SELECT 1 AS a
 
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE mv

@@ -34,23 +34,23 @@ contains:column reference "a" is ambiguous
 > SELECT * FROM t_v_alias
 2 1
 
-! CREATE MATERIALIZED VIEW t_m_v AS SELECT a, a FROM t;
+! CREATE MATERIALIZED VIEW t_m_v WITH (REFRESH EVERY '2 seconds') AS SELECT a, a FROM t;
 contains:column "a" specified more than once
 
-! CREATE MATERIALIZED VIEW t_m_v AS SELECT b, a, b FROM t;
+! CREATE MATERIALIZED VIEW t_m_v WITH (REFRESH EVERY '2 seconds') AS SELECT b, a, b FROM t;
 contains:column "b" specified more than once
 
-! CREATE MATERIALIZED VIEW t_m_v AS SELECT a, b AS a FROM t;
+! CREATE MATERIALIZED VIEW t_m_v WITH (REFRESH EVERY '2 seconds') AS SELECT a, b AS a FROM t;
 contains:column "a" specified more than once
 
-! CREATE MATERIALIZED VIEW t_m_v AS SELECT a, b FROM t AS t(a, a);
+! CREATE MATERIALIZED VIEW t_m_v WITH (REFRESH EVERY '2 seconds') AS SELECT a, b FROM t AS t(a, a);
 contains:column reference "a" is ambiguous
 
-> CREATE MATERIALIZED VIEW t_m_v AS SELECT a, b FROM t;
+> CREATE MATERIALIZED VIEW t_m_v WITH (REFRESH EVERY '2 seconds') AS SELECT a, b FROM t;
 > SELECT * FROM t_v;
 1 2
 
-> CREATE MATERIALIZED VIEW t_m_v_alias AS SELECT a, b FROM t AS t (b, a);
+> CREATE MATERIALIZED VIEW t_m_v_alias WITH (REFRESH EVERY '2 seconds') AS SELECT a, b FROM t AS t (b, a);
 > SELECT * FROM t_v_alias
 2 1
 

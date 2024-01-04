@@ -80,7 +80,7 @@ class CreateSink(Action):
 
         dest_view_sql = dedent(
             f"""
-            > CREATE MATERIALIZED VIEW {self.sink.dest_view.name} AS
+            > CREATE MATERIALIZED VIEW {self.sink.dest_view.name} WITH (REFRESH EVERY '2 seconds') AS
               SELECT SUM(count_all)::int AS count_all, SUM(count_distinct)::int AS count_distinct, SUM(min_value)::int AS min_value, SUM(max_value)::int AS max_value FROM (
                 SELECT (after).count_all, (after).count_distinct, (after).min_value, (after).max_value FROM {self.sink.name}_source
                 UNION ALL
@@ -89,7 +89,7 @@ class CreateSink(Action):
             """
             if self.sink.dest_view.expensive_aggregates
             else f"""
-            > CREATE MATERIALIZED VIEW {self.sink.dest_view.name} AS
+            > CREATE MATERIALIZED VIEW {self.sink.dest_view.name} WITH (REFRESH EVERY '2 seconds') AS
               SELECT SUM(count_all)::int AS count_all FROM (
                 SELECT (after).count_all FROM {self.sink.name}_source
                 UNION ALL

@@ -30,7 +30,7 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
               FORMAT BYTES
               ENVELOPE NONE;
 
-            > CREATE MATERIALIZED VIEW v{i} AS SELECT COUNT(*) FROM source{i};
+            > CREATE MATERIALIZED VIEW v{i} WITH (REFRESH EVERY '2 seconds') AS SELECT COUNT(*) FROM source{i};
 
             > CREATE TABLE t{i} (f1 INTEGER);
 

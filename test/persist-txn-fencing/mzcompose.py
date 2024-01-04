@@ -172,7 +172,7 @@ def run_workload(c: Composition, workload: Workload) -> None:
             c.sql(
                 f"""
                     CREATE TABLE IF NOT EXISTS table{table_id}(id INTEGER, subid INTEGER, mz_service STRING);
-                    CREATE MATERIALIZED VIEW view{table_id} AS SELECT DISTINCT id, subid, mz_service FROM table{table_id};
+                    CREATE MATERIALIZED VIEW view{table_id} WITH (REFRESH EVERY '2 seconds') AS SELECT DISTINCT id, subid, mz_service FROM table{table_id};
                 """,
                 service="mz_first",
             )

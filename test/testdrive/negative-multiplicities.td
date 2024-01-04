@@ -11,7 +11,7 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET enable_repeat_row  = true
 
 > CREATE TABLE base (data bigint, unsigned_data uint4, diff bigint)
-> CREATE MATERIALIZED VIEW data AS SELECT data, unsigned_data FROM base, repeat_row(diff)
+> CREATE MATERIALIZED VIEW data WITH (REFRESH EVERY '2 seconds') AS SELECT data, unsigned_data FROM base, repeat_row(diff)
 
 > INSERT INTO base VALUES (1, 1, 1)
 > SELECT * FROM data

@@ -61,7 +61,7 @@ class UpsertEnrichValue(Check):
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
-                > CREATE MATERIALIZED VIEW upsert_enrich_value_view AS
+                > CREATE MATERIALIZED VIEW upsert_enrich_value_view WITH (REFRESH EVERY '2 seconds') AS
                   SELECT LEFT(key1, 1) AS key_left, LEFT(f1, 1) AS value_left, RIGHT(f1, 1),
                   LENGTH(f1), COUNT(*), SUM(CASE WHEN f1 IS NULL THEN 1 ELSE 0 END) AS nulls, COUNT(f1) AS not_nulls
                   FROM upsert_enrich_value

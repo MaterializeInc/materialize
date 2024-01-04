@@ -29,7 +29,7 @@ $ kafka-ingest format=avro topic=foo schema=${foo-schema} timestamp=1
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-foo-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${foo-schema}'
 
-> CREATE MATERIALIZED VIEW test1 AS
+> CREATE MATERIALIZED VIEW test1 WITH (REFRESH EVERY '2 seconds') AS
   SELECT * FROM foo JOIN foo as foo2 USING (a);
 
 > SELECT * FROM test1;

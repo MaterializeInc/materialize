@@ -20,7 +20,7 @@
   SELECT * FROM flip
 > CREATE INDEX divergent_index ON divergent (x)
 
-> CREATE MATERIALIZED VIEW divergent_materialized AS
+> CREATE MATERIALIZED VIEW divergent_materialized WITH (REFRESH EVERY '2 seconds') AS
   WITH MUTUALLY RECURSIVE
       flip(x int) AS (VALUES(1) EXCEPT ALL SELECT * FROM flip)
   SELECT * FROM flip

@@ -37,7 +37,7 @@ banana
 
 > CREATE TABLE t (column1 integer)
 > INSERT INTO t VALUES (1), (2)
-> CREATE MATERIALIZED VIEW mv AS SELECT DISTINCT column1 FROM t
+> CREATE MATERIALIZED VIEW mv WITH (REFRESH EVERY '2 seconds') AS SELECT DISTINCT column1 FROM t
 
 # ==> Test. <==
 

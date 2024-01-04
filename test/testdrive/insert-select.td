@@ -99,7 +99,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
-> CREATE MATERIALIZED VIEW source_data_mat_view AS
+> CREATE MATERIALIZED VIEW source_data_mat_view WITH (REFRESH EVERY '2 seconds') AS
   SELECT * FROM source_data;
 
 ! INSERT INTO t SELECT * FROM source_data_mat_view;

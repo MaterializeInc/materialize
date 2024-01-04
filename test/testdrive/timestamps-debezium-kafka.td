@@ -110,9 +110,9 @@ $ kafka-ingest format=avro topic=bar schema=${schema}
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
   WITH (TIMELINE '${testdrive.seed}-timestamps-debezium-kafka')
 
-> CREATE MATERIALIZED VIEW foo AS SELECT b, sum(a) FROM data_foo GROUP BY b
+> CREATE MATERIALIZED VIEW foo WITH (REFRESH EVERY '2 seconds') AS SELECT b, sum(a) FROM data_foo GROUP BY b
 
-> CREATE MATERIALIZED VIEW bar AS SELECT b, sum(a) FROM data_bar GROUP BY b
+> CREATE MATERIALIZED VIEW bar WITH (REFRESH EVERY '2 seconds') AS SELECT b, sum(a) FROM data_bar GROUP BY b
 
 > CREATE MATERIALIZED VIEW join (b, foo_sum, bar_sum) AS SELECT * FROM foo JOIN bar USING (b);
 

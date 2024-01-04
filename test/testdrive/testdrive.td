@@ -58,7 +58,7 @@ contains:unknown catalog item 'UID'
 
 # Exclude FETCH from the retry logic
 
-> CREATE MATERIALIZED VIEW v1 AS VALUES (1),(2),(3);
+> CREATE MATERIALIZED VIEW v1 WITH (REFRESH EVERY '2 seconds') AS VALUES (1),(2),(3);
 
 > BEGIN
 

@@ -65,7 +65,7 @@ ALTER SYSTEM SET enable_specialized_arrangements = true
 
 # Linear join: Trace RowUnit - Local RowUnit
 ? EXPLAIN PHYSICAL PLAN FOR
-  CREATE MATERIALIZED VIEW empty_val_join AS
+  CREATE MATERIALIZED VIEW empty_val_join WITH (REFRESH EVERY '2 seconds') AS
   SELECT v.b
   FROM v_empty AS v
       JOIN t ON v.a = t.a AND v.b = t.b;
@@ -95,7 +95,7 @@ Source materialize.public.t
 Used Indexes:
   - materialize.public.v_empty_primary_idx (differential join)
 
-> CREATE MATERIALIZED VIEW empty_val_join AS
+> CREATE MATERIALIZED VIEW empty_val_join WITH (REFRESH EVERY '2 seconds') AS
   SELECT v.b
   FROM v_empty AS v
       JOIN t ON v.a = t.a AND v.b = t.b;
@@ -308,7 +308,7 @@ Used Indexes:
 > DROP TABLE t2;
 
 ? EXPLAIN PHYSICAL PLAN FOR
-  CREATE MATERIALIZED VIEW empty_val_distinct_join AS
+  CREATE MATERIALIZED VIEW empty_val_distinct_join WITH (REFRESH EVERY '2 seconds') AS
   SELECT v.b
   FROM v_empty AS v
       JOIN (SELECT DISTINCT a, b FROM t) AS t ON v.a = t.a AND v.b = t.b;
@@ -338,7 +338,7 @@ Source materialize.public.t
 Used Indexes:
   - materialize.public.v_empty_primary_idx (differential join)
 
-> CREATE MATERIALIZED VIEW empty_val_distinct_join AS
+> CREATE MATERIALIZED VIEW empty_val_distinct_join WITH (REFRESH EVERY '2 seconds') AS
   SELECT v.b
   FROM v_empty AS v
       JOIN (SELECT DISTINCT a, b FROM t) AS t ON v.a = t.a AND v.b = t.b;
@@ -355,7 +355,7 @@ Used Indexes:
 
 # Two or more basic distinct aggregates should generate only one validating
 # reduction that cannot use an empty value arrangement for distinctness.
-> CREATE MATERIALIZED VIEW basic_agg_distinct AS
+> CREATE MATERIALIZED VIEW basic_agg_distinct WITH (REFRESH EVERY '2 seconds') AS
   SELECT
     array_agg(DISTINCT a) AS array_a,
     array_agg(DISTINCT b) AS array_b,

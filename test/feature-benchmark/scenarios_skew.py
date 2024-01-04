@@ -28,7 +28,7 @@ class SkewedJoin(Scenario):
                 > CREATE TABLE skewed_table(f1 INTEGER);
                 > CREATE TABLE uniform_table (f1 INTEGER);
 
-                > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) > 0 FROM skewed_table JOIN uniform_table USING (f1)
+                > CREATE MATERIALIZED VIEW v1 WITH (REFRESH EVERY '2 seconds') AS SELECT COUNT(*) > 0 FROM skewed_table JOIN uniform_table USING (f1)
                   /* A */
 
                 > INSERT INTO uniform_table (f1) SELECT generate_series FROM generate_series(0, {count-1}::integer);

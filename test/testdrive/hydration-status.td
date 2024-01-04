@@ -43,7 +43,7 @@ s true
 
 > CREATE TABLE t (a int)
 > CREATE INDEX idx ON t (a)
-> CREATE MATERIALIZED VIEW mv AS SELECT * FROM t
+> CREATE MATERIALIZED VIEW mv WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM t
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_compute_hydration_statuses h

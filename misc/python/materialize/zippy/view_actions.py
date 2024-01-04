@@ -109,7 +109,7 @@ class CreateView(Action):
         c.testdrive(
             dedent(
                 f"""
-                > CREATE MATERIALIZED VIEW {self.view.name} AS
+                > CREATE MATERIALIZED VIEW {self.view.name} WITH (REFRESH EVERY '2 seconds') AS
                   SELECT {aggregates}
                   FROM {first_input.name}
                   {outer_join}

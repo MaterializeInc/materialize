@@ -100,12 +100,12 @@ def workflow_default(c: Composition) -> None:
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
-                > CREATE MATERIALIZED VIEW v1 AS
+                > CREATE MATERIALIZED VIEW v1 WITH (REFRESH EVERY '2 seconds') AS
                   SELECT COUNT(*) AS c1, COUNT(DISTINCT f1) AS c2, COUNT(DISTINCT f2) AS c3,
                          MIN(f1) AS min1, MIN(f2) AS min2, MAX(f1) AS max1, MAX(f2) AS max2
                   FROM t1;
 
-                > CREATE MATERIALIZED VIEW v2 AS
+                > CREATE MATERIALIZED VIEW v2 WITH (REFRESH EVERY '2 seconds') AS
                   SELECT COUNT(*) AS c1, COUNT(DISTINCT f1) AS c2, COUNT(DISTINCT f2) AS c3,
                          MIN(f1) AS min1, MIN(f2) AS min2, MAX(f1) AS max1, MAX(f2) AS max2
                   FROM s1;
@@ -134,12 +134,12 @@ def workflow_default(c: Composition) -> None:
                 1000000 1000000 1 1 3 1000000 3
 
                 # Create more views during the disruption
-                > CREATE MATERIALIZED VIEW v3 AS
+                > CREATE MATERIALIZED VIEW v3 WITH (REFRESH EVERY '2 seconds') AS
                   SELECT COUNT(*) AS c1, COUNT(DISTINCT f1) AS c2, COUNT(DISTINCT f2) AS c3,
                          MIN(f1) AS min1, MIN(f2) AS min2, MAX(f1) AS max1, MAX(f2) AS max2
                   FROM t1;
 
-                > CREATE MATERIALIZED VIEW v4 AS
+                > CREATE MATERIALIZED VIEW v4 WITH (REFRESH EVERY '2 seconds') AS
                   SELECT COUNT(*) AS c1, COUNT(DISTINCT f1) AS c2, COUNT(DISTINCT f2) AS c3,
                          MIN(f1) AS min1, MIN(f2) AS min2, MAX(f1) AS max1, MAX(f2) AS max2
                   FROM s1;

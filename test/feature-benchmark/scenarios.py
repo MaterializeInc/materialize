@@ -101,7 +101,7 @@ class FastPathFilterIndex(FastPath):
             self.table_ten(),
             TdAction(
                 f"""
-> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()}
+> CREATE MATERIALIZED VIEW v1 WITH (REFRESH EVERY '2 seconds') AS SELECT {self.unique_values()} AS f1 FROM {self.join()}
 
 > CREATE DEFAULT INDEX ON v1;
 
@@ -145,7 +145,7 @@ class FastPathOrderByLimit(FastPath):
             self.table_ten(),
             TdAction(
                 f"""
-> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()};
+> CREATE MATERIALIZED VIEW v1 WITH (REFRESH EVERY '2 seconds') AS SELECT {self.unique_values()} AS f1 FROM {self.join()};
 
 > CREATE DEFAULT INDEX ON v1;
 
@@ -175,7 +175,7 @@ class FastPathLimit(FastPath):
         return [
             TdAction(
                 f"""
-                > CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {self.n()})
+                > CREATE MATERIALIZED VIEW v1 WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM generate_series(1, {self.n()})
                 """
             ),
         ]
@@ -376,7 +376,7 @@ class OrderBy(Dataflow):
             f"""
 > CREATE TABLE ten (f1 INTEGER);
 
-> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()};
+> CREATE MATERIALIZED VIEW v1 WITH (REFRESH EVERY '2 seconds') AS SELECT {self.unique_values()} AS f1 FROM {self.join()};
 
 {inserts}
 
@@ -392,7 +392,7 @@ true
 > DROP MATERIALIZED VIEW IF EXISTS v2
   /* A */
 
-> CREATE MATERIALIZED VIEW v2 AS SELECT * FROM v1 ORDER BY f1 LIMIT 999999999999
+> CREATE MATERIALIZED VIEW v2 WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM v1 ORDER BY f1 LIMIT 999999999999
 
 > SELECT COUNT(*) FROM v2
   /* B */
@@ -407,7 +407,7 @@ class CountDistinct(Dataflow):
             self.view_ten(),
             TdAction(
                 f"""
-> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1, {self.unique_values()} AS f2 FROM {self.join()};
+> CREATE MATERIALIZED VIEW v1 WITH (REFRESH EVERY '2 seconds') AS SELECT {self.unique_values()} AS f1, {self.unique_values()} AS f2 FROM {self.join()};
 
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true
@@ -435,7 +435,7 @@ class MinMax(Dataflow):
             self.view_ten(),
             TdAction(
                 f"""
-> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()};
+> CREATE MATERIALIZED VIEW v1 WITH (REFRESH EVERY '2 seconds') AS SELECT {self.unique_values()} AS f1 FROM {self.join()};
 
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true
@@ -466,7 +466,7 @@ class MinMaxMaintained(Dataflow):
             self.table_ten(),
             TdAction(
                 f"""
-> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()};
+> CREATE MATERIALIZED VIEW v1 WITH (REFRESH EVERY '2 seconds') AS SELECT {self.unique_values()} AS f1 FROM {self.join()};
 
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true
@@ -497,7 +497,7 @@ class GroupBy(Dataflow):
             self.view_ten(),
             TdAction(
                 f"""
-> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1, {self.unique_values()} AS f2 FROM {self.join()}
+> CREATE MATERIALIZED VIEW v1 WITH (REFRESH EVERY '2 seconds') AS SELECT {self.unique_values()} AS f1, {self.unique_values()} AS f2 FROM {self.join()}
 
 > SELECT COUNT(*) = {self.n()} FROM v1
 true
@@ -528,7 +528,7 @@ class GroupByMaintained(Dataflow):
             self.table_ten(),
             TdAction(
                 f"""
-> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1, {self.unique_values()} AS f2 FROM {self.join()}
+> CREATE MATERIALIZED VIEW v1 WITH (REFRESH EVERY '2 seconds') AS SELECT {self.unique_values()} AS f1, {self.unique_values()} AS f2 FROM {self.join()}
 
 > SELECT COUNT(*) = {self.n()} FROM v1
 true
@@ -562,7 +562,7 @@ class CrossJoin(Dataflow):
             f"""
 > DROP MATERIALIZED VIEW IF EXISTS v1;
 
-> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} FROM {self.join()}
+> CREATE MATERIALIZED VIEW v1 WITH (REFRESH EVERY '2 seconds') AS SELECT {self.unique_values()} FROM {self.join()}
   /* A */
 
 > SELECT COUNT(*) = {self.n()} AS f1 FROM v1;
@@ -581,7 +581,7 @@ class AccumulateReductions(Dataflow):
 > DROP TABLE IF EXISTS t CASCADE;
 > CREATE TABLE t (a int, b int, c int, d int);
 
-> CREATE MATERIALIZED VIEW data AS
+> CREATE MATERIALIZED VIEW data WITH (REFRESH EVERY '2 seconds') AS
   SELECT a, a AS b FROM generate_series(1, 10000000) AS a
   UNION ALL
   SELECT a, b FROM t;
@@ -655,7 +655,7 @@ class Retraction(Dataflow):
 
 > INSERT INTO ten VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
 
-> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} FROM {self.join()}
+> CREATE MATERIALIZED VIEW v1 WITH (REFRESH EVERY '2 seconds') AS SELECT {self.unique_values()} FROM {self.join()}
 
 > SELECT COUNT(*) = {self.n()} AS f1 FROM v1;
 true
@@ -723,7 +723,7 @@ class DeltaJoin(Dataflow):
             self.view_ten(),
             TdAction(
                 f"""
-> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()}
+> CREATE MATERIALIZED VIEW v1 WITH (REFRESH EVERY '2 seconds') AS SELECT {self.unique_values()} AS f1 FROM {self.join()}
 """
             ),
         ]
@@ -753,7 +753,7 @@ class DeltaJoinMaintained(Dataflow):
             self.table_ten(),
             TdAction(
                 f"""
-> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()}
+> CREATE MATERIALIZED VIEW v1 WITH (REFRESH EVERY '2 seconds') AS SELECT {self.unique_values()} AS f1 FROM {self.join()}
 """
             ),
         ]
@@ -782,7 +782,7 @@ class DifferentialJoin(Dataflow):
             self.view_ten(),
             TdAction(
                 f"""
-> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1, {self.unique_values()} AS f2 FROM {self.join()}
+> CREATE MATERIALIZED VIEW v1 WITH (REFRESH EVERY '2 seconds') AS SELECT {self.unique_values()} AS f1, {self.unique_values()} AS f2 FROM {self.join()}
 """
             ),
         ]
@@ -821,12 +821,12 @@ class FullOuterJoin(Dataflow):
 
 > CREATE TABLE ten (f1 INTEGER);
 
-> CREATE MATERIALIZED VIEW v1 AS SELECT {columns_select} FROM {self.join()}
+> CREATE MATERIALIZED VIEW v1 WITH (REFRESH EVERY '2 seconds') AS SELECT {columns_select} FROM {self.join()}
 > SELECT 1;
   /* A */
 1
 
-> CREATE MATERIALIZED VIEW v2 AS
+> CREATE MATERIALIZED VIEW v2 WITH (REFRESH EVERY '2 seconds') AS
   SELECT COUNT(a1.f1) AS c1, COUNT(a2.f1) AS c2
   FROM v1 AS a1
   FULL OUTER JOIN v1 AS a2 USING ({columns_using});
@@ -853,7 +853,7 @@ class FinishOrderByLimit(Finish):
             self.view_ten(),
             TdAction(
                 f"""
-> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1, {self.unique_values()} AS f2 FROM {self.join()}
+> CREATE MATERIALIZED VIEW v1 WITH (REFRESH EVERY '2 seconds') AS SELECT {self.unique_values()} AS f1, {self.unique_values()} AS f2 FROM {self.join()}
 
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true
@@ -1105,7 +1105,7 @@ class KafkaRestartBig(ScenarioBig):
   ENVELOPE UPSERT;
 
 # Confirm that all the EOF markers generated above have been processed
-> CREATE MATERIALIZED VIEW s1_is_complete AS SELECT COUNT(*) = 256 FROM s1 WHERE key <= '\\x00000000000000ff'
+> CREATE MATERIALIZED VIEW s1_is_complete WITH (REFRESH EVERY '2 seconds') AS SELECT COUNT(*) = 256 FROM s1 WHERE key <= '\\x00000000000000ff'
 
 > SELECT * FROM s1_is_complete;
 true
@@ -1167,7 +1167,7 @@ $ kafka-create-topic topic=kafka-scalability partitions=8
   ENVELOPE NONE
   /* A */
 
-> CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) AS c FROM s1;
+> CREATE MATERIALIZED VIEW v1 WITH (REFRESH EVERY '2 seconds') AS SELECT COUNT(*) AS c FROM s1;
 
 > SELECT c = {self.n()} FROM v1
   /* B */
@@ -1241,7 +1241,7 @@ $ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true await
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
 
-> CREATE MATERIALIZED VIEW sink1_check_v AS SELECT COUNT(*) FROM sink1_check;
+> CREATE MATERIALIZED VIEW sink1_check_v WITH (REFRESH EVERY '2 seconds') AS SELECT COUNT(*) FROM sink1_check;
 
 > SELECT * FROM sink1_check_v
   /* B */
@@ -1490,7 +1490,7 @@ $ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
         )
 
         create_views = "\n".join(
-            f"> CREATE MATERIALIZED VIEW v{i} AS SELECT * FROM source{i} AS s {join} LIMIT {i+1}"
+            f"> CREATE MATERIALIZED VIEW v{i} WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM source{i} AS s {join} LIMIT {i+1}"
             for i in range(0, self.n())
         )
 

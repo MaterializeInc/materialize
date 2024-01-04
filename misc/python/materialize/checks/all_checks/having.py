@@ -28,12 +28,12 @@ class Having(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE MATERIALIZED VIEW having_view1 AS
+                > CREATE MATERIALIZED VIEW having_view1 WITH (REFRESH EVERY '2 seconds') AS
                   SELECT f1, SUM(f1) FROM having_table GROUP BY f1 HAVING SUM(f1) > 1 AND SUM(f1) < 3;
                 > INSERT INTO having_table VALUES (2, 2);
                 """,
                 """
-                > CREATE MATERIALIZED VIEW having_view2 AS
+                > CREATE MATERIALIZED VIEW having_view2 WITH (REFRESH EVERY '2 seconds') AS
                   SELECT f1, SUM(f1) FROM having_table GROUP BY f1 HAVING SUM(f1) > 1 AND SUM(f1) < 3;
                 > INSERT INTO having_table VALUES (3, 3);
                 """,

@@ -9,7 +9,7 @@
 
 > INSERT INTO view_table VALUES (2), (3), (3);
 
-> CREATE MATERIALIZED VIEW view_view2 AS SELECT f1, COUNT(*) FROM view_table GROUP BY f1;
+> CREATE MATERIALIZED VIEW view_view2 WITH (REFRESH EVERY '2 seconds') AS SELECT f1, COUNT(*) FROM view_table GROUP BY f1;
 
 > INSERT INTO view_table VALUES (3), (4), (4);
 

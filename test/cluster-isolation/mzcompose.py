@@ -55,7 +55,7 @@ ALTER SYSTEM SET enable_unstable_dependencies = true;
 
 > CREATE TABLE sleep_table (sleep INTEGER);
 
-> CREATE MATERIALIZED VIEW sleep_view AS SELECT mz_unsafe.mz_sleep(sleep) FROM sleep_table;
+> CREATE MATERIALIZED VIEW sleep_view WITH (REFRESH EVERY '2 seconds') AS SELECT mz_unsafe.mz_sleep(sleep) FROM sleep_table;
 
 > INSERT INTO sleep_table SELECT 1200 FROM generate_series(1,32)
 """,
@@ -149,12 +149,12 @@ t1
 
 # DDL statements
 
-> CREATE MATERIALIZED VIEW v2 AS SELECT COUNT(*) AS c1 FROM t1;
+> CREATE MATERIALIZED VIEW v2 WITH (REFRESH EVERY '2 seconds') AS SELECT COUNT(*) AS c1 FROM t1;
 
 > SELECT * FROM v2;
 3
 
-> CREATE MATERIALIZED VIEW v1mat AS SELECT * FROM v1;
+> CREATE MATERIALIZED VIEW v1mat WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM v1;
 
 > CREATE INDEX i2 IN CLUSTER cluster2 ON t1 (f1);
 

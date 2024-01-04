@@ -11,4 +11,4 @@
 # CREATE a VALUES view
 #
 
-> CREATE MATERIALIZED VIEW values_view AS VALUES (1,2,3),(7,8,9);
+> CREATE MATERIALIZED VIEW values_view WITH (REFRESH EVERY '2 seconds') AS VALUES (1,2,3),(7,8,9);

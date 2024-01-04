@@ -380,7 +380,7 @@ $ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=$
   ENVELOPE UPSERT
 
 # filter on key only
-> CREATE MATERIALIZED VIEW filterforkey AS
+> CREATE MATERIALIZED VIEW filterforkey WITH (REFRESH EVERY '2 seconds') AS
   SELECT f1 FROM realtimefilteravro WHERE k1='épicerie';
 
 > SELECT * from filterforkey
@@ -389,7 +389,7 @@ f1
 pear
 
 # filter on value only
-> CREATE MATERIALIZED VIEW filterforvalue AS
+> CREATE MATERIALIZED VIEW filterforvalue WITH (REFRESH EVERY '2 seconds') AS
   SELECT f2 FROM realtimefilteravro WHERE f1='date';
 
 > SELECT * from filterforvalue
@@ -398,7 +398,7 @@ f2
 <null>
 
 # filter with a predicate containing key + value
-> CREATE MATERIALIZED VIEW filterforkeyvalue AS
+> CREATE MATERIALIZED VIEW filterforkeyvalue WITH (REFRESH EVERY '2 seconds') AS
   SELECT f1, f2 FROM realtimefilteravro WHERE k2+f2=12;
 
 > SELECT * from filterforkeyvalue
@@ -407,7 +407,7 @@ f1   f2
 pear 2
 
 # filter on both a predicate containing a key and a predicate containing a value
-> CREATE MATERIALIZED VIEW keyfiltervaluefilter AS
+> CREATE MATERIALIZED VIEW keyfiltervaluefilter WITH (REFRESH EVERY '2 seconds') AS
   SELECT k1, k2 FROM realtimefilteravro WHERE k2 > 5 AND f2 < 5
 
 > SELECT * from keyfiltervaluefilter

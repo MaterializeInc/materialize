@@ -44,12 +44,12 @@ class BasicTopK(Check):
             for s in [
                 """
                 > INSERT INTO basic_topk_table SELECT * FROM basic_topk_table
-                > CREATE MATERIALIZED VIEW basic_topk_view1 AS SELECT f1, COUNT(f1) FROM basic_topk_table GROUP BY f1 ORDER BY f1 DESC NULLS LAST LIMIT 2;
+                > CREATE MATERIALIZED VIEW basic_topk_view1 WITH (REFRESH EVERY '2 seconds') AS SELECT f1, COUNT(f1) FROM basic_topk_table GROUP BY f1 ORDER BY f1 DESC NULLS LAST LIMIT 2;
                 > INSERT INTO basic_topk_table SELECT * FROM basic_topk_table;
                 """,
                 """
                 > INSERT INTO basic_topk_table SELECT * FROM basic_topk_table;
-                > CREATE MATERIALIZED VIEW basic_topk_view2 AS SELECT f1, COUNT(f1) FROM basic_topk_table GROUP BY f1 ORDER BY f1 ASC NULLS FIRST LIMIT 2;
+                > CREATE MATERIALIZED VIEW basic_topk_view2 WITH (REFRESH EVERY '2 seconds') AS SELECT f1, COUNT(f1) FROM basic_topk_table GROUP BY f1 ORDER BY f1 ASC NULLS FIRST LIMIT 2;
                 > INSERT INTO basic_topk_table SELECT * FROM basic_topk_table;
                 """,
             ]
@@ -104,14 +104,14 @@ class MonotonicTopK(Check):
                 """
                 $ kafka-ingest format=avro topic=monotonic-topk schema=${schema} repeat=2
                 {"f1": "B"}
-                > CREATE MATERIALIZED VIEW monotonic_topk_view1 AS SELECT f1, COUNT(f1) FROM monotonic_topk_source GROUP BY f1 ORDER BY f1 DESC NULLS LAST LIMIT 2;
+                > CREATE MATERIALIZED VIEW monotonic_topk_view1 WITH (REFRESH EVERY '2 seconds') AS SELECT f1, COUNT(f1) FROM monotonic_topk_source GROUP BY f1 ORDER BY f1 DESC NULLS LAST LIMIT 2;
                 $ kafka-ingest format=avro topic=monotonic-topk schema=${schema} repeat=3
                 {"f1": "C"}
                 """,
                 """
                 $ kafka-ingest format=avro topic=monotonic-topk schema=${schema} repeat=4
                 {"f1": "D"}
-                > CREATE MATERIALIZED VIEW monotonic_topk_view2 AS SELECT f1, COUNT(f1) FROM monotonic_topk_source GROUP BY f1 ORDER BY f1 ASC NULLS FIRST LIMIT 2;
+                > CREATE MATERIALIZED VIEW monotonic_topk_view2 WITH (REFRESH EVERY '2 seconds') AS SELECT f1, COUNT(f1) FROM monotonic_topk_source GROUP BY f1 ORDER BY f1 ASC NULLS FIRST LIMIT 2;
                 $ kafka-ingest format=avro topic=monotonic-topk schema=${schema} repeat=5
                 {"f1": "E"}
                 """,
@@ -167,14 +167,14 @@ class MonotonicTop1(Check):
                 """
                 $ kafka-ingest format=avro topic=monotonic-top1 schema=${schema} repeat=2
                 {"f1": "B"}
-                > CREATE MATERIALIZED VIEW monotonic_top1_view1 AS SELECT f1, COUNT(f1) FROM monotonic_top1_source GROUP BY f1 ORDER BY f1 DESC NULLS LAST LIMIT 1;
+                > CREATE MATERIALIZED VIEW monotonic_top1_view1 WITH (REFRESH EVERY '2 seconds') AS SELECT f1, COUNT(f1) FROM monotonic_top1_source GROUP BY f1 ORDER BY f1 DESC NULLS LAST LIMIT 1;
                 $ kafka-ingest format=avro topic=monotonic-top1 schema=${schema} repeat=3
                 {"f1": "C"}
                 """,
                 """
                 $ kafka-ingest format=avro topic=monotonic-top1 schema=${schema} repeat=4
                 {"f1": "C"}
-                > CREATE MATERIALIZED VIEW monotonic_top1_view2 AS SELECT f1, COUNT(f1) FROM monotonic_top1_source GROUP BY f1 ORDER BY f1 ASC NULLS FIRST LIMIT 1;
+                > CREATE MATERIALIZED VIEW monotonic_top1_view2 WITH (REFRESH EVERY '2 seconds') AS SELECT f1, COUNT(f1) FROM monotonic_top1_source GROUP BY f1 ORDER BY f1 ASC NULLS FIRST LIMIT 1;
                 $ kafka-ingest format=avro topic=monotonic-top1 schema=${schema} repeat=5
                 {"f1": "D"}
                 """,

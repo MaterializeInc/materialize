@@ -36,7 +36,7 @@ abc:abc
   ENVELOPE NONE
   WITH (SIZE '3xsmall');
 
-> CREATE MATERIALIZED VIEW bytes_view AS SELECT COUNT(*) AS cnt FROM bytes;
+> CREATE MATERIALIZED VIEW bytes_view WITH (REFRESH EVERY '2 seconds') AS SELECT COUNT(*) AS cnt FROM bytes;
 
 > CREATE DEFAULT INDEX ON bytes_view;
 

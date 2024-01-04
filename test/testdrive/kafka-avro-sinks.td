@@ -43,7 +43,7 @@ $ kafka-verify-data format=avro sink=materialize.public.interval_data_sink sort-
 {"before": null, "after": {"row": {"interval": [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]}}}
 
 # See #9723
-#> CREATE MATERIALIZED VIEW unnamed_cols AS SELECT 1, 2 AS b, 3;
+#> CREATE MATERIALIZED VIEW unnamed_cols WITH (REFRESH EVERY '2 seconds') AS SELECT 1, 2 AS b, 3;
 #
 #> CREATE SINK unnamed_cols_sink FROM unnamed_cols
 #  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-unnamed-cols-sink-${testdrive.seed}')
@@ -55,7 +55,7 @@ $ kafka-verify-data format=avro sink=materialize.public.interval_data_sink sort-
 # Test that invented field names do not clash with named columns.
 
 # See #9723
-#> CREATE MATERIALIZED VIEW clashing_cols AS SELECT 1, 2 AS column1, 3 as b, 4 as b2, 5 as b3;
+#> CREATE MATERIALIZED VIEW clashing_cols WITH (REFRESH EVERY '2 seconds') AS SELECT 1, 2 AS column1, 3 as b, 4 as b2, 5 as b3;
 #
 #> CREATE SINK clashing_cols_sink FROM clashing_cols
 #  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-clashing-cols-sink-${testdrive.seed}')
@@ -167,7 +167,7 @@ $ kafka-verify-data format=avro sink=materialize.public.namespace_key_value_sink
 # Test a sink over a view whose column names are not directly usable as
 # Avro schema names.
 
-> CREATE MATERIALIZED VIEW tricky_names AS SELECT 1 AS "tricky-name", 1 AS "tricky!name", 1 AS "tricky@name", 1 AS "666";
+> CREATE MATERIALIZED VIEW tricky_names WITH (REFRESH EVERY '2 seconds') AS SELECT 1 AS "tricky-name", 1 AS "tricky!name", 1 AS "tricky@name", 1 AS "666";
 
 > CREATE SINK tricky_sink FROM tricky_names
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-tricky-sink-${testdrive.seed}')

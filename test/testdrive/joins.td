@@ -12,7 +12,7 @@
 > CREATE TABLE mods (num bigint, mod text)
 > INSERT INTO mods VALUES (0, 'even'), (1, 'odd'), (2, 'even')
 
-> CREATE MATERIALIZED VIEW test1 AS
+> CREATE MATERIALIZED VIEW test1 WITH (REFRESH EVERY '2 seconds') AS
   SELECT * FROM names JOIN mods USING (num);
 
 > SELECT * FROM test1;
@@ -75,7 +75,7 @@ names_num names_name mods_num mods_mod
 --------------------------------------
 2 two 2 even
 
-> CREATE MATERIALIZED VIEW test8 AS
+> CREATE MATERIALIZED VIEW test8 WITH (REFRESH EVERY '2 seconds') AS
   SELECT mods.* FROM names, mods WHERE names.num = mods.num AND mods.mod = 'even';
 
 > SELECT * FROM test8;
@@ -83,7 +83,7 @@ num mod
 -------
 2 even
 
-> CREATE MATERIALIZED VIEW test9 AS
+> CREATE MATERIALIZED VIEW test9 WITH (REFRESH EVERY '2 seconds') AS
   SELECT foo.mod, foo.num, bar.name FROM names as bar, mods as foo
   WHERE bar.num = foo.num AND foo.mod = 'even';
 

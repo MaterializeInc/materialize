@@ -36,7 +36,7 @@ class UpsertWideValue(Check):
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
-                > CREATE MATERIALIZED VIEW upsert_wide_value_view AS
+                > CREATE MATERIALIZED VIEW upsert_wide_value_view WITH (REFRESH EVERY '2 seconds') AS
                   SELECT LEFT(f1, 1), RIGHT(f1, 1),
                   LENGTH(f1)
                   FROM upsert_wide_value
@@ -105,7 +105,7 @@ class UpsertWideKey(Check):
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
-                > CREATE MATERIALIZED VIEW upsert_wide_key_view AS
+                > CREATE MATERIALIZED VIEW upsert_wide_key_view WITH (REFRESH EVERY '2 seconds') AS
                   SELECT LEFT(key1, 1), RIGHT(key1, 1),
                   LENGTH(key1), f1
                   FROM upsert_wide_key
