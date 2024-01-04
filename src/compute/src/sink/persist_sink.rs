@@ -17,10 +17,8 @@ use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
-use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::{CollectionExt, HashMap};
-use mz_ore::{soft_assert_or_log, soft_panic_or_log};
+use mz_ore::collections::HashMap;
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
@@ -31,11 +29,9 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
-use mz_timely_util::buffer::ConsolidateBuffer;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{
     Broadcast, Capability, CapabilitySet, ConnectLoop, Feedback, Inspect,
 };
@@ -46,6 +42,7 @@ use tracing::trace;
 
 use crate::compute_state::ComputeState;
 use crate::render::sinks::SinkRender;
+use crate::sink::refresh::apply_refresh;
 
 impl<G> SinkRender<G> for PersistSinkConnection<CollectionMetadata>
 where
@@ -1217,119 +1214,4 @@ where
 
     let token = Rc::new(shutdown_button.press_on_drop());
     (output_stream, token)
-}
-
-/// This is for REFRESH options on materialized views. It adds an operator that rounds up the
-/// timestamps of data and frontiers to the time of the next refresh. See
-/// `doc/developer/design/20231027_refresh_every_mv.md`.
-///
-/// Note that this currently only works with 1-dim timestamps. (This is not an issue for WMR,
-/// because iteration numbers should disappear by the time the data gets to the Persist sink.)
-fn apply_refresh<G>(
-    coll: Collection<G, Result<Row, DataflowError>, Diff>,
-    refresh_schedule: RefreshSchedule,
-) -> Collection<G, Result<Row, DataflowError>, Diff>
-where
-    G: Scope<Timestamp = Timestamp>,
-{
-    // We need to disconnect the reachability graph and manage capabilities manually, because we'd like to round up
-    // frontiers as well as data: as soon as our input frontier passes a refresh time, we'll round it up to the next
-    // refresh time.
-    let mut builder = OperatorBuilder::new("apply_refresh".to_string(), coll.scope());
-    let (mut output_buf, output_stream) = builder.new_output();
-    let mut input = builder.new_input_connection(&coll.inner, Pipeline, vec![Antichain::new()]);
-    builder.build(move |capabilities| {
-        // This capability directly controls this operator's output frontier (because we have disconnected the input
-        // above). We wrap it in an Option so we can drop it to advance to the empty output frontier when the last
-        // refresh is done. (We must be careful that we only ever emit output updates at times that are at or beyond
-        // this capability.)
-        let mut capability = Some(capabilities.into_element());
-        let mut buffer = Vec::new();
-        move |frontiers| {
-            let mut output_handle_core = output_buf.activate();
-            let mut output_buf = ConsolidateBuffer::new(&mut output_handle_core, 0);
-            input.for_each(|input_cap, data| {
-                // Note that we can't use `input_cap` to get an output session because we might have advanced our output
-                // frontier already beyond the frontier of this capability.
-
-                // `capability` will be None if we are past the last refresh. We have made sure to not receive any
-                // data that is after the last refresh by setting the `until` of the dataflow to the last refresh.
-                let Some(capability) = capability.as_mut() else {
-                    soft_panic_or_log!(
-                        "should have a capability if we received data. input_cap: {:?}, frontier: {:?}",
-                        input_cap.time(),
-                        frontiers[0].frontier()
-                    );
-                    return;
-                };
-
-                data.swap(&mut buffer);
-                let mut cached_ts: Option<Timestamp> = None;
-                let mut cached_rounded_up_data_ts = None;
-                for (_d, ts, _r) in buffer.iter_mut() {
-                    let rounded_up_data_ts = {
-                        // We cache the rounded up timestamp for the last seen timestamp,
-                        // because the rounding up has a non-negligible cost. Caching for
-                        // just the 1 last timestamp helps already, because in some common
-                        // cases, we'll be seeing a lot of identical timestamps, e.g.,
-                        // during a rehydration, or when we have much more than 1000 records
-                        // during a single second.
-                        if cached_ts != Some(*ts) {
-                            cached_ts = Some(*ts);
-                            cached_rounded_up_data_ts = refresh_schedule.round_up_timestamp(*ts);
-                        }
-                        cached_rounded_up_data_ts
-                    };
-                    match rounded_up_data_ts {
-                        Some(rounded_up_ts) => {
-                            *ts = rounded_up_ts;
-                        }
-                        None => {
-                            // This record is after the last refresh, which is not possible because we set the dataflow
-                            // `until` to the last refresh.
-                            soft_panic_or_log!("Received data after the last refresh");
-                        }
-                    }
-                }
-
-                match refresh_schedule.round_up_timestamp(*input_cap.time()) {
-                    Some(_) => {
-                        // Use a ConsolidateBuffer, because different timestamps might have been collapsed by the
-                        // rounding.
-                        for record in buffer.drain(..) {
-                            output_buf.give_at(capability, record);
-                        }
-                    }
-                    None => {
-                        // We are after the last refresh.
-                        soft_assert_or_log!(buffer.is_empty(), "We should have dropped all data");
-                    }
-                }
-            });
-
-            // Round up the frontier.
-            // Note that `round_up_timestamp` is monotonic. This is needed to ensure that the timestamp (t) of any
-            // received data that has a larger timestamp than the original frontier (f) will get rounded up to a time
-            // that is at least at the rounded up frontier. In other words, monotonicity ensures that
-            // when `t >= f` then `round_up_timestamp(t) >= round_up_timestamp(f)`.
-            match frontiers[0].frontier().as_option() { // (We have only one input, so only one frontier.)
-                Some(ts) => {
-                    match refresh_schedule.round_up_timestamp(*ts) {
-                        Some(rounded_up_ts) => {
-                            capability.as_mut().expect("capability must exist if frontier is <= last refresh").downgrade(&rounded_up_ts);
-                        }
-                        None => {
-                            // We are past the last refresh. Drop the capability to signal that we are done.
-                            capability = None;
-                        }
-                    }
-                }
-                None => {
-                    capability = None;
-                }
-            }
-        }
-    });
-
-    output_stream.as_collection()
 }
