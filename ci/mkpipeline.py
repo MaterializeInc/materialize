@@ -135,6 +135,8 @@ so it is executed.""",
 
     permit_rerunning_successful_steps(pipeline)
 
+    set_default_agents_queue(pipeline)
+
     if test_selection := os.getenv("CI_TEST_SELECTION"):
         trim_test_selection(pipeline, set(test_selection.split(",")))
     else:
@@ -212,6 +214,24 @@ def prioritize_pipeline(pipeline: Any) -> None:
                     visit(inner_config)
                 continue
             visit(config)
+
+
+def set_default_agents_queue(pipeline: Any) -> None:
+    def visit(step: dict[str, Any]) -> None:
+        if (
+            "agents" not in step
+            and "prompt" not in step
+            and "wait" not in step
+            and "group" not in step
+            and "trigger" not in step
+        ):
+            step["agents"] = {"queue": "linux-x86_64"}
+
+    for step in pipeline["steps"]:
+        visit(step)
+        if "group" in step:
+            for inner_step in step.get("steps", []):
+                visit(inner_step)
 
 
 def check_depends_on(pipeline: Any, pipeline_name: str) -> None:
