@@ -33,7 +33,7 @@ class Workload:
     tables: int = 1
     operation = Operation.INSERT
     second_mz_delay = 5
-    operation_count = 2000
+    operation_count = 3000
     max_transaction_size = 100
 
 
@@ -201,6 +201,7 @@ def run_workload(c: Composition, workload: Workload, catalog_store: str) -> None
             commits = executor.map(execute_operation, operations)
 
         elapsed = time.time() - start
+        # The second Mz instance can come up slightly faster
         assert elapsed > (
             workload.second_mz_delay * 2
         ), f"Workload completed too soon - elapsed {elapsed}s is less than 2 x second_mz_delay({workload.second_mz_delay}s)"
