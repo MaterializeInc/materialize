@@ -20,7 +20,7 @@ use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::{CollectionExt, HashMap};
-use mz_ore::soft_assert_or_log;
+use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
@@ -1254,9 +1254,14 @@ where
 
                 // `capability` will be None if we are past the last refresh. We have made sure to not receive any
                 // data that is after the last refresh by setting the `until` of the dataflow to the last refresh.
-                let capability = capability
-                    .as_mut()
-                    .expect("should have a capability if we received data");
+                let Some(capability) = capability.as_mut() else {
+                    soft_panic_or_log!(
+                        "should have a capability if we received data. input_cap: {:?}, frontier: {:?}",
+                        input_cap.time(),
+                        frontiers[0].frontier()
+                    );
+                    return;
+                };
 
                 data.swap(&mut buffer);
                 let mut cached_ts: Option<Timestamp> = None;
@@ -1282,7 +1287,7 @@ where
                         None => {
                             // This record is after the last refresh, which is not possible because we set the dataflow
                             // `until` to the last refresh.
-                            unreachable!("Received data after the last refresh");
+                            soft_panic_or_log!("Received data after the last refresh");
                         }
                     }
                 }
@@ -1307,12 +1312,11 @@ where
             // received data that has a larger timestamp than the original frontier (f) will get rounded up to a time
             // that is at least at the rounded up frontier. In other words, monotonicity ensures that
             // when `t >= f` then `round_up_timestamp(t) >= round_up_timestamp(f)`.
-            let ac = frontiers.into_element();
-            match ac.frontier().as_option() {
+            match frontiers[0].frontier().as_option() { // (We have only one input, so only one frontier.)
                 Some(ts) => {
                     match refresh_schedule.round_up_timestamp(*ts) {
                         Some(rounded_up_ts) => {
-                            capability.as_mut().unwrap().downgrade(&rounded_up_ts);
+                            capability.as_mut().expect("capability must exist if frontier is <= last refresh").downgrade(&rounded_up_ts);
                         }
                         None => {
                             // We are past the last refresh. Drop the capability to signal that we are done.
