@@ -55,7 +55,11 @@ impl RefreshSchedule {
 
     /// Returns the time of the last refresh. Returns None if there is no last refresh (e.g., for a periodic refresh).
     pub fn last_refresh(&self) -> Option<Timestamp> {
-        self.ats.iter().max().cloned()
+        if self.everies.is_empty() {
+            self.ats.iter().max().cloned()
+        } else {
+            None
+        }
     }
 }
 

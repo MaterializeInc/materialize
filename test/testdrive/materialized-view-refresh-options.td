@@ -137,5 +137,29 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 330
 360
 
+# REFRESH AT + REFRESH EVERY
+
+> CREATE TABLE t3(x int);
+> INSERT INTO t3 VALUES (1);
+
+> CREATE MATERIALIZED VIEW mv6 WITH (REFRESH AT mz_now()::text::int8 + 6000, REFRESH EVERY '8 seconds') AS SELECT * FROM t3;
+> SELECT * FROM mv6
+1
+
+> INSERT INTO t3 VALUES (2);
+> SELECT * FROM mv6
+1
+2
+
+> SELECT mz_unsafe.mz_sleep(8+1);
+<null>
+
+> INSERT INTO t3 VALUES (3);
+> SELECT * FROM mv6
+1
+2
+3
+
+######## Cleanup ########
 > DROP DATABASE materialized_view_refresh_options CASCADE;
 > DROP CLUSTER refresh_cluster CASCADE;
