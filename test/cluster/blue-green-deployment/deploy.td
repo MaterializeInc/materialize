@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 > CREATE SCHEMA prod_deploy
-> CREATE SOURCE prod_deploy.counter IN CLUSTER prod_deploy FROM LOAD GENERATOR counter (TICK INTERVAL '1s')
+> CREATE SOURCE prod_deploy.counter IN CLUSTER prod_deploy FROM LOAD GENERATOR counter (TICK INTERVAL '0.01s')
 > CREATE MATERIALIZED VIEW prod_deploy.counter_mv IN CLUSTER prod_deploy AS SELECT count(*), 'some new value' FROM prod_deploy.counter
 > CREATE DEFAULT INDEX IN CLUSTER prod_deploy ON prod_deploy.counter
 > CREATE DEFAULT INDEX IN CLUSTER prod_deploy ON prod_deploy.counter_mv
