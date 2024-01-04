@@ -9,7 +9,7 @@
 
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::Write;
 use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -1057,24 +1057,6 @@ impl Stash {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Priority {
-    Low,
-    #[allow(dead_code)]
-    Normal,
-    High,
-}
-
-impl Display for Priority {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Priority::Low => "low",
-            Priority::Normal => "normal",
-            Priority::High => "high",
-        })
-    }
-}
-
 /// The Consolidator receives since advancements on a channel and
 /// transactionally consolidates them. These can safely be done at a later time
 /// in a separate connection that doesn't do leader or epoch checking because 1)
@@ -1093,7 +1075,6 @@ struct Consolidator {
     stmt_candidates: Option<Statement>,
     stmt_insert: Option<Statement>,
     stmt_delete: Option<Statement>,
-    priority: Priority,
 }
 
 impl Consolidator {
@@ -1114,7 +1095,6 @@ impl Consolidator {
             stmt_insert: None,
             stmt_delete: None,
             consolidations: BTreeMap::new(),
-            priority: Priority::Low,
         };
         cons.spawn();
     }
@@ -1198,20 +1178,15 @@ impl Consolidator {
         }
         let client = self.client.as_mut().unwrap();
 
+        let tx = client.transaction().await?;
+
         // If the consolidator has failed to consolidate enough times, elevate our transaction
         // priority to high. Otherwise we can get into a state where the consolidator is never able
         // to finish consolidating and the stash grows without bound.
-        if attempt >= HIGH_PRIORITY_ATTEMPT_THRESHOLD && self.priority != Priority::High {
-            client
-                .batch_execute(&format!(
-                    "SET default_transaction_priority = '{}';",
-                    Priority::High
-                ))
+        if attempt >= HIGH_PRIORITY_ATTEMPT_THRESHOLD {
+            tx.batch_execute(&format!("SET TRANSACTION PRIORITY HIGH;"))
                 .await?;
-            self.priority = Priority::High;
         }
-
-        let tx = client.transaction().await?;
         let deleted = match since.borrow().as_option() {
             Some(since) => {
                 // In a single query we can detect all candidate entries (things
@@ -1261,17 +1236,6 @@ impl Consolidator {
         tx.commit().await?;
         event!(Level::DEBUG, deleted);
 
-        // Set the consolidator priority back to low if it was elevated.
-        if self.priority != Priority::Low {
-            client
-                .batch_execute(&format!(
-                    "SET default_transaction_priority = '{}';",
-                    Priority::Low
-                ))
-                .await?;
-            self.priority = Priority::Low;
-        }
-
         Ok(())
     }
 
@@ -1288,7 +1252,7 @@ impl Consolidator {
         // `self.config` is shared with the Stash, so we update the application name in the
         // session instead of the `self.config`.
         client
-            .batch_execute(&format!("SET application_name = 'stash-consolidator'; SET default_transaction_priority = '{}';", self.priority))
+            .batch_execute("SET application_name = 'stash-consolidator'; SET default_transaction_priority = 'low';")
             .await?;
         if let Some(schema) = &self.schema {
             client
