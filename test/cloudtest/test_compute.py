@@ -141,6 +141,9 @@ def test_disk_label(mz: MaterializeApplication) -> None:
             == f'\'{{"materialize.cloud/disk":"{value}"}} {{"materialize.cloud/disk":"{value}"}}\''
         ), node_selectors
 
+    for value in ("true", "false"):
+        mz.environmentd.sql(f"DROP CLUSTER disk_{value} CASCADE")
+
 
 def test_cluster_replica_sizes(mz: MaterializeApplication) -> None:
     """Test that --cluster-replica-sizes mapping is respected"""
@@ -199,3 +202,6 @@ def test_cluster_replica_sizes(mz: MaterializeApplication) -> None:
         assert (
             node_selectors == expected
         ), f"actual: {node_selectors}, but expected {expected}"
+
+    for key, value in cluster_replica_size_map.items():
+        mz.environmentd.sql(f"DROP CLUSTER scale_{key} CASCADE")
