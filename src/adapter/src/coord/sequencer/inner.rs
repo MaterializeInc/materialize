@@ -5350,12 +5350,14 @@ impl Coordinator {
     pub(super) async fn sequence_alter_default_privileges(
         &mut self,
         session: &Session,
-        plan::AlterDefaultPrivilegesPlan {
+        p: plan::AlterDefaultPrivilegesPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        println!("plan: {p:?}");
+        let plan::AlterDefaultPrivilegesPlan {
             privilege_objects,
             privilege_acl_items,
             is_grant,
-        }: plan::AlterDefaultPrivilegesPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
+        } = p;
         let mut ops = Vec::with_capacity(privilege_objects.len() * privilege_acl_items.len());
         let variant = if is_grant {
             UpdatePrivilegeVariant::Grant
@@ -5413,7 +5415,7 @@ impl Coordinator {
                     let member_name = catalog.get_role(member_id).name().to_string();
                     // We need this check so we don't accidentally return a success on a reserved role.
                     catalog.ensure_not_reserved_role(member_id)?;
-                    catalog.ensure_not_reserved_role(&role_id)?;
+                    catalog.ensure_grantable_role(&role_id)?;
                     session.add_notice(AdapterNotice::RoleMembershipAlreadyExists {
                         role_name,
                         member_name,
@@ -5457,7 +5459,7 @@ impl Coordinator {
                     let member_name = catalog.get_role(member_id).name().to_string();
                     // We need this check so we don't accidentally return a success on a reserved role.
                     catalog.ensure_not_reserved_role(member_id)?;
-                    catalog.ensure_not_reserved_role(&role_id)?;
+                    catalog.ensure_grantable_role(&role_id)?;
                     session.add_notice(AdapterNotice::RoleMembershipDoesNotExists {
                         role_name,
                         member_name,

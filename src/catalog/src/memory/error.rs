@@ -35,6 +35,8 @@ pub enum ErrorKind {
     ReservedRoleName(String),
     #[error("role name {} is reserved", .0.quoted())]
     ReservedSystemRoleName(String),
+    #[error("role name {} cannot be granted", .0.quoted())]
+    UngrantableRoleName(String),
     #[error("cluster name {} is reserved", .0.quoted())]
     ReservedClusterName(String),
     #[error("replica name {} is reserved", .0.quoted())]

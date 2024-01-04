@@ -28,6 +28,7 @@ use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, Versione
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_catalog::builtin::{
     Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, BUILTINS,
+    GRANTABLE_BUILTIN_ROLE_IDS,
 };
 use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
 use mz_catalog::memory::error::{Error, ErrorKind};
@@ -2136,6 +2137,19 @@ impl CatalogState {
             )))
         } else {
             Ok(())
+        }
+    }
+
+    pub fn ensure_grantable_role(&self, role_id: &RoleId) -> Result<(), Error> {
+        let is_grantable = !role_id.is_public()
+            && ((!role_id.is_system()) || GRANTABLE_BUILTIN_ROLE_IDS.contains(role_id));
+        if is_grantable {
+            Ok(())
+        } else {
+            let role = self.get_role(role_id);
+            Err(Error::new(ErrorKind::UngrantableRoleName(
+                role.name().to_string(),
+            )))
         }
     }
 

@@ -2363,7 +2363,7 @@ impl Catalog {
                     grantor_id,
                 } => {
                     state.ensure_not_reserved_role(&member_id)?;
-                    state.ensure_not_reserved_role(&role_id)?;
+                    state.ensure_grantable_role(&role_id)?;
                     if state.collect_role_membership(&role_id).contains(&member_id) {
                         let group_role = state.get_role(&role_id);
                         let member_role = state.get_role(&member_id);
@@ -2405,7 +2405,7 @@ impl Catalog {
                     grantor_id,
                 } => {
                     state.ensure_not_reserved_role(&member_id)?;
-                    state.ensure_not_reserved_role(&role_id)?;
+                    state.ensure_grantable_role(&role_id)?;
                     builtin_table_updates
                         .push(state.pack_role_members_update(role_id, member_id, -1));
                     let member_role = state.get_role_mut(&member_id);
@@ -3645,6 +3645,10 @@ impl Catalog {
 
     pub fn ensure_not_reserved_role(&self, role_id: &RoleId) -> Result<(), Error> {
         self.state.ensure_not_reserved_role(role_id)
+    }
+
+    pub fn ensure_grantable_role(&self, role_id: &RoleId) -> Result<(), Error> {
+        self.state.ensure_grantable_role(role_id)
     }
 
     pub fn ensure_not_system_role(&self, role_id: &RoleId) -> Result<(), Error> {
