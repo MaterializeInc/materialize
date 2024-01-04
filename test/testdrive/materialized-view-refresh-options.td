@@ -103,21 +103,33 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 > SELECT * FROM mv5;
 300
 
+> INSERT INTO t2 VALUES (102);
+
+# Wait until the insert is reflected, so that we are just after a refresh. This is important, because otherwise the
+# below `SET (REPLICATION FACTOR 0)` and the `SELECT` after that might straddle a refresh, in which case the `SELECT`
+# would hang forever.
+> SELECT * FROM mv5;
+300
+306
+
 > ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 0);
 
 > SELECT * FROM mv5;
 300
+306
 
 > ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 1);
 
 > SELECT * FROM mv5;
 300
+306
 
 > INSERT INTO t2 VALUES (110);
 
-# Wait until the insert is reflected, so we are after a refresh.
+# Wait until the insert is reflected, so we are just after a refresh.
 > SELECT * FROM mv5;
 300
+306
 330
 
 # Turn off the cluster, and insert something, and then sleep through a scheduled refresh.
@@ -134,6 +146,7 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 
 > SELECT * FROM mv5;
 300
+306
 330
 360
 
