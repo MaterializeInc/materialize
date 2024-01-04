@@ -7,12 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
 import logging
 
 import pytest
 from pg8000.exceptions import InterfaceError
 
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
+from materialize.cloudtest.k8s.environmentd import EnvironmentdStatefulSet
 from materialize.cloudtest.util.cluster import cluster_pod_name, cluster_service_name
 from materialize.cloudtest.util.exists import exists, not_exists
 from materialize.cloudtest.util.wait import wait
@@ -138,3 +140,62 @@ def test_disk_label(mz: MaterializeApplication) -> None:
             node_selectors
             == f'\'{{"materialize.cloud/disk":"{value}"}} {{"materialize.cloud/disk":"{value}"}}\''
         ), node_selectors
+
+
+def test_cluster_replica_sizes(mz: MaterializeApplication) -> None:
+    """Test that --cluster-replica-sizes mapping is respected"""
+    cluster_replica_size_map = {
+        "small": {
+            "scale": 1,
+            "workers": 1,
+            "cpu_limit": 2,
+            "memory_limit": "8GiB",
+            "disk_limit": "10GiB",
+            "credits_per_hour": "0",
+            "selectors": {"key1": "value1"},
+        },
+        "medium": {
+            "scale": 1,
+            "workers": 4,
+            "cpu_limit": 8,
+            "memory_limit": "32GiB",
+            "disk_limit": "10GiB",
+            "credits_per_hour": "0",
+            "selectors": {"key2": "value2", "key3": "value3"},
+        },
+        # for existing clusters
+        "1": {
+            "scale": 1,
+            "workers": 1,
+            "cpu_limit": 2,
+            "memory_limit": "8GiB",
+            "disk_limit": "10GiB",
+            "credits_per_hour": "0",
+        },
+    }
+
+    stateful_set = [
+        resource
+        for resource in mz.resources
+        if type(resource) == EnvironmentdStatefulSet
+    ]
+    assert len(stateful_set) == 1
+    stateful_set = stateful_set[0]
+    stateful_set.env["MZ_CLUSTER_REPLICA_SIZES"] = json.dumps(cluster_replica_size_map)
+    stateful_set.extra_args.append("--bootstrap-default-cluster-replica-size=1")
+    stateful_set.replace()
+    mz.wait_for_sql()
+
+    for key, value in cluster_replica_size_map.items():
+        mz.environmentd.sql(f"CREATE CLUSTER scale_{key} MANAGED, SIZE = '{key}'")
+        (cluster_id, replica_id) = mz.environmentd.sql_query(
+            f"SELECT mz_clusters.id, mz_cluster_replicas.id FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'scale_{key}'"
+        )[0]
+        assert cluster_id is not None
+        assert replica_id is not None
+
+        expected = value.get("selectors", {}) | {"materialize.cloud/disk": "true"}
+        node_selectors = json.loads(get_node_selector(mz, cluster_id, replica_id)[1:-1])
+        assert (
+            node_selectors == expected
+        ), f"actual: {node_selectors}, but expected {expected}"

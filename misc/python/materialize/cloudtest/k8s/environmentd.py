@@ -90,6 +90,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         self.coverage_mode = coverage_mode
         self.log_filter = log_filter
         self.env: dict[str, str] = {}
+        self.extra_args: list[str] = []
         self.minio_namespace = minio_namespace
         self.cockroach_namespace = cockroach_namespace
         super().__init__(namespace)
@@ -234,7 +235,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                 f"--timestamp-oracle-url=postgres://root@cockroach.{self.cockroach_namespace}:26257?options=--search_path=tsoracle"
             ]
 
-        return args
+        return args + self.extra_args
 
     def env_vars(self) -> list[V1EnvVar]:
 
