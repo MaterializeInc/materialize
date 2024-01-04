@@ -302,11 +302,11 @@ The `mz_compute_hydration_statuses` table describes the per-replica hydration st
 A compute object is hydrated on a given replica when it has fully processed the initial snapshot of data available in its inputs.
 
 <!-- RELATION_SPEC mz_internal.mz_compute_hydration_statuses -->
-| Field        | Type        | Meaning                                                                                                                                                                                                                                  |
-| -----------  | ----------- | --------                                                                                                                                                                                                                                 |
+| Field        | Type        | Meaning  |
+| -----------  | ----------- | -------- |
 | `object_id`  | [`text`]    | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions`](#mz_subscriptions). |
-| `replica_id` | [`text`]    | The ID of a cluster replica.                                                                                                                                                                                                             |
-| `hydrated`   | [`boolean`] | Whether the compute object is hydrated on the replica.                                                                                                                                                                                   |
+| `replica_id` | [`text`]    | The ID of a cluster replica. |
+| `hydrated`   | [`boolean`] | Whether the compute object is hydrated on the replica. |
 
 ### `mz_frontiers`
 
@@ -327,16 +327,19 @@ At this time, we do not make any guarantees about the freshness of these numbers
 
 ### `mz_hydration_statuses`
 
-The `mz_hydration_statuses` view describes the per-replica hydration status of each object maintained by a dataflow.
+The `mz_hydration_statuses` view describes the per-replica hydration status of
+each object powered by a dataflow.
 
-A dataflow-maintained object is hydrated on a given replica when dataflow has fully processed the initial snapshot of data available in its inputs.
+A dataflow-powered object is hydrated on a given replica when the respective
+dataflow has fully processed the initial snapshot of data available in its
+inputs.
 
 <!-- RELATION_SPEC mz_internal.mz_hydration_statuses -->
-| Field        | Type        | Meaning                                                                                                                                                                                                                                                                                                                                                          |
-| -----------  | ----------- | --------                                                                                                                                                                                                                                                                                                                                                         |
-| `object_id`  | [`text`]    | The ID of a dataflow-maintained object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_internal.mz_subscriptions`](#mz_subscriptions), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks). |
-| `replica_id` | [`text`]    | The ID of a cluster replica.                                                                                                                                                                                                                                                                                                                                     |
-| `hydrated`   | [`boolean`] | Whether the object is hydrated on the replica.                                                                                                                                                                                                                                                                                                                   |
+| Field        | Type        | Meaning  |
+| -----------  | ----------- | -------- |
+| `object_id`  | [`text`]    | The ID of a dataflow-powered object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_internal.mz_subscriptions`](#mz_subscriptions), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks). |
+| `replica_id` | [`text`]    | The ID of a cluster replica. |
+| `hydrated`   | [`boolean`] | Whether the object is hydrated on the replica. |
 
 ### `mz_kafka_sources`
 
