@@ -89,9 +89,11 @@
 //! Consult the `StorageController` and `ComputeController` documentation for more information
 //! about each of these interfaces.
 
-use std::collections::BTreeMap;
+use std::any::Any;
+use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 use std::num::NonZeroI64;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
@@ -123,9 +125,8 @@ use mz_storage_client::controller::StorageController;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
-use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
-use timely::progress::Timestamp;
+use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::time::{self, Duration, Interval, MissedTickBehavior};
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -167,7 +168,7 @@ pub struct ControllerConfig {
 }
 
 /// Responses that [`Controller`] can produce.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub enum ControllerResponse<T = mz_repr::Timestamp> {
     /// The worker's response to a specified (by connection id) peek.
     ///
@@ -179,19 +180,7 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     SubscribeResponse(GlobalId, SubscribeResponse<T>),
     /// Notification that new resource usage metrics are available for a given replica.
     ComputeReplicaMetrics(ReplicaId, Vec<ServiceProcessMetrics>),
-}
-
-impl<T> From<ComputeControllerResponse<T>> for ControllerResponse<T> {
-    fn from(r: ComputeControllerResponse<T>) -> ControllerResponse<T> {
-        match r {
-            ComputeControllerResponse::PeekResponse(uuid, peek, otel_ctx) => {
-                ControllerResponse::PeekResponse(uuid, peek, otel_ctx)
-            }
-            ComputeControllerResponse::SubscribeResponse(id, tail) => {
-                ControllerResponse::SubscribeResponse(id, tail)
-            }
-        }
-    }
+    WatchSetFinished(Vec<Box<dyn Any>>),
 }
 
 /// Whether one of the underlying controllers is ready for their `process`
@@ -209,6 +198,8 @@ enum Readiness {
     Metrics,
     /// Frontiers are ready for recording.
     Frontiers,
+    /// An internally-generated message is ready to be returned.
+    Internal,
 }
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
@@ -240,6 +231,10 @@ pub struct Controller<T = mz_repr::Timestamp> {
 
     /// Arguments for secrets readers.
     secrets_args: SecretsReaderCliArgs,
+
+    watch_sets: BTreeMap<GlobalId, Vec<Rc<(T, Box<dyn Any>)>>>,
+
+    immediate_watch_sets: Vec<Box<dyn Any>>,
 }
 
 impl<T> Controller<T> {
@@ -303,21 +298,58 @@ where
     /// This method is cancellation safe.
     pub async fn ready(&mut self) {
         if let Readiness::NotReady = self.readiness {
-            // The underlying `ready` methods are cancellation safe, so it is
-            // safe to construct this `select!`.
-            tokio::select! {
-                () = self.storage.ready() => {
-                    self.readiness = Readiness::Storage;
+            if !self.immediate_watch_sets.is_empty() {
+                self.readiness = Readiness::Internal;
+            } else {
+                // The underlying `ready` methods are cancellation safe, so it is
+                // safe to construct this `select!`.
+                tokio::select! {
+                    () = self.storage.ready() => {
+                        self.readiness = Readiness::Storage;
+                    }
+                    () = self.compute.ready() => {
+                        self.readiness = Readiness::Compute;
+                    }
+                    _ = Pin::new(&mut self.metrics_rx).peek() => {
+                        self.readiness = Readiness::Metrics;
+                    }
+                    _ = self.frontiers_ticker.tick() => {
+                        self.readiness = Readiness::Frontiers;
+                    }
                 }
-                () = self.compute.ready() => {
-                    self.readiness = Readiness::Compute;
-                }
-                _ = Pin::new(&mut self.metrics_rx).peek() => {
-                    self.readiness = Readiness::Metrics;
-                }
-                _ = self.frontiers_ticker.tick() => {
-                    self.readiness = Readiness::Frontiers;
-                }
+            }
+        }
+    }
+
+    pub fn install_watch_set(
+        &mut self,
+        mut objects: BTreeSet<GlobalId>,
+        t: T,
+        token: Box<dyn Any>,
+    ) {
+        objects.retain(|id| {
+            let frontier = self
+                .compute
+                .find_collection(*id)
+                .map(|s| s.write_frontier())
+                .unwrap_or_else(|_| {
+                    self.storage
+                        .collection(*id)
+                        .expect("some controller must have the collection")
+                        .write_frontier
+                        .borrow()
+                });
+            frontier.less_equal(&t)
+        });
+        if objects.is_empty() {
+            self.immediate_watch_sets.push(token);
+        } else {
+            let state = Rc::new((t, token));
+            for id in objects {
+                self.watch_sets
+                    .entry(id)
+                    .or_default()
+                    .push(Rc::clone(&state));
             }
         }
     }
@@ -334,12 +366,28 @@ where
         match mem::take(&mut self.readiness) {
             Readiness::NotReady => Ok(None),
             Readiness::Storage => {
-                self.storage.process().await?;
-                Ok(None)
+                let maybe_response = self.storage.process().await?;
+                Ok(maybe_response.and_then(
+                    |mz_storage_client::controller::Response::FrontierUpdates(r)| {
+                        self.handle_frontier_updates(&r)
+                    },
+                ))
             }
             Readiness::Compute => {
                 let response = self.active_compute().process().await;
-                Ok(response.map(Into::into))
+
+                let response = response.and_then(|r| match r {
+                    ComputeControllerResponse::PeekResponse(uuid, peek, otel_ctx) => {
+                        Some(ControllerResponse::PeekResponse(uuid, peek, otel_ctx))
+                    }
+                    ComputeControllerResponse::SubscribeResponse(id, tail) => {
+                        Some(ControllerResponse::SubscribeResponse(id, tail))
+                    }
+                    ComputeControllerResponse::FrontierUpper { id, upper } => {
+                        self.handle_frontier_updates(&[(id, upper)])
+                    }
+                });
+                Ok(response)
             }
             Readiness::Metrics => Ok(self
                 .metrics_rx
@@ -350,7 +398,34 @@ where
                 self.record_frontiers().await;
                 Ok(None)
             }
+            Readiness::Internal => {
+                let immediate_watch_sets = std::mem::take(&mut self.immediate_watch_sets);
+                Ok((!immediate_watch_sets.is_empty())
+                    .then(|| ControllerResponse::WatchSetFinished(immediate_watch_sets)))
+            }
         }
+    }
+
+    fn handle_frontier_updates(
+        &mut self,
+        updates: &[(GlobalId, Antichain<T>)],
+    ) -> Option<ControllerResponse<T>> {
+        let mut finished = vec![];
+        for (id, antichain) in updates {
+            if let Some(x) = self.watch_sets.get_mut(id) {
+                let mut i = 0;
+                while i < x.len() {
+                    if !antichain.less_equal(&x[i].0) {
+                        if let Some((_, token)) = Rc::into_inner(x.swap_remove(i)) {
+                            finished.push(token)
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+        }
+        (!(finished.is_empty())).then(|| ControllerResponse::WatchSetFinished(finished))
     }
 
     async fn record_frontiers(&mut self) {
@@ -439,6 +514,8 @@ where
             persist_pubsub_url: config.persist_pubsub_url,
             persist_txn_tables,
             secrets_args: config.secrets_args,
+            watch_sets: BTreeMap::new(),
+            immediate_watch_sets: Vec::new(),
         }
     }
 }

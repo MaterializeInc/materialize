@@ -474,6 +474,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  details  jsonb
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_statement_lifecycle_history' ORDER BY position
+----
+1  statement_id  uuid
+2  event_type  text
+3  occurred_at  timestamp␠with␠time␠zone
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_subscriptions' ORDER BY position
 ----
 1  id  text
@@ -821,6 +828,7 @@ mz_source_status_history
 mz_source_statuses
 mz_statement_execution_history
 mz_statement_execution_history_redacted
+mz_statement_lifecycle_history
 mz_storage_shards
 mz_storage_usage_by_shard
 mz_subscriptions

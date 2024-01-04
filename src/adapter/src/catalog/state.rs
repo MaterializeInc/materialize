@@ -270,6 +270,40 @@ impl CatalogState {
         }
     }
 
+    /// Returns an iterator over the deduplicated identifiers of all
+    /// objects this catalog entry transitively depends on (where
+    /// "depends on" is meant in the sense of [`CatalogItem::uses`], rather than
+    /// [`CatalogItem::references`]).
+    pub fn transitive_uses(&self, id: GlobalId) -> impl Iterator<Item = GlobalId> + '_ {
+        struct I<'a> {
+            queue: VecDeque<GlobalId>,
+            seen: BTreeSet<GlobalId>,
+            this: &'a CatalogState,
+        }
+        impl<'a> Iterator for I<'a> {
+            type Item = GlobalId;
+            fn next(&mut self) -> Option<Self::Item> {
+                if let Some(next) = self.queue.pop_front() {
+                    for child in self.this.get_entry(&next).item().uses() {
+                        if !self.seen.contains(&child) {
+                            self.queue.push_back(child);
+                            self.seen.insert(child);
+                        }
+                    }
+                    Some(next)
+                } else {
+                    None
+                }
+            }
+        }
+
+        I {
+            queue: [id].into_iter().collect(),
+            seen: [id].into_iter().collect(),
+            this: self,
+        }
+    }
+
     /// Computes the IDs of any log sources this catalog entry transitively
     /// depends on.
     pub fn introspection_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {

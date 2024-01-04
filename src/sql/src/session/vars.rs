@@ -1610,6 +1610,14 @@ pub const ENABLE_COLUMNATION_LGALLOC: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
+pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_statement_lifecycle_logging"),
+    value: false,
+    description:
+        "Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history",
+    internal: true,
+};
+
 /// Configuration for gRPC client connections.
 mod grpc_client {
     use super::*;
@@ -2999,6 +3007,7 @@ impl SystemVars {
             .with_var(&PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE)
             .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
             .with_var(&ENABLE_COLUMNATION_LGALLOC)
+            .with_var(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
             .with_var(&TIMESTAMP_ORACLE_IMPL)
             .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE)
             .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT)
@@ -3854,6 +3863,10 @@ impl SystemVars {
     /// Returns the `enable_columnation_lgalloc` configuration parameter.
     pub fn enable_columnation_lgalloc(&self) -> bool {
         *self.expect_value(&ENABLE_COLUMNATION_LGALLOC)
+    }
+
+    pub fn enable_statement_lifecycle_logging(&self) -> bool {
+        *self.expect_value(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
     }
 
     /// Returns the `timestamp_oracle` configuration parameter.

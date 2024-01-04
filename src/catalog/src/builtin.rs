@@ -2580,6 +2580,21 @@ FROM mz_internal.mz_activity_log",
     sensitivity: DataSensitivity::SuperuserAndSupport,
 };
 
+pub static MZ_STATEMENT_LIFECYCLE_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_statement_lifecycle_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("statement_id", ScalarType::Uuid.nullable(false))
+        .with_column("event_type", ScalarType::String.nullable(false))
+        .with_column(
+            "occurred_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        ),
+    data_source: Some(IntrospectionType::StatementLifecycleHistory),
+    is_retained_metrics_object: false,
+    sensitivity: DataSensitivity::SuperuserAndSupport,
+});
+
 pub const MZ_SOURCE_STATUSES: BuiltinView = BuiltinView {
     name: "mz_source_statuses",
     schema: MZ_INTERNAL_SCHEMA,
@@ -6451,6 +6466,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_ACTIVITY_LOG),
         Builtin::View(&MZ_ACTIVITY_LOG_REDACTED),
         Builtin::View(&MZ_SOURCE_STATUSES),
+        Builtin::Source(&MZ_STATEMENT_LIFECYCLE_HISTORY),
         Builtin::Source(&MZ_STORAGE_SHARDS),
         Builtin::Source(&MZ_SOURCE_STATISTICS),
         Builtin::Source(&MZ_SINK_STATISTICS),

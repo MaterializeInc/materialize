@@ -118,7 +118,7 @@ use mz_storage_client::client::{
 };
 use mz_storage_client::controller::{
     CollectionDescription, CollectionState, DataSource, DataSourceOther, ExportDescription,
-    ExportState, IntrospectionType, MonotonicAppender, SnapshotCursor, StorageController,
+    ExportState, IntrospectionType, MonotonicAppender, Response, SnapshotCursor, StorageController,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_types::collections as proto;
@@ -956,7 +956,8 @@ where
                         // a huge amount of memory on environmentd startup.
                         IntrospectionType::PreparedStatementHistory
                         | IntrospectionType::StatementExecutionHistory
-                        | IntrospectionType::SessionHistory => {
+                        | IntrospectionType::SessionHistory
+                        | IntrospectionType::StatementLifecycleHistory => {
                             // do nothing.
                         }
                     }
@@ -1703,11 +1704,13 @@ where
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn process(&mut self) -> Result<(), anyhow::Error> {
+    async fn process(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
+        let mut updated_frontiers = None;
         match self.stashed_response.take() {
             None => (),
             Some(StorageResponse::FrontierUppers(updates)) => {
                 self.update_write_frontiers(&updates);
+                updated_frontiers = Some(Response::FrontierUpdates(updates));
             }
             Some(StorageResponse::DroppedIds(ids)) => {
                 let shards_to_finalize: Vec<_> = ids
@@ -1895,7 +1898,7 @@ where
             .drop_sinks(updates, mz_ore::now::to_datetime((self.now)()))
             .await;
 
-        Ok(())
+        Ok(updated_frontiers)
     }
 
     async fn reconcile_state(&mut self) {

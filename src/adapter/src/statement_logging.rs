@@ -16,6 +16,26 @@ use uuid::Uuid;
 
 use crate::session::TransactionId;
 use crate::{AdapterError, ExecuteResponse};
+
+#[derive(Clone, Debug)]
+pub enum StatementLifecycleEvent {
+    ExecutionBegan,
+    StorageDependenciesFinished,
+    ComputeDependenciesFinished,
+    ExecutionFinished,
+}
+
+impl StatementLifecycleEvent {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::ExecutionBegan => "execution-began",
+            Self::StorageDependenciesFinished => "storage-dependencies-finished",
+            Self::ComputeDependenciesFinished => "compute-dependencies-finished",
+            Self::ExecutionFinished => "execution-finished",
+        }
+    }
+}
+
 /// Contains all the information necessary to generate the initial
 /// entry in `mz_statement_execution_history`. We need to keep this
 /// around in order to modify the entry later once the statement finishes executing.

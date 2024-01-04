@@ -30,7 +30,7 @@ use crate::coord::{ConnMeta, Coordinator};
 use crate::session::Session;
 use crate::statement_logging::{
     SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
-    StatementEndedExecutionRecord, StatementPreparedRecord,
+    StatementEndedExecutionRecord, StatementLifecycleEvent, StatementPreparedRecord,
 };
 
 use super::Message;
@@ -89,6 +89,7 @@ pub(crate) struct StatementLogging {
     pending_statement_execution_events: Vec<(Row, Diff)>,
     pending_prepared_statement_events: Vec<Row>,
     pending_session_events: Vec<Row>,
+    pending_statement_lifecycle_events: Vec<Row>,
 }
 
 impl StatementLogging {
@@ -100,6 +101,7 @@ impl StatementLogging {
             pending_statement_execution_events: Vec::new(),
             pending_prepared_statement_events: Vec::new(),
             pending_session_events: Vec::new(),
+            pending_statement_lifecycle_events: Vec::new(),
         }
     }
 }
@@ -134,12 +136,18 @@ impl Coordinator {
                 .collect();
         let statement_execution_updates =
             std::mem::take(&mut self.statement_logging.pending_statement_execution_events);
+        let statement_lifecycle_updates =
+            std::mem::take(&mut self.statement_logging.pending_statement_lifecycle_events)
+                .into_iter()
+                .map(|update| (update, 1))
+                .collect();
 
         use IntrospectionType::*;
         for (type_, updates) in [
             (SessionHistory, session_updates),
             (PreparedStatementHistory, prepared_statement_updates),
             (StatementExecutionHistory, statement_execution_updates),
+            (StatementLifecycleHistory, statement_lifecycle_updates),
         ] {
             self.controller
                 .storage
@@ -217,20 +225,25 @@ impl Coordinator {
     /// should prevent this.
     pub fn end_statement_execution(
         &mut self,
-        StatementLoggingId(id): StatementLoggingId,
+        id: StatementLoggingId,
         reason: StatementEndedExecutionReason,
     ) {
+        let StatementLoggingId(uuid) = id;
         let now = self.now_datetime();
         let now_millis = now.timestamp_millis().try_into().expect("sane system time");
         let ended_record = StatementEndedExecutionRecord {
-            id,
+            id: uuid,
             reason,
             ended_at: now_millis,
         };
 
-        let began_record = self.statement_logging.executions_begun.remove(&id).expect(
-            "matched `begin_statement_execution` and `end_statement_execution` invocations",
-        );
+        let began_record = self
+            .statement_logging
+            .executions_begun
+            .remove(&uuid)
+            .expect(
+                "matched `begin_statement_execution` and `end_statement_execution` invocations",
+            );
         for (row, diff) in
             Self::pack_statement_ended_execution_updates(&began_record, &ended_record)
         {
@@ -238,6 +251,7 @@ impl Coordinator {
                 .pending_statement_execution_events
                 .push((row, diff));
         }
+        self.record_statement_lifecycle_event(&id, &StatementLifecycleEvent::ExecutionFinished);
     }
 
     fn pack_statement_execution_inner(
@@ -354,6 +368,19 @@ impl Coordinator {
             Datum::String(&*authenticated_user),
         ])
     }
+
+    fn pack_statement_lifecycle_event(
+        StatementLoggingId(uuid): &StatementLoggingId,
+        event: &StatementLifecycleEvent,
+        when: EpochMillis,
+    ) -> Row {
+        Row::pack_slice(&[
+            Datum::Uuid(*uuid),
+            Datum::String(event.as_str()),
+            Datum::TimestampTz(mz_ore::now::to_datetime(when).try_into().expect("must fit")),
+        ])
+    }
+
     pub fn pack_full_statement_execution_update(
         began_record: &StatementBeganExecutionRecord,
         ended_record: &StatementEndedExecutionRecord,
@@ -500,10 +527,14 @@ impl Coordinator {
         if !sample {
             return None;
         }
-
         let (ps_record, ps_uuid) = self.log_prepared_statement(session, logging);
 
         let ev_id = Uuid::new_v4();
+        self.record_statement_lifecycle_event(
+            &StatementLoggingId(ev_id),
+            &StatementLifecycleEvent::ExecutionBegan,
+        );
+
         let params = std::iter::zip(params.types.iter(), params.datums.iter())
             .map(|(r#type, datum)| {
                 mz_pgrepr::Value::from_datum(datum, r#type).map(|val| {
@@ -574,5 +605,23 @@ impl Coordinator {
 
     pub fn end_session_for_statement_logging(&mut self, uuid: Uuid) {
         self.statement_logging.unlogged_sessions.remove(&uuid);
+    }
+
+    pub fn record_statement_lifecycle_event(
+        &mut self,
+        id: &StatementLoggingId,
+        event: &StatementLifecycleEvent,
+    ) {
+        if self
+            .catalog()
+            .system_config()
+            .enable_statement_lifecycle_logging()
+        {
+            let when = self.now();
+            let row = Self::pack_statement_lifecycle_event(id, event, when);
+            self.statement_logging
+                .pending_statement_lifecycle_events
+                .push(row);
+        }
     }
 }
