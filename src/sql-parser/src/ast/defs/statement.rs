@@ -3408,6 +3408,8 @@ impl AstDisplay for ExplainStage {
 }
 impl_display!(ExplainStage);
 
+/// What is being explained.
+/// The bools mean whether this is an EXPLAIN BROKEN.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Explainee<T: AstInfo> {
     View(T::ItemName),

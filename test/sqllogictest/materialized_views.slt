@@ -753,7 +753,9 @@ CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY ASSERT NOT NULL x) AS SELECT
 query error db error: ERROR: invalid input syntax for type interval: Overflows maximum days; cannot exceed 2147483647/\-2147483648 days: "213503982001"
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH EVERY '213503982001' days) AS SELECT * FROM t2;
 
-# Test that we call `transform_ast::transform`. (This has an `Expr::Nested`, which needs to be desugared, or we panic.)
+# This tests that we don't forget to purify EXPLAIN CREATE MATERIALIZED VIEW
+statement ok
+EXPLAIN CREATE MATERIALIZED VIEW mv_explain WITH (REFRESH EVERY '2 seconds') AS SELECT * FROM t2;
 
 statement ok
 CREATE MATERIALIZED VIEW mv_on_commit WITH (REFRESH ON COMMIT) AS SELECT * FROM t2;
@@ -766,6 +768,7 @@ FROM mv_on_commit;
 4000  NULL  6000
 1000  2000  3000
 
+# Test that we call `transform_ast::transform`. (This has an `Expr::Nested`, which needs to be desugared, or we panic.)
 statement ok
 CREATE MATERIALIZED VIEW mv_desugar1 WITH (REFRESH AT (mz_now())) AS SELECT * FROM t2;
 
