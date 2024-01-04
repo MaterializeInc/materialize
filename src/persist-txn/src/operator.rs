@@ -239,8 +239,15 @@ where
         let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
         let client = client.await;
         let state = TxnsCacheState::new(txns_id, T::minimum(), Some(data_id));
+        let cache_name = format!(
+            "{} {:.9} {}/{}",
+            name,
+            data_id.to_string(),
+            worker_idx,
+            num_workers
+        );
         let mut txns_cache = TxnsCacheTimely {
-            name: name.clone(),
+            name: cache_name,
             state,
             input: txns_input,
             buf: Vec::new(),
@@ -465,7 +472,8 @@ where
             }
         }
         debug!(
-            "cache correct before {:?} len={} least_ts={:?}",
+            "{} cache correct before {:?} len={} least_ts={:?}",
+            self.name,
             self.state.progress_exclusive,
             self.state.unapplied_batches.len(),
             self.state
