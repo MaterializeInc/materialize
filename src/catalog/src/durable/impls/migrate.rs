@@ -231,6 +231,8 @@ impl CatalogMigrator {
         stash_txn.set_tombstone(true)?;
         stash_txn.commit().await?;
 
+        stash.expire().await;
+
         Ok(())
     }
 
