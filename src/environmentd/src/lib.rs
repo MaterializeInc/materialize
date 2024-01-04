@@ -780,13 +780,16 @@ async fn catalog_opener(
     controller_config: &ControllerConfig,
     environment_id: &EnvironmentId,
 ) -> Result<Box<dyn OpenableDurableCatalogState>, anyhow::Error> {
+    info!(
+        "Using {} backed catalog",
+        catalog_config.catalog_kind().as_str()
+    );
     Ok(match catalog_config {
         CatalogConfig::Stash {
             url,
             persist_clients,
             metrics,
         } => {
-            info!("Using stash backed catalog");
             let stash_factory =
                 mz_stash::StashFactory::from_metrics(Arc::clone(&controller_config.stash_metrics));
             let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(url)?)?;
@@ -809,7 +812,6 @@ async fn catalog_opener(
             )
         }
         CatalogConfig::EmergencyStash { url } => {
-            info!("Using emergency stash backed catalog");
             let stash_factory =
                 mz_stash::StashFactory::from_metrics(Arc::clone(&controller_config.stash_metrics));
             let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(url)?)?;
@@ -827,7 +829,6 @@ async fn catalog_opener(
             persist_clients,
             metrics,
         } => {
-            info!("Using persist backed catalog");
             let stash_factory =
                 mz_stash::StashFactory::from_metrics(Arc::clone(&controller_config.stash_metrics));
             let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(url)?)?;
@@ -853,7 +854,6 @@ async fn catalog_opener(
             url,
             persist_clients,
         } => {
-            info!("Using shadow catalog");
             let stash_factory =
                 mz_stash::StashFactory::from_metrics(Arc::clone(&controller_config.stash_metrics));
             let tls = mz_tls_util::make_tls(&tokio_postgres::config::Config::from_str(url)?)?;

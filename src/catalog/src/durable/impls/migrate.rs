@@ -10,7 +10,7 @@
 use async_trait::async_trait;
 use mz_ore::now::EpochMillis;
 use mz_sql::session::vars::CatalogKind;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::durable::debug::{DebugCatalogState, Trace};
 use crate::durable::impls::persist::UnopenedPersistCatalogState;
@@ -153,6 +153,7 @@ impl OpenableDurableCatalogState for CatalogMigrator {
     }
 
     fn set_catalog_kind(&mut self, catalog_kind: CatalogKind) {
+        info!("Switching to {} backed catalog", catalog_kind.as_str());
         let direction = match catalog_kind.try_into() {
             Ok(direction) => direction,
             Err(catalog_kind) => {
