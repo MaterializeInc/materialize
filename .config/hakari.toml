@@ -1,5 +1,5 @@
 hakari-package = "workspace-hack"
-dep-format-version = "3"
+dep-format-version = "4"
 resolver = "2"
 platforms = [
     "x86_64-unknown-linux-gnu",
