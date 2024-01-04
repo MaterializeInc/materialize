@@ -7,11 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::{AsCollection, Collection, Data};
 use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_ore::soft_panic_or_log;
-use mz_repr::{Diff, Row, Timestamp};
-use mz_storage_types::errors::DataflowError;
+use mz_repr::{Diff, Timestamp};
 use mz_timely_util::buffer::ConsolidateBuffer;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -24,12 +23,13 @@ use timely::progress::Antichain;
 ///
 /// Note that this currently only works with 1-dim timestamps. (This is not an issue for WMR,
 /// because iteration numbers should disappear by the time the data gets to the Persist sink.)
-pub(crate) fn apply_refresh<G>(
-    coll: Collection<G, Result<Row, DataflowError>, Diff>,
+pub(crate) fn apply_refresh<G, D>(
+    coll: Collection<G, D, Diff>,
     refresh_schedule: RefreshSchedule,
-) -> Collection<G, Result<Row, DataflowError>, Diff>
+) -> Collection<G, D, Diff>
 where
     G: Scope<Timestamp = Timestamp>,
+    D: Data,
 {
     // We need to disconnect the reachability graph and manage capabilities manually, because we'd like to round up
     // frontiers as well as data: as soon as our input frontier passes a refresh time, we'll round it up to the next
@@ -109,6 +109,10 @@ where
                         None => {
                             // We are past the last refresh. Drop the capability to signal that we are done.
                             capability = None;
+                            // We can only get here if we see the frontier advancing to a time after
+                            // the last refresh, but not empty, which would be a bug somewhere in
+                            // the `until` handling.
+                            soft_panic_or_log!("frontier advancements after the `until` should be suppressed");
                         }
                     }
                 }
