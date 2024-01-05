@@ -1,12 +1,3 @@
-# Copyright Materialize, Inc. and contributors. All rights reserved.
-#
-# Use of this software is governed by the Business Source License
-# included in the LICENSE file at the root of this repository.
-#
-# As of the Change Date specified in that file, in accordance with
-# the Business Source License, use of this software will be governed
-# by the Apache License, Version 2.0.
-
 """Tests for the Materialize Fivetran destination.
 
 This composition is a lightweight test harness for the Materialize Fivetran
@@ -50,15 +41,13 @@ name of the test directory.
 """
 
 import shutil
-from pathlib import Path
 
+from pathlib import Path
+from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.fivetran_destination import FivetranDestination
-from materialize.mzcompose.services.fivetran_destination_tester import (
-    FivetranDestinationTester,
-)
+from materialize.mzcompose.services.fivetran_destination_tester import FivetranDestinationTester
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.testdrive import Testdrive
 
 ROOT = Path(__file__).parent
 
@@ -78,7 +67,6 @@ SERVICES = [
     ),
 ]
 
-
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("filter", nargs="?")
     args = parser.parse_args()
@@ -93,7 +81,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             with c.test_case(path.name):
                 _run_test_case(c, path)
 
-
 def _run_test_case(c: Composition, path: Path):
     c.sql("DROP DATABASE IF EXISTS test")
     c.sql("CREATE DATABASE test")
@@ -105,7 +92,6 @@ def _run_test_case(c: Composition, path: Path):
             _run_destination_tester(c, test_file)
         elif test_file.name != "00-README":
             assert False, f"unexpected test file: {test_file}"
-
 
 def _run_destination_tester(c: Composition, test_file: Path):
     data_dir = ROOT / "data"
@@ -123,11 +109,7 @@ def _run_destination_tester(c: Composition, test_file: Path):
         ret = c.run("fivetran-destination-tester", check=False, capture=True)
         print("stdout:")
         print(ret.stdout)
-        assert (
-            ret.returncode != 0
-        ), f"destination tester did not fail with expected message {expected_failure!r}"
-        assert (
-            expected_failure in ret.stdout
-        ), f"destination tester did not fail with expected message {expected_failure!r}"
+        assert ret.returncode != 0, f"destination tester did not fail with expected message {expected_failure!r}"
+        assert expected_failure in ret.stdout, f"destination tester did not fail with expected message {expected_failure!r}"
     else:
         c.run("fivetran-destination-tester")

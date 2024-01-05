@@ -47,7 +47,6 @@ pub async fn handle_create_table_request(
     })
 }
 
-#[allow(clippy::unused_async)]
 pub async fn handle_alter_table_request(
     _: AlterTableRequest,
 ) -> Result<AlterTableResponse, anyhow::Error> {
@@ -101,7 +100,7 @@ async fn describe_table(request: DescribeTableRequest) -> Result<Option<Table>, 
             if name == "_fivetran_deleted" || name == "_fivetran_synced" {
                 continue;
             }
-            let primary_key = name.starts_with('k'); // TODO(benesch): support primary keys
+            let primary_key = name.starts_with("k"); // TODO(benesch): support primary keys
             let ty_oid = row.get::<_, u32>("type_oid");
             let ty_mod = row.get::<_, i32>("type_mod");
             let ty = Type::from_oid_and_typmod(ty_oid, ty_mod).with_context(|| {
@@ -152,7 +151,6 @@ async fn create_table(request: CreateTableRequest) -> Result<(), anyhow::Error> 
     ]);
 
     // TODO(benesch): support primary keys.
-    #[allow(clippy::overly_complex_bool_expr)]
     if !primary_key_columns.is_empty() && false {
         defs.push(format!("PRIMARY KEY ({})", primary_key_columns.join(",")));
     }
