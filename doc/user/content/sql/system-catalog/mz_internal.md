@@ -724,16 +724,16 @@ only includes rows where the current role is a direct or indirect member of `gra
 | `grantee`        | [`text`] | The role that the privilege was granted to. |
 | `privilege_type` | [`text`] | They type of privilege granted.             |
 
-### `mz_sink_statistics_raw`
+### `mz_sink_statistics_per_worker`
 
-The `mz_sink_statistics_raw` table contains statistics for each worker thread of
+The `mz_sink_statistics_per_worker` table contains statistics for each worker thread of
 each sink in the system.
 
 Materialize does not make any guarantees about the exactness or freshness of
 these statistics. They are occasionally reset to zero as internal components of
 the system are restarted.
 
-<!-- RELATION_SPEC mz_internal.mz_sink_statistics_raw -->
+<!-- RELATION_SPEC mz_internal.mz_sink_statistics_per_worker -->
 | Field                | Type      | Meaning                                                                                                             |
 |----------------------|-----------| --------                                                                                                            |
 | `id`                 | [`text`]  | The ID of the source. Corresponds to [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks).                            |
@@ -745,7 +745,7 @@ the system are restarted.
 
 ### `mz_sink_statistics`
 
-The `mz_sink_statistics` view contains statistics about each sink. It is an aggregated form of `mz_sink_statistics_raw`.
+The `mz_sink_statistics` view contains statistics about each sink. It is an aggregated form of `mz_sink_statistics_per_worker`.
 
 Materialize does not make any guarantees about the exactness or freshness of
 these statistics. They are occasionally reset to zero as internal components of
@@ -792,16 +792,16 @@ messages and additional metadata helpful for debugging.
 | `error`        | [`text`]                        | If the sink is in an error state, the error message.                                                             |
 | `details`      | [`jsonb`]                       | Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions. |
 
-### `mz_source_statistics_raw`
+### `mz_source_statistics_per_worker`
 
-The `mz_source_statistics_raw` table contains statistics for each worker thread of
+The `mz_source_statistics_per_worker` table contains statistics for each worker thread of
 each source in the system.
 
 Materialize does not make any guarantees about the exactness or freshness of
 these statistics. They are occasionally reset to zero as internal components of
 the system are restarted.
 
-<!-- RELATION_SPEC mz_internal.mz_source_statistics_raw -->
+<!-- RELATION_SPEC mz_internal.mz_source_statistics_per_worker -->
 | Field                    | Type        | Meaning                                                                                                                                                                                                                                                                             |
 | -------------------------|-------------| --------                                                                                                                                                                                                                                                                            |
 | `id`                     | [`text`]     | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                                                                                                                                                                                        |
@@ -817,7 +817,7 @@ the system are restarted.
 
 ### `mz_source_statistics`
 
-The `mz_source_statistics` view contains statistics about each source. It is an aggregated form of `mz_source_statistics_raw`.
+The `mz_source_statistics` view contains statistics about each source. It is an aggregated form of `mz_source_statistics_per_worker`.
 
 Materialize does not make any guarantees about the exactness or freshness of
 these statistics. They are occasionally reset to zero as internal components of
