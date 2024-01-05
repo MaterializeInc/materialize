@@ -27,20 +27,20 @@ use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_sql::session::vars::TimestampOracleImpl;
 use mz_storage_types::sources::Timeline;
+use mz_timestamp_oracle::batching_oracle::BatchingTimestampOracle;
+use mz_timestamp_oracle::postgres_oracle::{
+    PostgresTimestampOracle, PostgresTimestampOracleConfig,
+};
+use mz_timestamp_oracle::{self, ShareableTimestampOracle, TimestampOracle, WriteTimestamp};
 use timely::progress::Timestamp as TimelyTimestamp;
 use tracing::{debug, error, info, Instrument};
 
-use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::read_policy::ReadHolds;
-use crate::coord::timestamp_oracle::batching_oracle::BatchingTimestampOracle;
-use crate::coord::timestamp_oracle::catalog_oracle::{
-    CatalogTimestampOracle, CatalogTimestampPersistence, TimestampPersistence,
+use crate::coord::catalog_oracle::{
+    self, CatalogTimestampOracle, CatalogTimestampPersistence, TimestampPersistence,
     TIMESTAMP_INTERVAL_UPPER_BOUND, TIMESTAMP_PERSIST_INTERVAL,
 };
-use crate::coord::timestamp_oracle::postgres_oracle::{
-    PostgresTimestampOracle, PostgresTimestampOracleConfig,
-};
-use crate::coord::timestamp_oracle::{self, ShareableTimestampOracle, TimestampOracle};
+use crate::coord::id_bundle::CollectionIdBundle;
+use crate::coord::read_policy::ReadHolds;
 use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::Coordinator;
 use crate::AdapterError;
@@ -71,15 +71,6 @@ impl TimelineContext {
             Self::TimestampIndependent | Self::TimestampDependent => None,
         }
     }
-}
-
-/// Timestamps used by writes in an Append command.
-#[derive(Debug)]
-pub struct WriteTimestamp<T = mz_repr::Timestamp> {
-    /// Timestamp that the write will take place on.
-    pub(crate) timestamp: T,
-    /// Timestamp to advance the appended table to.
-    pub(crate) advance_to: T,
 }
 
 /// Global state for a single timeline.
@@ -176,7 +167,7 @@ impl Coordinator {
     pub(crate) async fn apply_local_write(&mut self, timestamp: Timestamp) {
         let now = self.now().into();
 
-        if timestamp > timestamp_oracle::catalog_oracle::upper_bound(&now) {
+        if timestamp > catalog_oracle::upper_bound(&now) {
             error!(
                 "Setting local read timestamp to {timestamp}, which is more than \
                 {TIMESTAMP_INTERVAL_UPPER_BOUND} intervals of size {} larger than now, {now}",
@@ -202,7 +193,7 @@ impl Coordinator {
     ) -> Option<impl Future<Output = ()> + Send + 'static> {
         let now = self.now().into();
 
-        if timestamp > timestamp_oracle::catalog_oracle::upper_bound(&now) {
+        if timestamp > catalog_oracle::upper_bound(&now) {
             error!(
                 "Setting local read timestamp to {timestamp}, which is more than \
                 {TIMESTAMP_INTERVAL_UPPER_BOUND} intervals of size {} larger than now, {now}",

@@ -22,7 +22,7 @@ use mz_storage_types::parameters::{
 };
 use mz_tracing::params::TracingParameters;
 
-use crate::coord::timestamp_oracle::postgres_oracle::PostgresTimestampOracleParameters;
+use mz_timestamp_oracle::postgres_oracle::PostgresTimestampOracleParameters;
 
 /// Return the current compute configuration, derived from the system configuration.
 pub fn compute_config(config: &SystemVars) -> ComputeParameters {

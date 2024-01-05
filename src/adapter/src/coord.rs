@@ -124,6 +124,7 @@ use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::Timeline;
+use mz_timestamp_oracle::WriteTimestamp;
 use opentelemetry::trace::TraceContextExt;
 use timely::progress::Antichain;
 use timely::PartialOrder;
@@ -139,13 +140,10 @@ use crate::client::{Client, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
+use crate::coord::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
-use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
-use crate::coord::timestamp_oracle::catalog_oracle::CatalogTimestampPersistence;
-use crate::coord::timestamp_oracle::postgres_oracle::{
-    PostgresTimestampOracle, PostgresTimestampOracleConfig,
-};
+use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
@@ -162,14 +160,17 @@ use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
 use mz_catalog::durable::DurableCatalogState;
 use mz_expr::refresh_schedule::RefreshSchedule;
+use mz_timestamp_oracle::postgres_oracle::{
+    PostgresTimestampOracle, PostgresTimestampOracleConfig,
+};
 
 use self::statement_logging::{StatementLogging, StatementLoggingId};
 
+pub(crate) mod catalog_oracle;
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
 pub(crate) mod statement_logging;
 pub(crate) mod timeline;
-pub(crate) mod timestamp_oracle;
 pub(crate) mod timestamp_selection;
 
 mod appends;
@@ -1259,7 +1260,7 @@ pub struct Coordinator {
     webhook_concurrency_limit: WebhookConcurrencyLimiter,
 
     /// Implementation of
-    /// [`TimestampOracle`](crate::coord::timestamp_oracle::TimestampOracle) to
+    /// [`TimestampOracle`](mz_timestamp_oracle::TimestampOracle) to
     /// use.
     timestamp_oracle_impl: vars::TimestampOracleImpl,
 

@@ -19,14 +19,14 @@ use mz_catalog::memory::error::Error;
 use mz_ore::now::NowFn;
 use mz_repr::{Timestamp, TimestampManipulation};
 use mz_storage_types::sources::Timeline;
+use mz_timestamp_oracle::{
+    GenericNowFn, ShareableTimestampOracle, TimestampOracle, WriteTimestamp,
+};
 use once_cell::sync::Lazy;
 use tracing::error;
 
 use crate::catalog::Catalog;
-use crate::coord::timeline::WriteTimestamp;
-use crate::coord::timestamp_oracle::{
-    catalog_oracle, GenericNowFn, ShareableTimestampOracle, TimestampOracle,
-};
+use crate::coord::catalog_oracle;
 use crate::util::ResultExt;
 
 /// A type that provides write and read timestamps, reads observe exactly their
@@ -322,14 +322,11 @@ pub(crate) fn monotonic_now(now: NowFn, previous_now: mz_repr::Timestamp) -> mz_
 
 #[cfg(test)]
 mod tests {
-
-    use crate::coord::timestamp_oracle;
-
     use super::*;
 
     #[mz_ore::test(tokio::test)]
     async fn test_in_memory_timestamp_oracle() -> Result<(), anyhow::Error> {
-        timestamp_oracle::tests::timestamp_oracle_impl_test(
+        mz_timestamp_oracle::tests::timestamp_oracle_impl_test(
             move |_timeline, now_fn, initial_ts| {
                 let persistence = NoopTimestampPersistence::new();
                 let oracle =

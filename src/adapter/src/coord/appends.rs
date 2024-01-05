@@ -21,11 +21,11 @@ use mz_ore::vec::VecExt;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_sql::plan::Plan;
 use mz_storage_client::client::TimestamplessUpdate;
+use mz_timestamp_oracle::WriteTimestamp;
 use tokio::sync::{oneshot, Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
 use tracing::{warn, Instrument, Span};
 
 use crate::catalog::BuiltinTableUpdate;
-use crate::coord::timeline::WriteTimestamp;
 use crate::coord::{Coordinator, Message, PendingTxn, PlanValidity};
 use crate::session::{Session, WriteOp};
 use crate::util::{CompletedClientTransmitter, ResultExt};
