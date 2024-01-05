@@ -971,6 +971,17 @@ steps:
             composition: rqg
             args: ["dbt3-joins", "--seed=$BUILDKITE_JOB_ID"]
 
+    - id: rqg-banking
+      label: "RQG banking workload"
+      artifact_paths: junit_*.xml
+      timeout_in_minutes: 45
+      agents:
+        queue: linux-x86_64
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: rqg
+            args: ["banking", "--seed=$BUILDKITE_JOB_ID"]
+
   - id: crdb-restarts
     label: "CRDB rolling restarts"
     timeout_in_minutes: 15

@@ -27,6 +27,15 @@ class Dataset(Enum):
     SIMPLE = 1
     DBT3 = 2
 
+    def files(self) -> list[str]:
+        match self:
+            case Dataset.SIMPLE:
+                return ["simple.sql"]
+            case Dataset.DBT3:
+                return ["dbt3-ddl.sql", "dbt3-s0.0001.dump"]
+            case _:
+                assert False
+
 
 class ReferenceImplementation(Enum):
     MATERIALIZE = 1
@@ -45,12 +54,13 @@ class ReferenceImplementation(Enum):
 @dataclass
 class Workload:
     name: str
-    dataset: Dataset
     grammar: str
     reference_implementation: ReferenceImplementation | None
+    dataset: Dataset | None = None
     duration: int = 30 * 60
     disabled: bool = False
     threads: int = 4
+    validator: str | None = None
 
 
 WORKLOADS = [
@@ -65,6 +75,14 @@ WORKLOADS = [
         dataset=Dataset.DBT3,
         grammar="conf/mz/dbt3-joins.yy",
         reference_implementation=ReferenceImplementation.POSTGRES,
+    ),
+    Workload(
+        # A workload that performs DML that preserve the dataset's invariants
+        # and also checks that those invariants are not violated
+        name="banking",
+        grammar="conf/mz/banking.yy",
+        reference_implementation=None,
+        validator="QueryProperties,RepeatableRead",
     ),
 ]
 
@@ -92,7 +110,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Random seed to use.",
     )
 
-
     parser.add_argument(
         "workloads", nargs="*", default=None, help="Run specified workloads"
     )
@@ -110,7 +127,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     ), f"No matching workloads found (args was {args.workloads})"
 
     for workload in workloads_to_run:
-        print(f"--- Running workload {workload.name}: {workload.__doc__} ...")
+        print(f"--- Running workload {workload.name}: {workload} ...")
         run_workload(c, args, workload)
 
 
@@ -144,14 +161,12 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
         case ReferenceImplementation.POSTGRES:
             participants.append(Postgres(ports=["15432:5432"]))
             psql_urls.append("postgresql://postgres:postgres@postgres/postgres")
+        case None:
+            pass
         case _:
             assert False
 
-    files = (
-        ["dbt3-ddl.sql", "dbt3-s0.0001.dump"]
-        if workload.dataset == Dataset.DBT3
-        else ["simple.sql"]
-    )
+    files = [] if workload.dataset is None else workload.dataset.files()
 
     dsn2 = (
         [f"--dsn2=dbi:Pg:{workload.reference_implementation.dsn()}"]
@@ -181,6 +196,9 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
                     "--dsn1=dbi:Pg:dbname=materialize;host=mz_this;user=materialize;port=6875",
                     *dsn2,
                     f"--grammar={workload.grammar}",
+                    f"--validator={workload.validator}"
+                    if workload.validator is not None
+                    else "",
                     "--queries=10000000",
                     f"--threads={workload.threads}",
                     f"--duration={duration}",
