@@ -11,7 +11,7 @@ MZFROM bazel
 
 WORKDIR /home/ubuntu
 
-COPY --chown=materialize:materialize build build
+COPY build build
 
 RUN cd build \
     && bazel build //testers:run_sdk_destination_tester_deploy.jar
