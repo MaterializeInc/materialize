@@ -137,6 +137,8 @@ pub fn persist_source<G>(
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
     max_inflight_bytes: Option<usize>,
+    // TODO(#23897): wire up end-to-end flow control
+    _flow_control: Option<FlowControl<G>>,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (DataflowError, Timestamp, Diff)>,

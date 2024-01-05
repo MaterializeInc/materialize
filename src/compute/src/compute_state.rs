@@ -41,6 +41,7 @@ use mz_repr::{ColumnType, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::stats::StatsCursor;
+use mz_timely_util::probe;
 use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
 use timely::order::PartialOrder;
@@ -93,7 +94,9 @@ pub struct ComputeState {
     /// Max size in bytes of any result.
     max_result_size: u32,
     /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
-    pub dataflow_max_inflight_bytes: Option<usize>,
+    pub dataflow_max_inflight_bytes: usize,
+    /// Maximum number of bytes in-flight inside a single persist_source.
+    pub persist_source_max_inflight_bytes: Option<usize>,
     /// Specification for rendering linear joins.
     pub linear_join_spec: LinearJoinSpec,
     /// Metrics for this replica.
@@ -128,7 +131,8 @@ impl ComputeState {
             persist_clients,
             command_history,
             max_result_size: u32::MAX,
-            dataflow_max_inflight_bytes: None,
+            dataflow_max_inflight_bytes: context.flow_control_bytes,
+            persist_source_max_inflight_bytes: None,
             linear_join_spec: Default::default(),
             metrics,
             tracing_handle,
@@ -225,8 +229,10 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         if let Some(v) = max_result_size {
             self.compute_state.max_result_size = v;
         }
+        // TODO(#23897): Resolve the naming confusion here by switching to a different compute
+        // parameter and LD flag for the persist_source-internal backpressure.
         if let Some(v) = dataflow_max_inflight_bytes {
-            self.compute_state.dataflow_max_inflight_bytes = v;
+            self.compute_state.persist_source_max_inflight_bytes = v;
         }
         if let Some(v) = linear_join_yielding {
             self.compute_state.linear_join_spec.yielding = v;
@@ -1255,6 +1261,14 @@ pub struct CollectionState {
     ///
     /// Only `Some` if the collection is a sink and *not* a subscribe.
     pub sink_write_frontier: Option<Rc<RefCell<Antichain<Timestamp>>>>,
+    /// Probe handles for regulating the output of dataflow sources that (transitively) feed this
+    /// collection.
+    ///
+    /// Only populated if the collection is an index.
+    ///
+    /// New dataflows that depend on this index are expected to report their output frontiers
+    /// through these probe handles.
+    pub index_flow_control_probes: Vec<probe::Handle<Timestamp>>,
 }
 
 impl CollectionState {
@@ -1263,6 +1277,7 @@ impl CollectionState {
             reported_frontier: ReportedFrontier::new(),
             sink_token: None,
             sink_write_frontier: None,
+            index_flow_control_probes: Default::default(),
         }
     }
 

@@ -55,6 +55,7 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
         timely::progress::Antichain::new(),
         None,
         None,
+        None,
     );
     tokens.extend(persist_tokens);
 

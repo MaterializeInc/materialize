@@ -117,9 +117,11 @@ use mz_expr::{EvalError, Id};
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Diff, GlobalId};
 use mz_storage_operators::persist_source;
+use mz_storage_operators::persist_source::FlowControl;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::probe;
 use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
@@ -188,6 +190,10 @@ pub fn build_compute_dataflow<A: Allocate>(
 
     let worker_logging = timely_worker.log_register().get("timely");
 
+    // Probe providing feedback to `persist_source` flow control.
+    // Only set if the dataflow instantiates any `persist_source`s.
+    let mut flow_control_probe: Option<probe::Handle<_>> = None;
+
     let name = format!("Dataflow: {}", &dataflow.debug_name);
     let input_name = format!("InputRegion: {}", &dataflow.debug_name);
     let build_name = format!("BuildRegion: {}", &dataflow.debug_name);
@@ -208,6 +214,20 @@ pub fn build_compute_dataflow<A: Allocate>(
                             .expect("Linear operators should always be valid")
                     });
 
+                    let probe = flow_control_probe.get_or_insert_with(Default::default);
+                    let flow_control_input = probe::source(
+                        inner.clone(),
+                        format!("flow_control_input({source_id})"),
+                        probe.clone(),
+                    );
+                    let flow_control = FlowControl {
+                        progress_stream: flow_control_input,
+                        max_inflight_bytes: compute_state.dataflow_max_inflight_bytes,
+                        summary: mz_repr::Timestamp::minimum().step_forward(),
+                        // TODO(guswynn): add metrics for compute flow control
+                        metrics: None,
+                    };
+
                     // Note: For correctness, we require that sources only emit times advanced by
                     // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
                     let (mut ok_stream, err_stream, token) = persist_source::persist_source(
@@ -219,7 +239,8 @@ pub fn build_compute_dataflow<A: Allocate>(
                         SnapshotMode::Include,
                         dataflow.until.clone(),
                         mfp.as_mut(),
-                        compute_state.dataflow_max_inflight_bytes,
+                        compute_state.persist_source_max_inflight_bytes,
+                        Some(flow_control),
                     );
 
                     // If `mfp` is non-identity, we need to apply what remains.
@@ -255,6 +276,17 @@ pub fn build_compute_dataflow<A: Allocate>(
                 });
             }
         });
+
+        // Collect flow control probes for this dataflow.
+        let index_ids = dataflow.index_imports.keys();
+        let output_probes: Vec<_> = index_ids
+            .flat_map(|id| {
+                let collection = compute_state.expect_collection(*id);
+                &collection.index_flow_control_probes
+            })
+            .cloned()
+            .chain(flow_control_probe)
+            .collect();
 
         // If there exists a recursive expression, we'll need to use a non-region scope,
         // in order to support additional timestamp coordinates for iteration.
@@ -304,12 +336,20 @@ pub fn build_compute_dataflow<A: Allocate>(
                         dependencies,
                         idx_id,
                         &idx,
+                        output_probes.clone(),
                     );
                 }
 
                 // Export declared sinks.
                 for (sink_id, dependencies, sink) in sinks {
-                    context.export_sink(compute_state, &tokens, dependencies, sink_id, &sink);
+                    context.export_sink(
+                        compute_state,
+                        &tokens,
+                        dependencies,
+                        sink_id,
+                        &sink,
+                        output_probes.clone(),
+                    );
                 }
             });
         } else {
@@ -351,12 +391,26 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Export declared indexes.
                 for (idx_id, dependencies, idx) in indexes {
-                    context.export_index(compute_state, &tokens, dependencies, idx_id, &idx);
+                    context.export_index(
+                        compute_state,
+                        &tokens,
+                        dependencies,
+                        idx_id,
+                        &idx,
+                        output_probes.clone(),
+                    );
                 }
 
                 // Export declared sinks.
                 for (sink_id, dependencies, sink) in sinks {
-                    context.export_sink(compute_state, &tokens, dependencies, sink_id, &sink);
+                    context.export_sink(
+                        compute_state,
+                        &tokens,
+                        dependencies,
+                        sink_id,
+                        &sink,
+                        output_probes.clone(),
+                    );
                 }
             });
         }
@@ -455,6 +509,7 @@ where
         dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
+        probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -470,9 +525,14 @@ where
             )
         });
 
+        let collection = compute_state.expect_collection_mut(idx_id);
+        collection.index_flow_control_probes = probes.clone();
+
         match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
-                // Obtain a specialized handle matching the specialized arrangement.
+                // Set up probes to notify on index frontier advancement, and obtain
+                // a specialized handle matching the specialized arrangement.
+                oks.probe_notify_with(probes);
                 let oks_trace = oks.trace_handle();
 
                 // Attach logging of dataflow errors.
@@ -521,6 +581,7 @@ where
         dependency_ids: BTreeSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,
+        probes: Vec<probe::Handle<mz_repr::Timestamp>>,
     ) {
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -536,9 +597,13 @@ where
             )
         });
 
+        let collection = compute_state.expect_collection_mut(idx_id);
+        collection.index_flow_control_probes = probes.clone();
+
         match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
                 let oks = self.dispatch_rearrange_iterative(oks, "Arrange export iterative");
+                oks.probe_notify_with(probes);
                 let oks_trace = oks.trace_handle();
 
                 let errs = errs
