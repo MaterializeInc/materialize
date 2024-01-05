@@ -192,7 +192,7 @@ where
                 .await;
                 if !updates.is_empty() {
                     debug!("{} emitting updates {:?}", name, updates);
-                    txns_output.give_container(&cap, &mut updates).await;
+                    txns_output.give_container_sync(&cap, &mut updates).await;
                 }
             }
         }
@@ -294,17 +294,7 @@ where
                     // NB: Ignore the data_cap because this input is
                     // disconnected.
                     Event::Data(_data_cap, data) => {
-                        for data in data.drain(..) {
-                            debug!(
-                                "{} {:.9} {}/{} emitting data {:?}",
-                                name,
-                                data_id.to_string(),
-                                worker_idx,
-                                num_workers,
-                                data
-                            );
-                            passthrough_output.give(&cap, data).await;
-                        }
+                        passthrough_output.give_container_sync(&cap, data).await;
                     }
                     Event::Progress(progress) => {
                         // We reached the empty frontier! Shut down.
