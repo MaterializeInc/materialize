@@ -29,16 +29,17 @@ class Dataset(Enum):
 
 
 class ReferenceImplementation(Enum):
-    MZ = 1
+    MATERIALIZE = 1
     POSTGRES = 2
 
     def dsn(self) -> str:
-        if self == ReferenceImplementation.MZ:
-            return "dbname=materialize;host=mz_other;user=materialize;port=6875;cluster=default"
-        elif self == ReferenceImplementation.POSTGRES:
-            return "dbname=postgres;host=postgres;user=postgres;password=postgres"
-        else:
-            assert False
+        match self:
+            case ReferenceImplementation.MATERIALIZE:
+                return "dbname=materialize;host=mz_other;user=materialize;port=6875"
+            case ReferenceImplementation.POSTGRES:
+                return "dbname=postgres;host=postgres;user=postgres;password=postgres"
+            case _:
+                assert False
 
 
 @dataclass
@@ -127,24 +128,24 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
 
     psql_urls = ["postgresql://materialize@mz_this:6875/materialize"]
 
-    if workload.reference_implementation == ReferenceImplementation.MZ:
-        participants.append(
-            Materialized(
-                name="mz_other",
-                image=f"materialize/materialized:{args.other_tag}"
-                if args.other_tag
-                else None,
-                ports=["26875:6875", "26877:6877"],
-                use_default_volumes=False,
+    match workload.reference_implementation:
+        case ReferenceImplementation.MATERIALIZE:
+            participants.append(
+                Materialized(
+                    name="mz_other",
+                    image=f"materialize/materialized:{args.other_tag}"
+                    if args.other_tag
+                    else None,
+                    ports=["26875:6875", "26877:6877"],
+                    use_default_volumes=False,
+                )
             )
-        )
-        psql_urls.append("postgresql://materialize@mz_other:6885/materialize")
-
-    elif workload.reference_implementation == ReferenceImplementation.POSTGRES:
-        participants.append(Postgres(ports=["15432:5432"]))
-        psql_urls.append("postgresql://postgres:postgres@postgres/postgres")
-    else:
-        assert False
+            psql_urls.append("postgresql://materialize@mz_other:6875/materialize")
+        case ReferenceImplementation.POSTGRES:
+            participants.append(Postgres(ports=["15432:5432"]))
+            psql_urls.append("postgresql://postgres:postgres@postgres/postgres")
+        case _:
+            assert False
 
     files = (
         ["dbt3-ddl.sql", "dbt3-s0.0001.dump"]
@@ -177,7 +178,7 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
                     "rqg",
                     "perl",
                     "gentest.pl",
-                    "--dsn1=dbi:Pg:dbname=materialize;host=mz_this;user=mz_system;port=6877",
+                    "--dsn1=dbi:Pg:dbname=materialize;host=mz_this;user=materialize;port=6875",
                     *dsn2,
                     f"--grammar={workload.grammar}",
                     "--queries=10000000",
