@@ -1,0 +1,133 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+"""Tests for the Materialize Fivetran destination.
+
+This composition is a lightweight test harness for the Materialize Fivetran
+destination.
+
+Each test is structured as a directory within whose name begins with `test-`.
+Each test directory may contain:
+
+  * any number of Testdrive scripts, which are files whose name ends in `.td`
+  * any number of Fivetran Destination Tester scripts, which are files whose
+    name ends in `.json`
+  * a README file, which must be named `00-README`
+
+The test harness boots Materialize and the Materialize Fivetran Destination
+server. At the start of each test, the harness creates a database named `test`
+that is owned by the `materialize` user. Then, the test harness runs each
+Testdrive and Fivetran Destination Tester script within the test directory in
+lexicographic order. If a script fails, the test is marked as failed and no
+further scripts from the test are executed.
+
+A script is normally considered to fail if Testdrive or the Fivetran Destination
+Tester exit with a non-zero code. However, if the last line of a Fivetran
+Destination Tester script matches the pattern `// FAIL: <message>`, the test
+harness will expect the Fivetran Destination Tester to exit with a non-zero code
+and with `<message>` printed to stdout; the test script will be marked as failed
+if it exits with code zero or if `<message>` is not printed to stdout.
+
+For details on Testdrive, consult doc/developer/testdrive.md.
+
+For details on the Fivetran Destination Tester, which is a tool provided by
+Fivetran, consult misc/fivetran-sdk/tools/README.md.
+
+To invoke the test harness locally:
+
+  $ cd test/fivetran-destination
+  $ ./mzcompose [--dev] run default -- [FILTER]
+
+The optional FILTER argument indicates a pattern which limits which test cases
+are run. A pattern matches a test case if the pattern is contained within the
+name of the test directory.
+"""
+
+import shutil
+from pathlib import Path
+
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.fivetran_destination import FivetranDestination
+from materialize.mzcompose.services.fivetran_destination_tester import (
+    FivetranDestinationTester,
+)
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.testdrive import Testdrive
+
+ROOT = Path(__file__).parent
+
+SERVICES = [
+    Materialized(),
+    Testdrive(
+        no_reset=True,
+        default_timeout="5s",
+    ),
+    FivetranDestination(
+        volumes_extra=["./data:/data"],
+    ),
+    FivetranDestinationTester(
+        destination_host="fivetran-destination",
+        destination_port=6874,
+        volumes_extra=["./data:/data"],
+    ),
+]
+
+
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument("filter", nargs="?")
+    args = parser.parse_args()
+
+    c.up("materialized", "fivetran-destination")
+
+    for path in ROOT.iterdir():
+        if path.name.startswith("test-"):
+            if args.filter and args.filter not in path.name:
+                print(f"Test case {path.name!r} does not match filter; skipping...")
+                continue
+            with c.test_case(path.name):
+                _run_test_case(c, path)
+
+
+def _run_test_case(c: Composition, path: Path):
+    c.sql("DROP DATABASE IF EXISTS test")
+    c.sql("CREATE DATABASE test")
+    for test_file in sorted(p for p in path.iterdir()):
+        test_file = test_file.relative_to(ROOT)
+        if test_file.suffix == ".td":
+            c.run("testdrive", str(test_file))
+        elif test_file.suffix == ".json":
+            _run_destination_tester(c, test_file)
+        elif test_file.name != "00-README":
+            assert False, f"unexpected test file: {test_file}"
+
+
+def _run_destination_tester(c: Composition, test_file: Path):
+    data_dir = ROOT / "data"
+    for data_file in data_dir.iterdir():
+        if data_file.name in ("configuration.json", ".gitignore"):
+            continue
+        data_file.unlink()
+    shutil.copy(test_file, data_dir)
+
+    expected_failure = None
+    last_line = test_file.read_text().splitlines()[-1]
+    if last_line.startswith("// FAIL: "):
+        expected_failure = last_line.removeprefix("// FAIL: ")
+    if expected_failure:
+        ret = c.run("fivetran-destination-tester", check=False, capture=True)
+        print("stdout:")
+        print(ret.stdout)
+        assert (
+            ret.returncode != 0
+        ), f"destination tester did not fail with expected message {expected_failure!r}"
+        assert (
+            expected_failure in ret.stdout
+        ), f"destination tester did not fail with expected message {expected_failure!r}"
+    else:
+        c.run("fivetran-destination-tester")

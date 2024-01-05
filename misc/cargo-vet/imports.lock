@@ -183,6 +183,13 @@ user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
+[[publisher.bstr]]
+version = "1.6.0"
+when = "2023-07-05"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
 [[publisher.bumpalo]]
 version = "3.12.1"
 when = "2023-04-21"
@@ -556,6 +563,13 @@ user-name = "Andrew Gallant"
 [[publisher.regex-automata]]
 version = "0.1.9"
 when = "2020-03-09"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.regex-automata]]
+version = "0.3.9"
+when = "2023-09-30"
 user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"

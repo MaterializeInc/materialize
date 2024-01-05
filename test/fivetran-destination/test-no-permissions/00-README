@@ -1,0 +1,2 @@
+Verify that configuration testing fails when the user does not have CREATE
+privilege on the database.
