@@ -89,6 +89,15 @@ feature in isolation. This can be particularly problematic if the bugfix or
 feature needs to be reverted—it is much more difficult to revert just one or the
 other if they are in the same RU.
 
+You should also endeavor to limit each RU to one team's scope as defined by
+the [CODEOWNERS](/.github/CODEOWNERS) file, in particular for larger changes.
+When a single RU contains changes across multiple parts of the stack, each
+reviewer has the additional overhead of digging thru the PR to figure out which
+files require their review. Splitting up the change into multiple RUs avoids
+this.\
+Areas where this is particularly applicable:
+* Changes to the [SQL parser](/src/sql-parser)
+
 ### Change descriptions
 
 Writing good commit messages (or PR descriptions, if you use the semantic PRs
@@ -896,6 +905,9 @@ submit a PR to fix it!
 * Never include refactoring and behavior changes in the same commit.
 
 * Keep PRs small, and ideally less than 500 lines.
+
+* For larger PRs, aim to limit each RU to one team's scope as defined by the
+[CODEOWNERS](/.github/CODEOWNERS) file.
 
 * Always initiate PR reviews within one business day, and sooner if possible.
 
