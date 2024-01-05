@@ -31,6 +31,7 @@ use console_subscriber::ConsoleLayer;
 use http::HeaderMap;
 use hyper::client::HttpConnector;
 use hyper_tls::HttpsConnector;
+use once_cell::sync::Lazy;
 use opentelemetry::global::Error;
 use opentelemetry::propagation::{Extractor, Injector};
 use opentelemetry::{global, KeyValue};
@@ -162,7 +163,7 @@ pub struct TokioConsoleConfig {
     pub retention: Duration,
 }
 
-type Reloader = Arc<dyn Fn(EnvFilter) -> Result<(), anyhow::Error> + Send + Sync>;
+type Reloader = Arc<dyn Fn(EnvFilter, Vec<Directive>) -> Result<(), anyhow::Error> + Send + Sync>;
 
 /// A handle to the tracing infrastructure configured with [`configure`].
 #[derive(Clone)]
@@ -177,19 +178,27 @@ impl TracingHandle {
     /// Primarily useful in tests.
     pub fn disabled() -> TracingHandle {
         TracingHandle {
-            stderr_log: Arc::new(|_| Ok(())),
-            opentelemetry: Arc::new(|_| Ok(())),
+            stderr_log: Arc::new(|_, _| Ok(())),
+            opentelemetry: Arc::new(|_, _| Ok(())),
         }
     }
 
     /// Dynamically reloads the stderr log filter.
-    pub fn reload_stderr_log_filter(&self, filter: EnvFilter) -> Result<(), anyhow::Error> {
-        (self.stderr_log)(filter)
+    pub fn reload_stderr_log_filter(
+        &self,
+        filter: EnvFilter,
+        defaults: Vec<Directive>,
+    ) -> Result<(), anyhow::Error> {
+        (self.stderr_log)(filter, defaults)
     }
 
     /// Dynamically reloads the OpenTelemetry log filter.
-    pub fn reload_opentelemetry_filter(&self, filter: EnvFilter) -> Result<(), anyhow::Error> {
-        (self.opentelemetry)(filter)
+    pub fn reload_opentelemetry_filter(
+        &self,
+        filter: EnvFilter,
+        defaults: Vec<Directive>,
+    ) -> Result<(), anyhow::Error> {
+        (self.opentelemetry)(filter, defaults)
     }
 }
 
@@ -218,6 +227,30 @@ impl std::fmt::Debug for TracingGuard {
         f.debug_struct("TracingGuard").finish_non_exhaustive()
     }
 }
+
+// Note that the following defaults are used on startup, regardless of the
+// parameters in LaunchDarkly. If we need to, we can add cli flags to control
+// then going forward.
+
+/// By default we turn off tracing from the following crates, because they
+/// have error spans which are noisy.
+///
+/// Note: folks should feel free to add more crates here if we find more
+/// with long lived Spans.
+pub static LOGGING_DEFAULTS: Lazy<Vec<Directive>> = Lazy::new(|| {
+    vec![Directive::from_str("kube_client::client::builder=off").expect("valid directive")]
+});
+/// By default we turn off tracing from the following crates, because they
+/// have long-lived Spans, which OpenTelemetry does not handle well.
+///
+/// Note: folks should feel free to add more crates here if we find more
+/// with long lived Spans.
+pub static OPENTELEMETRY_DEFAULTS: Lazy<Vec<Directive>> = Lazy::new(|| {
+    vec![
+        Directive::from_str("h2=off").expect("valid directive"),
+        Directive::from_str("hyper=off").expect("valid directive"),
+    ]
+});
 
 /// Enables application tracing via the [`tracing`] and [`opentelemetry`]
 /// libraries.
@@ -267,11 +300,20 @@ where
                 .with_current_span(true),
         ),
     };
-    let (stderr_log_filter, stderr_log_filter_reloader) =
-        reload::Layer::new(config.stderr_log.filter);
+    let (stderr_log_filter, stderr_log_filter_reloader) = reload::Layer::new({
+        let mut filter = config.stderr_log.filter;
+        for directive in LOGGING_DEFAULTS.iter() {
+            filter = filter.add_directive(directive.clone());
+        }
+        filter
+    });
     let stderr_log_layer = stderr_log_layer.with_filter(stderr_log_filter);
-    let stderr_log_reloader =
-        Arc::new(move |filter| Ok(stderr_log_filter_reloader.reload(filter)?));
+    let stderr_log_reloader = Arc::new(move |mut filter: EnvFilter, defaults: Vec<Directive>| {
+        for directive in &defaults {
+            filter = filter.add_directive(directive.clone());
+        }
+        Ok(stderr_log_filter_reloader.reload(filter)?)
+    });
 
     let (otel_layer, otel_reloader): (_, Reloader) = if let Some(otel_config) = config.opentelemetry
     {
@@ -364,19 +406,9 @@ where
         })
         .expect("valid error handler");
 
-        // By default we turn off tracing from the following crates, because they
-        // have long-lived Spans, which OpenTelemetry does not handle well.
-        //
-        // Note: folks should feel free to add more crates here if we find more
-        // with long lived Spans.
-        let default_directives: Vec<Directive> = vec![
-            Directive::from_str("h2=off").expect("valid directive"),
-            Directive::from_str("hyper=off").expect("valid directive"),
-        ];
-
         let (filter, filter_handle) = reload::Layer::new({
             let mut filter = otel_config.filter;
-            for directive in &default_directives {
+            for directive in OPENTELEMETRY_DEFAULTS.iter() {
                 filter = filter.add_directive(directive.clone());
             }
             filter
@@ -395,16 +427,16 @@ where
             //
             // Notice we use `with_filter` here. `and_then` will apply the filter globally.
             .with_filter(filter);
-        let reloader = Arc::new(move |mut filter: EnvFilter| {
+        let reloader = Arc::new(move |mut filter: EnvFilter, defaults: Vec<Directive>| {
             // Re-apply our defaults on reload.
-            for directive in &default_directives {
+            for directive in &defaults {
                 filter = filter.add_directive(directive.clone());
             }
             Ok(filter_handle.reload(filter)?)
         });
         (Some(layer), reloader)
     } else {
-        let reloader = Arc::new(|_| Ok(()));
+        let reloader = Arc::new(|_, _| Ok(()));
         (None, reloader)
     };
 
@@ -472,7 +504,14 @@ where
             // we will continue to place this here, as the sentry layer only cares about
             // events <= INFO, so we want to use the fast-path if no other layer
             // is interested in high-fidelity events.
-            .with_filter(tracing::level_filters::LevelFilter::INFO);
+            // TODO(guswynn): make this configurable.
+            .with_filter({
+                let mut filter = EnvFilter::new("info");
+                for directive in LOGGING_DEFAULTS.iter() {
+                    filter = filter.add_directive(directive.clone());
+                }
+                filter
+            });
 
         (Some(guard), Some(layer))
     } else {
