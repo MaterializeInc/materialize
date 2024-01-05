@@ -17,7 +17,7 @@ CREATE CONNECTION conn_datadog TO DATADOG API KEY = ...;
 CREATE SINK FROM <view/table> TO DATADOG CONNECTION conn_datadog;
 ```
 
-The source content of the sink, which can be either a view or a table, will be defined by the user but needs to match a predefined structure.
+The source content of the sink, which can be either a table, materialized view, or source, will be defined by the user but needs to match a predefined structure.
 
 ## Out of Scope
 
@@ -32,30 +32,26 @@ The solution proposal involves a new connection and sink for Datadog, and an OAu
 
 ### Datadog Connection
 
-The new connection will store Datadog’s API key, which is necessary to submit metrics to Datadog. The first time the user runs the integration, an API key will be created automatically by the console (refer to the [OAuth process diagram](#oauth-process) for more details.)
+The new connection needs a Datadog API key, which is required to send metrics to Datadog. Before creating the connection, the user must create a secret that contains the API key and then create the connection as follows:
 
-Command:
 ```sql
-CREATE CONNECTION conn_datadog TO DATADOG API KEY = ...;
+CREATE CONNECTION conn_datadog TO DATADOG (API KEY = ...);
 ```
 
 ### Datadog Sink
 
-We have two possible approaches, with the first one being simpler:
+The Datadog sink will build an internal state containing the metrics to export from the source. It will then submit the entire state to Datadog at a 15-second interval.
 
-1. The new sink will query the source, a table or view, at a 15-second interval and submit the results as metrics to Datadog. In case the sink crashes or gets paused, the sink will send the current metric values in the table or view.
-2. Build a state inside the sink, and submit the whole state to Datadog at a 15-second interval. This approach benefits from less query overhead but requires memory to keep/duplicate the state.
+The 15-second interval comes from [the Datadog agent](https://docs.datadoghq.com/agent/basic_agent_usage/?tab=agentv6v7#collector) collection interval. While this value could be customizable, for the initial approach and MVP, a default value is ok. The sink will utilize Materialize logical time to calculate when the progress reaches the 15-second interval and will then export the metrics to Datadog. In the event of a sink crash or pause, it will have a similar behavior to the Kafka sink, recovering from the last logical time processed.
 
-For both approaches, the 15-second interval comes from [the Datadog agent](https://docs.datadoghq.com/agent/basic_agent_usage/?tab=agentv6v7#collector) collection interval. This value could be customizable but as a first approach and MVP, a default value is ok. If the sink crashes or pauses, it will resume from the newest metric values, skipping any missing values. We will use the wall-clock time, so it wouldn't be justified to rewind unless we want to guarantee the correctness and use Materialize internal clock or go back in history to fill in the missing points. I would qualify this feature as a nice-to-have but not a minimum requirement. This mechanism is the same as the current integrations and how the Grafana integration will also work.
-
-I discarded sending updates when a metric's value changes (streaming without state.) Collections like storage usage are updated once an hour, and this would make charts empty in Datadog for an hour or any smaller time range. This issue makes the need to have a state to keep submitting the same metric values even if they haven't changed. 
+I discarded sending updates when a metric's value changes (streaming without state.) Collections like storage usage are updated once an hour, and this would make charts empty in Datadog for an hour or any smaller time range.
 
 ### Datadog Metrics
 
 Submitting metrics to Datadog API requires the following fields:
 <details>
 <summary>Fields</summary>
-    
+
 | Field             | Type      | Definition|
 |-------------------|-----------|-----------|
 | metric [required] | String    | The name of the timeseries.                                                                                              |
@@ -67,39 +63,37 @@ Submitting metrics to Datadog API requires the following fields:
 | unit              | String    | The unit of point value.                                                                                                 |
 | interval          | Int64     | If the type of the metric is rate or count, define the corresponding interval.                                          |
 | metadata          | [Object]  | Metadata for the metric.                                                                                                 |
-    
+
 </details>
 
-All of the fields except the timestamp are set by the user. Materialize will set the timestamp before retrieving the metrics from its source.
+All fields, except the `timestamp`, are set by the user. Materialize will set the timestamp using its logical time upon reaching progress in the 15-second interval. Optional fields such as `metadata` and `tags` can be customized by the user within Datadog's app. The type field in Materialize will be represented as either `NULL`, `'count'`, `'rate'`, or `'gauge'`, and later converted into its corresponding integer value.
 
 #### Timestamp
 
-In Materialize, we have two values to set the timestamp field: `mz_now()` and `now()`. I believe `now()` is enough. The integrations we recommend to our users today use the wall-clock time as a timestamp, so I don’t see any strong reason to switch to `mz_now()` unless we want correctness.
+In Materialize, we have two possible values to use as a timestamp: wall-clock time and logical time. The sink will use logical time as it is better suited for implementation in a sink than I initially thought. Using logical time brings code coherence and features like recovery without data loss in the event of a failure. As a con, this behavior can hold compaction indefinitely if the sink enters into a crash loop.
 
 While we could allow the user to set the timestamp, it would make the experience harder. Collections like `mz_cluster_replica_utilization` do not include a timestamp, forcing users to create one themselves. *I do not discard the chance to make it optional.*
 
 ### Materialize source structure
 
-A Datadog sink needs a _source_: a table or view — and must have a structure that matches [Datadog's API submit metrics endpoint](https://docs.datadoghq.com/api/latest/metrics/#submit-metrics) fields.
+A Datadog sink needs a _source_: a table, materialized view, or source — and must have a structure that matches [Datadog's API submit metrics endpoint](https://docs.datadoghq.com/api/latest/metrics/#submit-metrics) fields.
 
 A table in Materialize acting as a source for the sink must have the following structure:
 
 ```sql
 CREATE TABLE metrics (
     -- Required:
+    labels JSONB,
     metric TEXT,
-    resources JSONB,
     value FLOAT,
     -- Optional:
-    type INT,
-    interval BIGINT,
-    tags TEXT[],
+    type TEXT,
     unit TEXT,
-    metadata: JSONB,
+    interval BIGINT
 );
 ```
 
-And a view needs the same structure:
+And a materialized view needs the same structure:
 ```sql
 CREATE MATERIALIZED VIEW metrics AS
     SELECT
@@ -109,22 +103,21 @@ CREATE MATERIALIZED VIEW metrics AS
             'cluster_id', R.cluster_id,
             'cluster_name', C.name,
         )
-    ) as resources,
+    ) as labels,
     'cluster_replica_cpu_usage' as metric,
     cpu_percent::float as value,
     -- Optional:
-    0 as type,
-        120 as interval,
-    ARRAY['production', 'Materialize'] as tags,
+    'gauge' as type,
+    120 as interval,
     'percent' as unit
     FROM mz_internal.mz_cluster_replica_utilization U
     JOIN mz_catalog.mz_cluster_replicas R ON (U.replica_id = R.id)
     JOIN mz_catalog.mz_clusters C ON (R.cluster_id = C.id);
 ```
 
-**NOTE**: Metrics and their values do not need to be unique for each timestamp, but the latest value will suppress the other in Datadog. It would be great if the sink could detect this during creation/execution and emit a warning if there are different values at the same point in time for a set of metrics and resources.
+**NOTE**: Metrics and their values do not need to be unique for each timestamp, but the latest value will suppress the other in Datadog. It would be great if the sink could detect this during creation/execution and emit a warning if there are different values at the same point in time for a set of metrics and labels.
 
-Another distinction is that *resources* equal *labels* in the OpenMetrics definition. I kept *resources* to match Datadog’s API, but I like *labels* as a possible replacement.
+Another distinction is that Datadog uses *resources* to what equals to *labels* in the OpenMetrics definition. We ended up liking more and choosing *labels* over *resources*.
 
 ### OAuth Process
 
