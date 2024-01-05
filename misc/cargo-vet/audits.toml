@@ -20,6 +20,11 @@ who = "Matt Arthur <matthewleearthur@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.26.0"
 
+[[audits.core_affinity]]
+who = "Jan Teske <jteske@posteo.net>"
+criteria = "safe-to-deploy"
+version = "0.8.0"
+
 [[audits.csv-async]]
 who = "Parker Timmerman <parker.timmerman@materialize.com>"
 criteria = "safe-to-deploy"

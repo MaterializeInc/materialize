@@ -2239,6 +2239,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_worker_core_affinity,
+        desc: "set core affinity for replica worker threads",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 /// Represents the input to a variable.

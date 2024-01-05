@@ -520,8 +520,10 @@ impl Coordinator {
             });
         }
 
+        let enable_worker_core_affinity =
+            self.catalog().system_config().enable_worker_core_affinity();
         self.controller
-            .create_replicas(replicas_to_start)
+            .create_replicas(replicas_to_start, enable_worker_core_affinity)
             .await
             .expect("creating replicas must not fail");
     }
