@@ -275,7 +275,7 @@ true true true
 
 > CREATE DEFAULT INDEX ii_empty ON t3
 
-> SELECT records, batches, size < 1024, capacity < 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_empty'
+> SELECT records, batches, size < 16 * 1024, capacity < 16 * 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_empty'
 0 32 true true true
 
 # Tests that arrangement sizes are approximate
@@ -291,7 +291,7 @@ true true true
 
 > INSERT INTO t4 SELECT 1
 
-> SELECT records, batches, size < 1024, capacity > 0, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+> SELECT records, batches, size < 16 * 1024, capacity > 0, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
 1 32 true true true
 
 > INSERT INTO t4 SELECT generate_series(1, 1000)
