@@ -85,6 +85,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--debug", action="store_true", help="Run the RQG With RQG_DEBUG=1"
     )
     parser.add_argument(
+        "--seed",
+        metavar="SEED",
+        type=str,
+        help="Random seed to use.",
+    )
+
+
+    parser.add_argument(
         "workloads", nargs="*", default=None, help="Run specified workloads"
     )
     args = parser.parse_args()
@@ -175,6 +183,7 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
                     "--queries=10000000",
                     f"--threads={workload.threads}",
                     f"--duration={duration}",
+                    f"--seed={args.seed}",
                     env_extra=env_extra,
                 )
         finally:

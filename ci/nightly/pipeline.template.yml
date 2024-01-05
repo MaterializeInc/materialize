@@ -958,7 +958,7 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: rqg
-            args: ["simple-aggregates"]
+            args: ["simple-aggregates", "--seed=$BUILDKITE_JOB_ID"]
 
     - id: rqg-db3-joins
       label: "RQG dbt3-joins workload"
@@ -969,7 +969,7 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: rqg
-            args: ["dbt3-joins"]
+            args: ["dbt3-joins", "--seed=$BUILDKITE_JOB_ID"]
 
   - id: crdb-restarts
     label: "CRDB rolling restarts"
