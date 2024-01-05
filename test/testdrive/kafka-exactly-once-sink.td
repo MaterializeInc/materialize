@@ -331,8 +331,16 @@ $ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.p
 1	{"before": null, "after": {"row": {"a": 1, "b": 1}}}
 1	{"before": null, "after": {"row": {"a": 2, "b": 2}}}
 
-$ kafka-verify-data format=json key=false topic=testdrive-progress-fixed-${testdrive.seed}
-{"timestamp": 1}
+> CREATE SOURCE compaction_test_sink_check
+  FROM KAFKA CONNECTION kafka_fixed (TOPIC 'testdrive-progress-fixed-${testdrive.seed}')
+  FORMAT JSON ENVELOPE NONE
+
+# Retrieve all the progress messages that are beyond [2]. There should be
+# exactly one of them because the upper of the CDCv2 stream stops at [2].
+> SELECT data->'frontier'
+  FROM compaction_test_sink_check
+  WHERE data->'frontier'->0 IS NULL OR (data->'frontier'->0)::int >= 2
+[2]
 
 # verify output with real-time timestamps
 
