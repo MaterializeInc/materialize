@@ -9,7 +9,7 @@
 
 FROM gcr.io/bazel-public/bazel:6.3.2
 
-COPY --chown=ubuntu:root build build
+COPY --chown=ubuntu build build
 
 RUN cd build \
     && bazel build //testers:run_sdk_destination_tester_deploy.jar
