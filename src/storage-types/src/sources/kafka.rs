@@ -9,18 +9,20 @@
 
 //! Types related kafka sources
 
+use std::collections::BTreeMap;
+use std::fmt;
+use std::time::Duration;
+
 use dec::OrderedDecimal;
 use mz_expr::PartitionId;
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
-use mz_timely_util::order::{Interval, Partitioned, RangeBound};
+use mz_timely_util::order::{Extrema, Partitioned};
 use once_cell::sync::Lazy;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::time::Duration;
 
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
@@ -307,16 +309,90 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection<InlinedConne
     }
 }
 
-impl SourceTimestamp for Partitioned<i32, MzOffset> {
+/// Given an ordered type `P` it augments each of its values with a point right *before* that
+/// value, exactly *at* that value, and right *after* that value. Additionally, it provides two
+/// special values for positive and negative infinity that are greater than and less than all the
+/// other elements respectively.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum RangeBound<P> {
+    /// Negative infinity.
+    NegInfinity,
+    /// A specific element value with its associated kind.
+    Elem(P, BoundKind),
+    /// Positive infinity.
+    PosInfinity,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum BoundKind {
+    /// A bound right before a value. When used as an upper it represents an exclusive range.
+    Before,
+    /// A bound exactly at a value. When used as a lower or upper it represents an inclusive range.
+    At,
+    /// A bound right after a value. When used as a lower it represents an exclusive range.
+    After,
+}
+
+impl<P: std::fmt::Debug> RangeBound<P> {
+    /// Constructs a range bound right before `elem`.
+    pub fn before(elem: P) -> Self {
+        Self::Elem(elem, BoundKind::Before)
+    }
+
+    /// Constructs a range bound exactly at `elem`.
+    pub fn exact(elem: P) -> Self {
+        Self::Elem(elem, BoundKind::At)
+    }
+
+    /// Constructs a range bound right after `elem`.
+    pub fn after(elem: P) -> Self {
+        Self::Elem(elem, BoundKind::After)
+    }
+
+    /// Unwraps the element of this bound.
+    ///
+    /// # Panics
+    ///
+    /// This method panics if this is not an exact element range bound.
+    pub fn unwrap_exact(&self) -> &P {
+        match self {
+            RangeBound::Elem(p, BoundKind::At) => p,
+            _ => panic!("attempt to unwrap_exact {self:?}"),
+        }
+    }
+}
+
+impl<P: fmt::Display> fmt::Display for RangeBound<P> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NegInfinity => f.write_str("-inf"),
+            Self::Elem(elem, BoundKind::Before) => write!(f, "<{elem}"),
+            Self::Elem(elem, BoundKind::At) => write!(f, "{elem}"),
+            Self::Elem(elem, BoundKind::After) => write!(f, "{elem}>"),
+            Self::PosInfinity => f.write_str("+inf"),
+        }
+    }
+}
+
+impl<P> Extrema for RangeBound<P> {
+    fn minimum() -> Self {
+        Self::NegInfinity
+    }
+    fn maximum() -> Self {
+        Self::PosInfinity
+    }
+}
+
+impl SourceTimestamp for Partitioned<RangeBound<i32>, MzOffset> {
     fn from_compat_ts(pid: PartitionId, offset: MzOffset) -> Self {
         match pid {
-            PartitionId::Kafka(pid) => Partitioned::with_partition(pid, offset),
+            PartitionId::Kafka(pid) => Partitioned::new_singleton(RangeBound::exact(pid), offset),
             PartitionId::None => panic!("invalid partitioned partition {pid}"),
         }
     }
 
     fn try_into_compat_ts(&self) -> Option<(PartitionId, MzOffset)> {
-        let pid = self.partition()?;
+        let pid = self.interval().singleton()?.unwrap_exact();
         Some((PartitionId::Kafka(*pid), *self.timestamp()))
     }
 
@@ -327,37 +403,31 @@ impl SourceTimestamp for Partitioned<i32, MzOffset> {
 
         let to_numeric = |p: i32| Datum::from(OrderedDecimal(Numeric::from(p)));
 
-        let (lower, upper) = match self.interval() {
-            Interval::Range(l, u) => match (l, u) {
-                (RangeBound::Bottom, RangeBound::Top) => {
-                    ((Datum::Null, false), (Datum::Null, false))
-                }
-                (RangeBound::Bottom, RangeBound::Elem(pid)) => {
-                    ((Datum::Null, false), (to_numeric(*pid), false))
-                }
-                (RangeBound::Elem(pid), RangeBound::Top) => {
-                    ((to_numeric(*pid), false), (Datum::Null, false))
-                }
-                (RangeBound::Elem(l_pid), RangeBound::Elem(u_pid)) => {
-                    ((to_numeric(*l_pid), false), (to_numeric(*u_pid), false))
-                }
-                o => unreachable!("don't know how to handle this partition {o:?}"),
-            },
-            Interval::Point(pid) => ((to_numeric(*pid), true), (to_numeric(*pid), true)),
+        let (lower, lower_inclusive) = match self.interval().lower {
+            RangeBound::NegInfinity => (Datum::Null, false),
+            RangeBound::Elem(pid, BoundKind::After) => (to_numeric(pid), false),
+            RangeBound::Elem(pid, BoundKind::At) => (to_numeric(pid), true),
+            lower => unreachable!("invalid lower bound {lower:?}"),
         };
-
-        let offset = self.timestamp().offset;
+        let (upper, upper_inclusive) = match self.interval().upper {
+            RangeBound::PosInfinity => (Datum::Null, false),
+            RangeBound::Elem(pid, BoundKind::Before) => (to_numeric(pid), false),
+            RangeBound::Elem(pid, BoundKind::At) => (to_numeric(pid), true),
+            upper => unreachable!("invalid upper bound {upper:?}"),
+        };
+        assert_eq!(lower_inclusive, upper_inclusive, "invalid range {self}");
 
         packer
             .push_range(range::Range::new(Some((
-                range::RangeBound::new(lower.0, lower.1),
-                range::RangeBound::new(upper.0, upper.1),
+                range::RangeBound::new(lower, lower_inclusive),
+                range::RangeBound::new(upper, upper_inclusive),
             ))))
             .expect("pushing range must not generate errors");
 
-        packer.push(Datum::UInt64(offset));
+        packer.push(Datum::UInt64(self.timestamp().offset));
         row
     }
+
     fn decode_row(row: &Row) -> Self {
         let mut datums = row.iter();
 
@@ -380,9 +450,22 @@ impl SourceTimestamp for Partitioned<i32, MzOffset> {
                 match (range.lower.inclusive, range.upper.inclusive) {
                     (true, true) => {
                         assert_eq!(lower, upper);
-                        Partitioned::with_partition(lower.unwrap(), MzOffset::from(offset))
+                        Partitioned::new_singleton(
+                            RangeBound::exact(lower.unwrap()),
+                            MzOffset::from(offset),
+                        )
                     }
-                    (false, false) => Partitioned::with_range(lower, upper, MzOffset::from(offset)),
+                    (false, false) => {
+                        let lower = match lower {
+                            Some(pid) => RangeBound::after(pid),
+                            None => RangeBound::NegInfinity,
+                        };
+                        let upper = match upper {
+                            Some(pid) => RangeBound::before(pid),
+                            None => RangeBound::PosInfinity,
+                        };
+                        Partitioned::new_range(lower, upper, MzOffset::from(offset))
+                    }
                     _ => panic!("invalid timestamp"),
                 }
             }

@@ -16,140 +16,87 @@
 //! Traits and types for partially ordered sets.
 
 use std::cmp::Ordering;
-use std::fmt;
+use std::fmt::{self, Debug};
+use std::hash::Hash;
 
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use timely::communication::Data;
 use timely::order::Product;
 use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
 use timely::progress::Antichain;
 use timely::PartialOrder;
 
 /// A partially ordered timestamp that is partitioned by an arbitrary number of partitions
-/// identified by `P`. The construction allows for efficient representation frontiers with
+/// identified by `P`. The construction allows for efficient representation of frontiers with
 /// Antichains.
 ///
-/// ## The problem of partitioned timestamps
+/// A `Partitioned<P, T>` timestamp is internally the product order of an `Interval<P>` and a bare
+/// timestamp `T`. An `Interval<P>` represents an inclusive range of values from the type `P` and
+/// its partial order corresponds to the subset order.
 ///
-/// To understand this timestamp it helps to first think about how one would represent a
-/// partitioned, partially ordered timestamp type where each partition follows its own independent
-/// timeline in a natural way. Timely requires that all timestamps have a minimum element that is
-/// less than all other elements so you could express a partitioned timestamp like so:
-///
-/// ```rust
-/// enum Partitioned<P, T> {
-///     Bottom,
-///     Partition(P, T),
-/// }
-/// ```
-/// Laying out the order in a graph we'd see something like this:
-///
-/// ```text
-///           -----(P1, T0)---(P1, T1)--- ... ---(P1, Tn)
-///          / ----(P2, T0)---(P2, T1)--- ... ---(P2, Tn)
-///         / / ,--(P3, T0)---(P3, T1)--- ... ---(P3, Tn)
-/// Bottom-+-+-+     .
-///         \        .
-///          \       .
-///           '----(Pn, T0)---(Pn, T1)--- ... ---(Pn, Tn)
-/// ```
-///
-/// This timestamp has the problem that if you want to downgrade your operator's capability to
-/// indicate progress in one of the partitions, which implies dropping your `Bottom` capability,
-/// you are forced to also mint one capability per partition that you intend to produce data for in
-/// the future. If those partitions are unknown or, even worse, infinite, this type brings you to a
-/// dead end.
-///
-/// ## How this type works
-///
-/// The idea of this `Partitioned` timestamp is to extend the idea of the `Bottom` element above
-/// into a `Range` element that is parameterized by a lower and upper bound and represents a
-/// *range* of partitions at some timestamp `T`. The represented range has exclusive bounds.
-///
-/// The minimum timestamp of this type is `Product(Range(Bottom, Top), T::minimum())` which is less
-/// than any other `Range` element and all `Point` elements. Now, suppose an operator needs to
-/// start working on some partition `P1` and present progress. All it has to do is downgrade its
-/// `Antichain { Product(Range(Bottom, Top), 0) }` frontier in this frontier: `Antichain {
-/// Product(Range(Bottom, Elem(P1)), 0), Product(Point(P1), T::minimum()), Product(Range(Elem(P1),
-/// Top), 0) }`.
-///
-/// Essentially a `Range` element can be split at some partition P iff that partition is within
-/// its range and produce two more `Range` elements representing the range to the left and to the
-/// right of the partition respectively, plus a timestamp for the desired partition that can now be
-/// downgraded individually to present progress.
+/// Effectively, the minimum `Partitioned` timestamp will start out with the maximum possible
+/// `Interval<P>` on one side and the minimum timestamp `T` on the other side. Users of this
+/// timestamp can selectively downgrade the timestamp by advancing `T`, shrinking the interval, or
+/// both.
 ///
 /// Antichains of this type are efficient in storage. In the worst case, where all chosen
 /// partitions have gaps between them, the produced antichain has twice as many elements as
-/// partitions.
+/// partitions. This is because the "dead space" between the selected partitions must have a
+/// representative timestamp in order for that space to be useable in the future.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Partitioned<P, T>(Product<Interval<P>, T>);
 
-impl<P: fmt::Display, T: fmt::Display> fmt::Display for Partitioned<P, T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        f.write_str("(")?;
-        match self.interval() {
-            Interval::Range(lower, upper) => {
-                match lower {
-                    RangeBound::Elem(p) => p.fmt(f)?,
-                    RangeBound::Bottom => f.write_str("-inf")?,
-                    RangeBound::Top => unreachable!(),
-                }
-                f.write_str("..")?;
-                match upper {
-                    RangeBound::Elem(p) => p.fmt(f)?,
-                    RangeBound::Top => f.write_str("+inf")?,
-                    RangeBound::Bottom => unreachable!(),
-                }
-            }
-            Interval::Point(p) => p.fmt(f)?,
-        }
-        f.write_str(", ")?;
-        self.timestamp().fmt(f)?;
-        f.write_str(")")?;
-        Ok(())
-    }
-}
-
-impl<P, T> Partitioned<P, T> {
-    /// Construct a new timestamp for a specific partition
-    pub fn with_partition(partition: P, timestamp: T) -> Self {
-        Self(Product::new(Interval::Point(partition), timestamp))
+impl<P: Clone + PartialOrd, T> Partitioned<P, T> {
+    /// Constructs a new timestamp for a specific partition.
+    pub fn new_singleton(partition: P, timestamp: T) -> Self {
+        let interval = Interval {
+            lower: partition.clone(),
+            upper: partition,
+        };
+        Self(Product::new(interval, timestamp))
     }
 
-    /// Construct a new timestamp for an exclusive partition range
-    pub fn with_range(lower: Option<P>, upper: Option<P>, timestamp: T) -> Self {
-        let lower = lower.map(RangeBound::Elem).unwrap_or(RangeBound::Bottom);
-        let upper = upper.map(RangeBound::Elem).unwrap_or(RangeBound::Top);
-        Self(Product::new(Interval::Range(lower, upper), timestamp))
+    /// Constructs a new timestamp for a partition range.
+    pub fn new_range(lower: P, upper: P, timestamp: T) -> Self {
+        assert!(lower <= upper, "invalid range bounds");
+        Self(Product::new(Interval { lower, upper }, timestamp))
     }
 
-    /// Access the interval of this partitioned timestamp
+    /// Returns the interval component of this partitioned timestamp.
     pub fn interval(&self) -> &Interval<P> {
         &self.0.outer
     }
 
-    /// Returns the partition of this timestamp if it's not a range timestamp
-    pub fn partition(&self) -> Option<&P> {
-        match self.0.outer {
-            Interval::Point(ref partition) => Some(partition),
-            Interval::Range(_, _) => None,
-        }
-    }
-
-    /// Returns the timestamp of this partition interval
+    /// Returns the timestamp component of this partitioned timestamp.
     pub fn timestamp(&self) -> &T {
         &self.0.inner
     }
 }
 
-impl<P: Partition, T: Timestamp> Timestamp for Partitioned<P, T> {
-    type Summary = PartitionedSummary<P, T>;
+impl<P: fmt::Display, T: fmt::Display> fmt::Display for Partitioned<P, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+        f.write_str("(")?;
+        self.0.outer.fmt(f)?;
+        f.write_str(", ")?;
+        self.0.inner.fmt(f)?;
+        f.write_str(")")?;
+        Ok(())
+    }
+}
+
+impl<P, T: Timestamp> Timestamp for Partitioned<P, T>
+where
+    P: Extrema + Clone + Debug + Data + Hash + Ord,
+{
+    type Summary = ();
     fn minimum() -> Self {
         Self(Timestamp::minimum())
     }
 }
-
-impl<P: Partition, T: Timestamp> Refines<()> for Partitioned<P, T> {
+impl<P, T: Timestamp> Refines<()> for Partitioned<P, T>
+where
+    P: Extrema + Clone + Debug + Data + Hash + Ord,
+{
     fn to_inner(_other: ()) -> Self {
         Self::minimum()
     }
@@ -159,207 +106,111 @@ impl<P: Partition, T: Timestamp> Refines<()> for Partitioned<P, T> {
     fn summarize(_path: Self::Summary) {}
 }
 
-impl<P: Eq, T: PartialOrder> PartialOrder for Partitioned<P, T>
-where
-    Interval<P>: PartialOrder,
-{
+impl<P: Ord + Eq, T: PartialOrder> PartialOrder for Partitioned<P, T> {
     #[inline]
     fn less_equal(&self, other: &Self) -> bool {
         self.0.less_equal(&other.0)
     }
 }
-
-/// Helper type alias to access to access the Summary type of a Timestamp implementing type
-type Summary<T> = <T as Timestamp>::Summary;
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct PartitionedSummary<P: Partition, T: Timestamp>(
-    Product<Summary<Interval<P>>, Summary<T>>,
-);
-
-impl<P: Partition, T: Timestamp> Default for PartitionedSummary<P, T> {
-    fn default() -> Self {
-        PartitionedSummary(Default::default())
-    }
-}
-
-impl<P: Partition, T: Timestamp> PartialOrder for PartitionedSummary<P, T> {
-    #[inline]
-    fn less_equal(&self, other: &Self) -> bool {
-        self.0.less_equal(&other.0)
-    }
-}
-
-impl<P: Partition, T: Timestamp> PathSummary<Partitioned<P, T>> for PartitionedSummary<P, T> {
+impl<P: Clone, T: Timestamp> PathSummary<Partitioned<P, T>> for () {
     #[inline]
     fn results_in(&self, src: &Partitioned<P, T>) -> Option<Partitioned<P, T>> {
-        self.0.results_in(&src.0).map(Partitioned)
+        Some(src.clone())
     }
 
     #[inline]
-    fn followed_by(&self, other: &Self) -> Option<Self> {
-        PathSummary::<Product<Interval<P>, T>>::followed_by(&self.0, &other.0)
-            .map(PartitionedSummary)
+    fn followed_by(&self, _other: &Self) -> Option<Self> {
+        Some(())
     }
 }
 
-impl<P: Partition, T: Timestamp> PartitionedSummary<P, T> {
-    /// Construct a new summary for a specific partition
-    pub fn with_partition(partition: P, timestamp: Summary<T>) -> Self {
-        Self(Product::new(Interval::Point(partition), timestamp))
-    }
+/// A trait defining the minimum and maximum values of a type.
+pub trait Extrema {
+    /// The minimum value of this type.
+    fn minimum() -> Self;
+    /// The maximum value of this type.
+    fn maximum() -> Self;
+}
 
-    /// Construct a new summary for an exclusive partition range
-    pub fn with_range(lower: Option<P>, upper: Option<P>, timestamp: Summary<T>) -> Self {
-        let lower = lower.map(RangeBound::Elem).unwrap_or(RangeBound::Bottom);
-        let upper = upper.map(RangeBound::Elem).unwrap_or(RangeBound::Top);
-        Self(Product::new(Interval::Range(lower, upper), timestamp))
+impl Extrema for u64 {
+    fn minimum() -> Self {
+        Self::MIN
+    }
+    fn maximum() -> Self {
+        Self::MAX
+    }
+}
+
+impl Extrema for i32 {
+    fn minimum() -> Self {
+        Self::MIN
+    }
+    fn maximum() -> Self {
+        Self::MAX
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-/// A type that represents either an exclusive range or a particular point. When representing a
-/// range either of the two bounds can be minus or positive infinity.
-pub enum Interval<P> {
-    /// A range of points
-    Range(RangeBound<P>, RangeBound<P>),
-    /// A single point
-    Point(P),
+/// A type representing an inclusive interval of type `P`, ordered under the subset relation.
+pub struct Interval<P> {
+    pub lower: P,
+    pub upper: P,
+}
+
+impl<P: Eq> Interval<P> {
+    /// Returns the contained element if it's a singleton set.
+    pub fn singleton(&self) -> Option<&P> {
+        if self.lower == self.upper {
+            Some(&self.lower)
+        } else {
+            None
+        }
+    }
 }
 
 impl<P: Ord + Eq> PartialOrder for Interval<P> {
     #[inline]
     fn less_equal(&self, other: &Self) -> bool {
-        use Interval::*;
-        match (self, other) {
-            (Range(self_lower, self_upper), Range(other_lower, other_upper)) => {
-                self_lower <= other_lower && other_upper <= self_upper
-            }
-            (Range(lower, upper), Point(p)) => lower < p && upper > p,
-            (Point(self_p), Point(other_p)) => self_p == other_p,
-            // No Point element is less than a Range element
-            (Point(_), Range(_, _)) => false,
-        }
+        self.lower <= other.lower && other.upper <= self.upper
     }
 }
 
-impl<P: Partition> PathSummary<Interval<P>> for Interval<P> {
+impl<P: Clone> PathSummary<Interval<P>> for () {
     #[inline]
     fn results_in(&self, src: &Interval<P>) -> Option<Interval<P>> {
-        use std::cmp::{max, min};
-
-        use Interval::*;
-        match (self, src) {
-            // A range followed by another range contraints the range
-            (Range(self_lower, self_upper), Range(other_lower, other_upper)) => {
-                let new_lower = max(self_lower, other_lower);
-                let new_upper = min(self_upper, other_upper);
-                if new_lower < new_upper {
-                    Some(Interval::Range(new_lower.clone(), new_upper.clone()))
-                } else {
-                    None
-                }
-            }
-            // A range followed by an in-range partition or a partition followed by a range that
-            // includes it keeps the partition
-            (Range(lower, upper), Point(p)) | (Point(p), Range(lower, upper)) => {
-                if lower < p && upper > p {
-                    Some(Interval::Point(p.clone()))
-                } else {
-                    None
-                }
-            }
-            // A partition followed by the same partition results in that partition
-            (Point(self_p), Point(other_p)) => {
-                if self_p == other_p {
-                    Some(Point(self_p.clone()))
-                } else {
-                    None
-                }
-            }
-        }
+        Some(src.clone())
     }
 
     #[inline]
-    fn followed_by(&self, other: &Self) -> Option<Self> {
-        self.results_in(other)
+    fn followed_by(&self, _other: &Self) -> Option<Self> {
+        Some(())
     }
 }
 
-impl<P: Partition> Timestamp for Interval<P> {
-    type Summary = Interval<P>;
+impl<P> Timestamp for Interval<P>
+where
+    P: Extrema + Clone + Debug + Data + Hash + Ord,
+{
+    type Summary = ();
 
     #[inline]
     fn minimum() -> Self {
-        Self::default()
-    }
-}
-
-impl<P> Default for Interval<P> {
-    #[inline]
-    fn default() -> Self {
-        Self::Range(RangeBound::Bottom, RangeBound::Top)
-    }
-}
-
-/// Type to represent the lower or upper bound of an exclusive range
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum RangeBound<P> {
-    /// An element that is less than any other element P
-    Bottom,
-    /// An element P
-    Elem(P),
-    /// An element that is greather than any other element P
-    Top,
-}
-
-impl<P: PartialEq> PartialEq<P> for RangeBound<P> {
-    #[inline]
-    fn eq(&self, other: &P) -> bool {
-        match self {
-            RangeBound::Bottom => false,
-            RangeBound::Elem(p) => p.eq(other),
-            RangeBound::Top => false,
+        Self {
+            lower: P::minimum(),
+            upper: P::maximum(),
         }
     }
 }
 
-impl<P: PartialOrd> PartialOrd<P> for RangeBound<P> {
-    #[inline]
-    fn partial_cmp(&self, other: &P) -> Option<Ordering> {
-        match self {
-            RangeBound::Bottom => Some(Ordering::Less),
-            RangeBound::Elem(p) => p.partial_cmp(other),
-            RangeBound::Top => Some(Ordering::Greater),
-        }
+impl<P: fmt::Display> fmt::Display for Interval<P> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("[")?;
+        self.lower.fmt(f)?;
+        f.write_str(", ")?;
+        self.upper.fmt(f)?;
+        f.write_str("]")?;
+        Ok(())
     }
-}
-
-/// A supertrait of all the required trait a partition type must have
-pub trait Partition:
-    Clone
-    + std::fmt::Debug
-    + Send
-    + Sync
-    + Serialize
-    + DeserializeOwned
-    + std::hash::Hash
-    + Ord
-    + 'static
-{
-}
-
-impl<P> Partition for P where
-    P: Clone
-        + std::fmt::Debug
-        + Send
-        + Sync
-        + Serialize
-        + DeserializeOwned
-        + std::hash::Hash
-        + Ord
-        + 'static
-{
 }
 
 /// A helper struct for reverse partial ordering.
