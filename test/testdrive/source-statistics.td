@@ -71,6 +71,9 @@ fish          fish    1000
 birdmore      geese   56
 mammalmore    moose   2
 
+# statistics are only populated every minute by default
+$ set-sql-timeout duration=2minutes
+
 # Also test a source with multiple sub-sources.
 > CREATE SOURCE auction_house FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
@@ -80,7 +83,7 @@ mammalmore    moose   2
   bool_and(u.snapshot_committed),
   SUM(u.messages_received), SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('metrics_test_source')
   GROUP BY s.name
   ORDER BY s.name
@@ -95,7 +98,7 @@ metrics_test_source true 2 2 2 true true
   bool_and(u.snapshot_committed),
   SUM(u.messages_received) > 0, SUM(u.updates_staged) > 0, SUM(u.updates_committed) > 0, SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('accounts', 'auction_house', 'auctions', 'bids', 'organizations', 'users')
   GROUP BY s.name
   ORDER BY s.name
@@ -126,7 +129,7 @@ users          true      false   true  true  false   true
     SUM(u.envelope_state_records),
     bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
@@ -140,7 +143,7 @@ $ set-from-sql var=updates-committed
 SELECT
     (SUM(u.updates_committed) + 1)::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
 
 $ set-from-sql var=state-bytes
@@ -162,10 +165,25 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
     SUM(u.envelope_state_bytes) < ${state-bytes},
     SUM(u.envelope_state_records)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
 upsert true 10 "${updates-committed}" "${updates-committed}" true true 2
+
+# check pre-aggregated view
+> SELECT s.name,
+    u.snapshot_committed,
+    u.messages_received,
+    u.updates_staged,
+    u.updates_committed,
+    u.bytes_received > 0,
+    u.envelope_state_bytes < ${state-bytes},
+    u.envelope_state_records,
+    u.rehydration_latency IS NOT NULL
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+  WHERE s.name IN ('upsert')
+upsert true 10 "${updates-committed}" "${updates-committed}" true true 2 true
 
 > DROP SOURCE upsert

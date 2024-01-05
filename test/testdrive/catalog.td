@@ -562,9 +562,9 @@ mz_prepared_statement_history                source <null>  <null>
 mz_scheduling_elapsed_raw                    log   <null>   <null>
 mz_scheduling_parks_histogram_raw            log   <null>   <null>
 mz_session_history                           source <null>  <null>
-mz_sink_statistics                           source <null>  <null>
+mz_sink_statistics_raw                       source <null>  <null>
 mz_sink_status_history                       source <null>  <null>
-mz_source_statistics                         source <null>  <null>
+mz_source_statistics_raw                     source <null>  <null>
 mz_source_status_history                     source <null>  <null>
 mz_statement_execution_history               source <null>  <null>
 mz_statement_lifecycle_history               source <null>  <null>
@@ -671,7 +671,9 @@ mz_show_schema_privileges
 mz_show_sinks
 mz_show_sources
 mz_show_system_privileges
+mz_sink_statistics
 mz_sink_statuses
+mz_source_statistics
 mz_source_statuses
 mz_aws_privatelink_connection_statuses
 mz_statement_execution_history_redacted

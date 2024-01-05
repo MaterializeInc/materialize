@@ -496,7 +496,7 @@ Query the `snapshot_committed` field of the
 [`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics) table:
 
 ```sql
-SELECT bool_and(snapshot_committed) as snapshot_committed
+SELECT snapshot_committed
 FROM mz_internal.mz_source_statistics
 WHERE id = <SOURCE ID>;
 ```
@@ -517,10 +517,10 @@ table and look for ingestion statistics that advance over time:
 
 ```sql
 SELECT
-    SUM(bytes_received) AS bytes_received,
-    SUM(messages_received) AS messages_received,
-    SUM(updates_staged) AS updates_staged,
-    SUM(updates_committed) AS updates_committed
+    bytes_received,
+    messages_received,
+    updates_staged,
+    updates_committed
 FROM mz_internal.mz_source_statistics
 WHERE id = <SOURCE ID>;
 ```
@@ -581,10 +581,10 @@ table and look for ingestion statistics that advance over time:
 
 ```sql
 SELECT
-    SUM(messages_staged) AS messages_staged,
-    SUM(messages_committed) AS messages_committed,
-    SUM(bytes_staged) AS bytes_staged,
-    SUM(bytes_committed) AS bytes_committed
+    messages_staged,
+    messages_committed,
+    bytes_staged,
+    bytes_committed
 FROM mz_internal.mz_sink_statistics
 WHERE id = <SINK ID>;
 ```

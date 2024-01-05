@@ -31,7 +31,7 @@ In this step, you'll first verify that the source is running and then check the 
     WITH
       source_ids AS
       (SELECT id FROM mz_sources WHERE name = 'mz_source')
-    SELECT sources.object_id, bool_and(snapshot_committed) AS snapshot_committed
+    SELECT sources.object_id, snapshot_committed
     FROM
       mz_internal.mz_source_statistics
         JOIN

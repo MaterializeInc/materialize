@@ -37,6 +37,8 @@ message ProtoStorageParameters {
     uint64 keep_n_privatelink_status_history_entries = 19;
     ProtoSshTimeoutConfig ssh_timeout_config = 20;
     ProtoKafkaTimeouts kafka_timeout_config = 21;
+    mz_proto.ProtoDuration statistics_interval = 22;
+    mz_proto.ProtoDuration statistics_collection_interval = 23;
 }
 
 
