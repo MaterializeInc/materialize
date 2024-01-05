@@ -322,7 +322,7 @@ pub async fn build_kafka(
     sink_id: mz_repr::GlobalId,
     connection: &KafkaSinkConnection,
     storage_configuration: &StorageConfiguration,
-) -> Result<Option<Option<Timestamp>>, ContextCreationError> {
+) -> Result<Option<Timestamp>, ContextCreationError> {
     // Fetch the progress of the last incarnation of the sink, if any.
     let client_id = connection.client_id(&storage_configuration.connection_context, sink_id);
     let group_id = connection.progress_group_id(&storage_configuration.connection_context, sink_id);
@@ -448,7 +448,7 @@ pub async fn build_kafka(
 /// purely so the sink can maintain its transactional guarantees. Any future user-facing consistency
 /// information should be added elsewhere instead of overloading this record.
 pub struct ProgressRecord {
-    pub timestamp: Option<Timestamp>,
+    pub timestamp: Timestamp,
 }
 
 /// Determines the latest progress record from the specified topic for the given
@@ -467,7 +467,7 @@ async fn determine_latest_progress_record(
     progress_topic: String,
     progress_key: ProgressKey,
     fetch_timeout: Duration,
-) -> Result<Option<Option<Timestamp>>, anyhow::Error> {
+) -> Result<Option<Timestamp>, anyhow::Error> {
     // ****************************** WARNING ******************************
     // Be VERY careful when editing the code in this function. It is very easy
     // to accidentally introduce a correctness or liveness bug when refactoring
@@ -488,7 +488,7 @@ async fn determine_latest_progress_record(
         progress_topic: &str,
         progress_key: &ProgressKey,
         fetch_timeout: Duration,
-    ) -> Result<Option<Option<Timestamp>>, anyhow::Error>
+    ) -> Result<Option<Timestamp>, anyhow::Error>
     where
         C: ConsumerContext,
     {
@@ -655,21 +655,12 @@ async fn determine_latest_progress_record(
             let ProgressRecord { timestamp } =
                 serde_json::from_slice(message.payload().unwrap_or(&[]))?;
             match last_timestamp {
-                Some(prev_ts) => match (prev_ts, timestamp) {
-                    (None, Some(timestamp)) => {
-                        bail!(
-                            "timestamp regressed in topic {progress_topic}:{partition} \
-                            from empty frontier to {timestamp}"
-                        );
-                    }
-                    (Some(prev_ts), Some(timestamp)) if timestamp < prev_ts => {
-                        bail!(
-                            "timestamp regressed in topic {progress_topic}:{partition} \
-                            from {prev_ts} to {timestamp}"
-                        );
-                    }
-                    _ => last_timestamp = Some(timestamp),
-                },
+                Some(last_timestamp) if timestamp < last_timestamp => {
+                    bail!(
+                        "timestamp regressed in topic {progress_topic}:{partition} \
+                        from {last_timestamp} to {timestamp}"
+                    );
+                }
                 _ => last_timestamp = Some(timestamp),
             };
         }
