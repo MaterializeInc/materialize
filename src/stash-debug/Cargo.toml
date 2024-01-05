@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.66"
-clap = { version = "3.2.24", features = ["derive", "env"] }
+clap = { version = "4.4.13", features = ["derive", "env"] }
 futures = "0.3.25"
 mz-adapter = { path = "../adapter" }
 mz-catalog = { path = "../catalog" }

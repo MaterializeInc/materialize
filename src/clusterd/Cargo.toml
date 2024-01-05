@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.66"
 axum = "0.6.20"
-clap = { version = "3.2.24", features = ["derive", "env"] }
+clap = { version = "4.4.13", features = ["derive", "env"] }
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.25"
 mz-alloc = { path = "../alloc" }
