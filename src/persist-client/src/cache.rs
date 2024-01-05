@@ -33,6 +33,7 @@ use tracing::{debug, instrument};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::error::{CodecConcreteType, CodecMismatch};
+use crate::internal::cache::BlobMemCache;
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{LockMetrics, Metrics, MetricsBlob, MetricsConsensus, ShardMetrics};
 use crate::internal::state::TypedState;
@@ -218,6 +219,9 @@ impl PersistClientCache {
                     Self::PROMETHEUS_SCRAPE_INTERVAL,
                 )
                 .await;
+                // This is intentionally "outside" (wrapping) MetricsBlob so
+                // that we don't include cached responses in blob metrics.
+                let blob = BlobMemCache::new(&self.cfg, Arc::clone(&self.metrics), blob);
                 Arc::clone(&x.insert((RttLatencyTask(task.abort_on_drop()), blob)).1)
             }
         };
