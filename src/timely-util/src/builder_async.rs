@@ -10,8 +10,9 @@
 //! Types to build async operators with general shapes.
 
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::future::Future;
-use std::mem::ManuallyDrop;
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,8 +21,6 @@ use std::task::{Context, Poll, Waker};
 
 use futures_util::task::ArcWake;
 use futures_util::FutureExt;
-use polonius_the_crab::{polonius, WithLifetime};
-use timely::communication::message::RefOrMut;
 use timely::communication::{Message, Pull, Push};
 use timely::dataflow::channels::pact::ParallelizationContractCore;
 use timely::dataflow::channels::pushers::buffer::Session;
@@ -29,9 +28,7 @@ use timely::dataflow::channels::pushers::counter::CounterCore as PushCounter;
 use timely::dataflow::channels::pushers::TeeCore;
 use timely::dataflow::channels::BundleCore;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
-use timely::dataflow::operators::generic::{
-    InputHandleCore, OperatorInfo, OutputHandleCore, OutputWrapper,
-};
+use timely::dataflow::operators::generic::{OperatorInfo, OutputHandleCore, OutputWrapper};
 use timely::dataflow::operators::{Capability, CapabilitySet, InputCapability};
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::{Antichain, Timestamp};
@@ -50,9 +47,8 @@ pub struct OperatorBuilder<G: Scope> {
     activator: Activator,
     /// The waker set up to activate this timely operator when woken
     operator_waker: Arc<TimelyWaker>,
-    /// Holds type erased closures that drain an input handle when called. These handles will be
-    /// automatically drained when the operator is scheduled and the logic future has exited
-    drain_pipe: Rc<RefCell<Vec<Box<dyn FnMut()>>>>,
+    /// Closures that poll input handles and move data into local queues
+    handle_pollers: Vec<Box<dyn FnMut()>>,
     /// Holds type erased closures that flush an output handle when called. These handles will be
     /// automatically drained when the operator is scheduled after the logic future has been polled
     output_flushes: Vec<Box<dyn FnMut()>>,
@@ -95,7 +91,7 @@ pub struct AsyncInputHandle<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>
 /// disjoint capture on this state and the buffer that is about to be swapped.
 struct NextFutState<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> {
     /// The underying synchronous input handle
-    sync_handle: ManuallyDrop<InputHandleCore<T, D, P>>,
+    shared_queue: Rc<RefCell<VecDeque<(InputCapability<T>, D)>>>,
     /// Frontier information of input streams shared with the operator. Each frontier is paired
     /// with a flag indicating whether or not the handle has seen the updated frontier.
     shared_frontiers: Rc<RefCell<Vec<(Antichain<T>, bool)>>>,
@@ -103,9 +99,7 @@ struct NextFutState<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'sta
     index: usize,
     /// Reference to the reactor queue of this input handle where Wakers can be registered
     reactor_registry: Weak<RefCell<Vec<Waker>>>,
-    /// Holds type erased closures that should drain a handle when called. These handles will be
-    /// automatically drained when the operator is scheduled and the logic future has exited
-    drain_pipe: Rc<RefCell<Vec<Box<dyn FnMut()>>>>,
+    _phantom: PhantomData<P>,
 }
 
 impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> AsyncInputHandle<T, D, P> {
@@ -121,10 +115,10 @@ impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> AsyncInput
         };
         fut.map(|event| {
             Some(match event? {
-                Event::Data(cap, data) => match data {
-                    RefOrMut::Ref(data) => Event::Data(cap, data),
-                    RefOrMut::Mut(data) => Event::Data(cap, &*data),
-                },
+                Event::Data(cap, data) => {
+                    self.buffer = data;
+                    Event::Data(cap, &self.buffer)
+                }
                 Event::Progress(frontier) => Event::Progress(frontier),
             })
         })
@@ -143,24 +137,12 @@ impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> AsyncInput
         fut.map(|event| {
             Some(match event? {
                 Event::Data(cap, data) => {
-                    data.swap(&mut self.buffer);
+                    self.buffer = data;
                     Event::Data(cap, &mut self.buffer)
                 }
                 Event::Progress(frontier) => Event::Progress(frontier),
             })
         })
-    }
-}
-
-impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> Drop
-    for NextFutState<T, D, P>
-{
-    fn drop(&mut self) {
-        // SAFETY: We're in a Drop impl so this runs only once
-        let mut sync_handle = unsafe { ManuallyDrop::take(&mut self.sync_handle) };
-        self.drain_pipe
-            .borrow_mut()
-            .push(Box::new(move || sync_handle.for_each(|_, _| {})));
     }
 }
 
@@ -181,11 +163,10 @@ pub enum Event<T: Timestamp, D> {
 impl<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> Future
     for NextFut<'handle, T, D, P>
 {
-    type Output = Option<Event<T, RefOrMut<'handle, D>>>;
+    type Output = Option<Event<T, D>>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let state: &'handle mut NextFutState<T, D, P> =
-            self.state.take().expect("future polled after completion");
+        let state = self.state.as_mut().expect("future polled after completion");
 
         // Check for frontier notifications first, to urge operators to retire pending work
         let mut shared_frontiers = state.shared_frontiers.borrow_mut();
@@ -199,20 +180,10 @@ impl<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> Future
         };
         drop(shared_frontiers);
 
-        // This type serves as a type-level function that "shows" the `polonius` function how to
-        // create a version of the output type with a specific lifetime 'lt. It does this by
-        // implementing the `WithLifetime` trait for all lifetimes 'lt and setting the associated
-        // type to the output type with all lifetimes set to 'lt.
-        type NextHTB<T, D> =
-            dyn for<'lt> WithLifetime<'lt, T = (InputCapability<T>, RefOrMut<'lt, D>)>;
-
-        // The polonius function encodes a safe but rejected pattern by the current borrow checker.
-        // Explaining is beyond the scope of this comment but the docs have a great explanation:
-        // https://docs.rs/polonius-the-crab/latest/polonius_the_crab/index.html
-        match polonius::<NextHTB<T, D>, _, _, _>(state, |state| state.sync_handle.next().ok_or(()))
-        {
-            Ok((cap, data)) => Poll::Ready(Some(Event::Data(cap, data))),
-            Err((state, ())) => {
+        let mut shared_queue = state.shared_queue.borrow_mut();
+        match shared_queue.pop_front() {
+            Some((cap, data)) => Poll::Ready(Some(Event::Data(cap, data))),
+            None => {
                 // Nothing else to produce so install the provided waker in the reactor
                 state
                     .reactor_registry
@@ -220,7 +191,6 @@ impl<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> Future
                     .expect("handle outlived its operator")
                     .borrow_mut()
                     .push(cx.waker().clone());
-                self.state = Some(state);
                 Poll::Pending
             }
         }
@@ -366,7 +336,7 @@ impl<G: Scope> OperatorBuilder<G> {
             registered_wakers: Default::default(),
             activator,
             operator_waker: Arc::new(operator_waker),
-            drain_pipe: Default::default(),
+            handle_pollers: Default::default(),
             output_flushes: Default::default(),
             shutdown_handle,
             shutdown_button,
@@ -411,15 +381,26 @@ impl<G: Scope> OperatorBuilder<G> {
             .borrow_mut()
             .push((Antichain::from_elem(G::Timestamp::minimum()), false));
 
-        let sync_handle = self.builder.new_input_connection(stream, pact, connection);
+        let mut sync_handle = self.builder.new_input_connection(stream, pact, connection);
+
+        let shared_queue = Rc::new(RefCell::new(VecDeque::new()));
+        let queue = Rc::clone(&shared_queue);
+        let handle_poller = Box::new(move || {
+            let mut queue = queue.borrow_mut();
+            while let Some((cap, data)) = sync_handle.next() {
+                queue.push_back((cap, data.take()));
+            }
+        });
+
+        self.handle_pollers.push(handle_poller);
 
         AsyncInputHandle {
             state: NextFutState {
-                sync_handle: ManuallyDrop::new(sync_handle),
+                shared_queue,
                 shared_frontiers: Rc::clone(&self.shared_frontiers),
                 reactor_registry: Rc::downgrade(&self.registered_wakers),
                 index,
-                drain_pipe: Rc::clone(&self.drain_pipe),
+                _phantom: PhantomData,
             },
             buffer: D::default(),
         }
@@ -477,7 +458,7 @@ impl<G: Scope> OperatorBuilder<G> {
         let operator_waker = self.operator_waker;
         let registered_wakers = self.registered_wakers;
         let shared_frontiers = self.shared_frontiers;
-        let drain_pipe = self.drain_pipe;
+        let mut handle_pollers = self.handle_pollers;
         let mut output_flushes = self.output_flushes;
         let mut shutdown_handle = self.shutdown_handle;
         self.builder.build_reschedule(move |caps| {
@@ -493,6 +474,10 @@ impl<G: Scope> OperatorBuilder<G> {
                         }
                     }
                 }
+                // Then poll all input handles to bring data into local queues
+                for poller in handle_pollers.iter_mut() {
+                    (poller)()
+                }
 
                 // If our worker pressed the button we stop scheduling the logic future and/or
                 // draining the input handles to stop producing data and frontier updates
@@ -502,9 +487,8 @@ impl<G: Scope> OperatorBuilder<G> {
                     // also register all the handles for drainage
                     if shutdown_handle.all_pressed() {
                         logic_fut = None;
-                        let mut drains = drain_pipe.borrow_mut();
-                        for drain in drains.iter_mut() {
-                            (drain)()
+                        for poller in handle_pollers.iter_mut() {
+                            (poller)()
                         }
                         false
                     } else {
@@ -546,9 +530,8 @@ impl<G: Scope> OperatorBuilder<G> {
                         true
                     } else {
                         // Othewise we should drain any dropped handles
-                        let mut drains = drain_pipe.borrow_mut();
-                        for drain in drains.iter_mut() {
-                            (drain)()
+                        for poller in handle_pollers.iter_mut() {
+                            (poller)()
                         }
                         false
                     }
