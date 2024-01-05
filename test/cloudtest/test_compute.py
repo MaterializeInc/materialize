@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
+import copy
 import json
 import logging
 
@@ -186,7 +186,7 @@ def test_cluster_replica_sizes(mz: MaterializeApplication) -> None:
         if type(resource) == EnvironmentdStatefulSet
     ]
     assert len(stateful_set) == 1
-    stateful_set = stateful_set[0]
+    stateful_set = copy.copy(stateful_set[0])
     stateful_set.env["MZ_CLUSTER_REPLICA_SIZES"] = json.dumps(cluster_replica_size_map)
     stateful_set.extra_args.append("--bootstrap-default-cluster-replica-size=1")
     stateful_set.replace()
@@ -210,3 +210,14 @@ def test_cluster_replica_sizes(mz: MaterializeApplication) -> None:
         ), f"actual: {node_selectors}, but expected {expected}"
 
         mz.environmentd.sql(f"DROP CLUSTER scale_{key} CASCADE")
+
+    # Cleanup
+    stateful_set = [
+        resource
+        for resource in mz.resources
+        if type(resource) == EnvironmentdStatefulSet
+    ]
+    assert len(stateful_set) == 1
+    stateful_set = stateful_set[0]
+    stateful_set.replace()
+    mz.wait_for_sql()
