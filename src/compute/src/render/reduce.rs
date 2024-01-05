@@ -838,9 +838,11 @@ where
 
                         // We know that `mfp_after` can error if it exists, so try to evaluate it here.
                         let Some(mfp) = &mfp_after2 else { return };
-                        let iter = source.iter().flat_map(|(v, w)| {
+                        let iter = source.iter().flat_map(|(mut v, w)| {
                             let count = usize::try_from(*w).unwrap_or(0);
-                            std::iter::repeat(v.iter().next().unwrap()).take(count)
+                            // This would ideally use `into_datum_iter` but we cannot as it needs to
+                            // borrow `v` and only presents datums with that lifetime, not any longer.
+                            std::iter::repeat(v.next().unwrap()).take(count)
                         });
 
                         let temp_storage = RowArena::new();

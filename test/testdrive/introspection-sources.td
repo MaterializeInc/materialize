@@ -284,7 +284,9 @@ true true true
 
 > CREATE INDEX ii_t4 ON t4(c)
 
-> SELECT records, batches, size < 1024, capacity < 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+# We have 16 workers, and only want to ensure that the sizes are not egregious.
+
+> SELECT records, batches, size < 16 * 1024, capacity < 16 * 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
 0 32 true true true
 
 > INSERT INTO t4 SELECT 1
