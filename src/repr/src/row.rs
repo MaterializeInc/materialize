@@ -26,6 +26,7 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
 use proptest::strategy::{BoxedStrategy, Strategy};
+use ref_cast::RefCast;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -268,6 +269,7 @@ pub struct RowPacker<'a> {
 /// need not contain a `Row`, for example large contiguous `[u8]` allocations.
 /// It is not expected that most users will use this type, especially as its
 /// only constructor is unsafe.
+#[derive(RefCast)]
 #[repr(transparent)]
 pub struct RowRef {
     data: [u8],
@@ -2059,7 +2061,7 @@ impl RowRef {
     pub unsafe fn from_bytes_unchecked(data: &[u8]) -> &Self {
         // SAFETY: RowRef just wraps [u8], and data is &[u8],
         // therefore transmuting &[u8] to &RowRef is safe.
-        std::mem::transmute(data)
+        Self::ref_cast(data)
     }
 
     /// Unpack `self` into a `Vec<Datum>` for efficient random access.

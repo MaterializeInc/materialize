@@ -80,6 +80,16 @@ who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 delta = "0.3.5 -> 0.4.1"
 
+[[audits.ref-cast]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "1.0.17"
+
+[[audits.ref-cast-impl]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "1.0.17"
+
 [[audits.ring]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
