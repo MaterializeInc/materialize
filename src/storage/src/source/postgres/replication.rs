@@ -98,6 +98,7 @@ use postgres_protocol::message::backend::{
 };
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::operators::{Concat, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tokio_postgres::error::SqlState;
@@ -108,7 +109,7 @@ use tracing::{error, trace};
 
 use crate::metrics::postgres::PgSourceMetrics;
 use crate::source::postgres::verify_schema;
-use crate::source::postgres::{DefiniteError, TransientError};
+use crate::source::postgres::{DefiniteError, ReplicationError, TransientError};
 use crate::source::types::SourceReaderError;
 use crate::source::RawSourceCreationConfig;
 
@@ -147,7 +148,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 ) -> (
     Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
     Stream<G, Infallible>,
-    Stream<G, Rc<TransientError>>,
+    Stream<G, ReplicationError>,
     PressOnDropButton,
 ) {
     let op_name = format!("ReplicationReader({})", config.id);
@@ -157,16 +158,17 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let mut rewind_input = builder.new_input(rewind_stream, Exchange::new(move |_| slot_reader));
     let (mut data_output, data_stream) = builder.new_output();
     let (_upper_output, upper_stream) = builder.new_output();
+    let (mut definite_error_handle, definite_errors) = builder.new_output();
 
     let metrics = config.metrics.get_postgres_metrics(config.id);
     metrics.tables.set(u64::cast_from(table_info.len()));
 
     let reader_table_info = table_info.clone();
-    let (button, errors) = builder.build_fallible(move |caps| {
+    let (button, transient_errors) = builder.build_fallible(move |caps| {
         let table_info = reader_table_info;
         Box::pin(async move {
             let (id, worker_id) = (config.id, config.worker_id);
-            let [data_cap_set, upper_cap_set]: &mut [_; 2] = caps.try_into().unwrap();
+            let [data_cap_set, upper_cap_set, definite_error_cap_set]: &mut [_; 3] = caps.try_into().unwrap();
 
             if !config.responsible_for("slot") {
                 return Ok(());
@@ -246,6 +248,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                         let update = ((oid, Err(err.clone())), MzOffset::from(u64::MAX), 1);
                         data_output.give(&data_cap_set[0], update).await;
                     }
+
+                    definite_error_handle.give(&definite_error_cap_set[0], ReplicationError::Definite(Rc::new(err))).await;
                     return Ok(());
                 }
             };
@@ -340,6 +344,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
         (*output_index, event.err_into())
     });
+
+    let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
 
     (
         replication_updates,

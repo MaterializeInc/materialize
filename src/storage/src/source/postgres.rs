@@ -81,6 +81,7 @@
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
+use std::rc::Rc;
 use std::time::Duration;
 
 use differential_dataflow::Collection;
@@ -197,15 +198,21 @@ impl SourceRender for PostgresSourceConnection {
             // This update will cause the dataflow to restart
             let err_string = err.display_with_causes().to_string();
             let update = HealthStatusUpdate::halting(err_string.clone(), None);
-            let namespace = if matches!(
-                &*err,
-                TransientError::PostgresError(PostgresError::Ssh(_))
-                    | TransientError::PostgresError(PostgresError::SshIo(_))
-            ) {
-                StatusNamespace::Ssh
-            } else {
-                Self::STATUS_NAMESPACE.clone()
+
+            let namespace = match err {
+                // Is there a better way to reach into an Rc?
+                ReplicationError::Transient(err)
+                    if matches!(
+                        &*err,
+                        TransientError::PostgresError(PostgresError::Ssh(_))
+                            | TransientError::PostgresError(PostgresError::SshIo(_))
+                    ) =>
+                {
+                    StatusNamespace::Ssh
+                }
+                _ => Self::STATUS_NAMESPACE,
             };
+
             let mut statuses = vec![HealthStatusMessage {
                 index: 0,
                 namespace: namespace.clone(),
@@ -231,6 +238,14 @@ impl SourceRender for PostgresSourceConnection {
             vec![snapshot_token, repl_token],
         )
     }
+}
+
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum ReplicationError {
+    #[error(transparent)]
+    Transient(#[from] Rc<TransientError>),
+    #[error(transparent)]
+    Definite(#[from] Rc<DefiniteError>),
 }
 
 /// A transient error that never ends up in the collection of a specific table.
