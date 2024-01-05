@@ -226,13 +226,13 @@ pub trait ArrangementSize {
 
 /// Helper to compute the size of an [`OffsetList`] in memory.
 #[inline]
-fn offset_list_size(data: &OffsetList, mut callback: impl FnMut(usize, usize)) {
+pub(crate) fn offset_list_size(data: &OffsetList, mut callback: impl FnMut(usize, usize)) {
     // Private `vec_size` because we should only use it where data isn't region-allocated.
     // `T: Copy` makes sure the implementation is correct even if types change!
     #[inline(always)]
     fn vec_size<T: Copy>(data: &Vec<T>, mut callback: impl FnMut(usize, usize)) {
         let size_of_t = std::mem::size_of::<T>();
-        callback(data.len() * size_of_t, data.len() * size_of_t);
+        callback(data.len() * size_of_t, data.capacity() * size_of_t);
     }
 
     vec_size(&data.smol, &mut callback);
@@ -391,7 +391,7 @@ where
                 allocations += usize::from(cap > 0);
             };
             trace.map_batches(|batch| {
-                // batch.storage.keys.heap_size(&mut callback);
+                batch.storage.keys.heap_size(&mut callback);
                 offset_list_size(&batch.storage.keys_offs, &mut callback);
                 batch.storage.vals.heap_size(&mut callback);
                 offset_list_size(&batch.storage.vals_offs, &mut callback);
@@ -418,9 +418,9 @@ where
                 allocations += usize::from(cap > 0);
             };
             trace.map_batches(|batch| {
-                // batch.storage.keys.heap_size(&mut callback);
+                batch.storage.keys.heap_size(&mut callback);
                 offset_list_size(&batch.storage.keys_offs, &mut callback);
-                // batch.storage.vals.heap_size(&mut callback);
+                batch.storage.vals.heap_size(&mut callback);
                 offset_list_size(&batch.storage.vals_offs, &mut callback);
                 batch.storage.updates.heap_size(&mut callback);
             });
@@ -445,7 +445,7 @@ where
                 allocations += usize::from(cap > 0);
             };
             trace.map_batches(|batch| {
-                // batch.storage.keys.heap_size(&mut callback);
+                batch.storage.keys.heap_size(&mut callback);
                 offset_list_size(&batch.storage.keys_offs, &mut callback);
                 batch.storage.updates.heap_size(&mut callback);
             });

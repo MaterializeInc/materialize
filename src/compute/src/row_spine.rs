@@ -91,6 +91,23 @@ mod container {
         batches: Vec<DatumBatch>,
     }
 
+    impl DatumContainer {
+        /// Visit contained allocations to determine their size and capacity.
+        #[inline]
+        pub fn heap_size(&self, mut callback: impl FnMut(usize, usize)) {
+            // Calculate heap size for local, stash, and stash entries
+            callback(
+                self.batches.len() * std::mem::size_of::<DatumBatch>(),
+                self.batches.capacity() * std::mem::size_of::<DatumBatch>(),
+            );
+            for batch in self.batches.iter() {
+                use crate::extensions::arrange;
+                arrange::offset_list_size(&batch.offsets, &mut callback);
+                callback(batch.storage.len(), batch.storage.capacity());
+            }
+        }
+    }
+
     impl Default for DatumContainer {
         fn default() -> Self {
             Self {
@@ -125,11 +142,11 @@ mod container {
             if let Some(batch) = self.batches.last_mut() {
                 let success = batch.try_push(item.bytes);
                 if !success {
-                    let mut new_batch = DatumBatch::with_capacity(std::cmp::max(
-                        2 * batch.storage.capacity(),
-                        item.bytes.len(),
-                    ));
-                    new_batch.try_push(item.bytes);
+                    // double the lengths from `batch`.
+                    let item_cap = 2 * batch.offsets.len();
+                    let byte_cap = std::cmp::max(2 * batch.storage.capacity(), item.bytes.len());
+                    let mut new_batch = DatumBatch::with_capacities(item_cap, byte_cap);
+                    assert!(new_batch.try_push(item.bytes));
                     self.batches.push(new_batch);
                 }
             }
@@ -137,13 +154,23 @@ mod container {
 
         fn with_capacity(size: usize) -> Self {
             Self {
-                batches: vec![DatumBatch::with_capacity(size)],
+                batches: vec![DatumBatch::with_capacities(size, size)],
             }
         }
 
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
+            let mut item_cap = 1;
+            let mut byte_cap = 0;
+            for batch in cont1.batches.iter() {
+                item_cap += batch.offsets.len() - 1;
+                byte_cap += batch.storage.len();
+            }
+            for batch in cont2.batches.iter() {
+                item_cap += batch.offsets.len() - 1;
+                byte_cap += batch.storage.len();
+            }
             Self {
-                batches: vec![DatumBatch::with_capacity(cont1.len() + cont2.len())],
+                batches: vec![DatumBatch::with_capacities(item_cap, byte_cap)],
             }
         }
 
@@ -173,7 +200,7 @@ mod container {
     /// The backing storage for this batch will not be resized.
     pub struct DatumBatch {
         offsets: OffsetList,
-        storage: Vec<u8>,
+        storage: lgalloc::Region<u8>,
     }
 
     impl DatumBatch {
@@ -197,12 +224,13 @@ mod container {
             self.offsets.len() - 1
         }
 
-        fn with_capacity(cap: usize) -> Self {
-            let mut offsets = OffsetList::with_capacity(cap + 1);
+        fn with_capacities(item_cap: usize, byte_cap: usize) -> Self {
+            // TODO: be wary of `byte_cap` greater than 2^32.
+            let mut offsets = OffsetList::with_capacity(item_cap + 1);
             offsets.push(0);
             Self {
                 offsets,
-                storage: Vec::with_capacity(cap),
+                storage: lgalloc::Region::new_auto(byte_cap.next_power_of_two()),
             }
         }
     }
