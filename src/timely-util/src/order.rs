@@ -249,14 +249,14 @@ mod test {
     #[mz_ore::test]
     fn basic_properties() {
         let minimum: Partitioned<u64, u64> = Partitioned::minimum();
-        assert_eq!(minimum, Partitioned::with_range(None, None, 0));
+        assert_eq!(minimum, Partitioned::new_range(0, u64::MAX, 0));
         assert!(PartialOrder::less_equal(&minimum, &minimum));
         assert!(!PartialOrder::less_than(&minimum, &minimum));
 
         // All of these should be uncomparable in pairs
-        let lower = Partitioned::with_range(None, Some(10), 0);
-        let partition10 = Partitioned::with_partition(10, 0);
-        let upper = Partitioned::with_range(Some(10), None, 0);
+        let lower = Partitioned::new_range(0, 9, 0);
+        let partition10 = Partitioned::new_singleton(10, 0);
+        let upper = Partitioned::new_range(11, u64::MAX, 0);
         assert!(!PartialOrder::less_equal(&lower, &partition10));
         assert!(!PartialOrder::less_equal(&partition10, &lower));
         assert!(!PartialOrder::less_equal(&lower, &upper));
@@ -264,14 +264,14 @@ mod test {
         assert!(!PartialOrder::less_equal(&partition10, &upper));
         assert!(!PartialOrder::less_equal(&upper, &partition10));
 
-        let partition5 = Partitioned::with_partition(5, 0);
+        let partition5 = Partitioned::new_singleton(5, 0);
         // Point 5 is greater than the lower range
         assert!(PartialOrder::less_than(&lower, &partition5));
         // But uncomparable with the upper range
         assert!(!PartialOrder::less_equal(&upper, &partition5));
         assert!(!PartialOrder::less_equal(&partition5, &upper));
 
-        let sub_range = Partitioned::with_range(Some(1), Some(5), 0);
+        let sub_range = Partitioned::new_range(2, 4, 0);
         // This is a subrange of lower
         assert!(PartialOrder::less_than(&lower, &sub_range));
         // But uncomparable with the upper range
@@ -290,133 +290,36 @@ mod test {
 
         // Insert a few uncomparable elements at timestamp 5
         frontier.extend([
-            Partitioned::with_range(None, Some(10), 5),
-            Partitioned::with_partition(10, 5),
-            Partitioned::with_range(Some(10), None, 5),
+            Partitioned::new_range(0, 9, 5),
+            Partitioned::new_singleton(10, 5),
+            Partitioned::new_range(11, u64::MAX, 5),
         ]);
         assert_eq!(frontier.len(), 3);
 
         // Insert the biggest range at timestamp 4 that should shadow all other elements
-        frontier.insert(Partitioned::with_range(None, None, 4));
+        frontier.insert(Partitioned::new_range(0, u64::MAX, 4));
         assert_eq!(
             frontier,
-            Antichain::from_elem(Partitioned::with_range(None, None, 4))
+            Antichain::from_elem(Partitioned::new_range(0, u64::MAX, 4))
         );
 
-        // Create a frontier with one Point downgraded to timestamp 10 and all the rest at timestamp 5
+        // Create a frontier with singleton partition downgraded to timestamp 10 and all the rest at timestamp 5
         let frontier = Antichain::from_iter([
-            Partitioned::with_range(None, Some(10), 5),
-            Partitioned::with_partition(10, 10),
-            Partitioned::with_range(Some(10), None, 5),
+            Partitioned::new_range(0, 9, 5),
+            Partitioned::new_singleton(10, 10),
+            Partitioned::new_range(11, u64::MAX, 5),
         ]);
 
-        // The frontier is less than future timestamps of Point 10
-        assert!(frontier.less_than(&Partitioned::with_partition(10, 11)));
-        // And also less than any other Point at timestamp 6
-        assert!(frontier.less_than(&Partitioned::with_partition(0, 6)));
-        // But it's not less than any Point at time 4
-        assert!(!frontier.less_than(&Partitioned::with_partition(0, 4)));
-        // It's also less than the partition range (2, 6) at time 6
-        assert!(frontier.less_than(&Partitioned::with_range(Some(2), Some(6), 6)));
-        // But it's not less than the partition range (2, 6) at time 4
-        assert!(!frontier.less_than(&Partitioned::with_range(Some(2), Some(6), 4)));
-    }
-
-    #[mz_ore::test]
-    fn summary_properties() {
-        let summary1 = PartitionedSummary::with_range(Some(10), Some(100), 5);
-        let summary2 = PartitionedSummary::with_range(Some(20), Some(30), 5);
-        let summary3 = PartitionedSummary::with_range(Some(30), Some(40), 5);
-        let part_summary1 = PartitionedSummary::with_partition(15, 5);
-        let part_summary2 = PartitionedSummary::with_partition(16, 5);
-
-        // Ranges are constrained and summaries combined
-        assert_eq!(
-            PathSummary::<Partitioned<_, u64>>::followed_by(&summary1, &summary2),
-            Some(PartitionedSummary::with_range(Some(20), Some(30), 10))
-        );
-        assert_eq!(
-            PathSummary::<Partitioned<_, u64>>::followed_by(&summary2, &summary1),
-            Some(PartitionedSummary::with_range(Some(20), Some(30), 10))
-        );
-
-        // Non overlapping ranges result into nothing
-        assert_eq!(
-            PathSummary::<Partitioned<_, u64>>::followed_by(&summary2, &summary3),
-            None
-        );
-        assert_eq!(
-            PathSummary::<Partitioned<_, u64>>::followed_by(&summary3, &summary2),
-            None
-        );
-
-        // Point with ranges result into just the Point if it's within range
-        assert_eq!(
-            PathSummary::<Partitioned<_, u64>>::followed_by(&part_summary1, &summary1),
-            Some(PartitionedSummary::with_partition(15, 10))
-        );
-        assert_eq!(
-            PathSummary::<Partitioned<_, u64>>::followed_by(&summary1, &part_summary1),
-            Some(PartitionedSummary::with_partition(15, 10))
-        );
-
-        // Partitions with ranges result into nothing if it's not within range
-        assert_eq!(
-            PathSummary::<Partitioned<_, u64>>::followed_by(&part_summary1, &summary2),
-            None
-        );
-        assert_eq!(
-            PathSummary::<Partitioned<_, u64>>::followed_by(&summary2, &part_summary1),
-            None
-        );
-
-        // Same Point summaries result into the summary combined
-        assert_eq!(
-            PathSummary::<Partitioned<_, u64>>::followed_by(&part_summary1, &part_summary1),
-            Some(PartitionedSummary::with_partition(15, 10))
-        );
-
-        // Different Point summaries result into nothing
-        assert_eq!(
-            PathSummary::<Partitioned<_, u64>>::followed_by(&part_summary1, &part_summary2),
-            None
-        );
-        assert_eq!(
-            PathSummary::<Partitioned<_, u64>>::followed_by(&part_summary2, &part_summary1),
-            None
-        );
-
-        let ts1 = Partitioned::with_range(Some(10), Some(20), 100u64);
-        let ts2 = Partitioned::with_range(Some(20), Some(30), 100u64);
-        let ts3 = Partitioned::with_partition(15, 100u64);
-        let ts4 = Partitioned::with_partition(16, 100u64);
-
-        // Ranges are constrained and summaries applied
-        assert_eq!(
-            summary1.results_in(&ts1),
-            Some(Partitioned::with_range(Some(10), Some(20), 105))
-        );
-
-        // Non overlapping ranges result into nothing
-        assert_eq!(summary2.results_in(&ts1), None);
-
-        // Partitions with ranges result into just the Point if it's within range
-        assert_eq!(
-            part_summary1.results_in(&ts1),
-            Some(Partitioned::with_partition(15, 105))
-        );
-
-        // Point with ranges result into nothing if it's not within range
-        assert_eq!(part_summary1.results_in(&ts2), None);
-
-        // Same Point summaries result into the summary applied
-        assert_eq!(
-            part_summary1.results_in(&ts3),
-            Some(Partitioned::with_partition(15, 105))
-        );
-
-        // Different Point summaries result into nothing
-        assert_eq!(part_summary1.results_in(&ts4), None);
+        // The frontier is less than future timestamps of singleton partition 10
+        assert!(frontier.less_than(&Partitioned::new_singleton(10, 11)));
+        // And also less than any other singleton partition at timestamp 6
+        assert!(frontier.less_than(&Partitioned::new_singleton(0, 6)));
+        // But it's not less than any partition at time 4
+        assert!(!frontier.less_than(&Partitioned::new_singleton(0, 4)));
+        // It's also less than the partition range [3, 5] at time 6
+        assert!(frontier.less_than(&Partitioned::new_range(3, 5, 6)));
+        // But it's not less than the partition range [3, 5] at time 4
+        assert!(!frontier.less_than(&Partitioned::new_range(3, 5, 4)));
     }
 }
 
