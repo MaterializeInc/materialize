@@ -772,6 +772,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         // This is extremely cheap to clone, so just look into the lock once.
         let scheduling_config: ServiceSchedulingConfig =
             self.scheduling_config.read().expect("poisoned").clone();
+        let disk = scheduling_config.always_use_disk || disk;
 
         let name = format!("{}-{id}", self.namespace);
         // The match labels should be the minimal set of labels that uniquely
