@@ -28,7 +28,7 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
 > DROP SCHEMA IF EXISTS prod_deploy CASCADE
 
 > CREATE SCHEMA prod
-> CREATE SOURCE prod.counter IN CLUSTER prod FROM LOAD GENERATOR counter (TICK INTERVAL '0.01s')
+> CREATE SOURCE prod.counter IN CLUSTER prod FROM LOAD GENERATOR counter (TICK INTERVAL '1s')
 > CREATE MATERIALIZED VIEW prod.counter_mv IN CLUSTER prod AS SELECT count(*) FROM prod.counter
 > CREATE DEFAULT INDEX IN CLUSTER prod ON prod.counter
 > CREATE SOURCE prod.tpch
