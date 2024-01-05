@@ -166,6 +166,7 @@ def test_always_use_disk_replica(mz: MaterializeApplication) -> None:
         )
     )
 
+
 def test_no_disk_replica(mz: MaterializeApplication) -> None:
     """Testing `DISK = false` cluster replicas"""
     mz.testdrive.run(
