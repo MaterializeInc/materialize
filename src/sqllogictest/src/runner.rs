@@ -1153,11 +1153,14 @@ impl<'a> RunnerInner<'a> {
     /// Set features that should be enabled regardless of whether reset-server was
     /// called. These features may be set conditionally depending on the run configuration.
     async fn ensure_fixed_features(&self) -> Result<(), anyhow::Error> {
-        // We turn on enable_specialized_arrangements, as we wish to get
-        // as much coverage of this feature as we can.
+        // We turn on enable_specialized_arrangements and enable_reduce_mfp_fusion, as we wish
+        // to get as much coverage of these features as we can.
         // TODO(vmarcos): Remove this code when we retire these feature flags.
         self.system_client
             .execute("ALTER SYSTEM SET enable_specialized_arrangements = on", &[])
+            .await?;
+        self.system_client
+            .execute("ALTER SYSTEM SET enable_reduce_mfp_fusion = on", &[])
             .await?;
 
         // Dangerous functions are useful for tests so we enable it for all tests.

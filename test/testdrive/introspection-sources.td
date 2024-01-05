@@ -359,8 +359,8 @@ true true true true true
 true true true true true true true
 
 > SELECT
-    records > 2 * 1000,
-    records < 2 * 2 * 1000,
+    records > 1000,
+    records < 2 * 1000,
     size > 0.025 * 100 * 1024,
     size < 4 * 100 * 1024,
     capacity > 0.25 * 100 * 1024,

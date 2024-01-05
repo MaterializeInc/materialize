@@ -78,6 +78,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "default_arrangement_exert_proportionality": "16",
     "persist_txn_tables": "eager",
     "enable_expressions_in_limit_syntax": "true",
+    "enable_reduce_mfp_fusion": "true",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [

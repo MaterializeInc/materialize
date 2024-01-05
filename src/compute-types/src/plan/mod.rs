@@ -20,8 +20,8 @@ use mz_expr::{
     permutation_for_arrangement, CollectionPlan, EvalError, Id, JoinInputMapper, LetRecLimit,
     LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, TableFunc,
 };
-use mz_ore::soft_panic_or_log;
 use mz_ore::str::Indent;
+use mz_ore::{soft_assert_eq_or_log, soft_panic_or_log};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
@@ -249,8 +249,8 @@ pub enum Plan<T = mz_repr::Timestamp> {
     /// Map, Filter, and Project operators.
     ///
     /// This stage contains work that we would ideally like to fuse to other plan
-    /// stages, but for practical reasons cannot. For example: reduce, threshold,
-    /// and topk stages are not able to absorb this operator.
+    /// stages, but for practical reasons cannot. For example: threshold, topk,
+    /// and sometimes reduce stages are not able to absorb this operator.
     Mfp {
         /// The input collection.
         input: Box<Plan<T>>,
@@ -315,6 +315,11 @@ pub enum Plan<T = mz_repr::Timestamp> {
         /// The particular arrangement of the input we expect to use,
         /// if any
         input_key: Option<Vec<MirScalarExpr>>,
+        /// An MFP that must be applied to results. The projection part of this
+        /// MFP must preserve the key for the reduction; otherwise, the results
+        /// become undefined. Additionally, the MFP must be free from temporal
+        /// predicates so that it can be readily evaluated.
+        mfp_after: MapFilterProject,
     },
     /// Key-based "Top K" operator, retaining the first K records in each group.
     TopK {
@@ -511,13 +516,17 @@ impl Arbitrary for Plan {
                     any::<KeyValPlan>(),
                     any::<ReducePlan>(),
                     any::<Option<Vec<MirScalarExpr>>>(),
+                    any::<MapFilterProject>(),
                 )
-                    .prop_map(|(input, key_val_plan, plan, input_key)| Plan::Reduce {
-                        input: input.into(),
-                        key_val_plan,
-                        plan,
-                        input_key,
-                    })
+                    .prop_map(
+                        |(input, key_val_plan, plan, input_key, mfp_after)| Plan::Reduce {
+                            input: input.into(),
+                            key_val_plan,
+                            plan,
+                            input_key,
+                            mfp_after,
+                        },
+                    )
                     .boxed(),
                 //Plan::TopK
                 (inner.clone(), any::<TopKPlan>())
@@ -695,12 +704,14 @@ impl RustType<ProtoPlan> for Plan {
                     key_val_plan,
                     plan,
                     input_key,
+                    mfp_after,
                 } => Reduce(
                     ProtoPlanReduce {
                         input: Some(input.into_proto()),
                         key_val_plan: Some(key_val_plan.into_proto()),
                         plan: Some(plan.into_proto()),
                         input_key: input_k_into(input_key.as_ref()),
+                        mfp_after: Some(mfp_after.into_proto()),
                     }
                     .into(),
                 ),
@@ -849,6 +860,9 @@ impl RustType<ProtoPlan> for Plan {
                     .into_rust_if_some("ProtoPlanReduce::key_val_plan")?,
                 plan: proto.plan.into_rust_if_some("ProtoPlanReduce::plan")?,
                 input_key: input_k_try_into(proto.input_key)?,
+                mfp_after: proto
+                    .mfp_after
+                    .into_rust_if_some("ProtoPlanReduce::mfp_after")?,
             },
             TopK(proto) => Plan::TopK {
                 input: proto.input.into_rust_if_some("ProtoPlanTopK::input")?,
@@ -1066,6 +1080,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         arrangements: &mut BTreeMap<Id, AvailableCollections>,
         debug_info: LirDebugInfo<'_>,
         enable_specialized_arrangements: bool,
+        enable_reduce_mfp_fusion: bool,
     ) -> Result<(Self, AvailableCollections), String> {
         // This function is recursive and can overflow its stack, so grow it if
         // needed. The growth here is unbounded. Our general solution for this problem
@@ -1082,6 +1097,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 arrangements,
                 debug_info,
                 enable_specialized_arrangements,
+                enable_reduce_mfp_fusion,
             )
         })
     }
@@ -1091,6 +1107,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         arrangements: &mut BTreeMap<Id, AvailableCollections>,
         debug_info: LirDebugInfo<'_>,
         enable_specialized_arrangements: bool,
+        enable_reduce_mfp_fusion: bool,
     ) -> Result<(Self, AvailableCollections), String> {
         // Extract a maximally large MapFilterProject from `expr`.
         // We will then try and push this in to the resulting expression.
@@ -1209,6 +1226,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     arrangements,
                     debug_info,
                     enable_specialized_arrangements,
+                    enable_reduce_mfp_fusion,
                 )?;
                 let pre_existing = arrangements.insert(Id::Local(*id), v_keys);
                 assert!(pre_existing.is_none());
@@ -1219,6 +1237,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     arrangements,
                     debug_info,
                     enable_specialized_arrangements,
+                    enable_reduce_mfp_fusion,
                 )?;
                 arrangements.remove(&Id::Local(*id));
                 // Return the plan, and any `body` arrangements.
@@ -1250,6 +1269,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                         arrangements,
                         debug_info,
                         enable_specialized_arrangements,
+                        enable_reduce_mfp_fusion,
                     )?;
                     // If `v_keys` does not contain an unarranged collection, we must form it.
                     if !v_keys.raw {
@@ -1310,6 +1330,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     arrangements,
                     debug_info,
                     enable_specialized_arrangements,
+                    enable_reduce_mfp_fusion,
                 )?;
                 for id in ids.iter() {
                     arrangements.remove(&Id::Local(*id));
@@ -1331,6 +1352,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     arrangements,
                     debug_info,
                     enable_specialized_arrangements,
+                    enable_reduce_mfp_fusion,
                 )?;
                 // This stage can absorb arbitrary MFP instances.
                 let mfp = mfp.take();
@@ -1381,6 +1403,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                         arrangements,
                         debug_info,
                         enable_specialized_arrangements,
+                        enable_reduce_mfp_fusion,
                     )?;
                     input_arities.push(input.arity());
                     plans.push(plan);
@@ -1506,12 +1529,12 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 expected_group_size,
             } => {
                 let input_arity = input.arity();
-                let output_arity = group_key.len() + aggregates.len();
                 let (input, keys) = Self::from_mir(
                     input,
                     arrangements,
                     debug_info,
                     enable_specialized_arrangements,
+                    enable_reduce_mfp_fusion,
                 )?;
                 let (input_key, permutation_and_new_arity) = if let Some((
                     input_key,
@@ -1534,14 +1557,31 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 );
                 let reduce_plan =
                     ReducePlan::create_from(aggregates.clone(), *monotonic, *expected_group_size);
-                let output_keys = reduce_plan.keys(group_key.len(), output_arity);
                 // Return the plan, and the keys it produces.
+                let mfp_after;
+                let output_arity;
+                if enable_reduce_mfp_fusion {
+                    (mfp_after, mfp, output_arity) =
+                        reduce_plan.extract_mfp_after(mfp, group_key.len());
+                } else {
+                    (mfp_after, output_arity) = (
+                        MapFilterProject::new(mfp.input_arity),
+                        group_key.len() + aggregates.len(),
+                    );
+                    soft_assert_eq_or_log!(
+                        mfp.input_arity,
+                        output_arity,
+                        "Output arity of reduce must match input arity for MFP on top of it"
+                    );
+                }
+                let output_keys = reduce_plan.keys(group_key.len(), output_arity);
                 (
                     Plan::Reduce {
                         input: Box::new(input),
                         key_val_plan,
                         plan: reduce_plan,
                         input_key,
+                        mfp_after,
                     },
                     output_keys,
                 )
@@ -1561,6 +1601,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     arrangements,
                     debug_info,
                     enable_specialized_arrangements,
+                    enable_reduce_mfp_fusion,
                 )?;
 
                 let top_k_plan = TopKPlan::create_from(
@@ -1596,6 +1637,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     arrangements,
                     debug_info,
                     enable_specialized_arrangements,
+                    enable_reduce_mfp_fusion,
                 )?;
 
                 // We don't have an MFP here -- install an operator to permute the
@@ -1620,6 +1662,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     arrangements,
                     debug_info,
                     enable_specialized_arrangements,
+                    enable_reduce_mfp_fusion,
                 )?;
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
@@ -1670,6 +1713,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     arrangements,
                     debug_info,
                     enable_specialized_arrangements,
+                    enable_reduce_mfp_fusion,
                 )?;
                 plans_keys.push((plan, keys));
                 for input in inputs.iter() {
@@ -1678,6 +1722,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         arrangements,
                         debug_info,
                         enable_specialized_arrangements,
+                        enable_reduce_mfp_fusion,
                     )?;
                     plans_keys.push((plan, keys));
                 }
@@ -1712,6 +1757,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     arrangements,
                     debug_info,
                     enable_specialized_arrangements,
+                    enable_reduce_mfp_fusion,
                 )?;
                 input_keys.types = types;
 
@@ -1850,9 +1896,14 @@ This is not expected to cause incorrect results, but could indicate a performanc
         desc: DataflowDescription<OptimizedMirRelationExpr>,
         enable_consolidate_after_union_negate: bool,
         enable_specialized_arrangements: bool,
+        enable_reduce_mfp_fusion: bool,
     ) -> Result<DataflowDescription<Self>, String> {
         // First, we lower the dataflow description from MIR to LIR.
-        let mut dataflow = Self::lower_dataflow(desc, enable_specialized_arrangements)?;
+        let mut dataflow = Self::lower_dataflow(
+            desc,
+            enable_specialized_arrangements,
+            enable_reduce_mfp_fusion,
+        )?;
 
         // Subsequently, we perform plan refinements for the dataflow.
         Self::refine_source_mfps(&mut dataflow);
@@ -1909,6 +1960,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     fn lower_dataflow(
         desc: DataflowDescription<OptimizedMirRelationExpr>,
         enable_specialized_arrangements: bool,
+        enable_reduce_mfp_fusion: bool,
     ) -> Result<DataflowDescription<Self>, String> {
         // Collect available arrangements by identifier.
         let mut arrangements = BTreeMap::new();
@@ -1956,6 +2008,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     id: build.id,
                 },
                 enable_specialized_arrangements,
+                enable_reduce_mfp_fusion,
             )?;
             arrangements.insert(Id::Global(build.id), keys);
             objects_to_build.push(BuildDesc { id: build.id, plan });
@@ -2272,6 +2325,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     key_val_plan,
                     plan,
                     input_key,
+                    mfp_after,
                 } => input
                     .partition_among(parts)
                     .into_iter()
@@ -2280,6 +2334,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         input_key: input_key.clone(),
                         key_val_plan: key_val_plan.clone(),
                         plan: plan.clone(),
+                        mfp_after: mfp_after.clone(),
                     })
                     .collect(),
                 Plan::TopK { input, top_k_plan } => input
@@ -2409,6 +2464,7 @@ impl<T> CollectionPlan for Plan<T> {
                 key_val_plan: _,
                 plan: _,
                 input_key: _,
+                mfp_after: _,
             }
             | Plan::TopK {
                 input,
