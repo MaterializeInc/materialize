@@ -97,13 +97,13 @@ flag:
 To check the cluster status:
 
 ```
-kubectl --context=kind-cloudtest get all
+kubectl --context=kind-mzcloud get all
 ```
 
 Consider also using the [k9s] terminal user interface:
 
 ```
-k9s --context=kind-cloudtest
+k9s --context=kind-mzcloud
 ```
 
 To remove all resources from the Kubernetes cluster, so that a test can be rerun

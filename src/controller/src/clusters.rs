@@ -79,6 +79,9 @@ pub struct ReplicaAllocation {
     /// Whether instances of this type can be created
     #[serde(default)]
     pub disabled: bool,
+    /// Additional node selectors.
+    #[serde(default)]
+    pub selectors: BTreeMap<String, String>,
 }
 
 #[mz_ore::test]
@@ -94,7 +97,11 @@ fn test_replica_allocation_deserialization() {
             "disk_limit": "100MiB",
             "scale": 16,
             "workers": 1,
-            "credits_per_hour": "16"
+            "credits_per_hour": "16",
+            "selectors": {
+                "key1": "value1",
+                "key2": "value2"
+            }
         }"#;
 
     let replica_allocation: ReplicaAllocation = serde_json::from_str(data)
@@ -109,7 +116,11 @@ fn test_replica_allocation_deserialization() {
             memory_limit: Some(MemoryLimit(ByteSize::gib(10))),
             cpu_limit: Some(CpuLimit::from_millicpus(1000)),
             scale: 16,
-            workers: 1
+            workers: 1,
+            selectors: BTreeMap::from([
+                ("key1".to_string(), "value1".to_string()),
+                ("key2".to_string(), "value2".to_string())
+            ]),
         }
     );
 
@@ -136,7 +147,8 @@ fn test_replica_allocation_deserialization() {
             memory_limit: Some(MemoryLimit(ByteSize::gib(0))),
             cpu_limit: Some(CpuLimit::from_millicpus(0)),
             scale: 0,
-            workers: 0
+            workers: 0,
+            selectors: Default::default(),
         }
     );
 }
@@ -705,6 +717,7 @@ where
                     }],
                     disk_limit: location.allocation.disk_limit,
                     disk: location.disk,
+                    node_selector: location.allocation.selectors,
                 },
             )
             .await?;

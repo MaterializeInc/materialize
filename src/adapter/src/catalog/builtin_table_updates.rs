@@ -1431,6 +1431,7 @@ impl CatalogState {
                         workers,
                         credits_per_hour,
                         disabled: _,
+                        selectors: _,
                     },
                 )| {
                     // Just invent something when the limits are `None`,

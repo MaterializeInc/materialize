@@ -766,6 +766,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             replicas_selector,
             disk,
             disk_limit,
+            node_selector,
         }: ServiceConfig<'_>,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         // This is extremely cheap to clone, so just look into the lock once.
@@ -990,11 +991,12 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             "karpenter.sh/do-not-disrupt".to_owned() => "true".to_string(),
         };
 
-        let mut node_selector: BTreeMap<String, String> = self
-            .config
-            .service_node_selector
-            .clone()
+        let default_node_selector = [("materialize.cloud/disk".to_string(), disk.to_string())];
+
+        let node_selector: BTreeMap<String, String> = default_node_selector
             .into_iter()
+            .chain(self.config.service_node_selector.clone())
+            .chain(node_selector)
             .collect();
 
         let node_affinity = if let Some(availability_zones) = availability_zones {
@@ -1028,8 +1030,6 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         } else {
             None
         };
-
-        node_selector.insert("materialize.cloud/disk".to_string(), disk.to_string());
 
         let container_name = image
             .splitn(2, '/')
