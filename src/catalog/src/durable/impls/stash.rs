@@ -1112,7 +1112,7 @@ impl DurableCatalogState for Connection {
             Some(period) => u128::from(boot_ts).saturating_sub(period.as_millis()),
         };
         let is_read_only = self.is_read_only();
-        Ok(self
+        let (events, consolidate_notif) = self
             .stash
             .with_transaction(move |tx| {
                 Box::pin(async move {
@@ -1131,13 +1131,26 @@ impl DurableCatalogState for Connection {
                     // Delete things only if a retention period is
                     // specified (otherwise opening readonly catalogs
                     // can fail).
-                    if retention_period.is_some() && !is_read_only {
-                        tx.append(vec![batch]).await?;
-                    }
-                    Ok(events)
+                    let consolidate_notif = if retention_period.is_some() && !is_read_only {
+                        let notif = tx.append(vec![batch]).await?;
+                        Some(notif)
+                    } else {
+                        None
+                    };
+                    Ok((events, consolidate_notif))
                 })
             })
-            .await?)
+            .await?;
+
+        // Before we consider the pruning complete, we need to wait for the consolidate request to
+        // finish. We wait for consolidation because the storage usage collection is very large and
+        // it's possible for it to conflict with other Stash transactions, preventing consolidation
+        // from ever completing.
+        if let Some(notif) = consolidate_notif {
+            let _ = notif.await;
+        }
+
+        Ok(events)
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
