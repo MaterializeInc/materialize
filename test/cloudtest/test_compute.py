@@ -10,6 +10,7 @@
 import copy
 import json
 import logging
+import time
 
 import pytest
 from pg8000.exceptions import InterfaceError
@@ -147,37 +148,47 @@ def test_disk_label(mz: MaterializeApplication) -> None:
 
 def test_cluster_replica_sizes(mz: MaterializeApplication) -> None:
     """Test that --cluster-replica-sizes mapping is respected"""
+    # Some time for existing cluster drops to complete so we don't try to spin them up again
+    time.sleep(5)
     cluster_replica_size_map = {
         "small": {
             "scale": 1,
             "workers": 1,
-            "cpu_limit": 2,
-            "credits_per_hour": "0",
+            "cpu_limit": None,
+            "memory_limit": None,
+            "disk_limit": None,
+            "credits_per_hour": "1",
+            "disabled": False,
             "selectors": {"key1": "value1"},
         },
         "medium": {
             "scale": 1,
-            "workers": 4,
-            "cpu_limit": 8,
-            "credits_per_hour": "0",
+            "workers": 1,
+            "cpu_limit": None,
+            "memory_limit": None,
+            "disk_limit": None,
+            "credits_per_hour": "1",
+            "disabled": False,
             "selectors": {"key2": "value2", "key3": "value3"},
         },
         # for existing clusters
         "1": {
             "scale": 1,
             "workers": 1,
-            "cpu_limit": 2,
-            "memory_limit": "8GiB",
-            "disk_limit": "10GiB",
-            "credits_per_hour": "0",
+            "cpu_limit": None,
+            "memory_limit": None,
+            "disk_limit": None,
+            "disabled": False,
+            "credits_per_hour": "1",
         },
         "2-1": {
             "scale": 2,
-            "workers": 1,
-            "cpu_limit": 2,
-            "memory_limit": "8GiB",
-            "disk_limit": "10GiB",
-            "credits_per_hour": "0",
+            "workers": 2,
+            "cpu_limit": None,
+            "memory_limit": None,
+            "disk_limit": None,
+            "disabled": False,
+            "credits_per_hour": "2",
         },
     }
 
