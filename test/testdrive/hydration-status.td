@@ -181,7 +181,10 @@ mv  hydrated_test_3 true
 
 # Test adding new storage dataflows.
 
-> CREATE SOURCE src IN CLUSTER test FROM LOAD GENERATOR counter
+> CREATE SOURCE src
+  IN CLUSTER test
+  FROM LOAD GENERATOR auction
+  FOR ALL TABLES
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 > CREATE CONNECTION csr_conn
@@ -193,6 +196,10 @@ mv  hydrated_test_3 true
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
+# Webhook sources are not backed by dataflows, so they have no concept of
+# hydration and shouldn't show up in mz_hydration_statuses.
+> CREATE SOURCE web IN CLUSTER test FROM WEBHOOK BODY FORMAT JSON
+
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
@@ -200,9 +207,14 @@ mv  hydrated_test_3 true
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
-mv  hydrated_test_3 true
-src hydrated_test_3 true
-snk hydrated_test_3 true
+accounts      hydrated_test_3 true
+auctions      hydrated_test_3 true
+bids          hydrated_test_3 true
+mv            hydrated_test_3 true
+organizations hydrated_test_3 true
+src           hydrated_test_3 true
+snk           hydrated_test_3 true
+users         hydrated_test_3 true
 
 # Test dropping replicas.
 
@@ -227,9 +239,14 @@ snk hydrated_test_3 true
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
-mv  hydrated_test_4 true
-src hydrated_test_4 true
-snk hydrated_test_4 true
+accounts      hydrated_test_4 true
+auctions      hydrated_test_4 true
+bids          hydrated_test_4 true
+mv            hydrated_test_4 true
+organizations hydrated_test_4 true
+src           hydrated_test_4 true
+snk           hydrated_test_4 true
+users         hydrated_test_4 true
 
 # Test dropping dataflows.
 

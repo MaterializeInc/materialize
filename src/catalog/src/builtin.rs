@@ -5659,12 +5659,37 @@ materialized_views AS (
     LEFT JOIN mz_internal.mz_compute_hydration_statuses h
         ON (h.object_id = i.id)
 ),
+-- Hydration is a dataflow concept and not all sources are maintained by
+-- dataflows, so we need to find the ones that are. Generally, sources that
+-- have a cluster ID are maintained by a dataflow running on that cluster.
+-- Webhook sources are an exception to this rule.
+sources_maintained_by_dataflows AS (
+    SELECT id, cluster_id
+    FROM mz_sources
+    WHERE cluster_id IS NOT NULL AND type != 'webhook'
+),
+-- Cluster IDs are missing for subsources in `mz_sources` (#24235), so we need
+-- to add them manually here by looking up the parent sources.
+subsources_with_clusters AS (
+    SELECT ss.id, ps.cluster_id
+    FROM mz_sources ss
+    JOIN mz_internal.mz_object_dependencies d
+        ON (d.referenced_object_id = ss.id)
+    JOIN sources_maintained_by_dataflows ps
+        ON (ps.id = d.object_id)
+    WHERE ss.type = 'subsource'
+),
+sources_with_clusters AS (
+    SELECT id, cluster_id FROM sources_maintained_by_dataflows
+    UNION ALL
+    SELECT id, cluster_id FROM subsources_with_clusters
+),
 sources AS (
     SELECT
         s.id AS object_id,
         r.id AS replica_id,
         ss.rehydration_latency IS NOT NULL AS hydrated
-    FROM mz_sources s
+    FROM sources_with_clusters s
     LEFT JOIN mz_internal.mz_source_statistics ss USING (id)
     JOIN mz_cluster_replicas r
         ON (r.cluster_id = s.cluster_id)
