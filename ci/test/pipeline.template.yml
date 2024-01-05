@@ -44,7 +44,6 @@ steps:
         depends_on: []
         priority: 1
         timeout_in_minutes: 60
-        branches: "main v*.*"
         agents:
           queue: builder-linux-aarch64
         coverage: skip

@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM gcr.io/bazel-public/bazel:6.3.2
+FROM gcr.io/bazel-public/bazel:7.0.0
 
 COPY --chown=ubuntu:root build build
 
