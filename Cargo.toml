@@ -26,7 +26,6 @@ members = [
     "src/expr",
     "src/expr-parser",
     "src/expr-test-util",
-    "src/fivetran-destination",
     "src/frontegg-auth",
     "src/frontegg-client",
     "src/frontegg-mock",

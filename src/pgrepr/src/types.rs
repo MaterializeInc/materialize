@@ -345,18 +345,6 @@ pub struct NumericConstraints {
     max_scale: i32,
 }
 
-impl NumericConstraints {
-    /// Returns the maximum precision constraint.
-    pub fn max_precision(&self) -> i32 {
-        self.max_precision
-    }
-
-    /// Returns the maximum scale constraint.
-    pub fn max_scale(&self) -> i32 {
-        self.max_scale
-    }
-}
-
 impl TypeConstraint for NumericConstraints {
     fn from_typmod(typmod: i32) -> Result<Option<NumericConstraints>, String> {
         // https://github.com/postgres/postgres/blob/52377bb81/src/backend/utils/adt/numeric.c#L829-L862
