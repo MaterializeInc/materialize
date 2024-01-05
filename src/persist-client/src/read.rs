@@ -137,9 +137,6 @@ where
         // If Some, an override for the default listen sleep retry parameters.
         listen_retry: Option<RetryParameters>,
     ) -> Vec<ListenEvent<T, LeasedBatchPart<T>>> {
-        // This is odd, but we move our handle into a `Listen`.
-        self.listen.handle.maybe_heartbeat_reader().await;
-
         match self.snapshot.take() {
             Some(parts) => vec![ListenEvent::Updates(parts)],
             None => {
@@ -871,6 +868,7 @@ where
     /// call it as frequently as they like. Call this [Self::downgrade_since],
     /// or [Self::maybe_downgrade_since] on some interval that is "frequent"
     /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
+    #[allow(dead_code)]
     pub(crate) async fn maybe_heartbeat_reader(&mut self) {
         let min_elapsed = self.cfg.dynamic.reader_lease_duration() / 2;
         let heartbeat_ts = (self.cfg.now)();
