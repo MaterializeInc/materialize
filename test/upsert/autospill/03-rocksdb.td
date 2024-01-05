@@ -11,7 +11,7 @@ $ set-from-sql var=previous-bytes
 SELECT
   (SUM(u.envelope_state_bytes))::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics_per_worker u ON s.id = u.id
   WHERE s.name = 'autospill'
 
 # Inserting large value should trigger auto spill
@@ -30,7 +30,7 @@ fish:AREALLYBIGFISHAREALLYBIGFISHAREALLYBIGFISHAREALLYBIGFISH
     SUM(u.envelope_state_bytes) < (${previous-bytes} * 2),
     SUM(u.envelope_state_records)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics_per_worker u ON s.id = u.id
   WHERE s.name = 'autospill'
   GROUP BY s.name
   ORDER BY s.name
@@ -50,7 +50,7 @@ animal:
     SUM(u.envelope_state_bytes),
     SUM(u.envelope_state_records)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics_per_worker u ON s.id = u.id
   WHERE s.name = 'autospill'
   GROUP BY s.name
   ORDER BY s.name

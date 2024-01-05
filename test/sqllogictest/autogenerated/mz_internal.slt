@@ -410,7 +410,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  privilege_type  text
 
 query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sink_statistics_raw' ORDER BY position
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sink_statistics_per_worker' ORDER BY position
 ----
 1  id  text
 2  worker_id  uint8
@@ -449,7 +449,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  details  jsonb
 
 query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_statistics_raw' ORDER BY position
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_statistics_per_worker' ORDER BY position
 ----
 1  id  text
 2  worker_id  uint8
@@ -843,11 +843,11 @@ mz_show_sinks
 mz_show_sources
 mz_show_system_privileges
 mz_sink_statistics
-mz_sink_statistics_raw
+mz_sink_statistics_per_worker
 mz_sink_status_history
 mz_sink_statuses
 mz_source_statistics
-mz_source_statistics_raw
+mz_source_statistics_per_worker
 mz_source_status_history
 mz_source_statuses
 mz_statement_execution_history

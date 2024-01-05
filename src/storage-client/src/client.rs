@@ -287,8 +287,8 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
     }
 }
 
-// These structure represents a full set up updates for the `mz_source_statistics_raw`
-// and `mz_sink_statistics_raw` tables for a specific source-worker/sink-worker pair.
+// These structure represents a full set up updates for the `mz_source_statistics_per_worker`
+// and `mz_sink_statistics_per_worker` tables for a specific source-worker/sink-worker pair.
 // They are structured like this for simplicity
 // and efficiency: Each storage worker can individually collect and consolidate metrics,
 // then control how much `StorageResponse` traffic is produced when sending updates
