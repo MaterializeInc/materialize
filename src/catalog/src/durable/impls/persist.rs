@@ -72,6 +72,9 @@ pub(crate) type Timestamp = mz_repr::Timestamp;
 /// `new_unchecked` is safe to call with a non-zero value.
 const MIN_EPOCH: Epoch = unsafe { Epoch::new_unchecked(1) };
 
+/// Human readable shard name.
+const SHARD_NAME: &str = "catalog";
+
 /// Durable catalog mode that dictates the effect of mutable operations.
 #[derive(Debug)]
 enum Mode {
@@ -135,7 +138,10 @@ impl UnopenedPersistCatalogState {
                 // TODO: We may need to use a different critical reader
                 // id for this if we want to be able to introspect it via SQL.
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
-                diagnostics(),
+                Diagnostics {
+                    shard_name: SHARD_NAME.to_string(),
+                    handle_purpose: "durable catalog state critical since".to_string(),
+                },
             )
             .await
             .expect("invalid usage");
@@ -144,7 +150,10 @@ impl UnopenedPersistCatalogState {
                 shard_id,
                 Arc::new(PersistCatalogState::desc()),
                 Arc::new(UnitSchema::default()),
-                diagnostics(),
+                Diagnostics {
+                    shard_name: SHARD_NAME.to_string(),
+                    handle_purpose: "durable catalog state handles".to_string(),
+                },
             )
             .await
             .expect("invalid usage");
@@ -850,7 +859,10 @@ impl PersistCatalogState {
                 self.shard_id,
                 Arc::new(PersistCatalogState::desc()),
                 Arc::new(UnitSchema::default()),
-                diagnostics(),
+                Diagnostics {
+                    shard_name: SHARD_NAME.to_string(),
+                    handle_purpose: "durable catalog state temporary reader".to_string(),
+                },
             )
             .await
             .expect("invalid usage")
@@ -1161,14 +1173,6 @@ impl DurableCatalogState for PersistCatalogState {
         let ids = txn.get_and_increment_id_by(id_type.to_string(), amount)?;
         txn.commit().await?;
         Ok(ids)
-    }
-}
-
-/// Generate a diagnostic to use when connecting to persist.
-fn diagnostics() -> Diagnostics {
-    Diagnostics {
-        shard_name: "catalog".to_string(),
-        handle_purpose: "durable catalog state".to_string(),
     }
 }
 
