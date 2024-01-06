@@ -78,7 +78,20 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use bytes::Bytes;
 use differential_dataflow::{AsCollection, Collection};
 use futures::{future, future::select, FutureExt, Stream as AsyncStream, StreamExt, TryStreamExt};
+use mz_expr::MirScalarExpr;
+use mz_ore::cast::CastFrom;
+use mz_ore::collections::HashSet;
+use mz_ore::result::ResultExt;
+use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::PostgresError;
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
+use mz_sql_parser::ast::{display::AstDisplay, Ident};
+use mz_ssh_util::tunnel_manager::SshTunnelManager;
+use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
+use mz_timely_util::builder_async::{
+    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+};
+use mz_timely_util::operator::StreamExt as TimelyStreamExt;
 use once_cell::sync::Lazy;
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
@@ -92,20 +105,6 @@ use tokio_postgres::replication::LogicalReplicationStream;
 use tokio_postgres::types::PgLsn;
 use tokio_postgres::Client;
 use tracing::{error, trace};
-
-use mz_expr::MirScalarExpr;
-use mz_ore::cast::CastFrom;
-use mz_ore::collections::HashSet;
-use mz_ore::result::ResultExt;
-use mz_postgres_util::desc::PostgresTableDesc;
-use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
-use mz_sql_parser::ast::{display::AstDisplay, Ident};
-use mz_ssh_util::tunnel_manager::SshTunnelManager;
-use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
-use mz_timely_util::builder_async::{
-    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
-};
-use mz_timely_util::operator::StreamExt as TimelyStreamExt;
 
 use crate::metrics::postgres::PgSourceMetrics;
 use crate::source::postgres::verify_schema;

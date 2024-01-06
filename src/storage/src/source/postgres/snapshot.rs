@@ -139,18 +139,10 @@ use std::str::FromStr;
 
 use differential_dataflow::{AsCollection, Collection};
 use futures::TryStreamExt;
-use mz_postgres_util::schemas::PublicationInfoError;
-use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::{Broadcast, CapabilitySet, ConnectLoop, Feedback};
-use timely::dataflow::{Scope, Stream};
-use timely::progress::{Antichain, Timestamp};
-use tokio_postgres::types::PgLsn;
-use tokio_postgres::Client;
-use tracing::trace;
-
 use mz_expr::MirScalarExpr;
 use mz_ore::result::ResultExt;
 use mz_postgres_util::desc::PostgresTableDesc;
+use mz_postgres_util::schemas::PublicationInfoError;
 use mz_postgres_util::simple_query_opt;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
@@ -159,6 +151,13 @@ use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use mz_timely_util::operator::StreamExt as TimelyStreamExt;
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::{Broadcast, CapabilitySet, ConnectLoop, Feedback};
+use timely::dataflow::{Scope, Stream};
+use timely::progress::{Antichain, Timestamp};
+use tokio_postgres::types::PgLsn;
+use tokio_postgres::Client;
+use tracing::trace;
 
 use crate::source::postgres::replication::RewindRequest;
 use crate::source::postgres::{verify_schema, DefiniteError, TransientError};
