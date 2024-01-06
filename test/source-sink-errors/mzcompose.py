@@ -405,12 +405,14 @@ class PgDisruption:
                 # Postgres sources may halt after receiving an error, which means that they may alternate
                 # between `stalled` and `starting`. Instead of relying on the current status, we
                 # check that the latest stall has the error we expect.
-                > SELECT status, error ~* '{error}'
-                  FROM mz_internal.mz_source_status_history
-                  JOIN mz_sources ON mz_sources.id = source_id
-                  WHERE name = 'source1' and status = 'stalled'
-                  ORDER BY occurred_at DESC LIMIT 1
-                stalled true
+                > SELECT error ~* '{error}'
+                    FROM mz_internal.mz_source_status_history
+                    JOIN mz_sources ON mz_sources.id = source_id
+                    WHERE (
+                        name = 'source1' OR name = 'pg_source'
+                    ) AND status = 'stalled'
+                    ORDER BY occurred_at DESC LIMIT 1;
+                true
                 """
             )
         )

@@ -149,7 +149,6 @@ impl SourceRender for PostgresSourceConnection {
 
         // Collect the tables that we will be ingesting.
         let mut table_info = BTreeMap::new();
-        let mut subsource_outputs = vec![];
         for (i, desc) in self.publication_details.tables.iter().enumerate() {
             // Index zero maps to the main source
             let output_index = i + 1;
@@ -159,7 +158,6 @@ impl SourceRender for PostgresSourceConnection {
             // not we have casts for it.
             if let Some(casts) = self.table_casts.get(&output_index) {
                 table_info.insert(desc.oid, (output_index, desc.clone(), casts.clone()));
-                subsource_outputs.push(output_index);
             }
         }
 
@@ -194,7 +192,7 @@ impl SourceRender for PostgresSourceConnection {
         // restart we are going to set the status to an ssh error correctly, so we don't do this
         // extra work.
 
-        let health = snapshot_err.concat(&repl_err).flat_map(move |err| {
+        let health = snapshot_err.concat(&repl_err).map(move |err| {
             // This update will cause the dataflow to restart
             let err_string = err.display_with_causes().to_string();
             let update = HealthStatusUpdate::halting(err_string.clone(), None);
@@ -213,22 +211,11 @@ impl SourceRender for PostgresSourceConnection {
                 _ => Self::STATUS_NAMESPACE,
             };
 
-            let mut statuses = vec![HealthStatusMessage {
+            HealthStatusMessage {
                 index: 0,
                 namespace: namespace.clone(),
                 update,
-            }];
-
-            // But we still want to report the transient error for all subsources
-            statuses.extend(subsource_outputs.iter().map(|index| {
-                let status = HealthStatusUpdate::stalled(err_string.clone(), None);
-                HealthStatusMessage {
-                    index: *index,
-                    namespace,
-                    update: status,
-                }
-            }));
-            statuses
+            }
         });
 
         (
