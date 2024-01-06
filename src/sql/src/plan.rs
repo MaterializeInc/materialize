@@ -956,7 +956,7 @@ pub struct SendDiffsPlan {
     pub updates: Vec<(Row, Diff)>,
     pub kind: MutationKind,
     pub returning: Vec<(Row, NonZeroUsize)>,
-    pub max_result_size: u32,
+    pub max_result_size: u64,
 }
 
 #[derive(Debug)]

@@ -3031,7 +3031,7 @@ impl RowSetFinishing {
         &self,
         mut rows: Vec<(Row, NonZeroUsize)>,
         // TODO(jkosh44) Eventually we want to be able to return arbitrary sized results.
-        max_result_size: u32,
+        max_result_size: u64,
     ) -> Result<Vec<Row>, String> {
         let max_result_size = usize::cast_from(max_result_size);
         let mut left_datum_vec = mz_repr::DatumVec::new();

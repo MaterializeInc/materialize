@@ -357,7 +357,7 @@ pub struct ComputeParameters {
     /// [`PeekResponse::Rows`]: super::response::PeekResponse::Rows
     /// [`PeekResponse::Error`]: super::response::PeekResponse::Error
     /// [`SubscribeBatch::updates`]: super::response::SubscribeBatch::updates
-    pub max_result_size: Option<u32>,
+    pub max_result_size: Option<u64>,
     /// The maximum number of in-flight bytes emitted by persist_sources feeding
     /// dataflows.
     ///
