@@ -86,6 +86,12 @@ scopeguard = "1.1.0"
 serde_json = "1.0.89"
 tokio = { version = "1.32.0", features = ["macros", "rt-multi-thread"] }
 tokio-test = "0.4.2"
+tracing-subscriber = { version = "0.3.16", default-features = false, features = [
+  "env-filter",
+  "fmt",
+  "json",
+  "tracing-log",
+]}
 
 [features]
 default = ["tokio-console", "workspace-hack"]

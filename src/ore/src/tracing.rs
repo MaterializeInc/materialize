@@ -24,6 +24,7 @@ use std::io;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 #[cfg(feature = "tokio-console")]
@@ -218,6 +219,10 @@ impl std::fmt::Debug for TracingGuard {
         f.debug_struct("TracingGuard").finish_non_exhaustive()
     }
 }
+
+/// TODO(guswynn): document
+pub static GLOBAL_SUBSCRIBER: OnceLock<Arc<dyn Subscriber + Send + Sync + 'static>> =
+    OnceLock::new();
 
 /// Enables application tracing via the [`tracing`] and [`opentelemetry`]
 /// libraries.
@@ -487,7 +492,11 @@ where
     #[cfg(feature = "tokio-console")]
     let stack = stack.with(tokio_console_layer);
     let stack = stack.with(sentry_layer);
-    stack.init();
+
+    let global_subscriber: Arc<dyn Subscriber + Send + Sync + 'static> = Arc::new(stack);
+    let _ = GLOBAL_SUBSCRIBER.set(global_subscriber);
+
+    Arc::clone(&GLOBAL_SUBSCRIBER.get().unwrap()).init();
 
     #[cfg(feature = "tokio-console")]
     if let Some(console_config) = config.tokio_console {

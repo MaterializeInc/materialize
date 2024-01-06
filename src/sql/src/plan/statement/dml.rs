@@ -339,7 +339,7 @@ pub fn plan_explain_plan(
                 row_set_finishing,
                 when,
                 desc,
-                broken,
+                broken: true,
             })
         }
         Explainee::CreateMaterializedView(mut stmt, broken) => {

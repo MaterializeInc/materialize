@@ -10,13 +10,14 @@
 //! Tracing utilities for explainable plans.
 
 use std::fmt::{Debug, Display};
+use std::sync::Arc;
 use std::time::Duration;
 
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_expr::explain::ExplainContext;
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
-use mz_repr::explain::tracing::{DelegateSubscriber, PlanTrace, TraceEntry};
+use mz_repr::explain::tracing::{PlanTrace, TraceEntry};
 use mz_repr::explain::{
     Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer, UsedIndexes,
 };
@@ -52,7 +53,8 @@ impl OptimizerTrace {
     /// accumulate all [`TraceEntry`] instances otherwise.
     pub fn new(broken: bool, path: Option<&'static str>) -> OptimizerTrace {
         if broken {
-            let subscriber = DelegateSubscriber::default()
+            eprintln!("TRIGGERED");
+            let subscriber = Arc::clone(&mz_ore::tracing::GLOBAL_SUBSCRIBER.get().unwrap())
                 // Collect `explain_plan` types that are not used in the regular explain
                 // path, but are useful when instrumenting code for debugging purpuses.
                 .with(PlanTrace::<String>::new(path))
