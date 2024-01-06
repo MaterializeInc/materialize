@@ -504,6 +504,11 @@ pub mod scheduling_config {
         ///
         /// Defaults to `100`.
         pub soften_az_affinity_weight: i32,
+        /// Whether to always provision a replica with disk,
+        /// regardless of `DISK` DDL option.
+        ///
+        /// Defaults to `false`.
+        pub always_use_disk: bool,
     }
 
     pub const DEFAULT_POD_AZ_AFFINITY_WEIGHT: Option<i32> = Some(100);
@@ -517,6 +522,7 @@ pub mod scheduling_config {
 
     pub const DEFAULT_SOFTEN_AZ_AFFINITY: bool = false;
     pub const DEFAULT_SOFTEN_AZ_AFFINITY_WEIGHT: i32 = 100;
+    pub const DEFAULT_ALWAYS_USE_DISK: bool = false;
 
     impl Default for ServiceSchedulingConfig {
         fn default() -> Self {
@@ -533,6 +539,7 @@ pub mod scheduling_config {
                 },
                 soften_az_affinity: DEFAULT_SOFTEN_AZ_AFFINITY,
                 soften_az_affinity_weight: DEFAULT_SOFTEN_AZ_AFFINITY_WEIGHT,
+                always_use_disk: DEFAULT_ALWAYS_USE_DISK,
             }
         }
     }
