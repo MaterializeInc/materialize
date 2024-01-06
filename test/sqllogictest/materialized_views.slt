@@ -651,7 +651,12 @@ SELECT * FROM mv_assertion_at_begin ORDER BY x;
 
 # Planning/parsing errors
 
-# Should be disabled by default.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_refresh_every_mvs = false
+----
+COMPLETE 0
+
+# Should be disabled
 query error db error: ERROR: REFRESH EVERY materialized views is not supported
 CREATE MATERIALIZED VIEW mv_bad WITH (ASSERT NOT NULL x, REFRESH EVERY '8 seconds') AS SELECT * FROM t2;
 
