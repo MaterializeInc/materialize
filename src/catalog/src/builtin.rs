@@ -2600,33 +2600,73 @@ pub const MZ_SOURCE_STATUSES: BuiltinView = BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
     sql: "
-WITH latest_events AS (
-    SELECT DISTINCT ON(source_id) occurred_at, source_id, status, error, details
-    FROM mz_internal.mz_source_status_history
-    ORDER BY source_id, occurred_at DESC
-)
+    WITH
+    -- Get the latest events
+    latest_events AS
+    (
+        SELECT DISTINCT ON (source_id)
+            occurred_at, source_id, status, error, details
+        FROM mz_internal.mz_source_status_history
+        ORDER BY source_id, occurred_at DESC
+    ),
+    -- Determine which sources are subsources and which are parent sources
+    subsources AS
+    (
+        SELECT subsources.id AS self, sources.id AS parent
+        FROM
+            mz_sources AS subsources
+                JOIN
+                    mz_internal.mz_object_dependencies AS deps
+                    ON subsources.id = deps.referenced_object_id
+                JOIN mz_sources AS sources ON sources.id = deps.object_id
+    ),
+     -- Determine which collection's ID to use for the status
+    id_of_status_to_use AS
+    (
+        SELECT
+            self_events.source_id,
+            -- If self not errored, but parent is, use parent; else self
+            CASE
+                WHEN
+                    self_events.status <> 'stalled' AND
+                    parent_events.status = 'stalled'
+                THEN parent_events.source_id
+                ELSE self_events.source_id
+            END AS id_to_use
+        FROM
+            latest_events AS self_events
+                LEFT JOIN subsources ON self_events.source_id = self
+                LEFT JOIN
+                    latest_events AS parent_events
+                    ON parent_events.source_id = parent
+    ),
+    -- Swap out events for the ID of the event we plan to use instead
+    latest_events_to_use AS
+    (
+        SELECT occurred_at, s.source_id, status, error, details
+        FROM
+            id_of_status_to_use AS s
+                JOIN latest_events AS e ON e.source_id = s.id_to_use
+    )
 SELECT
     mz_sources.id,
     name,
     mz_sources.type,
-    occurred_at as last_status_change_at,
+    occurred_at AS last_status_change_at,
     -- TODO(parkmycar): Report status of webhook source once #20036 is closed.
     CASE
-      WHEN
-            mz_sources.type = 'webhook'
-              OR
-            mz_sources.type = 'progress'
-          THEN 'running'
-        ELSE COALESCE(status, 'created')
-      END
-      AS status,
+            WHEN
+                mz_sources.type = 'webhook' OR
+                mz_sources.type = 'progress'
+            THEN 'running'
+            ELSE COALESCE(status, 'created')
+    END AS status,
     error,
     details
-FROM mz_sources
-LEFT JOIN latest_events ON mz_sources.id = latest_events.source_id
-WHERE
-    -- This is a convenient way to filter out system sources, like the status_history table itself.
-    mz_sources.id NOT LIKE 's%'",
+FROM
+    mz_sources
+        LEFT JOIN latest_events_to_use AS e ON mz_sources.id = e.source_id
+WHERE mz_sources.id NOT LIKE 's%';",
     sensitivity: DataSensitivity::Public,
 };
 
