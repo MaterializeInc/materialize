@@ -247,6 +247,7 @@ class View(DBObject):
     assert_not_null: list[Column]
     rename: int
     schema: Schema
+    refresh: str | None
 
     def __init__(
         self,
@@ -288,6 +289,19 @@ class View(DBObject):
             else []
         )
 
+        self.refresh = (
+            rng.choice(
+                [
+                    "ON COMMIT",
+                    f"EVERY '{rng.randint(1, 60)} seconds {rng.randint(0, 60)} minutes'",
+                    f"EVERY '{rng.randint(1, 60)} seconds {rng.randint(0, 60)} minutes' ALIGNED TO (mz_now())",
+                    f"AT mz_now()::string::int8 + {rng.randint(0, 3600000)}",
+                ]
+            )
+            if self.materialized
+            else None
+        )
+
         if base_object2:
             self.join_column = rng.choice(base_object.columns)
             self.join_column2 = None
@@ -319,11 +333,18 @@ class View(DBObject):
 
         query += f" {self}"
 
+        options = []
+
+        if self.refresh:
+            options.append(f"REFRESH {self.refresh}")
+
         if self.assert_not_null:
-            assert_not_null_strs = [
-                f"ASSERT NOT NULL {c.name(True)}" for c in self.assert_not_null
-            ]
-            query += f" WITH ({', '.join(assert_not_null_strs)})"
+            options.extend(
+                [f"ASSERT NOT NULL {c.name(True)}" for c in self.assert_not_null]
+            )
+
+        if options:
+            query += f" WITH ({', '.join(options)})"
 
         query += f" AS SELECT {columns_str} FROM {self.base_object}"
         if self.base_object2:
