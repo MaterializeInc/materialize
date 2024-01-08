@@ -295,7 +295,8 @@ class View(DBObject):
                     "ON COMMIT",
                     f"EVERY '{rng.randint(1, 60)} seconds {rng.randint(0, 60)} minutes'",
                     f"EVERY '{rng.randint(1, 60)} seconds {rng.randint(0, 60)} minutes' ALIGNED TO (mz_now())",
-                    f"AT mz_now()::string::int8 + {rng.randint(0, 3600000)}",
+                    # TODO(def-): Allow smaller times again when #24288 is fixed
+                    f"AT mz_now()::string::int8 + {rng.randint(1800000, 3600000)}",
                 ]
             )
             if self.materialized
