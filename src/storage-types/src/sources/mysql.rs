@@ -140,14 +140,24 @@ impl RustType<ProtoMySqlSourceConnection> for MySqlSourceConnection {
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct MySqlSourceDetails {}
+pub struct MySqlSourceDetails {
+    pub tables: Vec<mz_mysql_util::MySqlTableDesc>,
+}
 
 impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {
     fn into_proto(&self) -> ProtoMySqlSourceDetails {
-        ProtoMySqlSourceDetails {}
+        ProtoMySqlSourceDetails {
+            tables: self.tables.iter().map(|t| t.into_proto()).collect(),
+        }
     }
 
-    fn from_proto(_proto: ProtoMySqlSourceDetails) -> Result<Self, TryFromProtoError> {
-        Ok(MySqlSourceDetails {})
+    fn from_proto(proto: ProtoMySqlSourceDetails) -> Result<Self, TryFromProtoError> {
+        Ok(MySqlSourceDetails {
+            tables: proto
+                .tables
+                .into_iter()
+                .map(mz_mysql_util::MySqlTableDesc::from_proto)
+                .collect::<Result<_, _>>()?,
+        })
     }
 }
