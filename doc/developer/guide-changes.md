@@ -97,6 +97,7 @@ files require their review. Splitting up the change into multiple RUs avoids
 this.\
 Areas where this is particularly applicable:
 * Changes to the [SQL parser](/src/sql-parser)
+* Changes to the [SQL planner](/src/sql/src/plan)
 
 ### Change descriptions
 
