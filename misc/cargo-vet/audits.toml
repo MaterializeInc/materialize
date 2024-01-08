@@ -31,9 +31,9 @@ criteria = "safe-to-deploy"
 version = "1.2.6"
 
 [[audits.differential-dataflow]]
-who = "Frank McSherry <frank@materialize.com>"
+who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:9d22bec650e80641bedfe1bcecbae27f31d17214"
+version = "0.12.0@git:c5b9baca0283f4d96f7e6f914de8578fb5c521de"
 
 [[audits.futures-timer]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
