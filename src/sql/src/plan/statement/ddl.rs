@@ -95,7 +95,8 @@ use crate::ast::{
 };
 use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError, CatalogItem, CatalogItemType,
-    CatalogRecordField, CatalogType, CatalogTypeDetails, ObjectType, SystemObjectType,
+    CatalogRecordField, CatalogType, CatalogTypeDetails, ObjectType, SubsourceCatalog,
+    SystemObjectType,
 };
 use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
 use crate::names::{
@@ -778,7 +779,7 @@ pub fn plan_create_source(
                     .or_insert(table);
             }
 
-            let publication_catalog = crate::catalog::ErsatzCatalog(tables_by_name);
+            let publication_catalog = crate::catalog::SubsourceCatalogTriple(tables_by_name);
 
             let mut text_cols: BTreeMap<Oid, BTreeSet<String>> = BTreeMap::new();
 
@@ -977,8 +978,8 @@ pub fn plan_create_source(
             options,
         } => {
             let connection_item = scx.get_item_by_resolved_name(connection)?;
-            let _connection = match connection_item.connection()? {
-                Connection::MySql(connection) => connection.clone(),
+            match connection_item.connection()? {
+                Connection::MySql(connection) => connection,
                 _ => sql_bail!(
                     "{} is not a MySQL connection",
                     scx.catalog.resolve_full_name(connection_item.name())
@@ -994,23 +995,27 @@ pub fn plan_create_source(
                 ProtoMySqlSourceDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
             let details = MySqlSourceDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
 
+            let mut available_subsources = BTreeMap::new();
+
+            for (index, table) in details.tables.iter().enumerate() {
+                let name = FullItemName {
+                    // In MySQL a database is the same as a schema
+                    database: RawDatabaseSpecifier::Ambient,
+                    schema: table.schema_name.clone(),
+                    item: table.name.clone(),
+                };
+                // The zero-th output is the main output
+                // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
+                // to handle the main source and the subsources uniformly
+                available_subsources.insert(name, index + 1);
+            }
+
             let connection =
                 GenericSourceConnection::<ReferencedConnection>::from(MySqlSourceConnection {
                     connection: connection_item.id(),
                     connection_id: connection_item.id(),
                     details,
                 });
-
-            // TODO(roshan): construct available subsources from the purified details
-            let mut available_subsources = BTreeMap::new();
-
-            // Pretend there is only one subsource named "dummydb.dummyschema.dummy"
-            let name = FullItemName {
-                database: RawDatabaseSpecifier::Name("dummydb".into()),
-                schema: "dummyschema".into(),
-                item: "dummy".into(),
-            };
-            available_subsources.insert(name, 1);
 
             // The MySQL source only outputs data to its subsources. The catalog object
             // representing the source itself is just an empty relation with no columns

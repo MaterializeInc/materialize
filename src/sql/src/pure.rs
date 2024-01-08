@@ -17,6 +17,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::anyhow;
+use itertools::Itertools;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError, Schema as CcsrSchema};
 use mz_kafka_util::client::MzClientContext;
 use mz_ore::error::ErrorExt;
@@ -25,7 +26,7 @@ use mz_ore::str::StrExt;
 use mz_postgres_util::replication::WalLevel;
 use mz_postgres_util::PostgresError;
 use mz_proto::RustType;
-use mz_repr::{strconv, GlobalId, Timestamp, RelationDesc, ScalarType};
+use mz_repr::{strconv, GlobalId, Timestamp};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::{visit_function, Visit};
 use mz_sql_parser::ast::visit_mut::{visit_expr_mut, VisitMut};
@@ -36,14 +37,15 @@ use mz_sql_parser::ast::{
     CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, DeferredItemName,
     DocOnIdentifier, DocOnSchema, Envelope, Expr, Function, FunctionArgs, Ident,
     KafkaSourceConfigOption, KafkaSourceConfigOptionName, MaterializedViewOption,
-    MaterializedViewOptionName, PgConfigOption, PgConfigOptionName, RawItemName,
-    ReaderSchemaSelectionStrategy, RefreshAtOptionValue, RefreshEveryOptionValue,
-    RefreshOptionValue, Statement, UnresolvedItemName,
+    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
+    PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, RefreshAtOptionValue,
+    RefreshEveryOptionValue, RefreshOptionValue, Statement, UnresolvedItemName,
 };
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::Connection;
 use mz_storage_types::errors::ContextCreationError;
+use mz_storage_types::sources::mysql::MySqlSourceDetails;
 use mz_storage_types::sources::postgres::PostgresSourcePublicationDetails;
 use mz_storage_types::sources::{GenericSourceConnection, SourceConnection};
 use prost::Message;
@@ -57,7 +59,7 @@ use crate::ast::{
     CreateSourceSubsource, CreateSubsourceStatement, CsrConnectionAvro, CsrConnectionProtobuf,
     Format, ProtobufSchema, ReferencedSubsources, Value, WithOptionValue,
 };
-use crate::catalog::{CatalogItemType, ErsatzCatalog, SessionCatalog};
+use crate::catalog::{CatalogItemType, SessionCatalog, SubsourceCatalog};
 use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
 use crate::names::{
     Aug, FullItemName, PartialItemName, ResolvedColumnName, ResolvedDataType, ResolvedIds,
@@ -70,16 +72,17 @@ use crate::{kafka_util, normalize};
 
 use self::error::{
     CsrPurificationError, KafkaSinkPurificationError, KafkaSourcePurificationError,
-    LoadGeneratorSourcePurificationError, PgSourcePurificationError,
+    LoadGeneratorSourcePurificationError, MySqlSourcePurificationError, PgSourcePurificationError,
     TestScriptSourcePurificationError,
 };
 
 pub(crate) mod error;
+mod mysql;
 mod postgres;
 
-fn subsource_gen<'a, T>(
+fn subsource_gen<'a, T, F: SubsourceCatalog<'a, T>>(
     selected_subsources: &mut Vec<CreateSourceSubsource<Aug>>,
-    catalog: &ErsatzCatalog<'a, T>,
+    catalog: &F,
     source_name: &UnresolvedItemName,
 ) -> Result<Vec<(UnresolvedItemName, UnresolvedItemName, &'a T)>, PlanError> {
     let mut validated_requested_subsources = vec![];
@@ -141,6 +144,56 @@ fn subsource_name_gen(
     let mut partial = normalize::unresolved_item_name(source_name.clone())?;
     partial.item = subsource_name.to_string();
     Ok(UnresolvedItemName::from(partial))
+}
+
+/// Validates the requested subsources do not have name conflicts with each other
+/// and that the same upstream table is not referenced multiple times.
+fn validate_subsource_names<T>(
+    requested_subsources: &[(UnresolvedItemName, UnresolvedItemName, &T)],
+) -> Result<(), PlanError> {
+    // This condition would get caught during the catalog transaction, but produces a
+    // vague, non-contextual error. Instead, error here so we can suggest to the user
+    // how to fix the problem.
+    if let Some(name) = requested_subsources
+        .iter()
+        .map(|(_, subsource_name, _)| subsource_name)
+        .duplicates()
+        .next()
+        .cloned()
+    {
+        let mut upstream_references: Vec<_> = requested_subsources
+            .into_iter()
+            .filter_map(|(u, t, _)| if t == &name { Some(u.clone()) } else { None })
+            .collect();
+
+        upstream_references.sort();
+
+        Err(PlanError::SubsourceNameConflict {
+            name,
+            upstream_references,
+        })?;
+    }
+
+    // We technically could allow multiple subsources to ingest the same upstream table, but
+    // it is almost certainly an error on the user's end.
+    if let Some(name) = requested_subsources
+        .iter()
+        .map(|(referenced_name, _, _)| referenced_name)
+        .duplicates()
+        .next()
+        .cloned()
+    {
+        let mut target_names: Vec<_> = requested_subsources
+            .into_iter()
+            .filter_map(|(u, t, _)| if u == &name { Some(t.clone()) } else { None })
+            .collect();
+
+        target_names.sort();
+
+        Err(PlanError::SubsourceDuplicateReference { name, target_names })?;
+    }
+
+    Ok(())
 }
 
 /// Purifies a statement, removing any dependencies on external state.
@@ -731,7 +784,9 @@ async fn purify_create_source(
                 );
             }
 
-            postgres::validate_requested_subsources(
+            validate_subsource_names(&validated_requested_subsources)?;
+
+            postgres::validate_requested_subsources_privileges(
                 &config,
                 &validated_requested_subsources,
                 &storage_configuration.connection_context.ssh_tunnel_manager,
@@ -796,45 +851,210 @@ async fn purify_create_source(
             })
         }
         CreateSourceConnection::MySql {
-            connection: _,
-            options: _,
+            connection,
+            options,
         } => {
-            // TODO(roshan): purify state from upstream to fill in MySqlSourceDetails
-            //
-            // TODO(roshan): properly process subsources
-            let mz_name = UnresolvedItemName::qualified(&[Ident::new("dummy").unwrap()]);
-            let subsource_name = UnresolvedItemName::qualified(&[
-                Ident::new("dummydb").unwrap(),
-                Ident::new("dummyschema").unwrap(),
-                Ident::new("dummy").unwrap(),
-            ]);
-
-            let desc = RelationDesc::empty().with_column("data", ScalarType::String.nullable(true));
             let scx = StatementContext::new(None, &catalog);
-            let (columns, table_constraints) = scx.relation_desc_into_table_defs(&desc)?;
-
-            let transient_id = GlobalId::Transient(get_transient_subsource_id());
-
-            let subsource = scx.allocate_resolved_item_name(transient_id, mz_name.clone())?;
-
-            let targeted_subsources = vec![CreateSourceSubsource {
-                reference: subsource_name,
-                subsource: Some(DeferredItemName::Named(subsource)),
-            }];
-            *referenced_subsources = Some(ReferencedSubsources::SubsetTables(targeted_subsources));
-
-            // Create the subsource statement
-            let subsource = CreateSubsourceStatement {
-                name: mz_name,
-                columns,
-                constraints: table_constraints,
-                if_not_exists: false,
-                with_options: vec![CreateSubsourceOption {
-                    name: CreateSubsourceOptionName::References,
-                    value: Some(WithOptionValue::Value(Value::Boolean(true))),
-                }],
+            let connection_item = scx.get_item_by_resolved_name(connection)?;
+            let connection = match connection_item.connection()? {
+                Connection::MySql(connection) => {
+                    connection.clone().into_inline_connection(&catalog)
+                }
+                _ => Err(MySqlSourcePurificationError::NotMySqlConnection(
+                    scx.catalog.resolve_full_name(connection_item.name()),
+                ))?,
             };
-            subsources.push((transient_id, subsource));
+            let crate::plan::statement::ddl::MySqlConfigOptionExtracted { details, seen: _ } =
+                options.clone().try_into()?;
+
+            if details.is_some() {
+                Err(MySqlSourcePurificationError::UserSpecifiedDetails)?;
+            }
+
+            let config = connection
+                .config(
+                    &*storage_configuration.connection_context.secrets_reader,
+                    storage_configuration,
+                )
+                .await?;
+
+            let mut conn = config
+                .connect(
+                    "mysql purification",
+                    &storage_configuration.connection_context.ssh_tunnel_manager,
+                )
+                .await?;
+
+            // Check if the MySQL database is configured to allow row-based consistent GTID replication
+            let mut replication_errors = vec![];
+            for error in [
+                mz_mysql_util::ensure_gtid_consistency(&mut conn)
+                    .await
+                    .err(),
+                mz_mysql_util::ensure_full_row_binlog_format(&mut conn)
+                    .await
+                    .err(),
+                mz_mysql_util::ensure_replication_commit_order(&mut conn)
+                    .await
+                    .err(),
+            ] {
+                match error {
+                    Some(mz_mysql_util::MySqlError::InvalidSystemSetting {
+                        setting,
+                        expected,
+                        actual,
+                    }) => {
+                        replication_errors.push((setting, expected, actual));
+                    }
+                    Some(err) => Err(err)?,
+                    None => (),
+                }
+            }
+            if !replication_errors.is_empty() {
+                Err(MySqlSourcePurificationError::ReplicationSettingsError(
+                    replication_errors,
+                ))?;
+            }
+
+            // Determine which schemas to request from mysql. Note that in mysql
+            // a 'schema' is the same as a 'database', and a fully qualified table
+            // name is 'schema_name.table_name' (there is no db_name)
+            let requested_schemas = match referenced_subsources
+                .as_mut()
+                .ok_or(MySqlSourcePurificationError::RequiresReferencedSubsources)?
+            {
+                ReferencedSubsources::All => {
+                    None // All schemas
+                }
+                ReferencedSubsources::SubsetSchemas(schemas) => Some(
+                    schemas
+                        .iter()
+                        .map(|s| s.as_str().to_string())
+                        .collect::<Vec<_>>(),
+                ),
+                ReferencedSubsources::SubsetTables(tables) => Some(
+                    tables
+                        .iter()
+                        .map(|t| {
+                            let idents = &t.reference.0;
+                            // We only support fully qualified table names for now
+                            if idents.len() != 2 {
+                                Err(MySqlSourcePurificationError::InvalidTableReference(
+                                    t.reference.to_ast_string(),
+                                ))?;
+                            }
+                            Ok(idents.first().unwrap().as_str().to_string())
+                        })
+                        .collect::<Result<Vec<_>, MySqlSourcePurificationError>>()?,
+                ),
+            };
+
+            // Retrieve all tables for the requested schemas
+            let tables = mz_mysql_util::schema_info(&mut conn, &requested_schemas)
+                .await
+                .map_err(|err| match err {
+                    // TODO: Refactor schema_info to return all unsupported columns rather than
+                    // just the first one
+                    mz_mysql_util::MySqlError::UnsupportedDataType {
+                        qualified_table_name,
+                        data_type,
+                        column_name,
+                    } => PlanError::from(MySqlSourcePurificationError::UnrecognizedTypes {
+                        cols: vec![(qualified_table_name, column_name, data_type)],
+                    }),
+                    _ => err.into(),
+                })?;
+
+            if tables.is_empty() {
+                Err(MySqlSourcePurificationError::EmptyDatabase)?;
+            }
+
+            let mysql_catalog = mysql::derive_catalog_from_tables(&tables)?;
+
+            let mut validated_requested_subsources = vec![];
+            match referenced_subsources
+                .as_mut()
+                .ok_or(MySqlSourcePurificationError::RequiresReferencedSubsources)?
+            {
+                ReferencedSubsources::All => {
+                    for table in &tables {
+                        let upstream_name = UnresolvedItemName::qualified(&[
+                            Ident::new(&table.schema_name)?,
+                            Ident::new(&table.name)?,
+                        ]);
+                        let subsource_name = subsource_name_gen(source_name, &table.name)?;
+                        validated_requested_subsources.push((upstream_name, subsource_name, table));
+                    }
+                }
+                ReferencedSubsources::SubsetSchemas(schemas) => {
+                    let available_schemas: BTreeSet<_> =
+                        tables.iter().map(|t| t.schema_name.as_str()).collect();
+                    let requested_schemas: BTreeSet<_> =
+                        schemas.iter().map(|s| s.as_str()).collect();
+                    let missing_schemas: Vec<_> = requested_schemas
+                        .difference(&available_schemas)
+                        .map(|s| s.to_string())
+                        .collect();
+                    if !missing_schemas.is_empty() {
+                        Err(MySqlSourcePurificationError::NoTablesFoundForSchemas(
+                            missing_schemas,
+                        ))?;
+                    }
+
+                    for table in &tables {
+                        if !requested_schemas.contains(table.schema_name.as_str()) {
+                            continue;
+                        }
+
+                        let upstream_name = UnresolvedItemName::qualified(&[
+                            Ident::new(&table.schema_name)?,
+                            Ident::new(&table.name)?,
+                        ]);
+                        let subsource_name = subsource_name_gen(source_name, &table.name)?;
+                        validated_requested_subsources.push((upstream_name, subsource_name, table));
+                    }
+                }
+                ReferencedSubsources::SubsetTables(subsources) => {
+                    // The user manually selected a subset of upstream tables so we need to
+                    // validate that the names actually exist and are not ambiguous
+                    validated_requested_subsources.extend(subsource_gen(
+                        subsources,
+                        &mysql_catalog,
+                        source_name,
+                    )?);
+                }
+            }
+
+            if validated_requested_subsources.is_empty() {
+                sql_bail!(
+                    "[internal error]: MySQL source must ingest at least one table, but {} matched none",
+                    referenced_subsources.as_ref().unwrap().to_ast_string()
+                );
+            }
+
+            validate_subsource_names(&validated_requested_subsources)?;
+
+            // TODO(roshan): Implement privileges check for MySQL
+
+            let (targeted_subsources, new_subsources) = mysql::generate_targeted_subsources(
+                &scx,
+                validated_requested_subsources,
+                get_transient_subsource_id,
+            )?;
+
+            *referenced_subsources = Some(ReferencedSubsources::SubsetTables(targeted_subsources));
+            subsources.extend(new_subsources);
+
+            // Remove any old detail references
+            options
+                .retain(|MySqlConfigOption { name, .. }| name != &MySqlConfigOptionName::Details);
+            let details = MySqlSourceDetails { tables };
+            options.push(MySqlConfigOption {
+                name: MySqlConfigOptionName::Details,
+                value: Some(WithOptionValue::Value(Value::String(hex::encode(
+                    details.into_proto().encode_to_vec(),
+                )))),
+            })
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
             let scx = StatementContext::new(None, &catalog);
@@ -1137,13 +1357,15 @@ async fn purify_alter_source(
 
     for (upstream_name, _, _) in validated_requested_subsources.iter() {
         if current_subsources.contains_key(upstream_name) {
-            Err(PgSourcePurificationError::SubsourceAlreadyReferredTo {
+            Err(PlanError::SubsourceAlreadyReferredTo {
                 name: upstream_name.clone(),
             })?;
         }
     }
 
-    postgres::validate_requested_subsources(
+    validate_subsource_names(&validated_requested_subsources)?;
+
+    postgres::validate_requested_subsources_privileges(
         &config,
         &validated_requested_subsources,
         &storage_configuration.connection_context.ssh_tunnel_manager,
