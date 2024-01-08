@@ -312,6 +312,8 @@ where
     }
 
     #[inline]
+    // Hrm, forgot to actually remove the "async" here... leave it here just to
+    // see whether that does a thing.
     pub async fn give_container_sync<C: CapabilityTrait<T>>(&mut self, cap: &C, container: &mut D) {
         let mut handle = self.handle.borrow_mut();
         cap.session(&mut handle).give_container(container);

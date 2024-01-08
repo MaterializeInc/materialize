@@ -11,6 +11,7 @@
 
 use std::fmt::Debug;
 use std::future::Future;
+use std::pin::pin;
 use std::sync::mpsc::TryRecvError;
 use std::sync::{mpsc, Arc};
 
@@ -37,6 +38,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::Scheduler;
 use timely::worker::Worker;
 use timely::{Data, WorkerConfig};
+use tokio::time::Duration;
 use tracing::{debug, trace};
 
 use crate::txn_cache::{TxnsCache, TxnsCacheState};
@@ -238,7 +240,7 @@ where
     let (worker_idx, num_workers) = (passthrough.scope().index(), passthrough.scope().peers());
     let shutdown_button = builder.build(move |capabilities| async move {
         let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
-        let client = client.await;
+        let client = timeout_log(client, "client").await;
         let state = TxnsCacheState::new(txns_id, T::minimum(), Some(data_id));
         let cache_name = format!(
             "{} {:.9} {}/{}",
@@ -254,18 +256,23 @@ where
             buf: Vec::new(),
         };
 
-        txns_cache.update_gt(&as_of).await;
+        timeout_log(
+            txns_cache.update_gt(&as_of),
+            format!("txns_cache.update_gt(as_of:{:?})", as_of),
+        )
+        .await;
         let snap = txns_cache.state.data_snapshot(data_id, as_of.clone());
-        let data_write = client
-            .open_writer::<K, V, T, D>(
-                data_id,
-                Arc::clone(&data_key_schema),
-                Arc::clone(&data_val_schema),
-                Diagnostics::from_purpose("data read physical upper"),
-            )
+        let data_write = client.open_writer::<K, V, T, D>(
+            data_id,
+            Arc::clone(&data_key_schema),
+            Arc::clone(&data_val_schema),
+            Diagnostics::from_purpose("data read physical upper"),
+        );
+        let data_write = timeout_log(data_write, "client.open_writer(..)")
             .await
             .expect("schema shouldn't change");
-        let empty_to = snap.unblock_read(data_write).await;
+        let empty_to = snap.unblock_read(data_write);
+        let empty_to = timeout_log(empty_to, "snap.unblock_read(data_write)").await;
         debug!(
             "{} {:.9} {}/{} starting as_of={:?} empty_to={:?}",
             name,
@@ -286,15 +293,18 @@ where
                 // This only returns None when there are no more data left. Turn
                 // it into an empty frontier progress so we can re-use the
                 // shutdown code below.
-                let event = passthrough_input
-                    .next_mut()
+                let event = passthrough_input.next_mut();
+
+                let event = timeout_log(event, "passthrough_input.next_mut()")
                     .await
                     .unwrap_or_else(|| Event::Progress(Antichain::new()));
                 match event {
                     // NB: Ignore the data_cap because this input is
                     // disconnected.
                     Event::Data(_data_cap, data) => {
-                        passthrough_output.give_container_sync(&cap, data).await;
+                        let fut = passthrough_output.give_container_sync(&cap, data);
+                        timeout_log(fut, "passthrough_output.give_container_sync(&cap, data)")
+                            .await;
                     }
                     Event::Progress(progress) => {
                         // We reached the empty frontier! Shut down.
@@ -329,7 +339,13 @@ where
             // physically written to the data shard. Query the txns shard to
             // find out what to do next given our current progress.
             loop {
-                txns_cache.update_ge(&output_progress_exclusive).await;
+                let fut = txns_cache.update_ge(&output_progress_exclusive);
+                timeout_log(
+                    fut,
+                    format!("txns_cache.update_ge({:?})", output_progress_exclusive),
+                )
+                .await;
+
                 txns_cache.compact_to(&output_progress_exclusive);
                 let data_listen_next = txns_cache
                     .state
@@ -353,7 +369,12 @@ where
                     // after this update_gt call), we're guaranteed to get an
                     // answer.
                     DataListenNext::WaitForTxnsProgress => {
-                        txns_cache.update_gt(&output_progress_exclusive).await;
+                        let fut = txns_cache.update_gt(&output_progress_exclusive);
+                        timeout_log(
+                            fut,
+                            format!("txns_cache.update_gt({:?})", output_progress_exclusive),
+                        )
+                        .await;
                         continue;
                     }
                     // The data shard got a write! Loop back above and pass
@@ -402,6 +423,31 @@ where
     (passthrough_stream, shutdown_button.press_on_drop())
 }
 
+/// Logs the given message when the future times out, and then never returns.
+async fn timeout_log<F, T, M>(future: F, msg: M) -> T
+where
+    F: Future<Output = T>,
+    M: AsRef<str>,
+{
+    // // Very long timeout, to avoid firing when the cluster is just overloaded.
+    // match tokio::time::timeout(Duration::from_secs(60 * 5), future).await {
+    //     Ok(t) => t,
+    //     Err(timeout) => {
+    //         // Log the timeout and never return.
+    //         tracing::error!("timeout elapsed, {}: {}", msg, timeout);
+    //         std::future::pending().await
+    //     }
+    // }
+    // Petros' alternative: retry/log continually.
+    let mut fut = pin!(future);
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), fut.as_mut()).await {
+            Ok(value) => break value,
+            Err(_) => tracing::error!("timeout: {}, continue waiting ...", msg.as_ref()),
+        }
+    }
+}
+
 // NB: The API of this intentionally mirrors TxnsCache and TxnsRead. Consider
 // making them all implement the same trait?
 struct TxnsCacheTimely<
@@ -444,7 +490,10 @@ where
 
     async fn update<F: Fn(&T) -> bool>(&mut self, done: F) {
         while !done(&self.state.progress_exclusive) {
-            let Some(event) = self.input.next_mut().await else {
+            let event = self.input.next_mut();
+            let event = timeout_log(event, "self.input.next_mut()").await;
+
+            let Some(event) = event else {
                 unreachable!("txns shard unexpectedly closed")
             };
             match event {
