@@ -33,10 +33,9 @@ class RegressionAssessment:
             Endpoint, str | None
         ] = {}
         self.determine_whether_regressions_are_justified()
-        # See #24147
-        # assert len(comparison_outcome.endpoints_with_regressions) == len(
-        #     self.endpoints_with_regressions_and_justifications
-        # )
+        assert len(comparison_outcome.endpoints_with_regressions) == len(
+            self.endpoints_with_regressions_and_justifications
+        )
 
     def has_comparison_target(self) -> bool:
         return self.baseline_endpoint is not None
