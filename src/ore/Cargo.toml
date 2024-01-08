@@ -7,6 +7,9 @@ edition.workspace = true
 rust-version.workspace = true
 authors = ["Materialize, Inc."]
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = { version = "1.0.66", optional = true }
 # NB: ore is meant to be an extension of the Rust stdlib. To keep it

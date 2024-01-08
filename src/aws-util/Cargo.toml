@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 aws-config = { version = "1.1.1", default-features = false }
 aws-sdk-s3 = { version = "1.8.0", default-features = false, features = ["rt-tokio"], optional = true }

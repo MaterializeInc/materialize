@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 columnation = { git = "https://github.com/frankmcsherry/columnation" }
 differential-dataflow = "0.12.0"

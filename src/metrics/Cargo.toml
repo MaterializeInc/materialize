@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 lgalloc = "0.1"
 libc = "0.2.138"

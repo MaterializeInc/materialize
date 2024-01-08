@@ -12,6 +12,9 @@ autoexamples = false
 # src/benches.
 autobenches = false
 
+[lints]
+workspace = true
+
 # Disable the ability to use benches in the library because the bench harness
 # isn't overridable there and the stock one prevents using Criterion specific
 # flags, e.g. `cargo bench -p persist -- --baseline=foo`.

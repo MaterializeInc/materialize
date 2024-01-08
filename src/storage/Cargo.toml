@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [[example]]
 name = "upsert_open_loop"
 bench = false
