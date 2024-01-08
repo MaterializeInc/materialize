@@ -32,7 +32,7 @@ class RegressionAssessment:
         self.endpoints_with_regressions_and_justifications: dict[
             Endpoint, str | None
         ] = {}
-        self.check_targets()
+        self.determine_whether_regressions_are_justified()
         # See #24147
         # assert len(comparison_outcome.endpoints_with_regressions) == len(
         #     self.endpoints_with_regressions_and_justifications
@@ -50,7 +50,7 @@ class RegressionAssessment:
             for justification in self.endpoints_with_regressions_and_justifications.values()
         )
 
-    def check_targets(self) -> None:
+    def determine_whether_regressions_are_justified(self) -> None:
         if self.baseline_endpoint is None:
             return
 
