@@ -17,8 +17,8 @@ mod spines {
     use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdKeyBuilder};
     use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
-    use differential_dataflow::trace::implementations::Layout;
     use differential_dataflow::trace::implementations::Update;
+    use differential_dataflow::trace::implementations::{Layout, OffsetList};
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
     use std::rc::Rc;
     use timely::container::columnation::{Columnation, TimelyStack};
@@ -62,6 +62,7 @@ mod spines {
         type KeyContainer = DatumContainer;
         type ValContainer = DatumContainer;
         type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
+        type OffsetContainer = OffsetList;
     }
     impl<U: Update<Key = Row>> Layout for RowValLayout<U>
     where
@@ -73,6 +74,7 @@ mod spines {
         type KeyContainer = DatumContainer;
         type ValContainer = TimelyStack<U::Val>;
         type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
+        type OffsetContainer = OffsetList;
     }
     impl<U: Update<Key = Row, Val = ()>> Layout for RowLayout<U>
     where
@@ -83,6 +85,7 @@ mod spines {
         type KeyContainer = DatumContainer;
         type ValContainer = TimelyStack<()>;
         type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
+        type OffsetContainer = OffsetList;
     }
 }
 
@@ -117,35 +120,9 @@ mod container {
         }
     }
 
-    impl Default for DatumContainer {
-        fn default() -> Self {
-            Self {
-                batches: Vec::new(),
-            }
-        }
-    }
-
     impl BatchContainer for DatumContainer {
         type PushItem = Row;
         type ReadItem<'a> = DatumSeq<'a>;
-
-        fn push(&mut self, item: Self::PushItem) {
-            self.copy_push(&item);
-        }
-        fn copy_push(&mut self, item: &Self::PushItem) {
-            self.copy(MyTrait::borrow_as(item));
-        }
-        fn copy_slice(&mut self, slice: &[Row]) {
-            for item in slice.iter() {
-                self.copy_push(item);
-            }
-        }
-        fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
-            for index in start..end {
-                self.copy(other.index(index));
-            }
-        }
-        fn reserve(&mut self, _additional: usize) {}
 
         fn copy(&mut self, item: Self::ReadItem<'_>) {
             if let Some(batch) = self.batches.last_mut() {
