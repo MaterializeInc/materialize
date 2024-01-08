@@ -71,7 +71,7 @@ use mz_storage_types::sources::Timeline;
 use crate::catalog::{
     is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config,
 };
-use crate::coord::timestamp_oracle;
+use crate::coord::catalog_oracle;
 use crate::AdapterError;
 
 #[derive(Debug)]
@@ -271,7 +271,7 @@ impl Catalog {
                 let previous_ts = txn
                     .get_timestamp(&Timeline::EpochMilliseconds)
                     .expect("missing EpochMilliseconds timeline");
-                let boot_ts = timestamp_oracle::catalog_oracle::monotonic_now(
+                let boot_ts = catalog_oracle::monotonic_now(
                     config.now.clone(),
                     previous_ts,
                 );
@@ -924,11 +924,7 @@ impl Catalog {
 
             let mut catalog = Catalog {
                 state,
-                plans: CatalogPlans {
-                    optimized_plan_by_id: Default::default(),
-                    physical_plan_by_id: Default::default(),
-                    dataflow_metainfos: BTreeMap::new(),
-                },
+                plans: CatalogPlans::default(),
                 transient_revision: 1,
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
             };

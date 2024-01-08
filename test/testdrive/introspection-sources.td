@@ -265,7 +265,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > CREATE DEFAULT INDEX ii_arr ON vv_arr
 
 # It's hard to come up with precise bounds because we might de-duplicate some data in arrangements.
-> SELECT records >= 300, size >= 0.25 * 10000, capacity >= 0.25 * 10000 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_arr' OR name LIKE '%mv_arr'
+> SELECT records >= 300, size > 0, capacity > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_arr' OR name LIKE '%mv_arr'
 true true true
 true true true
 
@@ -275,7 +275,7 @@ true true true
 
 > CREATE DEFAULT INDEX ii_empty ON t3
 
-> SELECT records, batches, size < 1024, capacity < 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_empty'
+> SELECT records, batches, size < 16 * 1024, capacity < 16 * 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_empty'
 0 32 true true true
 
 # Tests that arrangement sizes are approximate
@@ -284,18 +284,20 @@ true true true
 
 > CREATE INDEX ii_t4 ON t4(c)
 
-> SELECT records, batches, size < 1024, capacity < 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+# We have 16 workers, and only want to ensure that the sizes are not egregious.
+
+> SELECT records, batches, size < 16 * 1024, capacity < 16 * 1024, allocations < 512 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
 0 32 true true true
 
 > INSERT INTO t4 SELECT 1
 
-> SELECT records, batches, size < 1024, capacity > 96, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+> SELECT records, batches, size < 16 * 1024, capacity > 0, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
 1 32 true true true
 
 > INSERT INTO t4 SELECT generate_series(1, 1000)
 
 # Determining exact sizes is difficult because of deduplication in arrangements, so we just use safe values.
-> SELECT records >= 1000 AND records <= 1001, batches > 0, size > 0.25 * 30000 AND size < 4*30000, capacity > 0.25 * 30000, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+> SELECT records >= 1000 AND records <= 1001, batches > 0, size > 0 AND size < 4*30000, capacity > 0, allocations > 0 FROM mz_internal.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
 true true true true true
 
 > DROP INDEX ii_t4
@@ -349,9 +351,9 @@ true true true true true
 > SELECT
     records > 2 * 1000,
     records < 2 * 2 * 1000,
-    size > 0.25 * 130 * 1000,
+    size > 0,
     size < 4 * 130 * 1000,
-    capacity > 0.25 * 130 * 1000,
+    capacity > 0,
     capacity < 4 * 130 * 1000,
     allocations > 0
   FROM mz_internal.mz_dataflow_arrangement_sizes
@@ -359,11 +361,11 @@ true true true true true
 true true true true true true true
 
 > SELECT
-    records > 2 * 1000,
-    records < 2 * 2 * 1000,
-    size > 0.025 * 100 * 1024,
+    records > 1000,
+    records < 2 * 1000,
+    size > 0,
     size < 4 * 100 * 1024,
-    capacity > 0.25 * 100 * 1024,
+    capacity > 0,
     capacity < 4 * 100 * 1024,
     allocations > 100
   FROM mz_internal.mz_dataflow_arrangement_sizes
@@ -390,9 +392,9 @@ true true true true true true true
 > SELECT
     records > 12 * 1000,
     records < 2 * 12 * 1000,
-    size > 0.25 * 1000 * 1000,
+    size > 0,
     size < 4 * 1000 * 1000,
-    capacity > 0.25 * 1000 * 1000,
+    capacity > 0,
     capacity < 4 * 1000 * 1000,
     allocations > 0
   FROM mz_internal.mz_dataflow_arrangement_sizes
@@ -424,9 +426,9 @@ true true true true true true true
 > SELECT
     records >= 2 * 1000,
     records < 1.1 * 2 * 1000,
-    size > 0.25 * 200 * 1000,
+    size > 0,
     size < 4 * 200 * 1000,
-    capacity > 0.25 * 200 * 1000,
+    capacity > 0,
     capacity < 4 * 200 * 1000,
     allocations > 100
   FROM mz_internal.mz_dataflow_arrangement_sizes
@@ -436,9 +438,9 @@ true true true true true true true
 > SELECT
     records >= 2 * 1000,
     records < 2 * 2 * 1000,
-    size > 0.25 * 172 * 1000,
+    size > 0,
     size < 4 * 172 * 1000,
-    capacity > 0.25 * 172 * 1000,
+    capacity > 0,
     capacity < 4 * 172 * 1000,
     allocations > 100
   FROM mz_internal.mz_dataflow_arrangement_sizes

@@ -7,14 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
 use mz_expr::CollectionPlan;
+use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::{ObjectId, ResolvedIds};
 use mz_sql::plan;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
+use timely::progress::Antichain;
 
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
@@ -97,20 +100,11 @@ impl Coordinator {
         let plan::CreateMaterializedViewPlan {
             materialized_view:
                 plan::MaterializedView {
-                    expr,
-                    cluster_id,
-                    refresh_schedule,
-                    ..
+                    expr, cluster_id, ..
                 },
             ambiguous_columns,
             ..
         } = &plan;
-
-        if refresh_schedule.is_some() {
-            return Err(AdapterError::Unsupported(
-                "REFRESH options other than ON COMMIT",
-            ));
-        }
 
         // Validate any references in the materialized view's expression. We do
         // this on the unoptimized plan to better reflect what the user typed.
@@ -167,6 +161,7 @@ impl Coordinator {
                     column_names,
                     cluster_id,
                     non_null_assertions,
+                    refresh_schedule,
                     ..
                 },
             ..
@@ -193,6 +188,7 @@ impl Coordinator {
             internal_view_id,
             column_names.clone(),
             non_null_assertions.clone(),
+            refresh_schedule.clone(),
             debug_name,
             optimizer_config,
         );
@@ -285,6 +281,38 @@ impl Coordinator {
         )
         .collect::<Vec<_>>();
 
+        // Timestamp selection
+        let as_of = {
+            // Normally, `as_of` should be the least_valid_read.
+            let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
+            let mut as_of = self.least_valid_read(&id_bundle);
+            // But for MVs with non-trivial REFRESH schedules, it's important to set the
+            // `as_of` to the first refresh. This is because we'd like queries on the MV to
+            // block until the first refresh (rather than to show an empty MV).
+            if let Some(refresh_schedule) = &refresh_schedule {
+                if let Some(as_of_ts) = as_of.as_option() {
+                    let Some(rounded_up_ts) = refresh_schedule.round_up_timestamp(*as_of_ts) else {
+                        return Err(AdapterError::MaterializedViewWouldNeverRefresh(
+                            refresh_schedule.last_refresh().expect("if round_up_timestamp returned None, then there should be a last refresh"),
+                            *as_of_ts
+                        ));
+                    };
+                    as_of = Antichain::from_elem(rounded_up_ts);
+                } else {
+                    // The `as_of` should never be empty, because then the MV would be unreadable.
+                    soft_panic_or_log!("creating a materialized view with an empty `as_of`");
+                }
+            }
+            as_of
+        };
+
+        // If we have a refresh schedule that has a last refresh, then set the `until` to the last refresh.
+        // (If the `try_step_forward` fails, then no need to set an `until`, because it's not possible to get any data
+        // beyond that last refresh time, because there are no times beyond that time.)
+        let until = refresh_schedule
+            .and_then(|s| s.last_refresh())
+            .and_then(|r| r.try_step_forward());
+
         let transact_result = self
             .catalog_transact_with_side_effects(Some(ctx.session()), ops, |coord| async {
                 // Save plan structures.
@@ -298,10 +326,11 @@ impl Coordinator {
                 let output_desc = global_lir_plan.desc().clone();
                 let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
-                // Timestamp selection
-                let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
-                let since = coord.least_valid_read(&id_bundle);
-                df_desc.set_as_of(since.clone());
+                df_desc.set_as_of(as_of.clone());
+
+                if let Some(until) = until {
+                    df_desc.until.meet_assign(&Antichain::from_elem(until));
+                }
 
                 // Emit notices.
                 coord.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
@@ -323,7 +352,7 @@ impl Coordinator {
                             CollectionDescription {
                                 desc: output_desc,
                                 data_source: DataSource::Other(DataSourceOther::Compute),
-                                since: Some(since),
+                                since: Some(as_of),
                                 status_collection_id: None,
                             },
                         )],

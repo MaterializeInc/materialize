@@ -17,9 +17,8 @@ use mz_ore::cast::CastFrom;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
-use crate::coord::timeline::WriteTimestamp;
-use crate::coord::timestamp_oracle::metrics::Metrics;
-use crate::coord::timestamp_oracle::{ShareableTimestampOracle, TimestampOracle};
+use crate::metrics::Metrics;
+use crate::{ShareableTimestampOracle, TimestampOracle, WriteTimestamp};
 
 /// A batching [`TimestampOracle`] backed by a [`ShareableTimestampOracle`]
 ///
@@ -54,7 +53,7 @@ where
     T: Clone + Send + Sync + 'static,
 {
     /// Crates a [`BatchingTimestampOracle`] that uses the given inner oracle.
-    pub(crate) fn new(
+    pub fn new(
         metrics: Arc<Metrics>,
         oracle: Arc<dyn ShareableTimestampOracle<T> + Send + Sync>,
     ) -> Self {
@@ -172,10 +171,7 @@ mod tests {
     use mz_ore::metrics::MetricsRegistry;
     use tracing::info;
 
-    use crate::coord::timestamp_oracle;
-    use crate::coord::timestamp_oracle::postgres_oracle::{
-        PostgresTimestampOracle, PostgresTimestampOracleConfig,
-    };
+    use crate::postgres_oracle::{PostgresTimestampOracle, PostgresTimestampOracleConfig};
 
     use super::*;
 
@@ -194,7 +190,7 @@ mod tests {
         };
         let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
-        timestamp_oracle::tests::timestamp_oracle_impl_test(|timeline, now_fn, initial_ts| {
+        crate::tests::timestamp_oracle_impl_test(|timeline, now_fn, initial_ts| {
             // We use the postgres oracle as the backing oracle because it's
             // the only shareable oracle we have.
             let oracle =
@@ -230,26 +226,24 @@ mod tests {
         };
         let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
-        timestamp_oracle::tests::shareable_timestamp_oracle_impl_test(
-            |timeline, now_fn, initial_ts| {
-                // We use the postgres oracle as the backing oracle because it's
-                // the only shareable oracle we have.
-                let oracle =
-                    PostgresTimestampOracle::open(config.clone(), timeline, initial_ts, now_fn)
-                        .map(|oracle| {
-                            let shared_oracle = oracle.get_shared().expect("known to be shareable");
-                            let batching_oracle =
-                                BatchingTimestampOracle::new(Arc::clone(&metrics), shared_oracle);
+        crate::tests::shareable_timestamp_oracle_impl_test(|timeline, now_fn, initial_ts| {
+            // We use the postgres oracle as the backing oracle because it's
+            // the only shareable oracle we have.
+            let oracle =
+                PostgresTimestampOracle::open(config.clone(), timeline, initial_ts, now_fn)
+                    .map(|oracle| {
+                        let shared_oracle = oracle.get_shared().expect("known to be shareable");
+                        let batching_oracle =
+                            BatchingTimestampOracle::new(Arc::clone(&metrics), shared_oracle);
 
-                            batching_oracle
-                        })
-                        .map(|batching_oracle| {
-                            batching_oracle.get_shared().expect("known to be shareable")
-                        });
+                        batching_oracle
+                    })
+                    .map(|batching_oracle| {
+                        batching_oracle.get_shared().expect("known to be shareable")
+                    });
 
-                oracle
-            },
-        )
+            oracle
+        })
         .await?;
 
         Ok(())

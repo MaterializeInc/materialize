@@ -59,7 +59,22 @@ pub struct StorageParameters {
     pub ssh_timeout_config: SshTimeoutConfig,
     /// Networking configuration for kafka connections.
     pub kafka_timeout_config: mz_kafka_util::client::TimeoutConfig,
+    /// The interval to emit records to statistics tables
+    pub statistics_interval: Duration,
+    /// The interval to _collect statistics_ within clusterd.
+    // Note: this interval configures the level of granularity we expect statistics
+    // (at least with this implementation) to have. We expect a statistic in the
+    // system tables to be only accurate to within this interval + whatever
+    // skew the `CollectionManager` adds. The stats task in the controller will
+    // be reporting, for each worker, on some interval,
+    // the statistics reported by the most recent collection of statistics as
+    // defined by this interval. This is known to be somewhat inaccurate,
+    // but people mostly care about either rates, or the values to within 1 minute.
+    pub statistics_collection_interval: Duration,
 }
+
+pub const STATISTICS_INTERVAL_DEFAULT: Duration = Duration::from_secs(60);
+pub const STATISTICS_COLLECTION_INTERVAL_DEFAULT: Duration = Duration::from_secs(10);
 
 // Implement `Default` manually, so that the default can match the
 // LD default. This is not strictly necessary, but improves clarity.
@@ -83,6 +98,8 @@ impl Default for StorageParameters {
             record_namespaced_errors: true,
             ssh_timeout_config: Default::default(),
             kafka_timeout_config: Default::default(),
+            statistics_interval: STATISTICS_INTERVAL_DEFAULT,
+            statistics_collection_interval: STATISTICS_COLLECTION_INTERVAL_DEFAULT,
         }
     }
 }
@@ -176,6 +193,8 @@ impl StorageParameters {
             record_namespaced_errors,
             ssh_timeout_config,
             kafka_timeout_config,
+            statistics_interval,
+            statistics_collection_interval,
         }: StorageParameters,
     ) {
         self.persist.update(persist);
@@ -197,6 +216,9 @@ impl StorageParameters {
         self.record_namespaced_errors = record_namespaced_errors;
         self.ssh_timeout_config = ssh_timeout_config;
         self.kafka_timeout_config = kafka_timeout_config;
+        // We set this in the statistics scraper tasks only once at startup.
+        self.statistics_interval = statistics_interval;
+        self.statistics_collection_interval = statistics_collection_interval;
     }
 }
 
@@ -232,6 +254,8 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             record_namespaced_errors: self.record_namespaced_errors,
             ssh_timeout_config: Some(self.ssh_timeout_config.into_proto()),
             kafka_timeout_config: Some(self.kafka_timeout_config.into_proto()),
+            statistics_interval: Some(self.statistics_interval.into_proto()),
+            statistics_collection_interval: Some(self.statistics_collection_interval.into_proto()),
         }
     }
 
@@ -286,6 +310,12 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             kafka_timeout_config: proto
                 .kafka_timeout_config
                 .into_rust_if_some("ProtoStorageParameters::kafka_timeout_config")?,
+            statistics_interval: proto
+                .statistics_interval
+                .into_rust_if_some("ProtoStorageParameters::statistics_interval")?,
+            statistics_collection_interval: proto
+                .statistics_collection_interval
+                .into_rust_if_some("ProtoStorageParameters::statistics_collection_interval")?,
         })
     }
 }

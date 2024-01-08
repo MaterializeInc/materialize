@@ -419,8 +419,10 @@ The view is defined as the transitive closure of [`mz_object_dependencies`](#mz_
 
 ### `mz_notices`
 
+{{< public-preview />}}
+
 The `mz_notices` view contains a list of currently active notices emitted by the
-system.
+system. The view can be accessed by Materialize superusers.
 
 <!-- RELATION_SPEC mz_internal.mz_notices -->
 | Field                   | Type                         | Meaning                                                                                                                                           |
@@ -437,7 +439,25 @@ system.
 | `created_at`            | [`timestamp with time zone`] | The time at which the notice was created. Note that some notices are re-created on `environmentd` restart.                                        |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_optimizer_notices -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_notices_redacted -->
+
+### `mz_notices_redacted`
+
+{{< public-preview />}}
+
+The `mz_notices_redacted` view contains a redacted list of currently active
+optimizer notices emitted by the system. The view can be accessed by Materialize
+superusers and Materialize support.
+
+<!-- RELATION_SPEC mz_internal.mz_notices_redacted -->
+| Field                   | Type                         | Meaning                                                                                                                                           |
+| ----------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `notice_type`           | [`text`]                     | The notice type.                                                                                                                                  |
+| `message`               | [`text`]                     | A redacted brief description of the issue highlighted by this notice.                                                                                      |
+| `hint`                  | [`text`]                     | A redacted high-level hint that tells the user what can be improved.                                                                                       |
+| `action`                | [`text`]                     | A redacted concrete action that will resolve the notice.                                                                                                   |
+| `action_type`           | [`text`]                     | The type of the `action` string (`sql_statements` for a valid SQL string or `plain_text` for plain text).                                         |
+| `object_id`             | [`text`]                     | The ID of the materialized view or index. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). For global notices, this column is `NULL`. |
+| `created_at`            | [`timestamp with time zone`] | The time at which the notice was created. Note that some notices are re-created on `environmentd` restart.                                        |
 
 ### `mz_postgres_sources`
 
@@ -724,10 +744,28 @@ only includes rows where the current role is a direct or indirect member of `gra
 | `grantee`        | [`text`] | The role that the privilege was granted to. |
 | `privilege_type` | [`text`] | They type of privilege granted.             |
 
+### `mz_sink_statistics_per_worker`
+
+The `mz_sink_statistics_per_worker` table contains statistics for each worker thread of
+each sink in the system.
+
+Materialize does not make any guarantees about the exactness or freshness of
+these statistics. They are occasionally reset to zero as internal components of
+the system are restarted.
+
+<!-- RELATION_SPEC mz_internal.mz_sink_statistics_per_worker -->
+| Field                | Type      | Meaning                                                                                                             |
+|----------------------|-----------| --------                                                                                                            |
+| `id`                 | [`text`]  | The ID of the source. Corresponds to [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks).                            |
+| `worker_id`          | [`uint8`] | The ID of the worker thread.                                                                                        |
+| `messages_staged`    | [`uint8`] | The number of messages staged but possibly not committed to the sink.                                               |
+| `messages_committed` | [`uint8`] | The number of messages committed to the sink.                                                                       |
+| `bytes_staged`       | [`uint8`] | The number of bytes staged but possibly not committed to the sink. This counts both keys and values, if applicable. |
+| `bytes_committed`    | [`uint8`] | The number of bytes committed to the sink. This counts both keys and values, if applicable.                         |
+
 ### `mz_sink_statistics`
 
-The `mz_sink_statistics` table contains statistics for each worker thread of
-each sink in the system.
+The `mz_sink_statistics` view contains statistics about each sink. It is an aggregated form of `mz_sink_statistics_per_worker`.
 
 Materialize does not make any guarantees about the exactness or freshness of
 these statistics. They are occasionally reset to zero as internal components of
@@ -736,8 +774,7 @@ the system are restarted.
 <!-- RELATION_SPEC mz_internal.mz_sink_statistics -->
 | Field                | Type      | Meaning                                                                                                             |
 |----------------------|-----------| --------                                                                                                            |
-| `id`                 | [`text`]  | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                        |
-| `worker_id`          | [`uint8`] | The ID of the worker thread.                                                                                        |
+| `id`                 | [`text`]  | The ID of the sink. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sinks).                            |
 | `messages_staged`    | [`uint8`] | The number of messages staged but possibly not committed to the sink.                                               |
 | `messages_committed` | [`uint8`] | The number of messages committed to the sink.                                                                       |
 | `bytes_staged`       | [`uint8`] | The number of bytes staged but possibly not committed to the sink. This counts both keys and values, if applicable. |
@@ -775,25 +812,52 @@ messages and additional metadata helpful for debugging.
 | `error`        | [`text`]                        | If the sink is in an error state, the error message.                                                             |
 | `details`      | [`jsonb`]                       | Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions. |
 
-### `mz_source_statistics`
+### `mz_source_statistics_per_worker`
 
-The `mz_source_statistics` table contains statistics for each worker thread of
+The `mz_source_statistics_per_worker` table contains statistics for each worker thread of
 each source in the system.
 
 Materialize does not make any guarantees about the exactness or freshness of
 these statistics. They are occasionally reset to zero as internal components of
 the system are restarted.
 
-<!-- RELATION_SPEC mz_internal.mz_source_statistics -->
+<!-- RELATION_SPEC mz_internal.mz_source_statistics_per_worker -->
 | Field                    | Type        | Meaning                                                                                                                                                                                                                                                                             |
 | -------------------------|-------------| --------                                                                                                                                                                                                                                                                            |
 | `id`                     | [`text`]     | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                                                                                                                                                                                        |
 | `worker_id`              | [`uint8`]    | The ID of the worker thread.                                                                                                                                                                                                                                                        |
 | `snapshot_committed`     | [`boolean`]  | Whether the worker has committed the initial snapshot for a source.                                                                                                                                                                                                                 |
 | `messages_received`      | [`uint8`]    | The number of messages the worker has received from the external system. Messages are counted in a source type-specific manner. Messages do not correspond directly to updates: some messages produce multiple updates, while other messages may be coalesced into a single update. |
+| `bytes_received`         | [`uint8`]    | The number of bytes the worker has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead.                                                                                                                  |
 | `updates_staged`         | [`uint8`]    | The number of updates (insertions plus deletions) the worker has written but not yet committed to the storage layer.                                                                                                                                                                |
 | `updates_committed`      | [`uint8`]    | The number of updates (insertions plus deletions) the worker has committed to the storage layer.                                                                                                                                                                                    |
-| `bytes_received`         | [`uint8`]    | The number of bytes the worker has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead.                                                                                                                  |
+| `envelope_state_bytes`   | [`uint8`]    | The number of bytes stored in the source envelope state.                                                                       |
+| `envelope_state_records` | [`uint8`]    | The number of individual records stored in the source envelope state.                                                                                                                                                                                                               |
+| `rehydration_latency`    | [`interval`] | The amount of time it took for the worker to rehydrate the source envelope state. |
+
+### `mz_source_statistics`
+
+The `mz_source_statistics` view contains statistics about each source. It is an aggregated form of `mz_source_statistics_per_worker`.
+
+Materialize does not make any guarantees about the exactness or freshness of
+these statistics. They are occasionally reset to zero as internal components of
+the system are restarted.
+
+Note that:
+- `updates_staged` can be slightly different than `updates_committed` in steady state, as different threads may be staging and committed updates, while reporting statistics at different times.
+- `messages_received` can be significantly different than `updates_staged/updates_committed`, for multiple reasons:
+    - Different threads may be reading messages and staging and committed updates, while reporting statistics at different times.
+    - messages can be skipped (e.g. a key is updated multiple times in 1 second) or result in multiple updates (for `UPSERT` source, a single message can cause a delete and insert for an updated key).
+
+<!-- RELATION_SPEC mz_internal.mz_source_statistics -->
+| Field                    | Type        | Meaning                                                                                                                                                                                                                                                                             |
+| -------------------------|-------------| --------                                                                                                                                                                                                                                                                            |
+| `id`                     | [`text`]     | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                                                                                                                                                                                        |
+| `snapshot_committed`     | [`boolean`]  | Whether the source has committed the initial snapshot for a source.                                                                                                                                                                                                                 |
+| `messages_received`      | [`uint8`]    | The number of messages the source has received from the external system. Messages are counted in a source type-specific manner. Messages do not correspond directly to updates: some messages produce multiple updates, while other messages may be coalesced into a single update. |
+| `bytes_received`         | [`uint8`]    | The number of bytes the source has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead.                                                                                                                  |
+| `updates_staged`         | [`uint8`]    | The number of updates (insertions plus deletions) the source has written but not yet committed to the storage layer.                                                                                                                                                                |
+| `updates_committed`      | [`uint8`]    | The number of updates (insertions plus deletions) the source has committed to the storage layer.                                                                                                                                                                                    |
 | `envelope_state_bytes`   | [`uint8`]    | The number of bytes stored in the source envelope state.                                                                       |
 | `envelope_state_records` | [`uint8`]    | The number of individual records stored in the source envelope state.                                                                                                                                                                                                               |
 | `rehydration_latency`    | [`interval`] | The amount of time it took for the worker to rehydrate the source envelope state. |

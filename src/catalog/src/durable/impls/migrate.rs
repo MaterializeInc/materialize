@@ -61,10 +61,11 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        let stash_initialized = self.openable_stash.is_initialized().await?;
         let stash = self
             .openable_stash
             .open_savepoint(boot_ts.clone(), bootstrap_args, deploy_generation.clone())
-            .await?;
+            .await;
         let persist_initialized = self.openable_persist.is_initialized().await?;
         let persist = self
             .openable_persist
@@ -78,9 +79,20 @@ impl OpenableDurableCatalogState for CatalogMigrator {
                 && !persist_initialized
                 && self.direction == Direction::RollbackToStash
             {
-                return Ok(stash);
+                return stash;
             }
         }
+        // If our target implementation is the persist, but the stash is uninitialized, then we can
+        // still proceed with only using persist.
+        if let Err(CatalogError::Durable(e)) = &stash {
+            if e.can_recover_with_write_mode()
+                && !stash_initialized
+                && self.direction == Direction::MigrateToPersist
+            {
+                return persist;
+            }
+        }
+        let stash = stash?;
         let persist = persist?;
 
         Self::open_inner(stash, persist, self.direction).await
@@ -231,6 +243,8 @@ impl CatalogMigrator {
         stash_txn.set_tombstone(true)?;
         stash_txn.commit().await?;
 
+        stash.expire().await;
+
         Ok(())
     }
 
@@ -257,6 +271,8 @@ impl CatalogMigrator {
         )?;
         stash_txn.set_tombstone(false)?;
         stash_txn.commit().await?;
+
+        persist.expire().await;
 
         Ok(())
     }

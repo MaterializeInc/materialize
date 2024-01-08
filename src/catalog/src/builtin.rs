@@ -2860,8 +2860,8 @@ pub static MZ_WEBHOOKS_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 
 // These will be replaced with per-replica tables once source/sink multiplexing on
 // a single cluster is supported.
-pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
-    name: "mz_source_statistics",
+pub static MZ_SOURCE_STATISTICS_PER_WORKER: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_source_statistics_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     data_source: Some(IntrospectionType::StorageSourceStatistics),
     desc: RelationDesc::empty()
@@ -2869,17 +2869,17 @@ pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSourc
         .with_column("worker_id", ScalarType::UInt64.nullable(false))
         .with_column("snapshot_committed", ScalarType::Bool.nullable(false))
         .with_column("messages_received", ScalarType::UInt64.nullable(false))
+        .with_column("bytes_received", ScalarType::UInt64.nullable(false))
         .with_column("updates_staged", ScalarType::UInt64.nullable(false))
         .with_column("updates_committed", ScalarType::UInt64.nullable(false))
-        .with_column("bytes_received", ScalarType::UInt64.nullable(false))
         .with_column("envelope_state_bytes", ScalarType::UInt64.nullable(false))
         .with_column("envelope_state_records", ScalarType::UInt64.nullable(false))
         .with_column("rehydration_latency", ScalarType::Interval.nullable(true)),
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
     sensitivity: DataSensitivity::Public,
 });
-pub static MZ_SINK_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
-    name: "mz_sink_statistics",
+pub static MZ_SINK_STATISTICS_PER_WORKER: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_sink_statistics_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     data_source: Some(IntrospectionType::StorageSinkStatistics),
     desc: RelationDesc::empty()
@@ -2889,7 +2889,7 @@ pub static MZ_SINK_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource 
         .with_column("messages_committed", ScalarType::UInt64.nullable(false))
         .with_column("bytes_staged", ScalarType::UInt64.nullable(false))
         .with_column("bytes_committed", ScalarType::UInt64.nullable(false)),
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
     sensitivity: DataSensitivity::Public,
 });
 
@@ -5994,12 +5994,56 @@ ON mz_internal.mz_sink_status_history (sink_id)",
     is_retained_metrics_object: false,
 };
 
+// In both `mz_source_statistics` and `mz_sink_statistics` we cast the `SUM` of
+// uint8's to `uint8` instead of leaving them as `numeric`. This is because we want to
+// save index space, and we don't expect the sum to be > 2^63
+// (even if a source with 2000 workers, that each produce 400 terabytes in a month ~ 2^61).
+pub const MZ_SOURCE_STATISTICS: BuiltinView = BuiltinView {
+    name: "mz_source_statistics",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: None,
+    sql: "
+SELECT
+    id,
+    bool_and(snapshot_committed) as snapshot_committed,
+    SUM(messages_received)::uint8 AS messages_received,
+    SUM(bytes_received)::uint8 AS bytes_received,
+    SUM(updates_staged)::uint8 AS updates_staged,
+    SUM(updates_committed)::uint8 AS updates_committed,
+    SUM(envelope_state_bytes)::uint8 AS envelope_state_bytes,
+    SUM(envelope_state_records)::uint8 AS envelope_state_records,
+    -- Ensure we aggregate to NULL when not all workers are done rehydrating.
+    CASE
+        WHEN bool_or(rehydration_latency IS NULL) THEN NULL
+        ELSE MAX(rehydration_latency)::interval
+    END AS rehydration_latency
+FROM mz_internal.mz_source_statistics_per_worker
+GROUP BY id",
+    sensitivity: DataSensitivity::Public,
+};
+
 pub const MZ_SOURCE_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_source_statistics_ind",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_source_statistics (id)",
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
+};
+
+pub const MZ_SINK_STATISTICS: BuiltinView = BuiltinView {
+    name: "mz_sink_statistics",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: None,
+    sql: "
+SELECT
+    id,
+    SUM(messages_staged)::uint8 AS messages_staged,
+    SUM(messages_committed)::uint8 AS messages_committed,
+    SUM(bytes_staged)::uint8 AS bytes_staged,
+    SUM(bytes_committed)::uint8 AS bytes_committed
+FROM mz_internal.mz_sink_statistics_per_worker
+GROUP BY id",
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SINK_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
@@ -6007,7 +6051,7 @@ pub const MZ_SINK_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_sink_statistics (id)",
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
 };
 
 pub const MZ_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
@@ -6468,8 +6512,12 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_SOURCE_STATUSES),
         Builtin::Source(&MZ_STATEMENT_LIFECYCLE_HISTORY),
         Builtin::Source(&MZ_STORAGE_SHARDS),
-        Builtin::Source(&MZ_SOURCE_STATISTICS),
-        Builtin::Source(&MZ_SINK_STATISTICS),
+        Builtin::Source(&MZ_SOURCE_STATISTICS_PER_WORKER),
+        Builtin::Source(&MZ_SINK_STATISTICS_PER_WORKER),
+        Builtin::View(&MZ_SOURCE_STATISTICS),
+        Builtin::Index(&MZ_SOURCE_STATISTICS_IND),
+        Builtin::View(&MZ_SINK_STATISTICS),
+        Builtin::Index(&MZ_SINK_STATISTICS_IND),
         Builtin::View(&MZ_STORAGE_USAGE),
         Builtin::Source(&MZ_FRONTIERS),
         Builtin::View(&MZ_GLOBAL_FRONTIERS),
@@ -6507,8 +6555,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_SOURCE_STATUS_HISTORY_IND),
         Builtin::Index(&MZ_SINK_STATUSES_IND),
         Builtin::Index(&MZ_SINK_STATUS_HISTORY_IND),
-        Builtin::Index(&MZ_SOURCE_STATISTICS_IND),
-        Builtin::Index(&MZ_SINK_STATISTICS_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICAS_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_SIZES_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_STATUSES_IND),

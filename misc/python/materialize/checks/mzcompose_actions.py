@@ -211,14 +211,20 @@ class ConfigureMz(MzcomposeAction):
 
 
 class KillMz(MzcomposeAction):
-    def __init__(self, mz_service: str = "materialized") -> None:
+    def __init__(
+        self, mz_service: str = "materialized", capture_logs: bool = False
+    ) -> None:
         self.mz_service = mz_service
+        self.capture_logs = capture_logs
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
         with c.override(Materialized(name=self.mz_service)):
             c.kill(self.mz_service, wait=True)
+
+            if self.capture_logs:
+                c.capture_logs(self.mz_service)
 
 
 class Down(MzcomposeAction):
@@ -268,10 +274,16 @@ class UseClusterdCompute(MzcomposeAction):
 
 
 class KillClusterdCompute(MzcomposeAction):
+    def __init__(self, capture_logs: bool = False) -> None:
+        self.capture_logs = capture_logs
+
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
         with c.override(Clusterd(name="clusterd_compute_1")):
             c.kill("clusterd_compute_1")
+
+            if self.capture_logs:
+                c.capture_logs("clusterd_compute_1")
 
 
 class StartClusterdCompute(MzcomposeAction):

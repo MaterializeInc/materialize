@@ -1,0 +1,2 @@
+Verify that all supported data types work for create table, write batch, and
+truncate requests.

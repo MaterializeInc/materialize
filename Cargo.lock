@@ -199,7 +199,7 @@ version = "2.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d5c2ca00549910ec251e3bd15f87aeeb206c9456b9a77b43ff6c97c54042a472"
 dependencies = [
- "bstr",
+ "bstr 0.2.14",
  "doc-comment",
  "predicates",
  "predicates-core",
@@ -209,15 +209,17 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.3.15"
+version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "942c7cd7ae39e91bde4820d74132e9862e62c2f386c3aa90ccf55949f5bad63a"
+checksum = "bc2d0cfb2a7388d34f590e76686704c494ed7aaceed62ee1ba35cbf363abc2a5"
 dependencies = [
  "flate2",
  "futures-core",
  "memchr",
  "pin-project-lite",
  "tokio",
+ "zstd 0.13.0",
+ "zstd-safe 7.0.0",
 ]
 
 [[package]]
@@ -887,7 +889,18 @@ checksum = "473fc6b38233f9af7baa94fb5852dca389e3d95b8e21c8e3719301462c5d9faf"
 dependencies = [
  "lazy_static",
  "memchr",
- "regex-automata",
+ "regex-automata 0.1.9",
+]
+
+[[package]]
+name = "bstr"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6798148dccfbff0fae41c7574d2fa8f1ef3492fba0face179de5d8d447d67b05"
+dependencies = [
+ "memchr",
+ "regex-automata 0.3.9",
+ "serde",
 ]
 
 [[package]]
@@ -1335,6 +1348,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5827cebf4670468b8772dd191856768aedcb1b0278a04f989f7766351917b9dc"
 
 [[package]]
+name = "core_affinity"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4436406e93f52cce33bfba4be067a9f7229da44a634c385e4b22cdfaca5f84cc"
+dependencies = [
+ "libc",
+ "num_cpus",
+ "winapi",
+]
+
+[[package]]
 name = "cpp_demangle"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1502,6 +1526,20 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "csv-async"
+version = "1.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71933d3f2d0481d5111cb2817b15b6961961458ec58adf8008194e6c850046f4"
+dependencies = [
+ "bstr 1.6.0",
+ "cfg-if",
+ "csv-core",
+ "futures",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
@@ -1735,7 +1773,7 @@ checksum = "0e25ea47919b1560c4e3b7fe0aaab9becf5b84a10325ddf7db0f0ba5e1026499"
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#7596c843c745ef13ec7ea638be5e6b91b5fdf1a2"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#9d22bec650e80641bedfe1bcecbae27f31d17214"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1791,7 +1829,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#7596c843c745ef13ec7ea638be5e6b91b5fdf1a2"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#9d22bec650e80641bedfe1bcecbae27f31d17214"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -2332,7 +2370,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0a1e17342619edbc21a964c2afbeb6c820c6a2560032872f397bb97ea127bd0a"
 dependencies = [
  "aho-corasick",
- "bstr",
+ "bstr 0.2.14",
  "fnv",
  "log",
  "regex",
@@ -3204,7 +3242,7 @@ version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8263075bb86c5a1b1427b5ae862e8889656f126e9f77c484496e8b47cf5c5558"
 dependencies = [
- "regex-automata",
+ "regex-automata 0.1.9",
 ]
 
 [[package]]
@@ -3405,7 +3443,7 @@ dependencies = [
  "subprocess",
  "thiserror",
  "uuid",
- "zstd",
+ "zstd 0.12.4",
 ]
 
 [[package]]
@@ -3505,6 +3543,7 @@ dependencies = [
  "mz-stash",
  "mz-storage-client",
  "mz-storage-types",
+ "mz-timestamp-oracle",
  "mz-tls-util",
  "mz-tracing",
  "mz-transform",
@@ -3645,7 +3684,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "0.82.0-dev"
+version = "0.83.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3757,7 +3796,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "0.82.0-dev"
+version = "0.83.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -3907,7 +3946,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.82.0-dev"
+version = "0.83.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3947,6 +3986,7 @@ dependencies = [
  "async-trait",
  "bytesize",
  "clap",
+ "core_affinity",
  "crossbeam-channel",
  "dec",
  "differential-dataflow",
@@ -4105,7 +4145,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.82.0-dev"
+version = "0.83.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -4305,6 +4345,32 @@ dependencies = [
  "proc-macro2",
  "serde",
  "serde_json",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-fivetran-destination"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-compression",
+ "clap",
+ "csv-async",
+ "futures",
+ "itertools",
+ "mz-ore",
+ "mz-pgrepr",
+ "openssl",
+ "postgres-openssl",
+ "postgres-protocol",
+ "prost",
+ "prost-build",
+ "prost-types",
+ "protobuf-src",
+ "tokio",
+ "tokio-postgres",
+ "tonic",
+ "tonic-build",
  "workspace-hack",
 ]
 
@@ -4752,7 +4818,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.82.0-dev"
+version = "0.83.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4803,6 +4869,7 @@ dependencies = [
 name = "mz-persist-txn"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "crossbeam-channel",
  "differential-dataflow",
  "futures",
@@ -4813,11 +4880,14 @@ dependencies = [
  "mz-timely-util",
  "prometheus",
  "prost",
+ "prost-build",
+ "protobuf-src",
  "rand",
  "serde",
  "timely",
  "tokio",
  "tracing",
+ "uuid",
  "workspace-hack",
 ]
 
@@ -5150,6 +5220,7 @@ dependencies = [
  "prost-build",
  "protobuf-src",
  "rand",
+ "ref-cast",
  "regex",
  "ryu",
  "serde",
@@ -5556,7 +5627,7 @@ dependencies = [
 
 [[package]]
 name = "mz-stash-debug"
-version = "0.82.0-dev"
+version = "0.83.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -5873,7 +5944,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "0.82.0-dev"
+version = "0.83.0-dev"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -5959,6 +6030,28 @@ dependencies = [
  "serde",
  "timely",
  "tokio",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-timestamp-oracle"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "deadpool-postgres",
+ "dec",
+ "futures",
+ "mz-adapter-types",
+ "mz-ore",
+ "mz-pgrepr",
+ "mz-postgres-client",
+ "mz-repr",
+ "rand",
+ "serde",
+ "tokio",
+ "tracing",
+ "uuid",
  "workspace-hack",
 ]
 
@@ -7327,6 +7420,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ref-cast"
+version = "1.0.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85d07b1a5f16b5548f4255a978c94259971aff73f39e8d67e8250e8b2f6667c3"
+dependencies = [
+ "ref-cast-impl",
+]
+
+[[package]]
+name = "ref-cast-impl"
+version = "1.0.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a930b010d9effee5834317bb7ff406b76af7724348fd572b38705b4bd099fa92"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.39",
+]
+
+[[package]]
 name = "regex"
 version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7346,6 +7459,12 @@ dependencies = [
  "byteorder",
  "regex-syntax",
 ]
+
+[[package]]
+name = "regex-automata"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59b23e92ee4318893fa3fe3e6fb365258efbfe6ac6ab30f090cdcbb7aa37efa9"
 
 [[package]]
 name = "regex-lite"
@@ -8087,7 +8206,7 @@ version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "420acb44afdae038210c99e69aae24109f32f15500aa708e81d46c9f29d55fcf"
 dependencies = [
- "bstr",
+ "bstr 0.2.14",
  "unicode-segmentation",
 ]
 
@@ -9665,6 +9784,7 @@ version = "0.0.0"
 dependencies = [
  "ahash",
  "anyhow",
+ "async-compression",
  "aws-config",
  "aws-credential-types",
  "aws-runtime",
@@ -9677,7 +9797,7 @@ dependencies = [
  "aws-smithy-types",
  "axum",
  "bitflags 2.4.1",
- "bstr",
+ "bstr 0.2.14",
  "byteorder",
  "bytes",
  "cc",
@@ -9827,7 +9947,16 @@ version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1a27595e173641171fc74a1232b7b1c7a7cb6e18222c11e9dfb9888fa424c53c"
 dependencies = [
- "zstd-safe",
+ "zstd-safe 6.0.6",
+]
+
+[[package]]
+name = "zstd"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bffb3309596d527cfcba7dfc6ed6052f1d39dfbd7c867aa2e865e4a449c10110"
+dependencies = [
+ "zstd-safe 7.0.0",
 ]
 
 [[package]]
@@ -9837,6 +9966,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee98ffd0b48ee95e6c5168188e44a54550b1564d9d530ee21d5f0eaed1069581"
 dependencies = [
  "libc",
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "7.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43747c7422e2924c11144d5229878b98180ef8b06cca4ab5af37afc8a8d8ea3e"
+dependencies = [
  "zstd-sys",
 ]
 

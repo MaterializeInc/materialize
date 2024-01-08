@@ -11,6 +11,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::Context;
 use jsonwebtoken::DecodingKey;
@@ -18,10 +19,13 @@ use mz_balancerd::{BalancerConfig, BalancerService, FronteggResolver, Resolver, 
 use mz_frontegg_auth::{Authentication, AuthenticationConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_server_core::TlsCliArgs;
-use tracing::info;
+use tracing::warn;
 
 #[derive(Debug, clap::Parser)]
 pub struct Args {
+    /// Seconds to wait after receiving a SIGTERM for outstanding connections to close.
+    #[clap(long, value_name = "SECONDS")]
+    sigterm_wait_seconds: Option<u64>,
     #[clap(long, value_name = "HOST:PORT")]
     pgwire_listen_addr: SocketAddr,
     #[clap(long, value_name = "HOST:PORT")]
@@ -125,6 +129,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     };
     let config = BalancerConfig::new(
         &BUILD_INFO,
+        args.sigterm_wait_seconds.map(Duration::from_secs),
         args.internal_http_listen_addr,
         args.pgwire_listen_addr,
         args.https_listen_addr,
@@ -135,6 +140,6 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     );
     let service = BalancerService::new(config).await?;
     service.serve().await?;
-    info!("balancer service safely exited");
+    warn!("balancer service exited");
     Ok(())
 }

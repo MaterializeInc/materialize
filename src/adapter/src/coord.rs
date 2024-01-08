@@ -124,6 +124,7 @@ use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::Timeline;
+use mz_timestamp_oracle::WriteTimestamp;
 use opentelemetry::trace::TraceContextExt;
 use timely::progress::Antichain;
 use timely::PartialOrder;
@@ -139,13 +140,10 @@ use crate::client::{Client, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
+use crate::coord::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
-use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
-use crate::coord::timestamp_oracle::catalog_oracle::CatalogTimestampPersistence;
-use crate::coord::timestamp_oracle::postgres_oracle::{
-    PostgresTimestampOracle, PostgresTimestampOracleConfig,
-};
+use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
@@ -161,14 +159,18 @@ use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
 use mz_catalog::durable::DurableCatalogState;
+use mz_expr::refresh_schedule::RefreshSchedule;
+use mz_timestamp_oracle::postgres_oracle::{
+    PostgresTimestampOracle, PostgresTimestampOracleConfig,
+};
 
 use self::statement_logging::{StatementLogging, StatementLoggingId};
 
+pub(crate) mod catalog_oracle;
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
 pub(crate) mod statement_logging;
 pub(crate) mod timeline;
-pub(crate) mod timestamp_oracle;
 pub(crate) mod timestamp_selection;
 
 mod appends;
@@ -1258,7 +1260,7 @@ pub struct Coordinator {
     webhook_concurrency_limit: WebhookConcurrencyLimiter,
 
     /// Implementation of
-    /// [`TimestampOracle`](crate::coord::timestamp_oracle::TimestampOracle) to
+    /// [`TimestampOracle`](mz_timestamp_oracle::TimestampOracle) to
     /// use.
     timestamp_oracle_impl: vars::TimestampOracleImpl,
 
@@ -1318,7 +1320,11 @@ impl Coordinator {
                 });
             }
         }
-        self.controller.create_replicas(replicas_to_start).await?;
+        let enable_worker_core_affinity =
+            self.catalog().system_config().enable_worker_core_affinity();
+        self.controller
+            .create_replicas(replicas_to_start, enable_worker_core_affinity)
+            .await?;
 
         debug!("coordinator init: migrating builtin objects");
         // Migrate builtin objects.
@@ -1558,8 +1564,22 @@ impl Coordinator {
                         .clone();
 
                     // Timestamp selection
-                    let as_of = self.bootstrap_materialized_view_as_of(&df_desc, mview.cluster_id);
+                    let as_of = self.bootstrap_materialized_view_as_of(
+                        &df_desc,
+                        mview.cluster_id,
+                        &mview.refresh_schedule,
+                    );
                     df_desc.set_as_of(as_of);
+
+                    // If we have a refresh schedule that has a last refresh, then set the `until` to the last refresh.
+                    let until = mview
+                        .refresh_schedule
+                        .as_ref()
+                        .and_then(|s| s.last_refresh())
+                        .and_then(|r| r.try_step_forward());
+                    if let Some(until) = until {
+                        df_desc.until.meet_assign(&Antichain::from_elem(until));
+                    }
 
                     let df_meta = self
                         .catalog()
@@ -1932,6 +1952,7 @@ impl Coordinator {
                         internal_view_id,
                         mv.desc.iter_names().cloned().collect(),
                         mv.non_null_assertions.clone(),
+                        mv.refresh_schedule.clone(),
                         debug_name,
                         optimizer_config.clone(),
                     );
@@ -2154,6 +2175,7 @@ impl Coordinator {
         &self,
         dataflow: &DataflowDescription<Plan>,
         cluster_id: ComputeInstanceId,
+        refresh_schedule: &Option<RefreshSchedule>,
     ) -> Antichain<Timestamp> {
         // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
         // the `since`s of all dependencies.
@@ -2172,11 +2194,25 @@ impl Coordinator {
         let write_frontier = self.storage_write_frontier(*sink_id);
 
         // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
-        let as_of = if write_frontier.is_empty() {
+        let mut as_of = if write_frontier.is_empty() {
             min_as_of.clone()
         } else {
             min_as_of.join(write_frontier)
         };
+
+        // If we have a RefreshSchedule, then round up the `as_of` to the next refresh.
+        // Note that in many cases the `as_of` would already be at this refresh, because the `write_frontier` will be
+        // usually there. However, it can happen that we restart after the MV was created in the catalog but before
+        // its upper was initialized in persist.
+        if let Some(refresh_schedule) = &refresh_schedule {
+            if let Some(rounded_up_ts) =
+                refresh_schedule.round_up_timestamp(*as_of.as_option().expect("as_of is non-empty"))
+            {
+                as_of = Antichain::from_elem(rounded_up_ts);
+            } else {
+                // We are past the last refresh. Let's not move the as_of.
+            }
+        }
 
         tracing::info!(
             export_ids = %dataflow.display_export_ids(),

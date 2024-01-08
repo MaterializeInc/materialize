@@ -188,6 +188,8 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     up_to: self.up_to.map(Antichain::from_elem).unwrap_or_default(),
                     // No `FORCE NOT NULL` for subscribes
                     non_null_assertions: vec![],
+                    // No `REFRESH` for subscribes
+                    refresh_schedule: None,
                 };
 
                 let mut df_builder =
@@ -229,6 +231,8 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     up_to: self.up_to.map(Antichain::from_elem).unwrap_or_default(),
                     // No `FORCE NOT NULL` for subscribes
                     non_null_assertions: vec![],
+                    // No `REFRESH` for subscribes
+                    refresh_schedule: None,
                 };
 
                 let mut df_builder =
@@ -310,6 +314,7 @@ impl Optimize<GlobalMirPlan<Resolved>> for Optimizer {
             df_desc,
             self.config.enable_consolidate_after_union_negate,
             self.config.enable_specialized_arrangements,
+            self.config.enable_reduce_mfp_fusion,
         )
         .map_err(OptimizerError::Internal)?;
 

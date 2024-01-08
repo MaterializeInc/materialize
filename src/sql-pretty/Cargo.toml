@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 mz-sql-parser = { path = "../sql-parser", default-features = false }
 pretty = "0.12.3"

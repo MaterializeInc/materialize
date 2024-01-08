@@ -423,11 +423,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             sys.exit(1)
 
 
-def _are_regressions_justified(this_tag: str, baseline_tag: str) -> tuple[bool, str]:
+def _are_regressions_justified(
+    this_tag: str | None, baseline_tag: str | None
+) -> tuple[bool, str]:
     if not _tag_references_release_version(
         this_tag
     ) or not _tag_references_release_version(baseline_tag):
         return False, ""
+
+    # Checked in _tag_references_release_version
+    assert this_tag != None
+    assert baseline_tag != None
 
     this_version = MzVersion.parse_mz(this_tag)
     baseline_version = MzVersion.parse_mz(baseline_tag)
@@ -447,7 +453,9 @@ def _are_regressions_justified(this_tag: str, baseline_tag: str) -> tuple[bool, 
         )
 
 
-def _tag_references_release_version(image_tag: str) -> bool:
+def _tag_references_release_version(image_tag: str | None) -> bool:
+    if image_tag == None:
+        return False
     return is_image_tag_of_version(image_tag) and MzVersion.is_valid_version_string(
         image_tag
     )

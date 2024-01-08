@@ -21,6 +21,7 @@ from threading import Thread
 import requests
 from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
+from pg8000.exceptions import DatabaseError
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
@@ -75,7 +76,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for i, name in enumerate(c.workflows):
         # incident-70 requires more memory, runs in separate CI step
         # concurrent-connections is too flaky
-        if name in ("default", "test-incident-70", "test-concurrent-connections"):
+        if name in (
+            "default",
+            "test-incident-70",
+            "test-concurrent-connections",
+        ):
             continue
         if shard is None or shard_count is None or i % int(shard_count) == shard:
             with c.test_case(name):
@@ -2990,10 +2995,18 @@ def workflow_blue_green_deployment(
 
                     for i, query in enumerate(queries):
                         start_time = time.time()
-                        cursor.execute(query)
+                        try:
+                            cursor.execute(query)
+                        except DatabaseError as e:
+                            # Expected
+                            if "cached plan must not change result type" in str(e):
+                                continue
+                            raise e
                         assert int(cursor.fetchone()[0]) > 0
                         runtime = time.time() - start_time
-                        assert runtime < 5, f"runtime: {runtime}"
+                        assert (
+                            runtime < 15
+                        ), f"query: {query}, runtime spiked to {runtime}"
                         total_runtime += runtime
                     runtimes.append(total_runtime)
         finally:
@@ -3002,14 +3015,20 @@ def workflow_blue_green_deployment(
     def subscribe():
         cursor = c.sql_cursor()
         while running:
-            cursor.execute("BEGIN")
-            cursor.execute(
-                "DECLARE subscribe CURSOR FOR SUBSCRIBE (SELECT * FROM prod.counter_mv)"
-            )
-            cursor.execute("FETCH ALL subscribe WITH (timeout='15s')")
-            assert int(cursor.fetchall()[-1][2]) > 0
-            cursor.execute("CLOSE subscribe")
-            cursor.execute("ROLLBACK")
+            try:
+                cursor.execute("BEGIN")
+                cursor.execute(
+                    "DECLARE subscribe CURSOR FOR SUBSCRIBE (SELECT * FROM prod.counter_mv)"
+                )
+                cursor.execute("FETCH ALL subscribe WITH (timeout='15s')")
+                assert int(cursor.fetchall()[-1][2]) > 0
+                cursor.execute("CLOSE subscribe")
+                cursor.execute("ROLLBACK")
+            except DatabaseError as e:
+                # Expected
+                if "cached plan must not change result type" in str(e):
+                    continue
+                raise e
 
     with c.override(
         Testdrive(

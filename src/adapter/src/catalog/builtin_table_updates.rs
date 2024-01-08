@@ -1430,7 +1430,9 @@ impl CatalogState {
                         scale,
                         workers,
                         credits_per_hour,
+                        cpu_exclusive: _,
                         disabled: _,
+                        selectors: _,
                     },
                 )| {
                     // Just invent something when the limits are `None`,

@@ -24,7 +24,6 @@ from materialize.output_consistency.expression.expression_with_args import (
 )
 from materialize.output_consistency.ignore_filter.expression_matchers import (
     involves_data_type_category,
-    is_function_invoked_only_with_non_nested_parameters,
     matches_fun_by_any_name,
     matches_fun_by_name,
     matches_op_by_pattern,
@@ -52,17 +51,11 @@ from materialize.output_consistency.input_data.operations.text_operations_provid
 from materialize.output_consistency.input_data.params.text_operation_param import (
     TextOperationParam,
 )
-from materialize.output_consistency.input_data.return_specs.date_time_return_spec import (
-    DateTimeReturnTypeSpec,
-)
 from materialize.output_consistency.input_data.return_specs.number_return_spec import (
     NumericReturnTypeSpec,
 )
 from materialize.output_consistency.input_data.return_specs.text_return_spec import (
     TextReturnTypeSpec,
-)
-from materialize.output_consistency.input_data.types.date_time_types_provider import (
-    TIME_TYPE_IDENTIFIER,
 )
 from materialize.output_consistency.operation.operation import (
     DbFunction,
@@ -76,8 +69,6 @@ from materialize.output_consistency.validation.validation_message import Validat
 NAME_OF_NON_EXISTING_FUNCTION_PATTERN = re.compile(
     r"function (\w)\(.*?\) does not exist"
 )
-
-NON_EXISTING_MZ_FUNCTION_DEFINITIONS = ["min(time)", "max(time)"]
 
 
 class PgInconsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
@@ -157,15 +148,8 @@ class PgPreExecutionInconsistencyIgnoreFilter(
 
         if db_function.function_name_in_lower_case in {"min", "max"}:
             return_type_spec = expression.args[0].resolve_return_type_spec()
-
-            if (
-                isinstance(return_type_spec, DateTimeReturnTypeSpec)
-                and return_type_spec.type_identifier == TIME_TYPE_IDENTIFIER
-            ):
-                # MIN and MAX currently not supported on TIME type in mz
-                return YesIgnore("#22024: min/max on time")
             if isinstance(return_type_spec, TextReturnTypeSpec):
-                return YesIgnore("#22002: min/max on text")
+                return YesIgnore("#22002: min/max on text different")
 
         if db_function.function_name_in_lower_case == "replace":
             # replace is not working properly with empty text; however, it is not possible to reliably determine if an
@@ -306,24 +290,11 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
         if is_unknown_function_or_operation_invocation(mz_error_msg):
             function_name = extract_unknown_function_from_error_msg(mz_error_msg)
-
-            if (
-                function_name is not None
-                and is_function_invoked_only_with_non_nested_parameters(
-                    query_template, function_name
-                )
-            ):
-                # function does not exist
-                if is_function_known_not_to_exist_in_mz(mz_error_msg):
-                    return YesIgnore(
-                        f"#22024: non-existing function or operation: ({mz_error_msg})"
-                    )
-            else:
-                # this does not necessarily mean that the function exists in one database but not the other; it could
-                # also be a subsequent error when an expression (an argument) is evaluated to another type
-                return YesIgnore(
-                    "Function or operation does not exist for the evaluated input"
-                )
+            # this does not necessarily mean that the function exists in one database but not the other; it could
+            # also be a subsequent error when an expression (an argument) is evaluated to another type
+            return YesIgnore(
+                f"Function or operation does not exist for the evaluated input: {function_name}"
+            )
 
         def matches_round_function(expression: Expression) -> bool:
             return (
@@ -575,11 +546,3 @@ def extract_unknown_function_from_error_msg(error_msg: str) -> str | None:
 
     # do not parse not existing operators
     return None
-
-
-def is_function_known_not_to_exist_in_mz(error_msg: str) -> bool:
-    for function_definition in NON_EXISTING_MZ_FUNCTION_DEFINITIONS:
-        if function_definition in error_msg:
-            return True
-
-    return False

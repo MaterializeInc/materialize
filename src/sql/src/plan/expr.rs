@@ -24,7 +24,6 @@ use mz_expr::{func, CollectionPlan, Id, LetRecLimit, RowSetFinishing};
 use mz_expr::AggregateFunc::WindowAggregate;
 pub use mz_expr::{
     BinaryFunc, ColumnOrder, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc, WindowFrame,
-    WindowFrameBound, WindowFrameUnits,
 };
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack;

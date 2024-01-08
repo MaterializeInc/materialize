@@ -8,12 +8,18 @@
 # by the Apache License, Version 2.0.
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_table_keys = true
+ALTER SYSTEM SET enable_table_keys TO true
 ----
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_mz_notices = true
+ALTER SYSTEM SET enable_mz_notices TO true
+----
+COMPLETE 0
+
+# Disable rbac checks in order to select from mz_notices.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false
 ----
 COMPLETE 0
 
@@ -42,19 +48,22 @@ Notices:
 EOF
 
 # Verify that the same notice can be found in the catalog.
-query TTTTT
+query TTTTTTTT
 SELECT
-  n.notice_type, n.message, n.hint, n.action, n.action_type
+  n.notice_type, n.message, n.redacted_message, n.hint, n.redacted_hint, n.action, n.redacted_action, n.action_type
 FROM
-  mz_internal.mz_notices_redacted n JOIN
+  mz_internal.mz_notices n JOIN
   mz_catalog.mz_indexes idx ON(n.object_id = idx.id)
 WHERE
   idx.name = 't_idx_empty_key'
 ----
 Empty index key
 Empty index key. The index will be completely skewed to one worker thread, which can lead to performance problems.
+NULL
 CREATE DEFAULT INDEX is almost always better than an index with an empty key. (Except for cross joins with big inputs, which are better to avoid anyway.)
+NULL
 Drop the encosing index and re-create it using `CREATE DEFAULT INDEX ON` instead.
+NULL
 plain_text
 
 # Drop the catalog item associated with the notice.
@@ -62,11 +71,11 @@ statement ok
 DROP INDEX t_idx_empty_key;
 
 # Verify that the notice is no longer in the catalog.
-query TTTTT
+query TTTTTTTT
 SELECT
-  n.notice_type, n.message, n.hint, n.action, n.action_type
+  n.notice_type, n.message, n.redacted_message, n.hint, n.redacted_hint, n.action, n.redacted_action, n.action_type
 FROM
-  mz_internal.mz_notices_redacted n JOIN
+  mz_internal.mz_notices n JOIN
   mz_catalog.mz_indexes idx ON(n.object_id = idx.id)
 WHERE
   idx.name = 't_idx_empty_key'

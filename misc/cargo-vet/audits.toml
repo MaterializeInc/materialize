@@ -20,10 +20,20 @@ who = "Matt Arthur <matthewleearthur@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.26.0"
 
-[[audits.differential-dataflow]]
-who = "Moritz Hoffmann <mh@materialize.com>"
+[[audits.core_affinity]]
+who = "Jan Teske <jteske@posteo.net>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:7596c843c745ef13ec7ea638be5e6b91b5fdf1a2"
+version = "0.8.0"
+
+[[audits.csv-async]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.2.6"
+
+[[audits.differential-dataflow]]
+who = "Frank McSherry <frank@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.12.0@git:9d22bec650e80641bedfe1bcecbae27f31d17214"
 
 [[audits.futures-timer]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
@@ -70,6 +80,16 @@ who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 delta = "0.3.5 -> 0.4.1"
 
+[[audits.ref-cast]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "1.0.17"
+
+[[audits.ref-cast-impl]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "1.0.17"
+
 [[audits.ring]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
@@ -114,6 +134,16 @@ version = "0.12.0@git:de20aa88cc6df3de910e9befbe68408d31e287be"
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 delta = "0.7.1 -> 0.9.0"
+
+[[audits.zstd]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.13.0"
+
+[[audits.zstd-safe]]
+who = "Parker Timmerman <parker.timmerman@materialize.com>"
+criteria = "safe-to-deploy"
+delta = "6.0.6 -> 7.0.0"
 
 [[trusted.abomonation]]
 criteria = "safe-to-deploy"

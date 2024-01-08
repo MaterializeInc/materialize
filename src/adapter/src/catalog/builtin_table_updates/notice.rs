@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::sync::Arc;
+
 use mz_catalog::builtin::notice::MZ_OPTIMIZER_NOTICES;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_transform::dataflow::DataflowMetainfo;
@@ -26,7 +28,7 @@ impl Catalog {
         &self,
         df_meta: DataflowMetainfo<RawOptimizerNotice>,
         item_id: Option<GlobalId>,
-    ) -> DataflowMetainfo<OptimizerNotice> {
+    ) -> DataflowMetainfo<Arc<OptimizerNotice>> {
         self.state.render_notices(df_meta, item_id)
     }
 
@@ -37,7 +39,7 @@ impl Catalog {
     pub fn pack_optimizer_notices<'a>(
         &self,
         updates: &mut Vec<BuiltinTableUpdate>,
-        notices: impl Iterator<Item = &'a OptimizerNotice>,
+        notices: impl Iterator<Item = &'a Arc<OptimizerNotice>>,
         diff: Diff,
     ) {
         self.state.pack_optimizer_notices(updates, notices, diff);
@@ -51,17 +53,24 @@ impl CatalogState {
         &self,
         df_meta: DataflowMetainfo<RawOptimizerNotice>,
         item_id: Option<GlobalId>,
-    ) -> DataflowMetainfo<OptimizerNotice> {
+    ) -> DataflowMetainfo<Arc<OptimizerNotice>> {
+        // Helper for rendering redacted fields.
+        fn some_if_neq<T: Eq>(x: T, y: &T) -> Option<T> {
+            if &x != y {
+                Some(x)
+            } else {
+                None
+            }
+        }
+
         let optimizer_notices = df_meta
             .optimizer_notices
             .into_iter()
-            .map(|notice| OptimizerNotice {
-                kind: OptimizerNoticeKind::from(&notice),
-                item_id,
-                dependencies: notice.dependencies(),
-                message: notice.message(self, false).to_string(),
-                hint: notice.hint(self, false).to_string(),
-                action: match notice.action_kind(self) {
+            .map(|notice| {
+                // Render non-redacted fields.
+                let message = notice.message(self, false).to_string();
+                let hint = notice.hint(self, false).to_string();
+                let action = match notice.action_kind(self) {
                     ActionKind::SqlStatements => {
                         Action::SqlStatements(notice.action(self, false).to_string())
                     }
@@ -71,10 +80,11 @@ impl CatalogState {
                     ActionKind::None => {
                         Action::None // No concrete action.
                     }
-                },
-                message_redacted: notice.message(self, true).to_string(),
-                hint_redacted: notice.hint(self, true).to_string(),
-                action_redacted: match notice.action_kind(self) {
+                };
+                // Render redacted fields.
+                let message_redacted = notice.message(self, true).to_string();
+                let hint_redacted = notice.hint(self, true).to_string();
+                let action_redacted = match notice.action_kind(self) {
                     ActionKind::SqlStatements => {
                         Action::SqlStatements(notice.action(self, true).to_string())
                     }
@@ -84,9 +94,22 @@ impl CatalogState {
                     ActionKind::None => {
                         Action::None // No concrete action.
                     }
-                },
-                created_at: (self.config().now)(),
+                };
+                // Assemble the rendered notice.
+                OptimizerNotice {
+                    kind: OptimizerNoticeKind::from(&notice),
+                    item_id,
+                    dependencies: notice.dependencies(),
+                    message_redacted: some_if_neq(message_redacted, &message),
+                    hint_redacted: some_if_neq(hint_redacted, &hint),
+                    action_redacted: some_if_neq(action_redacted, &action),
+                    message,
+                    hint,
+                    action,
+                    created_at: (self.config().now)(),
+                }
             })
+            .map(From::from) // Wrap each notice into an `Arc`.
             .collect();
 
         DataflowMetainfo {
@@ -100,7 +123,7 @@ impl CatalogState {
     pub fn pack_optimizer_notices<'a>(
         &self,
         updates: &mut Vec<BuiltinTableUpdate>,
-        notices: impl Iterator<Item = &'a OptimizerNotice>,
+        notices: impl Iterator<Item = &'a Arc<OptimizerNotice>>,
         diff: Diff,
     ) {
         let mut row = Row::default();
@@ -133,14 +156,23 @@ impl CatalogState {
                 Action::SqlStatements(text) => Datum::String(text),
             });
             // push `message_redacted` column
-            packer.push(Datum::String(&notice.message_redacted));
+            packer.push(match notice.message_redacted.as_deref() {
+                Some(message_redacted) => Datum::String(message_redacted),
+                None => Datum::Null,
+            });
             // push `hint_redacted` column
-            packer.push(Datum::String(&notice.hint_redacted));
+            packer.push(match notice.hint_redacted.as_deref() {
+                Some(hint_redacted) => Datum::String(hint_redacted),
+                None => Datum::Null,
+            });
             // push `action_redacted` column
-            packer.push(match &notice.action_redacted {
-                Action::None => Datum::Null,
-                Action::PlainText(text) => Datum::String(text),
-                Action::SqlStatements(text) => Datum::String(text),
+            packer.push(match notice.action_redacted.as_ref() {
+                Some(action_redacted) => match action_redacted {
+                    Action::None => Datum::Null,
+                    Action::PlainText(text) => Datum::String(text),
+                    Action::SqlStatements(text) => Datum::String(text),
+                },
+                None => Datum::Null,
             });
             // push `action_type` column (TODO(21513): encode as int?)
             packer.push(match &notice.action {

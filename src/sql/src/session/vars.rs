@@ -1239,6 +1239,26 @@ const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY: ServerVar<bool> = ServerVar
     internal: true,
 };
 
+/// The interval to submit statistics to `mz_source_statistics_per_worker` and `mz_sink_statistics_per_worker`.
+const STORAGE_STATISTICS_INTERVAL: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("storage_statistics_interval"),
+    value: mz_storage_types::parameters::STATISTICS_INTERVAL_DEFAULT,
+    description: "The interval to submit statistics to `mz_source_statistics_per_worker` \
+        and `mz_sink_statistics` (Materialize).",
+    internal: true,
+};
+
+/// The interval to collect statistics for `mz_source_statistics_per_worker` and `mz_sink_statistics_per_worker` in
+/// clusterd. Controls the accuracy of metrics.
+const STORAGE_STATISTICS_COLLECTION_INTERVAL: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("storage_statistics_collection_interval"),
+    value: mz_storage_types::parameters::STATISTICS_COLLECTION_INTERVAL_DEFAULT,
+    description: "The interval to collect statistics for `mz_source_statistics_per_worker` \
+        and `mz_sink_statistics_per_worker` in clusterd. Controls the accuracy of metrics \
+        (Materialize).",
+    internal: true,
+};
+
 /// Controls [`mz_persist_client::cfg::PersistConfig::sink_minimum_batch_updates`].
 const PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_sink_minimum_batch_updates"),
@@ -1716,6 +1736,13 @@ mod cluster_scheduling {
         name: UncasedStr::new("cluster_soften_az_affinity_weight"),
         value: DEFAULT_SOFTEN_AZ_AFFINITY_WEIGHT,
         description: "The preference weight for `cluster_soften_az_affinity` (Materialize).",
+        internal: true,
+    };
+
+    pub const CLUSTER_ALWAYS_USE_DISK: ServerVar<bool> = ServerVar {
+        name: UncasedStr::new("cluster_always_use_disk"),
+        value: DEFAULT_ALWAYS_USE_DISK,
+        description: "Always provisions a replica with disk, regardless of `DISK` DDL option.",
         internal: true,
     };
 }
@@ -2211,6 +2238,20 @@ feature_flags!(
         default: false,
         internal: true,
         enable_for_item_parsing: true,
+    },
+    {
+        name: enable_reduce_mfp_fusion,
+        desc: "fusion of MFPs in reductions",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_worker_core_affinity,
+        desc: "set core affinity for replica worker threads",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: false,
     },
 );
 
@@ -2922,6 +2963,8 @@ impl SystemVars {
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY)
+            .with_var(&STORAGE_STATISTICS_INTERVAL)
+            .with_var(&STORAGE_STATISTICS_COLLECTION_INTERVAL)
             .with_var(&STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION)
             .with_var(&STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
@@ -2993,6 +3036,7 @@ impl SystemVars {
             .with_var(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT)
             .with_var(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY)
             .with_var(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT)
+            .with_var(&cluster_scheduling::CLUSTER_ALWAYS_USE_DISK)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
             .with_value_constrained_var(
                 &STATEMENT_LOGGING_MAX_SAMPLE_RATE,
@@ -3620,6 +3664,16 @@ impl SystemVars {
         *self.expect_value(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY)
     }
 
+    /// Returns the `storage_statistics_interval` configuration parameter.
+    pub fn storage_statistics_interval(&self) -> Duration {
+        *self.expect_value(&STORAGE_STATISTICS_INTERVAL)
+    }
+
+    /// Returns the `storage_statistics_collection_interval` configuration parameter.
+    pub fn storage_statistics_collection_interval(&self) -> Duration {
+        *self.expect_value(&STORAGE_STATISTICS_COLLECTION_INTERVAL)
+    }
+
     /// Returns the `persist_sink_minimum_batch_updates` configuration parameter.
     pub fn persist_sink_minimum_batch_updates(&self) -> usize {
         *self.expect_value(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
@@ -3828,6 +3882,10 @@ impl SystemVars {
 
     pub fn cluster_soften_az_affinity_weight(&self) -> i32 {
         *self.expect_value(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT)
+    }
+
+    pub fn cluster_always_use_disk(&self) -> bool {
+        *self.expect_value(&cluster_scheduling::CLUSTER_ALWAYS_USE_DISK)
     }
 
     /// Returns the `privatelink_status_update_quota_per_minute` configuration parameter.
@@ -5560,6 +5618,7 @@ pub fn is_cluster_scheduling_var(name: &str) -> bool {
         || name == cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT.name()
         || name == cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY.name()
         || name == cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT.name()
+        || name == cluster_scheduling::CLUSTER_ALWAYS_USE_DISK.name()
 }
 
 /// Returns whether the named variable is an HTTP server related config var.

@@ -73,13 +73,6 @@ pub static MZ_NOTICES: BuiltinView = BuiltinView {
     n.created_at
 FROM
     mz_internal.mz_optimizer_notices n
-WHERE
-    -- All dependencies are still present in the catalog
-    (
-        SELECT COUNT(*)
-        FROM unnest(n.dependency_ids) AS d(id)
-        WHERE id IN (SELECT id FROM mz_catalog.mz_objects)
-    ) = list_length(n.dependency_ids)
 ",
     sensitivity: DataSensitivity::Superuser,
 };
@@ -93,16 +86,16 @@ pub static MZ_NOTICES_REDACTED: BuiltinView = BuiltinView {
     column_defs: None,
     sql: "SELECT
     notice_type,
-    redacted_message as message,
-    redacted_hint as hint,
-    redacted_action as action,
+    coalesce(redacted_message, message) as message,
+    coalesce(redacted_hint, hint) as hint,
+    coalesce(redacted_action, action) as action,
     action_type,
     object_id,
     created_at
 FROM
     mz_internal.mz_notices
 ",
-    sensitivity: DataSensitivity::Public,
+    sensitivity: DataSensitivity::SuperuserAndSupport,
 };
 
 pub const MZ_NOTICES_IND: BuiltinIndex = BuiltinIndex {

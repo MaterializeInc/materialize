@@ -126,6 +126,10 @@ pub struct OptimizerConfig {
     pub persist_fast_path_limit: usize,
     /// Enable outer join lowering implemented in #22343.
     pub enable_new_outer_join_lowering: bool,
+    /// Enable fusion of MFPs in reductions.
+    ///
+    /// The fusion happens in MIR ⇒ LIR lowering.
+    pub enable_reduce_mfp_fusion: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -144,6 +148,7 @@ impl From<&SystemVars> for OptimizerConfig {
             enable_specialized_arrangements: vars.enable_specialized_arrangements(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
+            enable_reduce_mfp_fusion: vars.enable_reduce_mfp_fusion(),
         }
     }
 }
