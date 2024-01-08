@@ -251,6 +251,7 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         &mut self,
         retention_period: Option<Duration>,
         boot_ts: mz_repr::Timestamp,
+        wait_for_consolidation: bool,
     ) -> Result<Vec<VersionedStorageUsage>, CatalogError>;
 
     /// Persist new global timestamp for a timeline.

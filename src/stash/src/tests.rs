@@ -134,21 +134,22 @@ where
                 // Invalidate one upper and ensure append doesn't commit partial batches.
                 let other_upper = other_batch.upper;
                 other_batch.upper = Antichain::from_elem(Timestamp::MIN);
-                assert_contains!(
-                    tx.append(vec![orders_batch.clone(), other_batch.clone()])
-                        .await
-                        .unwrap_err()
-                        .to_string(),
-                    "{-9223372036854775808}",
-                );
+                let result = tx
+                    .append(vec![orders_batch.clone(), other_batch.clone()])
+                    .await;
+                let Err(err) = result else {
+                    panic!("unexpected success!")
+                };
+                assert_contains!(err.to_string(), "{-9223372036854775808}",);
+
                 // Test batches in the other direction too.
-                assert_contains!(
-                    tx.append(vec![other_batch.clone(), orders_batch.clone()])
-                        .await
-                        .unwrap_err()
-                        .to_string(),
-                    "{-9223372036854775808}",
-                );
+                let result = tx
+                    .append(vec![other_batch.clone(), orders_batch.clone()])
+                    .await;
+                let Err(err) = result else {
+                    panic!("unexpected success!")
+                };
+                assert_contains!(err.to_string(), "{-9223372036854775808}",);
 
                 // Fix the upper, append should work now.
                 other_batch.upper = other_upper;

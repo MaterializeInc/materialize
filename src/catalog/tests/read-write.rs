@@ -20,6 +20,7 @@ use mz_catalog::durable::{
 };
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::task::JoinHandleExt;
 use mz_persist_client::PersistClient;
 use mz_proto::RustType;
 use mz_repr::role_id::RoleId;
@@ -89,6 +90,89 @@ async fn test_confirm_leadership(
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_stash_get_and_prune_storage_usage_consolidates() {
+    let debug_factory = DebugStashFactory::new().await;
+    let openable_state = test_stash_backed_catalog_state(&debug_factory);
+
+    let recent_event = VersionedStorageUsage::V1(StorageUsageV1 {
+        id: 1,
+        shard_id: Some("recent".to_string()),
+        size_bytes: 42,
+        collection_timestamp: 20,
+    });
+    let boot_ts = mz_repr::Timestamp::new(23);
+
+    let mut state = Box::new(openable_state)
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .await
+        .unwrap();
+    let mut txn = state.transaction().await.unwrap();
+
+    // Insert many events that would take a long time to consolidate away.
+    for i in 0..200_000 {
+        let event = VersionedStorageUsage::V1(StorageUsageV1 {
+            id: i,
+            shard_id: Some("old".to_string()),
+            size_bytes: i * 2,
+            collection_timestamp: 10,
+        });
+        txn.insert_storage_usage_event(event.clone());
+    }
+    txn.insert_storage_usage_event(recent_event.clone());
+    txn.commit().await.unwrap();
+
+    // Test with no retention period.
+    let events = state
+        .get_and_prune_storage_usage(None, boot_ts, false)
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 200_001);
+
+    // Open a client so we can check if the collection has consolidated.
+    let (client, connection) =
+        tokio_postgres::connect(debug_factory.url(), debug_factory.tls().clone())
+            .await
+            .expect("failed to open client");
+    let client_conn = mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
+        if let Err(e) = connection.await {
+            tracing::warn!("postgres stash connection error: {e}");
+        }
+    });
+    client
+        .execute(
+            &format!("SET search_path = {}", debug_factory.schema()),
+            &[],
+        )
+        .await
+        .expect("failed to set schema");
+
+    // Test with some retention period.
+    let events = state
+        .get_and_prune_storage_usage(Some(Duration::from_millis(10)), boot_ts, true)
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events.into_element(), recent_event);
+
+    // We should _never_ have negative diffs here, we should have waited to return until
+    // consolidation was complete.
+    let count: i64 = client
+        .query_one("SELECT count(*) FROM data WHERE diff < 0", &[])
+        .await
+        .expect("verify select count failed")
+        .get(0);
+    assert_eq!(count, 0, "Stash failed to consolidate!");
+
+    // Cleanup.
+    drop(client);
+    client_conn.abort_and_wait().await;
+    Box::new(state).expire().await;
+
+    debug_factory.drop().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_stash_get_and_prune_storage_usage() {
     let debug_factory = DebugStashFactory::new().await;
     let openable_state = test_stash_backed_catalog_state(&debug_factory);
@@ -132,7 +216,7 @@ async fn test_get_and_prune_storage_usage(openable_state: impl OpenableDurableCa
 
     // Test with no retention period.
     let events = state
-        .get_and_prune_storage_usage(None, boot_ts)
+        .get_and_prune_storage_usage(None, boot_ts, false)
         .await
         .unwrap();
     assert_eq!(events.len(), 2);
@@ -141,7 +225,7 @@ async fn test_get_and_prune_storage_usage(openable_state: impl OpenableDurableCa
 
     // Test with some retention period.
     let events = state
-        .get_and_prune_storage_usage(Some(Duration::from_millis(10)), boot_ts)
+        .get_and_prune_storage_usage(Some(Duration::from_millis(10)), boot_ts, false)
         .await
         .unwrap();
     assert_eq!(events.len(), 1);

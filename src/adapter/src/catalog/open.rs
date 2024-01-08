@@ -1069,10 +1069,17 @@ impl Catalog {
             // To avoid reading over storage_usage events multiple times, do both
             // the table updates and delete calculations in a single read over the
             // data.
+            let wait_for_consolidation = catalog
+                .system_config()
+                .wait_catalog_consolidation_on_startup();
             let storage_usage_events = catalog
                 .storage()
                 .await
-                .get_and_prune_storage_usage(config.storage_usage_retention_period, boot_ts)
+                .get_and_prune_storage_usage(
+                    config.storage_usage_retention_period,
+                    boot_ts,
+                    wait_for_consolidation,
+                )
                 .await?;
             for event in storage_usage_events {
                 builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
