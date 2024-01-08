@@ -1104,6 +1104,7 @@ impl DurableCatalogState for Connection {
         &mut self,
         retention_period: Option<Duration>,
         boot_ts: Timestamp,
+        wait_for_consolidation: bool,
     ) -> Result<Vec<VersionedStorageUsage>, CatalogError> {
         // If no usage retention period is set, set the cutoff to MIN so nothing
         // is removed.
@@ -1146,8 +1147,10 @@ impl DurableCatalogState for Connection {
         // finish. We wait for consolidation because the storage usage collection is very large and
         // it's possible for it to conflict with other Stash transactions, preventing consolidation
         // from ever completing.
-        if let Some(notif) = consolidate_notif {
-            let _ = notif.await;
+        if wait_for_consolidation {
+            if let Some(notif) = consolidate_notif {
+                let _ = notif.await;
+            }
         }
 
         Ok(events)
