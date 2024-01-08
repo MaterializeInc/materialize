@@ -10,7 +10,7 @@
 use async_trait::async_trait;
 use mz_ore::now::EpochMillis;
 use mz_sql::session::vars::CatalogKind;
-use tracing::{info, warn};
+use tracing::{error, info};
 
 use crate::durable::debug::{DebugCatalogState, Trace};
 use crate::durable::impls::persist::UnopenedPersistCatalogState;
@@ -32,6 +32,7 @@ use crate::durable::{
 pub(crate) enum Direction {
     MigrateToPersist,
     RollbackToStash,
+    EmergencyStash,
 }
 
 impl TryFrom<CatalogKind> for Direction {
@@ -41,7 +42,8 @@ impl TryFrom<CatalogKind> for Direction {
         match catalog_kind {
             CatalogKind::Stash => Ok(Direction::RollbackToStash),
             CatalogKind::Persist => Ok(Direction::MigrateToPersist),
-            CatalogKind::Shadow | CatalogKind::EmergencyStash => Err(catalog_kind),
+            CatalogKind::EmergencyStash => Ok(Direction::EmergencyStash),
+            CatalogKind::Shadow => Err(catalog_kind),
         }
     }
 }
@@ -61,6 +63,14 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        // Handle emergency stash before opening persist.
+        if self.direction == Direction::EmergencyStash {
+            return self
+                .openable_stash
+                .open_savepoint(boot_ts.clone(), bootstrap_args, deploy_generation.clone())
+                .await;
+        }
+
         let stash_initialized = self.openable_stash.is_initialized().await?;
         let stash = self
             .openable_stash
@@ -112,6 +122,14 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        // Handle emergency stash before opening persist.
+        if self.direction == Direction::EmergencyStash {
+            return self
+                .openable_stash
+                .open(boot_ts.clone(), bootstrap_args, deploy_generation.clone())
+                .await;
+        }
+
         let stash = self
             .openable_stash
             .open(boot_ts.clone(), bootstrap_args, deploy_generation.clone())
@@ -169,7 +187,7 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         let direction = match catalog_kind.try_into() {
             Ok(direction) => direction,
             Err(catalog_kind) => {
-                warn!("unable to set catalog kind to {catalog_kind:?}");
+                error!("unable to set catalog kind to {catalog_kind:?}");
                 return;
             }
         };
@@ -210,6 +228,9 @@ impl CatalogMigrator {
             Direction::RollbackToStash => {
                 Self::rollback_from_persist_to_stash(&mut stash, persist).await?;
                 Ok(stash)
+            }
+            Direction::EmergencyStash => {
+                unreachable!("handled earlier without opening persist")
             }
         }
     }

@@ -43,7 +43,7 @@ use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::{SourceData, Timeline};
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tracing::{debug, warn};
+use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
@@ -582,7 +582,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     }
 
     fn set_catalog_kind(&mut self, catalog_kind: CatalogKind) {
-        warn!("unable to set catalog kind to {catalog_kind:?}");
+        error!("unable to set catalog kind to {catalog_kind:?}");
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
