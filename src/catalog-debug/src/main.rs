@@ -95,6 +95,11 @@ enum Action {
         /// Write output to specified path. Default stdout.
         target: Option<PathBuf>,
     },
+    /// Prints the current epoch.
+    Epoch {
+        /// Write output to specified path. Default stdout.
+        target: Option<PathBuf>,
+    },
     /// Edits a single item in a collection in the catalog.
     Edit {
         /// The name of the catalog collection to edit.
@@ -187,6 +192,14 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 Box::new(io::stdout().lock())
             };
             dump(openable_state, target).await
+        }
+        Action::Epoch { target } => {
+            let target: Box<dyn Write> = if let Some(path) = target {
+                Box::new(File::create(path)?)
+            } else {
+                Box::new(io::stdout().lock())
+            };
+            epoch(openable_state, target).await
         }
         Action::Edit {
             collection,
@@ -357,6 +370,16 @@ async fn dump(
     writeln!(&mut target, "{data:#?}")?;
     Ok(())
 }
+
+async fn epoch(
+    mut openable_state: Box<dyn OpenableDurableCatalogState>,
+    mut target: impl Write,
+) -> Result<(), anyhow::Error> {
+    let epoch = openable_state.epoch().await?;
+    writeln!(&mut target, "Epoch: {epoch:#?}")?;
+    Ok(())
+}
+
 async fn upgrade_check(
     openable_state: Box<dyn OpenableDurableCatalogState>,
     cluster_replica_sizes: ClusterReplicaSizeMap,

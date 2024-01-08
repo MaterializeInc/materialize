@@ -11,7 +11,7 @@ use mz_catalog::durable::debug::SettingCollection;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::{
     test_bootstrap_args, test_persist_backed_catalog_state, test_stash_backed_catalog_state,
-    CatalogError, DurableCatalogError, OpenableDurableCatalogState,
+    CatalogError, DurableCatalogError, Epoch, OpenableDurableCatalogState,
 };
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
@@ -70,11 +70,22 @@ async fn test_debug(
         CatalogError::Durable(DurableCatalogError::Uninitialized).to_string()
     );
 
+    // Check initial epoch.
+    let err = openable_state1.epoch().await.unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        CatalogError::Durable(DurableCatalogError::Uninitialized).to_string()
+    );
+
     // Use `NOW_ZERO` for consistent timestamps in the snapshots.
     let _ = Box::new(openable_state1)
         .open(NOW_ZERO(), &test_bootstrap_args(), None)
         .await
         .unwrap();
+
+    // Check epoch
+    let epoch = openable_state2.epoch().await.unwrap();
+    assert_eq!(Epoch::new(2).unwrap(), epoch);
 
     // Check opened trace.
     let trace = openable_state2.trace().await.unwrap();

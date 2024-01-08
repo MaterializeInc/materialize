@@ -150,6 +150,10 @@ where
         compare_and_return_async!(self, is_initialized)
     }
 
+    async fn epoch(&mut self) -> Result<Epoch, CatalogError> {
+        compare_and_return_async!(self, epoch)
+    }
+
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         compare_and_return_async!(self, get_deployment_generation)
     }

@@ -129,6 +129,17 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// Reports if the catalog state has been initialized.
     async fn is_initialized(&mut self) -> Result<bool, CatalogError>;
 
+    /// Returns the epoch of the current durable catalog state. The epoch acts as
+    /// a fencing token to prevent split brain issues across two
+    /// [`DurableCatalogState`]s. When a new [`DurableCatalogState`] opens the
+    /// catalog, it will increment the epoch by one (or initialize it to some
+    /// value if there's no existing epoch) and store the value in memory. It's
+    /// guaranteed that no two [`DurableCatalogState`]s will return the same value
+    /// for their epoch.
+    ///
+    /// NB: We may remove this in later iterations of Pv2.
+    async fn epoch(&mut self) -> Result<Epoch, CatalogError>;
+
     /// Get the deployment generation of this instance.
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError>;
 
