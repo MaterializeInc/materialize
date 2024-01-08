@@ -9,8 +9,6 @@
 
 //! PostgreSQL utility library.
 
-use tracing::warn;
-
 #[cfg(feature = "replication")]
 pub mod replication;
 #[cfg(feature = "replication")]
