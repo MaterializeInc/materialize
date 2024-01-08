@@ -3036,7 +3036,7 @@ def workflow_blue_green_deployment(
         ),  # pending dataflows can take a while
         Clusterd(name="clusterd1"),
         Clusterd(name="clusterd2"),
-        Materialized(),
+        Materialized(persist_blob_url="file:///mzdata/persist/blob"),
     ):
         c.up("materialized")
         c.up("clusterd1")
