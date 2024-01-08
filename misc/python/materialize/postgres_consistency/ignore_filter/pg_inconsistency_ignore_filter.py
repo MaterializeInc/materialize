@@ -157,15 +157,8 @@ class PgPreExecutionInconsistencyIgnoreFilter(
 
         if db_function.function_name_in_lower_case in {"min", "max"}:
             return_type_spec = expression.args[0].resolve_return_type_spec()
-
-            if (
-                isinstance(return_type_spec, DateTimeReturnTypeSpec)
-                and return_type_spec.type_identifier == TIME_TYPE_IDENTIFIER
-            ):
-                # MIN and MAX currently not supported on TIME type in mz
-                return YesIgnore("#22024: min/max on time")
             if isinstance(return_type_spec, TextReturnTypeSpec):
-                return YesIgnore("#22002: min/max on text")
+                return YesIgnore("#22002: min/max on text different")
 
         if db_function.function_name_in_lower_case == "replace":
             # replace is not working properly with empty text; however, it is not possible to reliably determine if an
