@@ -12,6 +12,8 @@ use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use futures::future::join_all;
+use futures::FutureExt;
 use futures::{
     future::{self, try_join, try_join3, try_join_all, BoxFuture},
     TryFutureExt,
@@ -21,7 +23,7 @@ use mz_ore::{cast::CastFrom, collections::CollectionExt};
 use mz_stash_types::{InternalStashError, StashError};
 use timely::progress::Antichain;
 use timely::PartialOrder;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_postgres::{types::ToSql, Client};
 
 use crate::postgres::{ConsolidateRequest, CountedStatements};
@@ -517,9 +519,12 @@ impl<'a> Transaction<'a> {
     /// Applies batches to the current transaction. If any batch fails and in
     /// error returned, all other applications are rolled back.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn append(&self, batches: Vec<AppendBatch>) -> Result<(), StashError> {
+    pub async fn append(
+        &self,
+        batches: Vec<AppendBatch>,
+    ) -> Result<BoxFuture<'static, ()>, StashError> {
         if batches.is_empty() {
-            return Ok(());
+            return Ok(Box::pin(futures::future::ready(())));
         }
 
         let consolidations = self
@@ -565,11 +570,15 @@ impl<'a> Transaction<'a> {
                                     },
                                 )
                                 .await?;
-                            Ok::<_, StashError>(ConsolidateRequest {
+
+                            let (tx, rx) = oneshot::channel();
+                            let request = ConsolidateRequest {
                                 id: collection_id,
                                 since: self.since(collection_id).await?,
-                                done: None,
-                            })
+                                done: Some(tx),
+                            };
+
+                            Ok::<_, StashError>((request, rx))
                         },
                     );
                     try_join_all(futures).await
@@ -577,10 +586,14 @@ impl<'a> Transaction<'a> {
             })
             .await?;
 
-        for cons in consolidations {
-            self.consolidations.send(cons).unwrap();
+        let mut notifs = Vec::with_capacity(consolidations.len());
+        for (req, notif) in consolidations {
+            self.consolidations.send(req).unwrap();
+            notifs.push(notif);
         }
-        Ok(())
+
+        // Note: we ignore the result of the Consolidation requests because consolidation cannot fail.
+        Ok(Box::pin(join_all(notifs).map(|_| ())))
     }
 
     /// Like update, but starts a savepoint.

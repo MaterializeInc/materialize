@@ -278,7 +278,7 @@ impl ShadowCatalogState {
                 .await?;
             let stash_storage_usage = self
                 .stash
-                .get_and_prune_storage_usage(None, Timestamp::minimum())
+                .get_and_prune_storage_usage(None, Timestamp::minimum(), false)
                 .await?;
             let mut txn = self.persist.transaction().await?;
             for event in &stash_storage_usage[u64_to_usize(persist_storage_usage_id)..] {
@@ -293,7 +293,7 @@ impl ShadowCatalogState {
                 .await?;
             let persist_storage_usage = self
                 .persist
-                .get_and_prune_storage_usage(None, Timestamp::minimum())
+                .get_and_prune_storage_usage(None, Timestamp::minimum(), false)
                 .await?;
             let mut txn = self.stash.transaction().await?;
             for event in &persist_storage_usage[u64_to_usize(stash_storage_usage_id)..] {
@@ -522,17 +522,18 @@ impl DurableCatalogState for ShadowCatalogState {
         &mut self,
         retention_period: Option<Duration>,
         boot_ts: Timestamp,
+        wait_for_consolidation: bool,
     ) -> Result<Vec<VersionedStorageUsage>, CatalogError> {
         if self.is_read_only() {
             // Read-only catalogs cannot fix storage usage so we must ignore them. See
             // `Self::fix_storage_usage`.
             let stash_storage_usage = self
                 .stash
-                .get_and_prune_storage_usage(retention_period, boot_ts)
+                .get_and_prune_storage_usage(retention_period, boot_ts, wait_for_consolidation)
                 .await?;
             let persist_storage_usage = self
                 .stash
-                .get_and_prune_storage_usage(retention_period, boot_ts)
+                .get_and_prune_storage_usage(retention_period, boot_ts, wait_for_consolidation)
                 .await?;
             if stash_storage_usage.len() >= persist_storage_usage.len() {
                 Ok(stash_storage_usage)
@@ -540,7 +541,13 @@ impl DurableCatalogState for ShadowCatalogState {
                 Ok(persist_storage_usage)
             }
         } else {
-            compare_and_return_async!(self, get_and_prune_storage_usage, retention_period, boot_ts)
+            compare_and_return_async!(
+                self,
+                get_and_prune_storage_usage,
+                retention_period,
+                boot_ts,
+                wait_for_consolidation
+            )
         }
     }
 
