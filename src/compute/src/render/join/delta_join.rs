@@ -434,8 +434,9 @@ where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
     Tr: TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
-    Tr::KeyOwned: ExchangeData + Hashable + Default + FromRowByTypes + IntoRowByTypes,
-    for<'a> Tr::Val<'a>: IntoRowByTypes,
+    Tr::KeyOwned: ExchangeData + Hashable + Default + FromRowByTypes,
+    for<'a> &'a Tr::KeyOwned: IntoRowByTypes<'a>,
+    for<'a> Tr::Val<'a>: IntoRowByTypes<'a>,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
     let updates_key_types = trace_key_types.clone();
@@ -638,8 +639,8 @@ where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
     Tr: for<'a> TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
-    for<'a> Tr::Key<'a>: IntoRowByTypes,
-    for<'a> Tr::Val<'a>: IntoRowByTypes,
+    for<'a> Tr::Key<'a>: IntoRowByTypes<'a>,
+    for<'a> Tr::Val<'a>: IntoRowByTypes<'a>,
 {
     let mut inner_as_of = Antichain::new();
     for event_time in as_of.elements().iter() {
