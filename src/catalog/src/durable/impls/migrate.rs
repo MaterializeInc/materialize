@@ -16,7 +16,7 @@ use crate::durable::debug::{DebugCatalogState, Trace};
 use crate::durable::impls::persist::UnopenedPersistCatalogState;
 use crate::durable::impls::stash::OpenableConnection;
 use crate::durable::{
-    BootstrapArgs, CatalogError, DurableCatalogState, OpenableDurableCatalogState,
+    BootstrapArgs, CatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState,
 };
 
 // Note: All reads done in this file can be fenced out by a new writer. All writers start by first
@@ -135,6 +135,15 @@ impl OpenableDurableCatalogState for CatalogMigrator {
             self.openable_persist.is_initialized().await
         } else {
             self.openable_stash.is_initialized().await
+        }
+    }
+
+    async fn epoch(&mut self) -> Result<Epoch, CatalogError> {
+        let tombstone = self.get_tombstone().await?;
+        if tombstone == Some(true) {
+            self.openable_persist.epoch().await
+        } else {
+            self.openable_stash.epoch().await
         }
     }
 

@@ -553,6 +553,17 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         Ok(self.is_initialized_inner().await?.0)
     }
 
+    async fn epoch(&mut self) -> Result<Epoch, CatalogError> {
+        let (persist_shard_readable, current_upper) = self.is_persist_shard_readable().await;
+        if persist_shard_readable {
+            let as_of = self.as_of(current_upper);
+            let epoch = self.get_epoch(as_of).await;
+            Ok(epoch)
+        } else {
+            Err(CatalogError::Durable(DurableCatalogError::Uninitialized))
+        }
+    }
+
     #[tracing::instrument(level = "debug", skip(self))]
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         self.get_current_config(DEPLOY_GENERATION).await

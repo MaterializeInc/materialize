@@ -250,6 +250,22 @@ impl OpenableDurableCatalogState for OpenableConnection {
         is_stash_initialized(stash).await.err_into()
     }
 
+    async fn epoch(&mut self) -> Result<Epoch, CatalogError> {
+        let stash = match &mut self.stash {
+            None => match self.open_stash_read_only().await {
+                Ok(stash) => stash,
+                Err(e) if e.can_recover_with_write_mode() => {
+                    return Err(CatalogError::Durable(DurableCatalogError::Uninitialized))
+                }
+                Err(e) => return Err(e.into()),
+            },
+            Some(stash) => stash,
+        };
+        stash
+            .epoch()
+            .ok_or(CatalogError::Durable(DurableCatalogError::Uninitialized))
+    }
+
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         self.get_config(DEPLOY_GENERATION.into()).await
     }
@@ -1322,6 +1338,10 @@ impl OpenableDurableCatalogState for TestOpenableConnection<'_> {
 
     async fn is_initialized(&mut self) -> Result<bool, CatalogError> {
         self.openable_connection.is_initialized().await
+    }
+
+    async fn epoch(&mut self) -> Result<Epoch, CatalogError> {
+        self.openable_connection.epoch().await
     }
 
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
