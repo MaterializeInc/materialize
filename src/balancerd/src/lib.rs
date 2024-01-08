@@ -211,7 +211,9 @@ impl BalancerService {
             let (handle, stream) = self.internal_http;
             server_handles.push(handle);
             set.spawn_named(|| "internal_http_stream", async move {
-                mz_server_core::serve(stream, internal_http, self.cfg.sigterm_wait).await;
+                // Prevent internal monitoring from allowing a graceful shutdown. In our testing
+                // *something* kept this open for at least 10 minutes.
+                mz_server_core::serve(stream, internal_http, None).await;
                 warn!("internal_http server exited");
             });
         }
