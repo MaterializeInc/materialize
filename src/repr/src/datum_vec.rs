@@ -98,8 +98,8 @@ mod test {
             // different lifetime, so that rust is happy with the reference lifetimes
             let r2 = Row::pack_slice(&[Datum::String("second")]);
             let mut borrow = d.borrow();
-            borrow.extend(&*r);
-            borrow.extend(&*r2);
+            borrow.extend(&r);
+            borrow.extend(&r2);
             assert_eq!(borrow.len(), 3);
             assert_eq!(borrow[2], Datum::String("second"));
         }
