@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = { version = "1.0.66", features = ["backtrace"] }
-clap = { version = "3.2.24", features = ["derive", "env"] }
+clap = { version = "4.4.14", features = ["derive", "env"] }
 hyper = { version = "0.14.23", features = ["http1", "server"] }
 jsonwebtoken = "9.2.0"
 mz-frontegg-auth = { path = "../frontegg-auth" }
