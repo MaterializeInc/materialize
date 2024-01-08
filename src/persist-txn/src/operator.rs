@@ -294,8 +294,9 @@ where
                 // it into an empty frontier progress so we can re-use the
                 // shutdown code below.
                 let event = passthrough_input.next_mut();
-
-                let event = timeout_log(event, "passthrough_input.next_mut()")
+ 
+                let event = timeout_log(event,
+                    format!("passthrough_input.next_mut(), read_data_to {:?}, output_progress_exclusive {:?}", read_data_to, output_progress_exclusive))
                     .await
                     .unwrap_or_else(|| Event::Progress(Antichain::new()));
                 match event {
@@ -342,7 +343,7 @@ where
                 let fut = txns_cache.update_ge(&output_progress_exclusive);
                 timeout_log(
                     fut,
-                    format!("txns_cache.update_ge({:?})", output_progress_exclusive),
+                    format!("txns_cache.update_ge(output_progress_exclusive:{:?})", output_progress_exclusive),
                 )
                 .await;
 
@@ -372,7 +373,7 @@ where
                         let fut = txns_cache.update_gt(&output_progress_exclusive);
                         timeout_log(
                             fut,
-                            format!("txns_cache.update_gt({:?})", output_progress_exclusive),
+                            format!("txns_cache.update_gt(output_progress_exclusive:{:?})", output_progress_exclusive),
                         )
                         .await;
                         continue;
