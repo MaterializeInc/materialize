@@ -186,6 +186,7 @@ async fn test_balancer() {
         let is_frontegg_resolver = matches!(resolver, Resolver::Frontegg(_));
         let balancer_cfg = BalancerConfig::new(
             &BUILD_INFO,
+            None,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -243,7 +244,7 @@ async fn test_balancer() {
                         .await
                         .unwrap();
                         task::spawn(|| "balancer-pg_client", async move {
-                            conn.await.expect("balancer-pg_client")
+                            let _ = conn.await;
                         });
                         let res: i32 = pg_client.query_one("SELECT 2", &[]).await.unwrap().get(0);
                         assert_eq!(res, 2);

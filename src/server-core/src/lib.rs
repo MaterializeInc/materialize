@@ -87,13 +87,14 @@ use std::time::Duration;
 use anyhow::bail;
 use futures::stream::{Stream, StreamExt};
 use mz_ore::error::ErrorExt;
-use mz_ore::task;
+use mz_ore::task::JoinSetExt;
 use openssl::ssl::{SslAcceptor, SslContext, SslFiletype, SslMethod};
 use socket2::{SockRef, TcpKeepalive};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
+use tokio::task::JoinSet;
 use tokio_stream::wrappers::TcpListenerStream;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 /// TCP keepalive settings. The idle time and interval match CockroachDB [0].
 /// The number of retries matches the Linux default.
@@ -156,52 +157,103 @@ pub async fn listen(
     Ok((handle, Box::pin(stream)))
 }
 
-/// Serves incoming TCP connections from `conns` using `server`.
-pub async fn serve<C, S>(mut conns: C, server: S)
+/// Serves incoming TCP connections from `conns` using `server`. `wait_timeout` is the time to wait
+/// after `conns` terminates for outstanding connections to complete. Returns handles to the
+/// outstanding connections after `wait_timeout` has expired or all connections have completed.
+pub async fn serve<C, S>(mut conns: C, server: S, wait_timeout: Option<Duration>) -> JoinSet<()>
 where
     C: ConnectionStream,
     S: Server,
 {
     let task_name = format!("handle_{}_connection", S::NAME);
-    while let Some(conn) = conns.next().await {
-        let conn = match conn {
-            Ok(conn) => conn,
-            Err(err) => {
-                error!("error accepting connection: {}", err);
-                continue;
+    let mut set = JoinSet::new();
+    loop {
+        tokio::select! {
+            // next() is cancel safe.
+            conn = conns.next() => {
+                let conn = match conn {
+                    None => break,
+                    Some(Ok(conn)) => conn,
+                    Some(Err(err)) => {
+                        error!("error accepting connection: {}", err);
+                        continue;
+                    }
+                };
+                // Set TCP_NODELAY to disable tinygram prevention (Nagle's
+                // algorithm), which forces a 40ms delay between each query
+                // on linux. According to John Nagle [0], the true problem
+                // is delayed acks, but disabling those is a receive-side
+                // operation (TCP_QUICKACK), and we can't always control the
+                // client. PostgreSQL sets TCP_NODELAY on both sides of its
+                // sockets, so it seems sane to just do the same.
+                //
+                // If set_nodelay fails, it's a programming error, so panic.
+                //
+                // [0]: https://news.ycombinator.com/item?id=10608356
+                conn.set_nodelay(true).expect("set_nodelay failed");
+                // Enable TCP keepalives to avoid any idle connection timeouts that may
+                // be enforced by networking devices between us and the client. Idle SQL
+                // connections are expected--e.g., a `SUBSCRIBE` to a view containing
+                // critical alerts will ideally be producing no data most of the time.
+                if let Err(e) = SockRef::from(&conn).set_tcp_keepalive(&KEEPALIVE) {
+                    error!("failed enabling keepalive: {e}");
+                    continue;
+                }
+                let fut = server.handle_connection(conn);
+                set.spawn_named(|| &task_name, async {
+                    if let Err(e) = fut.await {
+                        debug!(
+                            "error handling connection in {}: {}",
+                            S::NAME,
+                            e.display_with_causes()
+                        );
+                    }
+                });
             }
-        };
-        // Set TCP_NODELAY to disable tinygram prevention (Nagle's
-        // algorithm), which forces a 40ms delay between each query
-        // on linux. According to John Nagle [0], the true problem
-        // is delayed acks, but disabling those is a receive-side
-        // operation (TCP_QUICKACK), and we can't always control the
-        // client. PostgreSQL sets TCP_NODELAY on both sides of its
-        // sockets, so it seems sane to just do the same.
-        //
-        // If set_nodelay fails, it's a programming error, so panic.
-        //
-        // [0]: https://news.ycombinator.com/item?id=10608356
-        conn.set_nodelay(true).expect("set_nodelay failed");
-        // Enable TCP keepalives to avoid any idle connection timeouts that may
-        // be enforced by networking devices between us and the client. Idle SQL
-        // connections are expected--e.g., a `SUBSCRIBE` to a view containing
-        // critical alerts will ideally be producing no data most of the time.
-        if let Err(e) = SockRef::from(&conn).set_tcp_keepalive(&KEEPALIVE) {
-            error!("failed enabling keepalive: {e}");
-            continue;
+            // Actively cull completed tasks from the JoinSet so it does not grow unbounded. This
+            // method is cancel safe.
+            res = set.join_next(), if set.len() > 0 => {
+                if let Some(Err(e)) = res {
+                    debug!(
+                        "error joining connection in {}: {}",
+                        S::NAME,
+                        e.display_with_causes()
+                    );
+                }
+            }
         }
-        let fut = server.handle_connection(conn);
-        task::spawn(|| &task_name, async {
-            if let Err(e) = fut.await {
-                debug!(
-                    "error handling connection in {}: {}",
-                    S::NAME,
-                    e.display_with_causes()
-                );
-            }
-        });
     }
+    if let Some(wait) = wait_timeout {
+        if set.len() > 0 {
+            warn!(
+                "{} exiting, {} outstanding connections, waiting for {:?}",
+                S::NAME,
+                set.len(),
+                wait
+            );
+        }
+        let timedout = tokio::time::timeout(wait, async {
+            while let Some(res) = set.join_next().await {
+                if let Err(e) = res {
+                    debug!(
+                        "error joining connection in {}: {}",
+                        S::NAME,
+                        e.display_with_causes()
+                    );
+                }
+            }
+        })
+        .await;
+        if timedout.is_err() {
+            warn!(
+                "{}: wait timeout of {:?} exceeded, {} outstanding connections",
+                S::NAME,
+                wait,
+                set.len()
+            );
+        }
+    }
+    set
 }
 
 /// Configures a server's TLS encryption and authentication.
