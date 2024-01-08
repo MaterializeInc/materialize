@@ -1098,6 +1098,10 @@ mod tests {
         testcase(&mut c, 0, d0, ds(None, 0, 1), ReadDataTo(1));
 
         // ts 1 (direct write)
+        // - The cache knows everything < 2.
+        // - d0 is not registered in the cache.
+        // - We know the shard can't be written to via txn < 2.
+        // - So go read the shard normally up to 2.
         testcase(&mut c, 1, d0, ds(None, 1, 2), ReadDataTo(2));
 
         // ts 2 (register)
@@ -1163,6 +1167,7 @@ mod tests {
         assert_eq!(c.data_listen_next(&d0, 11), ReadDataTo(12));
         assert_eq!(c.data_listen_next(&d0, 12), EmitLogicalProgress(13));
         assert_eq!(c.data_listen_next(&d0, 13), EmitLogicalProgress(14));
+        assert_eq!(c.data_listen_next(&d0, 13), WaitForTxnsProgress);
     }
 
     #[mz_ore::test(tokio::test)]
