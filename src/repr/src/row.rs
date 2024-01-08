@@ -26,7 +26,6 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
 use proptest::strategy::{BoxedStrategy, Strategy};
-use ref_cast::RefCast;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -261,18 +260,6 @@ mod columnation {
 #[derive(Debug)]
 pub struct RowPacker<'a> {
     row: &'a mut Row,
-}
-
-/// A wrapper around a byte slice that guarantees the data are row-formatted.
-///
-/// This type exists to allow row-formatted data to be stored in types that
-/// need not contain a `Row`, for example large contiguous `[u8]` allocations.
-/// It is not expected that most users will use this type, especially as its
-/// only constructor is unsafe.
-#[derive(RefCast)]
-#[repr(transparent)]
-pub struct RowRef {
-    data: [u8],
 }
 
 #[derive(Debug, Clone)]
@@ -1619,6 +1606,40 @@ impl Row {
     pub fn byte_capacity(&self) -> usize {
         self.data.capacity()
     }
+
+    /// Unpack `self` into a `Vec<Datum>` for efficient random access.
+    pub fn unpack(&self) -> Vec<Datum> {
+        // It's usually cheaper to unpack twice to figure out the right length than it is to grow the vec as we go
+        let len = self.iter().count();
+        let mut vec = Vec::with_capacity(len);
+        vec.extend(self.iter());
+        vec
+    }
+
+    /// Return the first `Datum` in `self`
+    ///
+    /// Panics if the `Row` is empty.
+    pub fn unpack_first(&self) -> Datum {
+        self.iter().next().unwrap()
+    }
+
+    /// Iterate the `Datum` elements of the `Row`.
+    pub fn iter(&self) -> DatumListIter {
+        DatumListIter {
+            data: &self.data,
+            offset: 0,
+        }
+    }
+
+    /// For debugging only
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    /// True iff there is no data in this Row
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
 }
 
 impl RowPacker<'_> {
@@ -2050,65 +2071,7 @@ impl RowPacker<'_> {
     }
 }
 
-impl RowRef {
-    /// Construct a `RowRef` from a byte slice.
-    ///
-    /// # Safety
-    ///
-    /// This method is unsafe because if the byte slice is not a valid
-    /// row encoding, then unpacking its contents can cause undefined
-    /// behavior.
-    pub unsafe fn from_bytes_unchecked(data: &[u8]) -> &Self {
-        // SAFETY: RowRef just wraps [u8], and data is &[u8],
-        // therefore transmuting &[u8] to &RowRef is safe.
-        Self::ref_cast(data)
-    }
-
-    /// Unpack `self` into a `Vec<Datum>` for efficient random access.
-    pub fn unpack(&self) -> Vec<Datum> {
-        // It's usually cheaper to unpack twice to figure out the right length than it is to grow the vec as we go
-        let len = self.iter().count();
-        let mut vec = Vec::with_capacity(len);
-        vec.extend(self.iter());
-        vec
-    }
-
-    /// Return the first `Datum` in `self`
-    ///
-    /// Panics if the `Row` is empty.
-    pub fn unpack_first(&self) -> Datum {
-        self.iter().next().unwrap()
-    }
-
-    /// Iterate the `Datum` elements of the `Row`.
-    pub fn iter(&self) -> DatumListIter {
-        DatumListIter {
-            data: &self.data,
-            offset: 0,
-        }
-    }
-
-    /// For debugging only
-    pub fn data(&self) -> &[u8] {
-        &self.data
-    }
-
-    /// True iff there is no data in this Row
-    pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
-    }
-}
-
-impl std::ops::Deref for Row {
-    type Target = RowRef;
-
-    fn deref(&self) -> &Self::Target {
-        // SAFETY: self.data is a valid Row encoding since self is a Row
-        unsafe { RowRef::from_bytes_unchecked(&*self.data) }
-    }
-}
-
-impl<'a> IntoIterator for &'a RowRef {
+impl<'a> IntoIterator for &'a Row {
     type Item = Datum<'a>;
     type IntoIter = DatumListIter<'a>;
     fn into_iter(self) -> DatumListIter<'a> {
@@ -2116,7 +2079,7 @@ impl<'a> IntoIterator for &'a RowRef {
     }
 }
 
-impl fmt::Debug for RowRef {
+impl fmt::Debug for Row {
     /// Debug representation using the internal datums
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("Row{")?;
@@ -2125,14 +2088,7 @@ impl fmt::Debug for RowRef {
     }
 }
 
-impl fmt::Debug for Row {
-    /// Debug representation using the internal datums
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Debug::fmt(&**self, f)
-    }
-}
-
-impl fmt::Display for RowRef {
+impl fmt::Display for Row {
     /// Display representation using the internal datums
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("(")?;
@@ -2143,13 +2099,6 @@ impl fmt::Display for RowRef {
             write!(f, "{}", datum)?;
         }
         f.write_str(")")
-    }
-}
-
-impl fmt::Display for Row {
-    /// Debug representation using the internal datums
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Display::fmt(&**self, f)
     }
 }
 
