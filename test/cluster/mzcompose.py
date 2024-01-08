@@ -1551,7 +1551,7 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
                 """
         > SELECT id FROM mz_indexes WHERE id like 'u%';
         u2
-        
+
         $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
         DROP DATABASE sys_db CASCADE;
     """
