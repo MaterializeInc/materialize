@@ -256,7 +256,6 @@ impl Transactor {
                         data_id, init_ts, new_init_ts
                     );
                     init_ts = self.oracle.write_ts().await?;
-                    assert!(new_init_ts <= init_ts);
                     continue;
                 }
             }

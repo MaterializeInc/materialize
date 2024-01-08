@@ -332,7 +332,7 @@ pub struct MaelstromOracleKey {
 impl MaelstromOracle {
     pub async fn new(handle: Handle) -> Result<Self, ExternalError> {
         let read_ts = MaelstromOracleKey::new(handle.clone(), "tso_read", 0).await?;
-        let write_ts = MaelstromOracleKey::new(handle.clone(), "tso_write", 1).await?;
+        let write_ts = MaelstromOracleKey::new(handle.clone(), "tso_write", 0).await?;
         Ok(MaelstromOracle { read_ts, write_ts })
     }
 
