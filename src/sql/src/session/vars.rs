@@ -2246,6 +2246,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: wait_catalog_consolidation_on_startup,
+        desc: "When opening the Catalog, wait for consolidation to complete before returning",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 /// Represents the input to a variable.
