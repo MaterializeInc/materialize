@@ -6,6 +6,8 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
+import os
 import time
 
 import requests
@@ -14,10 +16,14 @@ from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import Materialized
 
+SENTRY_DSN = os.environ["BUILDKITE_SENTRY_DSN"]
+
 SERVICES = [
     Materialized(
         options=[
             "--opentelemetry-endpoint=whatever:7777",
+            f"--sentry-dsn={SENTRY_DSN}",
+            "--sentry-environment=development",
         ]
     ),
     Clusterd(name="clusterd"),
@@ -26,12 +32,13 @@ SERVICES = [
 
 def workflow_default(c: Composition) -> None:
     """Tests the dynamic tracing setup on environmentd"""
-    c.workflow("with-otel")
-    c.workflow("without-otel")
-    c.workflow("clusterd")
+    for name in c.workflows:
+        if name != "default":
+            with c.test_case(name):
+                c.workflow(name)
 
 
-def workflow_with_otel(c: Composition) -> None:
+def workflow_with_everything(c: Composition) -> None:
     c.up("materialized")
     port = c.port("materialized", 6878)
 
@@ -69,6 +76,26 @@ def workflow_with_otel(c: Composition) -> None:
     info = requests.get(f"http://localhost:{port}/api/tracing").json()
     assert info["current_level_filter"] == "debug"
 
+    # update the sentry directives
+    c.sql(
+        "ALTER SYSTEM SET sentry_filters = 'foo=trace'",
+        user="mz_system",
+        port=6877,
+        print_statement=False,
+    )
+    info = requests.get(f"http://localhost:{port}/api/tracing").json()
+    assert info["current_level_filter"] == "trace"
+
+    # revert the sentry directives and make sure we go back
+    c.sql(
+        "ALTER SYSTEM RESET sentry_filters",
+        user="mz_system",
+        port=6877,
+        print_statement=False,
+    )
+    info = requests.get(f"http://localhost:{port}/api/tracing").json()
+    assert info["current_level_filter"] == "debug"
+
     # make sure we can go allll the way back
     c.sql(
         "ALTER SYSTEM SET log_filter = 'info'",
@@ -80,7 +107,7 @@ def workflow_with_otel(c: Composition) -> None:
     assert info["current_level_filter"] == "info"
 
 
-def workflow_without_otel(c: Composition) -> None:
+def workflow_basic(c: Composition) -> None:
     with c.override(Materialized()):
         c.up("materialized")
         port = c.port("materialized", 6878)
@@ -152,3 +179,14 @@ def workflow_clusterd(c: Composition) -> None:
             break
 
     assert is_debug
+
+    # Reset
+    c.sql(
+        "ALTER SYSTEM SET log_filter = 'info'",
+        user="mz_system",
+        port=6877,
+        print_statement=False,
+    )
+    port = c.port("materialized", 6878)
+    info = requests.get(f"http://localhost:{port}/api/tracing").json()
+    assert info["current_level_filter"] == "info"
