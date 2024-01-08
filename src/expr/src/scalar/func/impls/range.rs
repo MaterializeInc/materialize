@@ -26,11 +26,11 @@ pub struct CastRangeToString {
 }
 
 impl LazyUnaryFunc for CastRangeToString {
-    fn eval<'a>(
-        &'a self,
+    fn eval<'a, 'b>(
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'b MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -79,11 +79,11 @@ impl fmt::Display for CastRangeToString {
 pub struct RangeLower;
 
 impl LazyUnaryFunc for RangeLower {
-    fn eval<'a>(
-        &'a self,
+    fn eval<'a, 'b>(
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'b MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -136,11 +136,11 @@ impl fmt::Display for RangeLower {
 pub struct RangeUpper;
 
 impl LazyUnaryFunc for RangeUpper {
-    fn eval<'a>(
-        &'a self,
+    fn eval<'a, 'b>(
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'b MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {

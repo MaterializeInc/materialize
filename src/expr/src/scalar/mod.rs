@@ -1821,14 +1821,14 @@ impl MirScalarExpr {
     }
 
     pub fn eval<'a>(
-        &'a self,
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
     ) -> Result<Datum<'a>, EvalError> {
         match self {
             MirScalarExpr::Column(index) => Ok(datums[*index].clone()),
             MirScalarExpr::Literal(res, _column_type) => match res {
-                Ok(row) => Ok(row.unpack_first()),
+                Ok(row) => Ok(temp_storage.make_datum(|p| p.push(row.unpack_first()))),
                 Err(e) => Err(e.clone()),
             },
             // Unmaterializable functions must be transformed away before

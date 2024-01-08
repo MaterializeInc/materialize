@@ -250,7 +250,7 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
 pub fn and<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
-    exprs: &'a [MirScalarExpr],
+    exprs: &[MirScalarExpr],
 ) -> Result<Datum<'a>, EvalError> {
     // If any is false, then return false. Else, if any is null, then return null. Else, return true.
     let mut null = false;
@@ -275,7 +275,7 @@ pub fn and<'a>(
 pub fn or<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
-    exprs: &'a [MirScalarExpr],
+    exprs: &[MirScalarExpr],
 ) -> Result<Datum<'a>, EvalError> {
     // If any is true, then return true. Else, if any is null, then return null. Else, return false.
     let mut null = false;
@@ -2342,12 +2342,12 @@ pub enum BinaryFunc {
 }
 
 impl BinaryFunc {
-    pub fn eval<'a>(
-        &'a self,
+    pub fn eval<'a, 'b>(
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a_expr: &'a MirScalarExpr,
-        b_expr: &'a MirScalarExpr,
+        a_expr: &'b MirScalarExpr,
+        b_expr: &'b MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a_expr.eval(datums, temp_storage)?;
         let b = b_expr.eval(datums, temp_storage)?;
@@ -4252,11 +4252,11 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
 /// A description of an SQL unary function that has the ability to lazy evaluate its arguments
 // This trait will eventually be annotated with #[enum_dispatch] to autogenerate the UnaryFunc enum
 trait LazyUnaryFunc {
-    fn eval<'a>(
-        &'a self,
+    fn eval<'a, 'b>(
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'b MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError>;
 
     /// The output ColumnType of this function.
@@ -4363,11 +4363,11 @@ trait EagerUnaryFunc<'a> {
 }
 
 impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
-    fn eval<'a>(
-        &'a self,
+    fn eval<'a, 'b>(
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'b MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         match T::Input::try_from_result(a.eval(datums, temp_storage)) {
             // If we can convert to the input type then we call the function
@@ -5986,7 +5986,7 @@ impl IntoRustIfSome<UnaryFunc> for Option<Box<ProtoUnaryFunc>> {
 fn coalesce<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
-    exprs: &'a [MirScalarExpr],
+    exprs: &[MirScalarExpr],
 ) -> Result<Datum<'a>, EvalError> {
     for e in exprs {
         let d = e.eval(datums, temp_storage)?;
@@ -6000,7 +6000,7 @@ fn coalesce<'a>(
 fn greatest<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
-    exprs: &'a [MirScalarExpr],
+    exprs: &[MirScalarExpr],
 ) -> Result<Datum<'a>, EvalError> {
     let datums = fallible_iterator::convert(exprs.iter().map(|e| e.eval(datums, temp_storage)));
     Ok(datums
@@ -6012,7 +6012,7 @@ fn greatest<'a>(
 fn least<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
-    exprs: &'a [MirScalarExpr],
+    exprs: &[MirScalarExpr],
 ) -> Result<Datum<'a>, EvalError> {
     let datums = fallible_iterator::convert(exprs.iter().map(|e| e.eval(datums, temp_storage)));
     Ok(datums
@@ -6024,7 +6024,7 @@ fn least<'a>(
 fn error_if_null<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
-    exprs: &'a [MirScalarExpr],
+    exprs: &[MirScalarExpr],
 ) -> Result<Datum<'a>, EvalError> {
     let datums = exprs
         .iter()
@@ -7468,10 +7468,10 @@ pub enum VariadicFunc {
 
 impl VariadicFunc {
     pub fn eval<'a>(
-        &'a self,
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        exprs: &'a [MirScalarExpr],
+        exprs: &[MirScalarExpr],
     ) -> Result<Datum<'a>, EvalError> {
         // Evaluate all non-eager functions directly
         match self {

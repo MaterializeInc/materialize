@@ -25,11 +25,11 @@ pub struct CastMapToString {
 }
 
 impl LazyUnaryFunc for CastMapToString {
-    fn eval<'a>(
-        &'a self,
+    fn eval<'a, 'b>(
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'b MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -78,11 +78,11 @@ impl fmt::Display for CastMapToString {
 pub struct MapLength;
 
 impl LazyUnaryFunc for MapLength {
-    fn eval<'a>(
-        &'a self,
+    fn eval<'a, 'b>(
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'b MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {

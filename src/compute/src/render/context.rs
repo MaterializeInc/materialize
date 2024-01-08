@@ -825,8 +825,8 @@ where
         refuel: usize,
     ) -> timely::dataflow::Stream<S, I::Item>
     where
-        for<'a> Tr::Key<'a>: IntoRowByTypes,
-        for<'a> Tr::Val<'a>: IntoRowByTypes,
+        for<'a> Tr::Key<'a>: IntoRowByTypes<'a>,
+        for<'a> Tr::Val<'a>: IntoRowByTypes<'a>,
         Tr: TraceReader<Time = S::Timestamp, Diff = mz_repr::Diff> + Clone + 'static,
         I: IntoIterator,
         I::Item: Data,

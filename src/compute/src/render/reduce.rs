@@ -533,7 +533,7 @@ where
         T1: Trace<KeyOwned = Row, Time = G::Timestamp, Diff = Diff> + 'static,
         T1::Batch: Batch,
         T1::Batcher: Batcher<Item = ((Row, T1::ValOwned), G::Timestamp, Diff)>,
-        for<'a> T1::Key<'a>: std::fmt::Debug + IntoRowByTypes,
+        for<'a> T1::Key<'a>: std::fmt::Debug + IntoRowByTypes<'a>,
         T1::ValOwned: Columnation + ExchangeData + Default,
         Arranged<S, TraceAgent<T1>>: ArrangementSize,
         T2: for<'a> Trace<

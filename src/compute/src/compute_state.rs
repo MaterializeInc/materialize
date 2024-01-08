@@ -1021,10 +1021,12 @@ impl IndexPeek {
     ) -> Result<Vec<(Row, NonZeroUsize)>, String>
     where
         Tr: TraceReader<Time = Timestamp, Diff = Diff>,
-        for<'a> Tr::Key<'a>: IntoRowByTypes,
-        for<'a> Tr::Val<'a>: IntoRowByTypes,
-        Tr::KeyOwned: Columnation + Data + FromRowByTypes + IntoRowByTypes,
-        Tr::ValOwned: Columnation + Data + IntoRowByTypes,
+        for<'a> Tr::Key<'a>: IntoRowByTypes<'a>,
+        for<'a> Tr::Val<'a>: IntoRowByTypes<'a>,
+        Tr::KeyOwned: Columnation + Data + FromRowByTypes,
+        for<'a> &'a Tr::KeyOwned: IntoRowByTypes<'a>,
+        Tr::ValOwned: Columnation + Data,
+        for<'a> &'a Tr::ValOwned: IntoRowByTypes<'a>,
     {
         let max_result_size = usize::cast_from(max_result_size);
         let count_byte_size = std::mem::size_of::<NonZeroUsize>();

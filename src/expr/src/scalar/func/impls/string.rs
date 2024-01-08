@@ -310,11 +310,11 @@ pub struct CastStringToArray {
 }
 
 impl LazyUnaryFunc for CastStringToArray {
-    fn eval<'a>(
-        &'a self,
+    fn eval<'a, 'b>(
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'b MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -383,11 +383,11 @@ pub struct CastStringToList {
 }
 
 impl LazyUnaryFunc for CastStringToList {
-    fn eval<'a>(
-        &'a self,
+    fn eval<'a, 'b>(
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'b MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -460,11 +460,11 @@ pub struct CastStringToMap {
 }
 
 impl LazyUnaryFunc for CastStringToMap {
-    fn eval<'a>(
-        &'a self,
+    fn eval<'a, 'b>(
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'b MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -587,11 +587,11 @@ pub struct CastStringToRange {
 }
 
 impl LazyUnaryFunc for CastStringToRange {
-    fn eval<'a>(
-        &'a self,
+    fn eval<'a, 'b>(
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'b MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -712,11 +712,11 @@ static INT2VECTOR_CAST_EXPR: Lazy<MirScalarExpr> = Lazy::new(|| MirScalarExpr::C
 pub struct CastStringToInt2Vector;
 
 impl LazyUnaryFunc for CastStringToInt2Vector {
-    fn eval<'a>(
-        &'a self,
+    fn eval<'a, 'b>(
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'b MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -907,11 +907,11 @@ impl fmt::Display for IsRegexpMatch {
 pub struct RegexpMatch(pub Regex);
 
 impl LazyUnaryFunc for RegexpMatch {
-    fn eval<'a>(
-        &'a self,
+    fn eval<'a, 'b>(
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'b MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         let haystack = a.eval(datums, temp_storage)?;
         if haystack.is_null() {
@@ -965,11 +965,11 @@ impl fmt::Display for RegexpMatch {
 pub struct RegexpSplitToArray(pub Regex);
 
 impl LazyUnaryFunc for RegexpSplitToArray {
-    fn eval<'a>(
-        &'a self,
+    fn eval<'a, 'b>(
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'b MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         let haystack = a.eval(datums, temp_storage)?;
         if haystack.is_null() {
@@ -1032,11 +1032,11 @@ sqlfunc!(
 pub struct QuoteIdent;
 
 impl LazyUnaryFunc for QuoteIdent {
-    fn eval<'a>(
-        &'a self,
+    fn eval<'a, 'b>(
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'b MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         let d = a.eval(datums, temp_storage)?;
         if d.is_null() {

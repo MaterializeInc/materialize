@@ -1481,7 +1481,7 @@ pub mod plan {
         /// returns `Ok(Some(row)).
         #[inline(always)]
         pub fn evaluate_into<'a, 'row>(
-            &'a self,
+            &self,
             datums: &mut Vec<Datum<'a>>,
             arena: &'a RowArena,
             row_buf: &'row mut Row,
@@ -1520,7 +1520,7 @@ pub mod plan {
         ///
         /// This does not apply `self.projection`, which is up to the calling method.
         pub fn evaluate_inner<'b, 'a: 'b>(
-            &'a self,
+            &self,
             datums: &'b mut Vec<Datum<'a>>,
             arena: &'a RowArena,
         ) -> Result<bool, EvalError> {

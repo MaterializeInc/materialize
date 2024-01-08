@@ -25,11 +25,11 @@ pub struct CastListToString {
 }
 
 impl LazyUnaryFunc for CastListToString {
-    fn eval<'a>(
-        &'a self,
+    fn eval<'a, 'b>(
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'b MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -83,11 +83,11 @@ pub struct CastList1ToList2 {
 }
 
 impl LazyUnaryFunc for CastList1ToList2 {
-    fn eval<'a>(
-        &'a self,
+    fn eval<'a, 'b>(
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'b MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -144,11 +144,11 @@ impl fmt::Display for CastList1ToList2 {
 pub struct ListLength;
 
 impl LazyUnaryFunc for ListLength {
-    fn eval<'a>(
-        &'a self,
+    fn eval<'a, 'b>(
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'b MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {

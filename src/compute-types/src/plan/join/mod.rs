@@ -125,10 +125,10 @@ impl JoinClosure {
     /// Applies per-row filtering and logic.
     #[inline(always)]
     pub fn apply<'a>(
-        &'a self,
+        &self,
         datums: &mut Vec<Datum<'a>>,
         temp_storage: &'a RowArena,
-        row: &'a mut Row,
+        row: &mut Row,
     ) -> Result<Option<Row>, mz_expr::EvalError> {
         for exprs in self.ready_equivalences.iter() {
             // Each list of expressions should be equal to the same value.

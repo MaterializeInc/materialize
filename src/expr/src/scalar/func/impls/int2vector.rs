@@ -25,11 +25,11 @@ pub struct CastInt2VectorToArray;
 // This could be simplified to an EagerUnaryFunc once we have
 // auto-parameterization of array built-in functions.
 impl LazyUnaryFunc for CastInt2VectorToArray {
-    fn eval<'a>(
-        &'a self,
+    fn eval<'a, 'b>(
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'b MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         a.eval(datums, temp_storage)
     }
@@ -75,11 +75,11 @@ impl fmt::Display for CastInt2VectorToArray {
 pub struct CastInt2VectorToString;
 
 impl LazyUnaryFunc for CastInt2VectorToString {
-    fn eval<'a>(
-        &'a self,
+    fn eval<'a, 'b>(
+        &self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'b MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {

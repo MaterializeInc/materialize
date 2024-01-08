@@ -333,11 +333,11 @@ macro_rules! derive_unary {
         }
 
         impl UnaryFunc {
-            pub fn eval<'a>(
-                &'a self,
+            pub fn eval<'a, 'b>(
+                &self,
                 datums: &[Datum<'a>],
                 temp_storage: &'a RowArena,
-                a: &'a MirScalarExpr,
+                a: &'b MirScalarExpr,
             ) -> Result<Datum<'a>, EvalError> {
                 match self {
                     $(Self::$name(f) => f.eval(datums, temp_storage, a),)*
