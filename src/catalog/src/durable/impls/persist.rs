@@ -10,6 +10,7 @@
 pub(crate) mod metrics;
 pub(crate) mod state_update;
 
+use std::cmp::max;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::future::Future;
@@ -177,6 +178,7 @@ impl UnopenedPersistCatalogState {
         boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
+        epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         let read_only = matches!(mode, Mode::Readonly);
         let (persist_shard_readable, upper) = self.is_persist_shard_readable().await;
@@ -199,6 +201,9 @@ impl UnopenedPersistCatalogState {
         // Only writable catalogs attempt to increment the epoch.
         if matches!(mode, Mode::Writable) {
             current_epoch = current_epoch + 1;
+            if let Some(epoch_lower_bound) = epoch_lower_bound {
+                current_epoch = max(current_epoch, epoch_lower_bound.get());
+            }
         }
         let current_epoch = Epoch::new(current_epoch).expect("known to be non-zero");
         fence_updates.push(StateUpdate {
@@ -514,10 +519,17 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
+        epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(Mode::Savepoint, boot_ts, bootstrap_args, deploy_generation)
-            .boxed()
-            .await
+        self.open_inner(
+            Mode::Savepoint,
+            boot_ts,
+            bootstrap_args,
+            deploy_generation,
+            epoch_lower_bound,
+        )
+        .boxed()
+        .await
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -526,7 +538,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(Mode::Readonly, boot_ts, bootstrap_args, None)
+        self.open_inner(Mode::Readonly, boot_ts, bootstrap_args, None, None)
             .boxed()
             .await
     }
@@ -537,10 +549,17 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
+        epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_inner(Mode::Writable, boot_ts, bootstrap_args, deploy_generation)
-            .boxed()
-            .await
+        self.open_inner(
+            Mode::Writable,
+            boot_ts,
+            bootstrap_args,
+            deploy_generation,
+            epoch_lower_bound,
+        )
+        .boxed()
+        .await
     }
 
     #[tracing::instrument(level = "debug", skip(self))]

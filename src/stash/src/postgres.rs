@@ -327,9 +327,16 @@ impl StashFactory {
         url: String,
         schema: Option<String>,
         tls: MakeTlsConnector,
+        epoch_lower_bound: Option<NonZeroI64>,
     ) -> Result<Stash, StashError> {
-        self.open_inner(TransactionMode::Writeable, url, schema, tls)
-            .await
+        self.open_inner(
+            TransactionMode::Writeable,
+            url,
+            schema,
+            tls,
+            epoch_lower_bound,
+        )
+        .await
     }
 
     /// Opens the stash stored at the specified path in readonly mode: any
@@ -340,7 +347,7 @@ impl StashFactory {
         schema: Option<String>,
         tls: MakeTlsConnector,
     ) -> Result<Stash, StashError> {
-        self.open_inner(TransactionMode::Readonly, url, schema, tls)
+        self.open_inner(TransactionMode::Readonly, url, schema, tls, None)
             .await
     }
 
@@ -353,9 +360,16 @@ impl StashFactory {
         url: String,
         schema: Option<String>,
         tls: MakeTlsConnector,
+        epoch_lower_bound: Option<NonZeroI64>,
     ) -> Result<Stash, StashError> {
-        self.open_inner(TransactionMode::Savepoint, url, schema, tls)
-            .await
+        self.open_inner(
+            TransactionMode::Savepoint,
+            url,
+            schema,
+            tls,
+            epoch_lower_bound,
+        )
+        .await
     }
 
     async fn open_inner(
@@ -364,6 +378,7 @@ impl StashFactory {
         url: String,
         schema: Option<String>,
         tls: MakeTlsConnector,
+        epoch_lower_bound: Option<NonZeroI64>,
     ) -> Result<Stash, StashError> {
         let mut config: Config = url.parse()?;
         // We'd like to use the crdb_connect_timeout SystemVar here (because it can
@@ -404,7 +419,7 @@ impl StashFactory {
             .into_retry_stream();
         let mut retry = Box::pin(retry);
         loop {
-            match conn.connect().await {
+            match conn.connect(epoch_lower_bound).await {
                 Ok(()) => break,
                 Err(err) => {
                     warn!("initial stash connection error, retrying: {err}");
@@ -535,7 +550,7 @@ impl Stash {
 
     /// Sets `client` to a new connection to the Postgres server.
     #[tracing::instrument(name = "stash::connect", level = "debug", skip_all)]
-    async fn connect(&mut self) -> Result<(), StashError> {
+    async fn connect(&mut self, epoch_lower_bound: Option<NonZeroI64>) -> Result<(), StashError> {
         // Initialize a connection.
         let result = self.config.lock().await.connect(self.tls.clone()).await;
         let (mut client, connection) = match result {
@@ -628,12 +643,13 @@ impl Stash {
                 // can't accidentally have the same epoch, nonce pair (especially risky if the
                 // current epoch has been bumped exactly once, then gets recreated by another
                 // connection that also bumps it once).
-                let row = tx
-                    .query_one(
-                        "UPDATE fence SET epoch=epoch+1, nonce=$1 RETURNING epoch",
-                        &[&self.nonce.to_vec()],
-                    )
-                    .await?;
+                let update = match epoch_lower_bound {
+                    Some(epoch_lower_bound) => {
+                        format!("UPDATE fence SET epoch=GREATEST(epoch+1, {}), nonce=$1 RETURNING epoch", epoch_lower_bound.get())
+                    }
+                    None => "UPDATE fence SET epoch=epoch+1, nonce=$1 RETURNING epoch".to_string(),
+                };
+                let row = tx.query_one(&update, &[&self.nonce.to_vec()]).await?;
                 NonZeroI64::new(row.get(0)).unwrap()
             } else {
                 let row = tx.query_one("SELECT epoch, nonce FROM fence", &[]).await?;
@@ -803,7 +819,9 @@ impl Stash {
             None => true,
         };
         if reconnect {
-            self.connect().await.map_err(TransactionError::Connect)?;
+            self.connect(None)
+                .await
+                .map_err(TransactionError::Connect)?;
         }
         // client is guaranteed to be Some here.
         let client = self.client.as_mut().unwrap();
@@ -892,7 +910,7 @@ impl Stash {
     #[tracing::instrument(name = "stash::determine_commit", level = "debug", skip_all)]
     async fn determine_commit(&mut self, committed_if_version: i64) -> Result<bool, StashError> {
         // Always reconnect.
-        self.connect().await?;
+        self.connect(None).await?;
 
         let client = self.client.as_mut().unwrap();
         let row = client
@@ -1358,6 +1376,7 @@ impl DebugStashFactory {
                 self.url.clone(),
                 Some(self.schema.clone()),
                 self.tls.clone(),
+                None,
             )
             .await
     }

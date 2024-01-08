@@ -404,6 +404,7 @@ impl Listeners {
                             bootstrap_role: config.bootstrap_role.clone(),
                         },
                         None,
+                        None,
                     )
                     .await
                 {
@@ -462,6 +463,7 @@ impl Listeners {
                     bootstrap_role: config.bootstrap_role,
                 },
                 config.deploy_generation,
+                None,
             )
             .await?;
         // Get the value from Launch Darkly as of the last time this environment

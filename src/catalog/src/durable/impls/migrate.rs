@@ -16,7 +16,8 @@ use crate::durable::debug::{DebugCatalogState, Trace};
 use crate::durable::impls::persist::UnopenedPersistCatalogState;
 use crate::durable::impls::stash::OpenableConnection;
 use crate::durable::{
-    BootstrapArgs, CatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState,
+    epoch_checked_increment, BootstrapArgs, CatalogError, DurableCatalogState, Epoch,
+    OpenableDurableCatalogState,
 };
 
 // Note: All reads done in this file can be fenced out by a new writer. All writers start by first
@@ -71,27 +72,40 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
+        epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        assert_eq!(
+            epoch_lower_bound, None,
+            "epoch_lower_bound shouldn't be set for `CatalogMigrator` impl"
+        );
+
         let direction = match self.target {
             TargetImplementation::EmergencyStash => {
                 // Handle emergency stash before opening persist.
                 return self
                     .openable_stash
-                    .open_savepoint(boot_ts, bootstrap_args, deploy_generation)
+                    .open_savepoint(boot_ts, bootstrap_args, deploy_generation, None)
                     .await;
             }
             TargetImplementation::MigrationDirection(direction) => direction,
         };
 
+        let stash_epoch = self.openable_stash.epoch().await.ok();
+        let persist_epoch = self.openable_persist.epoch().await.ok();
         let stash_initialized = self.openable_stash.is_initialized().await?;
+        let persist_initialized = self.openable_persist.is_initialized().await?;
         let stash = self
             .openable_stash
-            .open_savepoint(boot_ts.clone(), bootstrap_args, deploy_generation.clone())
+            .open_savepoint(
+                boot_ts.clone(),
+                bootstrap_args,
+                deploy_generation.clone(),
+                persist_epoch,
+            )
             .await;
-        let persist_initialized = self.openable_persist.is_initialized().await?;
         let persist = self
             .openable_persist
-            .open_savepoint(boot_ts, bootstrap_args, deploy_generation)
+            .open_savepoint(boot_ts, bootstrap_args, deploy_generation, stash_epoch)
             .await;
 
         // If our target implementation is the stash, but persist is uninitialized, then we can
@@ -104,6 +118,7 @@ impl OpenableDurableCatalogState for CatalogMigrator {
                 return stash;
             }
         }
+
         // If our target implementation is the persist, but the stash is uninitialized, then we can
         // still proceed with only using persist.
         if let Err(CatalogError::Durable(e)) = &stash {
@@ -114,9 +129,9 @@ impl OpenableDurableCatalogState for CatalogMigrator {
                 return persist;
             }
         }
+
         let stash = stash?;
         let persist = persist?;
-
         Self::open_inner(stash, persist, direction).await
     }
 
@@ -133,26 +148,50 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
+        epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        assert_eq!(
+            epoch_lower_bound, None,
+            "epoch_lower_bound shouldn't be set for `CatalogMigrator` impl"
+        );
+
         let direction = match self.target {
             TargetImplementation::EmergencyStash => {
                 // Handle emergency stash before opening persist.
                 return self
                     .openable_stash
-                    .open(boot_ts, bootstrap_args, deploy_generation)
+                    .open(boot_ts, bootstrap_args, deploy_generation, None)
                     .await;
             }
             TargetImplementation::MigrationDirection(direction) => direction,
         };
 
+        let stash_epoch = self
+            .openable_stash
+            .epoch()
+            .await
+            .ok()
+            .map(|epoch| epoch_checked_increment(epoch).expect("stash epoch overflowed"));
+        let persist_epoch = self
+            .openable_persist
+            .epoch()
+            .await
+            .ok()
+            .map(|epoch| epoch_checked_increment(epoch).expect("persist epoch overflowed"));
+
         let stash = self
             .openable_stash
-            .open(boot_ts.clone(), bootstrap_args, deploy_generation.clone())
+            .open(
+                boot_ts.clone(),
+                bootstrap_args,
+                deploy_generation.clone(),
+                persist_epoch,
+            )
             .await?;
         fail::fail_point!("post_stash_fence");
         let persist = self
             .openable_persist
-            .open(boot_ts, bootstrap_args, deploy_generation)
+            .open(boot_ts, bootstrap_args, deploy_generation, stash_epoch)
             .await?;
         fail::fail_point!("post_persist_fence");
         Self::open_inner(stash, persist, direction).await
