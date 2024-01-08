@@ -398,7 +398,17 @@
         font-size: var(--sm);
     }
 
-    a:not([class]) {
+    button {
+        border-bottom: 1px solid transparent;
+    }
+
+    button:hover,
+    button:focus {
+        border-color: var(--important);
+    }
+
+    a:not([class]),
+    button {
         color: var(--sub) !important;
         font-weight: 300 !important;
         text-decoration: none;
