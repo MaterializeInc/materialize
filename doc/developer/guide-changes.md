@@ -92,9 +92,9 @@ other if they are in the same RU.
 You should also endeavor to limit each RU to one team's scope as defined by
 the [CODEOWNERS](/.github/CODEOWNERS) file, in particular for larger changes.
 When a single RU contains changes across multiple parts of the stack, each
-reviewer has the additional overhead of digging through the PR to figure out which
-files require their review. Splitting up the change into multiple RUs avoids
-this.\
+reviewer has the additional overhead of digging through the PR to figure out
+which files require their review. Splitting up the change into multiple RUs
+avoids this.\
 Areas where this is particularly applicable:
 * Changes to the [SQL parser](/src/sql-parser)
 * Changes to the [SQL planner](/src/sql/src/plan)
