@@ -30,6 +30,8 @@ pub struct TracingParameters {
     pub log_filter_defaults: Vec<SerializableDirective>,
     /// Additional directives for `opentelemetry_filter`.
     pub opentelemetry_filter_defaults: Vec<SerializableDirective>,
+    /// Additional directives on top of the `info` filter for `sentry`.
+    pub sentry_filters: Vec<SerializableDirective>,
 }
 
 impl Arbitrary for TracingParameters {
@@ -42,6 +44,7 @@ impl Arbitrary for TracingParameters {
             any::<Option<CloneableEnvFilter>>(),
             any::<Vec<SerializableDirective>>(),
             any::<Vec<SerializableDirective>>(),
+            any::<Vec<SerializableDirective>>(),
         )
             .prop_map(
                 |(
@@ -49,11 +52,13 @@ impl Arbitrary for TracingParameters {
                     opentelemetry_filter,
                     log_filter_defaults,
                     opentelemetry_filter_defaults,
+                    sentry_filters,
                 )| Self {
                     log_filter,
                     opentelemetry_filter,
                     log_filter_defaults,
                     opentelemetry_filter_defaults,
+                    sentry_filters,
                 },
             )
             .boxed()
@@ -71,8 +76,8 @@ impl TracingParameters {
                     .collect(),
             ) {
                 warn!(
-                    "unable to apply stderr log filter: {:?}. filter={}",
-                    e, filter
+                    "unable to apply stderr log filter: {:?}. filter={}, defaults={:?}",
+                    e, filter, self.log_filter_defaults
                 );
             }
         }
@@ -85,10 +90,21 @@ impl TracingParameters {
                     .collect(),
             ) {
                 warn!(
-                    "unable to apply OpenTelemetry filter: {:?}. filter={}",
-                    e, filter
+                    "unable to apply OpenTelemetry filter: {:?}. filter={}, defaults={:?}",
+                    e, filter, self.opentelemetry_filter_defaults
                 );
             }
+        }
+        if let Err(e) = tracing_handle.reload_sentry_directives(
+            self.sentry_filters
+                .iter()
+                .map(|d| d.clone().into())
+                .collect(),
+        ) {
+            warn!(
+                "unable to apply sentry directives: {:?}. directives={:?}",
+                e, self.sentry_filters
+            );
         }
     }
 
@@ -98,6 +114,7 @@ impl TracingParameters {
             opentelemetry_filter,
             log_filter_defaults,
             opentelemetry_filter_defaults,
+            sentry_filters,
         } = self;
 
         let Self {
@@ -105,6 +122,7 @@ impl TracingParameters {
             opentelemetry_filter: other_opentelemetry_filter,
             log_filter_defaults: other_log_filter_defaults,
             opentelemetry_filter_defaults: other_opentelemetry_filter_defaults,
+            sentry_filters: other_sentry_filters,
         } = other;
 
         if let Some(v) = other_log_filter {
@@ -116,6 +134,7 @@ impl TracingParameters {
 
         *log_filter_defaults = other_log_filter_defaults;
         *opentelemetry_filter_defaults = other_opentelemetry_filter_defaults;
+        *sentry_filters = other_sentry_filters;
     }
 }
 
@@ -154,6 +173,7 @@ impl RustType<ProtoTracingParameters> for TracingParameters {
             opentelemetry_filter: self.opentelemetry_filter.into_proto(),
             log_filter_defaults: self.log_filter_defaults.into_proto(),
             opentelemetry_filter_defaults: self.opentelemetry_filter_defaults.into_proto(),
+            sentry_filters: self.sentry_filters.into_proto(),
         }
     }
 
@@ -163,6 +183,7 @@ impl RustType<ProtoTracingParameters> for TracingParameters {
             opentelemetry_filter: proto.opentelemetry_filter.into_rust()?,
             log_filter_defaults: proto.log_filter_defaults.into_rust()?,
             opentelemetry_filter_defaults: proto.opentelemetry_filter_defaults.into_rust()?,
+            sentry_filters: proto.sentry_filters.into_rust()?,
         })
     }
 }

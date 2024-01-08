@@ -16,4 +16,5 @@ message ProtoTracingParameters {
   optional string opentelemetry_filter = 2;
   repeated string log_filter_defaults= 3;
   repeated string opentelemetry_filter_defaults = 4;
+  repeated string sentry_filters = 5;
 }

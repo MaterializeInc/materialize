@@ -1022,6 +1022,18 @@ static OPENTELEMETRY_FILTER_DEFAULTS: Lazy<ServerVar<Vec<SerializableDirective>>
         internal: true,
     });
 
+static SENTRY_FILTERS: Lazy<ServerVar<Vec<SerializableDirective>>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("sentry_filters"),
+    value: mz_ore::tracing::SENTRY_DEFAULTS
+        .iter()
+        .map(|d| d.clone().into())
+        .collect(),
+    description: "Sets additional default directives to apply to sentry logging. \
+            These apply on top of a default `info` directive. Directives other than \
+            `module=off` are likely incorrect.",
+    internal: true,
+});
+
 static WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<ServerVar<usize>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("webhooks_secrets_caching_ttl_secs"),
     value: usize::cast_from(
@@ -3068,6 +3080,7 @@ impl SystemVars {
             .with_var(&OPENTELEMETRY_FILTER)
             .with_var(&LOGGING_FILTER_DEFAULTS)
             .with_var(&OPENTELEMETRY_FILTER_DEFAULTS)
+            .with_var(&SENTRY_FILTERS)
             .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
             .with_var(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
             .with_var(&grpc_client::CONNECT_TIMEOUT)
@@ -3885,6 +3898,10 @@ impl SystemVars {
 
     pub fn opentelemetry_filter_defaults(&self) -> Vec<SerializableDirective> {
         self.expect_value(&*OPENTELEMETRY_FILTER_DEFAULTS).clone()
+    }
+
+    pub fn sentry_filters(&self) -> Vec<SerializableDirective> {
+        self.expect_value(&*SENTRY_FILTERS).clone()
     }
 
     pub fn webhooks_secrets_caching_ttl_secs(&self) -> usize {
@@ -5592,6 +5609,7 @@ pub fn is_tracing_var(name: &str) -> bool {
         || name == LOGGING_FILTER_DEFAULTS.name()
         || name == OPENTELEMETRY_FILTER.name()
         || name == OPENTELEMETRY_FILTER_DEFAULTS.name()
+        || name == SENTRY_FILTERS.name()
 }
 
 /// Returns whether the named variable is a compute configuration parameter.
