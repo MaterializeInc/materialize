@@ -312,13 +312,10 @@ mod container {
 
     use mz_repr::fixed_length::IntoRowByTypes;
     use mz_repr::ColumnType;
-    impl<'long> IntoRowByTypes for DatumSeq<'long> {
-        type DatumIter<'short> = DatumSeq<'short> where Self: 'short;
-        fn into_datum_iter<'short>(
-            &'short self,
-            _types: Option<&[ColumnType]>,
-        ) -> Self::DatumIter<'short> {
-            *self
+    impl<'long: 'short, 'short> IntoRowByTypes<'short> for DatumSeq<'long> {
+        type DatumIter = DatumSeq<'short>;
+        fn into_datum_iter(self, _types: Option<&[ColumnType]>) -> Self::DatumIter {
+            self
         }
     }
 }
