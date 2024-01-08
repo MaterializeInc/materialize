@@ -124,20 +124,6 @@ mod container {
         type PushItem = Row;
         type ReadItem<'a> = DatumSeq<'a>;
 
-        fn push(&mut self, item: Self::PushItem) {
-            self.copy_push(&item);
-        }
-
-        fn copy_push(&mut self, item: &Self::PushItem) {
-            self.copy(MyTrait::borrow_as(item));
-        }
-
-        fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
-            for index in start..end {
-                self.copy(other.index(index));
-            }
-        }
-
         fn copy(&mut self, item: Self::ReadItem<'_>) {
             if let Some(batch) = self.batches.last_mut() {
                 let success = batch.try_push(item.bytes);
