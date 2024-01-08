@@ -10,11 +10,11 @@ Users want to export **metrics** to Datadog. But they need to learn how to confi
 
 ## Success Criteria
 
-In a few clicks, a user can integrate Materialize with Datadog. Also, the user can export custom metrics to Datadog by running the following SQL commands:
+A Materialize user can integrate and export custom metrics to Datadog by running the following SQL commands:
 
 ```sql
-CREATE CONNECTION conn_datadog TO DATADOG API KEY = ...;
-CREATE SINK FROM <view/table> TO DATADOG CONNECTION conn_datadog;
+CREATE CONNECTION conn_datadog TO DATADOG (API KEY = API_KEY_SECRET);
+CREATE SINK FROM <source> TO DATADOG CONNECTION conn_datadog;
 ```
 
 The source content of the sink, which can be either a table, materialized view, or source, will be defined by the user but needs to match a predefined structure.
@@ -23,12 +23,14 @@ The source content of the sink, which can be either a table, materialized view, 
 
 It is out of the scope:
 
-- Alternative approaches, such as https://github.com/MaterializeInc/materialize/issues/4779, to select labels and values, or send any additional information to Datadog outside the connection validation or metrics.
+- Alternative approaches, such as https://github.com/MaterializeInc/materialize/issues/4779, to select labels and values, or send additional data to Datadog.
 - Compression algorithms before exporting metrics.
+- OAuth process to create an API Key.
+- Anything else related to a Datadog integration, such as dashboards or tiles.
 
 ## Solution Proposal
 
-The solution proposal involves a new connection and sink for Datadog, and an OAuth process to create a seamless experience.
+The solution proposal involves a new connection and sink for Datadog.
 
 ### Datadog Connection
 
@@ -38,11 +40,13 @@ The new connection needs a Datadog API key, which is required to send metrics to
 CREATE CONNECTION conn_datadog TO DATADOG (API KEY = ...);
 ```
 
+The connection will automatically validate the API Key, just like Postgres or Kafka connections.
+
 ### Datadog Sink
 
 The Datadog sink will build an internal state containing the metrics to export from the source. It will then submit the entire state to Datadog at a 15-second interval.
 
-The 15-second interval comes from [the Datadog agent](https://docs.datadoghq.com/agent/basic_agent_usage/?tab=agentv6v7#collector) collection interval. While this value could be customizable, for the initial approach and MVP, a default value is ok. The sink will utilize Materialize logical time to calculate when the progress reaches the 15-second interval and will then export the metrics to Datadog. In the event of a sink crash or pause, it will have a similar behavior to the Kafka sink, recovering from the last logical time processed.
+The 15-second interval comes from [the Datadog agent](https://docs.datadoghq.com/agent/basic_agent_usage/?tab=agentv6v7#collector) collection interval. While this value could be customizable, a default value is ok for the initial approach and MVP. The sink will use Materialize logical time to calculate when the progress reaches the 15-second interval and will then export the metrics to Datadog. In the event of a sink crash or pause, it will behave similarly to the Kafka sink, recovering from the last logical time processed.
 
 I discarded sending updates when a metric's value changes (streaming without state.) Collections like storage usage are updated once an hour, and this would make charts empty in Datadog for an hour or any smaller time range.
 
@@ -66,7 +70,9 @@ Submitting metrics to Datadog API requires the following fields:
 
 </details>
 
-All fields, except the `timestamp`, are set by the user. Materialize will set the timestamp using its logical time upon reaching progress in the 15-second interval. Optional fields such as `metadata` and `tags` can be customized by the user within Datadog's app. The type field in Materialize will be represented as either `NULL`, `'count'`, `'rate'`, or `'gauge'`, and later converted into its corresponding integer value.
+In this design document, two of the optional fields, `metadata` and `tags`, are not going to be considered for the implementation to make the structure simpler. The user will have to set the values for all other fields, except for the `timestamp`. Materialize will set the timestamp using its logical time upon reaching progress in the 15-second interval.
+Optional fields can be omitted and customized by the user within Datadog's app.
+The `type` field will be represented in Materialize as either `NULL`, `'count'`, `'rate'`, or `'gauge'`, and later converted into its corresponding integer value.
 
 #### Timestamp
 
@@ -115,22 +121,18 @@ CREATE MATERIALIZED VIEW metrics AS
     JOIN mz_catalog.mz_clusters C ON (R.cluster_id = C.id);
 ```
 
-**NOTE**: Metrics and their values do not need to be unique for each timestamp, but the latest value will suppress the other in Datadog. It would be great if the sink could detect this during creation/execution and emit a warning if there are different values at the same point in time for a set of metrics and labels.
 
-Another distinction is that Datadog uses *resources* to what equals to *labels* in the OpenMetrics definition. We ended up liking more and choosing *labels* over *resources*.
+The idea behind the following considerations, or let's call them controls, is to behave like the Kafka receiver does to control the uniqueness of the push key. The biggest difference lies in the severity of the control: for a Datadog receiver, it may not be critical or necessary to throw an error. 
 
-### OAuth Process
+Controls:
+* If the source structure is incorrect, the sink will throw an error about it during its creation.
+* If a required field is incomplete or contains `NULL` values, the sink will not export the metric until it is fixed. If this happens during sink creation, a `NOTICE` message containing the warning should be sent. For an optional field, no warning should be generated if it is empty or contains a `NULL` value. However, a `NOTICE` message should be raised if there is a value mismatch, such as using `'gage'` instead of `'gauge'`, but compared to the initial case, the sink should continue to export the metric.
+* If the triplet of required fields is `NULL`, the sink will stop exporting the metric and remove it from the state.
 
-Datadog recommends an OAuth process for their integrations and creating an API key on behalf of the user if the integration needs to write data into Datadog. The token does not have the scope to write data into Datadog, so creating the API key is necessary.
+Not mandatory but a plus:
+* If the sink detects a duplicated set of metrics and labels with different values for the same timestamp during creation, it should emit a `NOTICE` warning message. Datadog selects the latest value sent for these cases.
 
-The OAuth process requires additional logic in the console. The whole process is defined in the following sequence diagram:
-
-<details open>
-<summary>Sequence diagram</summary>
-<img width="2129" alt="Sequence Diagram" src="https://github.com/joacoc/materialize/assets/11491779/28dc14cb-a488-4e8b-8c89-ab69accfd858">
-</details>
-
-At the end of the flow, the console creates a secret containing the Datadog API key, connection, and sink. Although we lack an integrations page, a screen similar to what the mz displays at the end of the flow is more than enough for an MVP.
+**NOTE**: Datadog uses *resources* to what equals *labels* in the OpenMetrics definition. We ended up liking more and choosing *labels* over *resources*.
 
 ### Datadog Sink Code
 
@@ -138,13 +140,12 @@ The Datadog sink will be added as a new module at `storage/src/sink` and have it
 
 ## Minimal Viable Prototype
 
-1. The user should be able to create the integration from Datadog in a couple of clicks.
-2. The user should be able to create a new Datadog connection and sink to export custom metrics. The following commands should work:
-    ```sql
-    CREATE SECRET API_KEY_SECRET AS 'Datadog_API_KEY';
-    CREATE CONNECTION datadog TO DATADOG API KEY = API_KEY_SECRET;
-    CREATE SINK metrics_sink FROM mz_metrics TO DATADOG CONNECTION datadog;
-    ```
+The user should be able to create a new Datadog connection and sink to export custom metrics. The following commands should work:
+```sql
+CREATE SECRET API_KEY_SECRET AS '<VALID_DATADOG_API_KEY>';
+CREATE CONNECTION datadog TO DATADOG (API KEY = API_KEY_SECRET);
+CREATE SINK metrics_sink FROM <METRICS> TO DATADOG CONNECTION datadog;
+```
 
 ## Alternatives
 
