@@ -1,15 +1,15 @@
 ---
-title: "Blue/Green deployments"
-description: "How to perform Blue/Green Deployments in Materialize."
+title: "Blue/green deployments"
+description: "How to perform blue/green deployments in Materialize."
 menu:
   main:
     parent: manage
-    name: "Blue/Green deployments"
+    name: "Blue/green deployments"
     weight: 13
 ---
 
-Materialize offers some helpful tools to manage Blue/Green deployments. We
-recommend using the Blue/Green pattern any time you need to deploy changes to
+Materialize offers some helpful tools to manage blue/green deployments. We
+recommend using the blue/green pattern any time you need to deploy changes to
 the definition of objects in Materialize in production environments.
 
 ## Structuring your environment
@@ -27,36 +27,35 @@ maintenance and serve queries.
 1. Configure `profiles.yml` to set up the different targets. Use consistent
 naming across the clusters and schemas that will be deployed together. In this
 example, we'll switch between two targets: `prod` and `prod_deploy`.
+    ```yaml
+    default:
+      outputs:
 
-  ```yaml
-  default:
-    outputs:
+        prod:
+          type: materialize
+          threads: 1
+          host: <host>
+          port: 6875
+          user: <user@domain.com>
+          pass: <password>
+          database: materialize
+          schema: prod
+          cluster: prod
+          sslmode: require
+        prod_deploy:
+          type: materialize
+          threads: 1
+          host: <host>
+          port: 6875
+          user: <user@domain.com>
+          pass: <password>
+          database: materialize
+          schema: prod_deploy
+          cluster: prod_deploy
+          sslmode: require
 
-      prod:
-        type: materialize
-        threads: 1
-        host: <host>
-        port: 6875
-        user: <user@domain.com>
-        pass: <password>
-        database: materialize
-        schema: prod
-        cluster: prod
-        sslmode: require
-      prod_deploy:
-        type: materialize
-        threads: 1
-        host: <host>
-        port: 6875
-        user: <user@domain.com>
-        pass: <password>
-        database: materialize
-        schema: prod_deploy
-        cluster: prod_deploy
-        sslmode: require
-
-  target: prod_deploy
-  ```
+    target: prod_deploy
+    ```
 
 1. Leave your sources in a separate schema (e.g. `public`) and don't touch them.
 Instead, define them as `sources` in a `schema.yml` file. Since the same source
@@ -72,10 +71,9 @@ production objects here.
 `prod_deploy` in schema `prod_deploy`. We recommend using a CI/CD Workflow and
 validating all changes on a staging environment before building them in
 production.
-
-  ```bash
-   dbt run --exclude config.materialized:source --target prod_deploy
-  ```
+    ```bash
+    dbt run --exclude config.materialized:source --target prod_deploy
+    ```
 
 1. For multi-cluster deployments, co-locate clusters with dependent views or
 indexes in the same schema. For instance:
@@ -89,11 +87,7 @@ indexes in the same schema. For instance:
 
 ## Cutting over
 
-{{< note >}}
-We're working on allowing programmatic hydration checks {{% gh 22166 %}}.
-{{</ note >}}
-
-1. Wait for all views on `prod_deploy` to hydrate. You can look at the lag in
+1. Wait for all views on `prod_deploy` to hydrate. You can query [`mz_hydration_statuses`](/sql/system-catalog/mz_internal/#mz_hydration_statuses) or take a look at the lag in
 the Workflow graph in the [Materialize Console](https://console.materialize.com)
 to get a rough sense of when rehydration is complete. The view will appear
 as “caught up”, and you can compare both the `prod` and `prod_deploy` versions
@@ -105,21 +99,19 @@ it is safe to cut over.
 
 1. Use the `SWAP` operation to atomically rename your objects in a way that is
 transparent to clients.
-
-  ```sql
-  BEGIN;
-  ALTER SCHEMA prod SWAP WITH prod_deploy;
-  ALTER CLUSTER prod SWAP WITH prod_deploy;
-  COMMIT;
-  ```
+    ```sql
+    BEGIN;
+    ALTER SCHEMA prod SWAP WITH prod_deploy;
+    ALTER CLUSTER prod SWAP WITH prod_deploy;
+    COMMIT;
+    ```
 
 1. Now that changes are running in `prod` and the legacy version is in
 `prod_deploy`, you can drop the prod_deploy compute objects and schema.
-
-  ```sql
-  DROP CLUSTER prod_deploy CASCADE;
-  DROP SCHEMA prod_deploy CASCADE;
-  ```
+    ```sql
+    DROP CLUSTER prod_deploy CASCADE;
+    DROP SCHEMA prod_deploy CASCADE;
+    ```
 
 ## Additional customizations
 
