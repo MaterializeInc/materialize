@@ -76,11 +76,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for i, name in enumerate(c.workflows):
         # incident-70 requires more memory, runs in separate CI step
         # concurrent-connections is too flaky
-        if name in (
-            "default",
-            "test-incident-70",
-            "test-concurrent-connections",
-        ):
+        # if name in (
+        #     "default",
+        #     "test-incident-70",
+        #     "test-concurrent-connections",
+        # ):
+        if name != "test-system-table-indexes":
             continue
         if shard is None or shard_count is None or i % int(shard_count) == shard:
             with c.test_case(name):
@@ -1518,8 +1519,6 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
                 """
         $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
         SET CLUSTER TO DEFAULT;
-        CREATE DATABASE sys_db;
-        SET DATABASE TO sys_db;
         CREATE VIEW v_mz_views AS SELECT \
             id, \
             oid, \
@@ -1541,7 +1540,7 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
         c.kill("materialized")
 
     with c.override(
-        Testdrive(),
+        Testdrive(no_reset=True),
         Materialized(),
     ):
         c.up("testdrive", persistent=True)
@@ -1551,9 +1550,6 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
                 """
         > SELECT id FROM mz_indexes WHERE id like 'u%';
         u2
-
-        $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
-        DROP DATABASE sys_db CASCADE;
     """
             )
         )
