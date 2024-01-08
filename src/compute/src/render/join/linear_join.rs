@@ -494,9 +494,9 @@ where
         Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = G::Timestamp, Diff = Diff>
             + Clone
             + 'static,
-        for<'a> Tr1::Key<'a>: IntoRowByTypes<'a>,
-        for<'a> Tr1::Val<'a>: IntoRowByTypes<'a>,
-        for<'a> Tr2::Val<'a>: IntoRowByTypes<'a>,
+        for<'a> Tr1::Key<'a>: IntoRowByTypes,
+        for<'a> Tr1::Val<'a>: IntoRowByTypes,
+        for<'a> Tr2::Val<'a>: IntoRowByTypes,
     {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();

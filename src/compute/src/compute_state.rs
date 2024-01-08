@@ -1024,9 +1024,7 @@ impl IndexPeek {
         for<'a> Tr::Key<'a>: IntoRowByTypes<'a>,
         for<'a> Tr::Val<'a>: IntoRowByTypes<'a>,
         Tr::KeyOwned: Columnation + Data + FromRowByTypes,
-        for<'a> &'a Tr::KeyOwned: IntoRowByTypes<'a>,
         Tr::ValOwned: Columnation + Data,
-        for<'a> &'a Tr::ValOwned: IntoRowByTypes<'a>,
     {
         let max_result_size = usize::cast_from(max_result_size);
         let count_byte_size = std::mem::size_of::<NonZeroUsize>();
