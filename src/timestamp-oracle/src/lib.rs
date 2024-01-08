@@ -19,13 +19,19 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use mz_ore::now::NowFn;
 
-use crate::coord::timeline::WriteTimestamp;
-
 pub mod batching_oracle;
-pub mod catalog_oracle;
 pub mod metrics;
 pub mod postgres_oracle;
 pub mod retry;
+
+/// Timestamps used by writes in an Append command.
+#[derive(Debug)]
+pub struct WriteTimestamp<T = mz_repr::Timestamp> {
+    /// Timestamp that the write will take place on.
+    pub timestamp: T,
+    /// Timestamp to advance the appended table to.
+    pub advance_to: T,
+}
 
 /// A type that provides write and read timestamps, reads observe exactly their
 /// preceding writes.
@@ -119,8 +125,9 @@ impl GenericNowFn<mz_repr::Timestamp> for NowFn {
     }
 }
 
-#[cfg(test)]
-mod tests {
+// TODO: Gate this with a `#[cfg(test)]` again once the legacy catalog impl goes
+// away.
+pub mod tests {
     use futures::Future;
     use mz_repr::Timestamp;
 

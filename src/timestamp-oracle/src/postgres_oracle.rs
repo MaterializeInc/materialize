@@ -31,12 +31,10 @@ use mz_repr::Timestamp;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-use crate::coord::timeline::WriteTimestamp;
-use crate::coord::timestamp_oracle::metrics::{Metrics, RetryMetrics};
-use crate::coord::timestamp_oracle::retry::Retry;
-use crate::coord::timestamp_oracle::{
-    self, GenericNowFn, ShareableTimestampOracle, TimestampOracle,
-};
+use crate::metrics::{Metrics, RetryMetrics};
+use crate::retry::Retry;
+use crate::WriteTimestamp;
+use crate::{GenericNowFn, ShareableTimestampOracle, TimestampOracle};
 
 // The timestamp columns are a `DECIMAL` that is big enough to hold
 // `18446744073709551615`, the maximum value of `u64` which is our underlying
@@ -92,7 +90,7 @@ impl PostgresTimestampOracleConfig {
 
     /// Returns a new instance of [`PostgresTimestampOracleConfig`] with default tuning.
     pub fn new(url: &str, metrics_registry: &MetricsRegistry) -> Self {
-        let metrics = Arc::new(timestamp_oracle::metrics::Metrics::new(metrics_registry));
+        let metrics = Arc::new(Metrics::new(metrics_registry));
 
         let dynamic = DynamicConfig::default();
 
@@ -279,9 +277,9 @@ impl PostgresClientKnobs for PostgresTimestampOracleConfig {
 /// interpreted to mean "use the previous value".
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PostgresTimestampOracleParameters {
-    /// Configures [`DynamicConfig::pg_connection_pool_max_size`].
+    /// Configures `DynamicConfig::pg_connection_pool_max_size`.
     pub pg_connection_pool_max_size: Option<usize>,
-    /// Configures [`DynamicConfig::pg_connection_pool_max_wait`].
+    /// Configures `DynamicConfig::pg_connection_pool_max_wait`.
     ///
     /// NOTE: Yes, this is an `Option<Option<...>>`. Fields in this struct are
     /// all `Option` to signal the presence or absence of a system var
@@ -290,13 +288,13 @@ pub struct PostgresTimestampOracleParameters {
     /// there is no actively set system var, although this case is not currently
     /// possible with how the code around this works.
     pub pg_connection_pool_max_wait: Option<Option<Duration>>,
-    /// Configures [`DynamicConfig::pg_connection_pool_ttl`].
+    /// Configures `DynamicConfig::pg_connection_pool_ttl`.
     pub pg_connection_pool_ttl: Option<Duration>,
-    /// Configures [`DynamicConfig::pg_connection_pool_ttl_stagger`].
+    /// Configures `DynamicConfig::pg_connection_pool_ttl_stagger`.
     pub pg_connection_pool_ttl_stagger: Option<Duration>,
-    /// Configures [`DynamicConfig::pg_connection_pool_connect_timeout`].
+    /// Configures `DynamicConfig::pg_connection_pool_connect_timeout`.
     pub pg_connection_pool_connect_timeout: Option<Duration>,
-    /// Configures [`DynamicConfig::pg_connection_pool_tcp_user_timeout`].
+    /// Configures `DynamicConfig::pg_connection_pool_tcp_user_timeout`.
     pub pg_connection_pool_tcp_user_timeout: Option<Duration>,
 }
 
@@ -413,7 +411,7 @@ where
     /// Open a Postgres [`TimestampOracle`] instance with `config`, for the
     /// timeline named `timeline`. `next` generates new timestamps when invoked.
     /// Timestamps that are returned are made durable and will never retract.
-    pub(crate) async fn open(
+    pub async fn open(
         config: PostgresTimestampOracleConfig,
         timeline: String,
         initially: Timestamp,
@@ -501,7 +499,7 @@ where
     /// if/when we migrate between different oracle implementations. Once we
     /// migrated from the catalog-backed oracle to the postgres/crdb-backed
     /// oracle we can remove this code and it's callsite.
-    pub(crate) async fn get_all_timelines(
+    pub async fn get_all_timelines(
         config: PostgresTimestampOracleConfig,
     ) -> Result<Vec<(String, Timestamp)>, anyhow::Error> {
         let fallible = || async {
@@ -834,9 +832,6 @@ where
 
 #[cfg(test)]
 mod tests {
-
-    use crate::coord::timestamp_oracle;
-
     use super::*;
 
     #[mz_ore::test(tokio::test)]
@@ -853,7 +848,7 @@ mod tests {
             }
         };
 
-        timestamp_oracle::tests::timestamp_oracle_impl_test(|timeline, now_fn, initial_ts| {
+        crate::tests::timestamp_oracle_impl_test(|timeline, now_fn, initial_ts| {
             let oracle =
                 PostgresTimestampOracle::open(config.clone(), timeline, initial_ts, now_fn);
 
@@ -878,19 +873,17 @@ mod tests {
             }
         };
 
-        timestamp_oracle::tests::shareable_timestamp_oracle_impl_test(
-            |timeline, now_fn, initial_ts| {
-                let oracle =
-                    PostgresTimestampOracle::open(config.clone(), timeline, initial_ts, now_fn);
+        crate::tests::shareable_timestamp_oracle_impl_test(|timeline, now_fn, initial_ts| {
+            let oracle =
+                PostgresTimestampOracle::open(config.clone(), timeline, initial_ts, now_fn);
 
-                async {
-                    oracle
-                        .await
-                        .get_shared()
-                        .expect("postgres oracle is shareable")
-                }
-            },
-        )
+            async {
+                oracle
+                    .await
+                    .get_shared()
+                    .expect("postgres oracle is shareable")
+            }
+        })
         .await?;
 
         Ok(())

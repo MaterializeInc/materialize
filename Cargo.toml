@@ -91,6 +91,7 @@ members = [
     "src/test-macro",
     "src/testdrive",
     "src/timely-util",
+    "src/timestamp-oracle",
     "src/tls-util",
     "src/tracing",
     "src/transform",
