@@ -3409,6 +3409,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util",
+ "tracing",
  "twox-hash",
  "url",
 ]
@@ -4604,10 +4605,21 @@ name = "mz-mysql-util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "indexmap 2.0.0",
+ "itertools",
  "mysql_async",
  "mz-ore",
+ "mz-proto",
+ "mz-repr",
  "mz-ssh-util",
+ "once_cell",
+ "proptest",
+ "prost",
+ "prost-build",
+ "protobuf-src",
+ "serde",
  "thiserror",
+ "tonic-build",
  "tracing",
  "workspace-hack",
 ]
@@ -9806,6 +9818,7 @@ dependencies = [
  "hashbrown 0.14.0",
  "hyper",
  "indexmap 1.9.1",
+ "indexmap 2.0.0",
  "itertools",
  "k8s-openapi",
  "kube",

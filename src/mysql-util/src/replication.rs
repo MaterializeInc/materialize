@@ -49,3 +49,16 @@ pub async fn ensure_gtid_consistency(conn: &mut Conn) -> Result<(), MySqlError> 
     verify_sys_setting(conn, "enforce_gtid_consistency", "ON").await?;
     Ok(())
 }
+
+pub async fn ensure_replication_commit_order(conn: &mut Conn) -> Result<(), MySqlError> {
+    // This system variable was renamed between MySQL 5.7 and 8.0
+    match (
+        verify_sys_setting(conn, "replica_preserve_commit_order", "1").await,
+        verify_sys_setting(conn, "slave_preserve_commit_order", "1").await,
+    ) {
+        (Ok(_), Ok(_)) => Ok(()),
+        (Err(_), Ok(())) => Ok(()),
+        (Ok(()), Err(_)) => Ok(()),
+        (Err(e), Err(_)) => Err(e),
+    }
+}
