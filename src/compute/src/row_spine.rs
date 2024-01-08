@@ -9,6 +9,88 @@
 
 pub use self::container::DatumContainer;
 pub use self::spines::{RowRowSpine, RowSpine, RowValSpine};
+use differential_dataflow::trace::implementations::BatchContainer;
+use timely::container::columnation::{Columnation, TimelyStack};
+
+/// TODO
+pub struct CapacityCheckingContainer<C> {
+    initial_capacity: usize,
+    length: usize,
+    inner: C,
+}
+
+impl<C> CapacityCheckingContainer<C> {
+    fn record_len(&mut self, additional: usize) {
+        self.length += additional;
+        if self.initial_capacity > 0 {
+            assert!(
+                self.length <= self.initial_capacity,
+                "length > initial capacity: length {}, cap {}",
+                self.length,
+                self.initial_capacity
+            );
+        }
+    }
+}
+
+impl<T: Columnation> CapacityCheckingContainer<TimelyStack<T>> {
+    pub fn heap_size(&self, callback: impl FnMut(usize, usize)) {
+        self.inner.heap_size(callback)
+    }
+}
+
+impl CapacityCheckingContainer<DatumContainer> {
+    pub fn heap_size(&self, callback: impl FnMut(usize, usize)) {
+        self.inner.heap_size(callback)
+    }
+}
+
+impl<C: BatchContainer> BatchContainer for CapacityCheckingContainer<C> {
+    type PushItem = C::PushItem;
+    type ReadItem<'a> = C::ReadItem<'a>;
+
+    fn copy(&mut self, item: Self::ReadItem<'_>) {
+        self.record_len(1);
+        self.inner.copy(item)
+    }
+
+    fn with_capacity(size: usize) -> Self {
+        Self {
+            initial_capacity: size,
+            length: 0,
+            inner: C::with_capacity(size),
+        }
+    }
+
+    fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
+        Self {
+            initial_capacity: cont1.initial_capacity + cont2.initial_capacity,
+            length: 0,
+            inner: C::merge_capacity(&cont1.inner, &cont2.inner),
+        }
+    }
+
+    fn index(&self, index: usize) -> Self::ReadItem<'_> {
+        self.inner.index(index)
+    }
+
+    fn len(&self) -> usize {
+        assert_eq!(self.inner.len(), self.length);
+        self.inner.len()
+    }
+    fn push(&mut self, item: Self::PushItem) {
+        self.record_len(1);
+        self.inner.push(item);
+    }
+    fn copy_push(&mut self, item: &Self::PushItem) {
+        self.record_len(1);
+        self.inner.copy_push(item)
+    }
+    fn copy_range(&mut self, other: &Self, start: usize, end: usize) {
+        self.record_len(end - start);
+        self.inner.copy_range(&other.inner, start, end)
+    }
+}
 
 /// Spines specialized to contain `Row` types in keys and values.
 mod spines {
@@ -23,7 +105,7 @@ mod spines {
     use std::rc::Rc;
     use timely::container::columnation::{Columnation, TimelyStack};
 
-    use super::DatumContainer;
+    use super::{CapacityCheckingContainer, DatumContainer};
     use mz_repr::Row;
 
     pub type RowRowSpine<T, R> = Spine<
@@ -59,9 +141,9 @@ mod spines {
         U::Diff: Columnation,
     {
         type Target = U;
-        type KeyContainer = DatumContainer;
-        type ValContainer = DatumContainer;
-        type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
+        type KeyContainer = CapacityCheckingContainer<DatumContainer>;
+        type ValContainer = CapacityCheckingContainer<DatumContainer>;
+        type UpdContainer = CapacityCheckingContainer<TimelyStack<(U::Time, U::Diff)>>;
         type OffsetContainer = OffsetList;
     }
     impl<U: Update<Key = Row>> Layout for RowValLayout<U>
@@ -71,9 +153,9 @@ mod spines {
         U::Diff: Columnation,
     {
         type Target = U;
-        type KeyContainer = DatumContainer;
-        type ValContainer = TimelyStack<U::Val>;
-        type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
+        type KeyContainer = CapacityCheckingContainer<DatumContainer>;
+        type ValContainer = CapacityCheckingContainer<TimelyStack<U::Val>>;
+        type UpdContainer = CapacityCheckingContainer<TimelyStack<(U::Time, U::Diff)>>;
         type OffsetContainer = OffsetList;
     }
     impl<U: Update<Key = Row, Val = ()>> Layout for RowLayout<U>
@@ -82,9 +164,9 @@ mod spines {
         U::Diff: Columnation,
     {
         type Target = U;
-        type KeyContainer = DatumContainer;
-        type ValContainer = TimelyStack<()>;
-        type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
+        type KeyContainer = CapacityCheckingContainer<DatumContainer>;
+        type ValContainer = CapacityCheckingContainer<TimelyStack<()>>;
+        type UpdContainer = CapacityCheckingContainer<TimelyStack<(U::Time, U::Diff)>>;
         type OffsetContainer = OffsetList;
     }
 }
