@@ -190,7 +190,10 @@ ci-coverage-pr-report creates a code coverage report for CI.""",
             test_cases.append(test_case)
 
     unit_test_only_report = get_report(
-        coverage, lambda lines, i, line: (lines.get(i + 1) or 0) >= 0
+        coverage,
+        lambda lines, i, line: bool(
+            (lines.get(i + 1) or 0) >= 0 or IGNORE_SRC_LINE_RE.search(line)
+        ),
     )
     # If a line has "None" marker, then it can't be covered, print it out.
     # If a line has positive or negative coverage then it is
