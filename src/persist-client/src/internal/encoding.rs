@@ -200,20 +200,20 @@ pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<
 // data we read is going to be because we fetched it using a pointer stored in
 // some persist state. If we can handle the state, we can handle the blobs it
 // references, too.
-fn check_applier_version(build_version: &Version, applier_version: &Version) {
-    if build_version < applier_version {
+pub(crate) fn check_data_version(code_version: &Version, data_version: &Version) {
+    if code_version < data_version {
         // We can't catch halts, so panic in test, so we can get unit test
         // coverage.
         if cfg!(test) {
             panic!(
                 "{} received persist state from the future {}",
-                build_version, applier_version,
+                code_version, data_version,
             );
         } else {
             halt!(
                 "{} received persist state from the future {}",
-                build_version,
-                applier_version,
+                code_version,
+                data_version,
             );
         }
     }
@@ -322,7 +322,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
             // case, fail loudly.
             .expect("internal error: invalid encoded state");
         let diff = Self::from_proto(proto).expect("internal error: invalid encoded state");
-        check_applier_version(build_version, &diff.applier_version);
+        check_data_version(build_version, &diff.applier_version);
         diff
     }
 }
@@ -674,7 +674,7 @@ impl<T: Timestamp + Lattice + Codec64> UntypedState<T> {
         let state = Rollup::from_proto(proto)
             .expect("internal error: invalid encoded state")
             .state;
-        check_applier_version(build_version, &state.state.applier_version);
+        check_data_version(build_version, &state.state.applier_version);
         state
     }
 }

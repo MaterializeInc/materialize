@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
-use tracing::{debug_span, error, instrument, warn, Instrument};
+use tracing::{debug_span, info, instrument, warn, Instrument};
 use uuid::Uuid;
 
 use crate::batch::{
@@ -36,7 +36,7 @@ use crate::batch::{
 use crate::cfg::PersistFeatureFlag;
 use crate::error::{InvalidUsage, UpperMismatch};
 use crate::internal::compact::Compactor;
-use crate::internal::encoding::Schemas;
+use crate::internal::encoding::{check_data_version, Schemas};
 use crate::internal::machine::Machine;
 use crate::internal::metrics::Metrics;
 use crate::internal::state::{HandleDebugState, HollowBatch, Upper};
@@ -461,13 +461,14 @@ where
                     handle_shard: self.machine.shard_id(),
                 });
             }
-            if self.cfg.build_version != batch.version {
-                error!(
+            check_data_version(&self.cfg.build_version, &batch.version);
+            if self.cfg.build_version > batch.version {
+                info!(
                     shard_id =? self.machine.shard_id(),
                     batch_version =? batch.version,
                     writer_version =? self.cfg.build_version,
-                    "Appending batch with a version that does not match the current build. \
-                    This may fail in the future."
+                    "Appending batch from the past. This is fine but should be rare. \
+                    TODO: Error on very old versions once the leaked blob detector exists."
                 )
             }
         }
