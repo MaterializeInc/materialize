@@ -218,7 +218,8 @@ impl Coordinator {
                 let _guard = span.enter();
 
                 // MIR ⇒ MIR optimization (global)
-                let global_mir_plan = return_if_err!(optimizer.optimize(plan.from.clone()), ctx);
+                let global_mir_plan =
+                    return_if_err!(optimizer.catch_unwind_optimize(plan.from.clone()), ctx);
 
                 let stage = SubscribeStage::Timestamp(SubscribeTimestamp {
                     validity,
@@ -310,8 +311,10 @@ impl Coordinator {
                 let _guard = span.enter();
 
                 // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                let global_lir_plan =
-                    return_if_err!(optimizer.optimize(global_mir_plan.clone()), ctx);
+                let global_lir_plan = return_if_err!(
+                    optimizer.catch_unwind_optimize(global_mir_plan.clone()),
+                    ctx
+                );
 
                 let stage = SubscribeStage::Finish(SubscribeFinish {
                     validity,
