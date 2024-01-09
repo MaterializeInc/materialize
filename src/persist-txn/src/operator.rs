@@ -194,7 +194,7 @@ where
                 .await;
                 if !updates.is_empty() {
                     debug!("{} emitting updates {:?}", name, updates);
-                    txns_output.give_container_sync(&cap, &mut updates).await;
+                    txns_output.give_container_sync(&cap, &mut updates);
                 }
             }
         }
@@ -303,9 +303,7 @@ where
                     // NB: Ignore the data_cap because this input is
                     // disconnected.
                     Event::Data(_data_cap, data) => {
-                        let fut = passthrough_output.give_container_sync(&cap, data);
-                        timeout_log(fut, "passthrough_output.give_container_sync(&cap, data)")
-                            .await;
+                        passthrough_output.give_container_sync(&cap, data);
                     }
                     Event::Progress(progress) => {
                         // We reached the empty frontier! Shut down.
