@@ -25,13 +25,13 @@ use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 use mz_persist_types::{Codec, Codec64, StepForward};
 use mz_timely_util::builder_async::{
-    AsyncInputHandle, Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+    Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use timely::communication::Pull;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::channels::BundleCore;
 use timely::dataflow::operators::capture::EventCore;
-use timely::dataflow::operators::{Broadcast, Capture, Leave, Map, Probe};
+use timely::dataflow::operators::{
+    Broadcast, Capability, CapabilitySet, Capture, Leave, Map, Probe,
+};
 use timely::dataflow::{ProbeHandle, Scope, Stream};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -232,14 +232,17 @@ where
         passthrough.scope().peers(),
     );
     let (mut passthrough_output, passthrough_stream) = builder.new_output();
-    let txns_input = builder.new_input_connection(&txns, Pipeline, vec![Antichain::new()]);
+    let mut txns_input = builder.new_input_connection(&txns, Pipeline, vec![Antichain::new()]);
     let mut passthrough_input =
         builder.new_input_connection(&passthrough, Pipeline, vec![Antichain::new()]);
 
     let (worker_idx, num_workers) = (passthrough.scope().index(), passthrough.scope().peers());
     let shutdown_button = builder.build(move |capabilities| async move {
-        let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
+        let [cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
+        let mut cap = CapabilitySet::from_elem(cap);
+
         let client = timeout_log(client, "client").await;
+
         let state = TxnsCacheState::new(txns_id, T::minimum(), Some(data_id));
         let cache_name = format!(
             "{} {:.9} {}/{}",
@@ -251,15 +254,16 @@ where
         let mut txns_cache = TxnsCacheTimely {
             name: cache_name,
             state,
-            input: txns_input,
             buf: Vec::new(),
         };
 
-        timeout_log(
-            txns_cache.update_gt(&as_of),
-            format!("txns_cache.update_gt(as_of:{:?})", as_of),
-        )
-        .await;
+        while let Some(txns_event) = txns_input.next_mut().await {
+            txns_cache.push_event(txns_event);
+            if txns_cache.ready_gt(&as_of) {
+                break;
+            }
+        }
+
         let snap = txns_cache.state.data_snapshot(data_id, as_of.clone());
         let data_write = client.open_writer::<K, V, T, D>(
             data_id,
@@ -282,114 +286,240 @@ where
             empty_to.elements()
         );
 
-        // We've ensured that the data shard's physical upper is past as_of, so
-        // start by passing through data and frontier updates from the input
-        // until it is past the as_of.
-        let mut read_data_to = empty_to;
-        let mut output_progress_exclusive = T::minimum();
-        loop {
-            loop {
-                // This only returns None when there are no more data left. Turn
-                // it into an empty frontier progress so we can re-use the
-                // shutdown code below.
-                let event = passthrough_input.next_mut();
- 
-                let event = timeout_log(event,
-                    format!("passthrough_input.next_mut(), read_data_to {:?}, output_progress_exclusive {:?}", read_data_to, output_progress_exclusive))
-                    .await
-                    .unwrap_or_else(|| Event::Progress(Antichain::new()));
-                match event {
-                    // NB: Ignore the data_cap because this input is
-                    // disconnected.
-                    Event::Data(_data_cap, data) => {
-                        for data in data.drain(..) {
-                            debug!(
-                                "{} {:.9} {}/{} emitting data {:?}",
-                                name,
-                                data_id.to_string(),
-                                worker_idx,
-                                num_workers,
-                                data
-                            );
-                            let fut = passthrough_output.give(&cap, data);
-                            timeout_log(fut, "passthrough_output.give_give(&cap, data)").await;
-                        }
-                    }
-                    Event::Progress(progress) => {
-                        // We reached the empty frontier! Shut down.
-                        let Some(input_progress_exclusive) = progress.as_option() else {
-                            return;
-                        };
+        // When our state machine tells us that there is an oustanding read we
+        // stash a token for it here, which locks in place a capability as of
+        // the logical time at which we learned of that outstanding read from
+        // the state machine. Only when the frontier of the data stream advances
+        // beyond the given target timestamp do we remove stashed outstanding
+        // reads, which drops the capability which will eventually allow the
+        // downstream frontier to advance.
+        let mut outstanding_reads = Vec::new();
 
-                        // Recall that any reads of the data shard are always
-                        // correct, so given that we've passed through any data
-                        // from the input, that means we're free to pass through
-                        // frontier updates too.
-                        if &output_progress_exclusive < input_progress_exclusive {
-                            output_progress_exclusive.clone_from(input_progress_exclusive);
-                            debug!(
-                                "{} {:.9} {}/{} downgrading cap to {:?}",
-                                name,
-                                data_id.to_string(),
-                                worker_idx,
-                                num_workers,
-                                output_progress_exclusive
-                            );
-                            cap.downgrade(&output_progress_exclusive);
-                        }
-                        if read_data_to.less_equal(&output_progress_exclusive) {
-                            break;
-                        }
+        // We likely have an initial outstanding read.
+        if let Some(empty_to) = empty_to.as_option() {
+            debug!(
+                empty_to = ?empty_to,
+                as_of = ?as_of,
+                fallback_cap = ?cap.first().unwrap().time(),
+                "initial outstanding read, up to empty_to!");
+
+            let outstanding_read = OutstandingRead {
+                cap: cap.delayed(&as_of),
+                target_ts: empty_to.clone(),
+            };
+
+            outstanding_reads.push(outstanding_read);
+        } else {
+            debug!(
+                empty_to = ?empty_to,
+                as_of = ?as_of,
+                fallback_cap = ?cap.first().unwrap().time(),
+                "initial outstanding read, up to as_of!");
+
+            let outstanding_read = OutstandingRead {
+                cap: cap.delayed(&as_of),
+                target_ts: as_of.clone(),
+            };
+
+            outstanding_reads.push(outstanding_read);
+        }
+        let mut output_progress_exclusive = T::minimum();
+
+        loop {
+            tokio::select! {
+                Some(data_event) = passthrough_input.next_mut() => {
+                    debug!(
+                        data_event = ?data_event,
+                        "data input"
+                    );
+                    match data_event {
+                       Event::Data(_data_cap, data) => {
+                           let ts = _data_cap.time();
+
+                           // SUBTLE: We see if this is a data read that we have
+                           // learned about from the txns state machine before.
+                           // This is the case when the data timestamp is less
+                           // than the target_ts of an outstanding read. If so,
+                           // we use the capability that we stored with this
+                           // outstanding read.
+                           //
+                           let valid_cap = outstanding_reads
+                               .iter()
+                               .filter(|read| ts < &read.target_ts)
+                               .min_by_key(|read| &read.target_ts)
+                               .map(|read| &read.cap);
+
+                           // SUBTLE, continued: If this is not a read we have
+                           // learned about before, we use the current output
+                           // capability. Because this operator reads from both
+                           // the data input and the txns input concurrently it
+                           // can happen that a read shows up before we learn
+                           // about it. This is not a problem, though, the
+                           // output capability is valid, since all that
+                           // learning about it from the txns input could do is
+                           // downgrade the output capability some more and/or
+                           // put in place an outstanding read that has a
+                           // capability that is >= the current output
+                           // capability.
+                           let valid_cap = match valid_cap {
+                               Some(valid_cap) => {
+                                   debug!(
+                                       ts = ?ts,
+                                       as_of = ?as_of,
+                                       outstanding_reads = ?outstanding_reads,
+                                       fallback_cap = ?cap.first().unwrap().time(),
+                                       "using cap from oustanding read: {:?}!", valid_cap.time());
+                                   valid_cap
+                               },
+                               None => {
+                                   let valid_cap = cap.first().expect("no output cap");
+                                   debug!(
+                                       ts = ?ts,
+                                       as_of = ?as_of,
+                                       outstanding_reads = ?outstanding_reads,
+                                       fallback_cap = ?cap.first().unwrap().time(),
+                                       "no cap from outstanding read cap! using fallback cap {:?}", valid_cap.time());
+                                   valid_cap
+                               }
+                           };
+
+                           passthrough_output.give_container(valid_cap, data).await;
+                       }
+                       Event::Progress(progress) => {
+                           // We reached the empty frontier! Shut down.
+                           let Some(input_progress_exclusive) = progress.as_option() else {
+                               break;
+                           };
+
+                           // Recall that any reads of the data shard are always
+                           // correct, so given that we've passed through any data
+                           // from the input, that means we're free to pass through
+                           // frontier updates too.
+                           if &output_progress_exclusive < input_progress_exclusive {
+                               output_progress_exclusive.clone_from(input_progress_exclusive);
+                               debug!(
+                                   "{} {:.9} {}/{} downgrading cap to {:?}, based on data progress",
+                                   name,
+                                   data_id.to_string(),
+                                   worker_idx,
+                                   num_workers,
+                                   output_progress_exclusive
+                               );
+                               cap.downgrade(Antichain::from_elem(output_progress_exclusive.clone()));
+                           }
+
+                           debug!(
+                               outstanding_reads = ?outstanding_reads,
+                               input_progress_exclusive = ?input_progress_exclusive,
+                               "{} {:.9} {}/{} retaining outstanding reads, before",
+                               name,
+                               data_id.to_string(),
+                               worker_idx,
+                               num_workers,
+                           );
+                           // Remove outstanding reads whose `target_ts` has now
+                           // been surpassed. That is, we retain those
+                           // outstanding reads for which this is not the case.
+                           outstanding_reads.retain(|read| &read.target_ts > input_progress_exclusive);
+                           debug!(
+                               outstanding_reads = ?outstanding_reads,
+                               input_progress_exclusive = ?input_progress_exclusive,
+                               "{} {:.9} {}/{} retaining outstanding reads, after",
+                               name,
+                               data_id.to_string(),
+                               worker_idx,
+                               num_workers,
+                           );
+                       }
                     }
+                }
+                Some(txns_event) = txns_input.next_mut() => {
+                    debug!(
+                        txns_event = ?txns_event,
+                        "txns input"
+                    );
+                    txns_cache.push_event(txns_event);
                 }
             }
 
-            // Any time we hit this point, we've emitted everything known to be
-            // physically written to the data shard. Query the txns shard to
-            // find out what to do next given our current progress.
-            loop {
-                let fut = txns_cache.update_ge(&output_progress_exclusive);
-                timeout_log(
-                    fut,
-                    format!("txns_cache.update_ge(output_progress_exclusive:{:?})", output_progress_exclusive),
-                )
-                .await;
 
-                txns_cache.compact_to(&output_progress_exclusive);
-                let data_listen_next = txns_cache
-                    .state
-                    .data_listen_next(&data_id, output_progress_exclusive.clone());
+            if !txns_cache.ready_ge(&output_progress_exclusive) {
                 debug!(
-                    "{} {:.9} {}/{} data_listen_next at {:?}({:?}): {:?}",
+                    outstanding_reads = ?outstanding_reads,
+                    state_progress = ?txns_cache.state.progress_exclusive,
+                    output_progress_exclusive = ?output_progress_exclusive,
+                    "{} {:.9} {}/{} txns_cache not yet ready",
                     name,
                     data_id.to_string(),
                     worker_idx,
                     num_workers,
-                    read_data_to.elements(),
+                );
+                // We're not yet ready to pull actions from the state
+                // machine.
+                continue;
+            }
+
+            txns_cache.compact_to(&output_progress_exclusive);
+
+            // Read from the state machine until it tells us that we
+            // have to wait for the txns frontier to advance.
+            loop {
+                let data_listen_next = txns_cache
+                    .state
+                    .data_listen_next(&data_id, output_progress_exclusive.clone());
+
+                debug!(
+                    "{} {:.9} {}/{} data_listen_next at ({:?}): {:?}",
+                    name,
+                    data_id.to_string(),
+                    worker_idx,
+                    num_workers,
                     output_progress_exclusive,
                     data_listen_next,
                 );
+
                 match data_listen_next {
                     // We've caught up to the txns upper and we have to wait for
                     // it to advance before asking again.
-                    //
-                    // Note that we're asking again with the same input, but
-                    // once the cache is past progress_exclusive (as it will be
-                    // after this update_gt call), we're guaranteed to get an
-                    // answer.
                     DataListenNext::WaitForTxnsProgress => {
-                        let fut = txns_cache.update_gt(&output_progress_exclusive);
-                        timeout_log(
-                            fut,
-                            format!("txns_cache.update_gt(output_progress_exclusive:{:?})", output_progress_exclusive),
-                        )
-                        .await;
-                        continue;
+                        // WIP: The previous implementation did a `update_gt`,
+                        // reading from the txns input until the input frontier
+                        // was >= output_progress_exclusive.
+                        //
+                        // Do we need that still? I think not:
+                        //  - It's always safe to pass through data updates,
+                        //  so the other select! branch is fine.
+                        //  - We go into the txn select branch when we get
+                        //  updates from the txn input, we push them into
+                        //  the state machine, then do a `read_ge` check.
+                        //
+                        // The worst that can happen is that we push updates
+                        // (both data and frontiers) into the state machine
+                        // and it keeps telling us that we have to wait,
+                        // i.e. we go into this branch again.
+                        break;
                     }
-                    // The data shard got a write! Loop back above and pass
-                    // through data until we see it.
                     DataListenNext::ReadDataTo(new_target) => {
-                        read_data_to = Antichain::from_elem(new_target);
+                        // WIP: Is this correct? I think it mirrors the previous
+                        // behaviour where, when we saw this, we switched over
+                        // to reading from the data input, that is we were not
+                        // downgrading our capability in reaction to any txn
+                        // updates.
+                        //
+                        // Now, we achieve the same behaviour by retaining a
+                        // capability at our current frontier/cap, and we only
+                        // drop that once the frontier of the data input
+                        // advances past the `target_ts`.
+                        let outstanding_read = OutstandingRead {
+                            cap: cap.delayed(&output_progress_exclusive),
+                            target_ts: new_target,
+                        };
+                        outstanding_reads.push(outstanding_read);
+
+                        // Nothing else from the state machine for now. Give the
+                        // operator a chance to ingest the outstanding read.
+                        break;
+
                         // TODO: This is a very strong hint that the data shard
                         // is about to be written to. Because the data shard's
                         // upper advances sparsely (on write, but not on passage
@@ -400,14 +530,13 @@ where
                         // and remove the listen polling entirely? (NB: This
                         // would have to happen in each worker so that it's
                         // guaranteed to happen in each process.)
-                        break;
                     }
                     // We know there are no writes in
                     // `[output_progress_exclusive, new_progress)`, so advance
                     // our output frontier.
                     DataListenNext::EmitLogicalProgress(new_progress) => {
                         assert!(output_progress_exclusive < new_progress);
-                        output_progress_exclusive = new_progress;
+                        output_progress_exclusive = new_progress.clone();
                         trace!(
                             "{} {:.9} {}/{} downgrading cap to {:?}",
                             name,
@@ -416,8 +545,7 @@ where
                             num_workers,
                             output_progress_exclusive
                         );
-                        cap.downgrade(&output_progress_exclusive);
-                        continue;
+                        cap.downgrade(Antichain::from_elem(new_progress));
                     }
                     DataListenNext::CompactedTo(since_ts) => {
                         unreachable!(
@@ -428,8 +556,36 @@ where
                 }
             }
         }
+
+        tracing::info!(
+            "{} {:.9} {}/{} shutting down",
+            name,
+            data_id.to_string(),
+            worker_idx,
+            num_workers,
+        );
     });
     (passthrough_stream, shutdown_button.press_on_drop())
+}
+
+/// Represents a read from the data/passthrough input that we are waiting to
+/// observe. We stash these in operator state until we see the data input
+/// frontier advancing past the `target_ts`. This "locks" in place a capability
+/// at the time at which we recorded this outstanding read.
+struct OutstandingRead<T: Timestamp> {
+    /// A capability for the time at which we created this hold.
+    cap: Capability<T>,
+    /// The timestamp up to which we have to read until we release this "lock".
+    target_ts: T,
+}
+
+impl<T: Debug + Timestamp> Debug for OutstandingRead<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OutstandingRead")
+            .field("cap", &self.cap.time())
+            .field("target_ts", &self.target_ts)
+            .finish()
+    }
 }
 
 /// Logs the given message when the future times out, and then never returns.
@@ -450,7 +606,7 @@ where
     // Petros' alternative: retry/log continually.
     let mut fut = pin!(future);
     loop {
-        match tokio::time::timeout(Duration::from_secs(10), fut.as_mut()).await {
+        match tokio::time::timeout(Duration::from_secs(2), fut.as_mut()).await {
             Ok(value) => break value,
             Err(_) => tracing::error!("timeout: {}, continue waiting ...", msg.as_ref()),
         }
@@ -459,65 +615,48 @@ where
 
 // NB: The API of this intentionally mirrors TxnsCache and TxnsRead. Consider
 // making them all implement the same trait?
-struct TxnsCacheTimely<
-    T: Timestamp + Lattice + Codec64,
-    P: Pull<BundleCore<T, Vec<(TxnsEntry, T, i64)>>> + 'static,
-> {
+struct TxnsCacheTimely<T: Timestamp + Lattice + Codec64> {
     name: String,
     state: TxnsCacheState<T>,
-    input: AsyncInputHandle<T, Vec<(TxnsEntry, T, i64)>, P>,
     buf: Vec<(TxnsEntry, T, i64)>,
 }
 
-impl<T, P> TxnsCacheTimely<T, P>
+impl<T> TxnsCacheTimely<T>
 where
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-    P: Pull<BundleCore<T, Vec<(TxnsEntry, T, i64)>>> + 'static,
 {
     /// See [TxnsCacheState::compact_to].
     fn compact_to(&mut self, since_ts: &T) {
         self.state.compact_to(since_ts)
     }
 
-    /// See [TxnsCache::update_gt].
-    async fn update_gt(&mut self, ts: &T) {
-        debug!("{} update_gt {:?}", self.name, ts);
-        self.update(|progress_exclusive| progress_exclusive > ts)
-            .await;
-        debug_assert!(&self.state.progress_exclusive > ts);
+    /// Has this [TxnsCacheTimely] caught up to `ts` (`>=`).
+    fn ready_gt(&mut self, ts: &T) -> bool {
+        debug!("{} ready_gt {:?}", self.name, ts);
         debug_assert_eq!(self.state.validate(), Ok(()));
+        &self.state.progress_exclusive > ts
     }
 
-    /// See [TxnsCache::update_ge].
-    async fn update_ge(&mut self, ts: &T) {
-        debug!("{} update_ge {:?}", self.name, ts);
-        self.update(|progress_exclusive| progress_exclusive >= ts)
-            .await;
-        debug_assert!(&self.state.progress_exclusive >= ts);
+    /// Has this [TxnsCacheTimely] caught up to `ts` (`>`).
+    fn ready_ge(&mut self, ts: &T) -> bool {
+        debug!("{} ready_ge {:?}", self.name, ts);
         debug_assert_eq!(self.state.validate(), Ok(()));
+        &self.state.progress_exclusive >= ts
     }
 
-    async fn update<F: Fn(&T) -> bool>(&mut self, done: F) {
-        while !done(&self.state.progress_exclusive) {
-            let event = self.input.next_mut();
-            let event = timeout_log(event, "self.input.next_mut()").await;
-
-            let Some(event) = event else {
-                unreachable!("txns shard unexpectedly closed")
-            };
-            match event {
-                Event::Progress(frontier) => {
-                    let progress = frontier
-                        .into_option()
-                        .expect("nothing should close the txns shard");
-                    debug!("{} got progress {:?}", self.name, progress);
-                    self.state
-                        .push_entries(std::mem::take(&mut self.buf), progress);
-                }
-                Event::Data(_cap, entries) => {
-                    debug!("{} got updates {:?}", self.name, entries);
-                    self.buf.append(entries);
-                }
+    fn push_event(&mut self, event: Event<T, &mut Vec<(TxnsEntry, T, i64)>>) {
+        match event {
+            Event::Progress(frontier) => {
+                let progress = frontier
+                    .into_option()
+                    .expect("nothing should close the txns shard");
+                debug!("{} got progress {:?}", self.name, progress);
+                self.state
+                    .push_entries(std::mem::take(&mut self.buf), progress);
+            }
+            Event::Data(_cap, entries) => {
+                debug!("{} got updates {:?}", self.name, entries);
+                self.buf.append(entries);
             }
         }
         debug!(
