@@ -646,9 +646,8 @@ where
     );
     let (mut data_output, data_stream) = builder.new_output();
 
-    let mut data_input = builder.new_input_connection(data, Pipeline, vec![Antichain::new()]);
-    let mut flow_control_input =
-        builder.new_input_connection(&summaried_flow, Pipeline, vec![Antichain::new()]);
+    let mut data_input = builder.new_disconnected_input(data, Pipeline);
+    let mut flow_control_input = builder.new_disconnected_input(&summaried_flow, Pipeline);
 
     // Helper method used to synthesize current and next frontier for ordered times.
     fn synthesize_frontiers<T: PartialOrder + Clone>(
@@ -676,7 +675,7 @@ where
         let mut part_number = 0;
         let mut parts: Vec<((T, Subtime), O)> = Vec::new();
         loop {
-            match data_input.next_mut().await {
+            match data_input.next().await {
                 None => {
                     let empty = Antichain::new();
                     parts.sort_by_key(|val| val.0.clone());
@@ -690,9 +689,9 @@ where
                     }
                     break;
                 }
-                Some(Event::Data(cap, data)) => {
-                    for d in data.drain(..) {
-                        parts.push((cap.time().clone(), d));
+                Some(Event::Data(time, data)) => {
+                    for d in data {
+                        parts.push((time.clone(), d));
                     }
                 }
                 Some(Event::Progress(prog)) => {
@@ -1336,8 +1335,8 @@ mod tests {
     ) -> UnboundedSender<()> {
         let (tx, mut rx) = unbounded_channel::<()>();
         let mut consumer = AsyncOperatorBuilder::new("consumer".to_string(), scope);
-        let mut input = consumer.new_input(input, Pipeline);
-        let (_output_handle, output) = consumer.new_output::<Vec<std::convert::Infallible>>();
+        let (output_handle, output) = consumer.new_output::<Vec<std::convert::Infallible>>();
+        let mut input = consumer.new_input_for(input, Pipeline, &output_handle);
 
         consumer.build(|_caps| async move {
             while let Some(()) = rx.recv().await {

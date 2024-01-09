@@ -934,7 +934,7 @@ where
     let hashed_id = id.hashed();
     let is_active_worker = usize::cast_from(hashed_id) % worker_count == worker_id;
 
-    let mut input = builder.new_input(&stream, Exchange::new(move |_| hashed_id));
+    let mut input = builder.new_disconnected_input(&stream, Exchange::new(move |_| hashed_id));
 
     // The frontier of this output is never inspected, so we can just use a
     // normal output, even if its frontier is connected to the input.
@@ -997,12 +997,12 @@ where
             s.maybe_update_progress(&gate);
         }
 
-        while let Some(event) = input.next_mut().await {
+        while let Some(event) = input.next().await {
             match event {
                 Event::Data(_, rows) => {
                     // Queue all pending rows waiting to be sent to kafka
                     assert!(is_active_worker);
-                    for ((key, value), time, diff) in rows.drain(..) {
+                    for ((key, value), time, diff) in rows {
                         let should_emit = if as_of.strict {
                             as_of.frontier.less_than(&time)
                         } else {
@@ -1217,11 +1217,9 @@ where
 
     let mut builder = AsyncOperatorBuilder::new(name.clone(), input_stream.scope());
 
-    let mut input = builder.new_input(input_stream, Exchange::new(move |_| hashed_id));
     let (mut output, stream) = builder.new_output();
+    let mut input = builder.new_input_for(input_stream, Exchange::new(move |_| hashed_id), &output);
 
-    // The frontier of this output is never inspected, so we can just use a normal output,
-    // even if its frontier is connected to the input.
     let (health_output, health_stream) = builder.new_output();
 
     let button = builder.build(move |caps| async move {
@@ -1297,9 +1295,9 @@ where
             )),
         };
 
-        while let Some(event) = input.next_mut().await {
+        while let Some(event) = input.next().await {
             if let Event::Data(cap, rows) = event {
-                for ((key, value), time, diff) in rows.drain(..) {
+                for ((key, value), time, diff) in rows {
                     let should_emit = if as_of.strict {
                         as_of.frontier.less_than(&time)
                     } else {

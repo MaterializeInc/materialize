@@ -155,10 +155,14 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
     let slot_reader = u64::cast_from(config.responsible_worker("slot"));
-    let mut rewind_input = builder.new_input(rewind_stream, Exchange::new(move |_| slot_reader));
     let (mut data_output, data_stream) = builder.new_output();
-    let (_upper_output, upper_stream) = builder.new_output();
+    let (upper_output, upper_stream) = builder.new_output();
     let (mut definite_error_handle, definite_errors) = builder.new_output();
+    let mut rewind_input = builder.new_input_for_many(
+        rewind_stream,
+        Exchange::new(move |_| slot_reader),
+        [&data_output, &upper_output],
+    );
 
     let metrics = config.metrics.get_postgres_metrics(config.id);
     metrics.tables.set(u64::cast_from(table_info.len()));
@@ -204,15 +208,14 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
 
             let mut rewinds = BTreeMap::new();
-            while let Some(event) = rewind_input.next_mut().await {
-                if let AsyncEvent::Data(cap, data) = event {
-                    let cap = cap.retain_for_output(0);
-                    for req in data.drain(..) {
+            while let Some(event) = rewind_input.next().await {
+                if let AsyncEvent::Data(caps, data) = event {
+                    for req in data {
                         assert!(
                             resume_lsn <= req.snapshot_lsn + 1,
                             "slot compacted past snapshot point. snapshot consistent point={} resume_lsn={resume_lsn}", req.snapshot_lsn + 1
                         );
-                        rewinds.insert(req.oid, (cap.clone(), req));
+                        rewinds.insert(req.oid, (caps.clone(), req));
                     }
                 }
             }
@@ -285,10 +288,11 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                     continue;
                                 }
                                 let data = (oid, event);
-                                if let Some((rewind_cap, req)) = rewinds.get(&oid) {
+                                if let Some((rewind_caps, req)) = rewinds.get(&oid) {
+                                    let [data_cap, _upper_cap] = rewind_caps;
                                     if commit_lsn <= req.snapshot_lsn {
                                         let update = (data.clone(), MzOffset::from(0), -diff);
-                                        data_output.give(rewind_cap, update).await;
+                                        data_output.give(data_cap, update).await;
                                     }
                                 }
                                 assert!(new_upper <= commit_lsn, "new_upper={} tx_lsn={}", new_upper, commit_lsn);

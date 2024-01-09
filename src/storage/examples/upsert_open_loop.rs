@@ -915,12 +915,13 @@ where
     let mut upsert_op =
         AsyncOperatorBuilder::new(format!("source-{source_id}-upsert"), scope.clone());
 
-    let mut input = upsert_op.new_input(
+    let (mut output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) =
+        upsert_op.new_output();
+    let mut input = upsert_op.new_input_for(
         source_stream,
         Exchange::new(|d: &(Vec<u8>, Vec<u8>)| d.0.hashed()),
+        &output,
     );
-    let (mut output, source_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) =
-        upsert_op.new_output();
 
     upsert_op.build(move |capabilities| async move {
         drop(capabilities);
@@ -929,10 +930,10 @@ where
         let mut pending_values: BTreeMap<u64, (_, BTreeMap<_, _>)> = BTreeMap::new();
 
         let mut frontier = Antichain::from_elem(0);
-        while let Some(event) = input.next_mut().await {
+        while let Some(event) = input.next().await {
             match event {
                 AsyncEvent::Data(cap, buffer) => {
-                    for (k, v) in buffer.drain(..) {
+                    for (k, v) in buffer {
                         let time = *cap.time();
                         let map = &mut pending_values
                             .entry(time)
@@ -998,7 +999,7 @@ where
         }
     });
 
-    source_stream
+    output_stream
 }
 
 fn upsert_core<G, M: Map + 'static>(
@@ -1013,22 +1014,22 @@ where
     let mut upsert_op =
         AsyncOperatorBuilder::new(format!("source-{source_id}-upsert"), scope.clone());
 
-    let mut input = upsert_op.new_input(
+    let (mut output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) =
+        upsert_op.new_output();
+    let mut input = upsert_op.new_input_for(
         source_stream,
         Exchange::new(|d: &(Vec<u8>, Vec<u8>)| d.0.hashed()),
+        &output,
     );
-    let (mut output, source_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) =
-        upsert_op.new_output();
 
     upsert_op.build(move |capabilities| async move {
         drop(capabilities);
 
-        while let Some(event) = input.next_mut().await {
+        while let Some(event) = input.next().await {
             match event {
-                AsyncEvent::Data(cap, buffer) => {
+                AsyncEvent::Data(cap, mut buffer) => {
                     let mut batch = Vec::new();
-                    #[allow(clippy::extend_with_drain)]
-                    batch.extend(buffer.drain(..));
+                    batch.append(&mut buffer);
 
                     for (k, v, previous_v) in current_values.ingest(vec![batch]).await {
                         if let Some(previous_v) = previous_v {
@@ -1045,7 +1046,7 @@ where
         }
     });
 
-    source_stream
+    output_stream
 }
 
 type KV = (Vec<u8>, Vec<u8>);
