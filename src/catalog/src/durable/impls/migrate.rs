@@ -232,6 +232,8 @@ impl CatalogMigrator {
             return Ok(());
         }
 
+        info!("migrating catalog contents from stash to persist");
+
         let (stash_snapshot, stash_audit_logs, stash_storage_usages) =
             stash.whole_migration_snapshot().await?;
 
@@ -265,6 +267,8 @@ impl CatalogMigrator {
         if tombstone.is_none() || tombstone == Some(false) {
             return Ok(());
         }
+
+        info!("rolling back catalog contents from persist to stash");
 
         let (persist_snapshot, persist_audit_logs, persist_storage_usages) =
             persist.whole_migration_snapshot().await?;
