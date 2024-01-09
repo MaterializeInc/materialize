@@ -3466,8 +3466,14 @@ pub fn plan_create_cluster_replica(
     let cluster = scx
         .catalog
         .resolve_cluster(Some(&normalize::ident(of_cluster)))?;
-    if contains_storage_objects(scx, cluster) && cluster.replica_ids().len() > 0 {
-        sql_bail!("cannot create more than one replica of a cluster containing sources or sinks");
+    let current_replica_count = cluster.replica_ids().iter().count();
+    if contains_storage_objects(scx, cluster) && current_replica_count > 0 {
+        let internal_replica_count = cluster.replicas().iter().filter(|r| r.internal()).count();
+        return Err(PlanError::CreateReplicaFailStorageObjects {
+            current_replica_count,
+            internal_replica_count,
+            hypothetical_replica_count: current_replica_count + 1,
+        });
     }
     ensure_cluster_is_not_linked(scx, cluster.id())?;
 
@@ -4329,7 +4335,11 @@ pub fn plan_alter_cluster(
                         // + replication factor.
                         if contains_storage_objects(scx, cluster) && hypothetical_replica_count > 1
                         {
-                            sql_bail!("cannot create more than one replica of a cluster containing sources or sinks");
+                            return Err(PlanError::CreateReplicaFailStorageObjects {
+                                current_replica_count: cluster.replica_ids().iter().count(),
+                                internal_replica_count,
+                                hypothetical_replica_count,
+                            });
                         }
                     }
                 }
