@@ -326,6 +326,10 @@ impl PersistConfig {
                 "ts".into(),
                 "receivedat".into(),
                 "createdat".into(),
+                // Fivetran created tables track deleted rows by setting this column.
+                //
+                // See <https://fivetran.com/docs/using-fivetran/features#capturedeletes>.
+                "_fivetran_deleted".into(),
             ],
             prefixes: vec!["last_".into()],
             suffixes: vec![
