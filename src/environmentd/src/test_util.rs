@@ -385,7 +385,7 @@ impl Listeners {
                     endpoint: "http://fake_address_for_testing:8080".to_string(),
                     headers: http::HeaderMap::new(),
                     filter: EnvFilter::default().add_directive(Level::DEBUG.into()),
-                    resource: opentelemetry::sdk::resource::Resource::default(),
+                    resource: opentelemetry_sdk::resource::Resource::default(),
                 }),
                 #[cfg(feature = "tokio-console")]
                 tokio_console: None,

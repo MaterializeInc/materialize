@@ -65,6 +65,36 @@ who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 delta = "1.17.1 -> 1.19.0"
 
+[[audits.opentelemetry]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.21.0"
+
+[[audits.opentelemetry-otlp]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.14.0"
+
+[[audits.opentelemetry-proto]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.4.0"
+
+[[audits.opentelemetry-semantic-conventions]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.13.0"
+
+[[audits.opentelemetry_sdk]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.21.2"
+
+[[audits.ordered-float]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "4.2.0"
+
 [[audits.quanta]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
@@ -130,10 +160,35 @@ who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.12.0@git:de20aa88cc6df3de910e9befbe68408d31e287be"
 
+[[audits.tracing-log]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.2.0"
+
+[[audits.tracing-opentelemetry]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.22.0@git:1e0cf8be6360b16096121ccbf266eba4f38e307e"
+
+[[audits.tracing-opentelemetry]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.22.0@git:7035e641b683985cc3b8630f3b61d53c96f83695"
+
+[[audits.tracing-subscriber]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.3.18"
+
 [[audits.untrusted]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 delta = "0.7.1 -> 0.9.0"
+
+[[audits.web-time]]
+who = "Gus Wynn <gus@materialize.com>"
+criteria = "maintained-and-necessary"
+version = "0.2.4"
 
 [[audits.zstd]]
 who = "Parker Timmerman <parker.timmerman@materialize.com>"

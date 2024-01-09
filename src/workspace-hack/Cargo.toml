@@ -73,7 +73,7 @@ num-bigint = { version = "0.4.3" }
 num-integer = { version = "0.1.44", features = ["i128"] }
 num-traits = { version = "0.2.15", features = ["i128"] }
 openssl = { version = "0.10.55", features = ["vendored"] }
-ordered-float = { version = "3.4.0", features = ["serde"] }
+ordered-float = { version = "4.2.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
 phf = { version = "0.11.1", features = ["uncased"] }
 phf_shared = { version = "0.11.1", features = ["uncased"] }
@@ -117,7 +117,7 @@ tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit"
 tower-http = { version = "0.4.3", features = ["auth", "cors", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.37", features = ["log"] }
 tracing-core = { version = "0.1.30" }
-tracing-subscriber = { version = "0.3.16", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
 tungstenite = { version = "0.20.1" }
 uncased = { version = "0.9.7" }
 url = { version = "2.3.1", features = ["serde"] }
@@ -186,7 +186,7 @@ num-bigint = { version = "0.4.3" }
 num-integer = { version = "0.1.44", features = ["i128"] }
 num-traits = { version = "0.2.15", features = ["i128"] }
 openssl = { version = "0.10.55", features = ["vendored"] }
-ordered-float = { version = "3.4.0", features = ["serde"] }
+ordered-float = { version = "4.2.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
 phf = { version = "0.11.1", features = ["uncased"] }
 phf_shared = { version = "0.11.1", features = ["uncased"] }
@@ -231,7 +231,7 @@ tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit"
 tower-http = { version = "0.4.3", features = ["auth", "cors", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.37", features = ["log"] }
 tracing-core = { version = "0.1.30" }
-tracing-subscriber = { version = "0.3.16", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
 tungstenite = { version = "0.20.1" }
 uncased = { version = "0.9.7" }
 url = { version = "2.3.1", features = ["serde"] }
