@@ -57,7 +57,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 10
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
         coverage: skip
 
       - id: check-merge-with-target
@@ -84,7 +84,7 @@ steps:
           - build-aarch64
         timeout_in_minutes: 10
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
         coverage: skip
         # Fortify against intermittent DockerHub issues
         retry:
@@ -103,7 +103,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 10
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
         coverage: skip
 
       - id: lint-slow
@@ -145,7 +145,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 30
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
         coverage: skip
 
       - id: vet-check
@@ -157,7 +157,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 5
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
         coverage: skip
 
       - id: lint-docs
@@ -170,7 +170,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 30
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
         coverage: skip
 
       - id: preview-docs
@@ -180,7 +180,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 30
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
         coverage: skip
 
   - group: "Cargo tests"
@@ -264,7 +264,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
 
   - id: restarts
     label: Restart test
@@ -275,7 +275,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: restart
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
 
   - id: legacy-upgrade
     label: Legacy upgrade tests (last version from docs)
@@ -329,7 +329,7 @@ steps:
               composition: debezium
               run: mysql
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
 
   - group: "MySQL tests"
     key: mysql-tests
@@ -344,7 +344,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
 
   - group: "Postgres tests"
     key: postgres-tests
@@ -359,7 +359,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64 # TODO(def-) Switch to small when #24324 is fixed
 
       - id: pg-cdc-resumption
         label: Postgres CDC resumption tests
@@ -398,7 +398,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-resumption
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
 
       - id: kafka-auth
         label: Kafka auth test
@@ -421,7 +421,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-exactly-once
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
 
   - id: zippy-kafka-sources-short
     label: "Short Zippy"
@@ -481,6 +481,8 @@ steps:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
           args: [--exitfirst, -m, "not long", --aws-region=us-east-1, test/cloudtest/]
+    agents:
+      queue: linux-x86_64
 
   - id: source-sink-errors
     label: "Source/Sink Error Reporting"
@@ -488,7 +490,7 @@ steps:
     depends_on: build-x86_64
     timeout_in_minutes: 30
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
     plugins:
       - ./ci/plugins/mzcompose:
           composition: source-sink-errors
@@ -499,7 +501,7 @@ steps:
     depends_on: build-x86_64
     timeout_in_minutes: 10
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
     plugins:
       - ./ci/plugins/mzcompose:
           composition: backup-restore
@@ -514,6 +516,8 @@ steps:
           composition: feature-benchmark
           args: [--scenario=KafkaUpsertUnique]
     coverage: skip
+    agents:
+      queue: linux-x86_64-small
 
   # Fast tests closer to the end, doesn't matter as much if they have to wait
   # for an agent
@@ -550,7 +554,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cluster-isolation
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
 
   - id: chbench-demo
     label: chbench smoke test
@@ -562,7 +566,7 @@ steps:
           args: [--run-seconds=10, --wait]
     timeout_in_minutes: 30
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
 
   - id: metabase-demo
     label: Metabase smoke test
@@ -573,7 +577,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: metabase
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
 
   - id: dbt-materialize
     label: dbt-materialize tests
@@ -592,7 +596,7 @@ steps:
     depends_on: build-x86_64
     timeout_in_minutes: 30
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
     plugins:
       - ./ci/plugins/mzcompose:
           composition: storage-usage
@@ -607,7 +611,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: tracing
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
 
   - id: deploy-website
     label: Deploy website
@@ -720,7 +724,7 @@ steps:
           job-uuid-file-pattern: _([^_]*).xml
     priority: 1
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
 
   - wait: ~
 
