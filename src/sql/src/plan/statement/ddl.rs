@@ -3466,7 +3466,7 @@ pub fn plan_create_cluster_replica(
     let cluster = scx
         .catalog
         .resolve_cluster(Some(&normalize::ident(of_cluster)))?;
-    if is_storage_cluster(scx, cluster) && cluster.replica_ids().len() > 0 {
+    if contains_storage_objects(scx, cluster) && cluster.replica_ids().len() > 0 {
         sql_bail!("cannot create more than one replica of a cluster containing sources or sinks");
     }
     ensure_cluster_is_not_linked(scx, cluster.id())?;
@@ -3757,7 +3757,7 @@ fn plan_drop_cluster(
 
 /// Returns `true` if the cluster has any storage object. Return `false` if the cluster has no
 /// objects.
-fn is_storage_cluster(scx: &StatementContext, cluster: &dyn CatalogCluster) -> bool {
+fn contains_storage_objects(scx: &StatementContext, cluster: &dyn CatalogCluster) -> bool {
     cluster.bound_objects().iter().any(|id| {
         matches!(
             scx.catalog.get_item(id).item_type(),
@@ -4318,8 +4318,17 @@ pub fn plan_alter_cluster(
                     if replica_defs.is_some() {
                         sql_bail!("REPLICAS not supported for managed clusters");
                     }
+
                     if let Some(replication_factor) = replication_factor {
-                        if is_storage_cluster(scx, cluster) && replication_factor > 1 {
+                        let internal_replica_count =
+                            cluster.replicas().iter().filter(|r| r.internal()).count();
+                        let hypothetical_replica_count =
+                            internal_replica_count + usize::cast_from(replication_factor);
+
+                        // Total number of replicas running is internal replicas
+                        // + replication factor.
+                        if contains_storage_objects(scx, cluster) && hypothetical_replica_count > 1
+                        {
                             sql_bail!("cannot create more than one replica of a cluster containing sources or sinks");
                         }
                     }
