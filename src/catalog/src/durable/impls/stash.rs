@@ -18,7 +18,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use itertools::Itertools;
 use postgres_openssl::MakeTlsConnector;
-use tracing::warn;
+use tracing::error;
 
 use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
 use mz_ore::metrics::MetricsFutureExt;
@@ -418,7 +418,7 @@ impl OpenableDurableCatalogState for OpenableConnection {
     }
 
     fn set_catalog_kind(&mut self, catalog_kind: CatalogKind) {
-        warn!("unable to set catalog kind to {catalog_kind:?}");
+        error!("unable to set catalog kind to {catalog_kind:?}");
     }
 
     async fn expire(self: Box<Self>) {

@@ -10,7 +10,7 @@
 use async_trait::async_trait;
 use mz_ore::now::EpochMillis;
 use mz_sql::session::vars::CatalogKind;
-use tracing::{info, warn};
+use tracing::{error, info};
 
 use crate::durable::debug::{DebugCatalogState, Trace};
 use crate::durable::impls::persist::UnopenedPersistCatalogState;
@@ -29,19 +29,30 @@ use crate::durable::{
 // inbetween steps (1) and (2).
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TargetImplementation {
+    EmergencyStash,
+    MigrationDirection(Direction),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Direction {
     MigrateToPersist,
     RollbackToStash,
 }
 
-impl TryFrom<CatalogKind> for Direction {
+impl TryFrom<CatalogKind> for TargetImplementation {
     type Error = CatalogKind;
 
     fn try_from(catalog_kind: CatalogKind) -> Result<Self, Self::Error> {
         match catalog_kind {
-            CatalogKind::Stash => Ok(Direction::RollbackToStash),
-            CatalogKind::Persist => Ok(Direction::MigrateToPersist),
-            CatalogKind::Shadow | CatalogKind::EmergencyStash => Err(catalog_kind),
+            CatalogKind::Stash => Ok(TargetImplementation::MigrationDirection(
+                Direction::RollbackToStash,
+            )),
+            CatalogKind::Persist => Ok(TargetImplementation::MigrationDirection(
+                Direction::MigrateToPersist,
+            )),
+            CatalogKind::EmergencyStash => Ok(TargetImplementation::EmergencyStash),
+            CatalogKind::Shadow => Err(catalog_kind),
         }
     }
 }
@@ -50,7 +61,7 @@ impl TryFrom<CatalogKind> for Direction {
 pub struct CatalogMigrator {
     openable_stash: Box<OpenableConnection>,
     openable_persist: Box<UnopenedPersistCatalogState>,
-    direction: Direction,
+    target: TargetImplementation,
 }
 
 #[async_trait]
@@ -61,6 +72,17 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        let direction = match self.target {
+            TargetImplementation::EmergencyStash => {
+                // Handle emergency stash before opening persist.
+                return self
+                    .openable_stash
+                    .open_savepoint(boot_ts, bootstrap_args, deploy_generation)
+                    .await;
+            }
+            TargetImplementation::MigrationDirection(direction) => direction,
+        };
+
         let stash_initialized = self.openable_stash.is_initialized().await?;
         let stash = self
             .openable_stash
@@ -77,7 +99,7 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         if let Err(CatalogError::Durable(e)) = &persist {
             if e.can_recover_with_write_mode()
                 && !persist_initialized
-                && self.direction == Direction::RollbackToStash
+                && direction == Direction::RollbackToStash
             {
                 return stash;
             }
@@ -87,7 +109,7 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         if let Err(CatalogError::Durable(e)) = &stash {
             if e.can_recover_with_write_mode()
                 && !stash_initialized
-                && self.direction == Direction::MigrateToPersist
+                && direction == Direction::MigrateToPersist
             {
                 return persist;
             }
@@ -95,7 +117,7 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         let stash = stash?;
         let persist = persist?;
 
-        Self::open_inner(stash, persist, self.direction).await
+        Self::open_inner(stash, persist, direction).await
     }
 
     async fn open_read_only(
@@ -112,6 +134,17 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        let direction = match self.target {
+            TargetImplementation::EmergencyStash => {
+                // Handle emergency stash before opening persist.
+                return self
+                    .openable_stash
+                    .open(boot_ts, bootstrap_args, deploy_generation)
+                    .await;
+            }
+            TargetImplementation::MigrationDirection(direction) => direction,
+        };
+
         let stash = self
             .openable_stash
             .open(boot_ts.clone(), bootstrap_args, deploy_generation.clone())
@@ -122,7 +155,7 @@ impl OpenableDurableCatalogState for CatalogMigrator {
             .open(boot_ts, bootstrap_args, deploy_generation)
             .await?;
         fail::fail_point!("post_persist_fence");
-        Self::open_inner(stash, persist, self.direction).await
+        Self::open_inner(stash, persist, direction).await
     }
 
     async fn open_debug(self: Box<Self>) -> Result<DebugCatalogState, CatalogError> {
@@ -178,11 +211,11 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         let direction = match catalog_kind.try_into() {
             Ok(direction) => direction,
             Err(catalog_kind) => {
-                warn!("unable to set catalog kind to {catalog_kind:?}");
+                error!("unable to set catalog kind to {catalog_kind:?}");
                 return;
             }
         };
-        self.direction = direction;
+        self.target = direction;
     }
 
     async fn expire(self: Box<Self>) {
@@ -202,7 +235,7 @@ impl CatalogMigrator {
         CatalogMigrator {
             openable_stash,
             openable_persist,
-            direction,
+            target: TargetImplementation::MigrationDirection(direction),
         }
     }
 
@@ -296,7 +329,7 @@ mod tests {
     use mz_sql::session::vars::CatalogKind;
     use uuid::Uuid;
 
-    use crate::durable::impls::migrate::Direction;
+    use crate::durable::impls::migrate::{Direction, TargetImplementation};
     use crate::durable::{
         migrate_from_stash_to_persist_state, rollback_from_persist_to_stash_state,
         test_stash_config, Metrics, OpenableDurableCatalogState,
@@ -318,19 +351,37 @@ mod tests {
                 Arc::clone(&persist_metrics),
             )
             .await;
-            assert_eq!(catalog.direction, Direction::MigrateToPersist);
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::MigrateToPersist)
+            );
 
             catalog.set_catalog_kind(CatalogKind::Shadow);
-            assert_eq!(catalog.direction, Direction::MigrateToPersist);
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::MigrateToPersist)
+            );
 
             catalog.set_catalog_kind(CatalogKind::Stash);
-            assert_eq!(catalog.direction, Direction::RollbackToStash);
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::RollbackToStash)
+            );
 
             catalog.set_catalog_kind(CatalogKind::Shadow);
-            assert_eq!(catalog.direction, Direction::RollbackToStash);
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::RollbackToStash)
+            );
 
             catalog.set_catalog_kind(CatalogKind::Persist);
-            assert_eq!(catalog.direction, Direction::MigrateToPersist);
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::MigrateToPersist)
+            );
+
+            catalog.set_catalog_kind(CatalogKind::EmergencyStash);
+            assert_eq!(catalog.target, TargetImplementation::EmergencyStash);
         }
 
         {
@@ -341,19 +392,37 @@ mod tests {
                 Arc::clone(&persist_metrics),
             )
             .await;
-            assert_eq!(catalog.direction, Direction::RollbackToStash);
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::RollbackToStash)
+            );
 
             catalog.set_catalog_kind(CatalogKind::Shadow);
-            assert_eq!(catalog.direction, Direction::RollbackToStash);
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::RollbackToStash)
+            );
 
             catalog.set_catalog_kind(CatalogKind::Persist);
-            assert_eq!(catalog.direction, Direction::MigrateToPersist);
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::MigrateToPersist)
+            );
 
             catalog.set_catalog_kind(CatalogKind::Shadow);
-            assert_eq!(catalog.direction, Direction::MigrateToPersist);
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::MigrateToPersist)
+            );
 
             catalog.set_catalog_kind(CatalogKind::Stash);
-            assert_eq!(catalog.direction, Direction::RollbackToStash);
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::RollbackToStash)
+            );
+
+            catalog.set_catalog_kind(CatalogKind::EmergencyStash);
+            assert_eq!(catalog.target, TargetImplementation::EmergencyStash);
         }
 
         debug_factory.drop().await;

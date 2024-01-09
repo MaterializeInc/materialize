@@ -22,6 +22,7 @@ use mz_proto::{ProtoType, RustType};
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{RoleAttributes, RoleMembership, RoleVars};
 use mz_sql::names::DatabaseId;
+use mz_sql::session::vars::CatalogKind;
 use mz_storage_types::sources::Timeline;
 use std::panic;
 use std::sync::Arc;
@@ -2054,6 +2055,90 @@ async fn test_savepoint_stash_uninitialized() {
         let database_value = databases.get(&database_key.into_proto());
         assert_eq!(database_value, None);
     }
+
+    debug_factory.drop().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_set_emergency_stash_migrate() {
+    let (debug_factory, stash_config) = test_stash_config().await;
+    let persist_client = PersistClient::new_for_tests().await;
+    let organization_id = Uuid::new_v4();
+    let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+
+    // Set a migrate catalog to emergency-stash and open.
+    let mut migrate_openable_state = Box::new(
+        migrate_from_stash_to_persist_state(
+            stash_config.clone(),
+            persist_client.clone(),
+            organization_id.clone(),
+            Arc::clone(&persist_metrics),
+        )
+        .await,
+    );
+    migrate_openable_state.set_catalog_kind(CatalogKind::EmergencyStash);
+    let _stash_state = migrate_openable_state
+        .open(NOW_ZERO(), &test_bootstrap_args(), None)
+        .await
+        .unwrap();
+
+    // Check that stash is initialized.
+    let mut stash_openable_state = Box::new(stash_backed_catalog_state(stash_config.clone()));
+    assert!(stash_openable_state.is_initialized().await.unwrap());
+
+    // Check that persist is still uninitialized.
+    let mut persist_openable_state = Box::new(
+        persist_backed_catalog_state(
+            persist_client.clone(),
+            organization_id.clone(),
+            Arc::clone(&persist_metrics),
+        )
+        .await,
+    );
+    assert!(!persist_openable_state.is_initialized().await.unwrap());
+
+    debug_factory.drop().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_set_emergency_stash_rollback() {
+    let (debug_factory, stash_config) = test_stash_config().await;
+    let persist_client = PersistClient::new_for_tests().await;
+    let organization_id = Uuid::new_v4();
+    let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+
+    // Set a rollback catalog to emergency-stash and open.
+    let mut rollback_openable_state = Box::new(
+        rollback_from_persist_to_stash_state(
+            stash_config.clone(),
+            persist_client.clone(),
+            organization_id.clone(),
+            Arc::clone(&persist_metrics),
+        )
+        .await,
+    );
+    rollback_openable_state.set_catalog_kind(CatalogKind::EmergencyStash);
+    let _stash_state = rollback_openable_state
+        .open(NOW_ZERO(), &test_bootstrap_args(), None)
+        .await
+        .unwrap();
+
+    // Check that stash is initialized.
+    let mut stash_openable_state = Box::new(stash_backed_catalog_state(stash_config.clone()));
+    assert!(stash_openable_state.is_initialized().await.unwrap());
+
+    // Check that persist is still uninitialized.
+    let mut persist_openable_state = Box::new(
+        persist_backed_catalog_state(
+            persist_client.clone(),
+            organization_id.clone(),
+            Arc::clone(&persist_metrics),
+        )
+        .await,
+    );
+    assert!(!persist_openable_state.is_initialized().await.unwrap());
 
     debug_factory.drop().await;
 }
