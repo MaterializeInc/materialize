@@ -48,7 +48,7 @@ The Datadog sink will build an internal state containing the metrics to export f
 
 The 15-second interval comes from [the Datadog agent](https://docs.datadoghq.com/agent/basic_agent_usage/?tab=agentv6v7#collector) collection interval. While this value could be customizable, a default value is ok for the initial approach and MVP. The sink will use Materialize logical time to calculate when the progress reaches the 15-second interval and will then export the metrics to Datadog. In the event of a sink crash or pause, it will behave similarly to the Kafka sink, recovering from the last logical time processed.
 
-I discarded sending updates when a metric's value changes (streaming without state.) Collections like storage usage are updated once an hour, and this would make charts empty in Datadog for an hour or any smaller time range.
+A discarded approach is exporting metrics only when their values change. This would be streaming from the source to Datadog without any state retention. But, certain metrics, like storage usage, are updated once an hour. This means exporting such metrics once every hour, resulting in no updates in Datadog for an hour or any shorter timeframe. This makes it an unsuitable approach for metrics visualizations.
 
 ### Datadog Metrics
 
@@ -73,6 +73,8 @@ Submitting metrics to Datadog API requires the following fields:
 In this design document, two of the optional fields, `metadata` and `tags`, are not going to be considered for the implementation to make the structure simpler. The user will have to set the values for all other fields, except for the `timestamp`. Materialize will set the timestamp using its logical time upon reaching progress in the 15-second interval.
 Optional fields can be omitted and customized by the user within Datadog's app.
 The `type` field will be represented in Materialize as either `NULL`, `'count'`, `'rate'`, or `'gauge'`, and later converted into its corresponding integer value.
+
+**NOTE**: Datadog uses *resources* to what equals *labels* in the OpenMetrics definition. We ended up liking more and choosing *labels* over *resources*.
 
 #### Timestamp
 
@@ -122,17 +124,15 @@ CREATE MATERIALIZED VIEW metrics AS
 ```
 
 
-The idea behind the following considerations, or let's call them controls, is to behave like the Kafka receiver does to control the uniqueness of the push key. The biggest difference lies in the severity of the control: for a Datadog receiver, it may not be critical or necessary to throw an error. 
+The idea behind the following considerations, or let's call them controls, is to verify that the source metrics are correct. The severity of the control may not be critical or necessary to trigger an error and stop exporting metrics; instead, we might simply skip exporting the metric and log a warning.
 
 Controls:
-* If the source structure is incorrect, the sink will throw an error about it during its creation.
-* If a required field is incomplete or contains `NULL` values, the sink will not export the metric until it is fixed. If this happens during sink creation, a `NOTICE` message containing the warning should be sent. For an optional field, no warning should be generated if it is empty or contains a `NULL` value. However, a `NOTICE` message should be raised if there is a value mismatch, such as using `'gage'` instead of `'gauge'`, but compared to the initial case, the sink should continue to export the metric.
-* If the triplet of required fields is `NULL`, the sink will stop exporting the metric and remove it from the state.
+1. If the source structure is incorrect (e.g. a missing required column), the sink will throw an error about it during its creation.
+2. If a required field is incomplete or contains `NULL` values, the sink will not export the metric until it is fixed. If it is possible to detect during sink creation, a `NOTICE` message containing the warning should be sent. Otherwise, a log should be created and stored in a dedicated collection, or the status should be changed to error/stale or assigned a new status name more suitable to the situation. I'm still looking and thinking for what is the best suitable approach here to monitor and log/report errors.
+3. If an optional field it is empty or contains a `NULL` value no warning should be generated. But we should raise one if there is a value mismatch, such as using `'gage'` instead of `'gauge'`. Compared to the case in (2.), the sink should continue to export the metric.
 
 Not mandatory but a plus:
-* If the sink detects a duplicated set of metrics and labels with different values for the same timestamp during creation, it should emit a `NOTICE` warning message. Datadog selects the latest value sent for these cases.
-
-**NOTE**: Datadog uses *resources* to what equals *labels* in the OpenMetrics definition. We ended up liking more and choosing *labels* over *resources*.
+* If the sink detects a duplicated set of metrics and labels with different values for the same timestamp during creation, it should log or emit a `NOTICE` warning message. Datadog selects the latest value sent for these cases.
 
 ### Datadog Sink Code
 
