@@ -117,4 +117,3 @@ SELECT 1 FROM mz_internal.mz_statement_execution_history_redacted WHERE 1 = 0
 query I
 SELECT 1 FROM mz_internal.mz_activity_log_redacted WHERE 1 = 0
 ----
-
