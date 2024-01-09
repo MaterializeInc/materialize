@@ -27,7 +27,7 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{adt::jsonb::Jsonb, Datum, Diff, GlobalId, Row};
 use mz_ssh_util::tunnel::SshTunnelStatus;
 use mz_storage_types::errors::ContextCreationError;
-use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
+use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection, RangeBound};
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
@@ -100,9 +100,9 @@ pub struct KafkaSourceReader {
 
 struct PartitionCapability {
     /// The capability of the data produced
-    data: Capability<Partitioned<PartitionId, MzOffset>>,
+    data: Capability<Partitioned<RangeBound<PartitionId>, MzOffset>>,
     /// The capability of the progress stream
-    progress: Capability<Partitioned<PartitionId, MzOffset>>,
+    progress: Capability<Partitioned<RangeBound<PartitionId>, MzOffset>>,
 }
 
 /// Represents the low and high watermark offsets of a Kafka partition.
@@ -126,15 +126,19 @@ pub struct KafkaOffsetCommiter {
 impl SourceRender for KafkaSourceConnection {
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
-    type Time = Partitioned<PartitionId, MzOffset>;
+    // TODO(petrosagg): The type used for the partition (RangeBound<PartitionId>) doesn't need to
+    // be so complicated and we could instead use `Partitioned<PartitionId, Option<u64>>` where all
+    // ranges are inclusive and a time of `None` signifies that a particular partition is not
+    // present. This requires an shard migration of the remap shard.
+    type Time = Partitioned<RangeBound<PartitionId>, MzOffset>;
 
     const STATUS_NAMESPACE: StatusNamespace = StatusNamespace::Kafka;
 
-    fn render<G: Scope<Timestamp = Partitioned<PartitionId, MzOffset>>>(
+    fn render<G: Scope<Timestamp = Partitioned<RangeBound<PartitionId>, MzOffset>>>(
         self,
         scope: &mut G,
         config: RawSourceCreationConfig,
-        resume_uppers: impl futures::Stream<Item = Antichain<Partitioned<PartitionId, MzOffset>>>
+        resume_uppers: impl futures::Stream<Item = Antichain<Partitioned<RangeBound<PartitionId>, MzOffset>>>
             + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
@@ -189,7 +193,8 @@ impl SourceRender for KafkaSourceConnection {
                     .map(Partitioned::<_, _>::decode_row),
             );
             for ts in resume_upper.elements() {
-                if let Some(pid) = ts.partition() {
+                if let Some(pid) = ts.interval().singleton() {
+                    let pid = pid.unwrap_exact();
                     max_pid = std::cmp::max(max_pid, Some(*pid));
                     if config.responsible_for(pid) {
                         let restored_offset = i64::try_from(ts.timestamp().offset)
@@ -200,7 +205,7 @@ impl SourceRender for KafkaSourceConnection {
                             start_offsets.insert(*pid, restored_offset);
                         }
 
-                        let part_ts = Partitioned::with_partition(*pid, ts.timestamp().clone());
+                        let part_ts = Partitioned::new_singleton(RangeBound::exact(*pid), ts.timestamp().clone());
                         let part_cap = PartitionCapability {
                             data: data_cap.delayed(&part_ts),
                             progress: progress_cap.delayed(&part_ts),
@@ -209,7 +214,8 @@ impl SourceRender for KafkaSourceConnection {
                     }
                 }
             }
-            let future_ts = Partitioned::with_range(max_pid, None, MzOffset::from(0));
+            let lower = max_pid.map(RangeBound::after).unwrap_or(RangeBound::NegInfinity);
+            let future_ts = Partitioned::new_range(lower, RangeBound::PosInfinity, MzOffset::from(0));
             data_cap.downgrade(&future_ts);
             progress_cap.downgrade(&future_ts);
 
@@ -456,7 +462,8 @@ impl SourceRender for KafkaSourceConnection {
                 let partition_info = reader.partition_info.lock().unwrap().take();
                 if let Some(partitions) = partition_info {
                     let max_pid = partitions.keys().last().cloned();
-                    let future_ts = Partitioned::with_range(max_pid, None, MzOffset::from(0));
+                    let lower = max_pid.map(RangeBound::after).unwrap_or(RangeBound::NegInfinity);
+                    let future_ts = Partitioned::new_range(lower, RangeBound::PosInfinity, MzOffset::from(0));
 
                     // Topics are identified by name but it's possible that a user recreates a
                     // topic with the same name but different configuration. Ideally we'd want to
@@ -505,11 +512,8 @@ impl SourceRender for KafkaSourceConnection {
                                 };
                                 let start_offset = std::cmp::max(start_offset, watermarks.low);
                                 let part_since_ts =
-                                    Partitioned::with_partition(pid, MzOffset::from(start_offset));
-                                let part_upper_ts = Partitioned::with_partition(
-                                    pid,
-                                    MzOffset::from(watermarks.high),
-                                );
+                                    Partitioned::new_singleton(RangeBound::exact(pid), MzOffset::from(start_offset));
+                                let part_upper_ts = Partitioned::new_singleton(RangeBound::exact(pid), MzOffset::from(watermarks.high));
 
                                 // This is the moment at which we have discovered a new partition
                                 // and we need to make sure we produce its initial snapshot at a,
@@ -562,7 +566,7 @@ impl SourceRender for KafkaSourceConnection {
                             let (message, ts) =
                                 construct_source_message(&message, &reader.metadata_columns);
                             if let Some((msg, time, diff)) = reader.handle_message(message, ts) {
-                                let pid = time.partition().unwrap();
+                                let pid = time.interval().singleton().unwrap().unwrap_exact();
                                 let part_cap = &reader.partition_capabilities[pid].data;
                                 let msg =
                                     msg.map_err(|e| SourceReaderError::other_definite(e.into()));
@@ -584,7 +588,7 @@ impl SourceRender for KafkaSourceConnection {
                         };
                         match message {
                             Ok(Some((msg, time, diff))) => {
-                                let pid = time.partition().unwrap();
+                                let pid = time.interval().singleton().unwrap().unwrap_exact();
                                 let part_cap = &reader.partition_capabilities[pid].data;
                                 let msg =
                                     msg.map_err(|e| SourceReaderError::other_definite(e.into()));
@@ -632,7 +636,7 @@ impl SourceRender for KafkaSourceConnection {
                     if let Offset::Offset(offset) = position.offset() {
                         let pid = position.partition();
                         let upper_offset = MzOffset::from(u64::try_from(offset).unwrap());
-                        let upper = Partitioned::with_partition(pid, upper_offset);
+                        let upper = Partitioned::new_singleton(RangeBound::exact(pid), upper_offset);
 
                         let part_cap = reader.partition_capabilities.get_mut(&pid).unwrap();
                         part_cap.data.downgrade(&upper);
@@ -698,14 +702,15 @@ impl SourceRender for KafkaSourceConnection {
 impl KafkaOffsetCommiter {
     async fn commit_offsets(
         &self,
-        frontier: Antichain<Partitioned<PartitionId, MzOffset>>,
+        frontier: Antichain<Partitioned<RangeBound<PartitionId>, MzOffset>>,
     ) -> Result<(), anyhow::Error> {
         use rdkafka::consumer::CommitMode;
 
         // Generate a list of partitions that this worker is responsible for
         let mut offsets = vec![];
         for ts in frontier.iter() {
-            if let Some(pid) = ts.partition() {
+            if let Some(pid) = ts.interval().singleton() {
+                let pid = pid.unwrap_exact();
                 if self.config.responsible_for(pid) {
                     offsets.push((pid.clone(), *ts.timestamp()));
                 }
@@ -905,7 +910,7 @@ impl KafkaSourceReader {
         (partition, offset): (PartitionId, MzOffset),
     ) -> Option<(
         Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, KafkaHeaderParseError>,
-        Partitioned<PartitionId, MzOffset>,
+        Partitioned<RangeBound<PartitionId>, MzOffset>,
         Diff,
     )> {
         // Offsets are guaranteed to be 1) monotonically increasing *unless* there is
@@ -951,7 +956,7 @@ impl KafkaSourceReader {
         } else {
             *last_offset_ref = offset_as_i64;
 
-            let ts = Partitioned::with_partition(partition, offset);
+            let ts = Partitioned::new_singleton(RangeBound::exact(partition), offset);
             Some((message, ts, 1))
         }
     }
