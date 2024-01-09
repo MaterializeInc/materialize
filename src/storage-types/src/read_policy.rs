@@ -110,4 +110,21 @@ impl<T: Timestamp> ReadPolicy<T> {
             }
         }
     }
+
+    pub fn hard_frontier(&self) -> Antichain<T> {
+        match self {
+            ReadPolicy::NoPolicy { .. } => Antichain::new(),
+            ReadPolicy::ValidFrom(frontier) => frontier.clone(),
+            ReadPolicy::LagWriteFrontier(_) => Antichain::new(),
+            ReadPolicy::Multiple(policies) => {
+                let mut frontier = Antichain::new();
+                for policy in policies.iter() {
+                    for time in policy.hard_frontier().iter() {
+                        frontier.insert(time.clone());
+                    }
+                }
+                frontier
+            }
+        }
+    }
 }

@@ -1000,6 +1000,16 @@ where
                 if !update.is_empty() {
                     read_capability_changes.insert(id, update);
                 }
+            } else if !PartialOrder::less_equal(
+                &collection.implied_capability,
+                &policy.hard_frontier(),
+            ) {
+                panic!(
+                    "read policy tried to regress `implied_capability` \
+                     (implied_capability={:?}, policy_frontier={:?}",
+                    collection.implied_capability,
+                    policy.hard_frontier(),
+                );
             }
 
             collection.read_policy = policy;
