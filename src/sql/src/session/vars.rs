@@ -74,7 +74,6 @@ use std::string::ToString;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use clap::clap_derive::ArgEnum;
 use clap::ValueEnum;
@@ -92,6 +91,7 @@ use mz_persist_client::cfg::{PersistConfig, PersistFeatureFlag};
 use mz_pgwire_common::Severity;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
+use mz_repr::bytes::ByteSize;
 use mz_repr::strconv;
 use mz_repr::user::ExternalUserMetadata;
 use mz_sql_parser::ast::TransactionIsolationLevel;
@@ -525,14 +525,14 @@ pub const MAX_ROLES: ServerVar<u32> = ServerVar {
 // TODO(jkosh44) Eventually we want to be able to return arbitrary sized results.
 pub const MAX_RESULT_SIZE: ServerVar<ByteSize> = ServerVar {
     name: UncasedStr::new("max_result_size"),
-    value: ByteSize::gib(1),
+    value: ByteSize::gb(1),
     description: "The maximum size in bytes for an internal query result (Materialize).",
     internal: false,
 };
 
 pub const MAX_QUERY_RESULT_SIZE: ServerVar<ByteSize> = ServerVar {
     name: UncasedStr::new("max_query_result_size"),
-    value: ByteSize::gib(1),
+    value: ByteSize::gb(1),
     description: "The maximum size in bytes for a single query's result (Materialize).",
     internal: false,
 };
@@ -4906,11 +4906,12 @@ impl Value for ByteSize {
         input: VarInput,
     ) -> Result<ByteSize, VarError> {
         let s = extract_single_value(param, input)?;
-        ByteSize::from_str(s).map_err(|_| VarError::InvalidParameterType(param.into()))
+        s.parse::<ByteSize>()
+            .map_err(|_| VarError::InvalidParameterType(param.into()))
     }
 
     fn format(&self) -> String {
-        self.to_string_as(true)
+        self.to_string()
     }
 }
 

@@ -9,11 +9,10 @@
 
 //! Provides tooling to handle `WITH` options.
 
-use std::str::FromStr;
 use std::time::Duration;
 
-use bytesize::ByteSize;
 use mz_repr::adt::interval::Interval;
+use mz_repr::bytes::ByteSize;
 use mz_repr::{strconv, GlobalId};
 use mz_sql_parser::ast::{Ident, KafkaBroker, RefreshOptionValue, ReplicaDefinition};
 use mz_storage_types::connections::StringOrSecret;
@@ -185,10 +184,10 @@ impl ImpliedValue for Duration {
 impl TryFromValue<Value> for ByteSize {
     fn try_from_value(v: Value) -> Result<Self, PlanError> {
         match v {
-            Value::Number(value) | Value::String(value) => {
-                Ok(ByteSize::from_str(&value).map_err(|e| sql_err!("invalid bytes value: {e}"))?)
-            }
-            _ => sql_bail!("cannot use value as interval"),
+            Value::Number(value) | Value::String(value) => Ok(value
+                .parse::<ByteSize>()
+                .map_err(|e| sql_err!("invalid bytes value: {e}"))?),
+            _ => sql_bail!("cannot use value as bytes"),
         }
     }
     fn name() -> String {
