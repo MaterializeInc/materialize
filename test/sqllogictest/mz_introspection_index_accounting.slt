@@ -67,7 +67,7 @@ mz_notices_ind  CREATE␠INDEX␠"mz_notices_ind"␠IN␠CLUSTER␠[s2]␠ON␠"
 mz_object_dependencies_ind  CREATE␠INDEX␠"mz_object_dependencies_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_object_dependencies"␠("object_id")
 mz_object_lifetimes_ind  CREATE␠INDEX␠"mz_object_lifetimes_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_object_lifetimes"␠("id")
 mz_object_transitive_dependencies_ind  CREATE␠INDEX␠"mz_object_transitive_dependencies_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_object_transitive_dependencies"␠("object_id")
-mz_peek_durations_histogram_raw_s2_primary_idx  CREATE␠INDEX␠"mz_peek_durations_histogram_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_peek_durations_histogram_raw"␠("worker_id",␠"duration_ns")
+mz_peek_durations_histogram_raw_s2_primary_idx  CREATE␠INDEX␠"mz_peek_durations_histogram_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_peek_durations_histogram_raw"␠("worker_id",␠"type",␠"duration_ns")
 mz_roles_ind  CREATE␠INDEX␠"mz_roles_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_catalog"."mz_roles"␠("id")
 mz_scheduling_elapsed_raw_s2_primary_idx  CREATE␠INDEX␠"mz_scheduling_elapsed_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_scheduling_elapsed_raw"␠("id",␠"worker_id")
 mz_scheduling_parks_histogram_raw_s2_primary_idx  CREATE␠INDEX␠"mz_scheduling_parks_histogram_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_scheduling_parks_histogram_raw"␠("worker_id",␠"slept_for_ns",␠"requested_ns")
@@ -110,8 +110,9 @@ WHERE cluster_id =
 ORDER BY 1, 2
 ----
 mz_active_peeks_per_worker  id
-mz_active_peeks_per_worker  index_id
+mz_active_peeks_per_worker  object_id
 mz_active_peeks_per_worker  time
+mz_active_peeks_per_worker  type
 mz_active_peeks_per_worker  worker_id
 mz_arrangement_batcher_allocations_raw  operator_id
 mz_arrangement_batcher_allocations_raw  worker_id
@@ -328,6 +329,7 @@ mz_optimizer_notices  redacted_action
 mz_optimizer_notices  redacted_hint
 mz_optimizer_notices  redacted_message
 mz_peek_durations_histogram_raw  duration_ns
+mz_peek_durations_histogram_raw  type
 mz_peek_durations_histogram_raw  worker_id
 mz_relations  id
 mz_relations  name
