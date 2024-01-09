@@ -8,14 +8,9 @@
 # by the Apache License, Version 2.0.
 
 > CREATE SCHEMA prod_deploy
-> CREATE SOURCE prod_deploy.counter IN CLUSTER prod_deploy FROM LOAD GENERATOR counter (TICK INTERVAL '0.01s')
-> CREATE MATERIALIZED VIEW prod_deploy.counter_mv IN CLUSTER prod_deploy AS SELECT count(*), 'some new value' FROM prod_deploy.counter
-> CREATE DEFAULT INDEX IN CLUSTER prod_deploy ON prod_deploy.counter
+> CREATE MATERIALIZED VIEW prod_deploy.counter_mv IN CLUSTER prod_deploy AS SELECT count(*), 'some new value' FROM counter
+> CREATE DEFAULT INDEX IN CLUSTER prod_deploy ON counter
 > CREATE DEFAULT INDEX IN CLUSTER prod_deploy ON prod_deploy.counter_mv
-> CREATE SOURCE prod_deploy.tpch
-  IN CLUSTER prod_deploy
-  FROM LOAD GENERATOR TPCH (SCALE FACTOR 1)
-  FOR ALL TABLES
 > CREATE MATERIALIZED VIEW prod_deploy.tpch_mv
   IN CLUSTER prod_deploy AS
   SELECT
@@ -31,7 +26,7 @@
     count(*) AS count_order,
     'new' as state
   FROM
-    prod_deploy.lineitem
+    lineitem
   WHERE
     l_shipdate <= date '1998-12-01' - interval '100' day
   GROUP BY

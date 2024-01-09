@@ -3007,7 +3007,7 @@ def workflow_blue_green_deployment(
                     total_runtime = 0
                     queries = [
                         "SELECT * FROM prod.counter_mv",
-                        "SELECT max(counter) FROM prod.counter",
+                        "SET CLUSTER = prod; SELECT max(counter) FROM counter",
                         "SELECT count(*) FROM prod.tpch_mv",
                     ]
 
@@ -3023,7 +3023,7 @@ def workflow_blue_green_deployment(
                         assert int(cursor.fetchone()[0]) > 0
                         runtime = time.time() - start_time
                         assert (
-                            runtime < 15
+                            runtime < 5
                         ), f"query: {query}, runtime spiked to {runtime}"
                         total_runtime += runtime
                     runtimes.append(total_runtime)
