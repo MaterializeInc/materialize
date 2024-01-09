@@ -2145,9 +2145,9 @@ impl Coordinator {
             mut optimizer,
         }: PeekStageOptimize,
     ) -> Result<PeekStageRealTimeRecency, AdapterError> {
-        let local_mir_plan = optimizer.optimize(source)?;
+        let local_mir_plan = optimizer.catch_unwind_optimize(source)?;
         let local_mir_plan = local_mir_plan.resolve(session, stats);
-        let global_mir_plan = optimizer.optimize(local_mir_plan)?;
+        let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
 
         Ok(PeekStageRealTimeRecency {
             validity,
@@ -2500,7 +2500,7 @@ impl Coordinator {
         let timestamp_context = determination.clone().timestamp_context;
 
         let global_mir_plan = global_mir_plan.resolve(timestamp_context, session);
-        let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+        let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
 
         let key = global_lir_plan.key();
         let arity = global_lir_plan.typ().arity();
