@@ -392,7 +392,9 @@ impl ShouldHalt for SubscribeTargetError {
 impl ShouldHalt for TransformError {
     fn should_halt(&self) -> bool {
         match self {
-            TransformError::Internal(_) | TransformError::IdentifierMissing(_) => false,
+            TransformError::Internal(_)
+            | TransformError::IdentifierMissing(_)
+            | TransformError::CallerShouldPanic(_) => false,
         }
     }
 }
