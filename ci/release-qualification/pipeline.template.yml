@@ -36,7 +36,7 @@ steps:
     # 48h
     timeout_in_minutes: 2880
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-large
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -48,7 +48,7 @@ steps:
     # 48h
     timeout_in_minutes: 2880
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-large
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -59,7 +59,7 @@ steps:
     label: "Large Zippy PogresCdc"
     timeout_in_minutes: 2880
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-large
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -70,7 +70,7 @@ steps:
     label: "Longer Zippy ClusterReplicas"
     timeout_in_minutes: 2880
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-large
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -82,7 +82,7 @@ steps:
     label: "Large Zippy w/ user tables"
     timeout_in_minutes: 2880
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-large
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
@@ -116,7 +116,7 @@ steps:
     label: "Longer Zippy Kafka Parallel Insert"
     timeout_in_minutes: 2880
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-large
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
