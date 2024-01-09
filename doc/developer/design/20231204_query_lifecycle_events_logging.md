@@ -78,13 +78,13 @@ occurred_at timestamp with time zone NOT NULL)`.
 
 The `event_type` can be one of the following:
 
-| type                            | description                                                                                                              |
-|---------------------------------|--------------------------------------------------------------------------------------------------------------------------|
-| `execution-began`               | Corresponds to today's `mz_statement_execution_history.began_at`                                                         |
-| `storage-dependencies-finished` | When all transitive source dependencies advanced to the timestamp. If there are none, same as `execution_began`          |
-| `compute-dependencies-finished` | When all compute dependencies (MVs and Indexes) advanced to the timestamp. If there are none, same as `execution_began`. |
-| `execution-finished`            | Corresponds to today's `mz_statement_execution_history.finished_at`                                                      |
-| `last-row-returned`             | The time at which all rows were sent and we were ready to receive new statements from its session.                       |
+| type                         | description                                                                                                              |
+|------------------------------|--------------------------------------------------------------------------------------------------------------------------|
+| `execution-began`            | Corresponds to today's `mz_statement_execution_history.began_at`                                                         |
+| `storage-dependencies-ready` | When all transitive source dependencies advanced to the timestamp. If there are none, same as `execution_began`          |
+| `compute-dependencies-ready` | When all compute dependencies (MVs and Indexes) advanced to the timestamp. If there are none, same as `execution_began`. |
+| `execution-finished`         | Corresponds to today's `mz_statement_execution_history.finished_at`                                                      |
+| `last-row-returned`          | The time at which all rows were sent and we were ready to receive new statements from its session.                       |
 
 When each event is generated, the coordinator will insert it into a
 buffer which is periodically dumped to storage, similarly to the
@@ -100,7 +100,7 @@ the pieces of data.
 
 We already collect this.
 
-### `storage-dependencies-finished` / `compute-dependencies-finished`
+### `storage-dependencies-ready` / `compute-dependencies-ready`
 
 Introduce a mechanism for the sub-controllers (Storage and Compute
 controllers) to return all frontier updates to the overall
