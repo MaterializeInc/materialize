@@ -634,6 +634,7 @@ mod tests {
     use mz_repr::{GlobalId, RelationDesc, ScalarType, Timestamp};
     use mz_storage_client::util::remap_handle::RemapHandle;
     use mz_storage_types::controller::CollectionMetadata;
+    use mz_storage_types::sources::kafka::RangeBound;
     use mz_storage_types::sources::{MzOffset, SourceData};
     use mz_timely_util::order::Partitioned;
     use once_cell::sync::Lazy;
@@ -673,12 +674,12 @@ mod tests {
         as_of: Antichain<Timestamp>,
     ) -> (
         ReclockOperator<
-            Partitioned<i32, MzOffset>,
+            Partitioned<RangeBound<i32>, MzOffset>,
             Timestamp,
-            impl RemapHandle<FromTime = Partitioned<i32, MzOffset>, IntoTime = Timestamp>,
+            impl RemapHandle<FromTime = Partitioned<RangeBound<i32>, MzOffset>, IntoTime = Timestamp>,
             impl Stream<Item = (Timestamp, Antichain<Timestamp>)>,
         >,
-        ReclockFollower<Partitioned<i32, MzOffset>, Timestamp>,
+        ReclockFollower<Partitioned<RangeBound<i32>, MzOffset>, Timestamp>,
     ) {
         let metadata = CollectionMetadata {
             persist_location: PersistLocation {
@@ -735,22 +736,29 @@ mod tests {
         (operator, follower)
     }
 
-    /// Generates a `Partitioned<i32, MzOffset>` antichain where all the provided
+    /// Generates a `Partitioned<RangeBound<i32>, MzOffset>` antichain where all the provided
     /// partitions are at the specified offset and the gaps in between are filled with range
     /// timestamps at offset zero.
-    fn partitioned_frontier<I>(items: I) -> Antichain<Partitioned<i32, MzOffset>>
+    fn partitioned_frontier<I>(items: I) -> Antichain<Partitioned<RangeBound<i32>, MzOffset>>
     where
         I: IntoIterator<Item = (i32, MzOffset)>,
     {
         let mut frontier = Antichain::new();
-        let mut prev = None;
+        let mut prev = RangeBound::NegInfinity;
         for (pid, offset) in items {
-            assert!(prev.as_ref() < Some(&pid));
-            let gap = Partitioned::with_range(prev.clone(), Some(pid.clone()), MzOffset::from(0));
-            frontier.extend([gap, Partitioned::with_partition(pid.clone(), offset)]);
-            prev = Some(pid);
+            assert!(prev < RangeBound::before(pid));
+            let gap = Partitioned::new_range(prev, RangeBound::before(pid), MzOffset::from(0));
+            frontier.extend([
+                gap,
+                Partitioned::new_singleton(RangeBound::exact(pid), offset),
+            ]);
+            prev = RangeBound::after(pid);
         }
-        frontier.insert(Partitioned::with_range(prev, None, MzOffset::from(0)));
+        frontier.insert(Partitioned::new_range(
+            prev,
+            RangeBound::PosInfinity,
+            MzOffset::from(0),
+        ));
         frontier
     }
 
@@ -762,9 +770,18 @@ mod tests {
 
         // Reclock offsets 1 and 3 to timestamp 1000
         let batch = vec![
-            (1, Partitioned::with_partition(0, MzOffset::from(1))),
-            (1, Partitioned::with_partition(0, MzOffset::from(1))),
-            (3, Partitioned::with_partition(0, MzOffset::from(3))),
+            (
+                1,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(1)),
+            ),
+            (
+                1,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(1)),
+            ),
+            (
+                3,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(3)),
+            ),
         ];
         let source_upper = partitioned_frontier([(0, MzOffset::from(4))]);
         follower.push_trace_batch(operator.mint(source_upper.borrow()).await);
@@ -788,8 +805,14 @@ mod tests {
 
         // Reclock more messages for offsets 3 to the same timestamp
         let batch = vec![
-            (3, Partitioned::with_partition(0, MzOffset::from(3))),
-            (3, Partitioned::with_partition(0, MzOffset::from(3))),
+            (
+                3,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(3)),
+            ),
+            (
+                3,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(3)),
+            ),
         ];
         let reclocked_msgs = follower
             .reclock(batch)
@@ -865,49 +888,77 @@ mod tests {
             BTreeSet::from_iter([
                 // Initial state
                 (
-                    Partitioned::with_range(None, None, MzOffset::from(0)),
+                    Partitioned::new_range(
+                        RangeBound::NegInfinity,
+                        RangeBound::PosInfinity,
+                        MzOffset::from(0)
+                    ),
                     0.into(),
                     1
                 ),
                 // updates from first mint
                 (
-                    Partitioned::with_range(None, Some(1), MzOffset::from(0)),
+                    Partitioned::new_range(
+                        RangeBound::NegInfinity,
+                        RangeBound::before(1),
+                        MzOffset::from(0)
+                    ),
                     1000.into(),
                     1
                 ),
                 (
-                    Partitioned::with_range(None, None, MzOffset::from(0)),
+                    Partitioned::new_range(
+                        RangeBound::NegInfinity,
+                        RangeBound::PosInfinity,
+                        MzOffset::from(0)
+                    ),
                     1000.into(),
                     -1
                 ),
                 (
-                    Partitioned::with_range(Some(1), None, MzOffset::from(0)),
+                    Partitioned::new_range(
+                        RangeBound::after(1),
+                        RangeBound::PosInfinity,
+                        MzOffset::from(0)
+                    ),
                     1000.into(),
                     1
                 ),
                 (
-                    Partitioned::with_partition(1, MzOffset::from(10)),
+                    Partitioned::new_singleton(RangeBound::exact(1), MzOffset::from(10)),
                     1000.into(),
                     1
                 ),
                 // updates from second mint
                 (
-                    Partitioned::with_range(Some(1), Some(2), MzOffset::from(0)),
+                    Partitioned::new_range(
+                        RangeBound::after(1),
+                        RangeBound::before(2),
+                        MzOffset::from(0)
+                    ),
                     2000.into(),
                     1
                 ),
                 (
-                    Partitioned::with_range(Some(1), None, MzOffset::from(0)),
+                    Partitioned::new_range(
+                        RangeBound::after(1),
+                        RangeBound::PosInfinity,
+                        MzOffset::from(0)
+                    ),
                     2000.into(),
                     -1
                 ),
                 (
-                    Partitioned::with_range(Some(2), None, MzOffset::from(0)),
+                    Partitioned::new_range(
+                        RangeBound::after(2),
+                        RangeBound::PosInfinity,
+                        MzOffset::from(0)
+                    ),
                     2000.into(),
                     1
                 ),
                 (
-                    Partitioned::with_partition(2, MzOffset::from(10)),
+                    Partitioned::new_singleton(RangeBound::exact(2), MzOffset::from(10)),
                     2000.into(),
                     1
                 ),
@@ -985,8 +1036,14 @@ mod tests {
 
         // Reclock offsets 1 and 2 to timestamp 1000
         let batch = vec![
-            (1, Partitioned::with_partition(0, MzOffset::from(1))),
-            (2, Partitioned::with_partition(0, MzOffset::from(2))),
+            (
+                1,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(1)),
+            ),
+            (
+                2,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(2)),
+            ),
         ];
         let source_upper = partitioned_frontier([(0, MzOffset::from(3))]);
 
@@ -999,8 +1056,14 @@ mod tests {
 
         // Reclock offsets 3 and 4 to timestamp 2000
         let batch = vec![
-            (3, Partitioned::with_partition(0, MzOffset::from(3))),
-            (4, Partitioned::with_partition(0, MzOffset::from(4))),
+            (
+                3,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(3)),
+            ),
+            (
+                4,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(4)),
+            ),
         ];
         let source_upper = partitioned_frontier([(0, MzOffset::from(5))]);
 
@@ -1013,8 +1076,14 @@ mod tests {
 
         // Reclock the same offsets again
         let batch = vec![
-            (1, Partitioned::with_partition(0, MzOffset::from(1))),
-            (2, Partitioned::with_partition(0, MzOffset::from(2))),
+            (
+                1,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(1)),
+            ),
+            (
+                2,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(2)),
+            ),
         ];
 
         let reclocked_msgs = follower
@@ -1025,10 +1094,22 @@ mod tests {
 
         // Reclock a batch with offsets that spans multiple bindings
         let batch = vec![
-            (1, Partitioned::with_partition(0, MzOffset::from(1))),
-            (2, Partitioned::with_partition(0, MzOffset::from(2))),
-            (3, Partitioned::with_partition(0, MzOffset::from(3))),
-            (4, Partitioned::with_partition(0, MzOffset::from(4))),
+            (
+                1,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(1)),
+            ),
+            (
+                2,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(2)),
+            ),
+            (
+                3,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(3)),
+            ),
+            (
+                4,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(4)),
+            ),
         ];
         let reclocked_msgs = follower
             .reclock(batch)
@@ -1046,10 +1127,22 @@ mod tests {
 
         // Reclock a batch that contains multiple messages having the same offset
         let batch = vec![
-            (1, Partitioned::with_partition(0, MzOffset::from(1))),
-            (1, Partitioned::with_partition(0, MzOffset::from(1))),
-            (3, Partitioned::with_partition(0, MzOffset::from(3))),
-            (3, Partitioned::with_partition(0, MzOffset::from(3))),
+            (
+                1,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(1)),
+            ),
+            (
+                1,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(1)),
+            ),
+            (
+                3,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(3)),
+            ),
+            (
+                3,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(3)),
+            ),
         ];
         let reclocked_msgs = follower
             .reclock(batch)
@@ -1087,7 +1180,10 @@ mod tests {
 
         // Reclockng (0, 50) must ignore the updates on the FromTime frontier that happened at
         // timestamp 2000 since those are completely unrelated
-        let batch = vec![(50, Partitioned::with_partition(0, MzOffset::from(50)))];
+        let batch = vec![(
+            50,
+            Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(50)),
+        )];
         let reclocked_msgs = follower
             .reclock(batch)
             .map(|(m, ts)| (m, ts.unwrap()))
@@ -1125,8 +1221,14 @@ mod tests {
 
         // Reclock offsets 1 and 2 to timestamp 1000
         let batch = vec![
-            (1, Partitioned::with_partition(0, MzOffset::from(1))),
-            (2, Partitioned::with_partition(0, MzOffset::from(2))),
+            (
+                1,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(1)),
+            ),
+            (
+                2,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(2)),
+            ),
         ];
         let source_upper = partitioned_frontier([(0, MzOffset::from(3))]);
 
@@ -1139,8 +1241,14 @@ mod tests {
 
         // Reclock offsets 3 and 4 to timestamp 2000
         let batch = vec![
-            (3, Partitioned::with_partition(0, MzOffset::from(3))),
-            (4, Partitioned::with_partition(0, MzOffset::from(4))),
+            (
+                3,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(3)),
+            ),
+            (
+                4,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(4)),
+            ),
         ];
         let source_upper = partitioned_frontier([(0, MzOffset::from(5))]);
 
@@ -1159,8 +1267,14 @@ mod tests {
 
         // Reclock offsets 3 and 4 again to see we get the uncompacted result
         let batch = vec![
-            (3, Partitioned::with_partition(0, MzOffset::from(3))),
-            (4, Partitioned::with_partition(0, MzOffset::from(4))),
+            (
+                3,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(3)),
+            ),
+            (
+                4,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(4)),
+            ),
         ];
 
         let reclocked_msgs = follower
@@ -1170,7 +1284,7 @@ mod tests {
         assert_eq!(reclocked_msgs, &[(3, 2000.into()), (4, 2000.into())]);
 
         // Attempting to reclock offset 2 should return compacted bindings
-        let src_ts = Partitioned::with_partition(0, MzOffset::from(2));
+        let src_ts = Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(2));
         let batch = vec![(2, src_ts.clone())];
 
         let reclocked_msgs = follower
@@ -1185,8 +1299,14 @@ mod tests {
 
         // Reclocking offsets 3 and 4 should succeed
         let batch = vec![
-            (3, Partitioned::with_partition(0, MzOffset::from(3))),
-            (4, Partitioned::with_partition(0, MzOffset::from(4))),
+            (
+                3,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(3)),
+            ),
+            (
+                4,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(4)),
+            ),
         ];
 
         let reclocked_msgs = follower
@@ -1196,7 +1316,10 @@ mod tests {
         assert_eq!(reclocked_msgs, &[(3, 2000.into()), (4, 2000.into())]);
 
         // But attempting to reclock offset 2 should return an error
-        let batch = vec![(2, Partitioned::with_partition(0, MzOffset::from(2)))];
+        let batch = vec![(
+            2,
+            Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(2)),
+        )];
 
         let reclocked_msgs = follower
             .reclock(batch)
@@ -1260,7 +1383,10 @@ mod tests {
         drop(shared_follower);
 
         // Verify that we reclock partition 0 offset 0 correctly
-        let batch = vec![(0, Partitioned::with_partition(0, MzOffset::from(0)))];
+        let batch = vec![(
+            0,
+            Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(0)),
+        )];
         let reclocked_msgs = follower
             .reclock(batch)
             .map(|(m, ts)| (m, ts.unwrap()))
@@ -1281,8 +1407,14 @@ mod tests {
         // Reclock a batch from one of the operators
         // Reclock offsets 1 and 2 to timestamp 1000 from operator A
         let batch = vec![
-            (1, Partitioned::with_partition(0, MzOffset::from(1))),
-            (2, Partitioned::with_partition(0, MzOffset::from(2))),
+            (
+                1,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(1)),
+            ),
+            (
+                2,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(2)),
+            ),
         ];
         let source_upper = partitioned_frontier([(0, MzOffset::from(3))]);
 
@@ -1300,10 +1432,22 @@ mod tests {
 
         // Reclock a batch that includes messages from the bindings already minted
         let batch = vec![
-            (1, Partitioned::with_partition(0, MzOffset::from(1))),
-            (2, Partitioned::with_partition(0, MzOffset::from(2))),
-            (3, Partitioned::with_partition(0, MzOffset::from(3))),
-            (4, Partitioned::with_partition(0, MzOffset::from(4))),
+            (
+                1,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(1)),
+            ),
+            (
+                2,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(2)),
+            ),
+            (
+                3,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(3)),
+            ),
+            (
+                4,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(4)),
+            ),
         ];
         let source_upper = partitioned_frontier([(0, MzOffset::from(5))]);
         // This operator should attempt to mint in one go, fail, re-sync, and retry only for the
@@ -1355,8 +1499,14 @@ mod tests {
         // SETUP
         // Reclock offsets 1 and 2 to timestamp 1000
         let batch = vec![
-            (1, Partitioned::with_partition(0, MzOffset::from(1))),
-            (2, Partitioned::with_partition(0, MzOffset::from(2))),
+            (
+                1,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(1)),
+            ),
+            (
+                2,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(2)),
+            ),
         ];
         let source_upper = partitioned_frontier([(0, MzOffset::from(3))]);
 
@@ -1368,8 +1518,14 @@ mod tests {
         assert_eq!(reclocked_msgs, &[(1, 1000.into()), (2, 1000.into())]);
         // Reclock offsets 3 and 4 to timestamp 2000
         let batch = vec![
-            (3, Partitioned::with_partition(0, MzOffset::from(3))),
-            (4, Partitioned::with_partition(0, MzOffset::from(4))),
+            (
+                3,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(3)),
+            ),
+            (
+                4,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(4)),
+            ),
         ];
         let source_upper = partitioned_frontier([(0, MzOffset::from(5))]);
 
@@ -1381,8 +1537,14 @@ mod tests {
         assert_eq!(reclocked_msgs, &[(3, 2000.into()), (4, 2000.into())]);
         // Reclock offsets 5 and 6 to timestamp 3000
         let batch = vec![
-            (5, Partitioned::with_partition(0, MzOffset::from(5))),
-            (6, Partitioned::with_partition(0, MzOffset::from(6))),
+            (
+                5,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(5)),
+            ),
+            (
+                6,
+                Partitioned::new_singleton(RangeBound::exact(0), MzOffset::from(6)),
+            ),
         ];
         let source_upper = partitioned_frontier([(0, MzOffset::from(7))]);
 

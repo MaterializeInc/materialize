@@ -1738,6 +1738,13 @@ mod cluster_scheduling {
         description: "The preference weight for `cluster_soften_az_affinity` (Materialize).",
         internal: true,
     };
+
+    pub const CLUSTER_ALWAYS_USE_DISK: ServerVar<bool> = ServerVar {
+        name: UncasedStr::new("cluster_always_use_disk"),
+        value: DEFAULT_ALWAYS_USE_DISK,
+        description: "Always provisions a replica with disk, regardless of `DISK` DDL option.",
+        internal: true,
+    };
 }
 
 /// Macro to simplify creating feature flags, i.e. boolean flags that we use to toggle the
@@ -2235,6 +2242,20 @@ feature_flags!(
     {
         name: enable_reduce_mfp_fusion,
         desc: "fusion of MFPs in reductions",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_worker_core_affinity,
+        desc: "set core affinity for replica worker threads",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: wait_catalog_consolidation_on_startup,
+        desc: "When opening the Catalog, wait for consolidation to complete before returning",
         default: false,
         internal: true,
         enable_for_item_parsing: false,
@@ -3022,6 +3043,7 @@ impl SystemVars {
             .with_var(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT)
             .with_var(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY)
             .with_var(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT)
+            .with_var(&cluster_scheduling::CLUSTER_ALWAYS_USE_DISK)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
             .with_value_constrained_var(
                 &STATEMENT_LOGGING_MAX_SAMPLE_RATE,
@@ -3867,6 +3889,10 @@ impl SystemVars {
 
     pub fn cluster_soften_az_affinity_weight(&self) -> i32 {
         *self.expect_value(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT)
+    }
+
+    pub fn cluster_always_use_disk(&self) -> bool {
+        *self.expect_value(&cluster_scheduling::CLUSTER_ALWAYS_USE_DISK)
     }
 
     /// Returns the `privatelink_status_update_quota_per_minute` configuration parameter.
@@ -5599,6 +5625,7 @@ pub fn is_cluster_scheduling_var(name: &str) -> bool {
         || name == cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT.name()
         || name == cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY.name()
         || name == cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT.name()
+        || name == cluster_scheduling::CLUSTER_ALWAYS_USE_DISK.name()
 }
 
 /// Returns whether the named variable is an HTTP server related config var.

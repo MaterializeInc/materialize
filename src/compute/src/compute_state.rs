@@ -375,7 +375,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         // Log the receipt of the peek.
         if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-            logger.log(ComputeEvent::Peek(pending.as_log_event(), true));
+            logger.log(pending.as_log_event(true));
         }
 
         self.process_peek(&mut Antichain::new(), pending);
@@ -578,7 +578,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     /// meant to prevent multiple responses to the same peek.
     #[tracing::instrument(level = "debug", skip(self, peek))]
     fn send_peek_response(&mut self, peek: PendingPeek, response: PeekResponse) {
-        let log_event = peek.as_log_event();
+        let log_event = peek.as_log_event(false);
         // Respond with the response.
         self.send_compute_response(ComputeResponse::PeekResponse(
             peek.peek().uuid,
@@ -588,7 +588,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         // Log responding to the peek request.
         if let Some(logger) = self.compute_state.compute_logger.as_mut() {
-            logger.log(ComputeEvent::Peek(log_event, false));
+            logger.log(log_event);
         }
     }
 
@@ -671,9 +671,17 @@ pub enum PendingPeek {
 
 impl PendingPeek {
     /// Produces a corresponding log event.
-    pub fn as_log_event(&self) -> logging::compute::Peek {
+    pub fn as_log_event(&self, installed: bool) -> ComputeEvent {
         let peek = self.peek();
-        logging::compute::Peek::new(peek.target.id(), peek.timestamp, peek.uuid)
+        let peek_type = match self {
+            PendingPeek::Index(_) => logging::compute::PeekType::Index,
+            PendingPeek::Persist(_) => logging::compute::PeekType::Persist,
+        };
+        ComputeEvent::Peek {
+            peek: logging::compute::Peek::new(peek.target.id(), peek.timestamp, peek.uuid),
+            peek_type,
+            installed,
+        }
     }
 
     fn index(peek: Peek, mut trace_bundle: TraceBundle) -> Self {

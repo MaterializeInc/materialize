@@ -22,7 +22,7 @@ use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::Timestamp;
 
 use crate::logging::compute::ComputeEvent;
-use crate::typedefs::{KeyAgent, KeyValAgent};
+use crate::typedefs::{KeyAgent, KeyValAgent, RowAgent, RowRowAgent, RowValAgent};
 
 /// Extension trait to arrange data.
 pub trait MzArrange
@@ -226,13 +226,13 @@ pub trait ArrangementSize {
 
 /// Helper to compute the size of an [`OffsetList`] in memory.
 #[inline]
-fn offset_list_size(data: &OffsetList, mut callback: impl FnMut(usize, usize)) {
+pub(crate) fn offset_list_size(data: &OffsetList, mut callback: impl FnMut(usize, usize)) {
     // Private `vec_size` because we should only use it where data isn't region-allocated.
     // `T: Copy` makes sure the implementation is correct even if types change!
     #[inline(always)]
     fn vec_size<T: Copy>(data: &Vec<T>, mut callback: impl FnMut(usize, usize)) {
         let size_of_t = std::mem::size_of::<T>();
-        callback(data.len() * size_of_t, data.len() * size_of_t);
+        callback(data.len() * size_of_t, data.capacity() * size_of_t);
     }
 
     vec_size(&data.smol, &mut callback);
@@ -354,6 +354,86 @@ where
     G::Timestamp: Lattice + Ord,
     K: Data + Columnation,
     T: Lattice + Timestamp + Columnation,
+    R: Semigroup + Columnation,
+{
+    fn log_arrangement_size(self) -> Self {
+        log_arrangement_size_inner(self, |trace| {
+            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
+            let mut callback = |siz, cap| {
+                size += siz;
+                capacity += cap;
+                allocations += usize::from(cap > 0);
+            };
+            trace.map_batches(|batch| {
+                batch.storage.keys.heap_size(&mut callback);
+                offset_list_size(&batch.storage.keys_offs, &mut callback);
+                batch.storage.updates.heap_size(&mut callback);
+            });
+            (size, capacity, allocations)
+        })
+    }
+}
+
+impl<G, V, T, R> ArrangementSize for Arranged<G, RowValAgent<V, T, R>>
+where
+    G: Scope<Timestamp = T>,
+    G::Timestamp: Lattice + Ord + Columnation,
+    V: Data + Columnation,
+    T: Lattice + Timestamp,
+    R: Semigroup + Columnation,
+{
+    fn log_arrangement_size(self) -> Self {
+        log_arrangement_size_inner(self, |trace| {
+            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
+            let mut callback = |siz, cap| {
+                size += siz;
+                capacity += cap;
+                allocations += usize::from(cap > 0);
+            };
+            trace.map_batches(|batch| {
+                batch.storage.keys.heap_size(&mut callback);
+                offset_list_size(&batch.storage.keys_offs, &mut callback);
+                batch.storage.vals.heap_size(&mut callback);
+                offset_list_size(&batch.storage.vals_offs, &mut callback);
+                batch.storage.updates.heap_size(&mut callback);
+            });
+            (size, capacity, allocations)
+        })
+    }
+}
+
+impl<G, T, R> ArrangementSize for Arranged<G, RowRowAgent<T, R>>
+where
+    G: Scope<Timestamp = T>,
+    G::Timestamp: Lattice + Ord + Columnation,
+    T: Lattice + Timestamp,
+    R: Semigroup + Columnation,
+{
+    fn log_arrangement_size(self) -> Self {
+        log_arrangement_size_inner(self, |trace| {
+            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
+            let mut callback = |siz, cap| {
+                size += siz;
+                capacity += cap;
+                allocations += usize::from(cap > 0);
+            };
+            trace.map_batches(|batch| {
+                batch.storage.keys.heap_size(&mut callback);
+                offset_list_size(&batch.storage.keys_offs, &mut callback);
+                batch.storage.vals.heap_size(&mut callback);
+                offset_list_size(&batch.storage.vals_offs, &mut callback);
+                batch.storage.updates.heap_size(&mut callback);
+            });
+            (size, capacity, allocations)
+        })
+    }
+}
+
+impl<G, T, R> ArrangementSize for Arranged<G, RowAgent<T, R>>
+where
+    G: Scope<Timestamp = T>,
+    G::Timestamp: Lattice + Ord + Columnation,
+    T: Lattice + Timestamp,
     R: Semigroup + Columnation,
 {
     fn log_arrangement_size(self) -> Self {

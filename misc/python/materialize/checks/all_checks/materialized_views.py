@@ -181,3 +181,116 @@ class MaterializedViewsAssertNotNull(Check):
            """
             )
         )
+
+
+class MaterializedViewsRefresh(Check):
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version >= MzVersion.parse_mz("v0.82.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > CREATE TABLE refresh_table (x INT);
+                > INSERT INTO refresh_table VALUES (1);
+                > CREATE MATERIALIZED VIEW refresh_view_2s_1 WITH (REFRESH EVERY '2 seconds') AS SELECT DISTINCT(x) FROM refresh_table;
+                > CREATE MATERIALIZED VIEW refresh_view_at_1 WITH (REFRESH AT mz_now()::string::int8) AS SELECT DISTINCT(x) FROM refresh_table;
+                > CREATE MATERIALIZED VIEW refresh_view_late_1 WITH (REFRESH AT mz_now()::string::int8 + 86400000) AS SELECT DISTINCT(x) FROM refresh_table;
+            """
+            )
+        )
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                > INSERT INTO refresh_table VALUES (2);
+                > CREATE MATERIALIZED VIEW refresh_view_2s_2 WITH (REFRESH EVERY '2 seconds') AS SELECT DISTINCT(x) FROM refresh_table;
+                > CREATE MATERIALIZED VIEW refresh_view_at_2 WITH (REFRESH AT mz_now()::string::int8) AS SELECT DISTINCT(x) FROM refresh_table;
+                > CREATE MATERIALIZED VIEW refresh_view_late_2 WITH (REFRESH AT mz_now()::string::int8 + 86400000) AS SELECT DISTINCT(x) FROM refresh_table;
+                """,
+                """
+                > INSERT INTO refresh_table VALUES (3);
+                > CREATE MATERIALIZED VIEW refresh_view_2s_3 WITH (REFRESH EVERY '2 seconds') AS SELECT DISTINCT(x) FROM refresh_table;
+                > CREATE MATERIALIZED VIEW refresh_view_at_3 WITH (REFRESH AT mz_now()::string::int8) AS SELECT DISTINCT(x) FROM refresh_table;
+                > CREATE MATERIALIZED VIEW refresh_view_late_3 WITH (REFRESH AT mz_now()::string::int8 + 86400000) AS SELECT DISTINCT(x) FROM refresh_table;
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > INSERT INTO refresh_table VALUES (4);
+
+                > SELECT * FROM refresh_view_2s_1
+                1
+                2
+                3
+                4
+
+                > SELECT * FROM refresh_view_2s_2
+                1
+                2
+                3
+                4
+
+                > SELECT * FROM refresh_view_2s_3
+                1
+                2
+                3
+                4
+
+                > SELECT * FROM refresh_view_at_1
+                1
+
+                > SELECT * FROM refresh_view_at_2
+                1
+                2
+
+                > SELECT * FROM refresh_view_at_3
+                1
+                2
+                3
+
+                $ set-regex match=\\d{13} replacement=<TIMESTAMP>
+
+                > SHOW CREATE MATERIALIZED VIEW refresh_view_2s_1
+                "materialize.public.refresh_view_2s_1" "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"refresh_view_2s_1\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = EVERY '2 seconds' ALIGNED TO <TIMESTAMP>::\\"mz_catalog\\".\\"mz_timestamp\\") AS SELECT DISTINCT (\\"x\\") FROM \\"materialize\\".\\"public\\".\\"refresh_table\\""
+
+                > SHOW CREATE MATERIALIZED VIEW refresh_view_2s_2
+                "materialize.public.refresh_view_2s_2" "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"refresh_view_2s_2\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = EVERY '2 seconds' ALIGNED TO <TIMESTAMP>::\\"mz_catalog\\".\\"mz_timestamp\\") AS SELECT DISTINCT (\\"x\\") FROM \\"materialize\\".\\"public\\".\\"refresh_table\\""
+
+                > SHOW CREATE MATERIALIZED VIEW refresh_view_2s_3
+                "materialize.public.refresh_view_2s_3" "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"refresh_view_2s_3\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = EVERY '2 seconds' ALIGNED TO <TIMESTAMP>::\\"mz_catalog\\".\\"mz_timestamp\\") AS SELECT DISTINCT (\\"x\\") FROM \\"materialize\\".\\"public\\".\\"refresh_table\\""
+
+                > SHOW CREATE MATERIALIZED VIEW refresh_view_at_1
+                "materialize.public.refresh_view_at_1" "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"refresh_view_at_1\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = AT <TIMESTAMP>::\\"mz_catalog\\".\\"mz_timestamp\\"::\\"pg_catalog\\".\\"text\\"::\\"pg_catalog\\".\\"int8\\") AS SELECT DISTINCT (\\"x\\") FROM \\"materialize\\".\\"public\\".\\"refresh_table\\""
+
+                > SHOW CREATE MATERIALIZED VIEW refresh_view_at_2
+                "materialize.public.refresh_view_at_2" "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"refresh_view_at_2\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = AT <TIMESTAMP>::\\"mz_catalog\\".\\"mz_timestamp\\"::\\"pg_catalog\\".\\"text\\"::\\"pg_catalog\\".\\"int8\\") AS SELECT DISTINCT (\\"x\\") FROM \\"materialize\\".\\"public\\".\\"refresh_table\\""
+
+                > SHOW CREATE MATERIALIZED VIEW refresh_view_at_3
+                "materialize.public.refresh_view_at_3" "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"refresh_view_at_3\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = AT <TIMESTAMP>::\\"mz_catalog\\".\\"mz_timestamp\\"::\\"pg_catalog\\".\\"text\\"::\\"pg_catalog\\".\\"int8\\") AS SELECT DISTINCT (\\"x\\") FROM \\"materialize\\".\\"public\\".\\"refresh_table\\""
+
+                > SHOW CREATE MATERIALIZED VIEW refresh_view_late_1
+                "materialize.public.refresh_view_late_1" "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"refresh_view_late_1\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = AT <TIMESTAMP>::\\"mz_catalog\\".\\"mz_timestamp\\"::\\"pg_catalog\\".\\"text\\"::\\"pg_catalog\\".\\"int8\\" + 86400000) AS SELECT DISTINCT (\\"x\\") FROM \\"materialize\\".\\"public\\".\\"refresh_table\\""
+
+                > SHOW CREATE MATERIALIZED VIEW refresh_view_late_2
+                "materialize.public.refresh_view_late_2" "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"refresh_view_late_2\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = AT <TIMESTAMP>::\\"mz_catalog\\".\\"mz_timestamp\\"::\\"pg_catalog\\".\\"text\\"::\\"pg_catalog\\".\\"int8\\" + 86400000) AS SELECT DISTINCT (\\"x\\") FROM \\"materialize\\".\\"public\\".\\"refresh_table\\""
+
+                > SHOW CREATE MATERIALIZED VIEW refresh_view_late_3
+                "materialize.public.refresh_view_late_3" "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"refresh_view_late_3\\" IN CLUSTER \\"quickstart\\" WITH (REFRESH = AT <TIMESTAMP>::\\"mz_catalog\\".\\"mz_timestamp\\"::\\"pg_catalog\\".\\"text\\"::\\"pg_catalog\\".\\"int8\\" + 86400000) AS SELECT DISTINCT (\\"x\\") FROM \\"materialize\\".\\"public\\".\\"refresh_table\\""
+
+                $ set-regex match=(s\\d+|\\d{13}|u\\d{1,3}|\\(\\d+-\\d\\d-\\d\\d\\s\\d\\d:\\d\\d:\\d\\d\\.\\d\\d\\d\\)) replacement=<>
+
+                # TODO(def-) Enable  when #24244 is fixed
+                #> EXPLAIN TIMESTAMP FOR SELECT * FROM refresh_view_late_1
+                #> EXPLAIN TIMESTAMP FOR SELECT * FROM refresh_view_late_2
+                #> EXPLAIN TIMESTAMP FOR SELECT * FROM refresh_view_late_3
+
+           """
+            )
+        )

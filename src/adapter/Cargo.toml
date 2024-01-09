@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = "1.0.66"
 async-trait = "0.1.68"
@@ -65,6 +68,7 @@ mz-storage-types = { path = "../storage-types" }
 mz-tls-util = { path = "../tls-util" }
 mz-tracing = { path = "../tracing" }
 mz-transform = { path = "../transform" }
+mz-timestamp-oracle = { path = "../timestamp-oracle" }
 opentelemetry = { version = "0.20.0", features = ["rt-tokio", "trace"] }
 prometheus = { version = "0.13.3", default-features = false }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }

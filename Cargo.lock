@@ -1348,6 +1348,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5827cebf4670468b8772dd191856768aedcb1b0278a04f989f7766351917b9dc"
 
 [[package]]
+name = "core_affinity"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4436406e93f52cce33bfba4be067a9f7229da44a634c385e4b22cdfaca5f84cc"
+dependencies = [
+ "libc",
+ "num_cpus",
+ "winapi",
+]
+
+[[package]]
 name = "cpp_demangle"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1762,7 +1773,7 @@ checksum = "0e25ea47919b1560c4e3b7fe0aaab9becf5b84a10325ddf7db0f0ba5e1026499"
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#7596c843c745ef13ec7ea638be5e6b91b5fdf1a2"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#c5b9baca0283f4d96f7e6f914de8578fb5c521de"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1818,7 +1829,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#7596c843c745ef13ec7ea638be5e6b91b5fdf1a2"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#c5b9baca0283f4d96f7e6f914de8578fb5c521de"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -3532,6 +3543,7 @@ dependencies = [
  "mz-stash",
  "mz-storage-client",
  "mz-storage-types",
+ "mz-timestamp-oracle",
  "mz-tls-util",
  "mz-tracing",
  "mz-transform",
@@ -3672,7 +3684,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "0.82.0-dev"
+version = "0.83.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3784,7 +3796,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "0.82.0-dev"
+version = "0.83.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -3934,7 +3946,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.82.0-dev"
+version = "0.83.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3974,6 +3986,7 @@ dependencies = [
  "async-trait",
  "bytesize",
  "clap",
+ "core_affinity",
  "crossbeam-channel",
  "dec",
  "differential-dataflow",
@@ -4132,7 +4145,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.82.0-dev"
+version = "0.83.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -4805,7 +4818,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.82.0-dev"
+version = "0.83.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4856,6 +4869,7 @@ dependencies = [
 name = "mz-persist-txn"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "crossbeam-channel",
  "differential-dataflow",
  "futures",
@@ -4866,11 +4880,14 @@ dependencies = [
  "mz-timely-util",
  "prometheus",
  "prost",
+ "prost-build",
+ "protobuf-src",
  "rand",
  "serde",
  "timely",
  "tokio",
  "tracing",
+ "uuid",
  "workspace-hack",
 ]
 
@@ -5609,7 +5626,7 @@ dependencies = [
 
 [[package]]
 name = "mz-stash-debug"
-version = "0.82.0-dev"
+version = "0.83.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -5926,7 +5943,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "0.82.0-dev"
+version = "0.83.0-dev"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -6012,6 +6029,28 @@ dependencies = [
  "serde",
  "timely",
  "tokio",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-timestamp-oracle"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "deadpool-postgres",
+ "dec",
+ "futures",
+ "mz-adapter-types",
+ "mz-ore",
+ "mz-pgrepr",
+ "mz-postgres-client",
+ "mz-repr",
+ "rand",
+ "serde",
+ "tokio",
+ "tracing",
+ "uuid",
  "workspace-hack",
 ]
 

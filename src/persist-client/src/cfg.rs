@@ -147,6 +147,8 @@ pub struct PersistConfig {
     pub critical_downgrade_interval: Duration,
     /// Timeout per connection attempt to Persist PubSub service.
     pub pubsub_connect_attempt_timeout: Duration,
+    /// Timeout per request attempt to Persist PubSub service.
+    pub pubsub_request_timeout: Duration,
     /// Maximum backoff when retrying connection establishment to Persist PubSub service.
     pub pubsub_connect_max_backoff: Duration,
     /// Size of channel used to buffer send messages to PubSub service.
@@ -230,6 +232,7 @@ impl PersistConfig {
             writer_lease_duration: 60 * Duration::from_secs(60),
             critical_downgrade_interval: Duration::from_secs(30),
             pubsub_connect_attempt_timeout: Duration::from_secs(5),
+            pubsub_request_timeout: Duration::from_secs(5),
             pubsub_connect_max_backoff: Duration::from_secs(60),
             pubsub_client_sender_channel_size: 25,
             pubsub_client_receiver_channel_size: 25,

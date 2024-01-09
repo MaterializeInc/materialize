@@ -9,6 +9,9 @@ publish = false
 [lib]
 crate-type = ["cdylib"]
 
+[lints]
+workspace = true
+
 [dependencies]
 mz-sql-lexer = { path = "../../../../src/sql-lexer", default-features = false }
 

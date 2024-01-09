@@ -223,7 +223,9 @@ impl GrpcPubSubClient {
                         Err(err) => return RetryResult::FatalErr(err),
                     };
                     ProtoPersistPubSubClient::connect(
-                        endpoint.timeout(config.persist_cfg.pubsub_connect_attempt_timeout),
+                        endpoint
+                            .connect_timeout(config.persist_cfg.pubsub_connect_attempt_timeout)
+                            .timeout(config.persist_cfg.pubsub_request_timeout),
                     )
                     .await
                     .into()

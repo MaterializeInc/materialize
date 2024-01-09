@@ -62,8 +62,16 @@ pub enum ComputeEvent {
         /// Identifier of the export.
         id: GlobalId,
     },
-    /// Peek command, true for install and false for retire.
-    Peek(Peek, bool),
+    /// Peek command.
+    Peek {
+        /// The data for the peek itself.
+        peek: Peek,
+        /// The relevant _type_ of peek: index or persist.
+        // Note that this is not stored on the Peek event for data-packing reasons only.
+        peek_type: PeekType,
+        /// True if the peek is being installed; false if it's being removed.
+        installed: bool,
+    },
     /// Available frontier information for dataflow exports.
     Frontier {
         id: GlobalId,
@@ -122,6 +130,21 @@ pub enum ComputeEvent {
         /// The change in error count.
         diff: i64,
     },
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
+pub enum PeekType {
+    Index,
+    Persist,
+}
+
+impl PeekType {
+    fn name(self) -> &'static str {
+        match self {
+            PeekType::Index => "index",
+            PeekType::Persist => "persist",
+        }
+    }
 }
 
 /// A logged peek event.
@@ -296,22 +319,27 @@ pub(super) fn construct<A: Allocate + 'static>(
         let mut packer = PermutedRowPacker::new(ComputeLog::PeekCurrent);
         let peek_current = peek.as_collection().map({
             let mut scratch = String::new();
-            move |datum| {
+            move |PeekDatum { peek, peek_type }| {
                 packer.pack_slice(&[
-                    Datum::Uuid(datum.uuid),
+                    Datum::Uuid(peek.uuid),
                     Datum::UInt64(u64::cast_from(worker_id)),
-                    make_string_datum(datum.id, &mut scratch),
-                    Datum::MzTimestamp(datum.time),
+                    make_string_datum(peek.id, &mut scratch),
+                    Datum::String(peek_type.name()),
+                    Datum::MzTimestamp(peek.time),
                 ])
             }
         });
         let mut packer = PermutedRowPacker::new(ComputeLog::PeekDuration);
-        let peek_duration = peek_duration.as_collection().map(move |bucket| {
-            packer.pack_slice(&[
-                Datum::UInt64(u64::cast_from(worker_id)),
-                Datum::UInt64(bucket.try_into().expect("bucket too big")),
-            ])
-        });
+        let peek_duration =
+            peek_duration
+                .as_collection()
+                .map(move |PeekDurationDatum { peek_type, bucket }| {
+                    packer.pack_slice(&[
+                        Datum::UInt64(u64::cast_from(worker_id)),
+                        Datum::String(peek_type.name()),
+                        Datum::UInt64(bucket.try_into().expect("bucket too big")),
+                    ])
+                });
         let mut packer = PermutedRowPacker::new(ComputeLog::ShutdownDuration);
         let shutdown_duration = shutdown_duration.as_collection().map(move |bucket| {
             packer.pack_slice(&[
@@ -544,8 +572,8 @@ struct DemuxOutput<'a> {
     frontier: OutputSession<'a, FrontierDatum>,
     import_frontier: OutputSession<'a, ImportFrontierDatum>,
     frontier_delay: OutputSession<'a, FrontierDelayDatum>,
-    peek: OutputSession<'a, Peek>,
-    peek_duration: OutputSession<'a, u128>,
+    peek: OutputSession<'a, PeekDatum>,
+    peek_duration: OutputSession<'a, PeekDurationDatum>,
     shutdown_duration: OutputSession<'a, u128>,
     arrangement_heap_size: OutputSession<'a, ArrangementHeapDatum>,
     arrangement_heap_capacity: OutputSession<'a, ArrangementHeapDatum>,
@@ -577,6 +605,18 @@ struct FrontierDelayDatum {
     export_id: GlobalId,
     import_id: GlobalId,
     delay_pow: u128,
+}
+
+#[derive(Clone)]
+struct PeekDatum {
+    peek: Peek,
+    peek_type: PeekType,
+}
+
+#[derive(Clone)]
+struct PeekDurationDatum {
+    peek_type: PeekType,
+    bucket: u128,
 }
 
 #[derive(Clone)]
@@ -624,8 +664,16 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         match event {
             Export { id, dataflow_index } => self.handle_export(id, dataflow_index),
             ExportDropped { id } => self.handle_export_dropped(id),
-            Peek(peek, true) => self.handle_peek_install(peek),
-            Peek(peek, false) => self.handle_peek_retire(peek),
+            Peek {
+                peek,
+                peek_type,
+                installed: true,
+            } => self.handle_peek_install(peek, peek_type),
+            Peek {
+                peek,
+                peek_type,
+                installed: false,
+            } => self.handle_peek_retire(peek, peek_type),
             Frontier { id, time, diff } => self.handle_frontier(id, time, diff),
             ImportFrontier {
                 import_id,
@@ -785,10 +833,12 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         export.error_count = new_count;
     }
 
-    fn handle_peek_install(&mut self, peek: Peek) {
+    fn handle_peek_install(&mut self, peek: Peek, peek_type: PeekType) {
         let uuid = peek.uuid;
         let ts = self.ts();
-        self.output.peek.give((peek, ts, 1));
+        self.output
+            .peek
+            .give((PeekDatum { peek, peek_type }, ts, 1));
 
         let existing = self.state.peek_stash.insert(uuid, self.time);
         if existing.is_some() {
@@ -799,15 +849,19 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
         }
     }
 
-    fn handle_peek_retire(&mut self, peek: Peek) {
+    fn handle_peek_retire(&mut self, peek: Peek, peek_type: PeekType) {
         let uuid = peek.uuid;
         let ts = self.ts();
-        self.output.peek.give((peek, ts, -1));
+        self.output
+            .peek
+            .give((PeekDatum { peek, peek_type }, ts, -1));
 
         if let Some(start) = self.state.peek_stash.remove(&uuid) {
             let elapsed_ns = self.time.saturating_sub(start).as_nanos();
-            let elapsed_pow = elapsed_ns.next_power_of_two();
-            self.output.peek_duration.give((elapsed_pow, ts, 1));
+            let bucket = elapsed_ns.next_power_of_two();
+            self.output
+                .peek_duration
+                .give((PeekDurationDatum { peek_type, bucket }, ts, 1));
         } else {
             error!(
                 uuid = ?uuid,
@@ -1175,4 +1229,15 @@ where
     }
 
     sum
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_compute_event_size() {
+        // This could be a static assertion, but we don't use those yet in this crate.
+        assert_eq!(48, std::mem::size_of::<ComputeEvent>())
+    }
 }

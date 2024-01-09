@@ -226,7 +226,7 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: limits
-      timeout_in_minutes: 90
+      timeout_in_minutes: 120
 
     - id: limits-instance-size
       label: "Instance size limits"
@@ -958,7 +958,7 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: rqg
-            args: ["simple-aggregates"]
+            args: ["simple-aggregates", "--seed=$BUILDKITE_JOB_ID"]
 
     - id: rqg-db3-joins
       label: "RQG dbt3-joins workload"
@@ -969,7 +969,18 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: rqg
-            args: ["dbt3-joins"]
+            args: ["dbt3-joins", "--seed=$BUILDKITE_JOB_ID"]
+
+    - id: rqg-banking
+      label: "RQG banking workload"
+      artifact_paths: junit_*.xml
+      timeout_in_minutes: 45
+      agents:
+        queue: linux-x86_64
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: rqg
+            args: ["banking", "--seed=$BUILDKITE_JOB_ID"]
 
   - id: crdb-restarts
     label: "CRDB rolling restarts"

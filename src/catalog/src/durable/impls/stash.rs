@@ -250,6 +250,22 @@ impl OpenableDurableCatalogState for OpenableConnection {
         is_stash_initialized(stash).await.err_into()
     }
 
+    async fn epoch(&mut self) -> Result<Epoch, CatalogError> {
+        let stash = match &mut self.stash {
+            None => match self.open_stash_read_only().await {
+                Ok(stash) => stash,
+                Err(e) if e.can_recover_with_write_mode() => {
+                    return Err(CatalogError::Durable(DurableCatalogError::Uninitialized))
+                }
+                Err(e) => return Err(e.into()),
+            },
+            Some(stash) => stash,
+        };
+        stash
+            .epoch()
+            .ok_or(CatalogError::Durable(DurableCatalogError::Uninitialized))
+    }
+
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         self.get_config(DEPLOY_GENERATION.into()).await
     }
@@ -1104,6 +1120,7 @@ impl DurableCatalogState for Connection {
         &mut self,
         retention_period: Option<Duration>,
         boot_ts: Timestamp,
+        wait_for_consolidation: bool,
     ) -> Result<Vec<VersionedStorageUsage>, CatalogError> {
         // If no usage retention period is set, set the cutoff to MIN so nothing
         // is removed.
@@ -1112,7 +1129,7 @@ impl DurableCatalogState for Connection {
             Some(period) => u128::from(boot_ts).saturating_sub(period.as_millis()),
         };
         let is_read_only = self.is_read_only();
-        Ok(self
+        let (events, consolidate_notif) = self
             .stash
             .with_transaction(move |tx| {
                 Box::pin(async move {
@@ -1131,13 +1148,28 @@ impl DurableCatalogState for Connection {
                     // Delete things only if a retention period is
                     // specified (otherwise opening readonly catalogs
                     // can fail).
-                    if retention_period.is_some() && !is_read_only {
-                        tx.append(vec![batch]).await?;
-                    }
-                    Ok(events)
+                    let consolidate_notif = if retention_period.is_some() && !is_read_only {
+                        let notif = tx.append(vec![batch]).await?;
+                        Some(notif)
+                    } else {
+                        None
+                    };
+                    Ok((events, consolidate_notif))
                 })
             })
-            .await?)
+            .await?;
+
+        // Before we consider the pruning complete, we need to wait for the consolidate request to
+        // finish. We wait for consolidation because the storage usage collection is very large and
+        // it's possible for it to conflict with other Stash transactions, preventing consolidation
+        // from ever completing.
+        if wait_for_consolidation {
+            if let Some(notif) = consolidate_notif {
+                let _ = notif.await;
+            }
+        }
+
+        Ok(events)
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -1306,6 +1338,10 @@ impl OpenableDurableCatalogState for TestOpenableConnection<'_> {
 
     async fn is_initialized(&mut self) -> Result<bool, CatalogError> {
         self.openable_connection.is_initialized().await
+    }
+
+    async fn epoch(&mut self) -> Result<Epoch, CatalogError> {
+        self.openable_connection.epoch().await
     }
 
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {

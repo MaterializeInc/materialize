@@ -255,6 +255,17 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 10  created_at  timestamp␠with␠time␠zone
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_notices_redacted' ORDER BY position
+----
+1  notice_type  text
+2  message  text
+3  hint  text
+4  action  text
+5  action_type  text
+6  object_id  text
+7  created_at  timestamp␠with␠time␠zone
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_postgres_sources' ORDER BY position
 ----
 1  id  text
@@ -522,8 +533,9 @@ query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_active_peeks' ORDER BY position
 ----
 1  id  uuid
-2  index_id  text
-3  time  mz_timestamp
+2  object_id  text
+3  type  text
+4  time  mz_timestamp
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_arrangement_sharing' ORDER BY position
@@ -672,8 +684,9 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_peek_durations_histogram' ORDER BY position
 ----
-1  duration_ns  uint8
-2  count  numeric
+1  type  text
+2  duration_ns  uint8
+3  count  numeric
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_records_per_dataflow' ORDER BY position

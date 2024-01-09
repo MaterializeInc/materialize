@@ -155,3 +155,56 @@ class MaterializeApplication(CloudtestApplicationBase):
         stateful_set.env["FAILPOINTS"] = failpoints
         stateful_set.replace()
         self.wait_for_sql()
+
+    def get_k8s_value(
+        self, selector: str, json_path: str, remove_quotes: bool = True
+    ) -> str:
+        value = self.kubectl(
+            "get",
+            "pods",
+            f"--selector={selector}",
+            "-o",
+            f"jsonpath='{json_path}'",
+        )
+
+        if remove_quotes:
+            value = value.replace("'", "")
+
+        return value
+
+    def get_pod_value(
+        self, cluster_id: str, json_path: str, remove_quotes: bool = True
+    ) -> str:
+        return self.get_k8s_value(
+            f"cluster.environmentd.materialize.cloud/cluster-id={cluster_id}",
+            json_path,
+            remove_quotes,
+        )
+
+    def get_pod_label_value(
+        self, cluster_id: str, label: str, remove_quotes: bool = True
+    ) -> str:
+        return self.get_pod_value(
+            cluster_id, "{.items[*].metadata.labels." + label + "}", remove_quotes
+        )
+
+    def get_cluster_node_names(self, cluster_name: str) -> list[str]:
+        cluster_id = self.get_cluster_id(cluster_name)
+
+        value_string = self.get_pod_value(
+            cluster_id, "{.items[*].spec.nodeName}", remove_quotes=True
+        )
+        values = value_string.split(" ")
+        return values
+
+    def get_cluster_id(self, cluster_name: str) -> str:
+        cluster_id: str = self.environmentd.sql_query(
+            f"SELECT id FROM mz_clusters WHERE name = '{cluster_name}'"
+        )[0][0]
+        return cluster_id
+
+    def get_cluster_and_replica_id(self, mz_table: str, name: str) -> tuple[str, str]:
+        [cluster_id, replica_id] = self.environmentd.sql_query(
+            f"SELECT s.cluster_id, r.id FROM {mz_table} s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = '{name}'"
+        )[0]
+        return cluster_id, replica_id

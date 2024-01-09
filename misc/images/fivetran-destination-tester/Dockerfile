@@ -7,18 +7,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM gcr.io/bazel-public/bazel:6.3.2
+MZFROM bazel
 
-COPY --chown=ubuntu:root build build
+WORKDIR /home/ubuntu
+
+COPY build build
 
 RUN cd build \
     && bazel build //testers:run_sdk_destination_tester_deploy.jar
 
-MZFROM ubuntu-base
-
 RUN apt-get update \
     && apt-get -qy install openjdk-17-jre
 
-COPY --from=0 /home/ubuntu/build/bazel-bin/testers/run_sdk_destination_tester_deploy.jar /usr/local/share/java/
-
-ENTRYPOINT ["java", "-jar", "/usr/local/share/java/run_sdk_destination_tester_deploy.jar", "--working-dir=/data"]
+ENTRYPOINT ["java", "-jar", "/home/ubuntu/build/bazel-bin/testers/run_sdk_destination_tester_deploy.jar", "--working-dir=/data"]

@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = { version = "1.0.66", features = ["backtrace"] }
 clap = { version = "3.2.24", features = ["derive", "env"] }

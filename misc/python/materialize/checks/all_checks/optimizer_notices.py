@@ -25,7 +25,7 @@ class OptimizerNotices(Check):
             dedent(
                 f"""
                 $postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
-                ALTER SYSTEM SET enable_mz_notices = true
+                ALTER SYSTEM SET enable_mz_notices TO true
                 > DROP SCHEMA IF EXISTS {SCHEMA} CASCADE;
                 > CREATE SCHEMA {SCHEMA};
                 > CREATE TABLE {SCHEMA}.t1(x INTEGER, y INTEGER);
@@ -54,10 +54,14 @@ class OptimizerNotices(Check):
         return Testdrive(
             dedent(
                 """
-                > SELECT o.type, o.name, replace(n.notice_type, ' ', '␠') FROM mz_internal.mz_notices_redacted n JOIN mz_catalog.mz_objects o ON (o.id = n.object_id);
+                $postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER SYSTEM SET enable_rbac_checks TO false
+                > SELECT o.type, o.name, replace(n.notice_type, ' ', '␠') FROM mz_internal.mz_notices n JOIN mz_catalog.mz_objects o ON (o.id = n.object_id);
                 index             v1_idx Empty␠index␠key
                 index             v1_idx Index␠too␠wide␠for␠literal␠constraints
                 materialized-view mv1    Index␠too␠wide␠for␠literal␠constraints
+                $postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER SYSTEM SET enable_rbac_checks TO true
                 """
             )
         )

@@ -14,6 +14,7 @@
 //! struct in order to provide alternate [`mz_repr::explain::Explain`]
 //! implementations for some structs (see the [`mir`]) module for details.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use mz_compute_types::dataflows::DataflowDescription;
@@ -50,7 +51,7 @@ pub(crate) fn explain_dataflow<T>(
     format: ExplainFormat,
     config: &ExplainConfig,
     humanizer: &dyn ExprHumanizer,
-    dataflow_metainfo: &DataflowMetainfo<OptimizerNotice>,
+    dataflow_metainfo: &DataflowMetainfo<Arc<OptimizerNotice>>,
 ) -> Result<String, AdapterError>
 where
     for<'a> Explainable<'a, DataflowDescription<T>>: Explain<'a, Context = ExplainContext<'a>>,

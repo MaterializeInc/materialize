@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 compile-time-run = "0.2.12"
 semver = { version = "1.0.16", optional = true }

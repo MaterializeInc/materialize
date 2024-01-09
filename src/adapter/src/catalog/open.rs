@@ -71,7 +71,7 @@ use mz_storage_types::sources::Timeline;
 use crate::catalog::{
     is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config,
 };
-use crate::coord::timestamp_oracle;
+use crate::coord::catalog_oracle;
 use crate::AdapterError;
 
 #[derive(Debug)]
@@ -271,7 +271,7 @@ impl Catalog {
                 let previous_ts = txn
                     .get_timestamp(&Timeline::EpochMilliseconds)
                     .expect("missing EpochMilliseconds timeline");
-                let boot_ts = timestamp_oracle::catalog_oracle::monotonic_now(
+                let boot_ts = catalog_oracle::monotonic_now(
                     config.now.clone(),
                     previous_ts,
                 );
@@ -924,11 +924,7 @@ impl Catalog {
 
             let mut catalog = Catalog {
                 state,
-                plans: CatalogPlans {
-                    optimized_plan_by_id: Default::default(),
-                    physical_plan_by_id: Default::default(),
-                    dataflow_metainfos: BTreeMap::new(),
-                },
+                plans: CatalogPlans::default(),
                 transient_revision: 1,
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
             };
@@ -1073,10 +1069,17 @@ impl Catalog {
             // To avoid reading over storage_usage events multiple times, do both
             // the table updates and delete calculations in a single read over the
             // data.
+            let wait_for_consolidation = catalog
+                .system_config()
+                .wait_catalog_consolidation_on_startup();
             let storage_usage_events = catalog
                 .storage()
                 .await
-                .get_and_prune_storage_usage(config.storage_usage_retention_period, boot_ts)
+                .get_and_prune_storage_usage(
+                    config.storage_usage_retention_period,
+                    boot_ts,
+                    wait_for_consolidation,
+                )
                 .await?;
             for event in storage_usage_events {
                 builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);

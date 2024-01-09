@@ -469,12 +469,14 @@ impl LogVariant {
             LogVariant::Compute(ComputeLog::PeekCurrent) => RelationDesc::empty()
                 .with_column("id", ScalarType::Uuid.nullable(false))
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
-                .with_column("index_id", ScalarType::String.nullable(false))
+                .with_column("object_id", ScalarType::String.nullable(false))
+                .with_column("type", ScalarType::String.nullable(false))
                 .with_column("time", ScalarType::MzTimestamp.nullable(false))
                 .with_key(vec![0, 1]),
 
             LogVariant::Compute(ComputeLog::PeekDuration) => RelationDesc::empty()
                 .with_column("worker_id", ScalarType::UInt64.nullable(false))
+                .with_column("type", ScalarType::String.nullable(false))
                 .with_column("duration_ns", ScalarType::UInt64.nullable(false)),
 
             LogVariant::Compute(ComputeLog::ShutdownDuration) => RelationDesc::empty()

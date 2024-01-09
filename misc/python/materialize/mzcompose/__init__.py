@@ -79,6 +79,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "persist_txn_tables": "eager",
     "enable_expressions_in_limit_syntax": "true",
     "enable_reduce_mfp_fusion": "true",
+    "enable_refresh_every_mvs": "true",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [

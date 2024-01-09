@@ -78,9 +78,14 @@ class CreateSink(Action):
         # The sink-derived source has upsert semantics, so produce a "normal" ViewExists output
         # from the 'before' and the 'after'
 
+        refresh = random.choice(
+            ["ON COMMIT", f"EVERY '{random.randint(1, 5)} seconds'"]
+        )
+
         dest_view_sql = dedent(
             f"""
-            > CREATE MATERIALIZED VIEW {self.sink.dest_view.name} AS
+            > CREATE MATERIALIZED VIEW {self.sink.dest_view.name}
+              WITH (REFRESH {refresh}) AS
               SELECT SUM(count_all)::int AS count_all, SUM(count_distinct)::int AS count_distinct, SUM(min_value)::int AS min_value, SUM(max_value)::int AS max_value FROM (
                 SELECT (after).count_all, (after).count_distinct, (after).min_value, (after).max_value FROM {self.sink.name}_source
                 UNION ALL

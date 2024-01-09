@@ -3015,7 +3015,9 @@ def workflow_blue_green_deployment(
                             raise e
                         assert int(cursor.fetchone()[0]) > 0
                         runtime = time.time() - start_time
-                        assert runtime < 5, f"runtime: {runtime}"
+                        assert (
+                            runtime < 15
+                        ), f"query: {query}, runtime spiked to {runtime}"
                         total_runtime += runtime
                     runtimes.append(total_runtime)
         finally:

@@ -76,7 +76,10 @@ pub struct ReplicaAllocation {
     /// The number of credits per hour that the replica consumes.
     #[serde(deserialize_with = "mz_repr::adt::numeric::str_serde::deserialize")]
     pub credits_per_hour: Numeric,
-    /// Whether instances of this type can be created
+    /// Whether each process has exclusive access to its CPU cores.
+    #[serde(default)]
+    pub cpu_exclusive: bool,
+    /// Whether instances of this type can be created.
     #[serde(default)]
     pub disabled: bool,
     /// Additional node selectors.
@@ -115,6 +118,7 @@ fn test_replica_allocation_deserialization() {
             disabled: false,
             memory_limit: Some(MemoryLimit(ByteSize::gib(10))),
             cpu_limit: Some(CpuLimit::from_millicpus(1000)),
+            cpu_exclusive: false,
             scale: 16,
             workers: 1,
             selectors: BTreeMap::from([
@@ -132,6 +136,7 @@ fn test_replica_allocation_deserialization() {
             "scale": 0,
             "workers": 0,
             "credits_per_hour": "0",
+            "cpu_exclusive": true,
             "disabled": true
         }"#;
 
@@ -146,6 +151,7 @@ fn test_replica_allocation_deserialization() {
             disabled: true,
             memory_limit: Some(MemoryLimit(ByteSize::gib(0))),
             cpu_limit: Some(CpuLimit::from_millicpus(0)),
+            cpu_exclusive: true,
             scale: 0,
             workers: 0,
             selectors: Default::default(),
@@ -339,6 +345,7 @@ where
     pub async fn create_replicas(
         &mut self,
         replicas: Vec<CreateReplicaConfig>,
+        enable_worker_core_affinity: bool,
     ) -> Result<(), anyhow::Error> {
         /// A intermediate struct to hold info about a replica, to avoid
         /// a large tuple.
@@ -398,7 +405,13 @@ where
                     ReplicaLocation::Managed(m) => {
                         let workers = m.allocation.workers;
                         let (service, metrics_task_join_handle) = this
-                            .provision_replica(cluster_id, replica_id, role, m)
+                            .provision_replica(
+                                cluster_id,
+                                replica_id,
+                                role,
+                                m,
+                                enable_worker_core_affinity,
+                            )
                             .await?;
                         let storage_location = ClusterReplicaLocation {
                             ctl_addrs: service.addresses("storagectl"),
@@ -590,6 +603,7 @@ where
         replica_id: ReplicaId,
         role: ClusterRole,
         location: ManagedReplicaLocation,
+        enable_worker_core_affinity: bool,
     ) -> Result<(Box<dyn Service>, AbortOnDropHandle<()>), anyhow::Error> {
         let service_name = generate_replica_service_name(cluster_id, replica_id);
         let role_label = match role {
@@ -644,6 +658,9 @@ where
                                 "--announce-memory-limit={}",
                                 memory_limit.0.as_u64()
                             ));
+                        }
+                        if location.allocation.cpu_exclusive && enable_worker_core_affinity {
+                            args.push("--worker-core-affinity".into());
                         }
 
                         args.extend(secrets_args.clone());

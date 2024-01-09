@@ -16,7 +16,7 @@ use mz_ore::metrics::raw::{CounterVec, IntCounterVec};
 use mz_ore::metrics::{Counter, IntCounter, MetricsRegistry};
 use mz_postgres_client::metrics::PostgresClientMetrics;
 
-use crate::coord::timestamp_oracle::retry::RetryStream;
+use crate::retry::RetryStream;
 
 /// Prometheus monitoring metrics for timestamp oracles.
 ///
@@ -26,7 +26,7 @@ pub struct Metrics {
     _vecs: MetricsVecs,
 
     /// Metrics for
-    /// [`TimestampOracle`](crate::coord::timestamp_oracle::TimestampOracle).
+    /// [`TimestampOracle`](crate::TimestampOracle).
     pub oracle: OracleMetrics,
 
     /// Metrics recording how many operations we batch into one oracle call, for
@@ -255,8 +255,8 @@ impl RetryMetrics {
 
 #[derive(Debug)]
 pub struct RetriesMetrics {
-    pub(crate) open: RetryMetrics,
-    pub(crate) get_all_timelines: RetryMetrics,
+    pub open: RetryMetrics,
+    pub get_all_timelines: RetryMetrics,
     pub(crate) write_ts: RetryMetrics,
     pub(crate) peek_write_ts: RetryMetrics,
     pub(crate) read_ts: RetryMetrics,
