@@ -4297,7 +4297,7 @@ dependencies = [
  "num",
  "num_enum",
  "once_cell",
- "ordered-float 3.4.0",
+ "ordered-float",
  "paste",
  "proc-macro2",
  "proptest",
@@ -4477,7 +4477,7 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "once_cell",
- "ordered-float 3.4.0",
+ "ordered-float",
  "prost",
  "prost-build",
  "prost-reflect",
@@ -5215,7 +5215,7 @@ dependencies = [
  "num-traits",
  "num_enum",
  "once_cell",
- "ordered-float 3.4.0",
+ "ordered-float",
  "postgres-protocol",
  "proptest",
  "proptest-derive",
@@ -6109,7 +6109,7 @@ dependencies = [
  "mz-persist-client",
  "mz-repr",
  "num-traits",
- "ordered-float 3.4.0",
+ "ordered-float",
  "paste",
  "proc-macro2",
  "serde_json",
@@ -6510,7 +6510,7 @@ dependencies = [
  "glob",
  "once_cell",
  "opentelemetry",
- "ordered-float 4.2.0",
+ "ordered-float",
  "percent-encoding",
  "rand",
  "thiserror",
@@ -6526,21 +6526,13 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "ordered-float"
-version = "3.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d84eb1409416d254e4a9c8fa56cc24701755025b458f0fcd8e59e1f5f40c23bf"
-dependencies = [
- "num-traits",
- "serde",
-]
-
-[[package]]
-name = "ordered-float"
 version = "4.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a76df7075c7d4d01fdcb46c912dd17fba5b60c78ea480b475f2b6ab6f666584e"
 dependencies = [
  "num-traits",
+ "rand",
+ "serde",
 ]
 
 [[package]]
@@ -7296,6 +7288,7 @@ dependencies = [
  "libc",
  "rand_chacha",
  "rand_core",
+ "serde",
 ]
 
 [[package]]
@@ -7315,6 +7308,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34cf66eb183df1c5876e2dcf6b13d57340741e8dc255b48e40a26de954d06ae7"
 dependencies = [
  "getrandom",
+ "serde",
 ]
 
 [[package]]
@@ -7963,9 +7957,9 @@ dependencies = [
 [[package]]
 name = "serde-value"
 version = "0.7.0"
-source = "git+https://github.com/MaterializeInc/serde-value.git#62c7e5f84ace6b7b5da48c46cb963be95d43aaab"
+source = "git+https://github.com/MaterializeInc/serde-value.git#a84c6b71825efaffb332c0d19f18c2bdf9ee7b40"
 dependencies = [
- "ordered-float 3.4.0",
+ "ordered-float",
  "serde",
 ]
 
@@ -9839,7 +9833,7 @@ dependencies = [
  "once_cell",
  "openssl",
  "openssl-sys",
- "ordered-float 3.4.0",
+ "ordered-float",
  "parking_lot",
  "phf",
  "phf_shared",
