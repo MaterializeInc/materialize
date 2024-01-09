@@ -7,7 +7,7 @@
 ## The Problem
 
 Materialize is unable to communicate to users why it takes a long time
-for their queries to return, which can roughly be broken down into: 
+for their queries to return, which can roughly be broken down into:
 
 * Time for all transitive source (in the storage sense) dependencies to reach the selected
   timestamp
@@ -58,7 +58,7 @@ record things at however advanced of a timestamp it wants.
 
 However, we should still track and log how long it takes sources to
 update to the chosen timestamp, in the hope that someday we will do
-the work to make storage work this way. 
+the work to make storage work this way.
 
 ### Time to result delivery
 
@@ -91,7 +91,7 @@ buffer which is periodically dumped to storage, similarly to the
 statement logging events that exist today. Since the amount of data is
 proportional to the number of statements, we don't envision that this
 will result in new scalability concerns beyond those which already
-exist for the statement log. 
+exist for the statement log.
 
 In the following subsections we will explain how to collect each of
 the pieces of data.
