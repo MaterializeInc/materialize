@@ -1980,6 +1980,10 @@ impl mz_sql::catalog::CatalogClusterReplica<'_> for ClusterReplica {
     fn owner_id(&self) -> RoleId {
         self.owner_id
     }
+
+    fn internal(&self) -> bool {
+        self.config.location.internal()
+    }
 }
 
 impl mz_sql::catalog::CatalogItem for CatalogEntry {

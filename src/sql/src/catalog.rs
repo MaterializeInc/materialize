@@ -537,7 +537,7 @@ pub trait CatalogCluster<'a> {
 }
 
 /// A cluster replica in a [`SessionCatalog`]
-pub trait CatalogClusterReplica<'a> {
+pub trait CatalogClusterReplica<'a>: Debug {
     /// Returns the name of the cluster replica.
     fn name(&self) -> &str;
 
@@ -549,6 +549,9 @@ pub trait CatalogClusterReplica<'a> {
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
+
+    /// Returns whether or not the replica is internal
+    fn internal(&self) -> bool;
 }
 
 /// An item in a [`SessionCatalog`].
