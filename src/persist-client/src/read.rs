@@ -32,7 +32,7 @@ use tokio::runtime::Handle;
 use tracing::{debug_span, instrument, warn, Instrument};
 use uuid::Uuid;
 
-use crate::cfg::{PersistFeatureFlag, RetryParameters};
+use crate::cfg::{flags, RetryParameters};
 use crate::fetch::{
     fetch_leased_part, FetchBatchFilter, FetchedPart, LeasedBatchPart, SerdeLeasedBatchPart,
     SerdeLeasedBatchPartMetadata,
@@ -1005,7 +1005,7 @@ where
             .applier
             .cfg
             .dynamic
-            .enabled(PersistFeatureFlag::STREAMING_SNAPSHOT_AND_FETCH)
+            .enabled(flags::STREAMING_SNAPSHOT_AND_FETCH)
         {
             return self.snapshot_and_fetch_streaming(as_of).await;
         }

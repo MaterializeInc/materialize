@@ -1203,7 +1203,7 @@ pub mod datadriven {
     use crate::batch::{
         validate_truncate_batch, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
     };
-    use crate::cfg::PersistFeatureFlag;
+    use crate::cfg::flags;
     use crate::fetch::{fetch_batch_part, Cursor};
     use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
     use crate::internal::datadriven::DirectiveArgs;
@@ -1245,11 +1245,11 @@ pub mod datadriven {
             client
                 .cfg
                 .dynamic
-                .set_feature_flag(PersistFeatureFlag::STREAMING_COMPACTION, true);
+                .set_feature_flag(flags::STREAMING_COMPACTION, true);
             client
                 .cfg
                 .dynamic
-                .set_feature_flag(PersistFeatureFlag::STREAMING_SNAPSHOT_AND_FETCH, true);
+                .set_feature_flag(flags::STREAMING_SNAPSHOT_AND_FETCH, true);
             let state_versions = Arc::new(StateVersions::new(
                 client.cfg.clone(),
                 Arc::clone(&client.consensus),

@@ -31,13 +31,15 @@ use serde::{Deserialize, Serialize};
 include!(concat!(env!("OUT_DIR"), "/mz_persist_client.cfg.rs"));
 
 #[derive(Copy, Clone, PartialOrd, PartialEq, Ord, Eq, Debug)]
-pub struct PersistFeatureFlag {
+pub struct PersistFeatureFlag<T = bool> {
     pub name: &'static str,
-    pub default: bool,
+    pub default: T,
     pub description: &'static str,
 }
 
-impl PersistFeatureFlag {
+pub mod flags {
+    use super::*;
+
     pub(crate) const STREAMING_COMPACTION: PersistFeatureFlag = PersistFeatureFlag {
         name: "persist_streaming_compaction_enabled",
         default: false,
@@ -56,9 +58,9 @@ impl PersistFeatureFlag {
     };
 
     pub const ALL: &'static [PersistFeatureFlag] = &[
-        Self::STREAMING_COMPACTION,
-        Self::STREAMING_SNAPSHOT_AND_FETCH,
-        Self::BATCH_DELETE_ENABLED,
+        STREAMING_COMPACTION,
+        STREAMING_SNAPSHOT_AND_FETCH,
+        BATCH_DELETE_ENABLED,
     ];
 }
 
@@ -216,7 +218,7 @@ impl PersistConfig {
                 txns_data_shard_retryer: RwLock::new(Self::DEFAULT_TXNS_DATA_SHARD_RETRYER),
                 feature_flags: {
                     // NB: initialized with the full set of feature flags, so the map never needs updating.
-                    PersistFeatureFlag::ALL
+                    flags::ALL
                         .iter()
                         .map(|f| (f.name, AtomicBool::new(f.default)))
                         .collect()
@@ -279,9 +281,9 @@ impl PersistConfig {
         let mut cfg = Self::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         cfg.hostname = "tests".into();
         cfg.dynamic
-            .set_feature_flag(PersistFeatureFlag::STREAMING_COMPACTION, true);
+            .set_feature_flag(flags::STREAMING_COMPACTION, true);
         cfg.dynamic
-            .set_feature_flag(PersistFeatureFlag::STREAMING_SNAPSHOT_AND_FETCH, true);
+            .set_feature_flag(flags::STREAMING_SNAPSHOT_AND_FETCH, true);
         cfg
     }
 }
@@ -1180,7 +1182,7 @@ impl PersistParameters {
                 .rollup_threshold
                 .store(*rollup_threshold, DynamicConfig::STORE_ORDERING);
         }
-        for flag in PersistFeatureFlag::ALL {
+        for flag in flags::ALL {
             if let Some(value) = feature_flags.get(flag.name) {
                 cfg.dynamic.set_feature_flag(*flag, *value);
             }

@@ -39,7 +39,7 @@ use timely::PartialOrder;
 use tracing::{debug_span, error, instrument, trace_span, warn, Instrument};
 
 use crate::async_runtime::IsolatedRuntime;
-use crate::cfg::{PersistFeatureFlag, ProtoUntrimmableColumns};
+use crate::cfg::{flags, ProtoUntrimmableColumns};
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
@@ -230,9 +230,7 @@ impl BatchBuilderConfig {
         BatchBuilderConfig {
             writer_key,
             blob_target_size: value.dynamic.blob_target_size(),
-            batch_delete_enabled: value
-                .dynamic
-                .enabled(PersistFeatureFlag::BATCH_DELETE_ENABLED),
+            batch_delete_enabled: value.dynamic.enabled(flags::BATCH_DELETE_ENABLED),
             batch_builder_max_outstanding_parts: value
                 .dynamic
                 .batch_builder_max_outstanding_parts(),
