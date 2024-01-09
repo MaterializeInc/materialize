@@ -9,6 +9,7 @@
 
 //! Generated protobuf code and companion impls.
 
+use std::borrow::Cow;
 use std::char::CharTryFromError;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -503,6 +504,15 @@ impl RustType<ProtoDuration> for std::time::Duration {
 
     fn from_proto(proto: ProtoDuration) -> Result<Self, TryFromProtoError> {
         Ok(std::time::Duration::new(proto.secs, proto.nanos))
+    }
+}
+
+impl<'a> RustType<String> for Cow<'a, str> {
+    fn into_proto(&self) -> String {
+        self.to_string()
+    }
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        Ok(Cow::Owned(proto))
     }
 }
 
