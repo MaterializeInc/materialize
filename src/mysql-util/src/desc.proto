@@ -17,16 +17,16 @@ message ProtoMySqlTableDesc {
     string name = 1;
     string schema_name = 2;
     repeated ProtoMySqlColumnDesc columns = 3;
+    repeated ProtoMySqlKeyDesc keys = 4;
 }
 
 message ProtoMySqlColumnDesc {
     string name = 1;
     mz_repr.relation_and_scalar.ProtoColumnType column_type = 2;
-    optional ProtoMySqlColumnKey column_key = 3;
 }
 
-enum ProtoMySqlColumnKey {
-    PRI = 0;
-    UNI = 1;
-    MUL = 2;
+message ProtoMySqlKeyDesc {
+    string name = 1;
+    bool is_primary = 2;
+    repeated string columns = 3;
 }

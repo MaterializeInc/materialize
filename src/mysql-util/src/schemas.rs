@@ -7,37 +7,38 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use indexmap::IndexMap;
 use itertools::Itertools;
-use once_cell::sync::Lazy;
 
 use mysql_async::prelude::Queryable;
-use mysql_async::{Conn, Row};
+use mysql_async::Conn;
 
 use mz_repr::{ColumnType, ScalarType};
 
-use crate::desc::{MySqlColumnDesc, MySqlColumnKey, MySqlTableDesc};
+use crate::desc::{MySqlColumnDesc, MySqlKeyDesc, MySqlTableDesc};
 use crate::MySqlError;
 
-/// Helper for querying information_schema.columns by storing the column
-/// index for easier access.
-static INFO_SCHEMA_COLS: Lazy<IndexMap<String, usize>> = Lazy::new(|| {
-    [
-        "column_name",
-        "data_type",
-        "column_type",
-        "column_key",
-        "is_nullable",
-        "ordinal_position",
-        "numeric_scale",
-        "datetime_precision",
-        "character_maximum_length",
-    ]
-    .iter()
-    .enumerate()
-    .map(|(i, col)| (col.to_string(), i))
-    .collect()
-});
+/// Helper for querying information_schema.columns
+const INFO_SCHEMA_COLS: &[&str] = &[
+    "column_name",
+    "data_type",
+    "column_type",
+    "is_nullable",
+    "ordinal_position",
+    "numeric_scale",
+    "datetime_precision",
+    "character_maximum_length",
+];
+
+type InfoSchemaColumnsRow = (
+    String,      // column_name
+    String,      // data_type
+    String,      // column_type
+    String,      // is_nullable
+    u16,         // ordinal_position
+    Option<i64>, // numeric_scale
+    Option<i64>, // datetime_precision
+    Option<i64>, // character_maximum_length
+);
 
 /// Retrieve the tables and column descriptions for tables in the given schemas.
 pub async fn schema_info(
@@ -69,39 +70,34 @@ pub async fn schema_info(
 
     let mut tables = vec![];
     for (table_name, schema_name) in table_rows {
+        // NOTE: It's important that we order by ordinal_position ASC since we rely on this as
+        // the ordering in which columns are returned in a row.
         let column_q = format!(
             "SELECT {}
              FROM information_schema.columns
              WHERE table_name = ? AND table_schema = ?
              ORDER BY ordinal_position ASC",
-            INFO_SCHEMA_COLS.keys().join(", ")
+            INFO_SCHEMA_COLS.join(", ")
         );
         let column_rows = conn
-            .exec::<Row, _, _>(column_q, (&table_name, &schema_name))
+            .exec::<InfoSchemaColumnsRow, _, _>(column_q, (&table_name, &schema_name))
             .await?;
 
         let mut columns = Vec::with_capacity(column_rows.len());
-        for mut row in column_rows {
-            let name = row.take(INFO_SCHEMA_COLS["column_name"]).unwrap();
-            let unsigned = row
-                .take::<String, _>(INFO_SCHEMA_COLS["column_type"])
-                .unwrap()
-                .contains("unsigned");
-            let numeric_scale: Option<i64> = row
-                .take::<Option<i64>, _>(INFO_SCHEMA_COLS["numeric_scale"])
-                .unwrap();
-            let datetime_precision = row
-                .take::<Option<i64>, _>(INFO_SCHEMA_COLS["datetime_precision"])
-                .unwrap();
-            let character_maximum_length = row
-                .take::<Option<i64>, _>(INFO_SCHEMA_COLS["character_maximum_length"])
-                .unwrap();
+        for (
+            column_name,
+            data_type,
+            column_type,
+            is_nullable,
+            _,
+            numeric_scale,
+            datetime_precision,
+            character_maximum_length,
+        ) in column_rows
+        {
+            let unsigned = column_type.contains("unsigned");
 
-            let scalar_type = match row
-                .take::<String, _>(INFO_SCHEMA_COLS["data_type"])
-                .expect("data_type should be not-null")
-                .as_str()
-            {
+            let scalar_type = match data_type.as_str() {
                 "tinyint" | "smallint" => {
                     if unsigned {
                         ScalarType::UInt16
@@ -154,39 +150,58 @@ pub async fn schema_info(
                 ref data_type => {
                     return Err(MySqlError::UnsupportedDataType {
                         data_type: data_type.to_string(),
-                        qualified_table_name: format!("{}.{}", schema_name, table_name),
-                        column_name: name,
+                        qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
+                        column_name,
                     })
                 }
             };
-            columns.push((
-                row.take::<u16, _>(INFO_SCHEMA_COLS["ordinal_position"])
-                    .unwrap(),
-                MySqlColumnDesc {
-                    name,
-                    column_type: ColumnType {
-                        scalar_type,
-                        nullable: &row
-                            .take::<String, _>(INFO_SCHEMA_COLS["is_nullable"])
-                            .unwrap()
-                            == "YES",
-                    },
-                    column_key: row
-                        .take::<String, _>(INFO_SCHEMA_COLS["column_key"])
-                        .and_then(|s| match s.as_str() {
-                            "PRI" => Some(MySqlColumnKey::PRI),
-                            "UNI" => Some(MySqlColumnKey::UNI),
-                            "MUL" => Some(MySqlColumnKey::MUL),
-                            _ => None,
-                        }),
+            columns.push(MySqlColumnDesc {
+                name: column_name,
+                column_type: ColumnType {
+                    scalar_type,
+                    nullable: &is_nullable == "YES",
                 },
-            ));
+            })
+        }
+
+        // Query for primary key and unique constraints that do not contain expressions / functional key parts.
+        let index_rows = conn.exec::<(String, String), _, _>("
+            WITH indexes AS (
+                SELECT
+                    index_name,
+                    group_concat(column_name ORDER BY seq_in_index separator ', ') AS columns,
+                    group_concat(expression ORDER BY seq_in_index separator ', ') AS expressions
+                FROM information_schema.statistics
+                WHERE
+                    table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+                    AND non_unique = 0
+                    AND table_name = ?
+                    AND table_schema = ?
+                GROUP BY index_name
+                ORDER BY index_name
+            )
+            SELECT index_name, columns FROM indexes WHERE expressions IS NULL AND columns IS NOT NULL;
+        ", (&table_name, &schema_name))
+        .await?;
+
+        let mut keys = Vec::with_capacity(index_rows.len());
+        for (index_name, columns) in index_rows {
+            let columns = columns
+                .split(", ")
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>();
+            keys.push(MySqlKeyDesc {
+                is_primary: &index_name == "PRIMARY",
+                name: index_name,
+                columns,
+            });
         }
 
         tables.push(MySqlTableDesc {
             schema_name,
             name: table_name,
-            columns: columns.into_iter().map(|(_, c)| c).collect(),
+            columns,
+            keys: keys.into_iter().collect(),
         });
     }
     Ok(tables)
