@@ -974,11 +974,12 @@ Per-worker relations expose the same data as their global counterparts, but have
 The `mz_active_peeks` view describes all read queries ("peeks") that are pending in the [dataflow] layer.
 
 <!-- RELATION_SPEC mz_internal.mz_active_peeks -->
-| Field       | Type               | Meaning                                                                                                                                              |
-| ----------- | ------------------ |------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `id`        | [`uuid`]           | The ID of the peek request.                                                                                                                          |
-| `index_id`  | [`text`]           | The ID of the collection the peek is targeting. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables). |
-| `time`      | [`mz_timestamp`]   | The timestamp the peek has requested.                                                                                                                |
+| Field       | Type             | Meaning                                                                                                                                                                                                                                                                                                               |
+|-------------|------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `id`        | [`uuid`]         | The ID of the peek request.                                                                                                                                                                                                                                                                                           |
+| `object_id` | [`text`]         | The ID of the collection the peek is targeting. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables). |
+| `type`      | [`text`]         | The type of the corresponding peek: `index` if targeting an index or temporary dataflow; `persist` for a source, materialized view, or table.                                                                                                                                                                         |
+| `time`      | [`mz_timestamp`] | The timestamp the peek has requested.                                                                                                                                                                                                                                                                                 |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_active_peeks_per_worker -->
 
@@ -1272,10 +1273,11 @@ It distinguishes between individual records (`sent`, `received`) and batches of 
 The `mz_peek_durations_histogram` view describes a histogram of the duration in nanoseconds of read queries ("peeks") in the [dataflow] layer.
 
 <!-- RELATION_SPEC mz_internal.mz_peek_durations_histogram -->
-| Field          | Type        | Meaning                                            |
-| -------------- |-------------| --------                                           |
-| `duration_ns`  | [`uint8`]   | The upper bound of the bucket in nanoseconds.      |
-| `count`        | [`numeric`] | The (noncumulative) count of peeks in this bucket. |
+| Field         | Type        | Meaning                                            |
+|---------------|-------------|----------------------------------------------------|
+| `type`        | [`text`]    | The peek variant: `index` or `persist`.            |
+| `duration_ns` | [`uint8`]   | The upper bound of the bucket in nanoseconds.      |
+| `count`       | [`numeric`] | The (noncumulative) count of peeks in this bucket. |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_peek_durations_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_peek_durations_histogram_raw -->

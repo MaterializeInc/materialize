@@ -3442,7 +3442,7 @@ fn test_peek_on_dropped_indexed_view() {
             let count: i64 = ddl_client
                 .query_one(
                     &format!(
-                "SELECT COUNT(*) FROM mz_internal.mz_active_peeks WHERE index_id = '{index_id}'"
+                "SELECT COUNT(*) FROM mz_internal.mz_active_peeks WHERE object_id = '{index_id}'"
             ),
                     &[],
                 )
@@ -3474,7 +3474,7 @@ fn test_peek_on_dropped_indexed_view() {
             let count: i64 = ddl_client
                 .query_one(
                     &format!(
-                        "SELECT COUNT(*) FROM mz_internal.mz_active_peeks WHERE index_id = '{index_id}'"
+                        "SELECT COUNT(*) FROM mz_internal.mz_active_peeks WHERE object_id = '{index_id}'"
                     ),
                     &[],
                 )
