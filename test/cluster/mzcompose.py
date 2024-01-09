@@ -1518,17 +1518,28 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
                 """
         $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
         SET CLUSTER TO DEFAULT;
-        CREATE DEFAULT INDEX ON mz_views;
+        CREATE VIEW v_mz_views AS SELECT \
+            id, \
+            oid, \
+            schema_id, \
+            name, \
+            definition, \
+            owner_id, \
+            privileges, \
+            create_sql, \
+            redacted_create_sql \
+        FROM mz_views;
+        CREATE DEFAULT INDEX ON v_mz_views;
 
         > SELECT id FROM mz_indexes WHERE id like 'u%';
-        u1
+        u2
     """
             )
         )
         c.kill("materialized")
 
     with c.override(
-        Testdrive(),
+        Testdrive(no_reset=True),
         Materialized(),
     ):
         c.up("testdrive", persistent=True)
@@ -1537,7 +1548,7 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
             input=dedent(
                 """
         > SELECT id FROM mz_indexes WHERE id like 'u%';
-        u1
+        u2
     """
             )
         )

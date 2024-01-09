@@ -66,10 +66,10 @@ use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
-    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
-    CatalogRecordField, CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails,
-    DefaultPrivilegeAclItem, DefaultPrivilegeObject, EnvironmentId, IdReference, NameReference,
-    RoleAttributes, RoleMembership, RoleVars, SessionCatalog, SystemObjectType,
+    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogRecordField,
+    CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, DefaultPrivilegeAclItem,
+    DefaultPrivilegeObject, EnvironmentId, IdReference, NameReference, RoleAttributes,
+    RoleMembership, RoleVars, SessionCatalog, SystemObjectType,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId,
@@ -1983,19 +1983,12 @@ impl Catalog {
                             )));
                         }
                         if let ResolvedDatabaseSpecifier::Ambient = name.qualifiers.database_spec {
-                            // We allow users to create indexes on system objects to speed up
-                            // debugging related queries.
-                            if item.typ() != CatalogItemType::Index {
-                                let schema_name = state
-                                    .resolve_full_name(
-                                        &name,
-                                        session.map(|session| session.conn_id()),
-                                    )
-                                    .schema;
-                                return Err(AdapterError::Catalog(Error::new(
-                                    ErrorKind::ReadOnlySystemSchema(schema_name),
-                                )));
-                            }
+                            let schema_name = state
+                                .resolve_full_name(&name, session.map(|session| session.conn_id()))
+                                .schema;
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlySystemSchema(schema_name),
+                            )));
                         }
                         let schema_id = name.qualifiers.schema_spec.clone().into();
                         let serialized_item = item.to_serialized();

@@ -262,26 +262,6 @@ bar_ind bar <VARIABLE_OUTPUT> {a}
 
 > DROP CLUSTER clstr CASCADE;
 
-# Test creating indexes on system objects
-$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
-SET CLUSTER TO quickstart
-CREATE INDEX sys_ind ON mz_array_types (id)
-
-> SET CLUSTER TO mz_introspection
-> SHOW INDEXES ON mz_array_types
-sys_ind mz_array_types  <VARIABLE_OUTPUT>   {id}
-> SHOW INDEXES FROM mz_catalog WHERE name = 'sys_ind'
-sys_ind mz_array_types  <VARIABLE_OUTPUT>   {id}
-> SET CLUSTER TO quickstart
-
-$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
-DROP INDEX sys_ind
-ALTER SYSTEM SET enable_rbac_checks TO false
-
-# Test that creating indexes on objects in the mz_internal schema fails
-! CREATE INDEX illegal_sys_ind ON mz_internal.mz_comments (id)
-contains:cannot create index with unstable dependencies
-
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET enable_rbac_checks TO true
 
