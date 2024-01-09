@@ -139,7 +139,7 @@ impl OpenableDurableCatalogState for CatalogMigrator {
                 // Handle emergency stash before opening persist.
                 return self
                     .openable_stash
-                    .open_savepoint(boot_ts, bootstrap_args, deploy_generation)
+                    .open(boot_ts, bootstrap_args, deploy_generation)
                     .await;
             }
             TargetImplementation::MigrationDirection(direction) => direction,
