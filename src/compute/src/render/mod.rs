@@ -112,7 +112,7 @@ use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
 use differential_dataflow::{AsCollection, Collection, Data, ExchangeData, Hashable};
 use itertools::izip;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
-use mz_compute_types::plan::Plan;
+use mz_compute_types::plan::{IdPlan, Plan};
 use mz_expr::{EvalError, Id};
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Diff, GlobalId};
@@ -161,7 +161,7 @@ pub use join::{LinearJoinImpl, LinearJoinSpec};
 pub fn build_compute_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     compute_state: &mut ComputeState,
-    dataflow: DataflowDescription<Plan, CollectionMetadata>,
+    dataflow: DataflowDescription<IdPlan, CollectionMetadata>,
 ) {
     // Mutually recursive view definitions require special handling.
     let recursive = dataflow.objects_to_build.iter().any(|object| {
@@ -435,7 +435,7 @@ where
     G: Scope,
     G::Timestamp: RenderTimestamp,
 {
-    pub(crate) fn build_object(&mut self, object: BuildDesc<Plan>) {
+    pub(crate) fn build_object(&mut self, object: BuildDesc<IdPlan>) {
         // First, transform the relation expression into a render plan.
         let bundle = self.render_plan(object.plan);
         self.insert_id(Id::Global(object.id), bundle);
@@ -636,7 +636,7 @@ where
     ///
     /// The method requires that all variables conclude with a physical representation that
     /// contains a collection (i.e. a non-arrangement), and it will panic otherwise.
-    pub fn render_recursive_plan(&mut self, level: usize, plan: Plan) -> CollectionBundle<G> {
+    pub fn render_recursive_plan(&mut self, level: usize, plan: IdPlan) -> CollectionBundle<G> {
         if let Plan::LetRec {
             ids,
             values,
@@ -752,7 +752,7 @@ where
     ///
     /// The return type reflects the uncertainty about the data representation, perhaps
     /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
-    pub fn render_plan(&mut self, plan: Plan) -> CollectionBundle<G> {
+    pub fn render_plan(&mut self, plan: IdPlan) -> CollectionBundle<G> {
         match plan {
             Plan::Constant { rows, node_id: _ } => {
                 // Produce both rows and errs to avoid conditional dataflow construction.

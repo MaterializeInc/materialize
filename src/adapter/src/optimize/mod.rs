@@ -60,7 +60,7 @@ pub mod subscribe;
 pub mod view;
 
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::Plan;
+use mz_compute_types::plan::IdPlan;
 use mz_expr::{EvalError, OptimizedMirRelationExpr, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::timestamp::TimestampError;
@@ -181,7 +181,7 @@ impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
 type MirDataflowDescription = DataflowDescription<OptimizedMirRelationExpr>;
 /// A type for a [`DataflowDescription`] backed by `Lir~` plans. Used internally
 /// by the optimizer implementations.
-type LirDataflowDescription = DataflowDescription<Plan>;
+type LirDataflowDescription = DataflowDescription<IdPlan>;
 
 /// Error types that can be generated during optimization.
 #[derive(Debug, thiserror::Error)]

@@ -675,7 +675,7 @@ where
     /// Create the described dataflows and initializes state for their output.
     pub fn create_dataflow(
         &mut self,
-        dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
+        dataflow: DataflowDescription<mz_compute_types::plan::IdPlan<T>, (), T>,
     ) -> Result<(), DataflowCreationError> {
         // Validate the dataflow as having inputs whose `since` is less or equal to the dataflow's `as_of`.
         // Start tracking frontiers for each dataflow, using its `as_of` for each index and sink.

@@ -35,13 +35,13 @@ use crate::plan::join::delta_join::{DeltaPathPlan, DeltaStagePlan};
 use crate::plan::join::linear_join::LinearStagePlan;
 use crate::plan::join::{DeltaJoinPlan, JoinClosure, LinearJoinPlan};
 use crate::plan::reduce::{AccumulablePlan, BasicPlan, CollationPlan, HierarchicalPlan};
-use crate::plan::{AvailableCollections, Plan};
+use crate::plan::{AvailableCollections, IdPlan, Plan};
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
+impl DisplayText<PlanRenderingContext<'_, IdPlan>> for IdPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, IdPlan>,
     ) -> fmt::Result {
         use Plan::*;
 
@@ -416,11 +416,11 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for AvailableCollections {
+impl DisplayText<PlanRenderingContext<'_, IdPlan>> for AvailableCollections {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, IdPlan>,
     ) -> fmt::Result {
         // raw field
         let raw = &self.raw;
@@ -449,11 +449,11 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for AvailableCollections {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for LinearJoinPlan {
+impl DisplayText<PlanRenderingContext<'_, IdPlan>> for LinearJoinPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, IdPlan>,
     ) -> fmt::Result {
         let plan = self;
         if let Some(closure) = plan.final_closure.as_ref() {
@@ -490,11 +490,11 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for LinearJoinPlan {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for LinearStagePlan {
+impl DisplayText<PlanRenderingContext<'_, IdPlan>> for LinearStagePlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, IdPlan>,
     ) -> fmt::Result {
         let plan = self;
         if !plan.closure.is_identity() {
@@ -523,11 +523,11 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for LinearStagePlan {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaJoinPlan {
+impl DisplayText<PlanRenderingContext<'_, IdPlan>> for DeltaJoinPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, IdPlan>,
     ) -> fmt::Result {
         for (i, plan) in self.path_plans.iter().enumerate() {
             writeln!(f, "{}plan_path[{}]", ctx.indent, i)?;
@@ -537,11 +537,11 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaJoinPlan {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaPathPlan {
+impl DisplayText<PlanRenderingContext<'_, IdPlan>> for DeltaPathPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, IdPlan>,
     ) -> fmt::Result {
         let plan = self;
         if let Some(closure) = plan.final_closure.as_ref() {
@@ -571,11 +571,11 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaPathPlan {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaStagePlan {
+impl DisplayText<PlanRenderingContext<'_, IdPlan>> for DeltaStagePlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, IdPlan>,
     ) -> fmt::Result {
         let plan = self;
         if !plan.closure.is_identity() {
@@ -604,11 +604,11 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaStagePlan {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for JoinClosure {
+impl DisplayText<PlanRenderingContext<'_, IdPlan>> for JoinClosure {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, IdPlan>,
     ) -> fmt::Result {
         self.before.deref().fmt_text(f, ctx)?;
         if !self.ready_equivalences.is_empty() {
@@ -624,11 +624,11 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for JoinClosure {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for AccumulablePlan {
+impl DisplayText<PlanRenderingContext<'_, IdPlan>> for AccumulablePlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, IdPlan>,
     ) -> fmt::Result {
         // full_aggrs (skipped because they are repeated in simple_aggrs ∪ distinct_aggrs)
         // for (i, aggr) in self.full_aggrs.iter().enumerate() {
@@ -650,11 +650,11 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for AccumulablePlan {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for HierarchicalPlan {
+impl DisplayText<PlanRenderingContext<'_, IdPlan>> for HierarchicalPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, IdPlan>,
     ) -> fmt::Result {
         match self {
             HierarchicalPlan::Monotonic(plan) => {
@@ -680,11 +680,11 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for HierarchicalPlan {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for BasicPlan {
+impl DisplayText<PlanRenderingContext<'_, IdPlan>> for BasicPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, IdPlan>,
     ) -> fmt::Result {
         match self {
             BasicPlan::Single(idx, agg) => {
@@ -700,11 +700,11 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for BasicPlan {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for CollationPlan {
+impl DisplayText<PlanRenderingContext<'_, IdPlan>> for CollationPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, IdPlan>,
     ) -> fmt::Result {
         {
             use crate::plan::reduce::ReductionType;

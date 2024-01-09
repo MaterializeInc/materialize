@@ -25,7 +25,7 @@ use mz_compute_client::protocol::command::{
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::Plan;
+use mz_compute_types::plan::IdPlan;
 use mz_expr::SafeMfpPlan;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
@@ -283,7 +283,10 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         tracing.apply(self.compute_state.tracing_handle.as_ref());
     }
 
-    fn handle_create_dataflow(&mut self, dataflow: DataflowDescription<Plan, CollectionMetadata>) {
+    fn handle_create_dataflow(
+        &mut self,
+        dataflow: DataflowDescription<IdPlan, CollectionMetadata>,
+    ) {
         // Collect the exported object identifiers, paired with their associated "collection" identifier.
         // The latter is used to extract dependency information, which is in terms of collections ids.
         let dataflow_index = self.timely_worker.next_dataflow_index();

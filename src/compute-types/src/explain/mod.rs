@@ -19,14 +19,14 @@ use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, UnsupportedFormat};
 use mz_repr::GlobalId;
 
 use crate::dataflows::DataflowDescription;
-use crate::plan::Plan;
+use crate::plan::IdPlan;
 
-impl<'a> Explain<'a> for DataflowDescription<Plan> {
+impl<'a> Explain<'a> for DataflowDescription<IdPlan> {
     type Context = ExplainContext<'a>;
 
-    type Text = ExplainMultiPlan<'a, Plan>;
+    type Text = ExplainMultiPlan<'a, IdPlan>;
 
-    type Json = ExplainMultiPlan<'a, Plan>;
+    type Json = ExplainMultiPlan<'a, IdPlan>;
 
     type Dot = UnsupportedFormat;
 
@@ -39,11 +39,11 @@ impl<'a> Explain<'a> for DataflowDescription<Plan> {
     }
 }
 
-impl<'a> DataflowDescription<Plan> {
+impl<'a> DataflowDescription<IdPlan> {
     fn as_explain_multi_plan(
         &'a mut self,
         context: &'a ExplainContext<'a>,
-    ) -> Result<ExplainMultiPlan<'a, Plan>, ExplainError> {
+    ) -> Result<ExplainMultiPlan<'a, IdPlan>, ExplainError> {
         let export_ids = export_ids_for(self);
         let plans = self
             .objects_to_build

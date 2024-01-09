@@ -75,7 +75,7 @@ pub enum PeekResponseUnary {
 
 #[derive(Debug)]
 pub struct PeekDataflowPlan<T = mz_repr::Timestamp> {
-    desc: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
+    desc: DataflowDescription<mz_compute_types::plan::IdPlan<T>, (), T>,
     pub(crate) id: GlobalId,
     key: Vec<MirScalarExpr>,
     permutation: BTreeMap<usize, usize>,
@@ -84,7 +84,7 @@ pub struct PeekDataflowPlan<T = mz_repr::Timestamp> {
 
 impl<T> PeekDataflowPlan<T> {
     pub fn new(
-        desc: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
+        desc: DataflowDescription<mz_compute_types::plan::IdPlan<T>, (), T>,
         id: GlobalId,
         key: Vec<MirScalarExpr>,
         permutation: BTreeMap<usize, usize>,

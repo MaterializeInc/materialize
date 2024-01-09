@@ -502,7 +502,7 @@ where
     pub fn create_dataflow(
         &mut self,
         instance_id: ComputeInstanceId,
-        dataflow: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
+        dataflow: DataflowDescription<mz_compute_types::plan::IdPlan<T>, (), T>,
     ) -> Result<(), DataflowCreationError> {
         self.instance(instance_id)?.create_dataflow(dataflow)?;
         Ok(())

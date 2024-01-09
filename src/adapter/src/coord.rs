@@ -91,7 +91,7 @@ use mz_catalog::memory::objects::{CatalogEntry, CatalogItem, Connection, DataSou
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::Plan;
+use mz_compute_types::plan::IdPlan;
 use mz_compute_types::ComputeInstanceId;
 use mz_controller::clusters::{ClusterConfig, ClusterEvent, CreateReplicaConfig};
 use mz_controller::ControllerConfig;
@@ -2062,7 +2062,7 @@ impl Coordinator {
     /// Returns an `as_of` suitable for bootstrapping the given index dataflow.
     fn bootstrap_index_as_of(
         &self,
-        dataflow: &DataflowDescription<Plan>,
+        dataflow: &DataflowDescription<IdPlan>,
         cluster_id: ComputeInstanceId,
         is_retained_metrics_index: bool,
         dependent_matviews: BTreeSet<GlobalId>,
@@ -2173,7 +2173,7 @@ impl Coordinator {
     /// Returns an `as_of` suitable for bootstrapping the given materialized view dataflow.
     fn bootstrap_materialized_view_as_of(
         &self,
-        dataflow: &DataflowDescription<Plan>,
+        dataflow: &DataflowDescription<IdPlan>,
         cluster_id: ComputeInstanceId,
         refresh_schedule: &Option<RefreshSchedule>,
     ) -> Antichain<Timestamp> {
@@ -2541,7 +2541,7 @@ impl Coordinator {
     /// initialize the read policies for its exported objects.
     pub(crate) async fn ship_dataflow(
         &mut self,
-        dataflow: DataflowDescription<Plan>,
+        dataflow: DataflowDescription<IdPlan>,
         instance: ComputeInstanceId,
     ) {
         let export_ids = dataflow.export_ids().collect();
@@ -2559,7 +2559,7 @@ impl Coordinator {
 #[cfg(test)]
 impl Coordinator {
     #[allow(dead_code)]
-    async fn verify_ship_dataflow_no_error(&mut self, dataflow: DataflowDescription<Plan>) {
+    async fn verify_ship_dataflow_no_error(&mut self, dataflow: DataflowDescription<IdPlan>) {
         // `ship_dataflow_new` is not allowed to have a `Result` return because this function is
         // called after `catalog_transact`, after which no errors are allowed. This test exists to
         // prevent us from incorrectly teaching those functions how to return errors (which has

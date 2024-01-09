@@ -27,7 +27,7 @@ use timely::progress::Antichain;
 use crate::dataflows::proto_dataflow_description::{
     ProtoIndexExport, ProtoIndexImport, ProtoSinkExport, ProtoSourceImport,
 };
-use crate::plan::Plan;
+use crate::plan::{Plan, IdPlan};
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
 
@@ -411,7 +411,7 @@ impl<P: PartialEq, S: PartialEq, T: timely::PartialOrder> DataflowDescription<P,
 }
 
 impl RustType<ProtoDataflowDescription>
-    for DataflowDescription<crate::plan::Plan, CollectionMetadata>
+    for DataflowDescription<crate::plan::IdPlan, CollectionMetadata>
 {
     fn into_proto(&self) -> ProtoDataflowDescription {
         ProtoDataflowDescription {
@@ -549,7 +549,7 @@ impl ProtoMapEntry<GlobalId, ComputeSinkDesc<CollectionMetadata>> for ProtoSinkE
     }
 }
 
-impl Arbitrary for DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp> {
+impl Arbitrary for DataflowDescription<IdPlan, CollectionMetadata, mz_repr::Timestamp> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -562,7 +562,7 @@ proptest::prop_compose! {
     fn any_dataflow_description()(
         source_imports in proptest::collection::vec(any_source_import(), 1..3),
         index_imports in proptest::collection::vec(any_dataflow_index_import(), 1..3),
-        objects_to_build in proptest::collection::vec(any::<BuildDesc<Plan>>(), 1..3),
+        objects_to_build in proptest::collection::vec(any::<BuildDesc<IdPlan>>(), 1..3),
         index_exports in proptest::collection::vec(any_dataflow_index_export(), 1..3),
         sink_descs in proptest::collection::vec(
             any::<(GlobalId, ComputeSinkDesc<CollectionMetadata, mz_repr::Timestamp>)>(),
@@ -571,7 +571,7 @@ proptest::prop_compose! {
         as_of_some in any::<bool>(),
         as_of in proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..5),
         debug_name in ".*",
-    ) -> DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp> {
+    ) -> DataflowDescription<IdPlan, CollectionMetadata, mz_repr::Timestamp> {
         DataflowDescription {
             source_imports: BTreeMap::from_iter(source_imports.into_iter()),
             index_imports: BTreeMap::from_iter(index_imports.into_iter()),
@@ -668,7 +668,7 @@ pub struct BuildDesc<P> {
     pub plan: P,
 }
 
-impl RustType<ProtoBuildDesc> for BuildDesc<crate::plan::Plan> {
+impl RustType<ProtoBuildDesc> for BuildDesc<crate::plan::IdPlan> {
     fn into_proto(&self) -> ProtoBuildDesc {
         ProtoBuildDesc {
             id: Some(self.id.into_proto()),
@@ -716,15 +716,15 @@ mod tests {
     use proptest::proptest;
 
     use crate::dataflows::DataflowDescription;
+    use crate::plan::IdPlan;
 
     use super::*;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
-
         #[mz_ore::test]
-        fn dataflow_description_protobuf_roundtrip(expect in any::<DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp>>()) {
+        fn dataflow_description_protobuf_roundtrip(expect in any::<DataflowDescription<IdPlan, CollectionMetadata, mz_repr::Timestamp>>()) {
             let actual = protobuf_roundtrip::<_, ProtoDataflowDescription>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);

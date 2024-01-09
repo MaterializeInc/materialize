@@ -159,7 +159,7 @@ impl Clone for Catalog {
 #[derive(Default, Debug, Clone)]
 pub struct CatalogPlans {
     optimized_plan_by_id: BTreeMap<GlobalId, DataflowDescription<OptimizedMirRelationExpr>>,
-    physical_plan_by_id: BTreeMap<GlobalId, DataflowDescription<mz_compute_types::plan::Plan>>,
+    physical_plan_by_id: BTreeMap<GlobalId, DataflowDescription<mz_compute_types::plan::IdPlan>>,
     dataflow_metainfos: BTreeMap<GlobalId, DataflowMetainfo<Arc<OptimizerNotice>>>,
     notices_by_dep_id: BTreeMap<GlobalId, SmallVec<[Arc<OptimizerNotice>; 4]>>,
 }
@@ -180,7 +180,7 @@ impl Catalog {
     pub fn set_physical_plan(
         &mut self,
         id: GlobalId,
-        plan: DataflowDescription<mz_compute_types::plan::Plan>,
+        plan: DataflowDescription<mz_compute_types::plan::IdPlan>,
     ) {
         self.plans.physical_plan_by_id.insert(id, plan);
     }
@@ -199,7 +199,7 @@ impl Catalog {
     pub fn try_get_physical_plan(
         &self,
         id: &GlobalId,
-    ) -> Option<&DataflowDescription<mz_compute_types::plan::Plan>> {
+    ) -> Option<&DataflowDescription<mz_compute_types::plan::IdPlan>> {
         self.plans.physical_plan_by_id.get(id)
     }
 

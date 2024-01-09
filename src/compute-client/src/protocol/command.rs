@@ -133,7 +133,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// [`FrontierUpper`]: super::response::ComputeResponse::FrontierUpper
     /// [`SubscribeResponse`]: super::response::ComputeResponse::SubscribeResponse
     /// [Initialization Stage]: super#initialization-stage
-    CreateDataflow(DataflowDescription<mz_compute_types::plan::Plan<T>, CollectionMetadata, T>),
+    CreateDataflow(DataflowDescription<mz_compute_types::plan::IdPlan<T>, CollectionMetadata, T>),
 
     /// `AllowCompaction` informs the replica about the relaxation of external read capabilities on
     /// a compute collection exported by one of the replica’s dataflow.
@@ -299,7 +299,7 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
                 .boxed(),
             any::<
                 DataflowDescription<
-                    mz_compute_types::plan::Plan,
+                    mz_compute_types::plan::IdPlan,
                     CollectionMetadata,
                     mz_repr::Timestamp,
                 >,

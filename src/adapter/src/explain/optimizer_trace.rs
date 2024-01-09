@@ -13,7 +13,7 @@ use std::fmt::{Debug, Display};
 use std::time::Duration;
 
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::Plan;
+use mz_compute_types::plan::IdPlan;
 use mz_expr::explain::ExplainContext;
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_repr::explain::tracing::{DelegateSubscriber, PlanTrace, TraceEntry};
@@ -62,7 +62,7 @@ impl OptimizerTrace {
                 .with(PlanTrace::<HirRelationExpr>::new(path))
                 .with(PlanTrace::<MirRelationExpr>::new(path))
                 .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(path))
-                .with(PlanTrace::<DataflowDescription<Plan>>::new(path));
+                .with(PlanTrace::<DataflowDescription<IdPlan>>::new(path));
 
             OptimizerTrace(dispatcher::Dispatch::new(subscriber))
         } else {
@@ -76,7 +76,7 @@ impl OptimizerTrace {
                 .with(PlanTrace::<HirRelationExpr>::new(path))
                 .with(PlanTrace::<MirRelationExpr>::new(path))
                 .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(path))
-                .with(PlanTrace::<DataflowDescription<Plan>>::new(path));
+                .with(PlanTrace::<DataflowDescription<IdPlan>>::new(path));
 
             OptimizerTrace(dispatcher::Dispatch::new(subscriber))
         }
@@ -142,7 +142,7 @@ impl OptimizerTrace {
                 &mut context,
                 &fast_path_plan
             )?,
-            self.drain_explainable_entries::<DataflowDescription<Plan>>(
+            self.drain_explainable_entries::<DataflowDescription<IdPlan>>(
                 &format,
                 &mut context,
                 &fast_path_plan
