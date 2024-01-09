@@ -87,7 +87,9 @@ use mz_ore::cast;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_persist_client::batch::UntrimmableColumns;
-use mz_persist_client::cfg::{PersistConfig, PersistFeatureFlag};
+use mz_persist_client::cfg::{
+    flags as persist_flags, FlagValue, PersistConfig, PersistFeatureFlag,
+};
 use mz_pgwire_common::Severity;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
@@ -2874,6 +2876,26 @@ impl Default for SystemVars {
     }
 }
 
+enum PersistVar {
+    Bool(ServerVar<bool>),
+}
+
+impl From<PersistFeatureFlag> for PersistVar {
+    fn from(flag: PersistFeatureFlag) -> Self {
+        let name = UncasedStr::new(flag.name);
+        let description = flag.description;
+        let internal = true;
+        match flag.default {
+            FlagValue::Bool(value) => PersistVar::Bool(ServerVar {
+                name,
+                value,
+                description,
+                internal,
+            }),
+        }
+    }
+}
+
 impl SystemVars {
     /// Set of [`SystemVar`]s that can also get set at a per-Session level.
     const SESSION_VARS: Lazy<BTreeMap<&'static UncasedStr, Box<dyn SystemVarMut>>> =
@@ -3065,8 +3087,10 @@ impl SystemVars {
             .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL)
             .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER);
 
-        for flag in PersistFeatureFlag::ALL {
-            vars = vars.with_var(&flag.into())
+        for flag in persist_flags::all() {
+            match flag.into() {
+                PersistVar::Bool(var) => vars = vars.with_var(&var),
+            };
         }
 
         vars.refresh_internal_state();
@@ -3742,9 +3766,14 @@ impl SystemVars {
     }
 
     pub fn persist_flags(&self) -> BTreeMap<String, bool> {
-        PersistFeatureFlag::ALL
-            .iter()
-            .map(|f| (f.name.to_owned(), *self.expect_value(&f.into())))
+        persist_flags::all()
+            .map(|f| {
+                let name = f.name.to_owned();
+                let value = match f.into() {
+                    PersistVar::Bool(bool) => self.expect_value(&bool),
+                };
+                (name, *value)
+            })
             .collect()
     }
 
@@ -4071,17 +4100,6 @@ where
             Err(VarError::RequiresUnsafeMode(self.name()))
         } else {
             Ok(())
-        }
-    }
-}
-
-impl From<&'static PersistFeatureFlag> for ServerVar<bool> {
-    fn from(value: &'static PersistFeatureFlag) -> Self {
-        Self {
-            name: UncasedStr::new(value.name),
-            value: value.default,
-            description: value.description,
-            internal: true,
         }
     }
 }
@@ -5600,7 +5618,7 @@ fn is_persist_config_var(name: &str) -> bool {
         || name == PERSIST_STATS_UNTRIMMABLE_COLUMNS.name()
         || name == PERSIST_PUBSUB_CLIENT_ENABLED.name()
         || name == PERSIST_PUBSUB_PUSH_DIFF_ENABLED.name()
-        || PersistFeatureFlag::ALL.iter().any(|f| f.name == name)
+        || persist_flags::all().any(|f| f.name == name)
 }
 
 /// Returns whether the named variable is a Postgres/CRDB timestamp oracle

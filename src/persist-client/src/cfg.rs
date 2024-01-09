@@ -30,38 +30,114 @@ use serde::{Deserialize, Serialize};
 
 include!(concat!(env!("OUT_DIR"), "/mz_persist_client.cfg.rs"));
 
+/// An externally-supplied configuration value.
+#[derive(Debug, Clone)]
+pub enum FlagValue {
+    Bool(bool),
+}
+
+#[derive(Debug)]
+pub enum FlagShared {
+    Bool(AtomicBool),
+}
+
+impl FlagShared {
+    fn new(value: FlagValue) -> Self {
+        match value {
+            FlagValue::Bool(b) => FlagShared::Bool(AtomicBool::new(b)),
+        }
+    }
+
+    fn get(&self) -> FlagValue {
+        match self {
+            FlagShared::Bool(atomic) => FlagValue::Bool(atomic.load(DynamicConfig::LOAD_ORDERING)),
+        }
+    }
+
+    fn apply(&self, value: FlagValue) {
+        match (self, value) {
+            (FlagShared::Bool(atomic), FlagValue::Bool(var)) => {
+                atomic.store(var, DynamicConfig::STORE_ORDERING)
+            }
+        }
+    }
+}
+
+pub trait FlagType: ToOwned {
+    fn into_value(self) -> FlagValue;
+    fn from_value(value: FlagValue) -> Option<Self::Owned>;
+}
+
+impl FlagType for FlagValue {
+    fn into_value(self) -> FlagValue {
+        self
+    }
+
+    fn from_value(value: FlagValue) -> Option<Self> {
+        Some(value)
+    }
+}
+
+impl FlagType for bool {
+    fn into_value(self) -> FlagValue {
+        FlagValue::Bool(self)
+    }
+
+    fn from_value(flag: FlagValue) -> Option<Self> {
+        match flag {
+            FlagValue::Bool(b) => Some(b),
+        }
+    }
+}
+
 #[derive(Copy, Clone, PartialOrd, PartialEq, Ord, Eq, Debug)]
-pub struct PersistFeatureFlag<T = bool> {
+pub struct PersistFeatureFlag<T = FlagValue> {
     pub name: &'static str,
     pub default: T,
     pub description: &'static str,
 }
 
+impl<T> PersistFeatureFlag<T> {
+    fn into_generic(self) -> PersistFeatureFlag<FlagValue>
+    where
+        T: FlagType,
+    {
+        PersistFeatureFlag {
+            name: self.name,
+            default: self.default.into_value(),
+            description: self.description,
+        }
+    }
+}
+
 pub mod flags {
     use super::*;
 
-    pub(crate) const STREAMING_COMPACTION: PersistFeatureFlag = PersistFeatureFlag {
+    pub(crate) const STREAMING_COMPACTION: PersistFeatureFlag<bool> = PersistFeatureFlag {
         name: "persist_streaming_compaction_enabled",
         default: false,
         description: "use the new streaming consolidate during compaction",
     };
-    pub(crate) const STREAMING_SNAPSHOT_AND_FETCH: PersistFeatureFlag = PersistFeatureFlag {
+    pub(crate) const STREAMING_SNAPSHOT_AND_FETCH: PersistFeatureFlag<bool> = PersistFeatureFlag {
         name: "persist_streaming_snapshot_and_fetch_enabled",
         default: false,
         description: "use the new streaming consolidate during snapshot_and_fetch",
     };
     // TODO: Remove this once we're comfortable that there aren't any bugs.
-    pub(crate) const BATCH_DELETE_ENABLED: PersistFeatureFlag = PersistFeatureFlag {
+    pub(crate) const BATCH_DELETE_ENABLED: PersistFeatureFlag<bool> = PersistFeatureFlag {
         name: "persist_batch_delete_enabled",
         default: false,
         description: "Whether to actually delete blobs when batch delete is called (Materialize).",
     };
 
-    pub const ALL: &'static [PersistFeatureFlag] = &[
-        STREAMING_COMPACTION,
-        STREAMING_SNAPSHOT_AND_FETCH,
-        BATCH_DELETE_ENABLED,
-    ];
+    pub fn all() -> impl Iterator<Item = PersistFeatureFlag> {
+        [
+            STREAMING_COMPACTION.into_generic(),
+            STREAMING_SNAPSHOT_AND_FETCH.into_generic(),
+            BATCH_DELETE_ENABLED.into_generic(),
+        ]
+        .into_iter()
+    }
 }
 
 /// The tunable knobs for persist.
@@ -218,9 +294,10 @@ impl PersistConfig {
                 txns_data_shard_retryer: RwLock::new(Self::DEFAULT_TXNS_DATA_SHARD_RETRYER),
                 feature_flags: {
                     // NB: initialized with the full set of feature flags, so the map never needs updating.
-                    flags::ALL
-                        .iter()
-                        .map(|f| (f.name, AtomicBool::new(f.default)))
+                    flags::all()
+                        .map(|PersistFeatureFlag { name, default, .. }| {
+                            (name, FlagShared::new(default))
+                        })
                         .collect()
                 },
             }),
@@ -472,7 +549,7 @@ pub struct DynamicConfig {
     pubsub_push_diff_enabled: AtomicBool,
     rollup_threshold: AtomicUsize,
 
-    feature_flags: BTreeMap<&'static str, AtomicBool>,
+    feature_flags: BTreeMap<&'static str, FlagShared>,
 
     // NB: These parameters are not atomically updated together in LD.
     // We put them under a single RwLock to reduce the cost of reads
@@ -529,12 +606,12 @@ impl DynamicConfig {
     const LOAD_ORDERING: Ordering = Ordering::SeqCst;
     const STORE_ORDERING: Ordering = Ordering::SeqCst;
 
-    pub fn enabled(&self, flag: PersistFeatureFlag) -> bool {
-        self.feature_flags[flag.name].load(DynamicConfig::LOAD_ORDERING)
+    pub fn enabled<T: FlagType>(&self, flag: PersistFeatureFlag<T>) -> T::Owned {
+        T::from_value(self.feature_flags[flag.name].get()).expect("flag names should be unique")
     }
 
-    pub fn set_feature_flag(&self, flag: PersistFeatureFlag, to: bool) {
-        self.feature_flags[flag.name].store(to, DynamicConfig::STORE_ORDERING);
+    pub fn set_feature_flag<T: FlagType>(&self, flag: PersistFeatureFlag<T>, to: T) {
+        self.feature_flags[flag.name].apply(to.into_value());
     }
 
     /// The maximum number of parts (s3 blobs) that [crate::batch::BatchBuilder]
@@ -1182,9 +1259,9 @@ impl PersistParameters {
                 .rollup_threshold
                 .store(*rollup_threshold, DynamicConfig::STORE_ORDERING);
         }
-        for flag in flags::ALL {
+        for flag in flags::all() {
             if let Some(value) = feature_flags.get(flag.name) {
-                cfg.dynamic.set_feature_flag(*flag, *value);
+                cfg.dynamic.set_feature_flag(flag, (*value).into_value());
             }
         }
     }
