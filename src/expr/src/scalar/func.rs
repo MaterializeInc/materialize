@@ -3237,7 +3237,7 @@ impl BinaryFunc {
     /// increasing `b` will always cause the result to _decrease_.)
     ///
     /// This property describes the behaviour of the function over ranges where the function is defined:
-    /// ie. the arguments and the result are non-null (and non-error) datums.
+    /// ie. the arguments and the result are non-error datums.
     pub fn is_monotone(&self) -> (bool, bool) {
         match self {
             BinaryFunc::AddInt16
@@ -4322,7 +4322,7 @@ trait LazyUnaryFunc {
     /// determine the range of possible outputs just by mapping the endpoints.
     ///
     /// This property describes the behaviour of the function over ranges where the function is defined:
-    /// ie. the argument and the result are non-null (and non-error) datums.
+    /// ie. the argument and the result are non-error datums.
     fn is_monotone(&self) -> bool;
 }
 
@@ -7846,11 +7846,11 @@ impl VariadicFunc {
     /// This describes the *pointwise* behaviour of the function:
     /// ie. if more than one argument is provided, this describes the behaviour of
     /// any specific argument as the others are held constant. (For example, `COALESCE(a, b)` is
-    /// monotone in `a` because for any particular non-null value of `b`, increasing `a` will never
+    /// monotone in `a` because for any particular value of `b`, increasing `a` will never
     /// cause the result to decrease.)
     ///
     /// This property describes the behaviour of the function over ranges where the function is defined:
-    /// ie. the arguments and the result are non-null (and non-error) datums.
+    /// ie. the arguments and the result are non-error datums.
     pub fn is_monotone(&self) -> bool {
         match self {
             VariadicFunc::Coalesce
