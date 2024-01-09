@@ -69,7 +69,7 @@ mz-tls-util = { path = "../tls-util" }
 mz-tracing = { path = "../tracing" }
 mz-transform = { path = "../transform" }
 mz-timestamp-oracle = { path = "../timestamp-oracle" }
-opentelemetry = { version = "0.20.0", features = ["rt-tokio", "trace"] }
+opentelemetry = { version = "0.21.0", features = ["trace"] }
 prometheus = { version = "0.13.3", default-features = false }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.3.0", features = ["boxed_union"] }
@@ -99,7 +99,7 @@ tokio-postgres = { version = "0.7.8" }
 tokio-stream = "0.1.11"
 tracing = "0.1.37"
 tracing-core = "0.1.30"
-tracing-opentelemetry = { version = "0.20.0" }
+tracing-opentelemetry = { version = "0.22.0" }
 tracing-subscriber = "0.3.16"
 thiserror = "1.0.37"
 uncased = "0.9.7"

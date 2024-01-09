@@ -38,8 +38,8 @@ use mz_ore::tracing::{
     TracingGuard, TracingHandle,
 };
 use mz_tracing::CloneableEnvFilter;
-use opentelemetry::sdk::resource::Resource;
 use opentelemetry::KeyValue;
+use opentelemetry_sdk::resource::Resource;
 
 /// Command line arguments for application tracing.
 ///
