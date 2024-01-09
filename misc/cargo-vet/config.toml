@@ -930,27 +930,7 @@ criteria = "safe-to-deploy"
 version = "0.9.90"
 criteria = "safe-to-deploy"
 
-[[exemptions.opentelemetry]]
-version = "0.20.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.opentelemetry-otlp]]
-version = "0.13.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.opentelemetry-proto]]
-version = "0.3.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.opentelemetry-semantic-conventions]]
-version = "0.12.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.opentelemetry_api]]
-version = "0.20.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.opentelemetry_sdk]]
 version = "0.20.0"
 criteria = "safe-to-deploy"
 
@@ -1370,6 +1350,10 @@ criteria = "safe-to-deploy"
 version = "0.7.0@git:62c7e5f84ace6b7b5da48c46cb963be95d43aaab"
 criteria = "safe-to-deploy"
 
+[[exemptions.serde-value]]
+version = "0.7.0@git:a84c6b71825efaffb332c0d19f18c2bdf9ee7b40"
+criteria = "safe-to-deploy"
+
 [[exemptions.serde_plain]]
 version = "1.0.1"
 criteria = "safe-to-deploy"
@@ -1654,16 +1638,8 @@ criteria = "safe-to-deploy"
 version = "0.1.30"
 criteria = "safe-to-deploy"
 
-[[exemptions.tracing-opentelemetry]]
-version = "0.20.0@git:405437e84fa3b0f34b91b8655d45a229265a6f14"
-criteria = "safe-to-deploy"
-
 [[exemptions.tracing-serde]]
 version = "0.1.3"
-criteria = "safe-to-deploy"
-
-[[exemptions.tracing-subscriber]]
-version = "0.3.16"
 criteria = "safe-to-deploy"
 
 [[exemptions.treediff]]
