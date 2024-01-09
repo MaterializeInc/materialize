@@ -321,3 +321,40 @@ Notices:
     Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (z, w).
 
 EOF
+
+# Regression test for #24301
+# --------------------------
+
+statement ok
+DROP TABLE IF EXISTS t1 CASCADE;
+
+statement ok
+CREATE TABLE t1 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
+
+statement ok
+CREATE INDEX t1i2 ON t1(f2, f1);
+
+# Recommended key has a field that is not present in any of the indexes.
+query T multiline
+EXPLAIN WITH(humanized_exprs)
+SELECT *
+  FROM (SELECT * FROM (VALUES (1, 2))) as t2(f1, f2)
+  JOIN (SELECT a1.f2 AS f1, a1.f1 + a1.f2 AS f2 FROM t1 AS a1) AS a2 USING (f1)
+WHERE
+  a2.f2 * 2 < a2.f2 + 2 AND
+  a2.f2 + a2.f2 = 7;
+----
+Explained Query (fast path):
+  Project (#4, #5, #3)
+    Filter (#0{f1} = 1) AND (7 = (#2 + #2)) AND ((#2 * 2) < (#2 + 2))
+      Map ((#1{f2} + #0{f1}), (#1{f2} + 1), 1, 2)
+        ReadIndex on=materialize.public.t1 t1i2=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.t1i2 (*** full scan ***)
+
+Notices:
+  - Notice: Index materialize.public.t1i2 on t1(f2, f1) is too wide to use for literal equalities `f2 = 1`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (f2, (#2 + #2)).
+
+EOF
