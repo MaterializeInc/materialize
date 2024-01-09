@@ -175,9 +175,11 @@ def run_one_scenario(
             )
         ):
             executor = Docker(composition=c, seed=common_seed, materialized=mz)
+            mz_version = MzVersion.parse_mz(c.query_mz_version())
 
             benchmark = Benchmark(
                 mz_id=mz_id,
+                mz_version=mz_version,
                 scenario=scenario,
                 scale=args.scale,
                 executor=executor,
