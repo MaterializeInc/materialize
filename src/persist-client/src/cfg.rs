@@ -13,7 +13,6 @@
 
 use once_cell::sync::Lazy;
 use std::collections::BTreeMap;
-use std::string::ToString;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -323,17 +322,17 @@ impl PersistConfig {
             equals: vec![
                 // If we trim the "err" column, then we can't ever use pushdown on a part
                 // (because it could have >0 errors).
-                "err".to_string(),
-                "ts".to_string(),
-                "receivedat".to_string(),
-                "createdat".to_string(),
+                "err".into(),
+                "ts".into(),
+                "receivedat".into(),
+                "createdat".into(),
             ],
-            prefixes: vec!["last_".to_string()],
+            prefixes: vec!["last_".into()],
             suffixes: vec![
-                "timestamp".to_string(),
-                "time".to_string(),
-                "_at".to_string(),
-                "_tstamp".to_string(),
+                "timestamp".into(),
+                "time".into(),
+                "_at".into(),
+                "_tstamp".into(),
             ],
         }
     });
