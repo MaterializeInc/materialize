@@ -33,11 +33,11 @@ statement error permission denied for VIEW
 SELECT 1 FROM mz_internal.mz_activity_log_redacted WHERE 1 = 0
 
 # Test that after granting the less-privileged
-# `read_sql_redacted` role, we can
+# `mz_monitor_redacted` role, we can
 # query the redacted objects, but not the unredacted ones.
 
 simple conn=mz_system,user=mz_system
-GRANT mz_read_redacted_sql TO materialize
+GRANT mz_monitor_redacted TO materialize
 ----
 COMPLETE 0
 
@@ -64,7 +64,7 @@ SELECT 1 FROM mz_internal.mz_activity_log_redacted WHERE 1 = 0
 
 # Test that revocation does something
 simple conn=mz_system,user=mz_system
-REVOKE mz_read_redacted_sql FROM materialize
+REVOKE mz_monitor_redacted FROM materialize
 ----
 COMPLETE 0
 
@@ -87,10 +87,10 @@ statement error permission denied for VIEW
 SELECT 1 FROM mz_internal.mz_activity_log_redacted WHERE 1 = 0
 
 # Test that we can read all tables with the more powerful permission
-# (`mz_read_sql`)
+# (`mz_monitor`)
 
 simple conn=mz_system,user=mz_system
-GRANT mz_read_sql TO materialize
+GRANT mz_monitor TO materialize
 ----
 COMPLETE 0
 

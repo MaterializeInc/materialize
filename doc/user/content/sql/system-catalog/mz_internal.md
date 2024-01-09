@@ -48,7 +48,7 @@ logging entirely for a session, execute `SET
 statement_logging_sample_rate TO 0`. Materialize may apply a lower
 sampling rate than the one set in this variable.
 
-Only users that have been granted the `mz_read_sql` role can access
+Only superusers or users that have been granted the `mz_monitor` role can access
 this view.
 
 <!-- RELATION_SPEC mz_internal.mz_activity_log -->

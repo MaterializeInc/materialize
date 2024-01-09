@@ -42,7 +42,7 @@ use mz_sql::catalog::{
 };
 use mz_sql::rbac;
 use mz_sql::session::user::{
-    MZ_READ_REDACTED_SQL_ROLE_ID, MZ_READ_SQL_ROLE_ID, MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID,
+    MZ_MONITOR_REDACTED_ROLE_ID, MZ_MONITOR_ROLE_ID, MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID,
     SUPPORT_USER_NAME, SYSTEM_USER_NAME,
 };
 use mz_storage_client::controller::IntrospectionType;
@@ -1656,14 +1656,14 @@ const SUPPORT_SELECT: MzAclItem = MzAclItem {
     acl_mode: AclMode::SELECT,
 };
 
-const READ_SQL: MzAclItem = MzAclItem {
-    grantee: MZ_READ_SQL_ROLE_ID,
+const MONITOR: MzAclItem = MzAclItem {
+    grantee: MZ_MONITOR_ROLE_ID,
     grantor: MZ_SYSTEM_ROLE_ID,
     acl_mode: AclMode::SELECT,
 };
 
-const READ_REDACTED_SQL: MzAclItem = MzAclItem {
-    grantee: MZ_READ_REDACTED_SQL_ROLE_ID,
+const MONITOR_REDACTED: MzAclItem = MzAclItem {
+    grantee: MZ_MONITOR_REDACTED_ROLE_ID,
     grantor: MZ_SYSTEM_ROLE_ID,
     acl_mode: AclMode::SELECT,
 };
@@ -2516,7 +2516,7 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| Bu
     data_source: Some(IntrospectionType::StatementExecutionHistory),
     desc: MZ_STATEMENT_EXECUTION_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
-    access: vec![READ_SQL],
+    access: vec![MONITOR],
 });
 
 pub static MZ_STATEMENT_EXECUTION_HISTORY_REDACTED: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
@@ -2530,7 +2530,7 @@ cluster_name, transaction_isolation, execution_timestamp, transaction_id,
 transient_index_id, began_at, finished_at, finished_status,
 error_message, rows_returned, execution_strategy
 FROM mz_internal.mz_statement_execution_history",
-    access: vec![SUPPORT_SELECT, READ_REDACTED_SQL, READ_SQL],
+    access: vec![SUPPORT_SELECT, MONITOR_REDACTED, MONITOR],
 });
 
 pub static MZ_PREPARED_STATEMENT_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -2539,7 +2539,7 @@ pub static MZ_PREPARED_STATEMENT_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| Bui
     data_source: Some(IntrospectionType::PreparedStatementHistory),
     desc: MZ_PREPARED_STATEMENT_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
-    access: vec![READ_SQL],
+    access: vec![MONITOR],
 });
 
 pub static MZ_PREPARED_STATEMENT_HISTORY_REDACTED: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
@@ -2550,7 +2550,7 @@ pub static MZ_PREPARED_STATEMENT_HISTORY_REDACTED: Lazy<BuiltinView> = Lazy::new
     sql: "
 SELECT id, session_id, name, redacted_sql, prepared_at, statement_type
 FROM mz_internal.mz_prepared_statement_history",
-    access: vec![SUPPORT_SELECT, READ_REDACTED_SQL, READ_SQL],
+    access: vec![SUPPORT_SELECT, MONITOR_REDACTED, MONITOR],
 });
 
 pub static MZ_SESSION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -2575,7 +2575,7 @@ mpsh.id AS prepared_statement_id, sql, mpsh.name AS prepared_statement_name,
 session_id, redacted_sql, prepared_at, statement_type
 FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh
 WHERE mseh.prepared_statement_id = mpsh.id",
-    access: vec![READ_SQL],
+    access: vec![MONITOR],
 }
 });
 
@@ -2590,7 +2590,7 @@ transaction_isolation, execution_timestamp, transient_index_id, began_at, finish
 error_message, rows_returned, execution_strategy, transaction_id, prepared_statement_id,
 prepared_statement_name, session_id, redacted_sql, prepared_at, statement_type
 FROM mz_internal.mz_activity_log",
-    access: vec![SUPPORT_SELECT, READ_REDACTED_SQL, READ_SQL],
+    access: vec![SUPPORT_SELECT, MONITOR_REDACTED, MONITOR],
     }
 });
 
@@ -2607,9 +2607,9 @@ pub static MZ_STATEMENT_LIFECYCLE_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| Bu
     data_source: Some(IntrospectionType::StatementLifecycleHistory),
     is_retained_metrics_object: false,
     // TODO[btv]: Maybe this should be public instead of
-    // `READ_REDACTED_SQL`, but since that would be a backwards-compatible
+    // `MONITOR_REDACTED`, but since that would be a backwards-compatible
     // chagne, we probably don't need to worry about it now.
-    access: vec![SUPPORT_SELECT, READ_REDACTED_SQL, READ_SQL],
+    access: vec![SUPPORT_SELECT, MONITOR_REDACTED, MONITOR],
 });
 
 pub static MZ_SOURCE_STATUSES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
@@ -6263,17 +6263,17 @@ pub const MZ_SUPPORT_ROLE: BuiltinRole = BuiltinRole {
 
 /// This role can `SELECT` from various query history objects,
 /// e.g. `mz_prepared_statement_history`.
-pub const MZ_READ_SQL_ROLE: BuiltinRole = BuiltinRole {
-    id: MZ_READ_SQL_ROLE_ID,
-    name: "mz_read_sql",
+pub const MZ_MONITOR_ROLE: BuiltinRole = BuiltinRole {
+    id: MZ_MONITOR_ROLE_ID,
+    name: "mz_monitor",
     attributes: RoleAttributes::new(),
 };
 
-/// This role is like [`MZ_READ_SQL_ROLE`], but can only query
+/// This role is like [`MZ_MONITOR_ROLE`], but can only query
 /// the redacted versions of the objects.
-pub const MZ_READ_REDACTED_SQL_ROLE: BuiltinRole = BuiltinRole {
-    id: MZ_READ_REDACTED_SQL_ROLE_ID,
-    name: "mz_read_redacted_sql",
+pub const MZ_MONITOR_REDACTED: BuiltinRole = BuiltinRole {
+    id: MZ_MONITOR_REDACTED_ROLE_ID,
+    name: "mz_monitor_redacted",
     attributes: RoleAttributes::new(),
 };
 
@@ -6705,11 +6705,11 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
 pub const BUILTIN_ROLES: &[&BuiltinRole] = &[
     &MZ_SYSTEM_ROLE,
     &MZ_SUPPORT_ROLE,
-    &MZ_READ_SQL_ROLE,
-    &MZ_READ_REDACTED_SQL_ROLE,
+    &MZ_MONITOR_ROLE,
+    &MZ_MONITOR_REDACTED,
 ];
 pub const GRANTABLE_BUILTIN_ROLE_IDS: &[RoleId] =
-    &[MZ_READ_SQL_ROLE_ID, MZ_READ_REDACTED_SQL_ROLE_ID];
+    &[MZ_MONITOR_ROLE_ID, MZ_MONITOR_REDACTED_ROLE_ID];
 pub const BUILTIN_CLUSTERS: &[&BuiltinCluster] = &[&MZ_SYSTEM_CLUSTER, &MZ_INTROSPECTION_CLUSTER];
 pub const BUILTIN_CLUSTER_REPLICAS: &[&BuiltinClusterReplica] = &[
     &MZ_SYSTEM_CLUSTER_REPLICA,
