@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-
+import re
 from math import ceil, floor
 from textwrap import dedent
 
@@ -25,6 +25,7 @@ from materialize.feature_benchmark.scenario import (
     ScenarioBig,
     ScenarioDisabled,
 )
+from materialize.mz_version import MzVersion
 
 
 class FastPath(Scenario):
@@ -603,8 +604,7 @@ class AccumulateReductions(Dataflow):
         )
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            """
+        sql = """
 > SELECT 1
   /* A */
 1
@@ -615,21 +615,21 @@ class AccumulateReductions(Dataflow):
 
 ? EXPLAIN SELECT count(*) FROM accumulable;
 Explained Query:
-  Return
-    Union
-      Get l0
-      Map (0)
-        Union
-          Negate
-            Project ()
-              Get l0
-          Constant
+  Return // { arity: 1 }
+    Union // { arity: 1 }
+      Get l0 // { arity: 1 }
+      Map (0) // { arity: 1 }
+        Union // { arity: 0 }
+          Negate // { arity: 0 }
+            Project () // { arity: 0 }
+              Get l0 // { arity: 1 }
+          Constant // { arity: 0 }
             - ()
   With
     cte l0 =
-      Reduce aggregates=[count(*)]
-        Project ()
-          ReadIndex on=accumulable i_accumulable=[*** full scan ***]
+      Reduce aggregates=[count(*)] // { arity: 1 }
+        Project () // { arity: 0 }
+          ReadIndex on=accumulable i_accumulable=[*** full scan ***] // { arity: 5 }
 
 Used Indexes:
   - materialize.public.i_accumulable (*** full scan ***)
@@ -640,7 +640,11 @@ Used Indexes:
 
 > SET CLUSTER = default;
 """
-        )
+
+        if self._mz_version < MzVersion.parse_mz("v0.83.0-dev"):
+            sql = remove_arity_information_from_explain(sql)
+
+        return Td(sql)
 
 
 class Retraction(Dataflow):
@@ -1569,8 +1573,7 @@ class HydrateIndex(Scenario):
         ]
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        sql = f"""
 > DROP TABLE IF EXISTS t1 CASCADE
 > CREATE TABLE t1 (f1 INTEGER, f2 INTEGER)
 > ALTER CLUSTER idx_cluster SET (REPLICATION FACTOR 0)
@@ -1588,21 +1591,21 @@ class HydrateIndex(Scenario):
 > SET CLUSTER = idx_cluster
 ? EXPLAIN SELECT COUNT(*) FROM t1
 Explained Query:
-  Return
-    Union
-      Get l0
-      Map (0)
-        Union
-          Negate
-            Project ()
-              Get l0
-          Constant
+  Return // {{ arity: 1 }}
+    Union // {{ arity: 1 }}
+      Get l0 // {{ arity: 1 }}
+      Map (0) // {{ arity: 1 }}
+        Union // {{ arity: 0 }}
+          Negate // {{ arity: 0 }}
+            Project () // {{ arity: 0 }}
+              Get l0 // {{ arity: 1 }}
+          Constant // {{ arity: 0 }}
             - ()
   With
     cte l0 =
-      Reduce aggregates=[count(*)]
-        Project ()
-          ReadIndex on=t1 i1=[*** full scan ***]
+      Reduce aggregates=[count(*)] // {{ arity: 1 }}
+        Project () // {{ arity: 0 }}
+          ReadIndex on=t1 i1=[*** full scan ***] // {{ arity: 2 }}
 
 Used Indexes:
   - materialize.public.i1 (*** full scan ***)
@@ -1612,4 +1615,12 @@ Used Indexes:
 {self._n}
 > SET CLUSTER = default
 """
-        )
+
+        if self._mz_version < MzVersion.parse_mz("v0.83.0-dev"):
+            sql = remove_arity_information_from_explain(sql)
+
+        return Td(sql)
+
+
+def remove_arity_information_from_explain(sql: str) -> str:
+    return re.sub(r" // { arity: \d+ }", "", sql)
