@@ -947,8 +947,8 @@ where
         let arranged_output = input.scope().region_named("ReduceHierarchical", |inner| {
             let input = input.enter(inner);
 
-            // Gather the relevant values ordered by aggregation_index
-            let input = input.map(move |(key, row)| {
+            // Gather the relevant keys with their hashes along with values ordered by aggregation_index.
+            let mut stage = input.map(move |(key, row)| {
                 let binding = SharedRow::get();
                 let mut row_builder = binding.borrow_mut();
                 let mut row_packer = row_builder.packer();
@@ -956,37 +956,58 @@ where
                 for skip in skips.iter() {
                     row_packer.push(row_iter.nth(*skip).unwrap());
                 }
+                let values = row_builder.clone();
 
-                (key, row_builder.clone())
+                row_packer = row_builder.packer();
+                row_packer.push(Datum::UInt64(values.hashed()));
+                row_packer.extend(&key);
+                (row_builder.clone(), values)
             });
 
             // Repeatedly apply hierarchical reduction with a progressively coarser key.
-            let mut stage = input.map(move |(key, values)| ((key, values.hashed()), values));
             for b in buckets.into_iter() {
-                let input = stage.map(move |((key, hash), values)| ((key, hash % b), values));
+                let input = stage.map(move |(hash_key, values)| {
+                    let mut hash_key_iter = hash_key.iter();
+                    let hash = hash_key_iter.next().unwrap().unwrap_uint64() % b;
+
+                    let binding = SharedRow::get();
+                    let mut row_builder = binding.borrow_mut();
+                    let mut row_packer = row_builder.packer();
+                    row_packer.push(Datum::UInt64(hash));
+                    row_packer.extend(hash_key_iter);
+                    (row_builder.clone(), values)
+                });
 
                 // We only want the first stage to perform validation of whether invalid accumulations
                 // were observed in the input. Subsequently, we will either produce an error in the error
                 // stream or produce correct data in the output stream.
                 let negated_output = if err_output.is_none() {
                     let (oks, errs) = self
-                        .build_bucketed_negated_output::<_, Result<Row, (Row, u64)>>(
+                        .build_bucketed_negated_output::<_, Result<Row, Row>>(
                             &input,
                             aggr_funcs.clone(),
                         )
-                        .map_fallible(
-                            "Checked Invalid Accumulations",
-                            |(key, result)| match result {
-                                Err((key, _)) => {
+                        .map_fallible("Checked Invalid Accumulations", |(hash_key, result)| {
+                            match result {
+                                Err(hash_key) => {
+                                    let mut hash_key_iter = hash_key.iter();
+                                    let _hash = hash_key_iter.next();
+
+                                    let binding = SharedRow::get();
+                                    let mut row_builder = binding.borrow_mut();
+                                    let mut row_packer = row_builder.packer();
+                                    row_packer.extend(hash_key_iter);
+                                    let key = row_builder.clone();
+
                                     let message = format!(
                                         "Invalid data in source, saw non-positive accumulation \
                                          for key {key:?} in hierarchical mins-maxes aggregate"
                                     );
                                     Err(EvalError::Internal(message).into())
                                 }
-                                Ok(values) => Ok((key, values)),
-                            },
-                        );
+                                Ok(values) => Ok((hash_key, values)),
+                            }
+                        });
                     err_output = Some(errs.leave_region());
                     oks
                 } else {
@@ -1000,7 +1021,16 @@ where
             }
 
             // Discard the hash from the key and return to the format of the input data.
-            let partial = stage.map(|((key, _hash), values)| (key, values));
+            let partial = stage.map(|(hash_key, values)| {
+                let mut hash_key_iter = hash_key.iter();
+                let _hash = hash_key_iter.next();
+
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
+                let mut row_packer = row_builder.packer();
+                row_packer.extend(hash_key_iter);
+                (row_builder.clone(), values)
+            });
 
             // Allocations for the two closures.
             let mut datums1 = DatumVec::new();
@@ -1123,23 +1153,26 @@ where
     /// stages can skip validation.
     fn build_bucketed_negated_output<S, R>(
         &self,
-        input: &Collection<S, ((Row, u64), Row), Diff>,
+        input: &Collection<S, (Row, Row), Diff>,
         aggrs: Vec<AggregateFunc>,
-    ) -> Collection<S, ((Row, u64), R), Diff>
+    ) -> Collection<S, (Row, R), Diff>
     where
         S: Scope<Timestamp = G::Timestamp>,
-        R: MaybeValidatingRow<Row, (Row, u64)>,
+        R: MaybeValidatingRow<Row, Row>,
     {
         let error_logger = self.error_logger();
         // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
         // view mz_internal.mz_expected_group_size_advice.
         let arranged_input =
-            input.mz_arrange::<KeyValSpine<_, Row, _, _>>("Arranged MinsMaxesHierarchical input");
+            input.mz_arrange::<RowRowSpine<_, _>>("Arranged MinsMaxesHierarchical input");
 
         arranged_input
-            .mz_reduce_abelian::<_, KeyValSpine<_, _, _, _>>(
+            .mz_reduce_abelian::<_, RowValSpine<_, _, _>>(
                 "Reduced Fallibly MinsMaxesHierarchical",
                 move |key, source, target| {
+                    let binding = SharedRow::get();
+                    let mut row_builder = binding.borrow_mut();
+                    let mut row_packer = row_builder.packer();
                     if let Some(err) = R::into_error() {
                         // Should negative accumulations reach us, we should loudly complain.
                         for (value, count) in source.iter() {
@@ -1152,16 +1185,14 @@ where
                             );
                             // After complaining, output an error here so that we can eventually
                             // report it in an error stream.
-                            target.push((err(key.clone()), -1));
+                            row_packer.extend(key);
+                            target.push((err(row_builder.clone()), -1));
                             return;
                         }
                     }
-                    let binding = SharedRow::get();
-                    let mut row_builder = binding.borrow_mut();
-                    let mut row_packer = row_builder.packer();
                     let mut source_iters = source
                         .iter()
-                        .map(|(values, _cnt)| values.iter())
+                        .map(|(values, _cnt)| *values)
                         .collect::<Vec<_>>();
                     for func in aggrs.iter() {
                         let column_iter =
@@ -1173,15 +1204,22 @@ where
                     // gives us the intended value of this aggregate function. Also we assume that regardless
                     // of the multiplicity of the final result in the input, we only want to have one copy
                     // in the output.
+                    target.reserve(source.len().saturating_add(1));
                     target.push((R::ok(row_builder.clone()), -1));
-                    target.extend(
-                        source
-                            .iter()
-                            .map(|(values, cnt)| (R::ok((*values).clone()), *cnt)),
-                    );
+                    for (values, cnt) in source.iter() {
+                        row_packer = row_builder.packer();
+                        row_packer.extend(*values);
+                        target.push((R::ok(row_builder.clone()), *cnt));
+                    }
                 },
             )
-            .as_collection(|k, v| (k.clone(), v.clone()))
+            .as_collection(|k, v| {
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
+                let mut row_packer = row_builder.packer();
+                row_packer.extend(k);
+                (row_builder.clone(), v.clone())
+            })
     }
 
     /// Build the dataflow to compute and arrange multiple hierarchical aggregations
