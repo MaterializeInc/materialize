@@ -642,6 +642,7 @@ where
             values,
             limits,
             body,
+            node_id: _,
         } = plan
         {
             assert_eq!(ids.len(), values.len());
@@ -753,7 +754,7 @@ where
     /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
     pub fn render_plan(&mut self, plan: Plan) -> CollectionBundle<G> {
         match plan {
-            Plan::Constant { rows } => {
+            Plan::Constant { rows, node_id: _ } => {
                 // Produce both rows and errs to avoid conditional dataflow construction.
                 let (rows, errs) = match rows {
                     Ok(rows) => (rows, Vec::new()),
@@ -796,7 +797,12 @@ where
 
                 CollectionBundle::from_collections(ok_collection, err_collection)
             }
-            Plan::Get { id, keys, plan } => {
+            Plan::Get {
+                id,
+                keys,
+                plan,
+                node_id: _,
+            } => {
                 // Recover the collection from `self` and then apply `mfp` to it.
                 // If `mfp` happens to be trivial, we can just return the collection.
                 let mut collection = self
@@ -831,7 +837,12 @@ where
                     }
                 }
             }
-            Plan::Let { id, value, body } => {
+            Plan::Let {
+                id,
+                value,
+                body,
+                node_id: _,
+            } => {
                 // Render `value` and bind it to `id`. Complain if this shadows an id.
                 let value = self.render_plan(*value);
                 let prebound = self.insert_id(Id::Local(id), value);
@@ -848,6 +859,7 @@ where
                 input,
                 mfp,
                 input_key_val,
+                node_id: _,
             } => {
                 let input = self.render_plan(*input);
                 // If `mfp` is non-trivial, we should apply it and produce a collection.
@@ -865,11 +877,16 @@ where
                 exprs,
                 mfp_after: mfp,
                 input_key,
+                node_id: _,
             } => {
                 let input = self.render_plan(*input);
                 self.render_flat_map(input, func, exprs, mfp, input_key)
             }
-            Plan::Join { inputs, plan } => {
+            Plan::Join {
+                inputs,
+                plan,
+                node_id: _,
+            } => {
                 let inputs = inputs
                     .into_iter()
                     .map(|input| self.render_plan(input))
@@ -889,16 +906,21 @@ where
                 plan,
                 input_key,
                 mfp_after,
+                node_id: _,
             } => {
                 let input = self.render_plan(*input);
                 let mfp_option = (!mfp_after.is_identity()).then_some(mfp_after);
                 self.render_reduce(input, key_val_plan, plan, input_key, mfp_option)
             }
-            Plan::TopK { input, top_k_plan } => {
+            Plan::TopK {
+                input,
+                top_k_plan,
+                node_id: _,
+            } => {
                 let input = self.render_plan(*input);
                 self.render_topk(input, top_k_plan)
             }
-            Plan::Negate { input } => {
+            Plan::Negate { input, node_id: _ } => {
                 let input = self.render_plan(*input);
                 let (oks, errs) = input.as_specific_collection(None);
                 CollectionBundle::from_collections(oks.negate(), errs)
@@ -906,6 +928,7 @@ where
             Plan::Threshold {
                 input,
                 threshold_plan,
+                node_id: _,
             } => {
                 let input = self.render_plan(*input);
                 self.render_threshold(input, threshold_plan)
@@ -913,6 +936,7 @@ where
             Plan::Union {
                 inputs,
                 consolidate_output,
+                node_id: _,
             } => {
                 let mut oks = Vec::new();
                 let mut errs = Vec::new();
@@ -933,6 +957,7 @@ where
                 forms: keys,
                 input_key,
                 input_mfp,
+                node_id: _,
             } => {
                 let input = self.render_plan(*input);
                 input.ensure_collections(

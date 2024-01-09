@@ -46,7 +46,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
         use Plan::*;
 
         match &self {
-            Constant { rows } => match rows {
+            Constant { rows, node_id: _ } => match rows {
                 Ok(rows) => {
                     if !rows.is_empty() {
                         writeln!(f, "{}Constant", ctx.indent)?;
@@ -66,7 +66,12 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     writeln!(f, "{}Error {}", ctx.indent, err.to_string().quoted())?;
                 }
             },
-            Get { id, keys, plan } => {
+            Get {
+                id,
+                keys,
+                plan,
+                node_id: _,
+            } => {
                 ctx.indent.set(); // mark the current indent level
 
                 // Resolve the id as a string.
@@ -108,13 +113,24 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
 
                 ctx.indent.reset(); // reset the original indent level
             }
-            Let { id, value, body } => {
+            Let {
+                id,
+                value,
+                body,
+                node_id: _,
+            } => {
                 let mut bindings = vec![(id, value.as_ref())];
                 let mut head = body.as_ref();
 
                 // Render Let-blocks nested in the body an outer Let-block in one step
                 // with a flattened list of bindings
-                while let Let { id, value, body } = head {
+                while let Let {
+                    id,
+                    value,
+                    body,
+                    node_id: _,
+                } = head
+                {
                     bindings.push((id, value.as_ref()));
                     head = body.as_ref();
                 }
@@ -135,6 +151,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 values,
                 limits,
                 body,
+                node_id: _,
             } => {
                 let bindings = izip!(ids.iter(), values, limits).collect_vec();
                 let head = body.as_ref();
@@ -158,6 +175,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 input,
                 mfp,
                 input_key_val,
+                node_id: _,
             } => {
                 writeln!(f, "{}Mfp", ctx.indent)?;
                 ctx.indented(|ctx| {
@@ -180,6 +198,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 exprs,
                 mfp_after,
                 input_key,
+                node_id: _,
             } => {
                 let exprs = CompactScalarSeq(exprs);
                 writeln!(f, "{}FlatMap {}({})", ctx.indent, func, exprs)?;
@@ -195,7 +214,11 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     input.fmt_text(f, ctx)
                 })?;
             }
-            Join { inputs, plan } => {
+            Join {
+                inputs,
+                plan,
+                node_id: _,
+            } => {
                 use crate::plan::join::JoinPlan;
                 match plan {
                     JoinPlan::Linear(plan) => {
@@ -220,6 +243,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 plan,
                 input_key,
                 mfp_after,
+                node_id: _,
             } => {
                 use crate::plan::reduce::ReducePlan;
                 match plan {
@@ -268,7 +292,11 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     input.fmt_text(f, ctx)
                 })?;
             }
-            TopK { input, top_k_plan } => {
+            TopK {
+                input,
+                top_k_plan,
+                node_id: _,
+            } => {
                 use crate::plan::top_k::TopKPlan;
                 match top_k_plan {
                     TopKPlan::MonotonicTop1(plan) => {
@@ -323,13 +351,14 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 writeln!(f)?;
                 ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
-            Negate { input } => {
+            Negate { input, node_id: _ } => {
                 writeln!(f, "{}Negate", ctx.indent)?;
                 ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
             Threshold {
                 input,
                 threshold_plan,
+                node_id: _,
             } => {
                 use crate::plan::threshold::ThresholdPlan;
                 match threshold_plan {
@@ -344,6 +373,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
             Union {
                 inputs,
                 consolidate_output,
+                node_id: _,
             } => {
                 if *consolidate_output {
                     writeln!(
@@ -366,6 +396,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 forms,
                 input_key,
                 input_mfp,
+                node_id: _,
             } => {
                 writeln!(f, "{}ArrangeBy", ctx.indent)?;
                 ctx.indented(|ctx| {

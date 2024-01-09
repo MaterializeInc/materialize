@@ -187,11 +187,12 @@ impl AvailableCollections {
 
 /// A rendering plan with as much conditional logic as possible removed.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-pub enum Plan<T = mz_repr::Timestamp> {
+pub enum Plan<T = mz_repr::Timestamp, ID = ()> {
     /// A collection containing a pre-determined collection.
     Constant {
         /// Explicit update triples for the collection.
         rows: Result<Vec<(Row, T, Diff)>, EvalError>,
+        node_id: ID,
     },
     /// A reference to a bound collection.
     ///
@@ -212,6 +213,7 @@ pub enum Plan<T = mz_repr::Timestamp> {
         keys: AvailableCollections,
         /// The actions to take when introducing the collection.
         plan: GetPlan,
+        node_id: ID,
     },
     /// Binds `value` to `id`, and then results in `body` with that binding.
     ///
@@ -224,10 +226,11 @@ pub enum Plan<T = mz_repr::Timestamp> {
         /// The local identifier to be used, available to `body` as `Id::Local(id)`.
         id: LocalId,
         /// The collection that should be bound to `id`.
-        value: Box<Plan<T>>,
+        value: Box<Self>,
         /// The collection that results, which is allowed to contain `Get` stages
         /// that reference `Id::Local(id)`.
-        body: Box<Plan<T>>,
+        body: Box<Self>,
+        node_id: ID,
     },
     /// Binds `values` to `ids`, evaluates them potentially recursively, and returns `body`.
     ///
@@ -239,12 +242,13 @@ pub enum Plan<T = mz_repr::Timestamp> {
         /// The local identifiers to be used, available to `body` as `Id::Local(id)`.
         ids: Vec<LocalId>,
         /// The collection that should be bound to `id`.
-        values: Vec<Plan<T>>,
+        values: Vec<Self>,
         /// Maximum number of iterations. See further info on the MIR `LetRec`.
         limits: Vec<Option<LetRecLimit>>,
         /// The collection that results, which is allowed to contain `Get` stages
         /// that reference `Id::Local(id)`.
-        body: Box<Plan<T>>,
+        body: Box<Self>,
+        node_id: ID,
     },
     /// Map, Filter, and Project operators.
     ///
@@ -253,12 +257,13 @@ pub enum Plan<T = mz_repr::Timestamp> {
     /// and sometimes reduce stages are not able to absorb this operator.
     Mfp {
         /// The input collection.
-        input: Box<Plan<T>>,
+        input: Box<Self>,
         /// Linear operator to apply to each record.
         mfp: MapFilterProject,
         /// Whether the input is from an arrangement, and if so,
         /// whether we can seek to a specific value therein
         input_key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        node_id: ID,
     },
     /// A variable number of output records for each input record.
     ///
@@ -274,7 +279,7 @@ pub enum Plan<T = mz_repr::Timestamp> {
     /// in these cases use a `mfp` member that projects away these large fields.
     FlatMap {
         /// The input collection.
-        input: Box<Plan<T>>,
+        input: Box<Self>,
         /// The variable-record emitting function.
         func: TableFunc,
         /// Expressions that for each row prepare the arguments to `func`.
@@ -284,6 +289,7 @@ pub enum Plan<T = mz_repr::Timestamp> {
         /// The particular arrangement of the input we expect to use,
         /// if any
         input_key: Option<Vec<MirScalarExpr>>,
+        node_id: ID,
     },
     /// A multiway relational equijoin, with fused map, filter, and projection.
     ///
@@ -292,18 +298,19 @@ pub enum Plan<T = mz_repr::Timestamp> {
     /// strategy we will use, and any pushed down per-record work.
     Join {
         /// An ordered list of inputs that will be joined.
-        inputs: Vec<Plan<T>>,
+        inputs: Vec<Self>,
         /// Detailed information about the implementation of the join.
         ///
         /// This includes information about the implementation strategy, but also
         /// any map, filter, project work that we might follow the join with, but
         /// potentially pushed down into the implementation of the join.
         plan: JoinPlan,
+        node_id: ID,
     },
     /// Aggregation by key.
     Reduce {
         /// The input collection.
-        input: Box<Plan<T>>,
+        input: Box<Self>,
         /// A plan for changing input records into key, value pairs.
         key_val_plan: KeyValPlan,
         /// A plan for performing the reduce.
@@ -320,22 +327,25 @@ pub enum Plan<T = mz_repr::Timestamp> {
         /// become undefined. Additionally, the MFP must be free from temporal
         /// predicates so that it can be readily evaluated.
         mfp_after: MapFilterProject,
+        node_id: ID,
     },
     /// Key-based "Top K" operator, retaining the first K records in each group.
     TopK {
         /// The input collection.
-        input: Box<Plan<T>>,
+        input: Box<Self>,
         /// A plan for performing the Top-K.
         ///
         /// The implementation of reduction has several different strategies based
         /// on the properties of the reduction, and the input itself. Please check
         /// out the documentation for this type for more detail.
         top_k_plan: TopKPlan,
+        node_id: ID,
     },
     /// Inverts the sign of each update.
     Negate {
         /// The input collection.
-        input: Box<Plan<T>>,
+        input: Box<Self>,
+        node_id: ID,
     },
     /// Filters records that accumulate negatively.
     ///
@@ -343,13 +353,14 @@ pub enum Plan<T = mz_repr::Timestamp> {
     /// resources proportional to the number of records with non-zero accumulation.
     Threshold {
         /// The input collection.
-        input: Box<Plan<T>>,
+        input: Box<Self>,
         /// A plan for performing the threshold.
         ///
         /// The implementation of reduction has several different strategies based
         /// on the properties of the reduction, and the input itself. Please check
         /// out the documentation for this type for more detail.
         threshold_plan: ThresholdPlan,
+        node_id: ID,
     },
     /// Adds the contents of the input collections.
     ///
@@ -359,9 +370,10 @@ pub enum Plan<T = mz_repr::Timestamp> {
     /// implementing the "distinct" operator.
     Union {
         /// The input collections
-        inputs: Vec<Plan<T>>,
+        inputs: Vec<Self>,
         /// Whether to consolidate the output, e.g., cancel negated records.
         consolidate_output: bool,
+        node_id: ID,
     },
     /// The `input` plan, but with additional arrangements.
     ///
@@ -371,7 +383,7 @@ pub enum Plan<T = mz_repr::Timestamp> {
     /// or to cap a `Plan` so that indexes can be exported.
     ArrangeBy {
         /// The input collection.
-        input: Box<Plan<T>>,
+        input: Box<Self>,
         /// A list of arrangement keys, and possibly a raw collection,
         /// that will be added to those of the input.
         ///
@@ -381,6 +393,7 @@ pub enum Plan<T = mz_repr::Timestamp> {
         input_key: Option<Vec<MirScalarExpr>>,
         /// The MFP that must be applied to the input.
         input_mfp: MapFilterProject,
+        node_id: ID,
     },
 }
 
@@ -407,7 +420,7 @@ impl<T> Plan<T> {
             | FlatMap { input, .. }
             | Reduce { input, .. }
             | TopK { input, .. }
-            | Negate { input }
+            | Negate { input, .. }
             | Threshold { input, .. }
             | ArrangeBy { input, .. } => {
                 first = Some(&mut **input);
@@ -444,6 +457,27 @@ impl Plan {
     }
 }
 
+impl<T, ID: Copy> Plan<T, ID> {
+    pub fn node_id(&self) -> ID {
+        use Plan::*;
+        match self {
+            Constant { node_id, .. }
+            | Get { node_id, .. }
+            | Let { node_id, .. }
+            | LetRec { node_id, .. }
+            | Mfp { node_id, .. }
+            | FlatMap { node_id, .. }
+            | Join { node_id, .. }
+            | Reduce { node_id, .. }
+            | TopK { node_id, .. }
+            | Negate { node_id, .. }
+            | Threshold { node_id, .. }
+            | Union { node_id, .. }
+            | ArrangeBy { node_id, .. } => *node_id,
+        }
+    }
+}
+
 impl Arbitrary for Plan {
     type Strategy = BoxedStrategy<Plan>;
     type Parameters = ();
@@ -458,10 +492,16 @@ impl Arbitrary for Plan {
             0..2,
         );
         let constant = prop::result::maybe_ok(row_diff, EvalError::arbitrary())
-            .prop_map(|rows| Plan::Constant { rows });
+            .prop_map(|rows| Plan::Constant { rows, node_id: () });
 
-        let get = (any::<Id>(), any::<AvailableCollections>(), any::<GetPlan>())
-            .prop_map(|(id, keys, plan)| Plan::<mz_repr::Timestamp>::Get { id, keys, plan });
+        let get = (any::<Id>(), any::<AvailableCollections>(), any::<GetPlan>()).prop_map(
+            |(id, keys, plan)| Plan::<mz_repr::Timestamp>::Get {
+                id,
+                keys,
+                plan,
+                node_id: (),
+            },
+        );
 
         let leaf = prop::strategy::Union::new(vec![constant.boxed(), get.boxed()]).boxed();
 
@@ -473,6 +513,7 @@ impl Arbitrary for Plan {
                         id,
                         value: value.into(),
                         body: body.into(),
+                        node_id: (),
                     })
                     .boxed(),
                 //Plan::Mfp
@@ -485,6 +526,7 @@ impl Arbitrary for Plan {
                         input: input.into(),
                         mfp,
                         input_key_val,
+                        node_id: (),
                     })
                     .boxed(),
                 //Plan::FlatMap
@@ -501,6 +543,7 @@ impl Arbitrary for Plan {
                         exprs,
                         mfp_after: mfp,
                         input_key,
+                        node_id: (),
                     })
                     .boxed(),
                 //Plan::Join
@@ -508,7 +551,11 @@ impl Arbitrary for Plan {
                     prop::collection::vec(inner.clone(), 0..2),
                     any::<JoinPlan>(),
                 )
-                    .prop_map(|(inputs, plan)| Plan::Join { inputs, plan })
+                    .prop_map(|(inputs, plan)| Plan::Join {
+                        inputs,
+                        plan,
+                        node_id: (),
+                    })
                     .boxed(),
                 //Plan::Reduce
                 (
@@ -525,6 +572,7 @@ impl Arbitrary for Plan {
                             plan,
                             input_key,
                             mfp_after,
+                            node_id: (),
                         },
                     )
                     .boxed(),
@@ -533,18 +581,23 @@ impl Arbitrary for Plan {
                     .prop_map(|(input, top_k_plan)| Plan::TopK {
                         input: input.into(),
                         top_k_plan,
+                        node_id: (),
                     })
                     .boxed(),
                 //Plan::Negate
                 inner
                     .clone()
-                    .prop_map(|x| Plan::Negate { input: x.into() })
+                    .prop_map(|x| Plan::Negate {
+                        input: x.into(),
+                        node_id: (),
+                    })
                     .boxed(),
                 //Plan::Threshold
                 (inner.clone(), any::<ThresholdPlan>())
                     .prop_map(|(input, threshold_plan)| Plan::Threshold {
                         input: input.into(),
                         threshold_plan,
+                        node_id: (),
                     })
                     .boxed(),
                 // Plan::Union
@@ -552,6 +605,7 @@ impl Arbitrary for Plan {
                     .prop_map(|(x, b)| Plan::Union {
                         inputs: x,
                         consolidate_output: b,
+                        node_id: (),
                     })
                     .boxed(),
                 //Plan::ArrangeBy
@@ -566,6 +620,7 @@ impl Arbitrary for Plan {
                         forms,
                         input_key,
                         input_mfp,
+                        node_id: (),
                     })
                     .boxed(),
             ])
@@ -623,13 +678,23 @@ impl RustType<ProtoPlan> for Plan {
 
         ProtoPlan {
             kind: Some(match self {
-                Plan::Constant { rows } => Constant(rows.into_proto()),
-                Plan::Get { id, keys, plan } => Get(ProtoPlanGet {
+                Plan::Constant { rows, node_id: _ } => Constant(rows.into_proto()),
+                Plan::Get {
+                    id,
+                    keys,
+                    plan,
+                    node_id: _,
+                } => Get(ProtoPlanGet {
                     id: Some(id.into_proto()),
                     keys: Some(keys.into_proto()),
                     plan: Some(plan.into_proto()),
                 }),
-                Plan::Let { id, value, body } => Let(ProtoPlanLet {
+                Plan::Let {
+                    id,
+                    value,
+                    body,
+                    node_id: _,
+                } => Let(ProtoPlanLet {
                     id: Some(id.into_proto()),
                     value: Some(value.into_proto()),
                     body: Some(body.into_proto()),
@@ -640,6 +705,7 @@ impl RustType<ProtoPlan> for Plan {
                     values,
                     limits,
                     body,
+                    node_id: _,
                 } => LetRec(
                     ProtoPlanLetRec {
                         ids: ids.into_proto(),
@@ -673,6 +739,7 @@ impl RustType<ProtoPlan> for Plan {
                     input,
                     mfp,
                     input_key_val,
+                    node_id: _,
                 } => Mfp(ProtoPlanMfp {
                     input: Some(input.into_proto()),
                     mfp: Some(mfp.into_proto()),
@@ -685,6 +752,7 @@ impl RustType<ProtoPlan> for Plan {
                     exprs,
                     mfp_after,
                     input_key,
+                    node_id: _,
                 } => FlatMap(
                     ProtoPlanFlatMap {
                         input: Some(input.into_proto()),
@@ -695,7 +763,11 @@ impl RustType<ProtoPlan> for Plan {
                     }
                     .into(),
                 ),
-                Plan::Join { inputs, plan } => Join(ProtoPlanJoin {
+                Plan::Join {
+                    inputs,
+                    plan,
+                    node_id: _,
+                } => Join(ProtoPlanJoin {
                     inputs: inputs.into_proto(),
                     plan: Some(plan.into_proto()),
                 }),
@@ -705,6 +777,7 @@ impl RustType<ProtoPlan> for Plan {
                     plan,
                     input_key,
                     mfp_after,
+                    node_id: _,
                 } => Reduce(
                     ProtoPlanReduce {
                         input: Some(input.into_proto()),
@@ -715,17 +788,22 @@ impl RustType<ProtoPlan> for Plan {
                     }
                     .into(),
                 ),
-                Plan::TopK { input, top_k_plan } => TopK(
+                Plan::TopK {
+                    input,
+                    top_k_plan,
+                    node_id: _,
+                } => TopK(
                     ProtoPlanTopK {
                         input: Some(input.into_proto()),
                         top_k_plan: Some(top_k_plan.into_proto()),
                     }
                     .into(),
                 ),
-                Plan::Negate { input } => Negate(input.into_proto()),
+                Plan::Negate { input, node_id: _ } => Negate(input.into_proto()),
                 Plan::Threshold {
                     input,
                     threshold_plan,
+                    node_id: _,
                 } => Threshold(
                     ProtoPlanThreshold {
                         input: Some(input.into_proto()),
@@ -736,6 +814,7 @@ impl RustType<ProtoPlan> for Plan {
                 Plan::Union {
                     inputs,
                     consolidate_output,
+                    node_id: _,
                 } => Union(ProtoPlanUnion {
                     inputs: inputs.into_proto(),
                     consolidate_output: consolidate_output.into_proto(),
@@ -745,6 +824,7 @@ impl RustType<ProtoPlan> for Plan {
                     forms,
                     input_key,
                     input_mfp,
+                    node_id: _,
                 } => ArrangeBy(
                     ProtoPlanArrangeBy {
                         input: Some(input.into_proto()),
@@ -794,17 +874,20 @@ impl RustType<ProtoPlan> for Plan {
                         proto_plan_constant::Result::Rows(rows) => Ok(rows.into_rust()?),
                         proto_plan_constant::Result::Err(eval_err) => Err(eval_err.into_rust()?),
                     },
+                    node_id: (),
                 }
             }
             Get(proto) => Plan::Get {
                 id: proto.id.into_rust_if_some("ProtoPlanGet::id")?,
                 keys: proto.keys.into_rust_if_some("ProtoPlanGet::keys")?,
                 plan: proto.plan.into_rust_if_some("ProtoPlanGet::plan")?,
+                node_id: (),
             },
             Let(proto) => Plan::Let {
                 id: proto.id.into_rust_if_some("ProtoPlanLet::id")?,
                 value: proto.value.into_rust_if_some("ProtoPlanLet::value")?,
                 body: proto.body.into_rust_if_some("ProtoPlanLet::body")?,
+                node_id: (),
             },
             LetRec(proto) => {
                 let ids: Vec<LocalId> = proto.ids.into_rust()?;
@@ -833,12 +916,14 @@ impl RustType<ProtoPlan> for Plan {
                     values,
                     limits,
                     body: proto.body.into_rust_if_some("ProtoPlanLetRec::body")?,
+                    node_id: (),
                 }
             }
             Mfp(proto) => Plan::Mfp {
                 input: proto.input.into_rust_if_some("ProtoPlanMfp::input")?,
                 input_key_val: input_kv_try_into(proto.input_key_val)?,
                 mfp: proto.mfp.into_rust_if_some("ProtoPlanMfp::mfp")?,
+                node_id: (),
             },
             FlatMap(proto) => Plan::FlatMap {
                 input: proto.input.into_rust_if_some("ProtoPlanFlatMap::input")?,
@@ -848,10 +933,12 @@ impl RustType<ProtoPlan> for Plan {
                     .mfp_after
                     .into_rust_if_some("ProtoPlanFlatMap::mfp_after")?,
                 input_key: input_k_try_into(proto.input_key)?,
+                node_id: (),
             },
             Join(proto) => Plan::Join {
                 inputs: proto.inputs.into_rust()?,
                 plan: proto.plan.into_rust_if_some("")?,
+                node_id: (),
             },
             Reduce(proto) => Plan::Reduce {
                 input: proto.input.into_rust_if_some("ProtoPlanReduce::input")?,
@@ -863,25 +950,30 @@ impl RustType<ProtoPlan> for Plan {
                 mfp_after: proto
                     .mfp_after
                     .into_rust_if_some("ProtoPlanReduce::mfp_after")?,
+                node_id: (),
             },
             TopK(proto) => Plan::TopK {
                 input: proto.input.into_rust_if_some("ProtoPlanTopK::input")?,
                 top_k_plan: proto
                     .top_k_plan
                     .into_rust_if_some("ProtoPlanTopK::top_k_plan")?,
+                node_id: (),
             },
             Negate(proto) => Plan::Negate {
                 input: proto.into_rust()?,
+                node_id: (),
             },
             Threshold(proto) => Plan::Threshold {
                 input: proto.input.into_rust_if_some("ProtoPlanThreshold::input")?,
                 threshold_plan: proto
                     .threshold_plan
                     .into_rust_if_some("ProtoPlanThreshold::threshold_plan")?,
+                node_id: (),
             },
             Union(proto) => Plan::Union {
                 inputs: proto.inputs.into_rust()?,
                 consolidate_output: proto.consolidate_output.into_rust()?,
+                node_id: (),
             },
             ArrangeBy(proto) => Plan::ArrangeBy {
                 input: proto.input.into_rust_if_some("ProtoPlanArrangeBy::input")?,
@@ -890,6 +982,7 @@ impl RustType<ProtoPlan> for Plan {
                 input_mfp: proto
                     .input_mfp
                     .into_rust_if_some("ProtoPlanArrangeBy::input_mfp")?,
+                node_id: (),
             },
         })
     }
@@ -1022,6 +1115,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
             mut forms,
             input_key,
             input_mfp,
+            node_id: _,
         } = self
         {
             forms.raw |= collections.raw;
@@ -1038,6 +1132,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 forms,
                 input_key,
                 input_mfp,
+                node_id: (),
             }
         } else {
             let (input_key, input_mfp) = if let Some((input_key, permutation, thinning)) =
@@ -1054,6 +1149,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                 forms: collections,
                 input_key,
                 input_mfp,
+                node_id: (),
             }
         };
         new_self
@@ -1137,6 +1233,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                             .map(|(row, diff)| (row, T::minimum(), diff))
                             .collect()
                     }),
+                    node_id: (),
                 };
                 // The plan, not arranged in any way.
                 (plan, AvailableCollections::new_raw())
@@ -1210,6 +1307,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                         id: id.clone(),
                         keys: in_keys,
                         plan,
+                        node_id: (),
                     },
                     out_keys,
                 )
@@ -1246,6 +1344,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                         id: id.clone(),
                         value: Box::new(value),
                         body: Box::new(body),
+                        node_id: (),
                     },
                     b_keys,
                 )
@@ -1294,6 +1393,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                                 values,
                                 limits,
                                 body,
+                                node_id: _,
                             } => Plan::LetRec {
                                 ids,
                                 values,
@@ -1303,13 +1403,16 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                                     forms,
                                     input_key,
                                     input_mfp,
+                                    node_id: (),
                                 }),
+                                node_id: (),
                             },
                             lir_value => Plan::ArrangeBy {
                                 input: Box::new(lir_value),
                                 forms,
                                 input_key,
                                 input_mfp,
+                                node_id: (),
                             },
                         };
                         v_keys.raw = true;
@@ -1342,6 +1445,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                         values: lir_values,
                         limits: limits.clone(),
                         body: Box::new(body),
+                        node_id: (),
                     },
                     b_keys,
                 )
@@ -1379,6 +1483,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                         exprs: exprs.clone(),
                         mfp_after: mfp,
                         input_key,
+                        node_id: (),
                     },
                     AvailableCollections::new_raw(),
                 )
@@ -1507,6 +1612,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                             input_plan,
                             Plan::Constant {
                                 rows: Ok(Vec::new()),
+                                node_id: (),
                             },
                         );
                         *input_plan = raw_plan.arrange_by(missing, input_keys, arity);
@@ -1517,6 +1623,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     Plan::Join {
                         inputs: plans,
                         plan,
+                        node_id: (),
                     },
                     AvailableCollections::new_raw(),
                 )
@@ -1582,6 +1689,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         plan: reduce_plan,
                         input_key,
                         mfp_after,
+                        node_id: (),
                     },
                     output_keys,
                 )
@@ -1626,6 +1734,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     Plan::TopK {
                         input: Box::new(input),
                         top_k_plan,
+                        node_id: (),
                     },
                     AvailableCollections::new_raw(),
                 )
@@ -1651,6 +1760,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 (
                     Plan::Negate {
                         input: Box::new(input),
+                        node_id: (),
                     },
                     AvailableCollections::new_raw(),
                 )
@@ -1701,6 +1811,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     Plan::Threshold {
                         input: Box::new(plan),
                         threshold_plan,
+                        node_id: (),
                     },
                     output_keys,
                 )
@@ -1742,6 +1853,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 let plan = Plan::Union {
                     inputs: plans,
                     consolidate_output: false,
+                    node_id: (),
                 };
                 (plan, AvailableCollections::new_raw())
             }
@@ -1793,6 +1905,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                             forms: input_keys.clone(),
                             input_key,
                             input_mfp,
+                            node_id: (),
                         },
                         input_keys,
                     )
@@ -1870,6 +1983,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         input: Box::new(plan),
                         mfp,
                         input_key_val: Some((key, val)),
+                        node_id: (),
                     }
                 }
             } else {
@@ -1877,6 +1991,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     input: Box::new(plan),
                     mfp,
                     input_key_val,
+                    node_id: (),
                 };
                 keys = AvailableCollections::new_raw();
             }
@@ -2103,6 +2218,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     Plan::Union {
                         inputs,
                         consolidate_output,
+                        node_id: _,
                     } => {
                         if inputs
                             .iter()
@@ -2210,7 +2326,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
         } else {
             match self {
                 // For constants, balance the rows across the workers.
-                Plan::Constant { rows } => match rows {
+                Plan::Constant { rows, node_id: () } => match rows {
                     Ok(rows) => {
                         let mut rows_parts = vec![Vec::new(); parts];
                         for (index, row) in rows.into_iter().enumerate() {
@@ -2218,25 +2334,50 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         }
                         rows_parts
                             .into_iter()
-                            .map(|rows| Plan::Constant { rows: Ok(rows) })
+                            .map(|rows| Plan::Constant {
+                                rows: Ok(rows),
+                                node_id: (),
+                            })
                             .collect()
                     }
                     Err(err) => {
                         let mut result = vec![
                             Plan::Constant {
-                                rows: Ok(Vec::new())
+                                rows: Ok(Vec::new()),
+                                node_id: (),
                             };
                             parts
                         ];
-                        result[0] = Plan::Constant { rows: Err(err) };
+                        result[0] = Plan::Constant {
+                            rows: Err(err),
+                            node_id: (),
+                        };
                         result
                     }
                 },
 
                 // For all other variants, just replace inputs with appropriately sharded versions.
                 // This is surprisingly verbose, but that is all it is doing.
-                Plan::Get { id, keys, plan } => vec![Plan::Get { id, keys, plan }; parts],
-                Plan::Let { value, body, id } => {
+                Plan::Get {
+                    id,
+                    keys,
+                    plan,
+                    node_id: _,
+                } => vec![
+                    Plan::Get {
+                        id,
+                        keys,
+                        plan,
+                        node_id: ()
+                    };
+                    parts
+                ],
+                Plan::Let {
+                    value,
+                    body,
+                    id,
+                    node_id: _,
+                } => {
                     let value_parts = value.partition_among(parts);
                     let body_parts = body.partition_among(parts);
                     value_parts
@@ -2246,6 +2387,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                             value: Box::new(value),
                             body: Box::new(body),
                             id,
+                            node_id: (),
                         })
                         .collect()
                 }
@@ -2254,6 +2396,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     values,
                     limits,
                     body,
+                    node_id: _,
                 } => {
                     let mut values_parts: Vec<Vec<Self>> = vec![Vec::new(); parts];
                     for value in values.into_iter() {
@@ -2270,6 +2413,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                             body: Box::new(body),
                             limits: limits.clone(),
                             ids: ids.clone(),
+                            node_id: (),
                         })
                         .collect()
                 }
@@ -2277,6 +2421,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     input,
                     input_key_val,
                     mfp,
+                    node_id: (),
                 } => input
                     .partition_among(parts)
                     .into_iter()
@@ -2284,6 +2429,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         input: Box::new(input),
                         mfp: mfp.clone(),
                         input_key_val: input_key_val.clone(),
+                        node_id: (),
                     })
                     .collect(),
                 Plan::FlatMap {
@@ -2292,6 +2438,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     func,
                     exprs,
                     mfp_after: mfp,
+                    node_id: _,
                 } => input
                     .partition_among(parts)
                     .into_iter()
@@ -2301,9 +2448,14 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         func: func.clone(),
                         exprs: exprs.clone(),
                         mfp_after: mfp.clone(),
+                        node_id: (),
                     })
                     .collect(),
-                Plan::Join { inputs, plan } => {
+                Plan::Join {
+                    inputs,
+                    plan,
+                    node_id: _,
+                } => {
                     let mut inputs_parts = vec![Vec::new(); parts];
                     for input in inputs.into_iter() {
                         for (index, input_part) in
@@ -2317,6 +2469,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         .map(|inputs| Plan::Join {
                             inputs,
                             plan: plan.clone(),
+                            node_id: (),
                         })
                         .collect()
                 }
@@ -2326,6 +2479,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     plan,
                     input_key,
                     mfp_after,
+                    node_id: _,
                 } => input
                     .partition_among(parts)
                     .into_iter()
@@ -2335,37 +2489,47 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         key_val_plan: key_val_plan.clone(),
                         plan: plan.clone(),
                         mfp_after: mfp_after.clone(),
+                        node_id: (),
                     })
                     .collect(),
-                Plan::TopK { input, top_k_plan } => input
+                Plan::TopK {
+                    input,
+                    top_k_plan,
+                    node_id: _,
+                } => input
                     .partition_among(parts)
                     .into_iter()
                     .map(|input| Plan::TopK {
                         input: Box::new(input),
                         top_k_plan: top_k_plan.clone(),
+                        node_id: (),
                     })
                     .collect(),
-                Plan::Negate { input } => input
+                Plan::Negate { input, node_id: _ } => input
                     .partition_among(parts)
                     .into_iter()
                     .map(|input| Plan::Negate {
                         input: Box::new(input),
+                        node_id: (),
                     })
                     .collect(),
                 Plan::Threshold {
                     input,
                     threshold_plan,
+                    node_id: _,
                 } => input
                     .partition_among(parts)
                     .into_iter()
                     .map(|input| Plan::Threshold {
                         input: Box::new(input),
                         threshold_plan: threshold_plan.clone(),
+                        node_id: (),
                     })
                     .collect(),
                 Plan::Union {
                     inputs,
                     consolidate_output,
+                    node_id: _,
                 } => {
                     let mut inputs_parts = vec![Vec::new(); parts];
                     for input in inputs.into_iter() {
@@ -2380,6 +2544,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         .map(|inputs| Plan::Union {
                             inputs,
                             consolidate_output,
+                            node_id: (),
                         })
                         .collect()
                 }
@@ -2388,6 +2553,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     forms: keys,
                     input_key,
                     input_mfp,
+                    node_id: _,
                 } => input
                     .partition_among(parts)
                     .into_iter()
@@ -2396,6 +2562,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         forms: keys.clone(),
                         input_key: input_key.clone(),
                         input_mfp: input_mfp.clone(),
+                        node_id: (),
                     })
                     .collect(),
             }
@@ -2406,18 +2573,27 @@ This is not expected to cause incorrect results, but could indicate a performanc
 impl<T> CollectionPlan for Plan<T> {
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         match self {
-            Plan::Constant { rows: _ } => (),
+            Plan::Constant {
+                rows: _,
+                node_id: _,
+            } => (),
             Plan::Get {
                 id,
                 keys: _,
                 plan: _,
+                node_id: _,
             } => match id {
                 Id::Global(id) => {
                     out.insert(*id);
                 }
                 Id::Local(_) => (),
             },
-            Plan::Let { id: _, value, body } => {
+            Plan::Let {
+                id: _,
+                value,
+                body,
+                node_id: _,
+            } => {
                 value.depends_on_into(out);
                 body.depends_on_into(out);
             }
@@ -2426,16 +2602,22 @@ impl<T> CollectionPlan for Plan<T> {
                 values,
                 limits: _,
                 body,
+                node_id: _,
             } => {
                 for value in values.iter() {
                     value.depends_on_into(out);
                 }
                 body.depends_on_into(out);
             }
-            Plan::Join { inputs, plan: _ }
+            Plan::Join {
+                inputs,
+                plan: _,
+                node_id: _,
+            }
             | Plan::Union {
                 inputs,
                 consolidate_output: _,
+                node_id: _,
             } => {
                 for input in inputs {
                     input.depends_on_into(out);
@@ -2445,6 +2627,7 @@ impl<T> CollectionPlan for Plan<T> {
                 input,
                 mfp: _,
                 input_key_val: _,
+                node_id: _,
             }
             | Plan::FlatMap {
                 input,
@@ -2452,12 +2635,14 @@ impl<T> CollectionPlan for Plan<T> {
                 exprs: _,
                 mfp_after: _,
                 input_key: _,
+                node_id: _,
             }
             | Plan::ArrangeBy {
                 input,
                 forms: _,
                 input_key: _,
                 input_mfp: _,
+                node_id: _,
             }
             | Plan::Reduce {
                 input,
@@ -2465,15 +2650,18 @@ impl<T> CollectionPlan for Plan<T> {
                 plan: _,
                 input_key: _,
                 mfp_after: _,
+                node_id: _,
             }
             | Plan::TopK {
                 input,
                 top_k_plan: _,
+                node_id: _,
             }
-            | Plan::Negate { input }
+            | Plan::Negate { input, node_id: _ }
             | Plan::Threshold {
                 input,
                 threshold_plan: _,
+                node_id: _,
             } => {
                 input.depends_on_into(out);
             }
