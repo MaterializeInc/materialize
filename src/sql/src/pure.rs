@@ -80,9 +80,9 @@ pub(crate) mod error;
 mod mysql;
 mod postgres;
 
-fn subsource_gen<'a, T, F: SubsourceCatalog<'a, T>>(
+fn subsource_gen<'a, T>(
     selected_subsources: &mut Vec<CreateSourceSubsource<Aug>>,
-    catalog: &F,
+    catalog: &SubsourceCatalog<&'a T>,
     source_name: &UnresolvedItemName,
 ) -> Result<Vec<(UnresolvedItemName, UnresolvedItemName, &'a T)>, PlanError> {
     let mut validated_requested_subsources = vec![];
@@ -117,7 +117,7 @@ fn subsource_gen<'a, T, F: SubsourceCatalog<'a, T>>(
 
         let (qualified_upstream_name, desc) = catalog.resolve(subsource.reference.clone())?;
 
-        validated_requested_subsources.push((qualified_upstream_name, subsource_name, desc));
+        validated_requested_subsources.push((qualified_upstream_name, subsource_name, *desc));
     }
 
     Ok(validated_requested_subsources)
@@ -978,10 +978,7 @@ async fn purify_create_source(
             {
                 ReferencedSubsources::All => {
                     for table in &tables {
-                        let upstream_name = UnresolvedItemName::qualified(&[
-                            Ident::new(&table.schema_name)?,
-                            Ident::new(&table.name)?,
-                        ]);
+                        let upstream_name = mysql::mysql_upstream_name(table)?;
                         let subsource_name = subsource_name_gen(source_name, &table.name)?;
                         validated_requested_subsources.push((upstream_name, subsource_name, table));
                     }
@@ -1006,10 +1003,7 @@ async fn purify_create_source(
                             continue;
                         }
 
-                        let upstream_name = UnresolvedItemName::qualified(&[
-                            Ident::new(&table.schema_name)?,
-                            Ident::new(&table.name)?,
-                        ]);
+                        let upstream_name = mysql::mysql_upstream_name(table)?;
                         let subsource_name = subsource_name_gen(source_name, &table.name)?;
                         validated_requested_subsources.push((upstream_name, subsource_name, table));
                     }

@@ -4605,7 +4605,7 @@ name = "mz-mysql-util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "indexmap 2.0.0",
+ "indexmap 1.9.1",
  "itertools",
  "mysql_async",
  "mz-ore",
@@ -9818,7 +9818,6 @@ dependencies = [
  "hashbrown 0.14.0",
  "hyper",
  "indexmap 1.9.1",
- "indexmap 2.0.0",
  "itertools",
  "k8s-openapi",
  "kube",

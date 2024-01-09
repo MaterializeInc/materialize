@@ -95,8 +95,7 @@ use crate::ast::{
 };
 use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError, CatalogItem, CatalogItemType,
-    CatalogRecordField, CatalogType, CatalogTypeDetails, ObjectType, SubsourceCatalog,
-    SystemObjectType,
+    CatalogRecordField, CatalogType, CatalogTypeDetails, ObjectType, SystemObjectType,
 };
 use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
 use crate::names::{
@@ -779,7 +778,7 @@ pub fn plan_create_source(
                     .or_insert(table);
             }
 
-            let publication_catalog = crate::catalog::SubsourceCatalogTriple(tables_by_name);
+            let publication_catalog = crate::catalog::SubsourceCatalog(tables_by_name);
 
             let mut text_cols: BTreeMap<Oid, BTreeSet<String>> = BTreeMap::new();
 
@@ -999,8 +998,9 @@ pub fn plan_create_source(
 
             for (index, table) in details.tables.iter().enumerate() {
                 let name = FullItemName {
-                    // In MySQL a database is the same as a schema
-                    database: RawDatabaseSpecifier::Ambient,
+                    // In MySQL we use 'mysql' as the default database name since there is
+                    // no concept of a 'database' in MySQL (schemas and databases are the same thing)
+                    database: RawDatabaseSpecifier::Name("mysql".to_string()),
                     schema: table.schema_name.clone(),
                     item: table.name.clone(),
                 };

@@ -1267,18 +1267,11 @@ impl CatalogError {
 
 impl Error for CatalogError {}
 
-// Implements a trait with a generic parameter T and a lifetime 'a for that parameter
-pub(crate) trait SubsourceCatalog<'a, T> {
-    fn resolve(&self, item: UnresolvedItemName) -> Result<(UnresolvedItemName, &'a T), PlanError>;
-}
-
 /// Provides a method of generating a 3-layer catalog on the fly, and then
 /// resolving objects within it.
-pub(crate) struct SubsourceCatalogTriple<'a, T>(
-    pub BTreeMap<String, BTreeMap<String, BTreeMap<String, &'a T>>>,
-);
+pub(crate) struct SubsourceCatalog<T>(pub BTreeMap<String, BTreeMap<String, BTreeMap<String, T>>>);
 
-impl<'a, T> SubsourceCatalog<'a, T> for SubsourceCatalogTriple<'a, T> {
+impl<T> SubsourceCatalog<T> {
     /// Returns the fully qualified name for `item`, as well as the `T` that it
     /// describes.
     ///
@@ -1286,7 +1279,10 @@ impl<'a, T> SubsourceCatalog<'a, T> for SubsourceCatalogTriple<'a, T> {
     /// - If `item` cannot be normalized to a [`PartialItemName`]
     /// - If the normalized `PartialItemName` does not resolve to an item in
     ///   `self.0`.
-    fn resolve(&self, item: UnresolvedItemName) -> Result<(UnresolvedItemName, &'a T), PlanError> {
+    pub(crate) fn resolve(
+        &self,
+        item: UnresolvedItemName,
+    ) -> Result<(UnresolvedItemName, &T), PlanError> {
         let name = normalize::unresolved_item_name(item)?;
 
         let schemas = match self.0.get(&name.item) {
@@ -1320,7 +1316,7 @@ impl<'a, T> SubsourceCatalog<'a, T> for SubsourceCatalogTriple<'a, T> {
         };
 
         let desc = match databases.get(database) {
-            Some(desc) => *desc,
+            Some(desc) => desc,
             None => sql_bail!("database {database} not found source"),
         };
 
@@ -1328,52 +1324,6 @@ impl<'a, T> SubsourceCatalog<'a, T> for SubsourceCatalogTriple<'a, T> {
         Ok((
             UnresolvedItemName::qualified(&[
                 Ident::new_unchecked(database),
-                Ident::new_unchecked(schema),
-                Ident::new_unchecked(&name.item),
-            ]),
-            desc,
-        ))
-    }
-}
-
-/// Provides a method of generating a 2-layer catalog on the fly, and then
-/// resolving objects within it.
-pub(crate) struct SubsourceCatalogDouble<'a, T>(pub BTreeMap<String, BTreeMap<String, &'a T>>);
-
-impl<'a, T> SubsourceCatalog<'a, T> for SubsourceCatalogDouble<'a, T> {
-    /// Returns the fully qualified name for `item`, as well as the `T` that it
-    /// describes.
-    ///
-    /// # Errors
-    /// - If `item` cannot be normalized to a [`PartialItemName`]
-    /// - If the normalized `PartialItemName` does not resolve to an item in
-    ///   `self.0`.
-    fn resolve(&self, item: UnresolvedItemName) -> Result<(UnresolvedItemName, &'a T), PlanError> {
-        let name = normalize::unresolved_item_name(item)?;
-
-        let schemas = match self.0.get(&name.item) {
-            Some(schemas) => schemas,
-            None => sql_bail!("table {name} not found in source"),
-        };
-
-        let schema = match &name.schema {
-            Some(schema) => schema,
-            None => match schemas.keys().exactly_one() {
-                Ok(schema) => schema,
-                Err(_) => {
-                    sql_bail!("table {name} is ambiguous, consider specifying the schema")
-                }
-            },
-        };
-
-        let desc = match schemas.get(schema) {
-            Some(desc) => *desc,
-            None => sql_bail!("schema {schema} not found in source"),
-        };
-
-        // Note: Using unchecked here is okay because all of these values were originally Idents.
-        Ok((
-            UnresolvedItemName::qualified(&[
                 Ident::new_unchecked(schema),
                 Ident::new_unchecked(&name.item),
             ]),

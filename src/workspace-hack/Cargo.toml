@@ -54,8 +54,7 @@ futures-util = { version = "0.3.28", features = ["channel", "io", "sink"] }
 globset = { version = "0.4.9", features = ["serde1"] }
 hashbrown = { version = "0.14.0", features = ["raw"] }
 hyper = { version = "0.14.27", features = ["full"] }
-indexmap-dff4ba8e3ae991db = { package = "indexmap", version = "1.9.1", default-features = false, features = ["std"] }
-indexmap-f595c2ba2a3f28df = { package = "indexmap", version = "2.0.0" }
+indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 itertools = { version = "0.10.5" }
 k8s-openapi = { version = "0.20.0", default-features = false, features = ["schemars", "v1_26"] }
 kube = { version = "0.87.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
@@ -168,8 +167,7 @@ futures-util = { version = "0.3.28", features = ["channel", "io", "sink"] }
 globset = { version = "0.4.9", features = ["serde1"] }
 hashbrown = { version = "0.14.0", features = ["raw"] }
 hyper = { version = "0.14.27", features = ["full"] }
-indexmap-dff4ba8e3ae991db = { package = "indexmap", version = "1.9.1", default-features = false, features = ["std"] }
-indexmap-f595c2ba2a3f28df = { package = "indexmap", version = "2.0.0" }
+indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 itertools = { version = "0.10.5" }
 k8s-openapi = { version = "0.20.0", default-features = false, features = ["schemars", "v1_26"] }
 kube = { version = "0.87.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }

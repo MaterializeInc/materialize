@@ -23,7 +23,7 @@ use mz_sql_parser::ast::{
 use mz_sql_parser::ast::{CreateSourceSubsource, UnresolvedItemName};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 
-use crate::catalog::{SubsourceCatalog, SubsourceCatalogTriple};
+use crate::catalog::SubsourceCatalog;
 use crate::names::{Aug, PartialItemName};
 use crate::normalize;
 use crate::plan::{PlanError, StatementContext};
@@ -33,7 +33,7 @@ use super::error::PgSourcePurificationError;
 pub(super) fn derive_catalog_from_publication_tables<'a>(
     database: &'a str,
     publication_tables: &'a [PostgresTableDesc],
-) -> Result<SubsourceCatalogTriple<'a, PostgresTableDesc>, PlanError> {
+) -> Result<SubsourceCatalog<&'a PostgresTableDesc>, PlanError> {
     // An index from table name -> schema name -> database name -> PostgresTableDesc
     let mut tables_by_name = BTreeMap::new();
     for table in publication_tables.iter() {
@@ -46,7 +46,7 @@ pub(super) fn derive_catalog_from_publication_tables<'a>(
             .or_insert(table);
     }
 
-    Ok(SubsourceCatalogTriple(tables_by_name))
+    Ok(SubsourceCatalog(tables_by_name))
 }
 
 pub(super) async fn validate_requested_subsources_privileges(
@@ -76,7 +76,7 @@ pub(super) async fn validate_requested_subsources_privileges(
 }
 
 pub(super) fn generate_text_columns(
-    publication_catalog: &SubsourceCatalogTriple<'_, PostgresTableDesc>,
+    publication_catalog: &SubsourceCatalog<&PostgresTableDesc>,
     text_columns: &mut [UnresolvedItemName],
     option_name: &str,
 ) -> Result<BTreeMap<u32, BTreeSet<String>>, PlanError> {

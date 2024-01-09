@@ -18,7 +18,7 @@ mz-repr = { path = "../repr" }
 mz-ore = { path = "../ore", features = ["async"] }
 thiserror = "1.0.37"
 itertools = "0.10.5"
-indexmap = { version = "2.0.0", default-features = false, features = ["std"] }
+indexmap = { version = "1.9.1", default-features = false, features = ["std"] }
 prost = { version = "0.11.3", features = ["no-recursion-limit"] }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 once_cell = "1.16.0"
