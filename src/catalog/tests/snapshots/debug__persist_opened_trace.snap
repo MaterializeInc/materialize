@@ -1119,6 +1119,76 @@ Trace {
                         id: Some(
                             RoleId {
                                 value: Some(
+                                    System(
+                                        3,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    RoleValue {
+                        name: "mz_monitor",
+                        attributes: Some(
+                            RoleAttributes {
+                                inherit: true,
+                            },
+                        ),
+                        membership: Some(
+                            RoleMembership {
+                                map: [],
+                            },
+                        ),
+                        vars: Some(
+                            RoleVars {
+                                entries: [],
+                            },
+                        ),
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    RoleKey {
+                        id: Some(
+                            RoleId {
+                                value: Some(
+                                    System(
+                                        4,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    RoleValue {
+                        name: "mz_monitor_redacted",
+                        attributes: Some(
+                            RoleAttributes {
+                                inherit: true,
+                            },
+                        ),
+                        membership: Some(
+                            RoleMembership {
+                                map: [],
+                            },
+                        ),
+                        vars: Some(
+                            RoleVars {
+                                entries: [],
+                            },
+                        ),
+                    },
+                ),
+                "1",
+                1,
+            ),
+            (
+                (
+                    RoleKey {
+                        id: Some(
+                            RoleId {
+                                value: Some(
                                     Public(
                                         Empty,
                                     ),
