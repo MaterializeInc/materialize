@@ -27,29 +27,40 @@ class Dataset(Enum):
     SIMPLE = 1
     DBT3 = 2
 
+    def files(self) -> list[str]:
+        match self:
+            case Dataset.SIMPLE:
+                return ["simple.sql"]
+            case Dataset.DBT3:
+                return ["dbt3-ddl.sql", "dbt3-s0.0001.dump"]
+            case _:
+                assert False
+
 
 class ReferenceImplementation(Enum):
-    MZ = 1
+    MATERIALIZE = 1
     POSTGRES = 2
 
     def dsn(self) -> str:
-        if self == ReferenceImplementation.MZ:
-            return "dbname=materialize;host=mz_other;user=materialize;port=6875;cluster=default"
-        elif self == ReferenceImplementation.POSTGRES:
-            return "dbname=postgres;host=postgres;user=postgres;password=postgres"
-        else:
-            assert False
+        match self:
+            case ReferenceImplementation.MATERIALIZE:
+                return "dbname=materialize;host=mz_other;user=materialize;port=6875"
+            case ReferenceImplementation.POSTGRES:
+                return "dbname=postgres;host=postgres;user=postgres;password=postgres"
+            case _:
+                assert False
 
 
 @dataclass
 class Workload:
     name: str
-    dataset: Dataset
     grammar: str
     reference_implementation: ReferenceImplementation | None
+    dataset: Dataset | None = None
     duration: int = 30 * 60
     disabled: bool = False
     threads: int = 4
+    validator: str | None = None
 
 
 WORKLOADS = [
@@ -64,6 +75,14 @@ WORKLOADS = [
         dataset=Dataset.DBT3,
         grammar="conf/mz/dbt3-joins.yy",
         reference_implementation=ReferenceImplementation.POSTGRES,
+    ),
+    Workload(
+        # A workload that performs DML that preserve the dataset's invariants
+        # and also checks that those invariants are not violated
+        name="banking",
+        grammar="conf/mz/banking.yy",
+        reference_implementation=None,
+        validator="QueryProperties,RepeatableRead",
     ),
 ]
 
@@ -85,6 +104,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--debug", action="store_true", help="Run the RQG With RQG_DEBUG=1"
     )
     parser.add_argument(
+        "--seed",
+        metavar="SEED",
+        type=str,
+        help="Random seed to use.",
+    )
+
+    parser.add_argument(
         "workloads", nargs="*", default=None, help="Run specified workloads"
     )
     args = parser.parse_args()
@@ -101,7 +127,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     ), f"No matching workloads found (args was {args.workloads})"
 
     for workload in workloads_to_run:
-        print(f"--- Running workload {workload.name}: {workload.__doc__} ...")
+        print(f"--- Running workload {workload.name}: {workload} ...")
         run_workload(c, args, workload)
 
 
@@ -119,30 +145,28 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
 
     psql_urls = ["postgresql://materialize@mz_this:6875/materialize"]
 
-    if workload.reference_implementation == ReferenceImplementation.MZ:
-        participants.append(
-            Materialized(
-                name="mz_other",
-                image=f"materialize/materialized:{args.other_tag}"
-                if args.other_tag
-                else None,
-                ports=["26875:6875", "26877:6877"],
-                use_default_volumes=False,
+    match workload.reference_implementation:
+        case ReferenceImplementation.MATERIALIZE:
+            participants.append(
+                Materialized(
+                    name="mz_other",
+                    image=f"materialize/materialized:{args.other_tag}"
+                    if args.other_tag
+                    else None,
+                    ports=["26875:6875", "26877:6877"],
+                    use_default_volumes=False,
+                )
             )
-        )
-        psql_urls.append("postgresql://materialize@mz_other:6885/materialize")
+            psql_urls.append("postgresql://materialize@mz_other:6875/materialize")
+        case ReferenceImplementation.POSTGRES:
+            participants.append(Postgres(ports=["15432:5432"]))
+            psql_urls.append("postgresql://postgres:postgres@postgres/postgres")
+        case None:
+            pass
+        case _:
+            assert False
 
-    elif workload.reference_implementation == ReferenceImplementation.POSTGRES:
-        participants.append(Postgres(ports=["15432:5432"]))
-        psql_urls.append("postgresql://postgres:postgres@postgres/postgres")
-    else:
-        assert False
-
-    files = (
-        ["dbt3-ddl.sql", "dbt3-s0.0001.dump"]
-        if workload.dataset == Dataset.DBT3
-        else ["simple.sql"]
-    )
+    files = [] if workload.dataset is None else workload.dataset.files()
 
     dsn2 = (
         [f"--dsn2=dbi:Pg:{workload.reference_implementation.dsn()}"]
@@ -169,12 +193,16 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
                     "rqg",
                     "perl",
                     "gentest.pl",
-                    "--dsn1=dbi:Pg:dbname=materialize;host=mz_this;user=mz_system;port=6877",
+                    "--dsn1=dbi:Pg:dbname=materialize;host=mz_this;user=materialize;port=6875",
                     *dsn2,
                     f"--grammar={workload.grammar}",
+                    f"--validator={workload.validator}"
+                    if workload.validator is not None
+                    else "",
                     "--queries=10000000",
                     f"--threads={workload.threads}",
                     f"--duration={duration}",
+                    f"--seed={args.seed}",
                     env_extra=env_extra,
                 )
         finally:
