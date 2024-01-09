@@ -155,9 +155,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
     let slot_reader = u64::cast_from(config.responsible_worker("slot"));
-    let mut rewind_input = builder.new_input(rewind_stream, Exchange::new(move |_| slot_reader));
-    let (mut data_output, data_stream) = builder.new_output();
-    let (_upper_output, upper_stream) = builder.new_output();
+    let (mut data_output, data_stream) = builder.new_disconnected_output();
+    let (_upper_output, upper_stream) = builder.new_disconnected_output();
+    let mut rewind_input =
+        builder.new_input_for(rewind_stream, Exchange::new(move |_| slot_reader), 0);
 
     let metrics = config.metrics.get_postgres_metrics(config.id);
     metrics.tables.set(u64::cast_from(table_info.len()));
@@ -205,7 +206,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let mut rewinds = BTreeMap::new();
             while let Some(event) = rewind_input.next_mut().await {
                 if let AsyncEvent::Data(cap, data) = event {
-                    let cap = cap.retain_for_output(0);
                     for req in data.drain(..) {
                         assert!(
                             resume_lsn <= req.snapshot_lsn + 1,

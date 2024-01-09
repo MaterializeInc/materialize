@@ -95,7 +95,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
     ) {
         let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
-        let (mut data_output, stream) = builder.new_output();
+        let (mut data_output, stream) = builder.new_disconnected_output();
 
         let button = builder.build(move |caps| async move {
             let mut cap = caps.into_element();

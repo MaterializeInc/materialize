@@ -163,7 +163,7 @@ where
     T: Timestamp,
 {
     let mut builder = AsyncOperatorBuilder::new(name, scope);
-    let (_output, output_stream) = builder.new_output();
+    let (_output, output_stream) = builder.new_disconnected_output();
 
     builder.build(move |capabilities| async move {
         let mut cap_set = CapabilitySet::from(capabilities);

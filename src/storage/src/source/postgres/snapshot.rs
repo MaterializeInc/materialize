@@ -183,15 +183,14 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
     let (feedback_handle, feedback_data) = scope.feedback(Default::default());
 
-    let (mut raw_handle, raw_data) = builder.new_output();
-    let (mut rewinds_handle, rewinds) = builder.new_output();
-    let (mut snapshot_handle, snapshot) = builder.new_output();
+    let (mut raw_handle, raw_data) = builder.new_disconnected_output();
+    let (mut rewinds_handle, rewinds) = builder.new_disconnected_output();
+    let (mut snapshot_handle, snapshot) = builder.new_disconnected_output();
 
     // This operator needs to broadcast data to itself in order to synchronize the transaction
     // snapshot. However, none of the feedback capabilities result in output messages and for the
     // feedback edge specifically having a default conncetion would result in a loop.
-    let disconnected = vec![Antichain::new(); 3];
-    let mut snapshot_input = builder.new_input_connection(&feedback_data, Pipeline, disconnected);
+    let mut snapshot_input = builder.new_disconnected_input(&feedback_data, Pipeline);
 
     // The export id must be sent to all workes, so we broadcast the feedback connection
     snapshot.broadcast().connect_loop(feedback_handle);

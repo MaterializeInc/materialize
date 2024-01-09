@@ -156,7 +156,7 @@ where
     let name = format!("txns_progress_source({}) [{}]", name, unique_id);
     let mut builder = AsyncOperatorBuilder::new(name.clone(), scope);
     let name = format!("{} [{}]", name, unique_id);
-    let (mut txns_output, txns_stream) = builder.new_output();
+    let (mut txns_output, txns_stream) = builder.new_disconnected_output();
 
     let shutdown_button = builder.build(move |capabilities| async move {
         if worker_idx != chosen_worker {
@@ -232,10 +232,9 @@ where
         passthrough.scope().index(),
         passthrough.scope().peers(),
     );
-    let (mut passthrough_output, passthrough_stream) = builder.new_output();
-    let txns_input = builder.new_input_connection(&txns, Pipeline, vec![Antichain::new()]);
-    let mut passthrough_input =
-        builder.new_input_connection(&passthrough, Pipeline, vec![Antichain::new()]);
+    let (mut passthrough_output, passthrough_stream) = builder.new_disconnected_output();
+    let txns_input = builder.new_disconnected_input(&txns, Pipeline);
+    let mut passthrough_input = builder.new_disconnected_input(&passthrough, Pipeline);
 
     let (worker_idx, num_workers) = (passthrough.scope().index(), passthrough.scope().peers());
     let shutdown_button = builder.build(move |capabilities| async move {
@@ -455,7 +454,7 @@ struct TxnsCacheTimely<
 > {
     name: String,
     state: TxnsCacheState<T>,
-    input: AsyncInputHandle<T, Vec<(TxnsEntry, T, i64)>, P>,
+    input: AsyncInputHandle<T, Vec<(TxnsEntry, T, i64)>, T, P>,
     buf: Vec<(TxnsEntry, T, i64)>,
 }
 

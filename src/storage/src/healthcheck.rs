@@ -353,7 +353,7 @@ where
 
     let health = health_stream.enter(scope);
 
-    let mut input = health_op.new_input(
+    let mut input = health_op.new_disconnected_input(
         &health,
         Exchange::new(move |_| u64::cast_from(chosen_worker_id)),
     );
@@ -1129,7 +1129,7 @@ mod tests {
         mut input: UnboundedReceiver<TestUpdate>,
     ) -> Stream<G, HealthStatusMessage> {
         let mut iterator = AsyncOperatorBuilder::new("iterator".to_string(), scope.clone());
-        let (mut output_handle, output) = iterator.new_output();
+        let (mut output_handle, output) = iterator.new_disconnected_output();
 
         let index = scope.index();
         iterator.build(|mut caps| async move {

@@ -156,7 +156,7 @@ pub fn rehydration_finished<G, T>(
     let worker_id = source_config.worker_id;
     let id = source_config.id;
     let mut builder = AsyncOperatorBuilder::new(format!("rehydration_finished({id}"), scope);
-    let mut input = builder.new_input(input, Pipeline);
+    let mut input = builder.new_disconnected_input(input, Pipeline);
 
     builder.build(move |_capabilities| async move {
         let mut input_upper = Antichain::from_elem(Timestamp::minimum());
@@ -390,11 +390,6 @@ where
 
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
 
-    let mut input = builder.new_input(
-        &input.inner,
-        Exchange::new(move |((key, _, _), _, _)| UpsertKey::hashed(key)),
-    );
-
     // We only care about UpsertValueError since this is the only error that we can retract
     let previous = previous.flat_map(move |result| {
         let value = match result {
@@ -407,12 +402,19 @@ where
         };
         Some((UpsertKey::from_value(value.as_ref(), &key_indices), value))
     });
-    let mut previous = builder.new_input(
+    let (mut output_handle, output) = builder.new_disconnected_output();
+    let (mut health_output, health_stream) = builder.new_disconnected_output();
+    let mut input = builder.new_input_for(
+        &input.inner,
+        Exchange::new(move |((key, _, _), _, _)| UpsertKey::hashed(key)),
+        0,
+    );
+
+    let mut previous = builder.new_input_for(
         &previous.inner,
         Exchange::new(|((key, _), _, _)| UpsertKey::hashed(key)),
+        0,
     );
-    let (mut output_handle, output) = builder.new_output();
-    let (mut health_output, health_stream) = builder.new_output();
 
     let upsert_shared_metrics = Arc::clone(&upsert_metrics.shared);
     let shutdown_button = builder.build(move |caps| async move {

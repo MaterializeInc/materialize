@@ -934,14 +934,14 @@ where
     let hashed_id = id.hashed();
     let is_active_worker = usize::cast_from(hashed_id) % worker_count == worker_id;
 
-    let mut input = builder.new_input(&stream, Exchange::new(move |_| hashed_id));
+    let mut input = builder.new_disconnected_input(&stream, Exchange::new(move |_| hashed_id));
 
     // The frontier of this output is never inspected, so we can just use a
     // normal output, even if its frontier is connected to the input.
     //
     // n.b. each operator needs to have its own `HealthOutputHandle` and they
     // cannot be shared between operators.
-    let (health_output, health_stream) = builder.new_output();
+    let (health_output, health_stream) = builder.new_disconnected_output();
 
     let button = builder.build(move |caps| async move {
         let [health_cap]: [_; 1] = caps.try_into().unwrap();
@@ -1217,12 +1217,10 @@ where
 
     let mut builder = AsyncOperatorBuilder::new(name.clone(), input_stream.scope());
 
-    let mut input = builder.new_input(input_stream, Exchange::new(move |_| hashed_id));
-    let (mut output, stream) = builder.new_output();
+    let (mut output, stream) = builder.new_disconnected_output();
+    let mut input = builder.new_input_for(input_stream, Exchange::new(move |_| hashed_id), 0);
 
-    // The frontier of this output is never inspected, so we can just use a normal output,
-    // even if its frontier is connected to the input.
-    let (health_output, health_stream) = builder.new_output();
+    let (health_output, health_stream) = builder.new_disconnected_output();
 
     let button = builder.build(move |caps| async move {
         let [output_cap, health_cap]: [_; 2] = caps.try_into().unwrap();

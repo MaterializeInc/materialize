@@ -410,12 +410,12 @@ where
         scope.clone(),
     );
 
-    let (mut output, output_stream) = mint_op.new_output();
-    let (mut data_output, data_output_stream) = mint_op.new_output();
+    let (mut output, output_stream) = mint_op.new_disconnected_output();
+    let (mut data_output, data_output_stream) = mint_op.new_disconnected_output();
 
     // The description and the data-passthrough outputs are both driven by this input, so
     // they use a standard input connection.
-    let mut desired_input = mint_op.new_input(&desired_collection.inner, Pipeline);
+    let mut desired_input = mint_op.new_input_for(&desired_collection.inner, Pipeline, 1);
 
     let shutdown_button = mint_op.build(move |capabilities| async move {
         // Non-active workers should just pass the data through.
@@ -587,10 +587,11 @@ where
     let mut write_op =
         AsyncOperatorBuilder::new(format!("{} write_batches", operator_name), scope.clone());
 
-    let (mut output, output_stream) = write_op.new_output();
+    let (mut output, output_stream) = write_op.new_disconnected_output();
 
-    let mut descriptions_input = write_op.new_input(&batch_descriptions.broadcast(), Pipeline);
-    let mut desired_input = write_op.new_input(&desired_collection.inner, Pipeline);
+    let mut descriptions_input =
+        write_op.new_input_for(&batch_descriptions.broadcast(), Pipeline, 0);
+    let mut desired_input = write_op.new_disconnected_input(&desired_collection.inner, Pipeline);
 
     // This operator accepts the current and desired update streams for a `persist` shard.
     // It attempts to write out updates, starting from the current's upper frontier, that
@@ -937,13 +938,10 @@ where
     // any output of this operator is entirely driven by the `compare_and_append`s. Currently
     // this operator has no outputs, but they may be added in the future, when merging with
     // the compute `persist_sink`.
-    let mut descriptions_input = append_op.new_input_connection(
-        batch_descriptions,
-        Exchange::new(move |_| hashed_id),
-        vec![],
-    );
+    let mut descriptions_input =
+        append_op.new_disconnected_input(batch_descriptions, Exchange::new(move |_| hashed_id));
     let mut batches_input =
-        append_op.new_input_connection(batches, Exchange::new(move |_| hashed_id), vec![]);
+        append_op.new_disconnected_input(batches, Exchange::new(move |_| hashed_id));
 
     let current_upper = Rc::clone(&storage_state.source_uppers[&collection_id]);
     if !active_worker {
@@ -959,7 +957,7 @@ where
         .clone();
 
     // An output whose frontier tracks the last successful compare and append of this operator
-    let (_upper_output, upper_stream) = append_op.new_output_connection(vec![Antichain::new(); 2]);
+    let (_upper_output, upper_stream) = append_op.new_disconnected_output();
 
     // This operator accepts the batch descriptions and tokens that represent
     // written batches. Written batches get appended to persist when we learn

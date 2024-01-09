@@ -206,7 +206,7 @@ where
         format!("shard_source_descs_return({})", name),
         scope.clone(),
     );
-    let mut completed_fetches = builder.new_input(
+    let mut completed_fetches = builder.new_disconnected_input(
         &completed_fetches_stream,
         // We must ensure all completed fetches are fed into
         // the worker responsible for managing part leases
@@ -236,7 +236,7 @@ where
 
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_descs({})", name), scope.clone());
-    let (mut descs_output, descs_stream) = builder.new_output();
+    let (mut descs_output, descs_stream) = builder.new_disconnected_output();
 
     #[allow(clippy::await_holding_refcell_ref)]
     let shutdown_button = builder.build(move |caps| async move {
@@ -449,12 +449,14 @@ where
 {
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_fetch({})", name), descs.scope());
-    let mut descs_input = builder.new_input(
+    let (mut fetched_output, fetched_stream) = builder.new_disconnected_output();
+    let (mut completed_fetches_output, completed_fetches_stream) =
+        builder.new_disconnected_output();
+    let mut descs_input = builder.new_input_for_many(
         descs,
         Exchange::new(|&(i, _): &(usize, _)| u64::cast_from(i)),
+        [0, 1],
     );
-    let (mut fetched_output, fetched_stream) = builder.new_output();
-    let (mut completed_fetches_output, completed_fetches_stream) = builder.new_output();
     let name_owned = name.to_owned();
 
     let shutdown_button = builder.build(move |_capabilities| async move {
@@ -474,7 +476,7 @@ where
         };
 
         while let Some(event) = descs_input.next_mut().await {
-            if let Event::Data(cap, data) = event {
+            if let Event::Data([cap1, cap2], data) = event {
                 // `LeasedBatchPart`es cannot be dropped at this point w/o
                 // panicking, so swap them to an owned version.
                 for (_idx, part) in data.drain(..) {
@@ -489,9 +491,9 @@ where
                         // outputs or sessions across await points, which
                         // would prevent messages from being flushed from
                         // the shared timely output buffer.
-                        fetched_output.give(&cap, fetched).await;
+                        fetched_output.give(&cap1, fetched).await;
                         completed_fetches_output
-                            .give(&cap, leased_part.into_exchangeable_part())
+                            .give(&cap2, leased_part.into_exchangeable_part())
                             .await;
                     }
                 }

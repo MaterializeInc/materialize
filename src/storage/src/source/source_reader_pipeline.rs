@@ -264,16 +264,16 @@ where
         trace!(%upper, "timely-{worker_id} source({source_id}) received resume upper");
     });
 
-    let (data, progress, health, tokens) =
+    let (input_data, progress, health, tokens) =
         source_connection.render(scope, config, resume_uppers, start_signal);
 
     let name = format!("SourceStats({})", source_id);
     let mut builder = AsyncOperatorBuilder::new(name, scope.clone());
 
-    let mut data_input = builder.new_input(&data.inner, Pipeline);
-    let (mut data_output, data) = builder.new_output();
-    let (mut _progress_output, derived_progress) = builder.new_output();
-    let (mut health_output, derived_health) = builder.new_output();
+    let (mut data_output, data) = builder.new_disconnected_output();
+    let (mut _progress_output, derived_progress) = builder.new_disconnected_output();
+    let mut data_input = builder.new_input_for_many(&input_data.inner, Pipeline, [0, 1]);
+    let (mut health_output, derived_health) = builder.new_disconnected_output();
 
     builder.build(move |mut caps| async move {
         let health_cap = caps.pop().unwrap();
@@ -282,7 +282,7 @@ where
         let mut statuses_by_idx = BTreeMap::new();
 
         while let Some(event) = data_input.next_mut().await {
-            let AsyncEvent::Data(cap, data) = event else {
+            let AsyncEvent::Data([cap_data, _cap_progress], data) = event else {
                 continue;
             };
             for ((output_index, message), _, _) in data.iter() {
@@ -312,7 +312,7 @@ where
                     Err(_) => {}
                 }
             }
-            data_output.give_container(&cap, data).await;
+            data_output.give_container(&cap_data, data).await;
 
             for statuses in statuses_by_idx.values_mut() {
                 if statuses.is_empty() {
@@ -423,7 +423,7 @@ where
 
     let operator_name = format!("remap({})", id);
     let mut remap_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
-    let (mut remap_output, remap_stream) = remap_op.new_output();
+    let (mut remap_output, remap_stream) = remap_op.new_disconnected_output();
 
     let button = remap_op.build(move |capabilities| async move {
         if !active_worker {
@@ -582,11 +582,11 @@ where
 
     let operator_name = format!("reclock({})", id);
     let mut reclock_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
-    let (mut reclocked_output, reclocked_stream) = reclock_op.new_output();
+    let (mut reclocked_output, reclocked_stream) = reclock_op.new_disconnected_output();
 
     // Need to broadcast the remap changes to all workers.
     let remap_trace_updates = remap_trace_updates.inner.broadcast();
-    let mut remap_input = reclock_op.new_input(&remap_trace_updates, Pipeline);
+    let mut remap_input = reclock_op.new_disconnected_input(&remap_trace_updates, Pipeline);
 
     reclock_op.build(move |capabilities| async move {
         // The capability of the output after reclocking the source frontier

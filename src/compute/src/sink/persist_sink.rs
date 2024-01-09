@@ -287,19 +287,15 @@ where
     let mut mint_op =
         AsyncOperatorBuilder::new(format!("{} mint_batch_descriptions", operator_name), scope);
 
-    let (mut output, output_stream) = mint_op.new_output();
-    let (mut data_output, data_output_stream) = mint_op.new_output();
+    let (mut output, output_stream) = mint_op.new_disconnected_output();
+    let (mut data_output, data_output_stream) = mint_op.new_disconnected_output();
 
     // The description and the data-passthrough outputs are both driven by this input, so
     // they use a standard input connection.
-    let mut desired_input = mint_op.new_input(desired_stream, Pipeline);
+    let mut desired_input = mint_op.new_input_for(desired_stream, Pipeline, 1);
 
-    let mut persist_feedback_input = mint_op.new_input_connection(
-        persist_feedback_stream,
-        Pipeline,
-        // Neither output's capabilities should depend on the feedback input.
-        vec![Antichain::new(), Antichain::new()],
-    );
+    let mut persist_feedback_input =
+        mint_op.new_disconnected_input(persist_feedback_stream, Pipeline);
 
     let shutdown_button = mint_op.build(move |capabilities| async move {
         // Non-active workers should just pass the data through.
@@ -586,30 +582,29 @@ where
 
     let mut write_op = AsyncOperatorBuilder::new(format!("{} write_batches", operator_name), scope);
 
-    let (mut output, output_stream) = write_op.new_output();
+    let (mut output, output_stream) = write_op.new_disconnected_output();
 
-    let mut descriptions_input = write_op.new_input(&batch_descriptions.broadcast(), Pipeline);
-    let mut desired_input = write_op.new_input(
+    let mut descriptions_input =
+        write_op.new_input_for(&batch_descriptions.broadcast(), Pipeline, 0);
+    let mut desired_input = write_op.new_input_for(
         desired_stream,
         Exchange::new(
             move |(row, _ts, _diff): &(Result<Row, DataflowError>, Timestamp, Diff)| row.hashed(),
         ),
+        0,
     );
-    let mut persist_input = write_op.new_input_connection(
+    // This input is disconnected so that the persist frontier is not taken into account when
+    // determining downstream implications. We're only interested in the frontier to know when we
+    // are ready to write out new data (when the corrections have "settled"). But the persist
+    // frontier must not hold back the downstream frontier, otherwise the `append_batches` operator
+    // would never append batches because it waits for its input frontier to advance before it does
+    // so. The input frontier would never advance if we don't write new updates to persist, leading
+    // to a Catch-22-type situation.
+    let mut persist_input = write_op.new_disconnected_input(
         persist_stream,
         Exchange::new(
             move |(row, _ts, _diff): &(Result<Row, DataflowError>, Timestamp, Diff)| row.hashed(),
         ),
-        // This connection specification makes sure that the persist frontier is
-        // not taken into account when determining downstream implications.
-        // We're only interested in the frontier to know when we are ready to
-        // write out new data (when the corrections have "settled"). But the
-        // persist frontier must not hold back the downstream frontier,
-        // otherwise the `append_batches` operator would never append batches
-        // because it waits for its input frontier to advance before it does so.
-        // The input frontier would never advance if we don't write new updates
-        // to persist, leading to a Catch-22-type situation.
-        vec![Antichain::new()],
     );
 
     // This operator accepts the current and desired update streams for a `persist` shard.
@@ -940,7 +935,7 @@ where
     // We never output anything, but we update our capabilities based on the
     // persist frontier we know about. So someone can listen on our output
     // frontier and learn about the persist frontier advancing.
-    let (mut _output, output_stream) = append_op.new_output();
+    let (mut _output, output_stream) = append_op.new_disconnected_output();
 
     let hashed_id = sink_id.hashed();
     let active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
@@ -950,16 +945,10 @@ where
     // when we either append to persist successfully or when we learn about a
     // new current frontier because a `compare_and_append` failed. That's why
     // input capability tracking is not connected to the output.
-    let mut descriptions_input = append_op.new_input_connection(
-        batch_descriptions,
-        Exchange::new(move |_| hashed_id),
-        vec![Antichain::new()],
-    );
-    let mut batches_input = append_op.new_input_connection(
-        batches,
-        Exchange::new(move |_| hashed_id),
-        vec![Antichain::new()],
-    );
+    let mut descriptions_input =
+        append_op.new_disconnected_input(batch_descriptions, Exchange::new(move |_| hashed_id));
+    let mut batches_input =
+        append_op.new_disconnected_input(batches, Exchange::new(move |_| hashed_id));
 
     // This operator accepts the batch descriptions and tokens that represent
     // written batches. Written batches get appended to persist when we learn

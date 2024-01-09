@@ -80,8 +80,8 @@ impl ArcWake for TimelyWaker {
 }
 
 /// Async handle to an operator's input stream
-pub struct AsyncInputHandle<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> {
-    state: NextFutState<T, D, P>,
+pub struct AsyncInputHandle<T: Timestamp, D: Container, C, P: Pull<BundleCore<T, D>> + 'static> {
+    state: NextFutState<T, D, C, P>,
     /// A scratch container used to gain mutable access to batches
     buffer: D,
 }
@@ -89,9 +89,9 @@ pub struct AsyncInputHandle<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>
 /// This struct holds the state that is captured by the `NextFut` future. This definition is
 /// mandatory for the implementation of `AsyncInputHandle::next_mut` which needs to perform a
 /// disjoint capture on this state and the buffer that is about to be swapped.
-struct NextFutState<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> {
+struct NextFutState<T: Timestamp, D: Container, C, P: Pull<BundleCore<T, D>> + 'static> {
     /// The underying synchronous input handle
-    shared_queue: Rc<RefCell<VecDeque<(InputCapability<T>, D)>>>,
+    shared_queue: Rc<RefCell<VecDeque<(C, D)>>>,
     /// Frontier information of input streams shared with the operator. Each frontier is paired
     /// with a flag indicating whether or not the handle has seen the updated frontier.
     shared_frontiers: Rc<RefCell<Vec<(Antichain<T>, bool)>>>,
@@ -102,14 +102,16 @@ struct NextFutState<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'sta
     _phantom: PhantomData<P>,
 }
 
-impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> AsyncInputHandle<T, D, P> {
+impl<T: Timestamp, D: Container, C, P: Pull<BundleCore<T, D>> + 'static>
+    AsyncInputHandle<T, D, C, P>
+{
     /// Produces a future that will resolve to the next event of this input stream with shared
     /// access to the data.
     ///
     /// # Cancel safety
     ///
     /// The returned future is cancel-safe
-    pub fn next(&mut self) -> impl Future<Output = Option<Event<T, &D>>> + '_ {
+    pub fn next(&mut self) -> impl Future<Output = Option<Event<T, C, &D>>> + '_ {
         let fut = NextFut {
             state: Some(&mut self.state),
         };
@@ -130,7 +132,7 @@ impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> AsyncInput
     /// # Cancel safety
     ///
     /// The returned future is cancel-safe
-    pub fn next_mut(&mut self) -> impl Future<Output = Option<Event<T, &mut D>>> + '_ {
+    pub fn next_mut(&mut self) -> impl Future<Output = Option<Event<T, C, &mut D>>> + '_ {
         let fut = NextFut {
             state: Some(&mut self.state),
         };
@@ -147,51 +149,52 @@ impl<T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> AsyncInput
 }
 
 /// The future returned by `AsyncInputHandle::next`
-struct NextFut<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>> + 'static> {
-    state: Option<&'handle mut NextFutState<T, D, P>>,
+struct NextFut<'handle, T: Timestamp, D: Container, C, P: Pull<BundleCore<T, D>> + 'static> {
+    state: Option<&'handle mut NextFutState<T, D, C, P>>,
 }
 
 /// An event of an input stream
 #[derive(Debug)]
-pub enum Event<T: Timestamp, D> {
+pub enum Event<T: Timestamp, C, D> {
     /// A data event
-    Data(InputCapability<T>, D),
+    Data(C, D),
     /// A progress event
     Progress(Antichain<T>),
 }
 
-impl<'handle, T: Timestamp, D: Container, P: Pull<BundleCore<T, D>>> Future
-    for NextFut<'handle, T, D, P>
+impl<'handle, T: Timestamp, D: Container, C, P: Pull<BundleCore<T, D>>> Future
+    for NextFut<'handle, T, D, C, P>
 {
-    type Output = Option<Event<T, D>>;
+    type Output = Option<Event<T, C, D>>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let state = self.state.as_mut().expect("future polled after completion");
-
-        // Check for frontier notifications first, to urge operators to retire pending work
-        let mut shared_frontiers = state.shared_frontiers.borrow_mut();
-        let (ref frontier, ref mut pending) = shared_frontiers[state.index];
-        if *pending {
-            *pending = false;
-            return Poll::Ready(Some(Event::Progress(frontier.clone())));
-        } else if frontier.is_empty() {
-            // If the frontier is empty and is not pending it means that there is no more data left
-            return Poll::Ready(None);
-        };
-        drop(shared_frontiers);
 
         let mut shared_queue = state.shared_queue.borrow_mut();
         match shared_queue.pop_front() {
             Some((cap, data)) => Poll::Ready(Some(Event::Data(cap, data))),
             None => {
-                // Nothing else to produce so install the provided waker in the reactor
-                state
-                    .reactor_registry
-                    .upgrade()
-                    .expect("handle outlived its operator")
-                    .borrow_mut()
-                    .push(cx.waker().clone());
-                Poll::Pending
+                // Check for frontier notifications after the input is exhausted.
+                // TODO(petrosagg): this is not optimal because we could always get new data in the
+                // queue and never deliver frontier updates
+                let mut shared_frontiers = state.shared_frontiers.borrow_mut();
+                let (ref frontier, ref mut pending) = shared_frontiers[state.index];
+                if *pending {
+                    *pending = false;
+                    Poll::Ready(Some(Event::Progress(frontier.clone())))
+                } else if frontier.is_empty() {
+                    // If the frontier is empty and is not pending it means that there is no more data left
+                    Poll::Ready(None)
+                } else {
+                    // Nothing else to produce so install the provided waker in the reactor
+                    state
+                        .reactor_registry
+                        .upgrade()
+                        .expect("handle outlived its operator")
+                        .borrow_mut()
+                        .push(cx.waker().clone());
+                    Poll::Pending
+                }
             }
         }
     }
@@ -316,6 +319,63 @@ impl<T: Timestamp, D: Container, P: Push<BundleCore<T, D>> + 'static> Clone
     }
 }
 
+pub trait InputConnection<T: Timestamp> {
+    type Capability;
+
+    fn describe(&self, outputs: usize) -> Vec<Antichain<T::Summary>>;
+
+    fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability;
+}
+
+pub struct Disconnected;
+
+impl<T: Timestamp> InputConnection<T> for Disconnected {
+    type Capability = T;
+
+    fn describe(&self, outputs: usize) -> Vec<Antichain<T::Summary>> {
+        vec![Antichain::new(); outputs]
+    }
+
+    fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
+        input_cap.time().clone()
+    }
+}
+
+pub struct ConnectedToOne(usize);
+
+impl<T: Timestamp> InputConnection<T> for ConnectedToOne {
+    type Capability = Capability<T>;
+
+    fn describe(&self, outputs: usize) -> Vec<Antichain<T::Summary>> {
+        let mut summary = vec![Antichain::new(); outputs];
+        summary[self.0] = Antichain::from_elem(T::Summary::default());
+        summary
+    }
+
+    fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
+        input_cap.retain_for_output(self.0)
+    }
+}
+
+pub struct ConnectedToMany<const N: usize>([usize; N]);
+
+impl<const N: usize, T: Timestamp> InputConnection<T> for ConnectedToMany<N> {
+    type Capability = [Capability<T>; N];
+
+    fn describe(&self, outputs: usize) -> Vec<Antichain<T::Summary>> {
+        let mut summary = vec![Antichain::new(); outputs];
+        for output in self.0 {
+            summary[output] = Antichain::from_elem(T::Summary::default());
+        }
+        summary
+    }
+
+    fn accept(&self, input_cap: InputCapability<T>) -> Self::Capability {
+        self.0
+            .map(|output| input_cap.delayed_for_output(input_cap.time(), output))
+    }
+}
+
 impl<G: Scope> OperatorBuilder<G> {
     /// Allocates a new generic async operator builder from its containing scope.
     pub fn new(name: String, mut scope: G) -> Self {
@@ -343,18 +403,46 @@ impl<G: Scope> OperatorBuilder<G> {
         }
     }
 
-    /// Adds a new input, returning the async input handle to use.
-    pub fn new_input<D: Container, P>(
+    /// Adds a new input that is connected to the specified output, returning the async input handle to use.
+    pub fn new_input_for<D: Container, P>(
         &mut self,
         stream: &StreamCore<G, D>,
         pact: P,
-    ) -> AsyncInputHandle<G::Timestamp, D, P::Puller>
+        output: usize,
+    ) -> AsyncInputHandle<G::Timestamp, D, Capability<G::Timestamp>, P::Puller>
     where
         P: ParallelizationContractCore<G::Timestamp, D>,
     {
-        let connection =
-            vec![Antichain::from_elem(Default::default()); self.builder.shape().outputs()];
-        self.new_input_connection(stream, pact, connection)
+        assert!(output < self.builder.shape().outputs());
+        self.new_input_connection2(stream, pact, ConnectedToOne(output))
+    }
+
+    /// Adds a new input that is connected to the specified outputs, returning the async input handle to use.
+    pub fn new_input_for_many<const N: usize, D: Container, P>(
+        &mut self,
+        stream: &StreamCore<G, D>,
+        pact: P,
+        outputs: [usize; N],
+    ) -> AsyncInputHandle<G::Timestamp, D, [Capability<G::Timestamp>; N], P::Puller>
+    where
+        P: ParallelizationContractCore<G::Timestamp, D>,
+    {
+        for output in outputs {
+            assert!(output < self.builder.shape().outputs());
+        }
+        self.new_input_connection2(stream, pact, ConnectedToMany(outputs))
+    }
+
+    /// Adds a new input that is connected to the specified outputs, returning the async input handle to use.
+    pub fn new_disconnected_input<D: Container, P>(
+        &mut self,
+        stream: &StreamCore<G, D>,
+        pact: P,
+    ) -> AsyncInputHandle<G::Timestamp, D, G::Timestamp, P::Puller>
+    where
+        P: ParallelizationContractCore<G::Timestamp, D>,
+    {
+        self.new_input_connection2(stream, pact, Disconnected)
     }
 
     /// Adds a new input with connection information, returning the async input handle to use.
@@ -367,28 +455,32 @@ impl<G: Scope> OperatorBuilder<G> {
     /// Commonly the connections are either the unit summary, indicating the same timestamp might
     /// be produced as output, or an empty antichain indicating that there is no connection from
     /// the input to the output.
-    pub fn new_input_connection<D: Container, P>(
+    pub fn new_input_connection2<D: Container, P, C>(
         &mut self,
         stream: &StreamCore<G, D>,
         pact: P,
-        connection: Vec<Antichain<<G::Timestamp as Timestamp>::Summary>>,
-    ) -> AsyncInputHandle<G::Timestamp, D, P::Puller>
+        connection: C,
+    ) -> AsyncInputHandle<G::Timestamp, D, C::Capability, P::Puller>
     where
         P: ParallelizationContractCore<G::Timestamp, D>,
+        C: InputConnection<G::Timestamp> + 'static,
     {
         let index = self.builder.shape().inputs();
         self.shared_frontiers
             .borrow_mut()
             .push((Antichain::from_elem(G::Timestamp::minimum()), false));
 
-        let mut sync_handle = self.builder.new_input_connection(stream, pact, connection);
+        let outputs = self.builder.shape().outputs();
+        let mut sync_handle =
+            self.builder
+                .new_input_connection(stream, pact, connection.describe(outputs));
 
         let shared_queue = Rc::new(RefCell::new(VecDeque::new()));
         let queue = Rc::clone(&shared_queue);
         let handle_poller = Box::new(move || {
             let mut queue = queue.borrow_mut();
             while let Some((cap, data)) = sync_handle.next() {
-                queue.push_back((cap, data.take()));
+                queue.push_back((connection.accept(cap), data.take()));
             }
         });
 
@@ -407,34 +499,13 @@ impl<G: Scope> OperatorBuilder<G> {
     }
 
     /// Adds a new output, returning the output handle and stream.
-    pub fn new_output<D: Container>(
+    pub fn new_disconnected_output<D: Container>(
         &mut self,
     ) -> (
         AsyncOutputHandle<G::Timestamp, D, TeeCore<G::Timestamp, D>>,
         StreamCore<G, D>,
     ) {
-        let connection =
-            vec![Antichain::from_elem(Default::default()); self.builder.shape().inputs()];
-        self.new_output_connection(connection)
-    }
-
-    /// Adds a new output with connetion information, returning the output handle and stream.
-    ///
-    /// The `connection` parameter contains promises made by the operator for each of the existing
-    /// *inputs*, that any timestamp appearing at the input, any output timestamp will be greater
-    /// than or equal to the input timestamp subjected to a `Summary` greater or equal to some
-    /// element of the corresponding antichain in `connection`.
-    ///
-    /// Commonly the connections are either the unit summary, indicating the same timestamp might
-    /// be produced as output, or an empty antichain indicating that there is no connection from
-    /// the input to the output.
-    pub fn new_output_connection<D: Container>(
-        &mut self,
-        connection: Vec<Antichain<<G::Timestamp as Timestamp>::Summary>>,
-    ) -> (
-        AsyncOutputHandle<G::Timestamp, D, TeeCore<G::Timestamp, D>>,
-        StreamCore<G, D>,
-    ) {
+        let connection = vec![Antichain::new(); self.builder.shape().inputs()];
         let (wrapper, stream) = self.builder.new_output_connection(connection);
 
         let handle = AsyncOutputHandle::new(wrapper);
@@ -589,8 +660,7 @@ impl<G: Scope> OperatorBuilder<G> {
             + 'static,
     {
         // Create a new completely disconnected output
-        let disconnected = vec![Antichain::new(); self.builder.shape().inputs()];
-        let (mut error_output, error_stream) = self.new_output_connection(disconnected);
+        let (mut error_output, error_stream) = self.new_disconnected_output();
         let button = self.build(|mut caps| async move {
             let error_cap = caps.pop().unwrap();
             let mut caps = caps
@@ -709,15 +779,14 @@ mod test {
             let input = (0..10).to_stream(scope);
 
             let mut op = OperatorBuilder::new("async_passthru".to_string(), input.scope());
-            let mut input_handle = op.new_input(&input, Pipeline);
-            let (mut output, output_stream) = op.new_output();
+            let (mut output, output_stream) = op.new_disconnected_output();
+            let mut input_handle = op.new_input_for(&input, Pipeline, 0);
 
             op.build(move |_capabilities| async move {
                 tokio::task::yield_now().await;
                 while let Some(event) = input_handle.next().await {
                     match event {
                         Event::Data(cap, data) => {
-                            let cap = cap.retain();
                             for item in data.iter().copied() {
                                 tokio::task::yield_now().await;
                                 output.give(&cap, item).await;
@@ -742,7 +811,7 @@ mod test {
             let index = worker.index();
             let tokens = worker.dataflow::<u64, _, _>(move |scope| {
                 let mut producer = OperatorBuilder::new("producer".to_string(), scope.clone());
-                let (_output, output_stream) = producer.new_output::<Vec<usize>>();
+                let (_output, output_stream) = producer.new_disconnected_output::<Vec<usize>>();
                 let producer_button = producer.build(move |mut capabilities| async move {
                     let mut cap = capabilities.pop().unwrap();
                     if index != 0 {
@@ -754,7 +823,7 @@ mod test {
                 });
 
                 let mut consumer = OperatorBuilder::new("consumer".to_string(), scope.clone());
-                let mut input_handle = consumer.new_input(&output_stream, Pipeline);
+                let mut input_handle = consumer.new_disconnected_input(&output_stream, Pipeline);
                 let consumer_button = consumer.build(move |_| async move {
                     while let Some(event) = input_handle.next().await {
                         if let Event::Progress(frontier) = event {

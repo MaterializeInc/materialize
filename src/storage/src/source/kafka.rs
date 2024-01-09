@@ -156,9 +156,9 @@ impl SourceRender for KafkaSourceConnection {
     ) {
         let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
-        let (mut data_output, stream) = builder.new_output();
-        let (_progress_output, progress_stream) = builder.new_output();
-        let (mut health_output, health_stream) = builder.new_output();
+        let (mut data_output, stream) = builder.new_disconnected_output();
+        let (_progress_output, progress_stream) = builder.new_disconnected_output();
+        let (mut health_output, health_stream) = builder.new_disconnected_output();
 
         let button = builder.build(move |caps| async move {
             let [mut data_cap, mut progress_cap, health_cap]: [_; 3] = caps.try_into().unwrap();

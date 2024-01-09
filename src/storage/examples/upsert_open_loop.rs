@@ -792,7 +792,7 @@ where
 
     let mut source_op = AsyncOperatorBuilder::new(format!("source-{source_id}"), scope);
 
-    let (mut output, output_stream) = source_op.new_output();
+    let (mut output, output_stream) = source_op.new_disconnected_output();
 
     let _shutdown_button = source_op.build(move |mut capabilities| async move {
         if !active_worker {
@@ -915,12 +915,13 @@ where
     let mut upsert_op =
         AsyncOperatorBuilder::new(format!("source-{source_id}-upsert"), scope.clone());
 
-    let mut input = upsert_op.new_input(
+    let (mut output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) =
+        upsert_op.new_disconnected_output();
+    let mut input = upsert_op.new_input_for(
         source_stream,
         Exchange::new(|d: &(Vec<u8>, Vec<u8>)| d.0.hashed()),
+        0,
     );
-    let (mut output, source_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) =
-        upsert_op.new_output();
 
     upsert_op.build(move |capabilities| async move {
         drop(capabilities);
@@ -998,7 +999,7 @@ where
         }
     });
 
-    source_stream
+    output_stream
 }
 
 fn upsert_core<G, M: Map + 'static>(
@@ -1013,12 +1014,13 @@ where
     let mut upsert_op =
         AsyncOperatorBuilder::new(format!("source-{source_id}-upsert"), scope.clone());
 
-    let mut input = upsert_op.new_input(
+    let (mut output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) =
+        upsert_op.new_disconnected_output();
+    let mut input = upsert_op.new_input_for(
         source_stream,
         Exchange::new(|d: &(Vec<u8>, Vec<u8>)| d.0.hashed()),
+        0,
     );
-    let (mut output, source_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) =
-        upsert_op.new_output();
 
     upsert_op.build(move |capabilities| async move {
         drop(capabilities);
@@ -1045,7 +1047,7 @@ where
         }
     });
 
-    source_stream
+    output_stream
 }
 
 type KV = (Vec<u8>, Vec<u8>);
