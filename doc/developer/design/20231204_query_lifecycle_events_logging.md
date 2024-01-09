@@ -1,4 +1,4 @@
-# Query Lifecycle Events logging
+# Statement Lifecycle Events logging
 
 - Associated:
 * Initial [conceptual doc](https://www.notion.so/materialize/A-Model-for-Materialize-s-Operation-831f0a35782547518a8c05617dc087ca?showMoveTo=true&saveParent=true) from Frank
@@ -12,7 +12,7 @@ for their queries to return, which can roughly be broken down into:
 * Time for all transitive source (in the storage sense) dependencies to reach the selected
   timestamp
 * Time for compute dependencies to reach that timestamp
-* Time for the query to finish executing (this includes the top-level
+* Time for the statement to finish executing (this includes the top-level
   computation as well as returning its results to `environmentd`)
 * Time for us to flush all results to the network.
 
@@ -72,19 +72,19 @@ to be returned to us.
 
 ## Solution Proposal
 
-Create a collection called `mz_internal.mz_query_lifecycle_events`
-with the schema `(statement_execution_id uuid, event_type text,
-event_timestamp timestamp with time zone)`.
+Create a collection called `mz_internal.mz_statement_lifecycle_history`
+with the schema `(statement_id uuid NOT NULL, event_type text NOT NULL,
+occurred_at timestamp with time zone NOT NULL)`.
 
 The `event_type` can be one of the following:
 
-| type                                | description                                                                                                                 |
-|-------------------------------------|-----------------------------------------------------------------------------------------------------------------------------|
-| `execution_began`                   | Corresponds to today's `mz_statement_execution_history.began_at`                                                            |
-| `sources_became_ready`              | When all transitive source dependencies advanced to the timestamp. If there are none, same as `execution_began`             |
-| `compute_dependencies_became_ready` | When all compute dependencies (MVs and Indexes) advanced to the timestamp. If there are none, same as `execution_began`.    |
-| `execution_finished`                | Corresponds to today's `mz_statement_execution_history.finished_at`                                                         |
-| `last_row_was_returned`             | The time at which all rows were sent and we were ready to receive new statements from its session. |
+| type                            | description                                                                                                              |
+|---------------------------------|--------------------------------------------------------------------------------------------------------------------------|
+| `execution-began`               | Corresponds to today's `mz_statement_execution_history.began_at`                                                         |
+| `storage-dependencies-finished` | When all transitive source dependencies advanced to the timestamp. If there are none, same as `execution_began`          |
+| `compute-dependencies-finished` | When all compute dependencies (MVs and Indexes) advanced to the timestamp. If there are none, same as `execution_began`. |
+| `execution-finished`            | Corresponds to today's `mz_statement_execution_history.finished_at`                                                      |
+| `last-row-returned`             | The time at which all rows were sent and we were ready to receive new statements from its session.                       |
 
 When each event is generated, the coordinator will insert it into a
 buffer which is periodically dumped to storage, similarly to the
@@ -96,11 +96,11 @@ exist for the statement log.
 In the following subsections we will explain how to collect each of
 the pieces of data.
 
-### `execution_began`
+### `execution-began`
 
 We already collect this.
 
-### `sources_became_ready` / `compute_dependencies_became_ready`
+### `storage-dependencies-finished` / `compute-dependencies-finished`
 
 Introduce a mechanism for the sub-controllers (Storage and Compute
 controllers) to return all frontier updates to the overall
@@ -123,11 +123,11 @@ WatchSetFulfilled {
 when the write frontier for all the global IDs in the set has passed
 `ts`. The coordinator will then emit the corresponding events.
 
-### `execution_finished`
+### `execution-finished`
 
 We already collect this.
 
-### `last_row_was_returned`
+### `last-row-returned`
 
 We would need to start sending the statement logging id to the client
 (pgwire/sql) layer along with all execute responses. Currently, we
