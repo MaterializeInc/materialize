@@ -67,18 +67,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 test_args.append(f"-k {args.k}")
 
             with c.test_case(test_case.name):
-                with c.override(materialized):
-                    c.down()
-                    c.up("redpanda")
-                    c.up("materialized")
-                    c.run(
-                        "dbt",
-                        "pytest",
-                        *test_args,
-                        env_extra={
-                            "DBT_HOST": "materialized",
-                            "KAFKA_ADDR": "redpanda:9092",
-                            "SCHEMA_REGISTRY_URL": "http://schema-registry:8081",
-                            **test_case.dbt_env,
-                        },
-                    )
+                c.override(materialized)
+                c.down()
+                c.up("redpanda")
+                c.up("materialized")
+                c.run(
+                    "dbt",
+                    "pytest",
+                    *test_args,
+                    env_extra={
+                        "DBT_HOST": "materialized",
+                        "KAFKA_ADDR": "redpanda:9092",
+                        "SCHEMA_REGISTRY_URL": "http://schema-registry:8081",
+                        **test_case.dbt_env,
+                    },
+                )

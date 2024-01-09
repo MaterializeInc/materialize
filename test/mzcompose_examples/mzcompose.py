@@ -75,5 +75,5 @@ def workflow_mz_with_options(c: Composition) -> None:
 def workflow_minio(c: Composition) -> None:
     mz = Materialized(external_minio=True)
 
-    with c.override(mz):
-        c.up("materialized")
+    c.override(mz)
+    c.up("materialized")

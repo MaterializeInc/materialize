@@ -167,7 +167,7 @@ def run_one_scenario(
         if balancerd:
             c.up("balancerd")
 
-        with c.override(
+        with c.override_scope(
             Testdrive(
                 materialize_url=f"postgres://materialize@{entrypoint_host}:6875",
                 default_timeout=default_timeout,
@@ -222,7 +222,7 @@ def create_mz_service(
 def start_overridden_mz_and_cockroach(
     c: Composition, mz: Materialized, instance: str
 ) -> None:
-    with c.override(mz):
+    with c.override_scope(mz):
         print(f"The version of the '{instance.upper()}' Mz instance is:")
         c.run(
             "materialized",

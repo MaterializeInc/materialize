@@ -126,62 +126,62 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     override = [Materialized(options=options)]
 
-    with c.override(*override):
-        c.up(*prerequisites, "materialized")
+    c.override(*override)
+    c.up(*prerequisites, "materialized")
 
-        c.run(
-            "testdrive",
-            "setup.td",
-        )
+    c.run(
+        "testdrive",
+        "setup.td",
+    )
 
-        start = time.monotonic()
-        records_sent = 0
-        total_records_to_send = args.records_per_second * args.num_seconds
-        # Maximum observed delta between records sent by the benchmark and ingested by
-        # Materialize.
-        max_lag = 0
-        last_reported_time = 0.0
+    start = time.monotonic()
+    records_sent = 0
+    total_records_to_send = args.records_per_second * args.num_seconds
+    # Maximum observed delta between records sent by the benchmark and ingested by
+    # Materialize.
+    max_lag = 0
+    last_reported_time = 0.0
 
-        while True:
-            elapsed = time.monotonic() - start
-            records_ingested = query_materialize(c)
+    while True:
+        elapsed = time.monotonic() - start
+        records_ingested = query_materialize(c)
 
-            lag = records_sent - records_ingested
+        lag = records_sent - records_ingested
 
-            if lag > max_lag:
-                max_lag = lag
+        if lag > max_lag:
+            max_lag = lag
 
-            # Report our findings back once per second.
-            if elapsed - last_reported_time > 1:
-                print(
-                    f"C> after {elapsed:.3f}s sent {records_sent} records, and ingested {records_ingested}. max observed lag {max_lag} records, most recent lag {lag} records"
-                )
-                last_reported_time = elapsed
-
-            # Determine how many records we are scheduled to send, based on how long
-            # the benchmark has been running and the desired QPS.
-            records_scheduled = int(
-                min(elapsed, args.num_seconds) * args.records_per_second
+        # Report our findings back once per second.
+        if elapsed - last_reported_time > 1:
+            print(
+                f"C> after {elapsed:.3f}s sent {records_sent} records, and ingested {records_ingested}. max observed lag {max_lag} records, most recent lag {lag} records"
             )
-            records_to_send = records_scheduled - records_sent
+            last_reported_time = elapsed
 
-            if records_to_send > 0:
-                send_records(
-                    c,
-                    num_records=records_to_send,
-                    num_keys=args.num_keys,
-                    value_bytes=args.value_bytes,
-                    timeout_secs=args.timeout_secs,
-                )
-                records_sent = records_scheduled
+        # Determine how many records we are scheduled to send, based on how long
+        # the benchmark has been running and the desired QPS.
+        records_scheduled = int(
+            min(elapsed, args.num_seconds) * args.records_per_second
+        )
+        records_to_send = records_scheduled - records_sent
 
-            # Exit once we've sent all the records we need to send, and confirmed that
-            # Materialize has ingested them.
-            if records_sent == total_records_to_send == records_ingested:
-                print(
-                    f"C> Finished after {elapsed:.3f}s sent and ingested {records_sent} records. max observed lag {max_lag} records."
-                )
-                break
+        if records_to_send > 0:
+            send_records(
+                c,
+                num_records=records_to_send,
+                num_keys=args.num_keys,
+                value_bytes=args.value_bytes,
+                timeout_secs=args.timeout_secs,
+            )
+            records_sent = records_scheduled
+
+        # Exit once we've sent all the records we need to send, and confirmed that
+        # Materialize has ingested them.
+        if records_sent == total_records_to_send == records_ingested:
+            print(
+                f"C> Finished after {elapsed:.3f}s sent and ingested {records_sent} records. max observed lag {max_lag} records."
+            )
+            break
 
 
 def workflow_smoke_test(c: Composition) -> None:

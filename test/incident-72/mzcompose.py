@@ -43,10 +43,10 @@ def workflow_default(c: Composition) -> None:
     """
     c.up("zookeeper", "kafka", "schema-registry")
 
-    with c.override(PRE_INCIDENT_MZ):
-        c.up("materialized")
-        c.run("testdrive", "produce-error.td")
-        c.kill("materialized")
+    c.override(PRE_INCIDENT_MZ)
+    c.up("materialized")
+    c.run("testdrive", "produce-error.td")
+    c.kill("materialized")
 
     # Run the new version that will produce the legacy error retractions to
     # heal the shards.
@@ -57,7 +57,7 @@ def workflow_default(c: Composition) -> None:
     # Now run a version of Materialize that panics if it ever encounters a
     # legacy error to ensure that the legacy errors are gone from both
     # in-memory traces and the on-disk blobs.
-    with c.override(REJECT_LEGACY_MZ):
-        c.up("materialized")
-        c.run("testdrive", "verify-heal-on-disk.td")
-        c.kill("materialized")
+    c.override(REJECT_LEGACY_MZ)
+    c.up("materialized")
+    c.run("testdrive", "verify-heal-on-disk.td")
+    c.kill("materialized")

@@ -1443,54 +1443,52 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         Clusterd(name="clusterd_2_1"),
         Clusterd(name="clusterd_2_2"),
     ]
-    with c.override(*nodes):
-        c.up(*[n.name for n in nodes])
+    c.override(*nodes)
+    c.up(*[n.name for n in nodes])
 
-        c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
 
-        c.sql(
-            f"""
-            DROP CLUSTER quickstart cascade;
-            CREATE CLUSTER quickstart REPLICAS (
-                replica1 (
-                    STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
-                    STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
-                    COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102'],
-                    WORKERS {args.workers}
-                ),
-                replica2 (
-                    STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
-                    STORAGE ADDRESSES ['clusterd_2_1:2103', 'clusterd_2_2:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
-                    COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102'],
-                    WORKERS {args.workers}
-                )
+    c.sql(
+        f"""
+        DROP CLUSTER quickstart cascade;
+        CREATE CLUSTER quickstart REPLICAS (
+            replica1 (
+                STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
+                STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
+                COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
+                COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102'],
+                WORKERS {args.workers}
+            ),
+            replica2 (
+                STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
+                STORAGE ADDRESSES ['clusterd_2_1:2103', 'clusterd_2_2:2103'],
+                COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
+                COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102'],
+                WORKERS {args.workers}
             )
-        """,
-            port=6877,
-            user="mz_system",
         )
+    """,
+        port=6877,
+        user="mz_system",
+    )
 
-        c.up("testdrive", persistent=True)
+    c.up("testdrive", persistent=True)
 
-        scenarios = (
-            [globals()[args.scenario]]
-            if args.scenario
-            else list(all_subclasses(Generator))
-        )
+    scenarios = (
+        [globals()[args.scenario]] if args.scenario else list(all_subclasses(Generator))
+    )
 
-        for scenario in scenarios:
-            with tempfile.NamedTemporaryFile(mode="w", dir=c.path) as tmp:
-                print(f"write testdrive to {c.path}")
-                with contextlib.redirect_stdout(tmp):
-                    scenario.generate()
-                    sys.stdout.flush()
-                    c.exec("testdrive", os.path.basename(tmp.name))
+    for scenario in scenarios:
+        with tempfile.NamedTemporaryFile(mode="w", dir=c.path) as tmp:
+            print(f"write testdrive to {c.path}")
+            with contextlib.redirect_stdout(tmp):
+                scenario.generate()
+                sys.stdout.flush()
+                c.exec("testdrive", os.path.basename(tmp.name))
 
 
 def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -1543,126 +1541,126 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
             for node_id in range(0, args.nodes):
                 cluster_replicas.append(Clusterd(name=nodes[node_id]))
 
-    with c.override(*cluster_replicas):
-        with c.override(Testdrive(seed=1, no_reset=True)):
-            for n in cluster_replicas:
-                c.up(n.name)
+    c.override(*cluster_replicas)
+    c.override(Testdrive(seed=1, no_reset=True))
+    for n in cluster_replicas:
+        c.up(n.name)
 
-            # Increase resource limits
-            c.testdrive(
-                dedent(
-                    """
-                    $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+    # Increase resource limits
+    c.testdrive(
+        dedent(
+            """
+            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
-                    """
-                    f"""
-                    $ postgres-execute connection=mz_system
-                    ALTER SYSTEM SET max_clusters = {args.clusters * 10}
-                    ALTER SYSTEM SET max_replicas_per_cluster = {args.replicas * 10}
-                    """
-                )
+            """
+            f"""
+            $ postgres-execute connection=mz_system
+            ALTER SYSTEM SET max_clusters = {args.clusters * 10}
+            ALTER SYSTEM SET max_replicas_per_cluster = {args.replicas * 10}
+            """
+        )
+    )
+    # Create some input data
+    c.testdrive(
+        dedent(
+            """
+            > CREATE TABLE ten (f1 INTEGER);
+            > INSERT INTO ten VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+
+            $ set schema={
+                "type" : "record",
+                "name" : "test",
+                "fields" : [
+                    {"name":"f1", "type":"string"}
+                ]
+              }
+
+            $ kafka-create-topic topic=instance-size
+
+            $ kafka-ingest format=avro topic=instance-size schema=${schema} repeat=10000
+            {"f1": "fish"}
+            """
+        )
+    )
+
+    # Construct the required CREATE CLUSTER statements
+    for cluster_id in range(0, args.clusters):
+        replica_definitions = []
+        for replica_id in range(0, args.replicas):
+            nodes = []
+            for node_id in range(0, args.nodes):
+                node_name = f"compute_u{cluster_id}_{replica_id}_{node_id}"
+                nodes.append(node_name)
+
+            replica_name = f"replica_u{cluster_id}_{replica_id}"
+
+            replica_definitions.append(
+                f"{replica_name} (STORAGECTL ADDRESSES ["
+                + ", ".join(f"'{n}:2100'" for n in nodes)
+                + "], STORAGE ADDRESSES ["
+                + ", ".join(f"'{n}:2103'" for n in nodes)
+                + "], COMPUTECTL ADDRESSES ["
+                + ", ".join(f"'{n}:2101'" for n in nodes)
+                + "], COMPUTE ADDRESSES ["
+                + ", ".join(f"'{n}:2102'" for n in nodes)
+                + f"], WORKERS {args.workers})"
             )
-            # Create some input data
-            c.testdrive(
-                dedent(
-                    """
-                    > CREATE TABLE ten (f1 INTEGER);
-                    > INSERT INTO ten VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
 
-                    $ set schema={
-                        "type" : "record",
-                        "name" : "test",
-                        "fields" : [
-                            {"name":"f1", "type":"string"}
-                        ]
-                      }
+        c.sql(
+            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+        c.sql(
+            f"CREATE CLUSTER cluster_u{cluster_id} REPLICAS ("
+            + ",".join(replica_definitions)
+            + ")"
+        )
 
-                    $ kafka-create-topic topic=instance-size
+    # Construct some dataflows in each cluster
+    for cluster_id in range(0, args.clusters):
+        cluster_name = f"cluster_u{cluster_id}"
 
-                    $ kafka-ingest format=avro topic=instance-size schema=${schema} repeat=10000
-                    {"f1": "fish"}
-                    """
-                )
+        c.testdrive(
+            dedent(
+                f"""
+                 > SET cluster={cluster_name}
+
+                 > CREATE DEFAULT INDEX ON ten;
+
+                 > CREATE MATERIALIZED VIEW v_{cluster_name} AS
+                   SELECT COUNT(*) AS c1 FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4;
+
+                 > CREATE CONNECTION IF NOT EXISTS kafka_conn
+                   TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+
+                 > CREATE CONNECTION IF NOT EXISTS csr_conn
+                   FOR CONFLUENT SCHEMA REGISTRY
+                   URL '${{testdrive.schema-registry-url}}';
+
+                 > CREATE SOURCE s_{cluster_name}
+                   FROM KAFKA CONNECTION kafka_conn (TOPIC
+                   'testdrive-instance-size-${{testdrive.seed}}')
+                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                   ENVELOPE NONE
+             """
             )
+        )
 
-            # Construct the required CREATE CLUSTER statements
-            for cluster_id in range(0, args.clusters):
-                replica_definitions = []
-                for replica_id in range(0, args.replicas):
-                    nodes = []
-                    for node_id in range(0, args.nodes):
-                        node_name = f"compute_u{cluster_id}_{replica_id}_{node_id}"
-                        nodes.append(node_name)
+    # Validate that each individual cluster is operating properly
+    for cluster_id in range(0, args.clusters):
+        cluster_name = f"cluster_u{cluster_id}"
 
-                    replica_name = f"replica_u{cluster_id}_{replica_id}"
+        c.testdrive(
+            dedent(
+                f"""
+                 > SET cluster={cluster_name}
 
-                    replica_definitions.append(
-                        f"{replica_name} (STORAGECTL ADDRESSES ["
-                        + ", ".join(f"'{n}:2100'" for n in nodes)
-                        + "], STORAGE ADDRESSES ["
-                        + ", ".join(f"'{n}:2103'" for n in nodes)
-                        + "], COMPUTECTL ADDRESSES ["
-                        + ", ".join(f"'{n}:2101'" for n in nodes)
-                        + "], COMPUTE ADDRESSES ["
-                        + ", ".join(f"'{n}:2102'" for n in nodes)
-                        + f"], WORKERS {args.workers})"
-                    )
+                 > SELECT c1 FROM v_{cluster_name};
+                 10000
 
-                c.sql(
-                    "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-                    port=6877,
-                    user="mz_system",
-                )
-                c.sql(
-                    f"CREATE CLUSTER cluster_u{cluster_id} REPLICAS ("
-                    + ",".join(replica_definitions)
-                    + ")"
-                )
-
-            # Construct some dataflows in each cluster
-            for cluster_id in range(0, args.clusters):
-                cluster_name = f"cluster_u{cluster_id}"
-
-                c.testdrive(
-                    dedent(
-                        f"""
-                         > SET cluster={cluster_name}
-
-                         > CREATE DEFAULT INDEX ON ten;
-
-                         > CREATE MATERIALIZED VIEW v_{cluster_name} AS
-                           SELECT COUNT(*) AS c1 FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4;
-
-                         > CREATE CONNECTION IF NOT EXISTS kafka_conn
-                           TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
-
-                         > CREATE CONNECTION IF NOT EXISTS csr_conn
-                           FOR CONFLUENT SCHEMA REGISTRY
-                           URL '${{testdrive.schema-registry-url}}';
-
-                         > CREATE SOURCE s_{cluster_name}
-                           FROM KAFKA CONNECTION kafka_conn (TOPIC
-                           'testdrive-instance-size-${{testdrive.seed}}')
-                           FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-                           ENVELOPE NONE
-                     """
-                    )
-                )
-
-            # Validate that each individual cluster is operating properly
-            for cluster_id in range(0, args.clusters):
-                cluster_name = f"cluster_u{cluster_id}"
-
-                c.testdrive(
-                    dedent(
-                        f"""
-                         > SET cluster={cluster_name}
-
-                         > SELECT c1 FROM v_{cluster_name};
-                         10000
-
-                         > SELECT COUNT(*) FROM s_{cluster_name}
-                         10000
-                     """
-                    )
-                )
+                 > SELECT COUNT(*) FROM s_{cluster_name}
+                 10000
+             """
+            )
+        )

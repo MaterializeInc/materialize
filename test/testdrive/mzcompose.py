@@ -93,41 +93,39 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         default_size=args.default_size,
     )
 
-    with c.override(testdrive, materialized):
-        c.up(*dependencies)
+    c.override(testdrive, materialized)
+    c.up(*dependencies)
 
-        if args.replicas > 1:
-            c.sql("DROP CLUSTER quickstart CASCADE", user="mz_system", port=6877)
-            # Make sure a replica named 'r1' always exists
-            replica_names = [
-                "r1" if replica_id == 0 else f"replica{replica_id}"
-                for replica_id in range(0, args.replicas)
-            ]
-            replica_string = ",".join(
-                f"{replica_name} (SIZE '{materialized.default_replica_size}')"
-                for replica_name in replica_names
-            )
-            c.sql(
-                f"CREATE CLUSTER quickstart REPLICAS ({replica_string})",
-                user="mz_system",
-                port=6877,
-            )
+    if args.replicas > 1:
+        c.sql("DROP CLUSTER quickstart CASCADE", user="mz_system", port=6877)
+        # Make sure a replica named 'r1' always exists
+        replica_names = [
+            "r1" if replica_id == 0 else f"replica{replica_id}"
+            for replica_id in range(0, args.replicas)
+        ]
+        replica_string = ",".join(
+            f"{replica_name} (SIZE '{materialized.default_replica_size}')"
+            for replica_name in replica_names
+        )
+        c.sql(
+            f"CREATE CLUSTER quickstart REPLICAS ({replica_string})",
+            user="mz_system",
+            port=6877,
+        )
 
+    junit_report = ci_util.junit_report_filename(c.name)
+
+    try:
         junit_report = ci_util.junit_report_filename(c.name)
-
-        try:
-            junit_report = ci_util.junit_report_filename(c.name)
-            for file in args.files:
-                c.run(
-                    "testdrive",
-                    f"--junit-report={junit_report}",
-                    f"--var=replicas={args.replicas}",
-                    f"--var=default-replica-size={materialized.default_replica_size}",
-                    f"--var=default-storage-size={materialized.default_storage_size}",
-                    file,
-                )
-                c.sanity_restart_mz()
-        finally:
-            ci_util.upload_junit_report(
-                "testdrive", Path(__file__).parent / junit_report
+        for file in args.files:
+            c.run(
+                "testdrive",
+                f"--junit-report={junit_report}",
+                f"--var=replicas={args.replicas}",
+                f"--var=default-replica-size={materialized.default_replica_size}",
+                f"--var=default-storage-size={materialized.default_storage_size}",
+                file,
             )
+            c.sanity_restart_mz()
+    finally:
+        ci_util.upload_junit_report("testdrive", Path(__file__).parent / junit_report)

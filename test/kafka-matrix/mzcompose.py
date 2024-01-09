@@ -50,18 +50,18 @@ def workflow_default(c: Composition) -> None:
 
     for redpanda_version in REDPANDA_VERSIONS:
         print(f"--- Testing Redpanda {redpanda_version}")
-        with c.override(Redpanda(version=redpanda_version)):
-            c.down(destroy_volumes=True)
-            c.up("redpanda", "materialized")
-            c.run("testdrive", *TD_CMD)
+        c.override(Redpanda(version=redpanda_version))
+        c.down(destroy_volumes=True)
+        c.up("redpanda", "materialized")
+        c.run("testdrive", *TD_CMD)
 
     for confluent_version in CONFLUENT_PLATFORM_VERSIONS:
         print(f"--- Testing Confluent Platform {confluent_version}")
-        with c.override(
+        c.override(
             Zookeeper(tag=confluent_version),
             Kafka(tag=confluent_version),
             SchemaRegistry(tag=confluent_version),
-        ):
-            c.down(destroy_volumes=True)
-            c.up("zookeeper", "kafka", "schema-registry", "materialized")
-            c.run("testdrive", *TD_CMD)
+        )
+        c.down(destroy_volumes=True)
+        c.up("zookeeper", "kafka", "schema-registry", "materialized")
+        c.run("testdrive", *TD_CMD)

@@ -520,7 +520,7 @@ def workflow_test_github_15930(c: Composition) -> None:
     """
 
     c.down(destroy_volumes=True)
-    with c.override(
+    with c.override_scope(
         Testdrive(no_reset=True),
     ):
         c.up("testdrive", persistent=True)
@@ -618,7 +618,7 @@ def workflow_test_github_15496(c: Composition) -> None:
     """
 
     c.down(destroy_volumes=True)
-    with c.override(
+    with c.override_scope(
         Clusterd(
             name="clusterd_nopanic",
             environment_extra=[
@@ -697,7 +697,7 @@ def workflow_test_github_17177(c: Composition) -> None:
     """
 
     c.down(destroy_volumes=True)
-    with c.override(
+    with c.override_scope(
         Testdrive(no_reset=True),
     ):
         c.up("testdrive", persistent=True)
@@ -776,7 +776,7 @@ def workflow_test_github_17510(c: Composition) -> None:
     """
 
     c.down(destroy_volumes=True)
-    with c.override(
+    with c.override_scope(
         Testdrive(no_reset=True),
     ):
         c.up("testdrive", persistent=True)
@@ -944,7 +944,7 @@ def workflow_test_github_17509(c: Composition) -> None:
     """
 
     c.down(destroy_volumes=True)
-    with c.override(
+    with c.override_scope(
         Clusterd(
             name="clusterd_nopanic",
             environment_extra=[
@@ -1038,7 +1038,7 @@ def workflow_test_github_19610(c: Composition) -> None:
     """
 
     c.down(destroy_volumes=True)
-    with c.override(
+    with c.override_scope(
         Clusterd(
             name="clusterd_nopanic",
             environment_extra=[
@@ -1139,7 +1139,7 @@ def workflow_test_github_22778(c: Composition) -> None:
     """
 
     c.down(destroy_volumes=True)
-    with c.override(
+    with c.override_scope(
         Testdrive(no_reset=True),
     ):
         c.up("materialized")
@@ -1235,7 +1235,7 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
     """
 
     c.down(destroy_volumes=True)
-    with c.override(
+    with c.override_scope(
         Clusterd(
             name="clusterd_nopanic",
             environment_extra=[
@@ -1336,7 +1336,7 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
 
 def workflow_test_upsert(c: Composition) -> None:
     """Test creating upsert sources and continuing to ingest them after a restart."""
-    with c.override(
+    with c.override_scope(
         Testdrive(default_timeout="30s", no_reset=True, consistent_seed=True),
     ):
         c.down(destroy_volumes=True)
@@ -1360,7 +1360,7 @@ def workflow_test_remote_storage(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
 
-    with c.override(
+    with c.override_scope(
         Testdrive(default_timeout="15s", no_reset=True, consistent_seed=True),
     ):
         c.up(
@@ -1412,7 +1412,7 @@ def workflow_test_resource_limits(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
 
-    with c.override(
+    with c.override_scope(
         Testdrive(),
         Postgres(),
         Materialized(),
@@ -1427,7 +1427,7 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
 
-    with c.override(
+    with c.override_scope(
         # Start postgres for the pg source
         Postgres(),
         Testdrive(no_reset=True),
@@ -1446,7 +1446,7 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
         # # clusterd should crash
         # c.run("testdrive", "pg-snapshot-resumption/04-while-clusterd-down.td")
 
-        with c.override(
+        with c.override_scope(
             # turn off the failpoint
             Clusterd(name="storage")
         ):
@@ -1459,7 +1459,7 @@ def workflow_sink_failure(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
 
-    with c.override(
+    with c.override_scope(
         # Start postgres for the pg source
         Testdrive(no_reset=True),
         Clusterd(
@@ -1472,7 +1472,7 @@ def workflow_sink_failure(c: Composition) -> None:
         c.run("testdrive", "sink-failure/01-configure-sinks.td")
         c.run("testdrive", "sink-failure/02-ensure-sink-down.td")
 
-        with c.override(
+        with c.override_scope(
             # turn off the failpoint
             Clusterd(name="storage")
         ):
@@ -1485,7 +1485,7 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
 
-    with c.override(
+    with c.override_scope(
         Testdrive(no_reset=True),
         Materialized(
             options=[
@@ -1497,7 +1497,7 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
 
         c.run("testdrive", "resources/bootstrapped-system-vars.td")
 
-    with c.override(
+    with c.override_scope(
         Testdrive(no_reset=True),
         Materialized(
             additional_system_parameter_defaults={
@@ -1514,7 +1514,7 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
 
-    with c.override(
+    with c.override_scope(
         Testdrive(),
         Materialized(),
     ):
@@ -1545,7 +1545,7 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
         )
         c.kill("materialized")
 
-    with c.override(
+    with c.override_scope(
         Testdrive(no_reset=True),
         Materialized(),
     ):
@@ -1740,7 +1740,7 @@ def workflow_pg_snapshot_partial_failure(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
 
-    with c.override(
+    with c.override_scope(
         # Start postgres for the pg source
         Postgres(),
         Testdrive(no_reset=True),
@@ -1757,7 +1757,7 @@ def workflow_pg_snapshot_partial_failure(c: Composition) -> None:
 
         c.kill("storage")
         # Restart the storage instance with the failpoint off...
-        with c.override(
+        with c.override_scope(
             # turn off the failpoint
             Clusterd(name="storage")
         ):
@@ -2096,7 +2096,7 @@ def workflow_test_query_without_default_cluster(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
 
-    with c.override(
+    with c.override_scope(
         Testdrive(),
         Postgres(),
         Materialized(),
@@ -2780,7 +2780,7 @@ def workflow_test_incident_70(c: Composition) -> None:
     persist_reader_lease_duration_in_sec = 10
     data_scale_factor = 10
 
-    with c.override(
+    with c.override_scope(
         Materialized(
             external_cockroach=True,
             external_minio=True,
@@ -2862,7 +2862,7 @@ def workflow_test_index_source_stuck(
     it has no replicas."""
     c.down(destroy_volumes=True)
 
-    with c.override(
+    with c.override_scope(
         Testdrive(),
         Clusterd(name="clusterd1"),
         Clusterd(name="clusterd2"),
@@ -2881,7 +2881,7 @@ def workflow_test_github_cloud_7998(
 
     c.down(destroy_volumes=True)
 
-    with c.override(
+    with c.override_scope(
         Testdrive(no_reset=True),
         Clusterd(name="clusterd1"),
         Materialized(),
@@ -2911,7 +2911,7 @@ def workflow_test_github_23246(c: Composition, parser: WorkflowArgumentParser) -
 
     c.down(destroy_volumes=True)
 
-    with c.override(
+    with c.override_scope(
         Testdrive(no_reset=True),
     ):
         c.up("testdrive", persistent=True)
@@ -2958,7 +2958,7 @@ def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -
 
     c.down(destroy_volumes=True)
 
-    with c.override(
+    with c.override_scope(
         Testdrive(no_reset=True),
         Materialized(),
     ):
@@ -3048,7 +3048,7 @@ def workflow_blue_green_deployment(
                     continue
                 raise e
 
-    with c.override(
+    with c.override_scope(
         Testdrive(
             no_reset=True, default_timeout="300s"
         ),  # pending dataflows can take a while

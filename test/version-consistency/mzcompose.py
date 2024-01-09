@@ -62,7 +62,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     print(f"Using {tag_mz_other} as tag for other mz version")
 
-    with c.override(
+    c.override(
         Materialized(
             name=name_mz_this,
             image=None,
@@ -75,16 +75,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ports=[f"{port_mz_other}:{port_mz_internal}"],
             use_default_volumes=False,
         ),
-    ):
-        c.up(name_mz_this)
-        c.up(name_mz_other)
+    )
+    c.up(name_mz_this)
+    c.up(name_mz_other)
 
-        connection = c.sql_connection(service=name_mz_this, port=port_mz_internal)
-        test.mz2_connection = c.sql_connection(
-            service=name_mz_other, port=port_mz_internal
-        )
-        test.evaluation_strategy_name = evaluation_strategy_name
+    connection = c.sql_connection(service=name_mz_this, port=port_mz_internal)
+    test.mz2_connection = c.sql_connection(service=name_mz_other, port=port_mz_internal)
+    test.evaluation_strategy_name = evaluation_strategy_name
 
-        test_summary = test.run_output_consistency_tests(connection, args)
+    test_summary = test.run_output_consistency_tests(connection, args)
 
-        assert test_summary.all_passed(), "At least one test failed"
+    assert test_summary.all_passed(), "At least one test failed"

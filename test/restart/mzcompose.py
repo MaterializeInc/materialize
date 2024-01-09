@@ -196,22 +196,22 @@ def workflow_stash(c: Composition) -> None:
     )
     c.rm_volumes("mzdata", force=True)
 
-    with c.override(Materialized(external_cockroach=True)):
-        c.up("cockroach")
+    c.override(Materialized(external_cockroach=True))
+    c.up("cockroach")
 
-        c.up("materialized")
+    c.up("materialized")
 
-        cursor = c.sql_cursor()
-        cursor.execute("CREATE TABLE a (i INT)")
+    cursor = c.sql_cursor()
+    cursor.execute("CREATE TABLE a (i INT)")
 
-        c.stop("cockroach")
-        c.up("cockroach")
+    c.stop("cockroach")
+    c.up("cockroach")
 
-        cursor.execute("CREATE TABLE b (i INT)")
+    cursor.execute("CREATE TABLE b (i INT)")
 
-        # No implicit restart as sanity check here, will panic:
-        # https://github.com/MaterializeInc/materialize/issues/20510
-        c.down(sanity_restart_mz=False)
+    # No implicit restart as sanity check here, will panic:
+    # https://github.com/MaterializeInc/materialize/issues/20510
+    c.down(sanity_restart_mz=False)
 
 
 def workflow_storage_managed_collections(c: Composition) -> None:

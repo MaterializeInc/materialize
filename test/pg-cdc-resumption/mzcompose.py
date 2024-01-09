@@ -60,28 +60,26 @@ def workflow_default(c: Composition) -> None:
             if scenario == pg_out_of_disk_space
             else []
         )
-        with c.override(*overrides):
-            print(
-                f"--- Running scenario {scenario.__name__} with overrides: {overrides}"
-            )
-            initialize(c)
-            scenario(c)
-            end(c)
+        c.override(*overrides)
+        print(f"--- Running scenario {scenario.__name__} with overrides: {overrides}")
+        initialize(c)
+        scenario(c)
+        end(c)
 
 
 def workflow_backup_restore(c: Composition) -> None:
-    with c.override(
+    c.override(
         Materialized(sanity_restart=False),
         Alpine(volumes=["pgdata:/var/lib/postgresql/data", "tmp:/scratch"]),
         Postgres(volumes=["pgdata:/var/lib/postgresql/data", "tmp:/scratch"]),
-    ):
-        for scenario in [
-            backup_restore_pg,
-        ]:
-            print(f"--- Running scenario {scenario.__name__}")
-            initialize(c)
-            scenario(c)
-            # No end confirmation here, since we expect the source to be in a bad state
+    )
+    for scenario in [
+        backup_restore_pg,
+    ]:
+        print(f"--- Running scenario {scenario.__name__}")
+        initialize(c)
+        scenario(c)
+        # No end confirmation here, since we expect the source to be in a bad state
 
 
 def initialize(c: Composition) -> None:

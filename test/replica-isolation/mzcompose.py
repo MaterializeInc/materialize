@@ -417,53 +417,53 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         Clusterd(name="clusterd_2_2"),
     ]
 
-    with c.override(*nodes):
-        c.up("materialized", *[n.name for n in nodes])
+    c.override(*nodes)
+    c.up("materialized", *[n.name for n in nodes])
 
-        c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
 
-        c.sql(
-            """
-            CREATE CLUSTER cluster1 REPLICAS (
-                replica1 (
-                    STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
-                    STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
-                    COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
-                ),
-                replica2 (
-                    STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
-                    STORAGE ADDRESSES ['clusterd_2_1:2103', 'clusterd_2_2:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
-                    COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102']
-                )
+    c.sql(
+        """
+        CREATE CLUSTER cluster1 REPLICAS (
+            replica1 (
+                STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
+                STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
+                COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
+                COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
+            ),
+            replica2 (
+                STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
+                STORAGE ADDRESSES ['clusterd_2_1:2103', 'clusterd_2_2:2103'],
+                COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
+                COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102']
             )
-            """
         )
+        """
+    )
 
-        with c.override(
-            Testdrive(
-                no_reset=True,
-                materialize_params={"cluster": "cluster1"},
-                seed=id,
-            )
-        ):
-            populate(c)
+    c.override(
+        Testdrive(
+            no_reset=True,
+            materialize_params={"cluster": "cluster1"},
+            seed=id,
+        )
+    )
+    populate(c)
 
-            # Disrupt replica1 by some means
-            disruption.disruption(c)
+    # Disrupt replica1 by some means
+    disruption.disruption(c)
 
-            validate(c)
-            validate_introspection_compaction(c, disruption.compaction_checks)
+    validate(c)
+    validate_introspection_compaction(c, disruption.compaction_checks)
 
-        cleanup_list = ["materialized", "testdrive", *[n.name for n in nodes]]
-        c.kill(*cleanup_list)
-        c.rm(*cleanup_list, destroy_volumes=True)
-        c.rm_volumes("mzdata")
+    cleanup_list = ["materialized", "testdrive", *[n.name for n in nodes]]
+    c.kill(*cleanup_list)
+    c.rm(*cleanup_list, destroy_volumes=True)
+    c.rm_volumes("mzdata")
 
 
 def get_single_value_from_cursor(cursor: Cursor) -> Any:

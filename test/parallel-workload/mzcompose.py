@@ -77,7 +77,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         catalog_store = "shadow"
         sanity_restart = True
 
-    with c.override(
+    c.override(
         Materialized(
             restart="on-failure",
             external_minio="toxiproxy",
@@ -87,47 +87,47 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             sanity_restart=sanity_restart,
         ),
         Toxiproxy(seed=random.randrange(2**63)),
-    ):
-        toxiproxy_start(c)
-        c.up(*service_names)
-        c.up("mc", persistent=True)
-        c.exec(
-            "mc",
-            "mc",
-            "alias",
-            "set",
-            "persist",
-            "http://minio:9000/",
-            "minioadmin",
-            "minioadmin",
-        )
-        c.exec("mc", "mc", "version", "enable", "persist/persist")
+    )
+    toxiproxy_start(c)
+    c.up(*service_names)
+    c.up("mc", persistent=True)
+    c.exec(
+        "mc",
+        "mc",
+        "alias",
+        "set",
+        "persist",
+        "http://minio:9000/",
+        "minioadmin",
+        "minioadmin",
+    )
+    c.exec("mc", "mc", "version", "enable", "persist/persist")
 
-        ports = {s: c.default_port(s) for s in service_names}
-        ports["http"] = c.port("materialized", 6876)
-        ports["mz_system"] = c.port("materialized", 6877)
-        # try:
-        run(
-            "localhost",
-            ports,
-            args.seed,
-            args.runtime,
-            complexity,
-            scenario,
-            args.threads,
-            args.naughty_identifiers,
-            args.fast_startup,
-            c,
-            catalog_store,
-            sanity_restart,
-        )
-        # TODO: Only ignore errors that will be handled by parallel-workload, not others
-        # except Exception:
-        #     print("--- Execution of parallel-workload failed")
-        #     print_exc()
-        #     # Don't fail the entire run. We ran into a crash,
-        #     # ci-logged-errors-detect will handle this if it's an unknown failure.
-        #     return
+    ports = {s: c.default_port(s) for s in service_names}
+    ports["http"] = c.port("materialized", 6876)
+    ports["mz_system"] = c.port("materialized", 6877)
+    # try:
+    run(
+        "localhost",
+        ports,
+        args.seed,
+        args.runtime,
+        complexity,
+        scenario,
+        args.threads,
+        args.naughty_identifiers,
+        args.fast_startup,
+        c,
+        catalog_store,
+        sanity_restart,
+    )
+    # TODO: Only ignore errors that will be handled by parallel-workload, not others
+    # except Exception:
+    #     print("--- Execution of parallel-workload failed")
+    #     print_exc()
+    #     # Don't fail the entire run. We ran into a crash,
+    #     # ci-logged-errors-detect will handle this if it's an unknown failure.
+    #     return
 
 
 def toxiproxy_start(c: Composition) -> None:

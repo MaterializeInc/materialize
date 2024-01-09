@@ -103,22 +103,22 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"--aws-external-id-prefix={AWS_EXTERNAL_ID_PREFIX}",
         ],
     )
-    with c.override(materialized):
-        # (Re)start Materialize and enable AWS connections.
-        c.down()
-        c.up("materialized")
-        c.sql(
-            port=6877,
-            user="mz_system",
-            sql="""
-            ALTER SYSTEM SET enable_aws_connection = true;
-            ALTER SYSTEM SET enable_connection_validation_syntax = true;
-            """,
-        )
+    c.override(materialized)
+    # (Re)start Materialize and enable AWS connections.
+    c.down()
+    c.up("materialized")
+    c.sql(
+        port=6877,
+        user="mz_system",
+        sql="""
+        ALTER SYSTEM SET enable_aws_connection = true;
+        ALTER SYSTEM SET enable_connection_validation_syntax = true;
+        """,
+    )
 
-        for fn in [test_credentials, test_assume_role]:
-            with c.test_case(fn.__name__):
-                fn(c, ctx)
+    for fn in [test_credentials, test_assume_role]:
+        with c.test_case(fn.__name__):
+            fn(c, ctx)
 
 
 def test_credentials(c: Composition, ctx: TestContext):
