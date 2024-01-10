@@ -10,6 +10,7 @@
 import sys
 from collections.abc import Iterable
 
+from materialize import ui
 from materialize.feature_benchmark.aggregation import Aggregation
 from materialize.feature_benchmark.comparator import Comparator
 from materialize.feature_benchmark.executor import Executor
@@ -61,8 +62,8 @@ class Benchmark:
         scenario = scenario_class(scale=scale, mz_version=self._mz_version)
         name = scenario.name()
 
-        print(
-            f"Sizing in effect for scenario {name}: scale = {scenario.scale()} , N = {scenario.n()}"
+        ui.header(
+            f"Running scenario {name}, scale = {scenario.scale()}, N = {scenario.n()}"
         )
 
         # Run the shared() section once for both Mzs under measurement
