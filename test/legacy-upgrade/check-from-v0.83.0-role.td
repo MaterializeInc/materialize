@@ -8,11 +8,13 @@
 # by the Apache License, Version 2.0.
 
 $ skip-if
-SELECT mz_version_num() < 5200 OR mz_version_num() >= 8300;
+SELECT mz_version_num() < 8300;
 
 > SELECT name FROM mz_roles;
 group
 joe
+mz_monitor
+mz_monitor_redacted
 mz_system
 mz_support
 materialize
