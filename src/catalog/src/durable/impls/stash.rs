@@ -147,7 +147,10 @@ impl OpenableConnection {
     }
 
     /// Opens the inner stash in savepoint mode.
-    async fn open_stash_savepoint(&mut self) -> Result<&mut Stash, StashError> {
+    async fn open_stash_savepoint(
+        &mut self,
+        epoch_lower_bound: Option<Epoch>,
+    ) -> Result<&mut Stash, StashError> {
         if !matches!(&self.stash, Some(stash) if stash.is_savepoint()) {
             self.stash = Some(
                 self.config
@@ -156,6 +159,7 @@ impl OpenableConnection {
                         self.config.stash_url.clone(),
                         self.config.schema.clone(),
                         self.config.tls.clone(),
+                        epoch_lower_bound,
                     )
                     .await?,
             );
@@ -164,7 +168,10 @@ impl OpenableConnection {
     }
 
     /// Opens the inner stash in a writeable mode.
-    async fn open_stash(&mut self) -> Result<&mut Stash, StashError> {
+    async fn open_stash(
+        &mut self,
+        epoch_lower_bound: Option<Epoch>,
+    ) -> Result<&mut Stash, StashError> {
         if !matches!(&self.stash, Some(stash) if stash.is_writeable()) {
             self.stash = Some(
                 self.config
@@ -173,6 +180,7 @@ impl OpenableConnection {
                         self.config.stash_url.clone(),
                         self.config.schema.clone(),
                         self.config.tls.clone(),
+                        epoch_lower_bound,
                     )
                     .await?,
             );
@@ -202,8 +210,9 @@ impl OpenableDurableCatalogState for OpenableConnection {
         boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
+        epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_stash_savepoint().await?;
+        self.open_stash_savepoint(epoch_lower_bound).await?;
         let stash = self.stash.take().expect("opened above");
         retry_open(stash, boot_ts, bootstrap_args, deploy_generation).await
     }
@@ -225,15 +234,16 @@ impl OpenableDurableCatalogState for OpenableConnection {
         boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
+        epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        self.open_stash().await?;
+        self.open_stash(epoch_lower_bound).await?;
         let stash = self.stash.take().expect("opened above");
         retry_open(stash, boot_ts, bootstrap_args, deploy_generation).await
     }
 
     #[tracing::instrument(name = "storage::open_debug", level = "info", skip_all)]
     async fn open_debug(mut self: Box<Self>) -> Result<DebugCatalogState, CatalogError> {
-        self.open_stash().await?;
+        self.open_stash(None).await?;
         let stash = self.stash.take().expect("opened above");
         Ok(DebugCatalogState::Stash(stash))
     }
@@ -1305,9 +1315,15 @@ impl OpenableDurableCatalogState for TestOpenableConnection<'_> {
         boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
+        epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.openable_connection
-            .open_savepoint(boot_ts, bootstrap_args, deploy_generation)
+            .open_savepoint(
+                boot_ts,
+                bootstrap_args,
+                deploy_generation,
+                epoch_lower_bound,
+            )
             .await
     }
 
@@ -1326,9 +1342,15 @@ impl OpenableDurableCatalogState for TestOpenableConnection<'_> {
         boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
+        epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         self.openable_connection
-            .open(boot_ts, bootstrap_args, deploy_generation)
+            .open(
+                boot_ts,
+                bootstrap_args,
+                deploy_generation,
+                epoch_lower_bound,
+            )
             .await
     }
 

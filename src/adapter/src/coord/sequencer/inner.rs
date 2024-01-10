@@ -5413,7 +5413,7 @@ impl Coordinator {
                     let member_name = catalog.get_role(member_id).name().to_string();
                     // We need this check so we don't accidentally return a success on a reserved role.
                     catalog.ensure_not_reserved_role(member_id)?;
-                    catalog.ensure_not_reserved_role(&role_id)?;
+                    catalog.ensure_grantable_role(&role_id)?;
                     session.add_notice(AdapterNotice::RoleMembershipAlreadyExists {
                         role_name,
                         member_name,
@@ -5457,7 +5457,7 @@ impl Coordinator {
                     let member_name = catalog.get_role(member_id).name().to_string();
                     // We need this check so we don't accidentally return a success on a reserved role.
                     catalog.ensure_not_reserved_role(member_id)?;
-                    catalog.ensure_not_reserved_role(&role_id)?;
+                    catalog.ensure_grantable_role(&role_id)?;
                     session.add_notice(AdapterNotice::RoleMembershipDoesNotExists {
                         role_name,
                         member_name,

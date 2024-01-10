@@ -2171,7 +2171,7 @@ where
         )
         .expect("could not make storage TLS connection");
         let mut stash = StashFactory::from_metrics(stash_metrics)
-            .open(postgres_url, None, tls)
+            .open(postgres_url, None, tls, None)
             .await
             .expect("could not connect to postgres storage stash");
 

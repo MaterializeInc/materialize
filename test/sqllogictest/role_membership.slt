@@ -396,13 +396,13 @@ CREATE ROLE joe
 
 # Cannot grant or revoke system role
 
-statement error role name "mz_system" is reserved
+statement error db error: ERROR: role name "mz_system" cannot be granted
 GRANT mz_system TO joe
 
 statement error role name "mz_system" is reserved
 GRANT joe TO mz_system
 
-statement error role name "mz_system" is reserved
+statement error db error: ERROR: role name "mz_system" cannot be granted
 REVOKE mz_system FROM joe
 
 statement error role name "mz_system" is reserved
@@ -413,13 +413,13 @@ REVOKE joe FROM mz_system
 statement error role name "public" is reserved
 GRANT group1 TO public
 
-statement error role name "public" is reserved
+statement error db error: ERROR: role name "public" cannot be granted
 GRANT public TO group1
 
 statement error role name "public" is reserved
 REVOKE group1 FROM public
 
-statement error role name "public" is reserved
+statement error db error: ERROR: role name "public" cannot be granted
 REVOKE public FROM group1
 
 statement ok
@@ -914,9 +914,11 @@ r2
 r3
 r4
 mz_system
+mz_monitor
 mz_support
 materialize
-COMPLETE 7
+mz_monitor_redacted
+COMPLETE 9
 
 statement ok
 DROP ROLE r1, r2, r3, r4

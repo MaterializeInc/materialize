@@ -81,6 +81,10 @@ pub struct BootstrapArgs {
 
 pub type Epoch = NonZeroI64;
 
+pub(crate) fn epoch_checked_increment(epoch: Epoch) -> Option<Epoch> {
+    epoch.get().checked_add(1).and_then(Epoch::new)
+}
+
 /// An API for opening a durable catalog state.
 ///
 /// If a catalog is not opened, then resources should be release via [`Self::expire`].
@@ -91,6 +95,9 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// opening the catalog would be successful, without making any durable
     /// changes.
     ///
+    /// `epoch_lower_bound` is used as a lower bound for the epoch that is used by the returned
+    /// catalog.
+    ///
     /// Will return an error in the following scenarios:
     ///   - Catalog initialization fails.
     ///   - Catalog migrations fail.
@@ -99,6 +106,7 @@ pub trait OpenableDurableCatalogState: Debug + Send {
         boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
+        epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
 
     /// Opens the catalog in read only mode. All mutating methods
@@ -115,11 +123,15 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// Opens the catalog in a writeable mode. Optionally initializes the
     /// catalog, if it has not been initialized, and perform any migrations
     /// needed.
+    ///
+    /// `epoch_lower_bound` is used as a lower bound for the epoch that is used by the returned
+    /// catalog.
     async fn open(
         mut self: Box<Self>,
         boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
+        epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
 
     /// Opens the catalog for manual editing of the underlying data. This is helpful for

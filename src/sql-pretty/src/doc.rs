@@ -119,7 +119,7 @@ pub(crate) fn doc_subscribe<T: AstInfo>(v: &SubscribeStatement<T>) -> RcDoc {
 fn doc_as_of<T: AstInfo>(v: &AsOf<T>) -> RcDoc {
     let (title, expr) = match v {
         AsOf::At(expr) => ("AS OF", expr),
-        AsOf::AtLeast(expr) => ("AS OFAT LEAST", expr),
+        AsOf::AtLeast(expr) => ("AS OF AT LEAST", expr),
     };
     nest_title(title, doc_expr(expr))
 }
@@ -228,7 +228,7 @@ pub(crate) fn doc_insert<T: AstInfo>(v: &InsertStatement<T>) -> RcDoc {
 pub(crate) fn doc_select_statement<T: AstInfo>(v: &SelectStatement<T>) -> RcDoc {
     let mut doc = doc_query(&v.query);
     if let Some(as_of) = &v.as_of {
-        doc = intersperse_line_nest([doc, doc_display_pass(as_of)]);
+        doc = intersperse_line_nest([doc, doc_as_of(as_of)]);
     }
     doc.group()
 }

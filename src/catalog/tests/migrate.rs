@@ -62,7 +62,7 @@ async fn test_migration() {
     let role_key = {
         let stash_openable_state = Box::new(stash_backed_catalog_state(stash_config.clone()));
         let mut stash_state = stash_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -94,7 +94,7 @@ async fn test_migration() {
             .await,
         );
         let mut persist_state = migrate_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -128,7 +128,7 @@ async fn test_migration() {
             .await,
         );
         let mut persist_state = persist_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -167,7 +167,7 @@ async fn test_migration() {
             .await,
         );
         let mut persist_state = migrate_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -206,7 +206,7 @@ async fn test_migration() {
             .await,
         );
         let mut persist_state = rollback_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -250,7 +250,7 @@ async fn test_migration() {
     {
         let stash_openable_state = Box::new(stash_backed_catalog_state(stash_config.clone()));
         let mut stash_state = stash_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -299,7 +299,7 @@ async fn test_migration() {
             .await,
         );
         let mut persist_state = rollback_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -362,7 +362,7 @@ async fn test_migration_panic_after_stash_fence_then_migrate() {
     let role_key = {
         let stash_openable_state = Box::new(stash_backed_catalog_state(stash_config.clone()));
         let mut stash_state = stash_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -400,7 +400,7 @@ async fn test_migration_panic_after_stash_fence_then_migrate() {
                 .await,
             );
             let _persist_state = migrate_openable_state
-                .open(NOW_ZERO(), &test_bootstrap_args(), None)
+                .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
                 .await
                 .unwrap();
         });
@@ -420,7 +420,7 @@ async fn test_migration_panic_after_stash_fence_then_migrate() {
             .await,
         );
         let mut persist_state = migrate_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -445,7 +445,7 @@ async fn test_migration_panic_after_stash_fence_then_migrate() {
             .await,
         );
         let mut persist_state = persist_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -487,7 +487,7 @@ async fn test_migration_panic_after_stash_fence_then_rollback() {
     let role_key = {
         let stash_openable_state = Box::new(stash_backed_catalog_state(stash_config.clone()));
         let mut stash_state = stash_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -525,7 +525,7 @@ async fn test_migration_panic_after_stash_fence_then_rollback() {
                 .await,
             );
             let _persist_state = migrate_openable_state
-                .open(NOW_ZERO(), &test_bootstrap_args(), None)
+                .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
                 .await
                 .unwrap();
         });
@@ -545,7 +545,7 @@ async fn test_migration_panic_after_stash_fence_then_rollback() {
             .await,
         );
         let mut stash_state = rollback_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -563,7 +563,7 @@ async fn test_migration_panic_after_stash_fence_then_rollback() {
     {
         let stash_openable_state = Box::new(stash_backed_catalog_state(stash_config.clone()));
         let mut stash_state = stash_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -610,7 +610,7 @@ async fn test_rollback_panic_after_stash_fence_then_migrate() {
     let role_key = {
         let stash_openable_state = Box::new(stash_backed_catalog_state(stash_config.clone()));
         let mut stash_state = stash_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -641,7 +641,7 @@ async fn test_rollback_panic_after_stash_fence_then_migrate() {
             .await,
         );
         let mut persist_state = migrate_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -683,7 +683,7 @@ async fn test_rollback_panic_after_stash_fence_then_migrate() {
                 .await,
             );
             let _stash_state = rollback_openable_state
-                .open(NOW_ZERO(), &test_bootstrap_args(), None)
+                .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
                 .await
                 .unwrap();
         });
@@ -703,7 +703,7 @@ async fn test_rollback_panic_after_stash_fence_then_migrate() {
             .await,
         );
         let mut persist_state = migrate_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -741,7 +741,7 @@ async fn test_rollback_panic_after_stash_fence_then_migrate() {
             .await,
         );
         let mut persist_state = persist_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -800,7 +800,7 @@ async fn test_rollback_panic_after_stash_fence_then_rollback() {
     let role_key = {
         let stash_openable_state = Box::new(stash_backed_catalog_state(stash_config.clone()));
         let mut stash_state = stash_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -831,7 +831,7 @@ async fn test_rollback_panic_after_stash_fence_then_rollback() {
             .await,
         );
         let mut persist_state = migrate_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -873,7 +873,7 @@ async fn test_rollback_panic_after_stash_fence_then_rollback() {
                 .await,
             );
             let _stash_state = rollback_openable_state
-                .open(NOW_ZERO(), &test_bootstrap_args(), None)
+                .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
                 .await
                 .unwrap();
         });
@@ -893,7 +893,7 @@ async fn test_rollback_panic_after_stash_fence_then_rollback() {
             .await,
         );
         let mut stash_state = rollback_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -924,7 +924,7 @@ async fn test_rollback_panic_after_stash_fence_then_rollback() {
     {
         let stash_openable_state = Box::new(stash_backed_catalog_state(stash_config.clone()));
         let mut stash_state = stash_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -978,7 +978,7 @@ async fn test_migration_panic_after_fence_then_migrate() {
     let role_key = {
         let stash_openable_state = Box::new(stash_backed_catalog_state(stash_config.clone()));
         let mut stash_state = stash_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -1016,7 +1016,7 @@ async fn test_migration_panic_after_fence_then_migrate() {
                 .await,
             );
             let _persist_state = migrate_openable_state
-                .open(NOW_ZERO(), &test_bootstrap_args(), None)
+                .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
                 .await
                 .unwrap();
         });
@@ -1036,7 +1036,7 @@ async fn test_migration_panic_after_fence_then_migrate() {
             .await,
         );
         let mut persist_state = migrate_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -1061,7 +1061,7 @@ async fn test_migration_panic_after_fence_then_migrate() {
             .await,
         );
         let mut persist_state = persist_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -1103,7 +1103,7 @@ async fn test_migration_panic_after_fence_then_rollback() {
     let role_key = {
         let stash_openable_state = Box::new(stash_backed_catalog_state(stash_config.clone()));
         let mut stash_state = stash_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -1141,7 +1141,7 @@ async fn test_migration_panic_after_fence_then_rollback() {
                 .await,
             );
             let _persist_state = migrate_openable_state
-                .open(NOW_ZERO(), &test_bootstrap_args(), None)
+                .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
                 .await
                 .unwrap();
         });
@@ -1161,7 +1161,7 @@ async fn test_migration_panic_after_fence_then_rollback() {
             .await,
         );
         let mut stash_state = rollback_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -1179,7 +1179,7 @@ async fn test_migration_panic_after_fence_then_rollback() {
     {
         let stash_openable_state = Box::new(stash_backed_catalog_state(stash_config.clone()));
         let mut stash_state = stash_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -1226,7 +1226,7 @@ async fn test_rollback_panic_after_fence_then_migrate() {
     let role_key = {
         let stash_openable_state = Box::new(stash_backed_catalog_state(stash_config.clone()));
         let mut stash_state = stash_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -1257,7 +1257,7 @@ async fn test_rollback_panic_after_fence_then_migrate() {
             .await,
         );
         let mut persist_state = migrate_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -1299,7 +1299,7 @@ async fn test_rollback_panic_after_fence_then_migrate() {
                 .await,
             );
             let _stash_state = rollback_openable_state
-                .open(NOW_ZERO(), &test_bootstrap_args(), None)
+                .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
                 .await
                 .unwrap();
         });
@@ -1319,7 +1319,7 @@ async fn test_rollback_panic_after_fence_then_migrate() {
             .await,
         );
         let mut persist_state = migrate_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -1357,7 +1357,7 @@ async fn test_rollback_panic_after_fence_then_migrate() {
             .await,
         );
         let mut persist_state = persist_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -1416,7 +1416,7 @@ async fn test_rollback_panic_after_fence_then_rollback() {
     let role_key = {
         let stash_openable_state = Box::new(stash_backed_catalog_state(stash_config.clone()));
         let mut stash_state = stash_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -1447,7 +1447,7 @@ async fn test_rollback_panic_after_fence_then_rollback() {
             .await,
         );
         let mut persist_state = migrate_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -1489,7 +1489,7 @@ async fn test_rollback_panic_after_fence_then_rollback() {
                 .await,
             );
             let _stash_state = rollback_openable_state
-                .open(NOW_ZERO(), &test_bootstrap_args(), None)
+                .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
                 .await
                 .unwrap();
         });
@@ -1509,7 +1509,7 @@ async fn test_rollback_panic_after_fence_then_rollback() {
             .await,
         );
         let mut stash_state = rollback_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -1540,7 +1540,7 @@ async fn test_rollback_panic_after_fence_then_rollback() {
     {
         let stash_openable_state = Box::new(stash_backed_catalog_state(stash_config.clone()));
         let mut stash_state = stash_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -1594,7 +1594,7 @@ async fn test_migration_panic_after_write_then_migrate() {
     let role_key = {
         let stash_openable_state = Box::new(stash_backed_catalog_state(stash_config.clone()));
         let mut stash_state = stash_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -1632,7 +1632,7 @@ async fn test_migration_panic_after_write_then_migrate() {
                 .await,
             );
             let _persist_state = migrate_openable_state
-                .open(NOW_ZERO(), &test_bootstrap_args(), None)
+                .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
                 .await
                 .unwrap();
         });
@@ -1652,7 +1652,7 @@ async fn test_migration_panic_after_write_then_migrate() {
             .await,
         );
         let mut persist_state = migrate_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -1677,7 +1677,7 @@ async fn test_migration_panic_after_write_then_migrate() {
             .await,
         );
         let mut persist_state = persist_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -1719,7 +1719,7 @@ async fn test_migration_panic_after_write_then_rollback() {
     let role_key = {
         let stash_openable_state = Box::new(stash_backed_catalog_state(stash_config.clone()));
         let mut stash_state = stash_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -1757,7 +1757,7 @@ async fn test_migration_panic_after_write_then_rollback() {
                 .await,
             );
             let _persist_state = migrate_openable_state
-                .open(NOW_ZERO(), &test_bootstrap_args(), None)
+                .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
                 .await
                 .unwrap();
         });
@@ -1777,7 +1777,7 @@ async fn test_migration_panic_after_write_then_rollback() {
             .await,
         );
         let mut stash_state = rollback_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -1795,7 +1795,7 @@ async fn test_migration_panic_after_write_then_rollback() {
     {
         let stash_openable_state = Box::new(stash_backed_catalog_state(stash_config.clone()));
         let mut stash_state = stash_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -1826,7 +1826,7 @@ async fn test_savepoint_persist_uninitialized() {
     {
         let stash_openable_state = Box::new(stash_backed_catalog_state(stash_config.clone()));
         let _stash_state = stash_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
     }
@@ -1843,7 +1843,7 @@ async fn test_savepoint_persist_uninitialized() {
             .await,
         );
         let mut stash_state = rollback_openable_state
-            .open_savepoint(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open_savepoint(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -1894,7 +1894,7 @@ async fn test_savepoint_persist_uninitialized() {
             .await,
         );
         let open_err = migrate_openable_state
-            .open_savepoint(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open_savepoint(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap_err();
         let durable_err = match open_err {
@@ -1919,7 +1919,7 @@ async fn test_savepoint_persist_uninitialized() {
             .await,
         );
         let mut stash_state = rollback_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -1952,7 +1952,7 @@ async fn test_savepoint_stash_uninitialized() {
             .await,
         );
         let _persist_state = persist_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
     }
@@ -1969,7 +1969,7 @@ async fn test_savepoint_stash_uninitialized() {
             .await,
         );
         let mut persist_state = migrate_openable_state
-            .open_savepoint(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open_savepoint(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -2020,7 +2020,7 @@ async fn test_savepoint_stash_uninitialized() {
             .await,
         );
         let open_err = rollback_openable_state
-            .open_savepoint(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open_savepoint(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap_err();
         let durable_err = match open_err {
@@ -2045,7 +2045,7 @@ async fn test_savepoint_stash_uninitialized() {
             .await,
         );
         let mut persist_state = migrate_openable_state
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -2079,7 +2079,7 @@ async fn test_set_emergency_stash_migrate() {
     );
     migrate_openable_state.set_catalog_kind(CatalogKind::EmergencyStash);
     let _stash_state = migrate_openable_state
-        .open(NOW_ZERO(), &test_bootstrap_args(), None)
+        .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
         .await
         .unwrap();
 
@@ -2121,7 +2121,7 @@ async fn test_set_emergency_stash_rollback() {
     );
     rollback_openable_state.set_catalog_kind(CatalogKind::EmergencyStash);
     let _stash_state = rollback_openable_state
-        .open(NOW_ZERO(), &test_bootstrap_args(), None)
+        .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
         .await
         .unwrap();
 
@@ -2139,6 +2139,59 @@ async fn test_set_emergency_stash_rollback() {
         .await,
     );
     assert!(!persist_openable_state.is_initialized().await.unwrap());
+
+    debug_factory.drop().await;
+}
+
+/// Test that the epoch is migrated and rolled back correctly.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_epoch_migration() {
+    let (debug_factory, stash_config) = test_stash_config().await;
+    let persist_client = PersistClient::new_for_tests().await;
+    let organization_id = Uuid::new_v4();
+    let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+
+    let mut epoch = 1;
+
+    // Open the catalog in the stash many times to increment the epoch.
+    for _ in 0..10 {
+        let stash_openable_state = Box::new(stash_backed_catalog_state(stash_config.clone()));
+        let mut stash_state = stash_openable_state
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
+            .await
+            .unwrap();
+        epoch += 1;
+        assert_eq!(epoch, stash_state.epoch().get());
+    }
+
+    // Migrate catalog to persist many times to increment the epoch.
+    for _ in 0..10 {
+        let migrate_openable_state = Box::new(
+            migrate_from_stash_to_persist_state(
+                stash_config.clone(),
+                persist_client.clone(),
+                organization_id.clone(),
+                Arc::clone(&persist_metrics),
+            )
+            .await,
+        );
+        let mut persist_state = migrate_openable_state
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
+            .await
+            .unwrap();
+        epoch += 1;
+        assert_eq!(epoch, persist_state.epoch().get());
+    }
+
+    // Rollback the catalog to the stash.
+    let stash_openable_state = Box::new(stash_backed_catalog_state(stash_config.clone()));
+    let mut stash_state = stash_openable_state
+        .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
+        .await
+        .unwrap();
+    epoch += 1;
+    assert_eq!(epoch, stash_state.epoch().get());
 
     debug_factory.drop().await;
 }

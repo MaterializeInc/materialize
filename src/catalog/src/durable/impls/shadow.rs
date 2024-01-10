@@ -83,13 +83,20 @@ where
         boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
+        epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        let stash =
-            self.stash
-                .open_savepoint(boot_ts.clone(), bootstrap_args, deploy_generation.clone());
-        let persist = self
-            .persist
-            .open_savepoint(boot_ts, bootstrap_args, deploy_generation);
+        let stash = self.stash.open_savepoint(
+            boot_ts.clone(),
+            bootstrap_args,
+            deploy_generation.clone(),
+            epoch_lower_bound,
+        );
+        let persist = self.persist.open_savepoint(
+            boot_ts,
+            bootstrap_args,
+            deploy_generation,
+            epoch_lower_bound,
+        );
         let (stash, persist) = futures::future::join(stash, persist).await;
         soft_assert_eq_or_log!(
             stash.is_ok(),
@@ -124,13 +131,20 @@ where
         boot_ts: EpochMillis,
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
+        epoch_lower_bound: Option<Epoch>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
-        let stash = self
-            .stash
-            .open(boot_ts.clone(), bootstrap_args, deploy_generation.clone());
-        let persist = self
-            .persist
-            .open(boot_ts, bootstrap_args, deploy_generation);
+        let stash = self.stash.open(
+            boot_ts.clone(),
+            bootstrap_args,
+            deploy_generation.clone(),
+            epoch_lower_bound,
+        );
+        let persist = self.persist.open(
+            boot_ts,
+            bootstrap_args,
+            deploy_generation,
+            epoch_lower_bound,
+        );
         let (stash, persist) = futures::future::join(stash, persist).await;
         soft_assert_eq_or_log!(
             stash.is_ok(),

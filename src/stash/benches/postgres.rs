@@ -30,7 +30,7 @@ fn init_bench() -> (Runtime, Stash) {
         .block_on(Stash::clear(&connstr, tls.clone()))
         .unwrap();
     let stash = runtime
-        .block_on((*FACTORY).open(connstr, None, tls))
+        .block_on((*FACTORY).open(connstr, None, tls, None))
         .unwrap();
     (runtime, stash)
 }

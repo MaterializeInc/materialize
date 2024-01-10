@@ -31,7 +31,7 @@ class Executor:
 
     def testdrive(
         self, input: str, caller: Traceback | None = None, mz_service: str | None = None
-    ) -> Any:
+    ) -> None:
         assert False
 
     def mzcompose_composition(self) -> Composition:

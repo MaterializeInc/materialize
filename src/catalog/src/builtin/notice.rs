@@ -12,7 +12,9 @@ use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::catalog::NameReference;
 use once_cell::sync::Lazy;
 
-use crate::builtin::{Builtin, BuiltinIndex, BuiltinTable, BuiltinView, DataSensitivity};
+use crate::builtin::{Builtin, BuiltinIndex, BuiltinTable, BuiltinView, MONITOR_SELECT};
+
+use super::{MONITOR_REDACTED_SELECT, SUPPORT_SELECT};
 
 pub static MZ_OPTIMIZER_NOTICES: Lazy<BuiltinTable> = Lazy::new(|| {
     use ScalarType::{List, String, TimestampTz};
@@ -44,7 +46,7 @@ pub static MZ_OPTIMIZER_NOTICES: Lazy<BuiltinTable> = Lazy::new(|| {
             )
             .without_keys(),
         is_retained_metrics_object: false,
-        sensitivity: DataSensitivity::Superuser,
+        access: vec![MONITOR_SELECT],
     }
 });
 
@@ -56,7 +58,7 @@ pub static MZ_OPTIMIZER_NOTICES: Lazy<BuiltinTable> = Lazy::new(|| {
 /// notices, the idea is to evolve it over time as sketched in the design doc[^1].
 ///
 /// [^1] <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20231113_optimizer_notice_catalog.md>
-pub static MZ_NOTICES: BuiltinView = BuiltinView {
+pub static MZ_NOTICES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_notices",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
@@ -74,13 +76,13 @@ pub static MZ_NOTICES: BuiltinView = BuiltinView {
 FROM
     mz_internal.mz_optimizer_notices n
 ",
-    sensitivity: DataSensitivity::Superuser,
-};
+    access: vec![MONITOR_SELECT],
+});
 
 /// A redacted version of [`MZ_NOTICES`] that is made safe to be viewed by
 /// Materialize staff because it binds the `redacted_~` from [`MZ_NOTICES`] as
 /// `~`.
-pub static MZ_NOTICES_REDACTED: BuiltinView = BuiltinView {
+pub static MZ_NOTICES_REDACTED: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     name: "mz_notices_redacted",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
@@ -95,8 +97,8 @@ pub static MZ_NOTICES_REDACTED: BuiltinView = BuiltinView {
 FROM
     mz_internal.mz_notices
 ",
-    sensitivity: DataSensitivity::SuperuserAndSupport,
-};
+    access: vec![SUPPORT_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
+});
 
 pub const MZ_NOTICES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_notices_ind",
