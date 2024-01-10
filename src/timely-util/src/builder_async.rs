@@ -13,7 +13,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
@@ -38,8 +38,6 @@ use timely::{Container, Data, PartialOrder};
 /// Builds async operators with generic shape.
 pub struct OperatorBuilder<G: Scope> {
     builder: OperatorBuilderRc<G>,
-    /// Wakers registered by input handles
-    registered_wakers: Rc<RefCell<Vec<Waker>>>,
     /// The activator for this operator
     activator: Activator,
     /// The waker set up to activate this timely operator when woken
@@ -79,9 +77,16 @@ where
 {
     fn accept_input(&mut self) {
         let mut queue = self.queue.borrow_mut();
+        let mut new_data = false;
         while let Some((cap, data)) = self.handle.next() {
+            new_data = true;
             let cap = self.connection.accept(cap);
             queue.push_back(Event::Data(cap, data.take()));
+        }
+        if new_data {
+            if let Some(waker) = self.waker.take() {
+                waker.wake();
+            }
         }
     }
 
@@ -92,6 +97,9 @@ where
 
     fn notify_progress(&mut self, upper: Antichain<T>) {
         self.queue.borrow_mut().push_back(Event::Progress(upper));
+        if let Some(waker) = self.waker.take() {
+            waker.wake();
+        }
     }
 }
 
@@ -102,6 +110,7 @@ struct InputHandleQueue<
     P: Pull<BundleCore<T, D>> + 'static,
 > {
     queue: Rc<RefCell<VecDeque<Event<T, C::Capability, D>>>>,
+    waker: Rc<Cell<Option<Waker>>>,
     connection: C,
     handle: InputHandleCore<T, D, P>,
 }
@@ -130,8 +139,7 @@ impl ArcWake for TimelyWaker {
 /// Async handle to an operator's input stream
 pub struct AsyncInputHandle<T: Timestamp, D: Container, C: InputConnection<T>> {
     queue: Rc<RefCell<VecDeque<Event<T, C::Capability, D>>>>,
-    /// Reference to the reactor queue of this input handle where Wakers can be registered
-    reactor_registry: Weak<RefCell<Vec<Waker>>>,
+    waker: Rc<Cell<Option<Waker>>>,
     /// Whether this handle has finished producing data
     done: bool,
 }
@@ -155,12 +163,8 @@ impl<T: Timestamp, D: Container, C: InputConnection<T>> AsyncInputHandle<T, D, C
                     Poll::Ready(Some(Event::Progress(frontier)))
                 }
                 None => {
-                    // Nothing else to produce so install the provided waker in the reactor
-                    self.reactor_registry
-                        .upgrade()
-                        .expect("handle outlived its operator")
-                        .borrow_mut()
-                        .push(cx.waker().clone());
+                    // Nothing else to produce so install the provided waker
+                    self.waker.set(Some(cx.waker().clone()));
                     Poll::Pending
                 }
             }
@@ -389,7 +393,6 @@ impl<G: Scope> OperatorBuilder<G> {
 
         OperatorBuilder {
             builder,
-            registered_wakers: Default::default(),
             activator,
             operator_waker: Arc::new(operator_waker),
             input_frontiers: Default::default(),
@@ -463,9 +466,11 @@ impl<G: Scope> OperatorBuilder<G> {
             .builder
             .new_input_connection(stream, pact, connection.describe(outputs));
 
+        let waker = Default::default();
         let queue = Default::default();
         let input_queue = InputHandleQueue {
             queue: Rc::clone(&queue),
+            waker: Rc::clone(&waker),
             connection,
             handle,
         };
@@ -473,7 +478,7 @@ impl<G: Scope> OperatorBuilder<G> {
 
         AsyncInputHandle {
             queue,
-            reactor_registry: Rc::downgrade(&self.registered_wakers),
+            waker,
             done: false,
         }
     }
@@ -509,7 +514,6 @@ impl<G: Scope> OperatorBuilder<G> {
         L: Future + 'static,
     {
         let operator_waker = self.operator_waker;
-        let registered_wakers = self.registered_wakers;
         let mut input_frontiers = self.input_frontiers;
         let mut input_queues = self.input_queues;
         let mut output_flushes = self.output_flushes;
@@ -517,6 +521,7 @@ impl<G: Scope> OperatorBuilder<G> {
         self.builder.build_reschedule(move |caps| {
             let mut logic_fut = Some(Box::pin(constructor(caps)));
             move |new_frontiers| {
+                operator_waker.active.store(true, Ordering::SeqCst);
                 for (i, queue) in input_queues.iter_mut().enumerate() {
                     // First, discover if there are any frontier notifications
                     let cur = &mut input_frontiers[i];
@@ -529,6 +534,7 @@ impl<G: Scope> OperatorBuilder<G> {
                     // messages with progress tracking.
                     queue.accept_input();
                 }
+                operator_waker.active.store(false, Ordering::SeqCst);
 
                 // If our worker pressed the button we stop scheduling the logic future and/or
                 // draining the input handles to stop producing data and frontier updates
@@ -546,19 +552,6 @@ impl<G: Scope> OperatorBuilder<G> {
                         true
                     }
                 } else {
-                    // Wake up any registered Wakers for the input streams while taking care to not
-                    // reactivate the timely operator since that would lead to an infinite loop.
-                    // This ensures that the input handles wake up properly when managed by other
-                    // executors, e.g a `select!` that provides its own Waker implementation.
-                    {
-                        operator_waker.active.store(true, Ordering::SeqCst);
-                        let mut registered_wakers = registered_wakers.borrow_mut();
-                        for waker in registered_wakers.drain(..) {
-                            waker.wake();
-                        }
-                        operator_waker.active.store(false, Ordering::SeqCst);
-                    }
-
                     // Schedule the logic future if any of the wakers above marked the task as ready
                     if let Some(fut) = logic_fut.as_mut() {
                         if operator_waker.task_ready.load(Ordering::SeqCst) {
