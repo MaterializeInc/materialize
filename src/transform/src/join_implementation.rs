@@ -751,6 +751,9 @@ mod differential {
         {
             // We compute one order for each possible starting point, and we will choose one from
             // these.
+            //
+            // It is an invariant that the orders are in input order: the ith order begins with the ith input.
+            //
             // We could change this preference at any point, but the list of orders should still inform.
             // Important, we should choose something stable under re-ordering, to converge under fixed
             // point iteration; we choose to start with the first input optimizing our criteria, which
@@ -1039,6 +1042,9 @@ fn permute_order(
     })
 }
 
+// Computes the best join orders for each input.
+//
+// If there are N inputs, returns N orders, with the ith input starting the ith order.
 fn optimize_orders(
     equivalences: &[Vec<MirScalarExpr>], // join equivalences: inside a Vec, the exprs are equivalent
     available: &[Vec<Vec<MirScalarExpr>>], // available arrangements per input
