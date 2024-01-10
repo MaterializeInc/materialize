@@ -5350,14 +5350,12 @@ impl Coordinator {
     pub(super) async fn sequence_alter_default_privileges(
         &mut self,
         session: &Session,
-        p: plan::AlterDefaultPrivilegesPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        println!("plan: {p:?}");
-        let plan::AlterDefaultPrivilegesPlan {
+        plan::AlterDefaultPrivilegesPlan {
             privilege_objects,
             privilege_acl_items,
             is_grant,
-        } = p;
+        }: plan::AlterDefaultPrivilegesPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
         let mut ops = Vec::with_capacity(privilege_objects.len() * privilege_acl_items.len());
         let variant = if is_grant {
             UpdatePrivilegeVariant::Grant

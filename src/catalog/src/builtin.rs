@@ -1656,13 +1656,13 @@ const SUPPORT_SELECT: MzAclItem = MzAclItem {
     acl_mode: AclMode::SELECT,
 };
 
-const MONITOR: MzAclItem = MzAclItem {
+const MONITOR_SELECT: MzAclItem = MzAclItem {
     grantee: MZ_MONITOR_ROLE_ID,
     grantor: MZ_SYSTEM_ROLE_ID,
     acl_mode: AclMode::SELECT,
 };
 
-const MONITOR_REDACTED: MzAclItem = MzAclItem {
+const MONITOR_REDACTED_SELECT: MzAclItem = MzAclItem {
     grantee: MZ_MONITOR_REDACTED_ROLE_ID,
     grantor: MZ_SYSTEM_ROLE_ID,
     acl_mode: AclMode::SELECT,
@@ -2516,7 +2516,7 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| Bu
     data_source: Some(IntrospectionType::StatementExecutionHistory),
     desc: MZ_STATEMENT_EXECUTION_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
-    access: vec![MONITOR],
+    access: vec![MONITOR_SELECT],
 });
 
 pub static MZ_STATEMENT_EXECUTION_HISTORY_REDACTED: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
@@ -2530,7 +2530,7 @@ cluster_name, transaction_isolation, execution_timestamp, transaction_id,
 transient_index_id, began_at, finished_at, finished_status,
 error_message, rows_returned, execution_strategy
 FROM mz_internal.mz_statement_execution_history",
-    access: vec![SUPPORT_SELECT, MONITOR_REDACTED, MONITOR],
+    access: vec![SUPPORT_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
 });
 
 pub static MZ_PREPARED_STATEMENT_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -2539,7 +2539,7 @@ pub static MZ_PREPARED_STATEMENT_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| Bui
     data_source: Some(IntrospectionType::PreparedStatementHistory),
     desc: MZ_PREPARED_STATEMENT_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
-    access: vec![MONITOR],
+    access: vec![MONITOR_SELECT],
 });
 
 pub static MZ_PREPARED_STATEMENT_HISTORY_REDACTED: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
@@ -2550,7 +2550,7 @@ pub static MZ_PREPARED_STATEMENT_HISTORY_REDACTED: Lazy<BuiltinView> = Lazy::new
     sql: "
 SELECT id, session_id, name, redacted_sql, prepared_at, statement_type
 FROM mz_internal.mz_prepared_statement_history",
-    access: vec![SUPPORT_SELECT, MONITOR_REDACTED, MONITOR],
+    access: vec![SUPPORT_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
 });
 
 pub static MZ_SESSION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
@@ -2575,7 +2575,7 @@ mpsh.id AS prepared_statement_id, sql, mpsh.name AS prepared_statement_name,
 session_id, redacted_sql, prepared_at, statement_type
 FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh
 WHERE mseh.prepared_statement_id = mpsh.id",
-    access: vec![MONITOR],
+    access: vec![MONITOR_SELECT],
 }
 });
 
@@ -2590,7 +2590,7 @@ transaction_isolation, execution_timestamp, transient_index_id, began_at, finish
 error_message, rows_returned, execution_strategy, transaction_id, prepared_statement_id,
 prepared_statement_name, session_id, redacted_sql, prepared_at, statement_type
 FROM mz_internal.mz_activity_log",
-    access: vec![SUPPORT_SELECT, MONITOR_REDACTED, MONITOR],
+    access: vec![SUPPORT_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
     }
 });
 
@@ -2609,7 +2609,7 @@ pub static MZ_STATEMENT_LIFECYCLE_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| Bu
     // TODO[btv]: Maybe this should be public instead of
     // `MONITOR_REDACTED`, but since that would be a backwards-compatible
     // chagne, we probably don't need to worry about it now.
-    access: vec![SUPPORT_SELECT, MONITOR_REDACTED, MONITOR],
+    access: vec![SUPPORT_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
 });
 
 pub static MZ_SOURCE_STATUSES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {

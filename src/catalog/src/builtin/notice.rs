@@ -12,9 +12,9 @@ use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::catalog::NameReference;
 use once_cell::sync::Lazy;
 
-use crate::builtin::{Builtin, BuiltinIndex, BuiltinTable, BuiltinView, MONITOR};
+use crate::builtin::{Builtin, BuiltinIndex, BuiltinTable, BuiltinView, MONITOR_SELECT};
 
-use super::{MONITOR_REDACTED, SUPPORT_SELECT};
+use super::{MONITOR_REDACTED_SELECT, SUPPORT_SELECT};
 
 pub static MZ_OPTIMIZER_NOTICES: Lazy<BuiltinTable> = Lazy::new(|| {
     use ScalarType::{List, String, TimestampTz};
@@ -46,7 +46,7 @@ pub static MZ_OPTIMIZER_NOTICES: Lazy<BuiltinTable> = Lazy::new(|| {
             )
             .without_keys(),
         is_retained_metrics_object: false,
-        access: vec![MONITOR],
+        access: vec![MONITOR_SELECT],
     }
 });
 
@@ -76,7 +76,7 @@ pub static MZ_NOTICES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
 FROM
     mz_internal.mz_optimizer_notices n
 ",
-    access: vec![MONITOR],
+    access: vec![MONITOR_SELECT],
 });
 
 /// A redacted version of [`MZ_NOTICES`] that is made safe to be viewed by
@@ -97,7 +97,7 @@ pub static MZ_NOTICES_REDACTED: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
 FROM
     mz_internal.mz_notices
 ",
-    access: vec![SUPPORT_SELECT, MONITOR_REDACTED],
+    access: vec![SUPPORT_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
 });
 
 pub const MZ_NOTICES_IND: BuiltinIndex = BuiltinIndex {
