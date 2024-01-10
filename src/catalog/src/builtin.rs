@@ -2685,7 +2685,7 @@ FROM
         LEFT JOIN latest_events_to_use AS e ON mz_sources.id = e.source_id
 WHERE mz_sources.id NOT LIKE 's%';",
     access: vec![PUBLIC_SELECT],
-};
+});
 
 pub static MZ_SINK_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_sink_status_history",
