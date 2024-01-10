@@ -35,7 +35,8 @@ message ProtoPersistParameters {
     mz_proto.ProtoDuration reader_lease_duration = 20;
     optional uint64 stats_budget_bytes = 17;
     optional ProtoUntrimmableColumns stats_untrimmable_columns = 18;
-    map<string, bool> feature_flags = 19;
+    repeated ProtoFlagUpdate feature_flags = 23;
+    reserved 19;
 }
 
 message ProtoRetryParameters {
@@ -48,4 +49,11 @@ message ProtoUntrimmableColumns {
     repeated string equals = 1;
     repeated string prefixes = 2;
     repeated string suffixes = 3;
+}
+
+message ProtoFlagUpdate {
+    string name = 1;
+    oneof value {
+        bool bool = 2;
+    }
 }

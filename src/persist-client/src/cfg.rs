@@ -18,6 +18,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::batch::UntrimmableColumns;
+use crate::cfg::proto_flag_update::Value;
 use mz_build_info::BuildInfo;
 use mz_ore::now::NowFn;
 use mz_persist::cfg::BlobKnobs;
@@ -31,7 +32,7 @@ use serde::{Deserialize, Serialize};
 include!(concat!(env!("OUT_DIR"), "/mz_persist_client.cfg.rs"));
 
 /// An externally-supplied configuration value.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Arbitrary, Serialize, Deserialize, PartialEq, Eq)]
 pub enum FlagValue {
     Bool(bool),
 }
@@ -923,7 +924,7 @@ pub struct PersistParameters {
     /// Configures [`DynamicConfig::rollup_threshold`]
     pub rollup_threshold: Option<usize>,
     /// Updates to various feature flags.
-    pub feature_flags: BTreeMap<String, bool>,
+    pub feature_flags: BTreeMap<String, FlagValue>,
 }
 
 impl PersistParameters {
@@ -1261,8 +1262,22 @@ impl PersistParameters {
         }
         for flag in flags::all() {
             if let Some(value) = feature_flags.get(flag.name) {
-                cfg.dynamic.set_feature_flag(flag, (*value).into_value());
+                cfg.dynamic.set_feature_flag(flag, value.clone());
             }
+        }
+    }
+}
+
+impl RustType<proto_flag_update::Value> for FlagValue {
+    fn into_proto(&self) -> proto_flag_update::Value {
+        match self {
+            FlagValue::Bool(b) => proto_flag_update::Value::Bool(*b),
+        }
+    }
+
+    fn from_proto(proto: proto_flag_update::Value) -> Result<Self, TryFromProtoError> {
+        match proto {
+            Value::Bool(b) => Ok(FlagValue::Bool(b)),
         }
     }
 }
@@ -1295,7 +1310,14 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             pubsub_client_enabled: self.pubsub_client_enabled.into_proto(),
             pubsub_push_diff_enabled: self.pubsub_push_diff_enabled.into_proto(),
             rollup_threshold: self.rollup_threshold.into_proto(),
-            feature_flags: self.feature_flags.clone(),
+            feature_flags: self
+                .feature_flags
+                .iter()
+                .map(|(k, v)| ProtoFlagUpdate {
+                    name: k.to_owned(),
+                    value: Some(v.into_proto()),
+                })
+                .collect(),
         }
     }
 
@@ -1327,7 +1349,16 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             pubsub_client_enabled: proto.pubsub_client_enabled.into_rust()?,
             pubsub_push_diff_enabled: proto.pubsub_push_diff_enabled.into_rust()?,
             rollup_threshold: proto.rollup_threshold.into_rust()?,
-            feature_flags: proto.feature_flags,
+            feature_flags: proto
+                .feature_flags
+                .into_iter()
+                .map(|update| {
+                    update
+                        .value
+                        .into_rust_if_some("ProtoFlagUpdate::value")
+                        .map(|v| (update.name, v))
+                })
+                .collect::<Result<_, _>>()?,
         })
     }
 }

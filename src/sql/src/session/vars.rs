@@ -3765,14 +3765,14 @@ impl SystemVars {
         *self.expect_value(&PERSIST_ROLLUP_THRESHOLD)
     }
 
-    pub fn persist_flags(&self) -> BTreeMap<String, bool> {
+    pub fn persist_flags(&self) -> BTreeMap<String, FlagValue> {
         persist_flags::all()
             .map(|f| {
                 let name = f.name.to_owned();
                 let value = match f.into() {
-                    PersistVar::Bool(bool) => self.expect_value(&bool),
+                    PersistVar::Bool(bool) => FlagValue::Bool(*self.expect_value(&bool)),
                 };
-                (name, *value)
+                (name, value)
             })
             .collect()
     }
