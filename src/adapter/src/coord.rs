@@ -159,7 +159,7 @@ use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, 
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
-use mz_catalog::durable::DurableCatalogState;
+use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
@@ -752,7 +752,7 @@ pub struct Config {
     pub storage_usage_retention_period: Option<Duration>,
     pub segment_client: Option<mz_segment::Client>,
     pub egress_ips: Vec<Ipv4Addr>,
-    pub system_parameter_sync_config: Option<SystemParameterSyncConfig>,
+    pub remote_system_parameters: Option<BTreeMap<String, OwnedVarInput>>,
     pub aws_account_id: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
     pub connection_context: ConnectionContext,
@@ -2615,7 +2615,7 @@ pub fn serve(
         controller_config,
         controller_envd_epoch,
         controller_persist_txn_tables,
-        mut storage,
+        storage,
         timestamp_oracle_url,
         unsafe_mode,
         all_features,
@@ -2638,7 +2638,7 @@ pub fn serve(
         aws_account_id,
         aws_privatelink_availability_zones,
         connection_context,
-        system_parameter_sync_config,
+        remote_system_parameters,
         active_connection_count,
         webhook_concurrency_limit,
         http_host_name,
@@ -2674,8 +2674,6 @@ pub fn serve(
             .map(|azs_vec| BTreeSet::from_iter(azs_vec.iter().cloned()));
 
         info!("coordinator init: opening catalog");
-        let remote_system_parameters =
-            load_remote_system_parameters(&mut storage, system_parameter_sync_config).await?;
         let (catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
             Catalog::open(mz_catalog::config::Config {
                 storage,
@@ -2932,10 +2930,9 @@ async fn get_initial_oracle_timestamps(
     Ok(initial_timestamps)
 }
 
-/// Potentially load system parameters from a remote frontend server.
 #[tracing::instrument(level = "info", skip_all)]
-async fn load_remote_system_parameters(
-    storage: &mut Box<dyn DurableCatalogState>,
+pub async fn load_remote_system_parameters(
+    storage: &mut Box<dyn OpenableDurableCatalogState>,
     system_parameter_sync_config: Option<SystemParameterSyncConfig>,
 ) -> Result<Option<BTreeMap<String, OwnedVarInput>>, AdapterError> {
     if let Some(system_parameter_sync_config) = system_parameter_sync_config {
@@ -2979,9 +2976,7 @@ async fn load_remote_system_parameters(
         //       LaunchDarkly configuration, for when LaunchDarkly comes
         //       back online.
         //    6. Reboot environmentd.
-        if storage.is_read_only() {
-            tracing::info!("parameter sync on boot: skipping sync as catalog is read-only");
-        } else if !storage.has_system_config_synced_once().await? {
+        if !storage.has_system_config_synced_once().await? {
             let mut params = SynchronizedParameters::new(SystemVars::default());
             let frontend = SystemParameterFrontend::from(&system_parameter_sync_config).await?;
             frontend.pull(&mut params);

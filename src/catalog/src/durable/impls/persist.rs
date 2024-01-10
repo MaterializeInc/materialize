@@ -593,6 +593,13 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         self.get_current_config(DEPLOY_GENERATION).await
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError> {
+        self.get_current_config(SYSTEM_CONFIG_SYNCED_KEY)
+            .await
+            .map(|value| value.map(|value| value > 0).unwrap_or(false))
+    }
+
     async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
         panic!("Persist implementation does not have a tombstone")
     }
@@ -963,21 +970,6 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         };
         self.with_snapshot(|snapshot| {
             Ok(snapshot.id_allocator.get(&key).expect("must exist").next_id)
-        })
-        .await
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError> {
-        let key = proto::ConfigKey {
-            key: SYSTEM_CONFIG_SYNCED_KEY.to_string(),
-        };
-        self.with_snapshot(|snapshot| {
-            Ok(snapshot
-                .configs
-                .get(&key)
-                .map(|value| value.value > 0)
-                .unwrap_or(false))
         })
         .await
     }

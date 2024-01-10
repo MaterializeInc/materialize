@@ -280,6 +280,14 @@ impl OpenableDurableCatalogState for OpenableConnection {
         self.get_config(DEPLOY_GENERATION.into()).await
     }
 
+    async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError> {
+        Ok(self
+            .get_config(SYSTEM_CONFIG_SYNCED_KEY.into())
+            .await?
+            .map(|value| value > 0)
+            .unwrap_or(false))
+    }
+
     async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
         Ok(self.get_config(TOMBSTONE_KEY.into()).await?.map(|v| v > 0))
     }
@@ -652,13 +660,6 @@ impl ReadOnlyDurableCatalogState for Connection {
                 DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(err.to_string()))
                     .into()
             })
-    }
-
-    async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError> {
-        Ok(get_config(&mut self.stash, SYSTEM_CONFIG_SYNCED_KEY.into())
-            .await?
-            .map(|value| value > 0)
-            .unwrap_or(false))
     }
 
     async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
@@ -1368,6 +1369,12 @@ impl OpenableDurableCatalogState for TestOpenableConnection<'_> {
 
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         self.openable_connection.get_deployment_generation().await
+    }
+
+    async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError> {
+        self.openable_connection
+            .has_system_config_synced_once()
+            .await
     }
 
     async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
