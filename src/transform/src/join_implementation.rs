@@ -779,7 +779,6 @@ mod differential {
                 .iter()
                 .map(|o| {
                     o.iter()
-                        .skip(1)
                         .filter_map(|(c, key, input)| {
                             if c.arranged {
                                 None
