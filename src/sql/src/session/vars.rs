@@ -5521,7 +5521,8 @@ pub fn is_tracing_var(name: &str) -> bool {
 }
 
 /// Returns whether the named variable is a compute configuration parameter
-/// (things that go in `ComputeParameters and are sent to replicas via `UpdateConfiguration`` commands).
+/// (things that go in `ComputeParameters` and are sent to replicas via `UpdateConfiguration`
+/// commands).
 pub fn is_compute_config_var(name: &str) -> bool {
     name == MAX_RESULT_SIZE.name()
         || name == COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES.name()

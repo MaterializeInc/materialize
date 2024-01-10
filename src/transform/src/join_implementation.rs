@@ -492,7 +492,7 @@ impl JoinImplementation {
                 return Ok(());
             }
 
-            // We are plannign a multiway join for the first time.
+            // We are planning a multiway join for the first time.
             //
             // We compare the delta and differential join plans.
             //
