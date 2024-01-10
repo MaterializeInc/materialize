@@ -379,17 +379,11 @@ pub fn plan_explain_plan(
                 );
             }
 
-            let Plan::CreateIndex(plan::CreateIndexPlan { name, index, .. }) =
-                ddl::plan_create_index(scx, *stmt)?
-            else {
+            let Plan::CreateIndex(plan) = ddl::plan_create_index(scx, *stmt)? else {
                 sql_bail!("expected CreateIndexPlan plan");
             };
 
-            crate::plan::Explainee::Statement(ExplaineeStatement::CreateIndex {
-                name,
-                index,
-                broken,
-            })
+            crate::plan::Explainee::Statement(ExplaineeStatement::CreateIndex { broken, plan })
         }
     };
 

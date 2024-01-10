@@ -2817,9 +2817,8 @@ impl Coordinator {
                 .await
             }
             plan::ExplaineeStatement::CreateIndex {
-                name,
-                index,
                 broken,
+                plan: plan::CreateIndexPlan { name, index, .. },
             } => {
                 // Please see the docs on `explain_query_optimizer_pipeline` above.
                 self.explain_create_index_optimizer_pipeline(
