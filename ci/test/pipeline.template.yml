@@ -566,7 +566,7 @@ steps:
           args: [--run-seconds=10, --wait]
     timeout_in_minutes: 30
     agents:
-      queue: linux-x86_64-small
+      queue: linux-x86_64
 
   - id: metabase-demo
     label: Metabase smoke test
