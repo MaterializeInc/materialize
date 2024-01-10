@@ -66,7 +66,9 @@
 //! ```
 //!
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fmt;
 use std::net::Ipv4Addr;
 use std::num::NonZeroI64;
 use std::ops::Neg;
@@ -100,7 +102,6 @@ use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
-use mz_ore::option::OptionExt;
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
@@ -2277,14 +2278,9 @@ impl Coordinator {
                         // Only log the error if we're newly stuck, to prevent logging repeatedly.
                         if !coord_stuck {
                             let last_message = last_message_watchdog.lock().expect("poisoned");
-                            let last_message_sql = last_message
-                                .stmt
-                                .as_ref()
-                                .map(|stmt| stmt.to_ast_string_redacted())
-                                .display_or("<none>");
                             tracing::error!(
                                 last_message_kind = %last_message.kind,
-                                %last_message_sql,
+                                last_message_sql = %last_message.stmt_to_string(),
                                 "coordinator stuck for {duration:?}",
                             );
                         }
@@ -2569,10 +2565,28 @@ impl Coordinator {
 }
 
 /// Contains information about the last message the [`Coordinator`] processed.
-#[derive(Debug)]
 struct LastMessage {
     kind: &'static str,
     stmt: Option<Arc<Statement<Raw>>>,
+}
+
+impl LastMessage {
+    /// Returns a redacted version of the statement that is safe for logs.
+    fn stmt_to_string(&self) -> Cow<'static, str> {
+        self.stmt
+            .as_ref()
+            .map(|stmt| stmt.to_ast_string_redacted().into())
+            .unwrap_or("<none>".into())
+    }
+}
+
+impl fmt::Debug for LastMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LastMessage")
+            .field("kind", &self.kind)
+            .field("stmt", &self.stmt_to_string())
+            .finish()
+    }
 }
 
 impl Drop for LastMessage {
@@ -2580,7 +2594,7 @@ impl Drop for LastMessage {
         // Only print the last message if we're currently panicking, otherwise we'd spam our logs.
         if std::thread::panicking() {
             // If we're panicking theres no guarantee `tracing` still works, so print to stderr.
-            eprintln!("Coordinator panicking, dumping last message\n{:?}", self);
+            eprintln!("Coordinator panicking, dumping last message\n{self:?}",);
         }
     }
 }
