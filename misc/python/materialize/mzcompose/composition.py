@@ -375,36 +375,12 @@ class Composition:
             loader.composition_path = None
 
     @contextmanager
-    def override(self, *services: "Service") -> Iterator[None]:
-        """Temporarily update the composition with the specified services.
-
-        The services must already exist in the composition. They restored to
-        their old definitions when the `with` block ends. Note that the service
-        definition is written in its entirety; i.e., the configuration is not
-        deep merged but replaced wholesale.
-
-        Lest you are tempted to change this function to allow dynamically
-        injecting new services: do not do this! These services will not be
-        visible to other commands, like `mzcompose run`, `mzcompose logs`, or
-        `mzcompose down`, which makes debugging or inspecting the composition
-        challenging.
-        """
+    def override_scope(self, *services: "Service") -> Iterator[None]:
+        """Temporarily update the composition with the specified services."""
         # Remember the old composition.
         old_compose = copy.deepcopy(self.compose)
 
-        # Update the composition with the new service definitions.
-        deps = self._munge_services([(s.name, cast(dict, s.config)) for s in services])
-        for service in services:
-            self.compose["services"][service.name] = service.config
-
-        # Re-acquire dependencies, as the override may have swapped an `image`
-        # config for an `mzbuild` config.
-        deps.acquire()
-
-        self.files = {}
-
-        # Ensure image freshness
-        self.pull_if_variable([service.name for service in services])
+        self.override(*services)
 
         try:
             # Run the next composition.
@@ -432,6 +408,34 @@ class Composition:
             # Restore the old composition.
             self.compose = old_compose
             self.files = {}
+
+    def override(self, *services: "Service") -> None:
+        """Permanently update the composition with the specified services.
+
+        The services must already exist in the composition. They restored to
+        their old definitions when the `with` block ends. Note that the service
+        definition is written in its entirety; i.e., the configuration is not
+        deep merged but replaced wholesale.
+
+        Lest you are tempted to change this function to allow dynamically
+        injecting new services: do not do this! These services will not be
+        visible to other commands, like `mzcompose run`, `mzcompose logs`, or
+        `mzcompose down`, which makes debugging or inspecting the composition
+        challenging.
+        """
+        # Update the composition with the new service definitions.
+        deps = self._munge_services([(s.name, cast(dict, s.config)) for s in services])
+        for service in services:
+            self.compose["services"][service.name] = service.config
+
+        # Re-acquire dependencies, as the override may have swapped an `image`
+        # config for an `mzbuild` config.
+        deps.acquire()
+
+        self.files = {}
+
+        # Ensure image freshness
+        self.pull_if_variable([service.name for service in services])
 
     @contextmanager
     def test_case(self, name: str) -> Iterator[None]:
@@ -668,7 +672,7 @@ class Composition:
     def try_pull_service_image(self, service: Service, max_tries: int = 2) -> bool:
         """Tries to pull the specified image and returns if this was successful."""
         try:
-            with self.override(service):
+            with self.override_scope(service):
                 self.pull_single_image_by_service_name(
                     service.name, max_tries=max_tries
                 )

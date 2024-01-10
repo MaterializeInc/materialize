@@ -267,18 +267,18 @@ def run_test(c: Composition, args: argparse.Namespace) -> None:
             },
         )
 
-        with c.override(materialized):
-            c.stop("materialized")
-            c.up("materialized")
+        c.override(materialized)
+        c.stop("materialized")
+        c.up("materialized")
 
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                dir=c.path,
-                prefix=f"{scenario.__name__}-phase3-",
-            ) as tmp:
-                tmp.write(scenario.phase3())
-                tmp.flush()
-                c.exec("testdrive", os.path.basename(tmp.name))
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            dir=c.path,
+            prefix=f"{scenario.__name__}-phase3-",
+        ) as tmp:
+            tmp.write(scenario.phase3())
+            tmp.flush()
+            c.exec("testdrive", os.path.basename(tmp.name))
 
     # Dedicated test for ALTER SYSTEM RESET ALL
     with tempfile.NamedTemporaryFile(
@@ -304,12 +304,12 @@ def run_test(c: Composition, args: argparse.Namespace) -> None:
                 scenario.feature_name(): "on" for scenario in scenarios
             },
         )
-        with c.override(materialized):
-            c.stop("materialized")
-            c.up("materialized")
-            tmp.write("\n\n".join(tmp_buf))
-            tmp.flush()
-            c.exec("testdrive", os.path.basename(tmp.name))
+        c.override(materialized)
+        c.stop("materialized")
+        c.up("materialized")
+        tmp.write("\n\n".join(tmp_buf))
+        tmp.flush()
+        c.exec("testdrive", os.path.basename(tmp.name))
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:

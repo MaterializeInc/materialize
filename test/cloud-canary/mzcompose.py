@@ -179,7 +179,7 @@ def version_check(c: Composition) -> None:
 def td(c: Composition, *args: str) -> None:
     materialize_url = f"postgres://{urllib.parse.quote(USERNAME)}:{urllib.parse.quote(APP_PASSWORD)}@{urllib.parse.quote(cloud_hostname(c))}:6875"
 
-    with c.override(
+    c.override(
         Testdrive(
             default_timeout="1200s",
             materialize_url=materialize_url,
@@ -207,9 +207,9 @@ def td(c: Composition, *args: str) -> None:
                 ),
             ],
         )
-    ):
-        c.run(
-            "testdrive",
-            *args,
-            rm=True,
-        )
+    )
+    c.run(
+        "testdrive",
+        *args,
+        rm=True,
+    )

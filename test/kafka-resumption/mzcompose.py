@@ -73,42 +73,42 @@ def workflow_sink_networking(c: Composition) -> None:
 def workflow_source_resumption(c: Composition) -> None:
     """Test creating sources in a remote clusterd process."""
 
-    with c.override(
+    c.override(
         Testdrive(no_reset=True, consistent_seed=True),
-    ):
-        c.up("materialized", "zookeeper", "kafka", "clusterd")
+    )
+    c.up("materialized", "zookeeper", "kafka", "clusterd")
 
-        c.run("testdrive", "source-resumption/setup.td")
-        c.run("testdrive", "source-resumption/verify.td")
+    c.run("testdrive", "source-resumption/setup.td")
+    c.run("testdrive", "source-resumption/verify.td")
 
-        # Disabled due to https://github.com/MaterializeInc/materialize/issues/20819
-        # assert (
-        #    find_source_resume_upper(
-        #        c,
-        #        "0",
-        #    )
-        #    == None
-        # )
+    # Disabled due to https://github.com/MaterializeInc/materialize/issues/20819
+    # assert (
+    #    find_source_resume_upper(
+    #        c,
+    #        "0",
+    #    )
+    #    == None
+    # )
 
-        c.kill("clusterd")
-        c.up("clusterd")
-        c.sleep(10)
+    c.kill("clusterd")
+    c.up("clusterd")
+    c.sleep(10)
 
-        # Verify the same data is query-able, and that we can make forward progress
-        c.run("testdrive", "source-resumption/verify.td")
-        c.run("testdrive", "source-resumption/re-ingest-and-verify.td")
+    # Verify the same data is query-able, and that we can make forward progress
+    c.run("testdrive", "source-resumption/verify.td")
+    c.run("testdrive", "source-resumption/re-ingest-and-verify.td")
 
-        # the first clusterd instance ingested 3 messages, so our
-        # upper is at the 4th offset (0-indexed)
+    # the first clusterd instance ingested 3 messages, so our
+    # upper is at the 4th offset (0-indexed)
 
-        # Disabled due to https://github.com/MaterializeInc/materialize/issues/20819
-        # assert (
-        #    find_source_resume_upper(
-        #        c,
-        #        "0",
-        #    )
-        #    == 3
-        # )
+    # Disabled due to https://github.com/MaterializeInc/materialize/issues/20819
+    # assert (
+    #    find_source_resume_upper(
+    #        c,
+    #        "0",
+    #    )
+    #    == 3
+    # )
 
 
 def find_source_resume_upper(c: Composition, partition_id: str) -> int | None:

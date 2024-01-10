@@ -157,14 +157,14 @@ def run_one_failpoint(c: Composition, failpoint: str, action: str) -> None:
 
 
 def workflow_compaction(c: Composition) -> None:
-    with c.override(
+    c.override(
         Materialized(options=["--metrics-scraping-interval=1s"]),
-    ):
-        c.up("materialized")
+    )
+    c.up("materialized")
 
-        c.run("testdrive", "compaction/compaction.td")
+    c.run("testdrive", "compaction/compaction.td")
 
-        c.kill("materialized")
+    c.kill("materialized")
 
     c.rm("materialized", "testdrive", destroy_volumes=True)
 

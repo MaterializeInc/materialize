@@ -57,7 +57,7 @@ class KafkaTransactionLogGreaterThan1:
 
         c.up("testdrive", persistent=True)
 
-        with c.override(
+        c.override(
             Kafka(
                 name="badkafka",
                 environment=[
@@ -79,11 +79,11 @@ class KafkaTransactionLogGreaterThan1:
                     "--kafka-addr=badkafka",
                 ],
             ),
-        ):
-            c.up("zookeeper", "badkafka", "schema-registry", "materialized")
-            self.populate(c)
-            self.assert_error(c, "transaction error", "running a single Kafka broker")
-            c.down(sanity_restart_mz=False)
+        )
+        c.up("zookeeper", "badkafka", "schema-registry", "materialized")
+        self.populate(c)
+        self.assert_error(c, "transaction error", "running a single Kafka broker")
+        c.down(sanity_restart_mz=False)
 
     def populate(self, c: Composition) -> None:
         # Create a source and a sink
@@ -140,20 +140,20 @@ class KafkaDisruption:
         c.up("testdrive", persistent=True)
         c.up("redpanda", "materialized", "clusterd")
 
-        with c.override(
+        c.override(
             Testdrive(
                 no_reset=True,
                 seed=seed,
                 entrypoint_extra=["--initial-backoff=1s", "--backoff-factor=0"],
             )
-        ):
-            self.populate(c)
-            self.breakage(c, seed)
-            self.assert_error(c, self.expected_error)
+        )
+        self.populate(c)
+        self.breakage(c, seed)
+        self.assert_error(c, self.expected_error)
 
-            if self.fixage:
-                self.fixage(c, seed)
-                self.assert_recovery(c)
+        if self.fixage:
+            self.fixage(c, seed)
+            self.assert_recovery(c)
 
     def populate(self, c: Composition) -> None:
         # Create a source and a sink
@@ -248,20 +248,20 @@ class KafkaSinkDisruption:
         c.up("testdrive", persistent=True)
         c.up("redpanda", "materialized", "clusterd")
 
-        with c.override(
+        c.override(
             Testdrive(
                 no_reset=True,
                 seed=seed,
                 entrypoint_extra=["--initial-backoff=1s", "--backoff-factor=0"],
             )
-        ):
-            self.populate(c)
-            self.breakage(c, seed)
-            self.assert_error(c, self.expected_error)
+        )
+        self.populate(c)
+        self.breakage(c, seed)
+        self.assert_error(c, self.expected_error)
 
-            if self.fixage:
-                self.fixage(c, seed)
-                self.assert_recovery(c)
+        if self.fixage:
+            self.fixage(c, seed)
+            self.assert_recovery(c)
 
     def populate(self, c: Composition) -> None:
         # Create a source and a sink
@@ -350,20 +350,20 @@ class PgDisruption:
         c.up("testdrive", persistent=True)
         c.up("postgres", "materialized", "clusterd")
 
-        with c.override(
+        c.override(
             Testdrive(
                 no_reset=True,
                 seed=seed,
                 entrypoint_extra=["--initial-backoff=1s", "--backoff-factor=0"],
             )
-        ):
-            self.populate(c)
-            self.breakage(c, seed)
-            self.assert_error(c, self.expected_error)
+        )
+        self.populate(c)
+        self.breakage(c, seed)
+        self.assert_error(c, self.expected_error)
 
-            if self.fixage:
-                self.fixage(c, seed)
-                self.assert_recovery(c)
+        if self.fixage:
+            self.fixage(c, seed)
+            self.assert_recovery(c)
 
     def populate(self, c: Composition) -> None:
         # Create a source and a sink

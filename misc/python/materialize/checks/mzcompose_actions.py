@@ -82,29 +82,29 @@ class StartMz(MzcomposeAction):
             catalog_store=self.catalog_store,
         )
 
-        with c.override(mz):
-            c.up("materialized" if self.mz_service is None else self.mz_service)
+        c.override(mz)
+        c.up("materialized" if self.mz_service is None else self.mz_service)
 
-            # This should live in ssh.py and alter_connection.py, but accessing the
-            # ssh bastion host from inside a check is not possible currently.
-            for i in range(4):
-                ssh_tunnel_name = f"ssh_tunnel_{i}"
-                setup_default_ssh_test_connection(
-                    c, ssh_tunnel_name, mz_service=self.mz_service
-                )
+        # This should live in ssh.py and alter_connection.py, but accessing the
+        # ssh bastion host from inside a check is not possible currently.
+        for i in range(4):
+            ssh_tunnel_name = f"ssh_tunnel_{i}"
+            setup_default_ssh_test_connection(
+                c, ssh_tunnel_name, mz_service=self.mz_service
+            )
 
-            mz_version = MzVersion.parse_mz(c.query_mz_version(service=self.mz_service))
-            if self.tag:
-                assert (
-                    self.tag == mz_version
-                ), f"Materialize version mismatch, expected {self.tag}, but got {mz_version}"
-            else:
-                version_cargo = MzVersion.parse_cargo()
-                assert (
-                    version_cargo == mz_version
-                ), f"Materialize version mismatch, expected {version_cargo}, but got {mz_version}"
+        mz_version = MzVersion.parse_mz(c.query_mz_version(service=self.mz_service))
+        if self.tag:
+            assert (
+                self.tag == mz_version
+            ), f"Materialize version mismatch, expected {self.tag}, but got {mz_version}"
+        else:
+            version_cargo = MzVersion.parse_cargo()
+            assert (
+                version_cargo == mz_version
+            ), f"Materialize version mismatch, expected {version_cargo}, but got {mz_version}"
 
-            e.current_mz_version = mz_version
+        e.current_mz_version = mz_version
 
 
 class ConfigureMz(MzcomposeAction):
@@ -221,11 +221,11 @@ class KillMz(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        with c.override(Materialized(name=self.mz_service)):
-            c.kill(self.mz_service, wait=True)
+        c.override(Materialized(name=self.mz_service))
+        c.kill(self.mz_service, wait=True)
 
-            if self.capture_logs:
-                c.capture_logs(self.mz_service)
+        if self.capture_logs:
+            c.capture_logs(self.mz_service)
 
 
 class Down(MzcomposeAction):
@@ -280,11 +280,11 @@ class KillClusterdCompute(MzcomposeAction):
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
-        with c.override(Clusterd(name="clusterd_compute_1")):
-            c.kill("clusterd_compute_1")
+        c.override(Clusterd(name="clusterd_compute_1"))
+        c.kill("clusterd_compute_1")
 
-            if self.capture_logs:
-                c.capture_logs("clusterd_compute_1")
+        if self.capture_logs:
+            c.capture_logs("clusterd_compute_1")
 
 
 class StartClusterdCompute(MzcomposeAction):
@@ -302,8 +302,8 @@ class StartClusterdCompute(MzcomposeAction):
             )
         print(f"Starting Compute using image {clusterd.config.get('image')}")
 
-        with c.override(clusterd):
-            c.up("clusterd_compute_1")
+        c.override(clusterd)
+        c.up("clusterd_compute_1")
 
 
 class RestartRedpandaDebezium(MzcomposeAction):

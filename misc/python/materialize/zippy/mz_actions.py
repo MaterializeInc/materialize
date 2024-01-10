@@ -67,15 +67,15 @@ class MzStart(Action):
             f"Starting Mz with additional_system_parameter_defaults = {self.additional_system_parameter_defaults}"
         )
 
-        with c.override(
+        c.override(
             Materialized(
                 external_minio="toxiproxy",
                 external_cockroach="toxiproxy",
                 sanity_restart=False,
                 additional_system_parameter_defaults=self.additional_system_parameter_defaults,
             )
-        ):
-            c.up("materialized")
+        )
+        c.up("materialized")
 
         for config_param in [
             "max_tables",

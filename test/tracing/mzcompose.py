@@ -81,33 +81,33 @@ def workflow_with_otel(c: Composition) -> None:
 
 
 def workflow_without_otel(c: Composition) -> None:
-    with c.override(Materialized()):
-        c.up("materialized")
-        port = c.port("materialized", 6878)
+    c.override(Materialized())
+    c.up("materialized")
+    port = c.port("materialized", 6878)
 
-        # Start with fastpath
-        info = requests.get(f"http://localhost:{port}/api/tracing").json()
-        assert info["current_level_filter"] == "info"
+    # Start with fastpath
+    info = requests.get(f"http://localhost:{port}/api/tracing").json()
+    assert info["current_level_filter"] == "info"
 
-        # update the stderr config
-        c.sql(
-            "ALTER SYSTEM SET log_filter = 'foo=debug,info'",
-            user="mz_system",
-            port=6877,
-            print_statement=False,
-        )
-        info = requests.get(f"http://localhost:{port}/api/tracing").json()
-        assert info["current_level_filter"] == "debug"
+    # update the stderr config
+    c.sql(
+        "ALTER SYSTEM SET log_filter = 'foo=debug,info'",
+        user="mz_system",
+        port=6877,
+        print_statement=False,
+    )
+    info = requests.get(f"http://localhost:{port}/api/tracing").json()
+    assert info["current_level_filter"] == "debug"
 
-        # make sure we can go back to normal
-        c.sql(
-            "ALTER SYSTEM SET log_filter = 'info'",
-            user="mz_system",
-            port=6877,
-            print_statement=False,
-        )
-        info = requests.get(f"http://localhost:{port}/api/tracing").json()
-        assert info["current_level_filter"] == "info"
+    # make sure we can go back to normal
+    c.sql(
+        "ALTER SYSTEM SET log_filter = 'info'",
+        user="mz_system",
+        port=6877,
+        print_statement=False,
+    )
+    info = requests.get(f"http://localhost:{port}/api/tracing").json()
+    assert info["current_level_filter"] == "info"
 
 
 def workflow_clusterd(c: Composition) -> None:

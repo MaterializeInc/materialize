@@ -119,7 +119,7 @@ def workflow_kafka(c: Composition, redpanda: bool = False) -> None:
     # Combined with using a large cluster in kafka-source.td, this ensures that
     # we only create one SSH tunnel per Kafka broker, rather than one SSH tunnel
     # per Kafka broker per worker.
-    with c.override(SshBastionHost(max_startups="2")):
+    with c.override_scope(SshBastionHost(max_startups="2")):
 
         dependencies = ["materialized", "ssh-bastion-host"]
         if redpanda:
@@ -161,7 +161,7 @@ def workflow_kafka_restart_replica(c: Composition, redpanda: bool = False) -> No
     # Combined with using a large cluster in kafka-source.td, this ensures that
     # we only create one SSH tunnel per Kafka broker, rather than one SSH tunnel
     # per Kafka broker per worker.
-    with c.override(SshBastionHost(max_startups="2")):
+    with c.override_scope(SshBastionHost(max_startups="2")):
 
         dependencies = ["materialized", "ssh-bastion-host"]
         if redpanda:
@@ -207,7 +207,7 @@ def workflow_kafka_sink(c: Composition, redpanda: bool = False) -> None:
     # Combined with using a large cluster in kafka-source.td, this ensures that
     # we only create one SSH tunnel per Kafka broker, rather than one SSH tunnel
     # per Kafka broker per worker.
-    with c.override(SshBastionHost(max_startups="2")):
+    with c.override_scope(SshBastionHost(max_startups="2")):
 
         dependencies = ["materialized", "ssh-bastion-host"]
         if redpanda:

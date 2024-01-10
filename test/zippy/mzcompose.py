@@ -144,7 +144,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     random.seed(args.seed)
 
-    with c.override(
+    c.override(
         Cockroach(
             image=f"cockroachdb/cockroach:{args.cockroach_tag}",
             # Workaround for #19276
@@ -168,43 +168,43 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ),
         # Override so seed gets respected
         Toxiproxy(seed=random.randrange(2**63)),
-    ):
-        toxiproxy_start(c, jitter)
+    )
+    toxiproxy_start(c, jitter)
 
-        c.up("materialized")
+    c.up("materialized")
 
-        c.sql(
-            "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
+    c.sql(
+        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
 
-        c.sql(
-            """
-            CREATE CLUSTER storage REPLICAS (r2 (
-                STORAGECTL ADDRESSES ['storaged:2100'],
-                STORAGE ADDRESSES ['storaged:2103'],
-                COMPUTECTL ADDRESSES ['storaged:2101'],
-                COMPUTE ADDRESSES ['storaged:2102'],
-                WORKERS 4
-            ))
+    c.sql(
         """
-        )
+        CREATE CLUSTER storage REPLICAS (r2 (
+            STORAGECTL ADDRESSES ['storaged:2100'],
+            STORAGE ADDRESSES ['storaged:2103'],
+            COMPUTECTL ADDRESSES ['storaged:2101'],
+            COMPUTE ADDRESSES ['storaged:2102'],
+            WORKERS 4
+        ))
+    """
+    )
 
-        setup_default_ssh_test_connection(c, "zippy_ssh")
+    setup_default_ssh_test_connection(c, "zippy_ssh")
 
-        c.rm("materialized")
+    c.rm("materialized")
 
-        c.up("testdrive", persistent=True)
+    c.up("testdrive", persistent=True)
 
-        print("Generating test...")
-        test = Test(
-            scenario=scenario_class(),
-            actions=args.actions,
-            max_execution_time=args.max_execution_time,
-        )
-        print("Running test...")
-        test.run(c)
+    print("Generating test...")
+    test = Test(
+        scenario=scenario_class(),
+        actions=args.actions,
+        max_execution_time=args.max_execution_time,
+    )
+    print("Running test...")
+    test.run(c)
 
 
 def toxiproxy_start(c: Composition, jitter: int) -> None:

@@ -56,8 +56,8 @@ class Docker(Executor):
         self._composition.kill("materialized")
         # Make sure we are restarting Materialized() with the
         # same parameters (docker tag, SIZE) it was initially started with
-        with self._composition.override(self._materialized):
-            self._composition.up("materialized")
+        self._composition.override(self._materialized)
+        self._composition.up("materialized")
         return None
 
     def Td(self, input: str) -> Any:

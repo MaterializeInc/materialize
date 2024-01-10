@@ -82,7 +82,7 @@ def workflow_default(c: Composition) -> None:
         c.up("testdrive", persistent=True)
 
         # Assert that the default max_result_size is served when sync is disabled.
-        with c.override(Materialized()):
+        with c.override_scope(Materialized()):
             c.up("materialized")
             c.testdrive("\n".join(["> SHOW max_result_size", "1073741824"]))
             c.stop("materialized")
@@ -108,7 +108,7 @@ def workflow_default(c: Composition) -> None:
         sleep(3)
 
         # Assert that the value is as expected after the initial parameter sync.
-        with c.override(
+        with c.override_scope(
             Materialized(
                 environment_extra=[
                     f"MZ_LAUNCHDARKLY_SDK_KEY={LAUNCHDARKLY_SDK_KEY}",
@@ -125,7 +125,7 @@ def workflow_default(c: Composition) -> None:
 
         # Assert that the last value is persisted and available upon restart,
         # even if the parameter sync loop is not running.
-        with c.override(Materialized()):
+        with c.override_scope(Materialized()):
             c.up("materialized")
             c.testdrive("\n".join(["> SHOW max_result_size", "2147483648"]))
             c.stop("materialized")

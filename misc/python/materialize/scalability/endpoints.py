@@ -61,9 +61,9 @@ class PostgresContainer(Endpoint):
 
     def up(self) -> None:
         self.composition.down(destroy_volumes=True)
-        with self.composition.override(Postgres()):
-            self.composition.up("postgres")
-            self._port = self.composition.default_port("postgres")
+        self.composition.override(Postgres())
+        self.composition.up("postgres")
+        self._port = self.composition.default_port("postgres")
 
     def try_load_version(self) -> str:
         return POSTGRES_ENDPOINT_NAME
@@ -166,11 +166,9 @@ class MaterializeContainer(MaterializeNonRemote):
         self.lift_limits()
 
     def up_internal(self) -> None:
-        with self.composition.override(
-            Materialized(image=self.image, sanity_restart=False)
-        ):
-            self.composition.up("materialized")
-            self._port = self.composition.default_port("materialized")
+        self.composition.override(Materialized(image=self.image, sanity_restart=False))
+        self.composition.up("materialized")
+        self._port = self.composition.default_port("materialized")
 
     def __str__(self) -> str:
         return (

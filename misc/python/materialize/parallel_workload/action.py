@@ -1210,7 +1210,7 @@ class KillAction(Action):
         # Otherwise getting failure on "up" locally
         time.sleep(1)
         self.system_parameters = self.system_param_fn(self.system_parameters)
-        with self.composition.override(
+        self.composition.override(
             Materialized(
                 restart="on-failure",
                 external_minio="toxiproxy",
@@ -1220,8 +1220,8 @@ class KillAction(Action):
                 sanity_restart=self.sanity_restart,
                 additional_system_parameter_defaults=self.system_parameters,
             )
-        ):
-            self.composition.up("materialized", detach=True)
+        )
+        self.composition.up("materialized", detach=True)
         time.sleep(self.rng.uniform(120, 240))
         return True
 

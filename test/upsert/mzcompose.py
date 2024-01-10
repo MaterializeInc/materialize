@@ -112,7 +112,7 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
         environment_extra=materialized_environment_extra,
     )
 
-    with c.override(testdrive, materialized):
+    with c.override_scope(testdrive, materialized):
         c.up(*dependencies)
 
         if args.replicas > 1:
@@ -210,7 +210,7 @@ def workflow_rehydration(c: Composition) -> None:
             ),
         ),
     ]:
-        with c.override(
+        with c.override_scope(
             mz,
             clusterd,
             Testdrive(no_reset=True, consistent_seed=True),
@@ -259,7 +259,7 @@ def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> Non
     c.kill("clusterd1")
     c.up(*dependencies)
     c.run("testdrive", "failpoint/00-reset.td")
-    with c.override(
+    with c.override_scope(
         Testdrive(no_reset=True, consistent_seed=True),
     ):
         c.run("testdrive", "failpoint/01-setup.td")
@@ -267,7 +267,7 @@ def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> Non
         c.run("testdrive", "failpoint/02-source.td")
         c.kill("clusterd1")
 
-        with c.override(
+        with c.override_scope(
             # Start clusterd with failpoint
             Clusterd(
                 name="clusterd1",
@@ -319,7 +319,7 @@ def workflow_incident_49(c: Composition) -> None:
             ),
         ),
     ]:
-        with c.override(
+        with c.override_scope(
             mz,
             Testdrive(no_reset=True, consistent_seed=True),
         ):
@@ -379,7 +379,7 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
     ]
 
     for testdrive_file, drop_stmt, cluster_dropped in scenarios:
-        with c.override(
+        with c.override_scope(
             Testdrive(no_reset=True),
         ):
             c.up("testdrive", persistent=True)
@@ -422,7 +422,7 @@ def workflow_autospill(c: Composition) -> None:
         "clusterd1",
     ]
 
-    with c.override(
+    with c.override_scope(
         Materialized(
             options=[
                 "--orchestrator-process-scratch-directory=/mzdata/source_data",
@@ -490,7 +490,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.down(destroy_volumes=True)
     c.up("redpanda", "materialized", "clusterd1")
     # initial hydration
-    with c.override(
+    with c.override_scope(
         Testdrive(no_reset=True, consistent_seed=True, default_timeout=f"{5 * 60}s"),
         Materialized(
             options=[
@@ -585,7 +585,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
             ),
         ]
         for scenario_name, mz_configs in scenarios:
-            with c.override(
+            with c.override_scope(
                 Materialized(
                     options=[
                         "--orchestrator-process-scratch-directory=/scratch",

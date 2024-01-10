@@ -143,7 +143,7 @@ def test_upgrade_from_version(
             external_cockroach=True,
             catalog_store="stash",
         )
-        with c.override(mz_from):
+        with c.override_scope(mz_from):
             c.up("materialized")
     else:
         c.up("materialized")
@@ -176,7 +176,7 @@ def test_upgrade_from_version(
     c.rm("materialized")
     c.up("materialized")
 
-    with c.override(
+    with c.override_scope(
         Testdrive(
             postgres_stash="cockroach",
             validate_catalog_store="stash",
