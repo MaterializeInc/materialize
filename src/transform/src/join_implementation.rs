@@ -25,7 +25,7 @@ use mz_expr::{
     MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
 use mz_ore::cast::{CastFrom, CastLossy, TryCastFrom};
-use mz_ore::soft_assert_or_log;
+use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 
 use crate::attribute::cardinality::{FactorizerVariable, SymExp};
@@ -576,7 +576,7 @@ impl JoinImplementation {
                 }
                 // If we can't plan a delta join, plan a differential join.
                 Err(err) => {
-                    tracing::error!("delta planning failed: {err}");
+                    soft_panic_or_log!("delta planning failed: {err}");
                     tracing::debug!(
                         plan = ?differential_query_plan,
                         "picking differential query plan (delta planning failed)");
