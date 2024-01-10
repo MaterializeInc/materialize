@@ -293,7 +293,7 @@ where
         // beyond the given target timestamp do we remove stashed outstanding
         // reads, which drops the capability which will eventually allow the
         // downstream frontier to advance.
-        let mut _outstanding_reads: Vec<OutstandingRead<T>> = Vec::new();
+        let mut outstanding_reads = Vec::new();
 
         // We likely have an initial outstanding read.
         if let Some(empty_to) = empty_to.as_option() {
@@ -303,12 +303,12 @@ where
                 fallback_cap = ?cap.first().unwrap().time(),
                 "initial outstanding read, up to empty_to!");
 
-            let _outstanding_read = OutstandingRead {
+            let outstanding_read = OutstandingRead {
                 cap: cap.delayed(&as_of),
                 target_ts: empty_to.clone(),
             };
 
-            // outstanding_reads.push(outstanding_read);
+            outstanding_reads.push(outstanding_read);
         } else {
             debug!(
                 empty_to = ?empty_to,
@@ -316,18 +316,14 @@ where
                 fallback_cap = ?cap.first().unwrap().time(),
                 "initial outstanding read, up to as_of!");
 
-            let _outstanding_read = OutstandingRead {
+            let outstanding_read = OutstandingRead {
                 cap: cap.delayed(&as_of),
                 target_ts: as_of.clone(),
             };
 
-            // outstanding_reads.push(outstanding_read);
+            outstanding_reads.push(outstanding_read);
         }
-
-
-        let mut read_data_to = empty_to;
         let mut output_progress_exclusive = T::minimum();
-
 
         loop {
             tokio::select! {
@@ -338,19 +334,56 @@ where
                     );
                     match data_event {
                        Event::Data(_data_cap, data) => {
+                           let ts = _data_cap.time();
 
-                           let valid_cap = cap.delayed(cap.first().expect("no output cap"));
+                           // SUBTLE: We see if this is a data read that we have
+                           // learned about from the txns state machine before.
+                           // This is the case when the data timestamp is less
+                           // than the target_ts of an outstanding read. If so,
+                           // we use the capability that we stored with this
+                           // outstanding read.
+                           //
+                           let valid_cap = outstanding_reads
+                               .iter()
+                               .filter(|read| ts < &read.target_ts)
+                               .min_by_key(|read| &read.target_ts)
+                               .map(|read| &read.cap);
 
-                           debug!(
-                               "{} {:.9} {}/{} emitting data: {:?}",
-                               name,
-                               data_id.to_string(),
-                               worker_idx,
-                               num_workers,
-                               data,
-                           );
+                           // SUBTLE, continued: If this is not a read we have
+                           // learned about before, we use the current output
+                           // capability. Because this operator reads from both
+                           // the data input and the txns input concurrently it
+                           // can happen that a read shows up before we learn
+                           // about it. This is not a problem, though, the
+                           // output capability is valid, since all that
+                           // learning about it from the txns input could do is
+                           // downgrade the output capability some more and/or
+                           // put in place an outstanding read that has a
+                           // capability that is >= the current output
+                           // capability.
+                           let valid_cap = match valid_cap {
+                               Some(valid_cap) => {
+                                   debug!(
+                                       ts = ?ts,
+                                       as_of = ?as_of,
+                                       outstanding_reads = ?outstanding_reads,
+                                       fallback_cap = ?cap.first().unwrap().time(),
+                                       "using cap from oustanding read: {:?}!", valid_cap.time());
+                                   valid_cap
+                               },
+                               None => {
+                                   let valid_cap = cap.first().expect("no output cap");
+                                   debug!(
+                                       ts = ?ts,
+                                       as_of = ?as_of,
+                                       outstanding_reads = ?outstanding_reads,
+                                       fallback_cap = ?cap.first().unwrap().time(),
+                                       "no cap from outstanding read cap! using fallback cap {:?}", valid_cap.time());
+                                   valid_cap
+                               }
+                           };
 
-                           passthrough_output.give_container(&valid_cap, data).await;
+                           passthrough_output.give_container(valid_cap, data).await;
                        }
                        Event::Progress(progress) => {
                            // We reached the empty frontier! Shut down.
@@ -374,6 +407,29 @@ where
                                );
                                cap.downgrade(Antichain::from_elem(output_progress_exclusive.clone()));
                            }
+
+                           debug!(
+                               outstanding_reads = ?outstanding_reads,
+                               input_progress_exclusive = ?input_progress_exclusive,
+                               "{} {:.9} {}/{} retaining outstanding reads, before",
+                               name,
+                               data_id.to_string(),
+                               worker_idx,
+                               num_workers,
+                           );
+                           // Remove outstanding reads whose `target_ts` has now
+                           // been surpassed. That is, we retain those
+                           // outstanding reads for which this is not the case.
+                           outstanding_reads.retain(|read| &read.target_ts > input_progress_exclusive);
+                           debug!(
+                               outstanding_reads = ?outstanding_reads,
+                               input_progress_exclusive = ?input_progress_exclusive,
+                               "{} {:.9} {}/{} retaining outstanding reads, after",
+                               name,
+                               data_id.to_string(),
+                               worker_idx,
+                               num_workers,
+                           );
                        }
                     }
                 }
@@ -386,22 +442,10 @@ where
                 }
             }
 
-            if !read_data_to.less_equal(&output_progress_exclusive) {
-                debug!(
-                    read_data_to = ?read_data_to,
-                    output_progress_exclusive = ?output_progress_exclusive,
-                    "{} {:.9} {}/{} not yet beyond read_data_to",
-                    name,
-                    data_id.to_string(),
-                    worker_idx,
-                    num_workers,
-                );
-                continue;
-            }
 
             if !txns_cache.ready_ge(&output_progress_exclusive) {
                 debug!(
-                    outstanding_reads = ?_outstanding_reads,
+                    outstanding_reads = ?outstanding_reads,
                     state_progress = ?txns_cache.state.progress_exclusive,
                     output_progress_exclusive = ?output_progress_exclusive,
                     "{} {:.9} {}/{} txns_cache not yet ready",
@@ -456,7 +500,21 @@ where
                         break;
                     }
                     DataListenNext::ReadDataTo(new_target) => {
-                        read_data_to = Antichain::from_elem(new_target);
+                        // WIP: Is this correct? I think it mirrors the
+                        // previous behaviour where, when we saw this, we
+                        // switched over to reading from the data input,
+                        // that is we were not downgrading out capability in
+                        // reaction to any txn updates.
+                        //
+                        // Now, we achieve the same behaviour by minting a
+                        // capability at our current frontier/cap, and we
+                        // only drop that once the frontier of the data
+                        // input advances past the `target_ts`.
+                        let outstanding_read = OutstandingRead {
+                            cap: cap.delayed(&output_progress_exclusive),
+                            target_ts: new_target,
+                        };
+                        outstanding_reads.push(outstanding_read);
 
                         // Nothing else from the state machine for
                         // now. Give the operator a chance to ingest
@@ -481,7 +539,7 @@ where
                         assert!(output_progress_exclusive < new_progress);
                         output_progress_exclusive = new_progress.clone();
                         trace!(
-                            "{} {:.9} {}/{} downgrading cap to {:?}, based on logical progress",
+                            "{} {:.9} {}/{} downgrading cap to {:?}",
                             name,
                             data_id.to_string(),
                             worker_idx,
