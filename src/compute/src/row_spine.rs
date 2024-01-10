@@ -133,50 +133,46 @@ mod container {
         fn copy(&mut self, item: Self::ReadItem<'_>) {
             if let Some(batch) = self.batches.last_mut() {
                 let success = batch.try_push(item.bytes);
-                if !success {
-                    // double the lengths from `batch`.
-                    let item_cap = 2 * batch.offsets.len();
-                    // New byte capacity should be in the range 2MB - 128MB, and at least the item length.
-                    let mut byte_cap = 2 * batch.storage.capacity();
-                    byte_cap = std::cmp::max(byte_cap, 2 << 20);
-                    byte_cap = std::cmp::min(byte_cap, 128 << 20);
-                    byte_cap = std::cmp::max(byte_cap, item.bytes.len());
-                    let mut new_batch = DatumBatch::with_capacities(item_cap, byte_cap);
-                    assert!(new_batch.try_push(item.bytes));
-                    self.offsets.push(self.len());
-                    self.batches.push(new_batch);
+                if success {
+                    return;
                 }
             }
-        }
 
-        fn with_capacity(size: usize) -> Self {
-            Self {
-                batches: vec![DatumBatch::with_capacities(size, size)],
-                offsets: vec![0],
-            }
-        }
-
-        fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
-            let mut item_cap = 1;
-            let mut byte_cap = 0;
-            for batch in cont1.batches.iter() {
-                item_cap += batch.offsets.len() - 1;
-                byte_cap += batch.storage.len();
-            }
-            for batch in cont2.batches.iter() {
-                item_cap += batch.offsets.len() - 1;
-                byte_cap += batch.storage.len();
-            }
-
-            // TODO: should we limit `item_cap` to avoid an inappropriately large allocation?
-            // It would be "when we cross the `128 << 20` byte boundary" or something like that.
+            // By default, we use zero capacities if we have no batches already present.
+            let (mut item_cap, mut byte_cap) = self
+                .batches
+                .last()
+                .map(|b| (b.offsets.len(), b.storage.capacity()))
+                .unwrap_or((0, 0));
+            // Double the previous "capacities" hoping that these track likely use.
+            // The byte capacity should be great because it drives `copy` acceptance,
+            // but the item capacity is a bit of a guess and there may be resizing.
+            item_cap = 2 * item_cap;
+            byte_cap = 2 * byte_cap;
+            // New byte capacity should be in the range 2MB - 128MB, and at least the item length.
             byte_cap = std::cmp::max(byte_cap, 2 << 20);
             byte_cap = std::cmp::min(byte_cap, 128 << 20);
+            byte_cap = std::cmp::max(byte_cap, item.bytes.len());
+            let mut new_batch = DatumBatch::with_capacities(item_cap, byte_cap);
+            assert!(new_batch.try_push(item.bytes));
+            self.offsets.push(self.len());
+            self.batches.push(new_batch);
+        }
 
+        fn with_capacity(_size: usize) -> Self {
+            // This structure starts at a reasonable capacity and never resized its allocations.
+            // We judged it relatively harmless to restart at that capacity and grow, rather than
+            // navigate the two different capacities (items and bytes) and some glitchy start-up
+            // logic around mis-sized capacities (if the first copy would fail).
             Self {
-                batches: vec![DatumBatch::with_capacities(item_cap, byte_cap)],
-                offsets: vec![0],
+                batches: Vec::new(),
+                offsets: Vec::new(),
             }
+        }
+
+        fn merge_capacity(_cont1: &Self, _cont2: &Self) -> Self {
+            // Same explanation as `with_capacity`: we believe the default behavior is good enough.
+            Self::with_capacity(0)
         }
 
         fn index(&self, index: usize) -> Self::ReadItem<'_> {
