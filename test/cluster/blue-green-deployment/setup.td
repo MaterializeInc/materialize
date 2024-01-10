@@ -27,14 +27,18 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
 > DROP SCHEMA IF EXISTS prod CASCADE
 > DROP SCHEMA IF EXISTS prod_deploy CASCADE
 
-> CREATE SCHEMA prod
-> CREATE SOURCE prod.counter IN CLUSTER prod FROM LOAD GENERATOR counter (TICK INTERVAL '0.01s')
-> CREATE MATERIALIZED VIEW prod.counter_mv IN CLUSTER prod AS SELECT count(*) FROM prod.counter
-> CREATE DEFAULT INDEX IN CLUSTER prod ON prod.counter
-> CREATE SOURCE prod.tpch
-  IN CLUSTER prod
-  FROM LOAD GENERATOR TPCH (SCALE FACTOR 1)
+# For now sources are not considered in blue-green deployments, so create them separately
+> DROP SOURCE IF EXISTS counter
+> CREATE SOURCE counter FROM LOAD GENERATOR counter (TICK INTERVAL '0.1s')
+
+> DROP SOURCE IF EXISTS tpch
+> CREATE SOURCE tpch
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1)
   FOR ALL TABLES
+
+> CREATE SCHEMA prod
+> CREATE MATERIALIZED VIEW prod.counter_mv IN CLUSTER prod AS SELECT count(*) FROM counter
+> CREATE DEFAULT INDEX IN CLUSTER prod ON counter
 > CREATE MATERIALIZED VIEW prod.tpch_mv
   IN CLUSTER prod AS
   SELECT
@@ -50,7 +54,7 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
     count(*) AS count_order,
     'old' as state
   FROM
-    prod.lineitem
+    lineitem
   WHERE
     l_shipdate <= date '1998-12-01' - interval '90' day
   GROUP BY
