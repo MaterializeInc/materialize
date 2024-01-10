@@ -96,6 +96,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Run Materialize with this git tag on port 26875 (for workloads that compare two MZ instances)",
     )
     parser.add_argument(
+        "--grammar", type=str, help="Override the default grammar of the workload"
+    )
+    parser.add_argument(
+        "--starting-rule",
+        type=str,
+        help="Override the default starting-rule for the workload",
+    )
+    parser.add_argument(
         "--duration",
         type=int,
         help="Run the Workload for the specifid time in seconds",
@@ -174,8 +182,11 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
         else []
     )
 
-    duration = args.duration if args.duration else workload.duration
+    duration = args.duration if args.duration is not None else workload.duration
     assert duration is not None
+
+    grammar = args.grammar if args.grammar is not None else workload.grammar
+    assert grammar is not None
 
     env_extra = {"RQG_DEBUG": "1"} if args.debug else {}
 
@@ -195,9 +206,12 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
                     "gentest.pl",
                     "--dsn1=dbi:Pg:dbname=materialize;host=mz_this;user=materialize;port=6875",
                     *dsn2,
-                    f"--grammar={workload.grammar}",
+                    f"--grammar={grammar}",
                     f"--validator={workload.validator}"
                     if workload.validator is not None
+                    else "",
+                    f"--starting-rule={args.starting_rule}"
+                    if args.starting_rule is not None
                     else "",
                     "--queries=10000000",
                     f"--threads={workload.threads}",
