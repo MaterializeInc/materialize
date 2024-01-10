@@ -98,7 +98,8 @@ the pieces of data.
 
 ### `execution-began`
 
-We already collect this.
+We already collect this [in
+`handle_execute`](https://github.com/MaterializeInc/materialize/blob/4ac31d85b7/src/adapter/src/coord/command_handler.rs#L407-L408).
 
 ### `storage-dependencies-ready` / `compute-dependencies-ready`
 
@@ -112,6 +113,9 @@ IDs. Concretely, the Controller will gain a function like:
 fn add_watch_set(&mut self, id: Box<Any>, global_ids: Vec<GlobalId>, ts: Timestamp);
 ```
 
+The `id` here is arbitrary; the `Controller` does not attempt to
+interpret it.
+
 The Controller will then be expected to return responses of the form:
 
 ``` rust
@@ -123,9 +127,16 @@ WatchSetFulfilled {
 when the write frontier for all the global IDs in the set has passed
 `ts`. The coordinator will then emit the corresponding events.
 
+This is a new variant of the `ControllerResponse` enum, and contains
+the arbitrary ID that was passed to `add_watch_set`.
+
 ### `execution-finished`
 
-We already collect this.
+We already collect this in various places; the exact place it's logged
+depends on the type of statement. When various statements are
+considered finished is documented in the [Coordinator
+Interface](https://github.com/MaterializeInc/materialize/blob/4ac31d85b7/doc/developer/reference/adapter/coord_interface.md)
+document.
 
 ### `last-row-returned`
 
