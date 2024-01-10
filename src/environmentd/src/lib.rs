@@ -391,7 +391,10 @@ impl Listeners {
         )
         .await?;
 
-        let catalog_kind_impl_ld = get_catalog_kind_ld_value(&remote_system_parameters)?;
+        let catalog_kind_impl_ld =
+            get_ld_value(CATALOG_KIND_IMPL.name(), &remote_system_parameters, |x| {
+                CatalogKind::from_str(x, true)
+            })?;
 
         'leader_promotion: {
             let Some(deploy_generation) = config.deploy_generation else {
@@ -491,10 +494,13 @@ impl Listeners {
                 None,
             )
             .await?;
+        let persist_txn_tables_current_ld =
+            get_ld_value(PERSIST_TXN_TABLES.name(), &remote_system_parameters, |x| {
+                PersistTxnTablesImpl::from_str(x).map_err(|x| x.to_string())
+            })?;
         // Get the value from Launch Darkly as of the last time this environment
-        // was running. (Ideally it would be the current value, but that's
-        // harder: we don't want to block startup on it if LD is down and it
-        // would also require quite a bit of abstraction breakage.)
+        // was running. (Ideally it would be the above current value, but that's
+        // not guaranteed: we don't want to block startup on it if LD is down.)
         let persist_txn_tables_stash_ld = adapter_storage.get_persist_txn_tables().await?;
 
         // Load the adapter catalog from disk.
@@ -536,14 +542,18 @@ impl Listeners {
         if let Some(value) = persist_txn_tables_stash_ld {
             persist_txn_tables = value;
         }
+        if let Some(value) = persist_txn_tables_current_ld {
+            persist_txn_tables = value;
+        }
         if let Some(value) = config.persist_txn_tables_cli {
             persist_txn_tables = value;
         }
         info!(
-            "persist_txn_tables value of {} computed from default {:?} catalog {:?} and flag {:?}",
+            "persist_txn_tables value of {} computed from default {:?} catalog {:?} LD {:?} and flag {:?}",
             persist_txn_tables,
             persist_txn_tables_default,
             persist_txn_tables_stash_ld,
+            persist_txn_tables_current_ld,
             config.persist_txn_tables_cli,
         );
 
@@ -822,30 +832,22 @@ async fn catalog_opener(
     })
 }
 
-fn get_catalog_kind_ld_value(
+fn get_ld_value<V>(
+    name: &str,
     remote_system_parameters: &Option<BTreeMap<String, OwnedVarInput>>,
-) -> Result<Option<CatalogKind>, anyhow::Error> {
+    parse: impl Fn(&str) -> Result<V, String>,
+) -> Result<Option<V>, anyhow::Error> {
     remote_system_parameters
         .as_ref()
-        .and_then(|params| params.get(CATALOG_KIND_IMPL.name()))
+        .and_then(|params| params.get(name))
         .map(|value| match value.borrow() {
             VarInput::Flat(s) => Ok(s),
             VarInput::SqlSet([s]) => Ok(s.as_str()),
-            VarInput::SqlSet(v) => Err(anyhow!(
-                "Invalid remote value for {}: {:?}",
-                CATALOG_KIND_IMPL.name(),
-                v,
-            )),
+            VarInput::SqlSet(v) => Err(anyhow!("Invalid remote value for {}: {:?}", name, v,)),
         })
         .transpose()?
         .map(|x| {
-            CatalogKind::from_str(x, true).map_err(|err| {
-                anyhow!(
-                    "failed to parse remote value for {}: {}",
-                    CATALOG_KIND_IMPL.name(),
-                    err
-                )
-            })
+            parse(x).map_err(|err| anyhow!("failed to parse remote value for {}: {}", name, err))
         })
         .transpose()
 }
