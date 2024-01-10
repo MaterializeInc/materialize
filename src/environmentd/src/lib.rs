@@ -45,7 +45,8 @@ use mz_secrets::SecretsController;
 use mz_server_core::{ConnectionStream, ListenerHandle, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::{
-    CatalogKind, ConnectionCounter, Var, VarInput, CATALOG_KIND_IMPL, PERSIST_TXN_TABLES,
+    CatalogKind, ConnectionCounter, OwnedVarInput, Var, VarInput, CATALOG_KIND_IMPL,
+    PERSIST_TXN_TABLES,
 };
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use tokio::sync::oneshot;
@@ -390,29 +391,7 @@ impl Listeners {
         )
         .await?;
 
-        let catalog_kind_impl_ld = remote_system_parameters
-            .as_ref()
-            .and_then(|params| params.get(CATALOG_KIND_IMPL.name()))
-            .map(|value| match value.borrow() {
-                VarInput::Flat(s) => Ok(s),
-                VarInput::SqlSet([s]) => Ok(s.as_str()),
-                VarInput::SqlSet(v) => Err(anyhow!(
-                    "Invalid remote value for {}: {:?}",
-                    CATALOG_KIND_IMPL.name(),
-                    v,
-                )),
-            })
-            .transpose()?
-            .map(|x| {
-                CatalogKind::from_str(x, true).map_err(|err| {
-                    anyhow!(
-                        "failed to parse remote value for {}: {}",
-                        CATALOG_KIND_IMPL.name(),
-                        err
-                    )
-                })
-            })
-            .transpose()?;
+        let catalog_kind_impl_ld = get_catalog_kind_ld_value(&remote_system_parameters)?;
 
         'leader_promotion: {
             let Some(deploy_generation) = config.deploy_generation else {
@@ -839,6 +818,34 @@ async fn catalog_opener(
             )
         }
     })
+}
+
+fn get_catalog_kind_ld_value(
+    remote_system_parameters: &Option<BTreeMap<String, OwnedVarInput>>,
+) -> Result<Option<CatalogKind>, anyhow::Error> {
+    remote_system_parameters
+        .as_ref()
+        .and_then(|params| params.get(CATALOG_KIND_IMPL.name()))
+        .map(|value| match value.borrow() {
+            VarInput::Flat(s) => Ok(s),
+            VarInput::SqlSet([s]) => Ok(s.as_str()),
+            VarInput::SqlSet(v) => Err(anyhow!(
+                "Invalid remote value for {}: {:?}",
+                CATALOG_KIND_IMPL.name(),
+                v,
+            )),
+        })
+        .transpose()?
+        .map(|x| {
+            CatalogKind::from_str(x, true).map_err(|err| {
+                anyhow!(
+                    "failed to parse remote value for {}: {}",
+                    CATALOG_KIND_IMPL.name(),
+                    err
+                )
+            })
+        })
+        .transpose()
 }
 
 fn catalog_kind_impl_reconcile(
