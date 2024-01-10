@@ -14,7 +14,7 @@ set -euo pipefail
 . misc/shlib/shlib.bash
 
 mzcompose() {
-    bin/ci-builder run stable bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
+    stdbuf --output=L --error=L bin/ci-builder run stable bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
 
 service=${BUILDKITE_PLUGIN_MZCOMPOSE_RUN:-default}
@@ -78,6 +78,6 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
     mzcompose cp balancerd:/usr/local/bin/balancerd coverage/ || true
 fi
 
-ci_uncollapsed_heading ":docker: Running \`mzcompose run ${run_args[*]}\`"
+ci_uncollapsed_heading ":docker: Running \`bin/mzcompose --find \"$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION\" run ${run_args[*]}\`"
 
 mzcompose run "${run_args[@]}" |& tee run.log

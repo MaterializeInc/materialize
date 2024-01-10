@@ -564,7 +564,7 @@ ArrangeBy[[]]
 ReduceAccumulable
 
 > DROP TABLE t1 CASCADE
-> SET cluster=default
+> SET cluster=quickstart
 > DROP CLUSTER linear_join CASCADE
 
 # from negative-multiplicities.td
@@ -693,195 +693,54 @@ ReduceMinsMaxes
 # Check mz_introspection
 > SET CLUSTER TO mz_introspection
 
-> SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
-"AccumulableErrorCheck"
-"AccumulableErrorCheck"
-"Arrange export iterative err"
-"Arrange export iterative"
-"Arrange recursive err"
-"ArrangeAccumulable [val: empty]"
-"ArrangeAccumulable [val: empty]"
-"ArrangeBy[[Column(0), Column(2)]]"
-"ArrangeBy[[Column(0)]] [val: empty]"
-"ArrangeBy[[Column(0)]] [val: empty]"
-"ArrangeBy[[Column(0)]] [val: empty]"
-"ArrangeBy[[Column(0)]]-errors"
-"ArrangeBy[[Column(0)]]-errors"
-"ArrangeBy[[Column(0)]]-errors"
-"ArrangeBy[[Column(0)]]-errors"
-"ArrangeBy[[Column(0)]]-errors"
-"ArrangeBy[[Column(0)]]-errors"
-"ArrangeBy[[Column(0)]]-errors"
-"ArrangeBy[[Column(0)]]-errors"
-"ArrangeBy[[Column(0)]]-errors"
-"ArrangeBy[[Column(0)]]-errors"
-"ArrangeBy[[Column(0)]]-errors"
-"ArrangeBy[[Column(0)]]-errors"
-"ArrangeBy[[Column(0)]]-errors"
-"ArrangeBy[[Column(0)]]-errors"
-"ArrangeBy[[Column(0)]]-errors"
-"ArrangeBy[[Column(0)]]-errors"
-"ArrangeBy[[Column(0)]]-errors"
-"ArrangeBy[[Column(0)]]-errors"
-"ArrangeBy[[Column(0)]]-errors"
-"ArrangeBy[[Column(0)]]-errors"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(0)]]"
-"ArrangeBy[[Column(1), Column(3)]]"
-"ArrangeBy[[Column(1), Column(3)]]"
-"ArrangeBy[[Column(1)]]-errors"
-"ArrangeBy[[Column(1)]]-errors"
-"ArrangeBy[[Column(1)]]-errors"
-"ArrangeBy[[Column(1)]]-errors"
-"ArrangeBy[[Column(1)]]"
-"ArrangeBy[[Column(1)]]"
-"ArrangeBy[[Column(1)]]"
-"ArrangeBy[[Column(1)]]"
-"ArrangeBy[[Column(1)]]"
-"ArrangeBy[[Column(1)]]"
-"ArrangeBy[[Column(1)]]"
-"ArrangeBy[[Column(1)]]"
-"ArrangeBy[[Column(1)]]"
-"ArrangeBy[[Column(2)]]-errors"
-"ArrangeBy[[Column(2)]]-errors"
-"ArrangeBy[[Column(2)]]-errors"
-"ArrangeBy[[Column(2)]]-errors"
-"ArrangeBy[[Column(2)]]-errors"
-"ArrangeBy[[Column(2)]]-errors"
-"ArrangeBy[[Column(2)]]-errors"
-"ArrangeBy[[Column(2)]]-errors"
-"ArrangeBy[[Column(2)]]-errors"
-"ArrangeBy[[Column(2)]]"
-"ArrangeBy[[Column(2)]]"
-"ArrangeBy[[Column(2)]]"
-"ArrangeBy[[Column(2)]]"
-"ArrangeBy[[Column(2)]]"
-"ArrangeBy[[Column(2)]]"
-"ArrangeBy[[Column(2)]]"
-"ArrangeBy[[Column(2)]]"
-"ArrangeBy[[Column(2)]]"
-"ArrangeBy[[Column(2)]]"
-"ArrangeBy[[Column(2)]]"
-"ArrangeBy[[Column(2)]]"
-"ArrangeBy[[Column(3)]]"
-"ArrangeBy[[Column(4)]]-errors"
-"ArrangeBy[[Column(4)]]-errors"
-"ArrangeBy[[Column(4)]]"
-"ArrangeBy[[Column(4)]]"
-"ArrangeBy[[Column(4)]]"
-"ArrangeBy[[Column(4)]]"
-"ArrangeBy[[Column(4)]]"
-"ArrangeBy[[Column(5)]]-errors"
-"ArrangeBy[[Column(5)]]-errors"
-"ArrangeBy[[Column(5)]]"
-"ArrangeBy[[Column(5)]]"
-"ArrangeBy[[Column(8)]]-errors"
-"ArrangeBy[[Column(8)]]"
-"ArrangeBy[[Column(9)]]"
-"Arranged DistinctBy [val: empty]"
-"Arranged DistinctBy [val: empty]"
-"Arranged DistinctBy [val: empty]"
-"Arranged DistinctBy [val: empty]"
-"Arranged DistinctBy [val: empty]"
-"Arranged DistinctBy [val: empty]"
-"Arranged DistinctBy [val: empty]"
-"Arranged DistinctBy [val: empty]"
-"Arranged ReduceInaccumulable"
-"Arranged TopK input"
-"Arranged TopK input"
-"Arranged TopK input"
-"Arranged TopK input"
-"Arranged TopK input"
-"Arranged TopK input"
-"Arranged TopK input"
-"Arranged TopK input"
-"Arranged TopK input"
-"Arranged TopK input"
-"Arranged TopK input"
-"Arranged TopK input"
-"Arranged TopK input"
-"Arranged TopK input"
-"Arranged TopK input"
-"Arranged TopK input"
-"Distinct recursive err"
-"DistinctBy [val: empty]"
-"DistinctBy [val: empty]"
-"DistinctBy [val: empty]"
-"DistinctBy [val: empty]"
-"DistinctBy [val: empty]"
-"DistinctBy [val: empty]"
-"DistinctBy [val: empty]"
-"DistinctBy [val: empty]"
-"DistinctByErrorCheck"
-"DistinctByErrorCheck"
-"DistinctByErrorCheck"
-"DistinctByErrorCheck"
-"DistinctByErrorCheck"
-"DistinctByErrorCheck"
-"DistinctByErrorCheck"
-"DistinctByErrorCheck"
-"JoinStage"
-"JoinStage"
-"ReduceAccumulable"
-"ReduceAccumulable"
-"Reduced TopK input"
-"Reduced TopK input"
-"Reduced TopK input"
-"Reduced TopK input"
-"Reduced TopK input"
-"Reduced TopK input"
-"Reduced TopK input"
-"Reduced TopK input"
-"Reduced TopK input"
-"Reduced TopK input"
-"Reduced TopK input"
-"Reduced TopK input"
-"Reduced TopK input"
-"Reduced TopK input"
-"Reduced TopK input"
-"Reduced TopK input"
-"ReduceInaccumulable Error Check"
-"ReduceInaccumulable"
+> SELECT name, count(*) FROM (SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name) GROUP BY name;
+"AccumulableErrorCheck"                       3
+"Arrange export iterative err"                1
+"Arrange export iterative"                    1
+"Arrange recursive err"                       1
+"Arrange ReduceCollation"                     1
+"Arrange ReduceMinsMaxes"                     1
+"ArrangeAccumulable [val: empty]"             3
+"ArrangeBy[[Column(0), Column(2)]]"           1
+"ArrangeBy[[Column(0)]] [val: empty]"         2
+"ArrangeBy[[Column(0)]]-errors"              20
+"ArrangeBy[[Column(0)]]"                     37
+"ArrangeBy[[Column(1), Column(3)]]"           2
+"ArrangeBy[[Column(1)]]-errors"               4
+"ArrangeBy[[Column(1)]]"                      9
+"ArrangeBy[[Column(2)]]-errors"               9
+"ArrangeBy[[Column(2)]]"                     14
+"ArrangeBy[[Column(3)]]"                      1
+"ArrangeBy[[Column(4)]]-errors"               2
+"ArrangeBy[[Column(4)]]"                      5
+"ArrangeBy[[Column(5)]]-errors"               2
+"ArrangeBy[[Column(5)]]"                      2
+"ArrangeBy[[Column(8)]]-errors"               1
+"ArrangeBy[[Column(8)]]"                      1
+"Arranged DistinctBy [val: empty]"            7
+"Arranged MinsMaxesHierarchical input"        7
+"Arranged ReduceInaccumulable"                1
+"Arranged TopK input"                        16
+"Distinct recursive err"                      1
+"DistinctBy [val: empty]"                     7
+"DistinctByErrorCheck"                        7
+"JoinStage"                                   5
+"ReduceAccumulable"                           3
+"ReduceCollation Errors"                      1
+"ReduceCollation"                             1
+"Reduced Fallibly MinsMaxesHierarchical"      7
+"Reduced TopK input"                         16
+"ReduceInaccumulable Error Check"             1
+"ReduceInaccumulable"                         1
+"ReduceMinsMaxes"                             1
 
-> SET CLUSTER TO default
+> SET CLUSTER TO quickstart
 
 # Check dataflows of our logging infrastructure with log_logging
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET log_filter = 'debug'
-ALTER CLUSTER default SET (MANAGED = false);
-CREATE CLUSTER REPLICA default.replica SIZE = '2', INTROSPECTION DEBUGGING = true;
+ALTER CLUSTER quickstart SET (MANAGED = false);
+CREATE CLUSTER REPLICA quickstart.replica SIZE = '2', INTROSPECTION DEBUGGING = true;
 
 > SET cluster_replica = replica;
 
@@ -916,6 +775,6 @@ CREATE CLUSTER REPLICA default.replica SIZE = '2', INTROSPECTION DEBUGGING = tru
 "Arrange Timely(Operates)"
 "Arrange Timely(Parks)"
 
-# Reset default cluster into its previous state so that other tests can expect it to be unchanged
+# Reset quickstart cluster into its previous state so that other tests can expect it to be unchanged
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-DROP CLUSTER REPLICA default.replica
+DROP CLUSTER REPLICA quickstart.replica

@@ -54,7 +54,39 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 20  session_id  uuid
 21  redacted_sql  text
 22  prepared_at  timestamp␠with␠time␠zone
-23  statement_kind  text
+23  statement_type  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_aws_connections' ORDER BY position
+----
+1  id  text
+2  endpoint  text
+3  region  text
+4  access_key_id  text
+5  access_key_id_secret_id  text
+6  secret_access_key_secret_id  text
+7  session_token  text
+8  session_token_secret_id  text
+9  assume_role_arn  text
+10  assume_role_session_name  text
+11  principal  text
+12  external_id  text
+13  example_trust_policy  jsonb
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_aws_privatelink_connection_status_history' ORDER BY position
+----
+1  occurred_at  timestamp␠with␠time␠zone
+2  connection_id  text
+3  status  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_aws_privatelink_connection_statuses' ORDER BY position
+----
+1  id  text
+2  name  text
+3  last_status_change_at  timestamp␠with␠time␠zone
+4  status  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_frontiers' ORDER BY position
@@ -158,6 +190,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  write_frontier  mz_timestamp
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_hydration_statuses' ORDER BY position
+----
+1  object_id  text
+2  replica_id  text
+3  hydrated  boolean
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_kafka_sources' ORDER BY position
 ----
 1  id  text
@@ -214,6 +253,17 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 8  action_type  text
 9  object_id  text
 10  created_at  timestamp␠with␠time␠zone
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_notices_redacted' ORDER BY position
+----
+1  notice_type  text
+2  message  text
+3  hint  text
+4  action  text
+5  action_type  text
+6  object_id  text
+7  created_at  timestamp␠with␠time␠zone
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_postgres_sources' ORDER BY position
@@ -371,7 +421,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  privilege_type  text
 
 query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sink_statistics' ORDER BY position
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sink_statistics_per_worker' ORDER BY position
 ----
 1  id  text
 2  worker_id  uint8
@@ -379,6 +429,15 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 4  messages_committed  uint8
 5  bytes_staged  uint8
 6  bytes_committed  uint8
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sink_statistics' ORDER BY position
+----
+1  id  text
+2  messages_staged  uint8
+3  messages_committed  uint8
+4  bytes_staged  uint8
+5  bytes_committed  uint8
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sink_statuses' ORDER BY position
@@ -401,18 +460,31 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  details  jsonb
 
 query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_statistics' ORDER BY position
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_statistics_per_worker' ORDER BY position
 ----
 1  id  text
 2  worker_id  uint8
 3  snapshot_committed  boolean
 4  messages_received  uint8
-5  updates_staged  uint8
-6  updates_committed  uint8
-7  bytes_received  uint8
+5  bytes_received  uint8
+6  updates_staged  uint8
+7  updates_committed  uint8
 8  envelope_state_bytes  uint8
 9  envelope_state_records  uint8
 10  rehydration_latency  interval
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_statistics' ORDER BY position
+----
+1  id  text
+2  snapshot_committed  boolean
+3  messages_received  uint8
+4  bytes_received  uint8
+5  updates_staged  uint8
+6  updates_committed  uint8
+7  envelope_state_bytes  uint8
+8  envelope_state_records  uint8
+9  rehydration_latency  interval
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_statuses' ORDER BY position
@@ -435,11 +507,11 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  details  jsonb
 
 query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_aws_privatelink_connection_status_history' ORDER BY position
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_statement_lifecycle_history' ORDER BY position
 ----
-1  occurred_at  timestamp␠with␠time␠zone
-2  connection_id  text
-3  status  text
+1  statement_id  uuid
+2  event_type  text
+3  occurred_at  timestamp␠with␠time␠zone
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_subscriptions' ORDER BY position
@@ -461,8 +533,9 @@ query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_active_peeks' ORDER BY position
 ----
 1  id  uuid
-2  index_id  text
-3  time  mz_timestamp
+2  object_id  text
+3  type  text
+4  time  mz_timestamp
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_arrangement_sharing' ORDER BY position
@@ -611,8 +684,9 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_peek_durations_histogram' ORDER BY position
 ----
-1  duration_ns  uint8
-2  count  numeric
+1  type  text
+2  duration_ns  uint8
+3  count  numeric
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_records_per_dataflow' ORDER BY position
@@ -674,6 +748,7 @@ mz_arrangement_sizes
 mz_arrangement_sizes_per_worker
 mz_aws_connections
 mz_aws_privatelink_connection_status_history
+mz_aws_privatelink_connection_statuses
 mz_cluster_links
 mz_cluster_replica_frontiers
 mz_cluster_replica_heartbeats
@@ -724,6 +799,7 @@ mz_dataflows_per_worker
 mz_expected_group_size_advice
 mz_frontiers
 mz_global_frontiers
+mz_hydration_statuses
 mz_internal_cluster_replicas
 mz_kafka_sources
 mz_materialization_lag
@@ -780,13 +856,16 @@ mz_show_sinks
 mz_show_sources
 mz_show_system_privileges
 mz_sink_statistics
+mz_sink_statistics_per_worker
 mz_sink_status_history
 mz_sink_statuses
 mz_source_statistics
+mz_source_statistics_per_worker
 mz_source_status_history
 mz_source_statuses
 mz_statement_execution_history
 mz_statement_execution_history_redacted
+mz_statement_lifecycle_history
 mz_storage_shards
 mz_storage_usage_by_shard
 mz_subscriptions

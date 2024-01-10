@@ -71,6 +71,20 @@ user-id = 160111
 user-login = "aws-sdk-rust-ci"
 user-name = "AWS SDK Rust Bot"
 
+[[publisher.aws-sdk-sso]]
+version = "1.7.0"
+when = "2023-12-14"
+user-id = 160111
+user-login = "aws-sdk-rust-ci"
+user-name = "AWS SDK Rust Bot"
+
+[[publisher.aws-sdk-ssooidc]]
+version = "1.9.0"
+when = "2023-12-21"
+user-id = 160111
+user-login = "aws-sdk-rust-ci"
+user-name = "AWS SDK Rust Bot"
+
 [[publisher.aws-sdk-sts]]
 version = "1.7.0"
 when = "2023-12-14"
@@ -165,6 +179,13 @@ user-name = "AWS SDK Rust Bot"
 [[publisher.bstr]]
 version = "0.2.14"
 when = "2020-10-18"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.bstr]]
+version = "1.6.0"
+when = "2023-07-05"
 user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
@@ -393,6 +414,12 @@ user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
 
+[[publisher.launchdarkly-server-sdk]]
+version = "1.0.0"
+when = "2022-12-07"
+user-id = 144672
+user-login = "LaunchDarklyReleaseBot"
+
 [[publisher.link-cplusplus]]
 version = "1.0.6"
 when = "2021-11-13"
@@ -536,6 +563,13 @@ user-name = "Andrew Gallant"
 [[publisher.regex-automata]]
 version = "0.1.9"
 when = "2020-03-09"
+user-id = 189
+user-login = "BurntSushi"
+user-name = "Andrew Gallant"
+
+[[publisher.regex-automata]]
+version = "0.3.9"
+when = "2023-09-30"
 user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
@@ -1246,6 +1280,12 @@ notes = "HTTP type definitions. Single sound unsafe usage, no ambient capabiliti
 who = "Johan Andersson <opensource@embark-studios.com>"
 criteria = "safe-to-deploy"
 version = "1.0.1"
+notes = "No unsafe usage or ambient capabilities"
+
+[[audits.embark-studios.audits.jsonwebtoken]]
+who = "Johan Andersson <opensource@embark-studios.com>"
+criteria = "safe-to-deploy"
+version = "8.3.0"
 notes = "No unsafe usage or ambient capabilities"
 
 [[audits.embark-studios.audits.no-std-compat]]

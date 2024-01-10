@@ -174,7 +174,7 @@ GRANT CREATE ON DATABASE materialize, d1, d2 TO r6, r7, r9;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-GRANT CREATE ON CLUSTER default TO r6, r7, r9, r11;
+GRANT CREATE ON CLUSTER quickstart TO r6, r7, r9, r11;
 ----
 COMPLETE 0
 
@@ -4812,7 +4812,7 @@ REVOKE CREATE ON DATABASE materialize, d1, d2 FROM r6, r7, r9;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE CREATE ON CLUSTER default FROM r6, r7, r9, r11;
+REVOKE CREATE ON CLUSTER quickstart FROM r6, r7, r9, r11;
 ----
 COMPLETE 0
 

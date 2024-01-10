@@ -10,6 +10,7 @@
 import sys
 from collections.abc import Iterable
 
+from materialize import ui
 from materialize.feature_benchmark.aggregation import Aggregation
 from materialize.feature_benchmark.comparator import Comparator
 from materialize.feature_benchmark.executor import Executor
@@ -17,12 +18,14 @@ from materialize.feature_benchmark.filter import Filter
 from materialize.feature_benchmark.measurement import Measurement, MeasurementType
 from materialize.feature_benchmark.scenario import Scenario
 from materialize.feature_benchmark.termination import TerminationCondition
+from materialize.mz_version import MzVersion
 
 
 class Benchmark:
     def __init__(
         self,
         mz_id: int,
+        mz_version: MzVersion,
         scenario: type[Scenario],
         executor: Executor,
         filter: Filter,
@@ -33,6 +36,7 @@ class Benchmark:
     ) -> None:
         self._scale = scale
         self._mz_id = mz_id
+        self._mz_version = mz_version
         self._scenario = scenario
         self._executor = executor
         self._filter = filter
@@ -55,11 +59,11 @@ class Benchmark:
                 scale = float(self._scale)
 
         scenario_class = self._scenario
-        scenario = scenario_class(scale=scale)
+        scenario = scenario_class(scale=scale, mz_version=self._mz_version)
         name = scenario.name()
 
-        print(
-            f"Sizing in effect for scenario {name}: scale = {scenario.scale()} , N = {scenario.n()}"
+        ui.header(
+            f"Running scenario {name}, scale = {scenario.scale()}, N = {scenario.n()}"
         )
 
         # Run the shared() section once for both Mzs under measurement

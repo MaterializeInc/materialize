@@ -269,12 +269,29 @@ impl Client {
         let jwk = jwks.keys.first().ok_or_else(|| Error::EmptyJwks)?;
         let token = self.auth().await?;
 
+        let mut validation = Validation::new(Algorithm::RS256);
+
+        // We don't validate the audience because:
+        //
+        //   1. We don't have easy access to the expected audience ID here.
+        //
+        //   2. There is no meaningful security improvement to doing so, because
+        //      Frontegg always sets the audience to the ID of the workspace
+        //      that issued the token. Since we only trust the signing keys from
+        //      a single Frontegg workspace, the audience is redundant.
+        //
+        // For details, see this conversation [0] from the Materialize–Frontegg
+        // shared Slack channel on 1 January 2024.
+        //
+        // [0]: https://materializeinc.slack.com/archives/C02940WNMRQ/p1704131331041669
+        validation.validate_aud = false;
+
         let token_data = decode::<Claims>(
             &token,
             &DecodingKey::from_jwk(jwk).map_err(|_| Error::ConvertingJwks)?,
-            &Validation::new(Algorithm::RS256),
+            &validation,
         )
-        .map_err(|_| Error::DecodingClaims)?;
+        .map_err(Error::DecodingClaims)?;
 
         Ok(token_data.claims)
     }

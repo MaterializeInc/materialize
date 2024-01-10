@@ -196,7 +196,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
         cluster_replica_name: &'b QualifiedReplica,
     ) -> Result<&dyn CatalogClusterReplica<'a>, CatalogError>;
 
-    /// Resolves a partially-specified item name.
+    /// Resolves a partially-specified item name, that is NOT a function or
+    /// type. (For resolving functions or types, please use
+    /// [SessionCatalog::resolve_function] or [SessionCatalog::resolve_type].)
     ///
     /// If the partial name has a database component, it searches only the
     /// specified database; otherwise, it searches the active database. If the
@@ -231,6 +233,13 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
         }
         self.resolve_item(name)
     }
+
+    /// Gets a type named `name` from exactly one of the system schemas.
+    ///
+    /// # Panics
+    /// - If `name` is not an entry in any system schema
+    /// - If more than one system schema has an entry named `name`.
+    fn get_system_type(&self, name: &str) -> &dyn CatalogItem;
 
     /// Gets an item by its ID.
     fn try_get_item(&self, id: &GlobalId) -> Option<&dyn CatalogItem>;
@@ -528,7 +537,7 @@ pub trait CatalogCluster<'a> {
 }
 
 /// A cluster replica in a [`SessionCatalog`]
-pub trait CatalogClusterReplica<'a> {
+pub trait CatalogClusterReplica<'a>: Debug {
     /// Returns the name of the cluster replica.
     fn name(&self) -> &str;
 
@@ -540,6 +549,9 @@ pub trait CatalogClusterReplica<'a> {
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
+
+    /// Returns whether or not the replica is internal
+    fn internal(&self) -> bool;
 }
 
 /// An item in a [`SessionCatalog`].

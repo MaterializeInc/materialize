@@ -393,7 +393,7 @@ ALTER SYSTEM SET max_aws_privatelink_connections = 42
 42
 
 $ postgres-execute connection=mz_system
-DROP CLUSTER default CASCADE
+DROP CLUSTER quickstart CASCADE
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_replicas_per_cluster = 100

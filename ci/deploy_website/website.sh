@@ -31,6 +31,7 @@ declare -A shortlinks=(
     [docs]="https://materialize.com/docs"
     [non-materialized-error]="https://materialize.com/docs/lts/sql/create-view/#querying-non-materialized-views"
     [sink-key-selection]="https://materialize.com/docs/sql/create-sink/kafka/#upsert-key-selection"
+    [aws-connection-role-trust-policy]="https://materialize.com/docs/sql/create-connection/#permissions"
     [chat]="https://join.slack.com/t/materializecommunity/shared_invite/zt-ljdufufo-PTwVPmgzlZtI7RIQLDrAiA"
     [pricing]="https://materialize.com/pdfs/pricing.pdf"
 )

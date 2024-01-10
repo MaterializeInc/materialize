@@ -76,7 +76,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "• *PR:* <${{ github.event.pull_request.html_url }}|${{ github.event.pull_request.title }}>"
+                    "text": ${{ toJSON(format('• *PR:* <{0}|{1}>', github.event.pull_request.html_url, github.event.pull_request.title)) }}
                   }
                 },
                 {

@@ -30,15 +30,15 @@ class DropDefaultReplica(Action):
             dedent(
                 """
             $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
-            ALTER CLUSTER default SET (MANAGED = false)
-            DROP CLUSTER REPLICA default.r1
+            ALTER CLUSTER quickstart SET (MANAGED = false)
+            DROP CLUSTER REPLICA quickstart.r1
             """
             )
         )
 
 
 class CreateReplica(Action):
-    """Creates a replica on the default cluster."""
+    """Creates a replica on the quickstart cluster."""
 
     @classmethod
     def requires(cls) -> set[type[Capability]]:
@@ -91,7 +91,7 @@ class CreateReplica(Action):
                 dedent(
                     f"""
                 $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
-                CREATE CLUSTER REPLICA default.{self.replica.name} SIZE '{self.replica.size}'
+                CREATE CLUSTER REPLICA quickstart.{self.replica.name} SIZE '{self.replica.size}'
                 """
                 )
             )
@@ -101,7 +101,7 @@ class CreateReplica(Action):
 
 
 class DropReplica(Action):
-    """Drops a replica from the default cluster."""
+    """Drops a replica from the quickstart cluster."""
 
     replica: ReplicaExists | None
 
@@ -128,7 +128,7 @@ class DropReplica(Action):
                 dedent(
                     f"""
                 $ postgres-execute connection=postgres://mz_system:materialize@materialized:6877
-                DROP CLUSTER REPLICA IF EXISTS default.{self.replica.name}
+                DROP CLUSTER REPLICA IF EXISTS quickstart.{self.replica.name}
                 """
                 )
             )

@@ -21,6 +21,152 @@ certificates) can be specified as plain `text`, or also stored as secrets.
 
 ## Source and sink connections
 
+### AWS
+
+{{< private-preview />}}
+
+An Amazon Web Services (AWS) connection provides Materialize with access to an
+Identity and Access Management (IAM) user or role in your AWS account. In the
+future, you will be able to use AWS connections with sources and sinks that
+interact with AWS services, like Amazon Simple Storage Service (S3) and Amazon
+Relational Database Service (RDS).
+
+{{< diagram "create-connection-aws.svg" >}}
+
+#### Connection options {#aws-options}
+
+| <div style="min-width:240px">Field</div>  | Value            | Description
+|-------------------------------------------|------------------|------------------------------
+| `ENDPOINT`                                | `text`           | *Advanced.* Override the default AWS endpoint URL. Allows targeting AWS-compatible services like MinIO.
+| `REGION`                                  | `text`           | The AWS region to connect to.
+| `ACCESS KEY ID`                           | secret or `text` | The access key ID to connect with. Triggers credentials-based authentication.
+| `SECRET ACCESS KEY`                       | secret           | The secret access key corresponding to the specified access key ID.<br><br>Required and only valid when `ACCESS KEY ID` is specified.
+| `SESSION TOKEN`                           | secret or `text` | The session token corresponding to the specified access key ID.<br><br>Only valid when `ACCESS KEY ID` is specified.
+| `ASSUME ROLE ARN`                         | `text`           | The Amazon Resource Name (ARN) of the IAM role to assume. Triggers role assumption-based authentication.
+| `ASSUME ROLE SESSION NAME`                | `text`           | The session name to use when assuming the role.<br><br>Only valid when `ASSUME ROLE ARN` is specified.
+
+#### `WITH` options {#aws-with-options}
+
+Field         | Value     | Description
+--------------|-----------|-------------------------------------
+`VALIDATE`    | `boolean` | Whether [connection validation](#connection-validation) should be performed on connection creation.<br><br>Defaults to `false`.
+
+#### Permissions
+
+{{< warning >}}
+Failing to constrain the external ID in your role trust policy will allow
+other Materialize customers to assume your role and use AWS privileges you
+have granted the role!
+{{< /warning >}}
+
+When using role assumption-based authentication, you must configure a [trust
+policy] on the IAM role that permits Materialize to assume the role.
+
+Materialize always uses the following IAM principal to assume the role:
+
+```
+arn:aws:iam::664411391173:role/MaterializeConnection
+```
+
+Materialize additionally generates an [external ID] which uniquely identifies
+your AWS connection across all Materialize regions. To ensure that other
+Materialize customers cannot assume your role, your IAM trust policy **must**
+constrain access to only the external ID that Materialize generates for the
+connection:
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::664411391173:role/MaterializeConnection"
+            },
+            "Action": "sts:AssumeRole",
+            "Condition": {
+                "StringEquals": {
+                    "sts:ExternalId": "<EXTERNAL ID FOR CONNECTION>"
+                }
+            }
+        }
+    ]
+}
+```
+
+You can retrieve the external ID for the connection, as well as an example trust
+policy, by querying the
+[`mz_internal.mz_aws_connections`](/sql/system-catalog/mz_internal/#mz_aws_connections)
+table:
+
+```sql
+SELECT id, external_id, example_trust_policy FROM mz_internal.mz_aws_connections;
+```
+
+#### Examples
+
+{{< tabs >}}
+{{< tab "Credentials">}}
+To create an AWS connection that uses static access key credentials:
+
+```sql
+CREATE SECRET aws_secret_access_key = '...';
+CREATE CONNECTION aws_credentials TO AWS (
+    ACCESS KEY ID = 'ASIAV2KIV5LPTG6HGXG6',
+    SECRET ACCESS KEY = SECRET aws_secret_access_key
+);
+```
+{{< /tab >}}
+
+{{< tab "Role assumption">}}
+
+In this example, we have created the following IAM role for Materialize to
+assume:
+
+<table>
+<tr>
+<th>Name</th>
+<th>AWS account ID</th>
+<th>Trust policy</th>
+<tr>
+<td><code>WarehouseExport</code></td>
+<td>400121260767</td>
+<td>
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::664411391173:role/MaterializeConnection"
+            },
+            "Action": "sts:AssumeRole",
+            "Condition": {
+                "StringEquals": {
+                    "sts:ExternalId": "mz_00000000-0000-0000-0000-000000000000_u0"
+                }
+            }
+        }
+    ]
+}
+```
+
+</td>
+</tr>
+</table>
+
+To create an AWS connection that will assume the `WarehouseExport` role:
+
+```sql
+CREATE CONNECTION aws_role_assumption TO AWS (
+    ASSUME ROLE ARN = 'arn:aws:iam::400121260767:role/WarehouseExport',
+);
+```
+{{< /tab >}}
+{{< /tabs >}}
+
 ### Kafka
 
 A Kafka connection establishes a link to a [Kafka] cluster. You can use Kafka
@@ -674,6 +820,7 @@ Connection type             | Validated by default |
 PostgreSQL                  | ✓                    |
 Kafka                       | ✓                    |
 Confluent Schema Registry   | ✓                    |
+AWS                         |                      |
 SSH Tunnel                  |                      |
 AWS PrivateLink             |                      |
 
@@ -683,10 +830,10 @@ returned. You can disable connection validation by setting the `VALIDATE`
 option to `false`. This is useful, for example, when the parameters are known
 to be correct but the external system is unavailable at the time of creation.
 
-Connection types that require additional setup steps after creation, like SSH
-tunnel and AWS PrivateLink connections, can be **manually validated** using the
-[`VALIDATE CONNECTION`](/sql/validate-connection) syntax once all setup steps
-are completed.
+Connection types that require additional setup steps after creation, like AWS
+and SSH tunnel connections, can be **manually validated** using the [`VALIDATE
+CONNECTION`](/sql/validate-connection) syntax once all setup steps are
+completed.
 
 ## Privileges
 
@@ -715,3 +862,5 @@ The privileges required to execute this statement are:
 [`mz_ssh_tunnel_connections`]: /sql/system-catalog/mz_catalog/#mz_ssh_tunnel_connections
 [Ed25519 algorithm]: https://ed25519.cr.yp.to
 [latacora-crypto]: https://latacora.micro.blog/2018/04/03/cryptographic-right-answers.html
+[trust policy]: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_terms-and-concepts.html#term_trust-policy
+[external ID]: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html

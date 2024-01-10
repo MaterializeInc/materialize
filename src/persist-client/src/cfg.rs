@@ -13,7 +13,6 @@
 
 use once_cell::sync::Lazy;
 use std::collections::BTreeMap;
-use std::string::ToString;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -147,6 +146,8 @@ pub struct PersistConfig {
     pub critical_downgrade_interval: Duration,
     /// Timeout per connection attempt to Persist PubSub service.
     pub pubsub_connect_attempt_timeout: Duration,
+    /// Timeout per request attempt to Persist PubSub service.
+    pub pubsub_request_timeout: Duration,
     /// Maximum backoff when retrying connection establishment to Persist PubSub service.
     pub pubsub_connect_max_backoff: Duration,
     /// Size of channel used to buffer send messages to PubSub service.
@@ -230,6 +231,7 @@ impl PersistConfig {
             writer_lease_duration: 60 * Duration::from_secs(60),
             critical_downgrade_interval: Duration::from_secs(30),
             pubsub_connect_attempt_timeout: Duration::from_secs(5),
+            pubsub_request_timeout: Duration::from_secs(5),
             pubsub_connect_max_backoff: Duration::from_secs(60),
             pubsub_client_sender_channel_size: 25,
             pubsub_client_receiver_channel_size: 25,
@@ -320,17 +322,21 @@ impl PersistConfig {
             equals: vec![
                 // If we trim the "err" column, then we can't ever use pushdown on a part
                 // (because it could have >0 errors).
-                "err".to_string(),
-                "ts".to_string(),
-                "receivedat".to_string(),
-                "createdat".to_string(),
+                "err".into(),
+                "ts".into(),
+                "receivedat".into(),
+                "createdat".into(),
+                // Fivetran created tables track deleted rows by setting this column.
+                //
+                // See <https://fivetran.com/docs/using-fivetran/features#capturedeletes>.
+                "_fivetran_deleted".into(),
             ],
-            prefixes: vec!["last_".to_string()],
+            prefixes: vec!["last_".into()],
             suffixes: vec![
-                "timestamp".to_string(),
-                "time".to_string(),
-                "_at".to_string(),
-                "_tstamp".to_string(),
+                "timestamp".into(),
+                "time".into(),
+                "_at".into(),
+                "_tstamp".into(),
             ],
         }
     });

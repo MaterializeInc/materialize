@@ -22,7 +22,6 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
@@ -65,6 +64,9 @@ pub enum IntrospectionType {
     StatementExecutionHistory,
     SessionHistory,
     PreparedStatementHistory,
+    // For statement lifecycle logging, which is closely related
+    // to statement logging
+    StatementLifecycleHistory,
 
     // Collections written by the compute controller.
     ComputeDependencies,
@@ -195,6 +197,11 @@ impl<T: Codec64 + Timestamp + Lattice> SnapshotCursor<T> {
     > {
         self.cursor.next().await
     }
+}
+
+#[derive(Debug)]
+pub enum Response<T> {
+    FrontierUpdates(Vec<(GlobalId, Antichain<T>)>),
 }
 
 #[async_trait(?Send)]
@@ -376,8 +383,8 @@ pub trait StorageController: Debug {
         commands: Vec<(GlobalId, Vec<TimestamplessUpdate>)>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
 
-    /// Returns a [`MonotonicAppender`] which is a oneshot-esque struct that can be used to
-    /// monotonically append to the specified [`GlobalId`].
+    /// Returns a [`MonotonicAppender`] which is a channel that can be used to monotonically
+    /// append to the specified [`GlobalId`].
     fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError>;
 
     /// Returns the snapshot of the contents of the local input named `id` at `as_of`.
@@ -463,7 +470,7 @@ pub trait StorageController: Debug {
     ///
     /// This method is **not** guaranteed to be cancellation safe. It **must**
     /// be awaited to completion.
-    async fn process(&mut self) -> Result<(), anyhow::Error>;
+    async fn process(&mut self) -> Result<Option<Response<Self::Timestamp>>, anyhow::Error>;
 
     /// Signal to the controller that the adapter has populated all of its
     /// initial state and the controller can reconcile (i.e. drop) any unclaimed
@@ -535,10 +542,6 @@ pub trait StorageController: Debug {
     /// good and there is no possibility of the old code running concurrently
     /// with the new code.
     async fn init_txns(&mut self, init_ts: Self::Timestamp) -> Result<(), StorageError>;
-
-    /// Returns the timestamp of the latest row for each id in the
-    /// privatelink_connection_status_history table seen on startup
-    fn get_privatelink_status_table_latest(&self) -> &Option<BTreeMap<GlobalId, DateTime<Utc>>>;
 }
 
 /// State maintained about individual collections.
@@ -656,11 +659,12 @@ impl<T: Timestamp> ExportState<T> {
         self.read_capability.is_empty()
     }
 }
-/// A "oneshot"-like channel that allows you to append a set of updates to a pre-defined [`GlobalId`].
+/// A channel that allows you to append a set of updates to a pre-defined [`GlobalId`].
 ///
 /// See `CollectionManager::monotonic_appender` to acquire a [`MonotonicAppender`].
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct MonotonicAppender {
+    /// Channel that sends to a [`tokio::task`] which pushes updates to Persist.
     tx: mpsc::Sender<(Vec<(Row, Diff)>, oneshot::Sender<Result<(), StorageError>>)>,
 }
 
@@ -671,7 +675,7 @@ impl MonotonicAppender {
         MonotonicAppender { tx }
     }
 
-    pub async fn append(self, updates: Vec<(Row, Diff)>) -> Result<(), StorageError> {
+    pub async fn append(&self, updates: Vec<(Row, Diff)>) -> Result<(), StorageError> {
         let (tx, rx) = oneshot::channel();
 
         // Make sure there is space available on the channel.
@@ -694,10 +698,6 @@ impl MonotonicAppender {
         result
     }
 }
-
-// Note(parkmycar): While it technically could be `Clone` we want `MonotonicAppender` to have the
-// same semantics as a oneshot channel, so we specifically don't make it `Clone`.
-static_assertions::assert_not_impl_any!(MonotonicAppender: Clone);
 
 #[cfg(test)]
 mod tests {

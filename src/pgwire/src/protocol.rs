@@ -309,6 +309,7 @@ where
     let machine = StateMachine {
         conn,
         adapter_client,
+        txn_needs_commit: false,
     };
 
     select! {
@@ -428,6 +429,7 @@ enum State {
 struct StateMachine<'a, A> {
     conn: &'a mut FramedConn<A>,
     adapter_client: mz_adapter::SessionClient,
+    txn_needs_commit: bool,
 }
 
 enum SendRowsEndedReason {
@@ -551,17 +553,22 @@ where
                     )
                     .instrument(execute_root_span)
                     .await?;
-                // Close the current transaction if we are in an implicit transaction.
                 // In PostgreSQL, when using the extended query protocol, some statements may
                 // trigger an eager commit of the current implicit transaction,
                 // see: <https://git.postgresql.org/gitweb/?p=postgresql.git&a=commitdiff&h=f92944137>.
-                // In Materialize however, we eagerly commit all statements outside of an explicit
-                // transaction when using the extended query protocol. This allows us to remove
-                // the ambiguity between multiple and single statement implicit transactions when
-                // using the extended query protocol and apply some optimizations to single
-                // statement transactions.
+                //
+                // In Materialize, however, we eagerly commit every statement outside of an explicit
+                // transaction when using the extended query protocol. This allows us to eliminate
+                // the possibility of a multiple statement implicit transaction, which in turn
+                // allows us to apply single-statement optimizations to queries issued in implicit
+                // transactions in the extended query protocol.
+                //
+                // We don't immediately commit here to allow users to page through the portal if
+                // necessary. Committing the transaction would destroy the portal before the next
+                // Execute command has a chance to resume it. So we instead mark the transaction
+                // for commit the next time that `ensure_transaction` is called.
                 if self.adapter_client.session().transaction().is_implicit() {
-                    self.commit_transaction().await?;
+                    self.txn_needs_commit = true;
                 }
                 state
             }
@@ -668,11 +675,15 @@ where
         result
     }
 
-    fn start_transaction(&mut self, stmts: Option<usize>) {
+    async fn ensure_transaction(&mut self, num_stmts: usize) -> Result<(), io::Error> {
+        if self.txn_needs_commit {
+            self.commit_transaction().await?;
+        }
         // start_transaction can't error (but assert that just in case it changes in
         // the future.
-        let res = self.adapter_client.start_transaction(stmts);
+        let res = self.adapter_client.start_transaction(Some(num_stmts));
         assert!(res.is_ok());
+        Ok(())
     }
 
     fn parse_sql<'b>(&self, sql: &'b str) -> Result<Vec<StatementParseResult<'b>>, ErrorResponse> {
@@ -718,7 +729,7 @@ where
             // This needs to be done in the loop instead of once at the top because
             // a COMMIT/ROLLBACK statement needs to start a new transaction on next
             // statement.
-            self.start_transaction(Some(num_stmts));
+            self.ensure_transaction(num_stmts).await?;
 
             match self.one_query(stmt, sql.to_string()).await? {
                 State::Ready => (),
@@ -749,7 +760,7 @@ where
         param_oids: Vec<u32>,
     ) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
-        self.start_transaction(Some(1));
+        self.ensure_transaction(1).await?;
 
         let mut param_types = vec![];
         for oid in param_oids {
@@ -826,6 +837,7 @@ where
     /// End a transaction and report to the user if an error occurred.
     #[instrument(level = "debug", skip_all)]
     async fn end_transaction(&mut self, action: EndTransactionAction) -> Result<(), io::Error> {
+        self.txn_needs_commit = false;
         let resp = self.adapter_client.end_transaction(action).await;
         if let Err(err) = resp {
             self.send(BackendMessage::ErrorResponse(
@@ -846,7 +858,7 @@ where
         result_formats: Vec<Format>,
     ) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
-        self.start_transaction(Some(1));
+        self.ensure_transaction(1).await?;
 
         let aborted_txn = self.is_aborted_txn();
         let stmt = match self
@@ -1019,11 +1031,8 @@ where
             let row_desc = portal.desc.relation_desc.clone();
             match &mut portal.state {
                 PortalState::NotStarted => {
-                    // Start a transaction if we aren't in one. Postgres does this both here and
-                    // in bind. We don't do it in bind because I'm not sure what purpose it would
-                    // serve us (i.e., I'm not aware of a pgtest that would differ between us and
-                    // Postgres).
-                    self.start_transaction(Some(1));
+                    // Start a transaction if we aren't in one.
+                    self.ensure_transaction(1).await?;
                     match self
                         .adapter_client
                         .execute(
@@ -1152,7 +1161,7 @@ where
     #[instrument(level = "debug", skip_all)]
     async fn describe_statement(&mut self, name: &str) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
-        self.start_transaction(Some(1));
+        self.ensure_transaction(1).await?;
 
         let stmt = match self.adapter_client.get_prepared_statement(name).await {
             Ok(stmt) => stmt,
@@ -1178,7 +1187,7 @@ where
     #[instrument(level = "debug", skip_all)]
     async fn describe_portal(&mut self, name: &str) -> Result<State, io::Error> {
         // Start a transaction if we aren't in one.
-        self.start_transaction(Some(1));
+        self.ensure_transaction(1).await?;
 
         let session = self.adapter_client.session();
         let row_desc = session

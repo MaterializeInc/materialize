@@ -49,6 +49,7 @@ The same syntax, supported formats and features can be used to connect to a [Red
 Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
 `TOPIC`                              | `text`    | The Kafka topic you want to subscribe to.
+`GROUP ID PREFIX`                    | `text`    | The prefix of the consumer group ID to use. See [Monitoring consumer lag](#monitoring-consumer-lag).<br>Default: `materialize-{REGION-ID}-{CONNECTION-ID}-{SOURCE_ID}`
 
 ### `WITH` options
 
@@ -281,7 +282,7 @@ CREATE SOURCE kafka_offset
 Note that:
 
 - If fewer offsets than partitions are provided, the remaining partitions will start at offset 0. This is true if you provide `START OFFSET (1)` or `START OFFSET (1, ...)`.
-- If more offsets than partitions are provided, then any partitions added later will incorrectly be read from that offset. So, if you have a single partition, but you provide `START OFFSET (1, 2)`, when you add the second partition you will miss the first 2 records of data.
+- Providing more offsets than partitions is not supported.
 
 #### Time-based offsets
 
@@ -362,22 +363,20 @@ provided solely for the benefit of Kafka monitoring tools.
 {{< /note >}}
 
 Committed offsets are associated with a consumer group specific to the source.
-The ID of the consumer group has a prefix with the following format:
-
-```
-materialize-{REGION-ID}-{CONNECTION-ID}-{SOURCE_ID}
-```
+The ID of the consumer group consists of the prefix configured with the [`GROUP
+ID PREFIX` option](#connection-options) followed by a Materialize-generated
+suffix.
 
 You should not make assumptions about the number of consumer groups that
 Materialize will use to consume from a given source. The only guarantee is that
-the ID of each consumer group will begin with the above prefix.
+the ID of each consumer group will begin with the configured prefix.
 
-The rendered consumer group ID prefix for each Kafka source in the system is
-available in the `group_id_base` column of the [`mz_kafka_sources`] table. To
-look up the `group_id_base` for a source by name, use:
+The consumer group ID prefix for each Kafka source in the system is available in
+the `group_id_prefix` column of the [`mz_kafka_sources`] table. To look up the
+`group_id_prefix` for a source by name, use:
 
 ```sql
-SELECT group_id_base
+SELECT group_id_prefix
 FROM mz_internal.mz_kafka_sources ks
 JOIN mz_sources s ON s.id = ks.id
 WHERE s.name = '<src_name>'
@@ -391,13 +390,7 @@ to perform the following operations on the following resources:
 Operation type | Resource type    | Resource name
 ---------------|------------------|--------------
 Read           | Topic            | The specified `TOPIC` option
-
-To allow Materialize to [commit offsets](#monitoring-consumer-lag) to the Kafka
-broker, Materialize additionally requires access to the following operations:
-
-Operation type | Resource type    | Resource name
----------------|------------------|--------------
-Read           | Group            | `materialize-{REGION-ID}-{CONNECTION-ID}-{SOURCE_ID}*`
+Read           | Group            | All group IDs starting with the specified [`GROUP ID PREFIX` option](#connection-options)
 
 ## Examples
 

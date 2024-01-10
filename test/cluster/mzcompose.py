@@ -21,6 +21,7 @@ from threading import Thread
 import requests
 from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
+from pg8000.exceptions import DatabaseError
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
@@ -75,7 +76,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for i, name in enumerate(c.workflows):
         # incident-70 requires more memory, runs in separate CI step
         # concurrent-connections is too flaky
-        if name in ("default", "test-incident-70", "test-concurrent-connections"):
+        if name in (
+            "default",
+            "test-incident-70",
+            "test-concurrent-connections",
+        ):
             continue
         if shard is None or shard_count is None or i % int(shard_count) == shard:
             with c.test_case(name):
@@ -100,25 +105,31 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     # Create a cluster and verify that tests pass.
     c.up("clusterd1")
     c.up("clusterd2")
-    c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
 
+    # Make sure cluster1 is owned by the system so it doesn't get dropped
+    # between testdrive runs.
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
+        """
+        ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
+
+        DROP CLUSTER IF EXISTS cluster1 CASCADE;
+
+        CREATE CLUSTER cluster1 REPLICAS (
+            replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
+                WORKERS 2
+            )
+        );
+
+        GRANT ALL ON CLUSTER cluster1 TO materialize;
+    """,
         port=6877,
         user="mz_system",
     )
 
-    c.sql(
-        """
-            CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
-            WORKERS 2
-        ));
-    """
-    )
     c.run("testdrive", *args.glob)
 
     # Add a replica to that cluster and verify that tests still pass.
@@ -126,19 +137,18 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("clusterd4")
 
     c.sql(
-        "ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
+        """
+        ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
 
-    c.sql(
-        """CREATE CLUSTER REPLICA cluster1.replica2
+        CREATE CLUSTER REPLICA cluster1.replica2
             STORAGECTL ADDRESSES ['clusterd3:2100', 'clusterd4:2100'],
             STORAGE ADDRESSES ['clusterd3:2103', 'clusterd4:2103'],
             COMPUTECTL ADDRESSES ['clusterd3:2101', 'clusterd4:2101'],
             COMPUTE ADDRESSES ['clusterd3:2102', 'clusterd4:2102'],
-            WORKERS 2
-    """
+            WORKERS 2;
+    """,
+        port=6877,
+        user="mz_system",
     )
     c.run("testdrive", *args.glob)
 
@@ -148,8 +158,10 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.run("testdrive", *args.glob)
 
     # Leave only replica 2 up and verify that tests still pass.
-    c.sql("DROP CLUSTER REPLICA cluster1.replica1")
+    c.sql("DROP CLUSTER REPLICA cluster1.replica1", port=6877, user="mz_system")
     c.run("testdrive", *args.glob)
+
+    c.sql("DROP CLUSTER cluster1 CASCADE", port=6877, user="mz_system")
 
 
 def workflow_test_invalid_compute_reuse(c: Composition) -> None:
@@ -205,7 +217,7 @@ def workflow_test_github_12251(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("materialized")
 
-    start_time = time.process_time()
+    start_time = time.time()
     try:
         c.sql(
             """
@@ -222,7 +234,7 @@ def workflow_test_github_12251(c: Composition) -> None:
         assert "statement timeout" in e.args[0]["M"], e
         # Ensure the statemenet_timeout setting is ~honored
         assert (
-            time.process_time() - start_time < 2
+            time.time() - start_time < 2
         ), "idle_in_transaction_session_timeout not respected"
     else:
         assert False, "unexpected success in test_github_12251"
@@ -1381,15 +1393,15 @@ def workflow_test_remote_storage(c: Composition) -> None:
         c.run("testdrive", "storage/04-after-clusterd-restart.td")
 
 
-def workflow_test_drop_default_cluster(c: Composition) -> None:
-    """Test that the default cluster can be dropped"""
+def workflow_test_drop_quickstart_cluster(c: Composition) -> None:
+    """Test that the quickstart cluster can be dropped"""
 
     c.down(destroy_volumes=True)
     c.up("materialized")
 
-    c.sql("DROP CLUSTER default CASCADE", user="mz_system", port=6877)
+    c.sql("DROP CLUSTER quickstart CASCADE", user="mz_system", port=6877)
     c.sql(
-        "CREATE CLUSTER default REPLICAS (default (SIZE '1'))",
+        "CREATE CLUSTER quickstart REPLICAS (quickstart (SIZE '1'))",
         user="mz_system",
         port=6877,
     )
@@ -1513,17 +1525,28 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
                 """
         $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
         SET CLUSTER TO DEFAULT;
-        CREATE DEFAULT INDEX ON mz_views;
+        CREATE VIEW v_mz_views AS SELECT \
+            id, \
+            oid, \
+            schema_id, \
+            name, \
+            definition, \
+            owner_id, \
+            privileges, \
+            create_sql, \
+            redacted_create_sql \
+        FROM mz_views;
+        CREATE DEFAULT INDEX ON v_mz_views;
 
         > SELECT id FROM mz_indexes WHERE id like 'u%';
-        u1
+        u2
     """
             )
         )
         c.kill("materialized")
 
     with c.override(
-        Testdrive(),
+        Testdrive(no_reset=True),
         Materialized(),
     ):
         c.up("testdrive", persistent=True)
@@ -1532,7 +1555,7 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
             input=dedent(
                 """
         > SELECT id FROM mz_indexes WHERE id like 'u%';
-        u1
+        u2
     """
             )
         )
@@ -1988,13 +2011,13 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
         )
         assert output == expected, f"expected: {expected}, got: {output}"
 
-    subscribe1 = start_subscribe("t1", "default")
-    check_mz_subscriptions((["materialize", "default", "t1"],))
+    subscribe1 = start_subscribe("t1", "quickstart")
+    check_mz_subscriptions((["materialize", "quickstart", "t1"],))
 
     subscribe2 = start_subscribe("t2", "cluster1")
     check_mz_subscriptions(
         (
-            ["materialize", "default", "t1"],
+            ["materialize", "quickstart", "t1"],
             ["materialize", "cluster1", "t2"],
         )
     )
@@ -2002,11 +2025,11 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
     stop_subscribe(subscribe1)
     check_mz_subscriptions((["materialize", "cluster1", "t2"],))
 
-    subscribe3 = start_subscribe("t3", "default")
+    subscribe3 = start_subscribe("t3", "quickstart")
     check_mz_subscriptions(
         (
             ["materialize", "cluster1", "t2"],
-            ["materialize", "default", "t3"],
+            ["materialize", "quickstart", "t3"],
         )
     )
 
@@ -2951,3 +2974,101 @@ def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -
         )
 
         c.run("testdrive", "statement-logging/statement-logging.td")
+
+
+class PropagatingThread(Thread):
+    def run(self):
+        self.exc = None
+        try:
+            self.ret = self._target(*self._args, **self._kwargs)  # type: ignore
+        except BaseException as e:
+            self.exc = e
+
+    def join(self, timeout=None):
+        super().join(timeout)
+        if self.exc:
+            raise self.exc
+        return self.ret
+
+
+def workflow_blue_green_deployment(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Blue/Green Deployment testing, see https://www.notion.so/materialize/Testing-Plan-Blue-Green-Deployments-01528a1eec3b42c3a25d5faaff7a9bf9#f53b51b110b044859bf954afc771c63a"""
+    c.down(destroy_volumes=True)
+
+    running = True
+
+    def selects():
+        runtimes = []
+        try:
+            with c.sql_cursor() as cursor:
+                while running:
+                    total_runtime = 0
+                    queries = [
+                        "SELECT * FROM prod.counter_mv",
+                        "SET CLUSTER = prod; SELECT max(counter) FROM counter",
+                        "SELECT count(*) FROM prod.tpch_mv",
+                    ]
+
+                    for i, query in enumerate(queries):
+                        start_time = time.time()
+                        try:
+                            cursor.execute(query)
+                        except DatabaseError as e:
+                            # Expected
+                            if "cached plan must not change result type" in str(e):
+                                continue
+                            raise e
+                        assert int(cursor.fetchone()[0]) > 0
+                        runtime = time.time() - start_time
+                        assert (
+                            runtime < 5
+                        ), f"query: {query}, runtime spiked to {runtime}"
+                        total_runtime += runtime
+                    runtimes.append(total_runtime)
+        finally:
+            print(f"Query runtimes: {runtimes}")
+
+    def subscribe():
+        cursor = c.sql_cursor()
+        while running:
+            try:
+                cursor.execute("BEGIN")
+                cursor.execute(
+                    "DECLARE subscribe CURSOR FOR SUBSCRIBE (SELECT * FROM prod.counter_mv)"
+                )
+                cursor.execute("FETCH ALL subscribe WITH (timeout='15s')")
+                assert int(cursor.fetchall()[-1][2]) > 0
+                cursor.execute("CLOSE subscribe")
+                cursor.execute("ROLLBACK")
+            except DatabaseError as e:
+                # Expected
+                if "cached plan must not change result type" in str(e):
+                    continue
+                raise e
+
+    with c.override(
+        Testdrive(
+            no_reset=True, default_timeout="300s"
+        ),  # pending dataflows can take a while
+        Clusterd(name="clusterd1"),
+        Clusterd(name="clusterd2"),
+        Materialized(),
+    ):
+        c.up("materialized")
+        c.up("clusterd1")
+        c.up("clusterd2")
+        c.up("clusterd3")
+        c.run("testdrive", "blue-green-deployment/setup.td")
+
+        threads = [PropagatingThread(target=fn) for fn in (selects, subscribe)]
+        for thread in threads:
+            thread.start()
+        time.sleep(10)  # some time to make sure the queries run fine
+        try:
+            c.run("testdrive", "blue-green-deployment/deploy.td")
+        finally:
+            running = False
+            for thread in threads:
+                thread.join()

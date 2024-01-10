@@ -821,6 +821,7 @@ where
                 with_snapshot: se.with_snapshot,
                 up_to: se.up_to,
                 non_null_assertions: se.non_null_assertions,
+                refresh_schedule: se.refresh_schedule,
             };
             sink_exports.insert(id, desc);
         }
@@ -1249,8 +1250,27 @@ where
     ) -> Option<ComputeControllerResponse<T>> {
         match response {
             ComputeResponse::FrontierUpper { id, upper } => {
-                self.handle_frontier_upper(id, upper, replica_id);
-                None
+                let old_upper = self
+                    .compute
+                    .collection(id)
+                    .ok()
+                    .map(|state| state.write_frontier.clone());
+
+                self.handle_frontier_upper(id, upper.clone(), replica_id);
+
+                let new_upper = self
+                    .compute
+                    .collection(id)
+                    .ok()
+                    .map(|state| state.write_frontier.clone());
+
+                if let (Some(old), Some(new)) = (old_upper, new_upper) {
+                    (old != new).then_some(ComputeControllerResponse::FrontierUpper { id, upper })
+                } else {
+                    // this is surprising, but we should already log something in `handle_frontier_upper`,
+                    // so no need to do so here
+                    None
+                }
             }
             ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
                 self.handle_peek_response(uuid, peek_response, otel_ctx, replica_id)

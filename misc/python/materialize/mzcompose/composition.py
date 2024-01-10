@@ -26,6 +26,7 @@ import re
 import ssl
 import subprocess
 import sys
+import threading
 import time
 import traceback
 from collections import OrderedDict
@@ -44,7 +45,7 @@ from pg8000 import Connection, Cursor
 from materialize import MZ_ROOT, mzbuild, spawn, ui
 from materialize.mzcompose import loader
 from materialize.mzcompose.service import Service
-from materialize.mzcompose.services.minio import MINIO_BLOB_URI
+from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.ui import UIError
 
 
@@ -103,6 +104,7 @@ class Composition:
         self.silent = silent
         self.workflows: dict[str, Callable[..., None]] = {}
         self.test_results: OrderedDict[str, Composition.TestResult] = OrderedDict()
+        self.files = {}
 
         if name in self.repo.compositions:
             self.path = self.repo.compositions[name]
@@ -164,9 +166,7 @@ class Composition:
         if munge_services:
             self.dependencies = self._munge_services(self.compose["services"].items())
 
-        # Emit the munged configuration to a temporary file so that we can later
-        # pass it to Docker Compose.
-        self._write_compose()
+        self.files = {}
 
     def _munge_services(
         self, services: list[tuple[str, dict]]
@@ -234,12 +234,6 @@ class Composition:
 
         return deps
 
-    def _write_compose(self) -> None:
-        new_file = TemporaryFile(mode="w")
-        os.set_inheritable(new_file.fileno(), True)
-        yaml.dump(self.compose, new_file)
-        self.file = new_file
-
     def invoke(
         self,
         *args: str,
@@ -274,8 +268,15 @@ class Composition:
             ("--project-name", self.project_name) if self.project_name else ()
         )
 
-        # Make sure file doesn't get changed/deleted while we use it
-        file = self.file
+        # One file per thread to make sure we don't try to read a file which is
+        # not seeked to 0, leading to "empty compose file" errors
+        thread_id = threading.get_ident()
+        file = self.files.get(thread_id)
+        if not file:
+            file = TemporaryFile(mode="w")
+            os.set_inheritable(file.fileno(), True)
+            yaml.dump(self.compose, file)
+            self.files[thread_id] = file
 
         ret = None
         for retry in range(1, max_tries + 1):
@@ -400,7 +401,7 @@ class Composition:
         # config for an `mzbuild` config.
         deps.acquire()
 
-        self._write_compose()
+        self.files = {}
 
         # Ensure image freshness
         self.pull_if_variable([service.name for service in services])
@@ -430,7 +431,7 @@ class Composition:
 
             # Restore the old composition.
             self.compose = old_compose
-            self._write_compose()
+            self.files = {}
 
     @contextmanager
     def test_case(self, name: str) -> Iterator[None]:
@@ -485,12 +486,15 @@ class Composition:
 
     def sql_connection(
         self,
-        service: str = "materialized",
+        service: str | None = None,
         user: str = "materialize",
         port: int | None = None,
         password: str | None = None,
         ssl_context: ssl.SSLContext | None = None,
     ) -> Connection:
+        if service is None:
+            service = "materialized"
+
         """Get a connection (with autocommit enabled) to the materialized service."""
         port = self.port(service, port) if port else self.default_port(service)
         conn = pg8000.connect(
@@ -505,7 +509,7 @@ class Composition:
 
     def sql_cursor(
         self,
-        service: str = "materialized",
+        service: str | None = None,
         user: str = "materialize",
         port: int | None = None,
         password: str | None = None,
@@ -518,7 +522,7 @@ class Composition:
     def sql(
         self,
         sql: str,
-        service: str = "materialized",
+        service: str | None = None,
         user: str = "materialize",
         port: int | None = None,
         password: str | None = None,
@@ -536,7 +540,7 @@ class Composition:
     def sql_query(
         self,
         sql: str,
-        service: str = "materialized",
+        service: str | None = None,
         user: str = "materialize",
         port: int | None = None,
         password: str | None = None,
@@ -548,8 +552,8 @@ class Composition:
             cursor.execute(sql)
             return cursor.fetchall()
 
-    def query_mz_version(self) -> str:
-        return self.sql_query("SELECT mz_version()")[0][0]
+    def query_mz_version(self, service: str | None = None) -> str:
+        return self.sql_query("SELECT mz_version()", service=service)[0][0]
 
     def run(
         self,
@@ -609,6 +613,7 @@ class Composition:
         stdin: str | None = None,
         check: bool = True,
         workdir: str | None = None,
+        env_extra: dict[str, str] = {},
     ) -> subprocess.CompletedProcess:
         """Execute a one-off command in a service's running container
 
@@ -626,6 +631,7 @@ class Composition:
             "exec",
             *(["--detach"] if detach else []),
             *(["--workdir", workdir] if workdir else []),
+            *(f"-e{k}={v}" for k, v in env_extra.items()),
             "-T",
             service,
             *(
@@ -697,7 +703,7 @@ class Composition:
             for service in self.compose["services"].values():
                 service["entrypoint"] = ["sleep", "infinity"]
                 service["command"] = []
-            self._write_compose()
+            self.files = {}
 
         self.invoke(
             "up",
@@ -709,7 +715,7 @@ class Composition:
 
         if persistent:
             self.compose = old_compose  # type: ignore
-            self._write_compose()
+            self.files = {}
 
     def validate_sources_sinks_clusters(self) -> str | None:
         """Validate that all sources, sinks & clusters are in a good state"""
@@ -788,11 +794,11 @@ class Composition:
                 "Sanity Restart skipped because Mz not in services or `sanity_restart` label not set"
             )
 
-    def capture_logs(self) -> None:
+    def capture_logs(self, *services: str) -> None:
         # Capture logs into services.log since they will be lost otherwise
         # after dowing a composition.
         with open(MZ_ROOT / "services.log", "a") as f:
-            self.invoke("logs", "--no-color", capture=f)
+            self.invoke("logs", "--no-color", *services, capture=f)
 
     def down(
         self,
@@ -1014,6 +1020,7 @@ class Composition:
         persistent: bool = True,
         args: list[str] = [],
         caller: Traceback | None = None,
+        mz_service: str | None = None,
     ) -> None:
         """Run a string as a testdrive script.
 
@@ -1022,16 +1029,27 @@ class Composition:
             service: Optional name of the testdrive service to use.
             input: The string to execute.
             persistent: Whether a persistent testdrive container will be used.
+            caller: The python source line that invoked testdrive()
+            mz_service: The Materialize service name to target
         """
 
         caller = caller or getframeinfo(stack()[1][0])
+        args = args + [f"--source={caller.filename}:{caller.lineno}"]
 
-        args_with_source = args + [f"--source={caller.filename}:{caller.lineno}"]
+        if mz_service is not None:
+            args += [
+                f"--materialize-url=postgres://materialize@{mz_service}:6875",
+                f"--materialize-internal-url=postgres://mz_system@{mz_service}:6877",
+                f"--persist-consensus-url=postgres://root@{mz_service}:26257?options=--search_path=consensus",
+            ]
 
         if persistent:
-            self.exec(service, *args_with_source, stdin=input)
+            self.exec(service, *args, stdin=input)
         else:
-            self.run(service, *args_with_source, stdin=input)
+            assert (
+                mz_service is None
+            ), "testdrive(mz_service = ...) can only be used with persistent Testdrive containers."
+            self.run(service, *args, stdin=input)
 
     def enable_minio_versioning(self) -> None:
         self.up("minio")
@@ -1088,7 +1106,7 @@ class Composition:
             "admin",
             "--commit",
             "restore-blob",
-            f"--blob-uri={MINIO_BLOB_URI}",
+            f"--blob-uri={minio_blob_uri()}",
             "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
         )
         self.up("materialized")

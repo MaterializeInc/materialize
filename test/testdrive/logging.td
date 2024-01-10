@@ -103,8 +103,9 @@ contains:cannot drop source mz_internal.mz_compute_delays_histogram_raw because 
 id      name        position    type
 --------------------------------------
 SID   worker_id   1           uint8
-SID   duration_ns 2           uint8
-SID   count       3           bigint
+SID   type        2           text
+SID   duration_ns 3           uint8
+SID   count       4           bigint
 
 > SELECT mz_columns.id, mz_columns.name, position, type
   FROM mz_views JOIN mz_columns USING (id)

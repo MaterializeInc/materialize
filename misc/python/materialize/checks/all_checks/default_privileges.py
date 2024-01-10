@@ -29,7 +29,7 @@ class DefaultPrivileges(Check):
             > CREATE ROLE defpriv_role1
             >[version<5900] ALTER ROLE defpriv_role1 CREATEDB CREATECLUSTER
 
-            $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+            $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
             GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO defpriv_role1
 
             > CREATE TABLE defpriv_table1 (c int)
@@ -48,7 +48,7 @@ class DefaultPrivileges(Check):
                 > CREATE ROLE defpriv_role2
                 >[version<5900] ALTER ROLE defpriv_role2 CREATEDB CREATECLUSTER
 
-                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO defpriv_role2
 
                 > CREATE TABLE defpriv_table2 (c int)
@@ -60,7 +60,7 @@ class DefaultPrivileges(Check):
                 > CREATE ROLE defpriv_role3
                 >[version<5900] ALTER ROLE defpriv_role3 CREATEDB CREATECLUSTER
 
-                $[version>=5900] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version>=5900] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO defpriv_role3
 
                 > CREATE TABLE defpriv_table3 (c int)

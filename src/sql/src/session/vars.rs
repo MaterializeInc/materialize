@@ -75,6 +75,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use clap::clap_derive::ArgEnum;
+use clap::ValueEnum;
 use itertools::Itertools;
 use mz_adapter_types::timestamp_oracle::{
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_WAIT,
@@ -96,6 +98,7 @@ use mz_sql_parser::ident;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_tracing::CloneableEnvFilter;
 use once_cell::sync::Lazy;
+use proptest_derive::Arbitrary;
 use serde::Serialize;
 use uncased::UncasedStr;
 
@@ -269,7 +272,7 @@ const CLIENT_MIN_MESSAGES: ServerVar<ClientSeverity> = ServerVar {
 pub const CLUSTER_VAR_NAME: &UncasedStr = UncasedStr::new("cluster");
 pub static CLUSTER: Lazy<ServerVar<String>> = Lazy::new(|| ServerVar {
     name: CLUSTER_VAR_NAME,
-    value: "default".to_string(),
+    value: "quickstart".to_string(),
     description: "Sets the current cluster (Materialize).",
     internal: false,
 });
@@ -709,6 +712,13 @@ const TIMESTAMP_ORACLE_IMPL: ServerVar<TimestampOracleImpl> = ServerVar {
     name: UncasedStr::new("timestamp_oracle"),
     value: TimestampOracleImpl::Catalog,
     description: "Backing implementation of TimestampOracle.",
+    internal: true,
+};
+
+pub const CATALOG_KIND_IMPL: ServerVar<Option<CatalogKind>> = ServerVar {
+    name: UncasedStr::new("catalog_kind"),
+    value: None,
+    description: "Backing implementation of catalog.",
     internal: true,
 };
 
@@ -1229,6 +1239,26 @@ const STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY: ServerVar<bool> = ServerVar
     internal: true,
 };
 
+/// The interval to submit statistics to `mz_source_statistics_per_worker` and `mz_sink_statistics_per_worker`.
+const STORAGE_STATISTICS_INTERVAL: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("storage_statistics_interval"),
+    value: mz_storage_types::parameters::STATISTICS_INTERVAL_DEFAULT,
+    description: "The interval to submit statistics to `mz_source_statistics_per_worker` \
+        and `mz_sink_statistics` (Materialize).",
+    internal: true,
+};
+
+/// The interval to collect statistics for `mz_source_statistics_per_worker` and `mz_sink_statistics_per_worker` in
+/// clusterd. Controls the accuracy of metrics.
+const STORAGE_STATISTICS_COLLECTION_INTERVAL: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("storage_statistics_collection_interval"),
+    value: mz_storage_types::parameters::STATISTICS_COLLECTION_INTERVAL_DEFAULT,
+    description: "The interval to collect statistics for `mz_source_statistics_per_worker` \
+        and `mz_sink_statistics_per_worker` in clusterd. Controls the accuracy of metrics \
+        (Materialize).",
+    internal: true,
+};
+
 /// Controls [`mz_persist_client::cfg::PersistConfig::sink_minimum_batch_updates`].
 const PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_sink_minimum_batch_updates"),
@@ -1600,6 +1630,14 @@ pub const ENABLE_COLUMNATION_LGALLOC: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
+pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_statement_lifecycle_logging"),
+    value: false,
+    description:
+        "Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history",
+    internal: true,
+};
+
 /// Configuration for gRPC client connections.
 mod grpc_client {
     use super::*;
@@ -1698,6 +1736,13 @@ mod cluster_scheduling {
         name: UncasedStr::new("cluster_soften_az_affinity_weight"),
         value: DEFAULT_SOFTEN_AZ_AFFINITY_WEIGHT,
         description: "The preference weight for `cluster_soften_az_affinity` (Materialize).",
+        internal: true,
+    };
+
+    pub const CLUSTER_ALWAYS_USE_DISK: ServerVar<bool> = ServerVar {
+        name: UncasedStr::new("cluster_always_use_disk"),
+        value: DEFAULT_ALWAYS_USE_DISK,
+        description: "Always provisions a replica with disk, regardless of `DISK` DDL option.",
         internal: true,
     };
 }
@@ -2085,13 +2130,6 @@ feature_flags!(
     {
         name: enable_role_vars,
         desc: "setting default session variables for a role",
-        default: false,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_unified_clusters,
-        desc: "unified compute and storage cluster",
         default: true,
         internal: true,
         enable_for_item_parsing: true,
@@ -2160,6 +2198,13 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
+        name: enable_mysql_source,
+        desc: "Create a MySQL connection or source",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_expressions_in_limit_syntax,
         desc: "LIMIT <expr> syntax",
         default: false,
@@ -2187,6 +2232,41 @@ feature_flags!(
         default: false,
         internal: true,
         enable_for_item_parsing: true,
+    },
+    {
+        name: enable_off_thread_optimization,
+        desc: "use off-thread optimization in `CREATE` statements",
+        default: true,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_refresh_every_mvs,
+        desc: "REFRESH EVERY materialized views",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_reduce_mfp_fusion,
+        desc: "fusion of MFPs in reductions",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_worker_core_affinity,
+        desc: "set core affinity for replica worker threads",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: wait_catalog_consolidation_on_startup,
+        desc: "When opening the Catalog, wait for consolidation to complete before returning",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: false,
     },
 );
 
@@ -2898,6 +2978,8 @@ impl SystemVars {
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY)
+            .with_var(&STORAGE_STATISTICS_INTERVAL)
+            .with_var(&STORAGE_STATISTICS_COLLECTION_INTERVAL)
             .with_var(&STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION)
             .with_var(&STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO)
             .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
@@ -2912,6 +2994,7 @@ impl SystemVars {
             .with_var(&PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP)
             .with_var(&PERSIST_FAST_PATH_LIMIT)
             .with_var(&PERSIST_TXN_TABLES)
+            .with_var(&CATALOG_KIND_IMPL)
             .with_var(&PERSIST_STATS_AUDIT_PERCENT)
             .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
             .with_var(&PERSIST_STATS_FILTER_ENABLED)
@@ -2968,6 +3051,7 @@ impl SystemVars {
             .with_var(&cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT)
             .with_var(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY)
             .with_var(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT)
+            .with_var(&cluster_scheduling::CLUSTER_ALWAYS_USE_DISK)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
             .with_value_constrained_var(
                 &STATEMENT_LOGGING_MAX_SAMPLE_RATE,
@@ -2982,6 +3066,7 @@ impl SystemVars {
             .with_var(&PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE)
             .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
             .with_var(&ENABLE_COLUMNATION_LGALLOC)
+            .with_var(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
             .with_var(&TIMESTAMP_ORACLE_IMPL)
             .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE)
             .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT)
@@ -3233,6 +3318,12 @@ impl SystemVars {
         self.propagate_var_change(MAX_CONNECTIONS.name.as_str());
     }
 
+    /// Returns the system default for the [`CLUSTER`] session variable. To know the active cluster
+    /// for the current session, you must check the [`SessionVars`].
+    pub fn default_cluster(&self) -> String {
+        self.expect_value(&CLUSTER).to_owned()
+    }
+
     /// Returns the value of the `max_kafka_connections` configuration parameter.
     pub fn max_kafka_connections(&self) -> u32 {
         *self.expect_value(&MAX_KAFKA_CONNECTIONS)
@@ -3455,6 +3546,10 @@ impl SystemVars {
         *self.expect_value(&PERSIST_TXN_TABLES)
     }
 
+    pub fn catalog_kind(&self) -> Option<CatalogKind> {
+        *self.expect_value(&CATALOG_KIND_IMPL)
+    }
+
     pub fn persist_reader_lease_duration(&self) -> Duration {
         *self.expect_value(&PERSIST_READER_LEASE_DURATION)
     }
@@ -3582,6 +3677,16 @@ impl SystemVars {
     /// Returns the `storage_dataflow_max_inflight_bytes_disk_only` configuration parameter.
     pub fn storage_dataflow_max_inflight_bytes_disk_only(&self) -> bool {
         *self.expect_value(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY)
+    }
+
+    /// Returns the `storage_statistics_interval` configuration parameter.
+    pub fn storage_statistics_interval(&self) -> Duration {
+        *self.expect_value(&STORAGE_STATISTICS_INTERVAL)
+    }
+
+    /// Returns the `storage_statistics_collection_interval` configuration parameter.
+    pub fn storage_statistics_collection_interval(&self) -> Duration {
+        *self.expect_value(&STORAGE_STATISTICS_COLLECTION_INTERVAL)
     }
 
     /// Returns the `persist_sink_minimum_batch_updates` configuration parameter.
@@ -3794,6 +3899,10 @@ impl SystemVars {
         *self.expect_value(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT)
     }
 
+    pub fn cluster_always_use_disk(&self) -> bool {
+        *self.expect_value(&cluster_scheduling::CLUSTER_ALWAYS_USE_DISK)
+    }
+
     /// Returns the `privatelink_status_update_quota_per_minute` configuration parameter.
     pub fn privatelink_status_update_quota_per_minute(&self) -> u32 {
         *self.expect_value(&PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE)
@@ -3827,6 +3936,10 @@ impl SystemVars {
     /// Returns the `enable_columnation_lgalloc` configuration parameter.
     pub fn enable_columnation_lgalloc(&self) -> bool {
         *self.expect_value(&ENABLE_COLUMNATION_LGALLOC)
+    }
+
+    pub fn enable_statement_lifecycle_logging(&self) -> bool {
+        *self.expect_value(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
     }
 
     /// Returns the `timestamp_oracle` configuration parameter.
@@ -5521,6 +5634,7 @@ pub fn is_cluster_scheduling_var(name: &str) -> bool {
         || name == cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT.name()
         || name == cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY.name()
         || name == cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT.name()
+        || name == cluster_scheduling::CLUSTER_ALWAYS_USE_DISK.name()
 }
 
 /// Returns whether the named variable is an HTTP server related config var.
@@ -5693,9 +5807,72 @@ impl Value for PersistTxnTablesImpl {
     }
 }
 
+#[derive(
+    ArgEnum,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    num_enum::TryFromPrimitive,
+    num_enum::IntoPrimitive,
+    Arbitrary,
+)]
+#[repr(u64)]
+pub enum CatalogKind {
+    Stash = 0,
+    Persist = 1,
+    Shadow = 2,
+    /// Escape hatch to use the stash directly without trying to rollover from persist.
+    EmergencyStash = 3,
+}
+
+impl CatalogKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CatalogKind::Stash => "stash",
+            CatalogKind::Persist => "persist",
+            CatalogKind::Shadow => "shadow",
+            CatalogKind::EmergencyStash => "emergency-stash",
+        }
+    }
+
+    fn valid_values() -> Vec<&'static str> {
+        vec![
+            CatalogKind::Stash.as_str(),
+            CatalogKind::Persist.as_str(),
+            CatalogKind::Shadow.as_str(),
+            CatalogKind::EmergencyStash.as_str(),
+        ]
+    }
+}
+
+impl Value for CatalogKind {
+    fn type_name() -> String {
+        "string".to_string()
+    }
+
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Self::Owned, VarError> {
+        let s = extract_single_value(param, input)?;
+        CatalogKind::from_str(s, true).map_err(|_| VarError::ConstrainedParameter {
+            parameter: (&CATALOG_KIND_IMPL).into(),
+            values: input.to_vec(),
+            valid_values: Some(CatalogKind::valid_values()),
+        })
+    }
+
+    fn format(&self) -> String {
+        self.as_str().into()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[mz_ore::test]
     fn test_should_output_to_client() {
@@ -5731,6 +5908,17 @@ mod tests {
                         == expected
                 )
             }
+        }
+    }
+
+    proptest! {
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // slow
+        fn catalog_kind_roundtrip(catalog_kind: CatalogKind) {
+            let s = catalog_kind.as_str();
+            let round = CatalogKind::from_str(s, true).expect("to roundtrip");
+
+            prop_assert_eq!(catalog_kind, round);
         }
     }
 }

@@ -267,7 +267,7 @@ Trace {
                                         IdNameV1(
                                             IdNameV1 {
                                                 id: "u1",
-                                                name: "default",
+                                                name: "quickstart",
                                             },
                                         ),
                                     ),
@@ -333,7 +333,7 @@ Trace {
                                         CreateClusterReplicaV1(
                                             CreateClusterReplicaV1 {
                                                 cluster_id: "u1",
-                                                cluster_name: "default",
+                                                cluster_name: "quickstart",
                                                 replica_id: Some(
                                                     StringWrapper {
                                                         inner: "u1",
@@ -408,7 +408,7 @@ Trace {
                         ),
                     },
                     ClusterValue {
-                        name: "default",
+                        name: "quickstart",
                         linked_object_id: None,
                         owner_id: Some(
                             RoleId {

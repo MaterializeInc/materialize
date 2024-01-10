@@ -55,7 +55,7 @@ SELECT id, name, managed, replication_factor, size FROM mz_clusters
 ----
 s1  mz_system  false  NULL  NULL
 s2  mz_introspection  false  NULL  NULL
-u1  default  true  1  2
+u1  quickstart  true  1  2
 
 
 query T rowsort
@@ -63,7 +63,7 @@ SELECT name FROM (SHOW CLUSTERS)
 ----
 mz_system
 mz_introspection
-default
+quickstart
 
 # Test invalid option combinations.
 
@@ -124,9 +124,9 @@ CREATE CLUSTER baz REPLICAS (), INTROSPECTION INTERVAL 1
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  2
 mz_introspection  r1  2
 mz_system  r1  2
+quickstart  r1  2
 
 statement error db error: ERROR: unknown cluster replica size abc
 CREATE CLUSTER foo SIZE 'abc', REPLICATION FACTOR 3
@@ -137,12 +137,12 @@ CREATE CLUSTER foo SIZE '1', REPLICATION FACTOR 3
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  2
 foo  r1  1
 foo  r2  1
 foo  r3  1
 mz_introspection  r1  2
 mz_system  r1  2
+quickstart  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -155,12 +155,12 @@ ALTER CLUSTER foo SET (MANAGED = false)
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  2
 foo  r1  1
 foo  r2  1
 foo  r3  1
 mz_introspection  r1  2
 mz_system  r1  2
+quickstart  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -182,12 +182,12 @@ ALTER CLUSTER foo SET (MANAGED, SIZE '1')
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  2
 foo  r1  1
 foo  r2  1
 foo  r3  1
 mz_introspection  r1  2
 mz_system  r1  2
+quickstart  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -197,12 +197,12 @@ u5  foo  true  3  1
 query TTT
 SELECT mz_clusters.name, mz_cluster_replicas.name, mz_cluster_replicas.id FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id ORDER BY 1, 2
 ----
-default  r1  u1
 foo  r1  u3
 foo  r2  u4
 foo  r3  u5
 mz_introspection  r1  s2
 mz_system  r1  s1
+quickstart  r1  u1
 
 statement error db error: ERROR: cannot drop replica of managed cluster
 DROP CLUSTER REPLICA foo.r1
@@ -216,10 +216,10 @@ ALTER CLUSTER foo SET (REPLICATION FACTOR 1)
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  2
 foo  r1  1
 mz_introspection  r1  2
 mz_system  r1  2
+quickstart  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -235,11 +235,11 @@ CREATE SOURCE loadgen IN CLUSTER foo FROM LOAD GENERATOR COUNTER
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  2
 foo  r1  1
 foo  r2  1
 mz_introspection  r1  2
 mz_system  r1  2
+quickstart  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -252,10 +252,10 @@ ALTER CLUSTER foo RESET (REPLICATION FACTOR)
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  2
 foo  r1  1
 mz_introspection  r1  2
 mz_system  r1  2
+quickstart  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -268,10 +268,10 @@ ALTER CLUSTER foo SET (SIZE '2')
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  2
 foo  r1  2
 mz_introspection  r1  2
 mz_system  r1  2
+quickstart  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -284,10 +284,10 @@ ALTER CLUSTER foo SET (SIZE '1', REPLICATION FACTOR 1)
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  2
 foo  r1  1
 mz_introspection  r1  2
 mz_system  r1  2
+quickstart  r1  2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -304,13 +304,13 @@ statement error db error: ERROR: unknown cluster replica size invalid_size
 ALTER CLUSTER foo SET (SIZE invalid_size)
 
 statement ok
-DROP CLUSTER REPLICA IF EXISTS default.bar
+DROP CLUSTER REPLICA IF EXISTS quickstart.bar
 
 statement ok
 DROP CLUSTER REPLICA IF EXISTS bar.foo
 
 statement ok
-DROP CLUSTER REPLICA IF EXISTS default.foo
+DROP CLUSTER REPLICA IF EXISTS quickstart.foo
 
 statement error db error: ERROR: CLUSTER foo has no CLUSTER REPLICA named "r1"
 DROP CLUSTER REPLICA foo.r1
@@ -319,9 +319,9 @@ DROP CLUSTER REPLICA foo.r1
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  2
 mz_introspection  r1  2
 mz_system  r1  2
+quickstart  r1  2
 
 query TTTTTTT
 SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers, s.credits_per_hour FROM mz_cluster_replicas r JOIN mz_internal.mz_cluster_replica_sizes s ON r.size = s.size ORDER BY r.name

@@ -27,8 +27,12 @@ use mz_catalog::builtin::{
     MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS,
     MZ_WEBHOOKS_SOURCES,
 };
+use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::memory::error::{Error, ErrorKind};
-use mz_catalog::memory::objects::Table;
+use mz_catalog::memory::objects::{
+    CatalogItem, ClusterVariant, Connection, DataSourceDesc, Database, Func, Index,
+    MaterializedView, Sink, Table, Type, View,
+};
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
     ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
@@ -45,7 +49,10 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
 use mz_sql::ast::{CreateIndexStatement, Statement};
-use mz_sql::catalog::{CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, TypeCategory};
+use mz_sql::catalog::{
+    CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, DefaultPrivilegeObject,
+    TypeCategory,
+};
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{CommentObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -58,10 +65,7 @@ use mz_storage_types::sources::{
 };
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
-use crate::catalog::{
-    AwsPrincipalContext, CatalogItem, CatalogState, ClusterVariant, Connection, DataSourceDesc,
-    Database, DefaultPrivilegeObject, Func, Index, MaterializedView, Sink, Type, View,
-};
+use crate::catalog::CatalogState;
 use crate::coord::ConnMeta;
 use crate::subscribe::ActiveSubscribe;
 
@@ -631,6 +635,7 @@ impl CatalogState {
                         "aws-privatelink"
                     }
                     mz_storage_types::connections::Connection::Ssh { .. } => "ssh-tunnel",
+                    mz_storage_types::connections::Connection::MySql { .. } => "mysql",
                 }),
                 Datum::String(&owner_id.to_string()),
                 privileges,
@@ -676,7 +681,8 @@ impl CatalogState {
                 }
             }
             mz_storage_types::connections::Connection::Csr(_)
-            | mz_storage_types::connections::Connection::Postgres(_) => (),
+            | mz_storage_types::connections::Connection::Postgres(_)
+            | mz_storage_types::connections::Connection::MySql(_) => (),
         };
         updates
     }
@@ -754,18 +760,29 @@ impl CatalogState {
 
         let mut access_key_id = None;
         let mut access_key_id_secret_id = None;
+        let mut secret_access_key_secret_id = None;
+        let mut session_token = None;
+        let mut session_token_secret_id = None;
         let mut assume_role_arn = None;
         let mut assume_role_session_name = None;
         let mut principal = None;
         let mut external_id = None;
         let mut example_trust_policy = None;
         match &aws_config.auth {
-            AwsAuth::Credentials(credentials) => match &credentials.access_key_id {
-                StringOrSecret::String(access_key) => access_key_id = Some(access_key.as_str()),
-                StringOrSecret::Secret(secret_id) => {
-                    access_key_id_secret_id = Some(secret_id.to_string())
+            AwsAuth::Credentials(credentials) => {
+                match &credentials.access_key_id {
+                    StringOrSecret::String(s) => access_key_id = Some(s.as_str()),
+                    StringOrSecret::Secret(s) => access_key_id_secret_id = Some(s.to_string()),
                 }
-            },
+                secret_access_key_secret_id = Some(credentials.secret_access_key.to_string());
+                match credentials.session_token.as_ref() {
+                    None => (),
+                    Some(StringOrSecret::String(s)) => session_token = Some(s.as_str()),
+                    Some(StringOrSecret::Secret(s)) => {
+                        session_token_secret_id = Some(s.to_string())
+                    }
+                }
+            }
             AwsAuth::AssumeRole(assume_role) => {
                 assume_role_arn = Some(assume_role.arn.as_str());
                 assume_role_session_name = assume_role.session_name.as_deref();
@@ -791,6 +808,9 @@ impl CatalogState {
             Datum::from(aws_config.region.as_deref()),
             Datum::from(access_key_id),
             Datum::from(access_key_id_secret_id.as_deref()),
+            Datum::from(secret_access_key_secret_id.as_deref()),
+            Datum::from(session_token),
+            Datum::from(session_token_secret_id.as_deref()),
             Datum::from(assume_role_arn),
             Datum::from(assume_role_session_name),
             Datum::from(principal),
@@ -813,7 +833,12 @@ impl CatalogState {
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         let create_stmt = mz_sql::parse::parse(&view.create_sql)
-            .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", view.create_sql))
+            .unwrap_or_else(|e| {
+                panic!(
+                    "create_sql cannot be invalid: `{}` --- error: `{}`",
+                    view.create_sql, e
+                )
+            })
             .into_element()
             .ast;
         let query = match &create_stmt {
@@ -855,7 +880,12 @@ impl CatalogState {
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         let create_stmt = mz_sql::parse::parse(&mview.create_sql)
-            .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", mview.create_sql))
+            .unwrap_or_else(|e| {
+                panic!(
+                    "create_sql cannot be invalid: `{}` --- error: `{}`",
+                    mview.create_sql, e
+                )
+            })
             .into_element()
             .ast;
         let query = match &create_stmt {
@@ -955,7 +985,12 @@ impl CatalogState {
         let mut updates = vec![];
 
         let create_stmt = mz_sql::parse::parse(&index.create_sql)
-            .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", index.create_sql))
+            .unwrap_or_else(|e| {
+                panic!(
+                    "create_sql cannot be invalid: `{}` --- error: `{}`",
+                    index.create_sql, e
+                )
+            })
             .into_element()
             .ast;
 
@@ -1395,7 +1430,9 @@ impl CatalogState {
                         scale,
                         workers,
                         credits_per_hour,
+                        cpu_exclusive: _,
                         disabled: _,
+                        selectors: _,
                     },
                 )| {
                     // Just invent something when the limits are `None`,

@@ -28,18 +28,22 @@ use mz_ore::now::EpochMillis;
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::{
     soft_assert_eq_or_log, soft_assert_ne_or_log, soft_assert_no_log, soft_assert_or_log,
+    soft_panic_or_log,
 };
+use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::{ListenEvent, ReadHandle, Subscribe};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
+use mz_persist_types::Opaque;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, RelationDesc, ScalarType};
+use mz_sql::session::vars::CatalogKind;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::{SourceData, Timeline};
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tracing::debug;
+use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
@@ -47,7 +51,8 @@ use crate::durable::impls::persist::metrics::Metrics;
 use crate::durable::impls::persist::state_update::{IntoStateUpdateKindRaw, StateUpdateKindRaw};
 pub use crate::durable::impls::persist::state_update::{StateUpdate, StateUpdateKind};
 use crate::durable::initialize::{
-    DEPLOY_GENERATION, PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY, USER_VERSION_KEY,
+    CATALOG_KIND_KEY, DEPLOY_GENERATION, PERSIST_TXN_TABLES, SYSTEM_CONFIG_SYNCED_KEY,
+    USER_VERSION_KEY,
 };
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{AuditLogKey, Config, DurableType, Snapshot, StorageUsageKey};
@@ -66,6 +71,9 @@ pub(crate) type Timestamp = mz_repr::Timestamp;
 /// # Safety
 /// `new_unchecked` is safe to call with a non-zero value.
 const MIN_EPOCH: Epoch = unsafe { Epoch::new_unchecked(1) };
+
+/// Human readable shard name.
+const SHARD_NAME: &str = "catalog";
 
 /// Durable catalog mode that dictates the effect of mutable operations.
 #[derive(Debug)]
@@ -87,6 +95,8 @@ enum Mode {
 /// so that it can expire its leases. If/when rust gets AsyncDrop, this will be done automatically.
 #[derive(Debug)]
 pub struct UnopenedPersistCatalogState {
+    /// Since handle to control compaction.
+    since_handle: SinceHandle<SourceData, (), Timestamp, Diff, i64>,
     /// Write handle to persist.
     write_handle: WriteHandle<SourceData, (), Timestamp, Diff>,
     /// Read handle to persist.
@@ -122,17 +132,34 @@ impl UnopenedPersistCatalogState {
         const SEED: usize = 1;
         let shard_id = Self::shard_id(organization_id, SEED);
         debug!(?shard_id, "new persist backed catalog state");
+        let since_handle = persist_client
+            .open_critical_since(
+                shard_id,
+                // TODO: We may need to use a different critical reader
+                // id for this if we want to be able to introspect it via SQL.
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                Diagnostics {
+                    shard_name: SHARD_NAME.to_string(),
+                    handle_purpose: "durable catalog state critical since".to_string(),
+                },
+            )
+            .await
+            .expect("invalid usage");
         let (mut write_handle, mut read_handle) = persist_client
             .open(
                 shard_id,
                 Arc::new(PersistCatalogState::desc()),
                 Arc::new(UnitSchema::default()),
-                diagnostics(),
+                Diagnostics {
+                    shard_name: SHARD_NAME.to_string(),
+                    handle_purpose: "durable catalog state handles".to_string(),
+                },
             )
             .await
             .expect("invalid usage");
         let epoch = get_current_epoch(&mut write_handle, &mut read_handle, &metrics).await;
         UnopenedPersistCatalogState {
+            since_handle,
             write_handle,
             read_handle,
             persist_client,
@@ -219,6 +246,7 @@ impl UnopenedPersistCatalogState {
             .expect("invalid usage");
         let mut catalog = PersistCatalogState {
             mode,
+            since_handle: self.since_handle,
             write_handle: self.write_handle,
             subscribe,
             persist_client: self.persist_client,
@@ -234,7 +262,7 @@ impl UnopenedPersistCatalogState {
         let txn = if is_initialized {
             let mut txn = catalog.transaction().await?;
             if let Some(deploy_generation) = deploy_generation {
-                txn.set_config(DEPLOY_GENERATION.into(), deploy_generation)?;
+                txn.set_config(DEPLOY_GENERATION.into(), Some(deploy_generation))?;
             }
             txn
         } else {
@@ -463,7 +491,14 @@ impl UnopenedPersistCatalogState {
         current_upper: Timestamp,
         next_upper: Timestamp,
     ) -> Result<(), CatalogError> {
-        compare_and_append(&mut self.write_handle, updates, current_upper, next_upper).await?;
+        compare_and_append(
+            &mut self.since_handle,
+            &mut self.write_handle,
+            updates,
+            current_upper,
+            next_upper,
+        )
+        .await?;
         self.read_handle
             .downgrade_since(&Antichain::from_elem(current_upper))
             .await;
@@ -518,6 +553,17 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         Ok(self.is_initialized_inner().await?.0)
     }
 
+    async fn epoch(&mut self) -> Result<Epoch, CatalogError> {
+        let (persist_shard_readable, current_upper) = self.is_persist_shard_readable().await;
+        if persist_shard_readable {
+            let as_of = self.as_of(current_upper);
+            let epoch = self.get_epoch(as_of).await;
+            Ok(epoch)
+        } else {
+            Err(CatalogError::Durable(DurableCatalogError::Uninitialized))
+        }
+    }
+
     #[tracing::instrument(level = "debug", skip(self))]
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         self.get_current_config(DEPLOY_GENERATION).await
@@ -525,6 +571,13 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
 
     async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
         panic!("Persist implementation does not have a tombstone")
+    }
+
+    async fn get_catalog_kind_config(&mut self) -> Result<Option<CatalogKind>, CatalogError> {
+        let value = self.get_current_config(CATALOG_KIND_KEY).await?;
+        value.map(CatalogKind::try_from).transpose().map_err(|err| {
+            DurableCatalogError::from(TryFromProtoError::UnknownEnumVariant(err.to_string())).into()
+        })
     }
 
     #[tracing::instrument(level = "info", skip_all)]
@@ -539,6 +592,10 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         }
     }
 
+    fn set_catalog_kind(&mut self, catalog_kind: CatalogKind) {
+        error!("unable to set catalog kind to {catalog_kind:?}");
+    }
+
     #[tracing::instrument(level = "debug", skip(self))]
     async fn expire(self: Box<Self>) {
         self.read_handle.expire().await;
@@ -551,6 +608,8 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
 pub struct PersistCatalogState {
     /// The [`Mode`] that this catalog was opened in.
     mode: Mode,
+    /// Since handle to control compaction.
+    since_handle: SinceHandle<SourceData, (), Timestamp, Diff, i64>,
     /// Write handle to persist.
     write_handle: WriteHandle<SourceData, (), Timestamp, Diff>,
     /// Subscription to catalog changes.
@@ -589,7 +648,14 @@ impl PersistCatalogState {
         current_upper: Timestamp,
         next_upper: Timestamp,
     ) -> Result<(), CatalogError> {
-        compare_and_append(&mut self.write_handle, updates, current_upper, next_upper).await
+        compare_and_append(
+            &mut self.since_handle,
+            &mut self.write_handle,
+            updates,
+            current_upper,
+            next_upper,
+        )
+        .await
     }
 
     /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
@@ -804,7 +870,10 @@ impl PersistCatalogState {
                 self.shard_id,
                 Arc::new(PersistCatalogState::desc()),
                 Arc::new(UnitSchema::default()),
-                diagnostics(),
+                Diagnostics {
+                    shard_name: SHARD_NAME.to_string(),
+                    handle_purpose: "durable catalog state temporary reader".to_string(),
+                },
             )
             .await
             .expect("invalid usage")
@@ -1047,6 +1116,7 @@ impl DurableCatalogState for PersistCatalogState {
         &mut self,
         retention_period: Option<Duration>,
         boot_ts: mz_repr::Timestamp,
+        _wait_for_consolidation: bool,
     ) -> Result<Vec<VersionedStorageUsage>, CatalogError> {
         // If no usage retention period is set, set the cutoff to MIN so nothing
         // is removed.
@@ -1118,14 +1188,6 @@ impl DurableCatalogState for PersistCatalogState {
     }
 }
 
-/// Generate a diagnostic to use when connecting to persist.
-fn diagnostics() -> Diagnostics {
-    Diagnostics {
-        shard_name: "catalog".to_string(),
-        handle_purpose: "durable catalog state".to_string(),
-    }
-}
-
 /// Fetch the current upper of the catalog state.
 async fn current_upper(
     write_handle: &mut WriteHandle<SourceData, (), Timestamp, Diff>,
@@ -1163,6 +1225,7 @@ fn as_of(read_handle: &ReadHandle<SourceData, (), Timestamp, Diff>, upper: Times
 /// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
 /// iff the current global upper of the catalog is `current_upper`.
 async fn compare_and_append<T: IntoStateUpdateKindRaw>(
+    since_handle: &mut SinceHandle<SourceData, (), Timestamp, Diff, i64>,
     write_handle: &mut WriteHandle<SourceData, (), Timestamp, Diff>,
     updates: Vec<StateUpdate<T>>,
     current_upper: Timestamp,
@@ -1185,8 +1248,29 @@ async fn compare_and_append<T: IntoStateUpdateKindRaw>(
                 "current catalog upper {:?} fenced by new catalog upper {:?}",
                 upper_mismatch.expected, upper_mismatch.current
             ))
-            .into()
-        })
+        })?;
+
+    // Lag the shard's upper by 1 to keep it readable.
+    let downgrade_to = Antichain::from_elem(next_upper.saturating_sub(1));
+
+    // The since handle gives us the ability to fence out other writes using an opaque token.
+    // (See the method documentation for details.)
+    // That's not needed here, so we use a constant opaque token to avoid any comparison failures.
+    let opaque = i64::initial();
+    let downgrade = since_handle
+        .maybe_compare_and_downgrade_since(&opaque, (&opaque, &downgrade_to))
+        .await;
+
+    match downgrade {
+        None => {}
+        Some(Err(e)) => soft_panic_or_log!("found opaque value {e}, but expected {opaque}"),
+        Some(Ok(updated)) => soft_assert_or_log!(
+            updated == downgrade_to,
+            "updated bound should match expected"
+        ),
+    }
+
+    Ok(())
 }
 
 #[tracing::instrument(level = "debug", skip(read_handle))]

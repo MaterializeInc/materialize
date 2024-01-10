@@ -56,10 +56,13 @@ _item&lowbar;name_ | The name of the source, table or materialized view you want
 
 ### `CONNECTION` options
 
-Field                | Value  | Description
----------------------|--------|------------
-`TOPIC`              | `text` | The prefix used to generate the Kafka topic name to create and write to.
-`COMPRESSION TYPE`   | `text` | Default: `none`. The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.
+Field                      | Value  | Description
+---------------------------|--------|------------
+`TOPIC`                    | `text` | The name of the Kafka topic to write to.
+`COMPRESSION TYPE`         | `text` | Default: `none`. The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.
+`TRANSACTIONAL ID PREFIX`  | `text` | The prefix of the transactional ID to use when producing to the Kafka topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`
+`PROGRESS GROUP ID PREFIX` | `text` | The prefix of the consumer group ID to use when reading from the progress topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`
+
 
 ### CSR `CONNECTION` options
 
@@ -391,9 +394,9 @@ to perform the following operations on the following resources:
 Operation type  | Resource type    | Resource name
 ----------------|------------------|--------------
 Read, Write     | Topic            | Consult `mz_kafka_connections.sink_progress_topic` for the sink's connection
-Write           | Topic            | The specified `TOPIC` option
-Write           | Transactional ID | `mz-producer-{SINK ID}-*`
-Read            | Group            | `materialize-bootstrap-sink-{SINK ID}`
+Write           | Topic            | The specified [`TOPIC` option](#connection-options)
+Write           | Transactional ID | All transactional IDs beginning with the specified [`TRANSACTIONAL ID PREFIX` option](#connection-options)
+Read            | Group            | All group IDs beginning with the specified [`PROGRESS GROUP ID PREFIX` option](#connection-options)
 
 When using [automatic topic creation](#automatic-topic-creation), Materialize
 additionally requires access to the following operations:

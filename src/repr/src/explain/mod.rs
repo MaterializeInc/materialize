@@ -246,11 +246,14 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
         }
         let result = ExplainConfig {
             redacted: flags.remove("redacted"),
-            arity: flags.remove("arity"),
+            arity: flags.remove("arity") || !SOFT_ASSERTIONS.load(Ordering::Relaxed),
             cardinality: flags.remove("cardinality"),
             column_names: flags.remove("column_names"),
-            filter_pushdown: flags.remove("filter_pushdown") || flags.remove("mfp_pushdown"),
-            humanized_exprs: flags.remove("humanized_exprs") && !flags.contains("raw_plans"),
+            filter_pushdown: flags.remove("filter_pushdown")
+                || flags.remove("mfp_pushdown")
+                || !SOFT_ASSERTIONS.load(Ordering::Relaxed),
+            humanized_exprs: !flags.contains("raw_plans")
+                && (flags.remove("humanized_exprs") || !SOFT_ASSERTIONS.load(Ordering::Relaxed)),
             join_impls: flags.remove("join_impls"),
             keys: flags.remove("keys"),
             linear_chains: flags.remove("linear_chains") && !flags.contains("raw_plans"),

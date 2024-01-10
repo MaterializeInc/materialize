@@ -39,7 +39,7 @@ dbt-materialize:
       pass: [password]
       dbname: [database]
       schema: [dbt schema]
-      cluster: [cluster] # default 'default'
+      cluster: [cluster] # default 'quickstart'
       sslmode: require
       keepalives_idle: 0 # default 0
       retries: 1  # default 1 retry on error/timeout when opening connections

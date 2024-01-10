@@ -16,6 +16,7 @@ use anyhow::{anyhow, bail};
 use mz_proto::{RustType, TryFromProtoError};
 use num_traits::CheckedMul;
 use once_cell::sync::Lazy;
+use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 
 use crate::adt::datetime::DateTimeField;
@@ -374,6 +375,11 @@ impl Interval {
             i128::from(self.days),
         ).unwrap() +
         i128::from(self.micros)
+    }
+
+    /// Computes the total number of milliseconds in the interval. Discards fractional milliseconds!
+    pub fn as_milliseconds(&self) -> i128 {
+        self.as_microseconds() / 1000
     }
 
     /// Converts this `Interval`'s duration into `chrono::Duration`.
@@ -767,6 +773,21 @@ impl fmt::Display for Interval {
         }
 
         Ok(())
+    }
+}
+
+impl Arbitrary for Interval {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (any::<i32>(), any::<i32>(), any::<i64>())
+            .prop_map(|(months, days, micros)| Interval {
+                months,
+                days,
+                micros,
+            })
+            .boxed()
     }
 }
 

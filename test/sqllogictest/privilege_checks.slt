@@ -59,7 +59,7 @@ REVOKE USAGE ON DATABASE materialize FROM PUBLIC;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE USAGE ON CLUSTER default FROM PUBLIC;
+REVOKE USAGE ON CLUSTER quickstart FROM PUBLIC;
 ----
 COMPLETE 0
 
@@ -497,7 +497,7 @@ CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
 COMPLETE 0
 
 simple conn=mz_support,user=mz_support
-SET CLUSTER TO "default";
+SET CLUSTER TO "quickstart";
 ----
 COMPLETE 0
 
@@ -799,15 +799,15 @@ COMPLETE 0
 simple conn=joe,user=joe
 CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=child,user=child
 CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=mz_system,user=mz_system
-GRANT CREATE ON CLUSTER default TO joe;
+GRANT CREATE ON CLUSTER quickstart TO joe;
 ----
 COMPLETE 0
 
@@ -827,7 +827,7 @@ REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM joe;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE CREATE ON CLUSTER default FROM joe;
+REVOKE CREATE ON CLUSTER quickstart FROM joe;
 ----
 COMPLETE 0
 
@@ -896,15 +896,15 @@ COMPLETE 0
 simple conn=joe,user=joe
 CREATE INDEX i ON t (a::ty);
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=child,user=child
 CREATE INDEX i ON t (a::ty);
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=mz_system,user=mz_system
-GRANT CREATE ON CLUSTER default TO joe;
+GRANT CREATE ON CLUSTER quickstart TO joe;
 ----
 COMPLETE 0
 
@@ -924,7 +924,7 @@ REVOKE CREATE, USAGE ON SCHEMA materialize.public FROM joe;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE CREATE ON CLUSTER default FROM joe;
+REVOKE CREATE ON CLUSTER quickstart FROM joe;
 ----
 COMPLETE 0
 
@@ -1447,15 +1447,15 @@ COMPLETE 0
 simple conn=joe,user=joe
 SELECT a::ty FROM t;
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=child,user=child
 SELECT a::ty FROM t;
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=mz_system,user=mz_system
-GRANT USAGE ON CLUSTER default TO joe;
+GRANT USAGE ON CLUSTER quickstart TO joe;
 ----
 COMPLETE 0
 
@@ -1485,7 +1485,7 @@ REVOKE USAGE ON SCHEMA materialize.public FROM joe;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE USAGE ON CLUSTER default FROM joe;
+REVOKE USAGE ON CLUSTER quickstart FROM joe;
 ----
 COMPLETE 0
 
@@ -1584,15 +1584,15 @@ COMPLETE 0
 simple conn=joe,user=joe
 SELECT * FROM v;
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=child,user=child
 SELECT * FROM v;
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=mz_system,user=mz_system
-GRANT USAGE ON CLUSTER default TO joe;
+GRANT USAGE ON CLUSTER quickstart TO joe;
 ----
 COMPLETE 0
 
@@ -1627,7 +1627,7 @@ REVOKE USAGE, CREATE ON SCHEMA materialize.public FROM view_owner;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE USAGE ON CLUSTER default FROM joe;
+REVOKE USAGE ON CLUSTER quickstart FROM joe;
 ----
 COMPLETE 0
 
@@ -1925,7 +1925,7 @@ REVOKE USAGE ON SCHEMA materialize.public FROM materialize;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE MATERIALIZED VIEW mv IN CLUSTER default AS SELECT 1
+CREATE MATERIALIZED VIEW mv IN CLUSTER quickstart AS SELECT 1
 ----
 COMPLETE 0
 
@@ -1966,7 +1966,7 @@ CREATE TABLE t (a INT)
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE INDEX i IN CLUSTER default ON t(a)
+CREATE INDEX i IN CLUSTER quickstart ON t(a)
 ----
 COMPLETE 0
 
@@ -2039,15 +2039,15 @@ COMPLETE 0
 simple conn=joe,user=joe
 INSERT INTO t VALUES (1);
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=child,user=child
 INSERT INTO t VALUES (1);
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=mz_system,user=mz_system
-GRANT USAGE ON CLUSTER default TO joe;
+GRANT USAGE ON CLUSTER quickstart TO joe;
 ----
 COMPLETE 0
 
@@ -2072,7 +2072,7 @@ REVOKE USAGE ON SCHEMA materialize.public FROM joe;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE USAGE ON CLUSTER default FROM joe;
+REVOKE USAGE ON CLUSTER quickstart FROM joe;
 ----
 COMPLETE 0
 
@@ -2136,15 +2136,15 @@ COMPLETE 0
 simple conn=joe,user=joe
 INSERT INTO t SELECT * FROM t;
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=child,user=child
 INSERT INTO t SELECT * FROM t;
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=mz_system,user=mz_system
-GRANT USAGE ON CLUSTER default TO joe;
+GRANT USAGE ON CLUSTER quickstart TO joe;
 ----
 COMPLETE 0
 
@@ -2184,7 +2184,7 @@ REVOKE USAGE ON SCHEMA materialize.public FROM joe;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE USAGE ON CLUSTER default FROM joe;
+REVOKE USAGE ON CLUSTER quickstart FROM joe;
 ----
 COMPLETE 0
 
@@ -2248,15 +2248,15 @@ COMPLETE 0
 simple conn=joe,user=joe
 INSERT INTO t VALUES (42) RETURNING a;
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=child,user=child
 INSERT INTO t VALUES (42) RETURNING a;
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=mz_system,user=mz_system
-GRANT USAGE ON CLUSTER default TO joe;
+GRANT USAGE ON CLUSTER quickstart TO joe;
 ----
 COMPLETE 0
 
@@ -2298,7 +2298,7 @@ REVOKE USAGE ON SCHEMA materialize.public FROM joe;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE USAGE ON CLUSTER default FROM joe;
+REVOKE USAGE ON CLUSTER quickstart FROM joe;
 ----
 COMPLETE 0
 
@@ -2362,15 +2362,15 @@ COMPLETE 0
 simple conn=joe,user=joe
 UPDATE t SET a = 42;
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=child,user=child
 UPDATE t SET a = 42;
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=mz_system,user=mz_system
-GRANT USAGE ON CLUSTER default TO joe;
+GRANT USAGE ON CLUSTER quickstart TO joe;
 ----
 COMPLETE 0
 
@@ -2410,7 +2410,7 @@ REVOKE USAGE ON SCHEMA materialize.public FROM joe;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE USAGE ON CLUSTER default FROM joe;
+REVOKE USAGE ON CLUSTER quickstart FROM joe;
 ----
 COMPLETE 0
 
@@ -2474,15 +2474,15 @@ COMPLETE 0
 simple conn=joe,user=joe
 UPDATE T SET a = 42 WHERE a > 6;
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=child,user=child
 UPDATE T SET a = 42 WHERE a > 6;
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=mz_system,user=mz_system
-GRANT USAGE ON CLUSTER default TO joe;
+GRANT USAGE ON CLUSTER quickstart TO joe;
 ----
 COMPLETE 0
 
@@ -2522,7 +2522,7 @@ REVOKE USAGE ON SCHEMA materialize.public FROM joe;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE USAGE ON CLUSTER default FROM joe;
+REVOKE USAGE ON CLUSTER quickstart FROM joe;
 ----
 COMPLETE 0
 
@@ -2586,15 +2586,15 @@ COMPLETE 0
 simple conn=joe,user=joe
 UPDATE T SET a = a + 10;
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=child,user=child
 UPDATE T SET a = a + 10;
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=mz_system,user=mz_system
-GRANT USAGE ON CLUSTER default TO joe;
+GRANT USAGE ON CLUSTER quickstart TO joe;
 ----
 COMPLETE 0
 
@@ -2634,7 +2634,7 @@ REVOKE USAGE ON SCHEMA materialize.public FROM joe;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE USAGE ON CLUSTER default FROM joe;
+REVOKE USAGE ON CLUSTER quickstart FROM joe;
 ----
 COMPLETE 0
 
@@ -2698,15 +2698,15 @@ COMPLETE 0
 simple conn=joe,user=joe
 DELETE FROM t;
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=child,user=child
 DELETE FROM t;
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=mz_system,user=mz_system
-GRANT USAGE ON CLUSTER default TO joe;
+GRANT USAGE ON CLUSTER quickstart TO joe;
 ----
 COMPLETE 0
 
@@ -2746,7 +2746,7 @@ REVOKE USAGE ON SCHEMA materialize.public FROM joe;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE USAGE ON CLUSTER default FROM joe;
+REVOKE USAGE ON CLUSTER quickstart FROM joe;
 ----
 COMPLETE 0
 
@@ -2810,15 +2810,15 @@ COMPLETE 0
 simple conn=joe,user=joe
 DELETE FROM t WHERE a > 5;
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=child,user=child
 DELETE FROM t WHERE a > 5;
 ----
-db error: ERROR: permission denied for CLUSTER "default"
+db error: ERROR: permission denied for CLUSTER "quickstart"
 
 simple conn=mz_system,user=mz_system
-GRANT USAGE ON CLUSTER default TO joe;
+GRANT USAGE ON CLUSTER quickstart TO joe;
 ----
 COMPLETE 0
 
@@ -2858,7 +2858,7 @@ REVOKE USAGE ON SCHEMA materialize.public FROM joe;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-REVOKE USAGE ON CLUSTER default FROM joe;
+REVOKE USAGE ON CLUSTER quickstart FROM joe;
 ----
 COMPLETE 0
 

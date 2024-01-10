@@ -101,7 +101,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN SHOW MATERIALIZED VIEWS IN CLUSTER default
+EXPLAIN SHOW MATERIALIZED VIEWS IN CLUSTER quickstart
 ----
 Explained Query (fast path):
   Project (#1, #2)
@@ -127,7 +127,7 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN SHOW INDEXES IN CLUSTER DEFAULT
+EXPLAIN SHOW INDEXES IN CLUSTER quickstart
 ----
 Explained Query (fast path):
   Project (#1..=#4)

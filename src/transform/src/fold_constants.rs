@@ -15,7 +15,9 @@ use std::convert::TryInto;
 use std::iter;
 
 use mz_expr::visit::Visit;
-use mz_expr::{AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, TableFunc};
+use mz_expr::{
+    AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, TableFunc, UnaryFunc,
+};
 use mz_repr::{ColumnType, Datum, Diff, RelationType, Row, RowArena};
 
 use crate::{any, TransformCtx, TransformError};
@@ -199,6 +201,23 @@ impl FoldConstants {
                 }
 
                 if let Some((rows, ..)) = (**input).as_const() {
+                    // Do not evaluate calls if:
+                    // 1. The input consist of at least one row, and
+                    // 2. The scalars is a singleton mz_panic('forced panic') call.
+                    // Instead, indicate to the caller to panic.
+                    if rows.as_ref().map_or(0, |r| r.len()) > 0 && scalars.len() == 1 {
+                        if let MirScalarExpr::CallUnary {
+                            func: UnaryFunc::Panic(_),
+                            expr,
+                        } = &scalars[0]
+                        {
+                            if let Some("forced panic") = expr.as_literal_str() {
+                                let msg = "forced panic".to_string();
+                                return Err(TransformError::CallerShouldPanic(msg));
+                            }
+                        }
+                    }
+
                     let new_rows = match rows {
                         Ok(rows) => rows
                             .iter()

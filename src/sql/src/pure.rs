@@ -25,24 +25,27 @@ use mz_ore::str::StrExt;
 use mz_postgres_util::replication::WalLevel;
 use mz_postgres_util::PostgresError;
 use mz_proto::RustType;
-use mz_repr::{strconv, GlobalId};
+use mz_repr::{strconv, GlobalId, Timestamp};
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::visit::{visit_function, Visit};
+use mz_sql_parser::ast::visit_mut::{visit_expr_mut, VisitMut};
 use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn,
-    CreateSinkConnection, CreateSinkStatement, CreateSourceOptionName, CreateSubsourceOption,
-    CreateSubsourceOptionName, CsrConfigOption, CsrConfigOptionName, CsrConnection, CsrSeedAvro,
-    CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, DeferredItemName, DocOnIdentifier,
-    DocOnSchema, Envelope, Ident, KafkaSourceConfigOption, KafkaSourceConfigOptionName,
-    PgConfigOption, PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, Statement,
-    UnresolvedItemName,
+    CreateMaterializedViewStatement, CreateSinkConnection, CreateSinkStatement,
+    CreateSubsourceOption, CreateSubsourceOptionName, CsrConfigOption, CsrConfigOptionName,
+    CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, DeferredItemName,
+    DocOnIdentifier, DocOnSchema, Envelope, Expr, Function, FunctionArgs, Ident,
+    KafkaSourceConfigOption, KafkaSourceConfigOptionName, MaterializedViewOption,
+    MaterializedViewOptionName, PgConfigOption, PgConfigOptionName, RawItemName,
+    ReaderSchemaSelectionStrategy, RefreshAtOptionValue, RefreshEveryOptionValue,
+    RefreshOptionValue, Statement, UnresolvedItemName,
 };
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::Connection;
 use mz_storage_types::errors::ContextCreationError;
-use mz_storage_types::sources::{
-    GenericSourceConnection, PostgresSourcePublicationDetails, SourceConnection,
-};
+use mz_storage_types::sources::postgres::PostgresSourcePublicationDetails;
+use mz_storage_types::sources::{GenericSourceConnection, SourceConnection};
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
@@ -56,7 +59,10 @@ use crate::ast::{
 };
 use crate::catalog::{CatalogItemType, ErsatzCatalog, SessionCatalog};
 use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
-use crate::names::{Aug, ResolvedColumnName, ResolvedItemName};
+use crate::names::{
+    Aug, FullItemName, PartialItemName, ResolvedColumnName, ResolvedDataType, ResolvedIds,
+    ResolvedItemName,
+};
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
 use crate::plan::StatementContext;
@@ -141,6 +147,11 @@ fn subsource_name_gen(
 ///
 /// See the section on [purification](crate#purification) in the crate
 /// documentation for details.
+///
+/// Note that this doesn't handle CREATE MATERIALIZED VIEW, which is
+/// handled by [purify_create_materialized_view_options] instead.
+/// This could be made more consistent by a refactoring discussed here:
+/// <https://github.com/MaterializeInc/materialize/pull/23870#discussion_r1435922709>
 pub async fn purify_statement(
     catalog: impl SessionCatalog,
     now: u64,
@@ -409,19 +420,8 @@ async fn purify_create_source(
         include_metadata: _,
         referenced_subsources,
         progress_subsource,
-        with_options,
         ..
     } = &mut stmt;
-
-    let subsource_retain_history = with_options.iter().find_map(|o| {
-        if o.name != CreateSourceOptionName::RetainHistory {
-            return None;
-        }
-        Some(CreateSubsourceOption {
-            name: CreateSubsourceOptionName::RetainHistory,
-            value: o.value.clone(),
-        })
-    });
 
     // Disallow manually targetting subsources, this syntax is reserved for purification only
     named_subsource_err(progress_subsource)?;
@@ -445,13 +445,17 @@ async fn purify_create_source(
     let mut subsources = vec![];
 
     let progress_desc = match &connection {
-        CreateSourceConnection::Kafka { .. } => &mz_storage_types::sources::KAFKA_PROGRESS_DESC,
-        CreateSourceConnection::Postgres { .. } => &mz_storage_types::sources::PG_PROGRESS_DESC,
+        CreateSourceConnection::Kafka { .. } => {
+            &mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC
+        }
+        CreateSourceConnection::Postgres { .. } => {
+            &mz_storage_types::sources::postgres::PG_PROGRESS_DESC
+        }
         CreateSourceConnection::LoadGenerator { .. } => {
-            &mz_storage_types::sources::LOAD_GEN_PROGRESS_DESC
+            &mz_storage_types::sources::load_generator::LOAD_GEN_PROGRESS_DESC
         }
         CreateSourceConnection::TestScript { .. } => {
-            &mz_storage_types::sources::TEST_SCRIPT_PROGRESS_DESC
+            &mz_storage_types::sources::testscript::TEST_SCRIPT_PROGRESS_DESC
         }
     };
 
@@ -925,13 +929,6 @@ async fn purify_create_source(
         }],
     };
     subsources.push((transient_id, subsource));
-
-    // Apply the outer source's RETAIN HISTORY option to all subsources.
-    for (_, subsource) in subsources.iter_mut() {
-        subsource
-            .with_options
-            .extend(subsource_retain_history.clone());
-    }
 
     purify_source_format(
         &catalog,
@@ -1492,4 +1489,249 @@ async fn compile_proto(
         schema,
         message_name,
     })
+}
+
+const MZ_NOW_NAME: &str = "mz_now";
+const MZ_NOW_SCHEMA: &str = "mz_catalog";
+
+/// Purifies a CREATE MATERIALIZED VIEW statement. Additionally, it adjusts `resolved_ids` if
+/// references to ids appear or disappear during the purification.
+///
+/// Note that in contrast with [`purify_statement`], this doesn't need to be async, because
+/// this function is not making any network calls. Furthermore, there is a good reason for it
+/// to be sync: if this were async, then the `mz_now` that our caller selected could become
+/// invalid by the time the async result message is handled by the coordinator main loop, in
+/// the sense that we might no longer be able to read our inputs at the selected timestamp.
+/// If it is sync, then there is no gap between observing the oracle read timestamp and
+/// installing the materialized view in the catalog, at which point it will install its own
+/// read holds for the refresh at `mz_now`.
+pub fn purify_create_materialized_view_options(
+    catalog: impl SessionCatalog,
+    mz_now: Option<Timestamp>,
+    cmvs: &mut CreateMaterializedViewStatement<Aug>,
+    resolved_ids: &mut ResolvedIds,
+) {
+    // 0. Preparations:
+    // Prepare an expression that calls `mz_now()`, which we can insert in various later steps.
+    let (mz_now_id, mz_now_expr) = {
+        let item = catalog
+            .resolve_function(&PartialItemName {
+                database: None,
+                schema: Some(MZ_NOW_SCHEMA.to_string()),
+                item: MZ_NOW_NAME.to_string(),
+            })
+            .expect("we should be able to resolve mz_now");
+        (
+            item.id(),
+            Expr::Function(Function {
+                name: ResolvedItemName::Item {
+                    id: item.id(),
+                    qualifiers: item.name().qualifiers.clone(),
+                    full_name: catalog.resolve_full_name(item.name()),
+                    print_id: false,
+                },
+                args: FunctionArgs::Args {
+                    args: Vec::new(),
+                    order_by: Vec::new(),
+                },
+                filter: None,
+                over: None,
+                distinct: false,
+            }),
+        )
+    };
+    // Prepare the `mz_timestamp` type.
+    let (mz_timestamp_id, mz_timestamp_type) = {
+        let item = catalog.get_system_type("mz_timestamp");
+        let full_name = catalog.resolve_full_name(item.name());
+        (
+            item.id(),
+            ResolvedDataType::Named {
+                id: item.id(),
+                qualifiers: item.name().qualifiers.clone(),
+                full_name,
+                modifiers: vec![],
+                print_id: true,
+            },
+        )
+    };
+
+    let mut introduced_mz_timestamp = false;
+
+    for option in cmvs.with_options.iter_mut() {
+        // 1. Purify `REFRESH AT CREATION` to `REFRESH AT mz_now()`.
+        if matches!(
+            option.value,
+            Some(WithOptionValue::Refresh(RefreshOptionValue::AtCreation))
+        ) {
+            option.value = Some(WithOptionValue::Refresh(RefreshOptionValue::At(
+                RefreshAtOptionValue {
+                    time: mz_now_expr.clone(),
+                },
+            )));
+        }
+
+        // 2. If `REFRESH EVERY` doesn't have an `ALIGNED TO`, then add `ALIGNED TO mz_now()`.
+        if let Some(WithOptionValue::Refresh(RefreshOptionValue::Every(
+            RefreshEveryOptionValue { aligned_to, .. },
+        ))) = &mut option.value
+        {
+            if aligned_to.is_none() {
+                *aligned_to = Some(mz_now_expr.clone());
+            }
+        }
+
+        // 3. Substitute `mz_now()` with the timestamp chosen for the CREATE MATERIALIZED VIEW
+        // statement. (This has to happen after the above steps, which might introduce `mz_now()`.)
+        match &mut option.value {
+            Some(WithOptionValue::Refresh(RefreshOptionValue::At(RefreshAtOptionValue {
+                time,
+            }))) => {
+                let mut visitor = MzNowPurifierVisitor::new(mz_now, mz_timestamp_type.clone());
+                visitor.visit_expr_mut(time);
+                introduced_mz_timestamp |= visitor.introduced_mz_timestamp;
+            }
+            Some(WithOptionValue::Refresh(RefreshOptionValue::Every(
+                RefreshEveryOptionValue {
+                    interval: _,
+                    aligned_to: Some(aligned_to),
+                },
+            ))) => {
+                let mut visitor = MzNowPurifierVisitor::new(mz_now, mz_timestamp_type.clone());
+                visitor.visit_expr_mut(aligned_to);
+                introduced_mz_timestamp |= visitor.introduced_mz_timestamp;
+            }
+            _ => {}
+        }
+    }
+
+    // 4. If the user didn't give any REFRESH option, then default to ON COMMIT.
+    if !cmvs.with_options.iter().any(|o| {
+        matches!(
+            o,
+            MaterializedViewOption {
+                value: Some(WithOptionValue::Refresh(..)),
+                ..
+            }
+        )
+    }) {
+        cmvs.with_options.push(MaterializedViewOption {
+            name: MaterializedViewOptionName::Refresh,
+            value: Some(WithOptionValue::Refresh(RefreshOptionValue::OnCommit)),
+        })
+    }
+
+    // 5. Attend to `resolved_ids`: The purification might have
+    // - added references to `mz_timestamp`;
+    // - removed references to `mz_now`.
+    if introduced_mz_timestamp {
+        resolved_ids.0.insert(mz_timestamp_id);
+    }
+    // Even though we always remove `mz_now()` from the `with_options`, there might be `mz_now()`
+    // remaining in the main query expression of the MV, so let's visit the entire statement to look
+    // for `mz_now()` everywhere.
+    let mut visitor = ExprContainsTemporalVisitor::new();
+    visitor.visit_create_materialized_view_statement(cmvs);
+    if !visitor.contains_temporal {
+        resolved_ids.0.remove(&mz_now_id);
+    }
+}
+
+/// Returns true if the [MaterializedViewOption] either already involves `mz_now()` or will involve
+/// after purification.
+pub fn materialized_view_option_contains_temporal(mvo: &MaterializedViewOption<Aug>) -> bool {
+    match &mvo.value {
+        Some(WithOptionValue::Refresh(RefreshOptionValue::At(RefreshAtOptionValue { time }))) => {
+            let mut visitor = ExprContainsTemporalVisitor::new();
+            visitor.visit_expr(time);
+            visitor.contains_temporal
+        }
+        Some(WithOptionValue::Refresh(RefreshOptionValue::Every(RefreshEveryOptionValue {
+            interval: _,
+            aligned_to: Some(aligned_to),
+        }))) => {
+            let mut visitor = ExprContainsTemporalVisitor::new();
+            visitor.visit_expr(aligned_to);
+            visitor.contains_temporal
+        }
+        Some(WithOptionValue::Refresh(RefreshOptionValue::Every(RefreshEveryOptionValue {
+            interval: _,
+            aligned_to: None,
+        }))) => {
+            // For a `REFRESH EVERY` without an `ALIGNED TO`, purification will default the
+            // `ALIGNED TO` to `mz_now()`.
+            true
+        }
+        Some(WithOptionValue::Refresh(RefreshOptionValue::AtCreation)) => {
+            // `REFRESH AT CREATION` will be purified to `REFRESH AT mz_now()`.
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Determines whether the AST involves `mz_now()`.
+struct ExprContainsTemporalVisitor {
+    pub contains_temporal: bool,
+}
+
+impl ExprContainsTemporalVisitor {
+    pub fn new() -> ExprContainsTemporalVisitor {
+        ExprContainsTemporalVisitor {
+            contains_temporal: false,
+        }
+    }
+}
+
+impl Visit<'_, Aug> for ExprContainsTemporalVisitor {
+    fn visit_function(&mut self, func: &Function<Aug>) {
+        self.contains_temporal |= func.name.full_item_name().item == MZ_NOW_NAME;
+        visit_function(self, func);
+    }
+}
+
+struct MzNowPurifierVisitor {
+    pub mz_now: Option<Timestamp>,
+    pub mz_timestamp_type: ResolvedDataType,
+    pub introduced_mz_timestamp: bool,
+}
+
+impl MzNowPurifierVisitor {
+    pub fn new(
+        mz_now: Option<Timestamp>,
+        mz_timestamp_type: ResolvedDataType,
+    ) -> MzNowPurifierVisitor {
+        MzNowPurifierVisitor {
+            mz_now,
+            mz_timestamp_type,
+            introduced_mz_timestamp: false,
+        }
+    }
+}
+
+impl VisitMut<'_, Aug> for MzNowPurifierVisitor {
+    fn visit_expr_mut(&mut self, expr: &'_ mut Expr<Aug>) {
+        match expr {
+            Expr::Function(Function {
+                name:
+                    ResolvedItemName::Item {
+                        full_name: FullItemName { item, .. },
+                        ..
+                    },
+                ..
+            }) if item == &MZ_NOW_NAME.to_string() => {
+                let mz_now = self.mz_now.expect(
+                    "we should have chosen a timestamp if the expression contains mz_now()",
+                );
+                // We substitute `mz_now()` with number + a cast to `mz_timestamp`. The cast is to
+                // not alter the type of the expression.
+                *expr = Expr::Cast {
+                    expr: Box::new(Expr::Value(Value::Number(mz_now.to_string()))),
+                    data_type: self.mz_timestamp_type.clone(),
+                };
+                self.introduced_mz_timestamp = true;
+            }
+            _ => visit_expr_mut(self, expr),
+        }
+    }
 }

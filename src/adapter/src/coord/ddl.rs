@@ -33,7 +33,7 @@ use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{GlobalId, Timestamp};
-use mz_sql::catalog::CatalogCluster;
+use mz_sql::catalog::{CatalogCluster, CatalogSchema};
 use mz_sql::names::{ObjectId, ResolvedDatabaseSpecifier};
 use mz_sql::session::vars::{
     self, SystemVars, Var, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
@@ -203,6 +203,7 @@ impl Coordinator {
         event!(Level::TRACE, ops = format!("{:?}", ops));
 
         let mut sources_to_drop = vec![];
+        let mut webhook_sources_to_restart = BTreeSet::new();
         let mut tables_to_drop = vec![];
         let mut storage_sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
@@ -341,6 +342,34 @@ impl Coordinator {
                     update_jemalloc_profiling_config = true;
                     update_default_arrangement_merge_options = true;
                     update_http_config = true;
+                }
+                catalog::Op::AlterSource { id, .. } | catalog::Op::RenameItem { id, .. } => {
+                    let item = self.catalog().get_entry(id);
+                    let is_webhook_source = item
+                        .source()
+                        .map(|s| matches!(s.data_source, DataSourceDesc::Webhook { .. }))
+                        .unwrap_or(false);
+                    if is_webhook_source {
+                        webhook_sources_to_restart.insert(*id);
+                    }
+                }
+                catalog::Op::RenameSchema {
+                    database_spec,
+                    schema_spec,
+                    ..
+                } => {
+                    let schema = self.catalog().get_schema(
+                        database_spec,
+                        schema_spec,
+                        conn_id.unwrap_or(&SYSTEM_CONN_ID),
+                    );
+                    let webhook_sources = schema.item_ids().filter(|id| {
+                        let item = self.catalog().get_entry(id);
+                        item.source()
+                            .map(|s| matches!(s.data_source, DataSourceDesc::Webhook { .. }))
+                            .unwrap_or(false)
+                    });
+                    webhook_sources_to_restart.extend(webhook_sources);
                 }
                 _ => (),
             }
@@ -496,6 +525,9 @@ impl Coordinator {
             }
             if !tables_to_drop.is_empty() {
                 self.drop_sources(tables_to_drop);
+            }
+            if !webhook_sources_to_restart.is_empty() {
+                self.restart_webhook_sources(webhook_sources_to_restart);
             }
             if !storage_sinks_to_drop.is_empty() {
                 self.drop_storage_sinks(storage_sinks_to_drop);
@@ -679,12 +711,19 @@ impl Coordinator {
 
     fn drop_sources(&mut self, sources: Vec<GlobalId>) {
         for id in &sources {
+            self.active_webhooks.remove(id);
             self.drop_storage_read_policy(id);
         }
         self.controller
             .storage
             .drop_sources(sources)
             .unwrap_or_terminate("cannot fail to drop sources");
+    }
+
+    fn restart_webhook_sources(&mut self, sources: impl IntoIterator<Item = GlobalId>) {
+        for id in sources {
+            self.active_webhooks.remove(&id);
+        }
     }
 
     pub(crate) fn drop_compute_sinks(&mut self, sinks: impl IntoIterator<Item = ComputeSinkId>) {
@@ -1067,7 +1106,11 @@ impl Coordinator {
                                 Connection::AwsPrivatelink(_) => {
                                     new_aws_privatelink_connections += 1
                                 }
-                                Connection::Csr(_) | Connection::Ssh(_) | Connection::Aws(_) => {}
+                                // TODO(roshan): Implement limits for MySQL
+                                Connection::Csr(_)
+                                | Connection::Ssh(_)
+                                | Connection::Aws(_)
+                                | Connection::MySql(_) => {}
                             }
                         }
                         CatalogItem::Table(_) => {
@@ -1219,7 +1262,11 @@ impl Coordinator {
                 Connection::AwsPrivatelink(_) => current_aws_privatelink_connections += 1,
                 Connection::Postgres(_) => current_postgres_connections += 1,
                 Connection::Kafka(_) => current_kafka_connections += 1,
-                Connection::Csr(_) | Connection::Ssh(_) | Connection::Aws(_) => {}
+                // TODO(roshan): Implement limits for MySQL
+                Connection::Csr(_)
+                | Connection::Ssh(_)
+                | Connection::Aws(_)
+                | Connection::MySql(_) => {}
             }
         }
         self.validate_resource_limit(

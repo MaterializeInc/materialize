@@ -1669,7 +1669,16 @@ SELECT DISTINCT a, b FROM t
             {
               "Column": 0
             }
-          ]
+          ],
+          "mfp_after": {
+            "expressions": [],
+            "predicates": [],
+            "projection": [
+              0,
+              1
+            ],
+            "input_arity": 2
+          }
         }
       }
     }
@@ -1806,7 +1815,17 @@ GROUP BY a
             {
               "Column": 0
             }
-          ]
+          ],
+          "mfp_after": {
+            "expressions": [],
+            "predicates": [],
+            "projection": [
+              0,
+              1,
+              2
+            ],
+            "input_arity": 3
+          }
         }
       }
     }
@@ -1955,7 +1974,16 @@ FROM t
                   ]
                 }
               },
-              "input_key": null
+              "input_key": null,
+              "mfp_after": {
+                "expressions": [],
+                "predicates": [],
+                "projection": [
+                  0,
+                  1
+                ],
+                "input_arity": 2
+              }
             }
           },
           "body": {
@@ -2216,7 +2244,17 @@ SELECT * FROM hierarchical_group_by
             {
               "Column": 0
             }
-          ]
+          ],
+          "mfp_after": {
+            "expressions": [],
+            "predicates": [],
+            "projection": [
+              0,
+              1,
+              2
+            ],
+            "input_arity": 3
+          }
         }
       }
     }
@@ -2339,7 +2377,16 @@ MATERIALIZED VIEW hierarchical_global_mv
                   }
                 }
               },
-              "input_key": null
+              "input_key": null,
+              "mfp_after": {
+                "expressions": [],
+                "predicates": [],
+                "projection": [
+                  0,
+                  1
+                ],
+                "input_arity": 2
+              }
             }
           },
           "body": {
@@ -2614,7 +2661,16 @@ SELECT * FROM hierarchical_global
                   }
                 }
               },
-              "input_key": null
+              "input_key": null,
+              "mfp_after": {
+                "expressions": [],
+                "predicates": [],
+                "projection": [
+                  0,
+                  1
+                ],
+                "input_arity": 2
+              }
             }
           },
           "body": {
@@ -3194,7 +3250,17 @@ GROUP BY a
             {
               "Column": 0
             }
-          ]
+          ],
+          "mfp_after": {
+            "expressions": [],
+            "predicates": [],
+            "projection": [
+              0,
+              1,
+              2
+            ],
+            "input_arity": 3
+          }
         }
       }
     }
@@ -3626,7 +3692,16 @@ FROM t
                   ]
                 }
               },
-              "input_key": null
+              "input_key": null,
+              "mfp_after": {
+                "expressions": [],
+                "predicates": [],
+                "projection": [
+                  0,
+                  1
+                ],
+                "input_arity": 2
+              }
             }
           },
           "body": {
@@ -4280,7 +4355,21 @@ MATERIALIZED VIEW collated_group_by_mv
             {
               "Column": 0
             }
-          ]
+          ],
+          "mfp_after": {
+            "expressions": [],
+            "predicates": [],
+            "projection": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ],
+            "input_arity": 7
+          }
         }
       }
     }
@@ -4766,7 +4855,21 @@ SELECT * FROM collated_group_by
             {
               "Column": 0
             }
-          ]
+          ],
+          "mfp_after": {
+            "expressions": [],
+            "predicates": [],
+            "projection": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ],
+            "input_arity": 7
+          }
         }
       }
     }
@@ -5274,7 +5377,20 @@ MATERIALIZED VIEW collated_global_mv
                   ]
                 }
               },
-              "input_key": null
+              "input_key": null,
+              "mfp_after": {
+                "expressions": [],
+                "predicates": [],
+                "projection": [
+                  0,
+                  1,
+                  2,
+                  3,
+                  4,
+                  5
+                ],
+                "input_arity": 6
+              }
             }
           },
           "body": {
@@ -6018,7 +6134,20 @@ SELECT * FROM collated_global
                   ]
                 }
               },
-              "input_key": null
+              "input_key": null,
+              "mfp_after": {
+                "expressions": [],
+                "predicates": [],
+                "projection": [
+                  0,
+                  1,
+                  2,
+                  3,
+                  4,
+                  5
+                ],
+                "input_arity": 6
+              }
             }
           },
           "body": {

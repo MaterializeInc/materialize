@@ -114,7 +114,7 @@ use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::{Aug, ResolvedIds};
-use mz_sql::plan::{CopyFormat, CreateConnectionPlan, Params, QueryWhen};
+use mz_sql::plan::{self, CopyFormat, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::{self, ConnectionCounter, OwnedVarInput, SystemVars};
@@ -124,6 +124,7 @@ use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::Timeline;
+use mz_timestamp_oracle::WriteTimestamp;
 use opentelemetry::trace::TraceContextExt;
 use timely::progress::Antichain;
 use timely::PartialOrder;
@@ -139,13 +140,10 @@ use crate::client::{Client, Handle};
 use crate::command::{Canceled, Command, ExecuteResponse};
 use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParameterSyncConfig};
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
+use crate::coord::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
-use crate::coord::timeline::{TimelineContext, TimelineState, WriteTimestamp};
-use crate::coord::timestamp_oracle::catalog_oracle::CatalogTimestampPersistence;
-use crate::coord::timestamp_oracle::postgres_oracle::{
-    PostgresTimestampOracle, PostgresTimestampOracleConfig,
-};
+use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
@@ -157,18 +155,22 @@ use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::subscribe::ActiveSubscribe;
 use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, ResultExt};
-use crate::webhook::WebhookConcurrencyLimiter;
+use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
 use mz_catalog::durable::DurableCatalogState;
+use mz_expr::refresh_schedule::RefreshSchedule;
+use mz_timestamp_oracle::postgres_oracle::{
+    PostgresTimestampOracle, PostgresTimestampOracleConfig,
+};
 
 use self::statement_logging::{StatementLogging, StatementLoggingId};
 
+pub(crate) mod catalog_oracle;
 pub(crate) mod id_bundle;
 pub(crate) mod peek;
 pub(crate) mod statement_logging;
 pub(crate) mod timeline;
-pub(crate) mod timestamp_oracle;
 pub(crate) mod timestamp_selection;
 
 mod appends;
@@ -236,8 +238,28 @@ pub enum Message<T = mz_repr::Timestamp> {
         otel_ctx: OpenTelemetryContext,
         stage: PeekStage,
     },
+    CreateIndexStageReady {
+        ctx: ExecuteContext,
+        otel_ctx: OpenTelemetryContext,
+        stage: CreateIndexStage,
+    },
+    CreateViewStageReady {
+        ctx: ExecuteContext,
+        otel_ctx: OpenTelemetryContext,
+        stage: CreateViewStage,
+    },
+    CreateMaterializedViewStageReady {
+        ctx: ExecuteContext,
+        otel_ctx: OpenTelemetryContext,
+        stage: CreateMaterializedViewStage,
+    },
+    SubscribeStageReady {
+        ctx: ExecuteContext,
+        otel_ctx: OpenTelemetryContext,
+        stage: SubscribeStage,
+    },
     DrainStatementLog,
-    PrivateLinkVpcEndpointEvents(BTreeMap<GlobalId, VpcEndpointEvent>),
+    PrivateLinkVpcEndpointEvents(Vec<VpcEndpointEvent>),
 }
 
 impl Message {
@@ -251,7 +273,7 @@ impl Message {
                 Command::Commit { .. } => "command-commit",
                 Command::CancelRequest { .. } => "command-cancel_request",
                 Command::PrivilegedCancelRequest { .. } => "command-privileged_cancel_request",
-                Command::AppendWebhook { .. } => "command-append_webhook",
+                Command::GetWebhook { .. } => "command-get_webhook",
                 Command::GetSystemVars { .. } => "command-get_system_vars",
                 Command::SetSystemVars { .. } => "command-set_system_vars",
                 Command::Terminate { .. } => "command-terminate",
@@ -276,6 +298,12 @@ impl Message {
                 "execute_single_statement_transaction"
             }
             Message::PeekStageReady { .. } => "peek_stage_ready",
+            Message::CreateIndexStageReady { .. } => "create_index_stage_ready",
+            Message::CreateViewStageReady { .. } => "create_view_stage_ready",
+            Message::CreateMaterializedViewStageReady { .. } => {
+                "create_materialized_view_stage_ready"
+            }
+            Message::SubscribeStageReady { .. } => "subscribe_stage_ready",
             Message::DrainStatementLog => "drain_statement_log",
             Message::AlterConnectionValidationReady(..) => "alter_connection_validation_ready",
             Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",
@@ -430,6 +458,185 @@ pub struct PeekStageFinish {
     real_time_recency_ts: Option<mz_repr::Timestamp>,
     optimizer: optimize::peek::Optimizer,
     global_mir_plan: optimize::peek::GlobalMirPlan,
+}
+
+#[derive(Debug)]
+pub enum CreateIndexStage {
+    Validate(CreateIndexValidate),
+    Optimize(CreateIndexOptimize),
+    Finish(CreateIndexFinish),
+}
+
+impl CreateIndexStage {
+    fn validity(&mut self) -> Option<&mut PlanValidity> {
+        match self {
+            Self::Validate(_) => None,
+            Self::Optimize(stage) => Some(&mut stage.validity),
+            Self::Finish(stage) => Some(&mut stage.validity),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CreateIndexValidate {
+    plan: plan::CreateIndexPlan,
+    resolved_ids: ResolvedIds,
+}
+
+#[derive(Debug)]
+pub struct CreateIndexOptimize {
+    validity: PlanValidity,
+    plan: plan::CreateIndexPlan,
+    resolved_ids: ResolvedIds,
+}
+
+#[derive(Debug)]
+pub struct CreateIndexFinish {
+    validity: PlanValidity,
+    id: GlobalId,
+    plan: plan::CreateIndexPlan,
+    resolved_ids: ResolvedIds,
+    global_mir_plan: optimize::index::GlobalMirPlan,
+    global_lir_plan: optimize::index::GlobalLirPlan,
+}
+
+#[derive(Debug)]
+pub enum CreateViewStage {
+    Validate(CreateViewValidate),
+    Optimize(CreateViewOptimize),
+    Finish(CreateViewFinish),
+}
+
+impl CreateViewStage {
+    fn validity(&mut self) -> Option<&mut PlanValidity> {
+        match self {
+            Self::Validate(_) => None,
+            Self::Optimize(stage) => Some(&mut stage.validity),
+            Self::Finish(stage) => Some(&mut stage.validity),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CreateViewValidate {
+    plan: plan::CreateViewPlan,
+    resolved_ids: ResolvedIds,
+}
+
+#[derive(Debug)]
+pub struct CreateViewOptimize {
+    validity: PlanValidity,
+    plan: plan::CreateViewPlan,
+    resolved_ids: ResolvedIds,
+}
+
+#[derive(Debug)]
+pub struct CreateViewFinish {
+    validity: PlanValidity,
+    id: GlobalId,
+    plan: plan::CreateViewPlan,
+    resolved_ids: ResolvedIds,
+    optimized_expr: OptimizedMirRelationExpr,
+}
+
+#[derive(Debug)]
+pub enum CreateMaterializedViewStage {
+    Validate(CreateMaterializedViewValidate),
+    Optimize(CreateMaterializedViewOptimize),
+    Finish(CreateMaterializedViewFinish),
+}
+
+impl CreateMaterializedViewStage {
+    fn validity(&mut self) -> Option<&mut PlanValidity> {
+        match self {
+            Self::Validate(_) => None,
+            Self::Optimize(stage) => Some(&mut stage.validity),
+            Self::Finish(stage) => Some(&mut stage.validity),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CreateMaterializedViewValidate {
+    plan: plan::CreateMaterializedViewPlan,
+    resolved_ids: ResolvedIds,
+}
+
+#[derive(Debug)]
+pub struct CreateMaterializedViewOptimize {
+    validity: PlanValidity,
+    plan: plan::CreateMaterializedViewPlan,
+    resolved_ids: ResolvedIds,
+}
+
+#[derive(Debug)]
+pub struct CreateMaterializedViewFinish {
+    validity: PlanValidity,
+    id: GlobalId,
+    plan: plan::CreateMaterializedViewPlan,
+    resolved_ids: ResolvedIds,
+    local_mir_plan: optimize::materialized_view::LocalMirPlan,
+    global_mir_plan: optimize::materialized_view::GlobalMirPlan,
+    global_lir_plan: optimize::materialized_view::GlobalLirPlan,
+}
+
+#[derive(Debug)]
+pub enum SubscribeStage {
+    Validate(SubscribeValidate),
+    OptimizeMir(SubscribeOptimizeMir),
+    Timestamp(SubscribeTimestamp),
+    OptimizeLir(SubscribeOptimizeLir),
+    Finish(SubscribeFinish),
+}
+
+impl SubscribeStage {
+    fn validity(&mut self) -> Option<&mut PlanValidity> {
+        match self {
+            Self::Validate(_) => None,
+            Self::OptimizeMir(stage) => Some(&mut stage.validity),
+            Self::Timestamp(stage) => Some(&mut stage.validity),
+            Self::OptimizeLir(stage) => Some(&mut stage.validity),
+            Self::Finish(stage) => Some(&mut stage.validity),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SubscribeValidate {
+    plan: plan::SubscribePlan,
+    target_cluster: TargetCluster,
+}
+
+#[derive(Debug)]
+pub struct SubscribeOptimizeMir {
+    validity: PlanValidity,
+    plan: plan::SubscribePlan,
+    timeline: TimelineContext,
+}
+
+#[derive(Debug)]
+pub struct SubscribeTimestamp {
+    validity: PlanValidity,
+    plan: plan::SubscribePlan,
+    timeline: TimelineContext,
+    optimizer: optimize::subscribe::Optimizer,
+    global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
+}
+
+#[derive(Debug)]
+pub struct SubscribeOptimizeLir {
+    validity: PlanValidity,
+    plan: plan::SubscribePlan,
+    optimizer: optimize::subscribe::Optimizer,
+    global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Resolved>,
+}
+
+#[derive(Debug)]
+pub struct SubscribeFinish {
+    validity: PlanValidity,
+    cluster_id: ComputeInstanceId,
+    plan: plan::SubscribePlan,
+    global_lir_plan: optimize::subscribe::GlobalLirPlan,
 }
 
 /// An enum describing which cluster to run a statement on.
@@ -994,6 +1201,8 @@ pub struct Coordinator {
 
     /// A map from active subscribes to the subscribe description.
     active_subscribes: BTreeMap<GlobalId, ActiveSubscribe>,
+    /// A map from active webhooks to their invalidation handle.
+    active_webhooks: BTreeMap<GlobalId, WebhookAppenderInvalidator>,
 
     /// Serializes accesses to write critical sections.
     write_lock: Arc<tokio::sync::Mutex<()>>,
@@ -1051,7 +1260,7 @@ pub struct Coordinator {
     webhook_concurrency_limit: WebhookConcurrencyLimiter,
 
     /// Implementation of
-    /// [`TimestampOracle`](crate::coord::timestamp_oracle::TimestampOracle) to
+    /// [`TimestampOracle`](mz_timestamp_oracle::TimestampOracle) to
     /// use.
     timestamp_oracle_impl: vars::TimestampOracleImpl,
 
@@ -1111,7 +1320,11 @@ impl Coordinator {
                 });
             }
         }
-        self.controller.create_replicas(replicas_to_start).await?;
+        let enable_worker_core_affinity =
+            self.catalog().system_config().enable_worker_core_affinity();
+        self.controller
+            .create_replicas(replicas_to_start, enable_worker_core_affinity)
+            .await?;
 
         debug!("coordinator init: migrating builtin objects");
         // Migrate builtin objects.
@@ -1351,8 +1564,22 @@ impl Coordinator {
                         .clone();
 
                     // Timestamp selection
-                    let as_of = self.bootstrap_materialized_view_as_of(&df_desc, mview.cluster_id);
+                    let as_of = self.bootstrap_materialized_view_as_of(
+                        &df_desc,
+                        mview.cluster_id,
+                        &mview.refresh_schedule,
+                    );
                     df_desc.set_as_of(as_of);
+
+                    // If we have a refresh schedule that has a last refresh, then set the `until` to the last refresh.
+                    let until = mview
+                        .refresh_schedule
+                        .as_ref()
+                        .and_then(|s| s.last_refresh())
+                        .and_then(|r| r.try_step_forward());
+                    if let Some(until) = until {
+                        df_desc.until.meet_assign(&Antichain::from_elem(until));
+                    }
 
                     let df_meta = self
                         .catalog()
@@ -1725,6 +1952,7 @@ impl Coordinator {
                         internal_view_id,
                         mv.desc.iter_names().cloned().collect(),
                         mv.non_null_assertions.clone(),
+                        mv.refresh_schedule.clone(),
                         debug_name,
                         optimizer_config.clone(),
                     );
@@ -1947,6 +2175,7 @@ impl Coordinator {
         &self,
         dataflow: &DataflowDescription<Plan>,
         cluster_id: ComputeInstanceId,
+        refresh_schedule: &Option<RefreshSchedule>,
     ) -> Antichain<Timestamp> {
         // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
         // the `since`s of all dependencies.
@@ -1965,11 +2194,25 @@ impl Coordinator {
         let write_frontier = self.storage_write_frontier(*sink_id);
 
         // Things go wrong if we try to create a dataflow with `as_of = []`, so avoid that.
-        let as_of = if write_frontier.is_empty() {
+        let mut as_of = if write_frontier.is_empty() {
             min_as_of.clone()
         } else {
             min_as_of.join(write_frontier)
         };
+
+        // If we have a RefreshSchedule, then round up the `as_of` to the next refresh.
+        // Note that in many cases the `as_of` would already be at this refresh, because the `write_frontier` will be
+        // usually there. However, it can happen that we restart after the MV was created in the catalog but before
+        // its upper was initialized in persist.
+        if let Some(refresh_schedule) = &refresh_schedule {
+            if let Some(rounded_up_ts) =
+                refresh_schedule.round_up_timestamp(*as_of.as_option().expect("as_of is non-empty"))
+            {
+                as_of = Antichain::from_elem(rounded_up_ts);
+            } else {
+                // We are past the last refresh. Let's not move the as_of.
+            }
+        }
 
         tracing::info!(
             export_ids = %dataflow.display_export_ids(),
@@ -2519,6 +2762,7 @@ pub fn serve(
                     client_pending_peeks: BTreeMap::new(),
                     pending_real_time_recency_timestamp: BTreeMap::new(),
                     active_subscribes: BTreeMap::new(),
+                    active_webhooks: BTreeMap::new(),
                     write_lock: Arc::new(tokio::sync::Mutex::new(())),
                     write_lock_wait_group: VecDeque::new(),
                     pending_writes: Vec::new(),

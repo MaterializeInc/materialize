@@ -21,43 +21,22 @@ from materialize.cloudtest.util.wait import wait
 LOGGER = logging.getLogger(__name__)
 
 
-def get_value_from_label(
-    mz: MaterializeApplication, cluster_id: str, label: str
-) -> str:
-    return mz.kubectl(
-        "get",
-        "pods",
-        f"--selector=cluster.environmentd.materialize.cloud/cluster-id={cluster_id}",
-        "-o",
-        "jsonpath='{.items[*].metadata.labels." + label + "}'",
-    )
-
-
 def get_cluster_workers(mz: MaterializeApplication, cluster_id: str) -> str:
-    return get_value_from_label(
-        mz, cluster_id, r"cluster\.environmentd\.materialize\.cloud/workers"
+    return mz.get_pod_label_value(
+        cluster_id, r"cluster\.environmentd\.materialize\.cloud/workers"
     )
 
 
 def get_cluster_scale(mz: MaterializeApplication, cluster_id: str) -> str:
-    return get_value_from_label(
-        mz, cluster_id, r"cluster\.environmentd\.materialize\.cloud/scale"
+    return mz.get_pod_label_value(
+        cluster_id, r"cluster\.environmentd\.materialize\.cloud/scale"
     )
 
 
 def get_cluster_size(mz: MaterializeApplication, cluster_id: str) -> str:
-    return get_value_from_label(
-        mz, cluster_id, r"cluster\.environmentd\.materialize\.cloud/size"
+    return mz.get_pod_label_value(
+        cluster_id, r"cluster\.environmentd\.materialize\.cloud/size"
     )
-
-
-def get_cluster_and_replica_id(
-    mz: MaterializeApplication, mz_table: str, name: str
-) -> tuple[str, str]:
-    [cluster_id, replica_id] = mz.environmentd.sql_query(
-        f"SELECT s.cluster_id, r.id FROM {mz_table} s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = '{name}'"
-    )[0]
-    return cluster_id, replica_id
 
 
 def test_source_creation(mz: MaterializeApplication) -> None:
@@ -88,7 +67,7 @@ def test_source_creation(mz: MaterializeApplication) -> None:
     )
 
     for source in ["source1", "source2"]:
-        [cluster_id, replica_id] = get_cluster_and_replica_id(mz, "mz_sources", source)
+        [cluster_id, replica_id] = mz.get_cluster_and_replica_id("mz_sources", source)
 
         storage_cluster = cluster_pod_name(cluster_id, replica_id)
         wait(condition="condition=Ready", resource=storage_cluster)
@@ -117,15 +96,15 @@ def test_source_resizing(mz: MaterializeApplication) -> None:
             """
         )
     )
-    [cluster_id, replica_id] = get_cluster_and_replica_id(
-        mz, "mz_sources", "resize_source"
+    [cluster_id, replica_id] = mz.get_cluster_and_replica_id(
+        "mz_sources", "resize_source"
     )
     storage_cluster_name = cluster_pod_name(cluster_id, replica_id)
     wait(condition="condition=Ready", resource=storage_cluster_name)
 
-    assert get_cluster_workers(mz, cluster_id) == "'1'"
-    assert get_cluster_scale(mz, cluster_id) == "'1'"
-    assert get_cluster_size(mz, cluster_id) == "'1'"
+    assert get_cluster_workers(mz, cluster_id) == "1"
+    assert get_cluster_scale(mz, cluster_id) == "1"
+    assert get_cluster_size(mz, cluster_id) == "1"
 
     mz.testdrive.run(
         input=dedent(
@@ -145,12 +124,12 @@ def test_source_resizing(mz: MaterializeApplication) -> None:
 
     wait(condition="delete", resource=storage_cluster_name)
 
-    assert get_cluster_workers(mz, cluster_id) == "'16'"
-    assert get_cluster_scale(mz, cluster_id) == "'1'"
-    assert get_cluster_size(mz, cluster_id) == "'16'"
+    assert get_cluster_workers(mz, cluster_id) == "16"
+    assert get_cluster_scale(mz, cluster_id) == "1"
+    assert get_cluster_size(mz, cluster_id) == "16"
 
-    [cluster_id, replica_id] = get_cluster_and_replica_id(
-        mz, "mz_sources", "resize_source"
+    [cluster_id, replica_id] = mz.get_cluster_and_replica_id(
+        "mz_sources", "resize_source"
     )
     storage_cluster_name = cluster_pod_name(cluster_id, replica_id)
 
@@ -194,7 +173,7 @@ def test_source_shutdown(mz: MaterializeApplication, failpoint: bool) -> None:
         )
     )
 
-    [cluster_id, replica_id] = get_cluster_and_replica_id(mz, "mz_sources", "source1")
+    [cluster_id, replica_id] = mz.get_cluster_and_replica_id("mz_sources", "source1")
 
     storage_cluster_pod = cluster_pod_name(cluster_id, replica_id)
     storage_cluster_svc = cluster_service_name(cluster_id, replica_id)
@@ -246,14 +225,14 @@ def test_sink_resizing(mz: MaterializeApplication) -> None:
     )
     assert id is not None
 
-    [cluster_id, replica_id] = get_cluster_and_replica_id(mz, "mz_sinks", "resize_sink")
+    [cluster_id, replica_id] = mz.get_cluster_and_replica_id("mz_sinks", "resize_sink")
     storage_cluster_name = cluster_pod_name(cluster_id, replica_id)
 
     wait(condition="condition=Ready", resource=storage_cluster_name)
 
-    assert get_cluster_workers(mz, cluster_id) == "'2'"
-    assert get_cluster_scale(mz, cluster_id) == "'1'"
-    assert get_cluster_size(mz, cluster_id) == "'2'"
+    assert get_cluster_workers(mz, cluster_id) == "2"
+    assert get_cluster_scale(mz, cluster_id) == "1"
+    assert get_cluster_size(mz, cluster_id) == "2"
 
     mz.testdrive.run(
         input=dedent(
@@ -273,11 +252,11 @@ def test_sink_resizing(mz: MaterializeApplication) -> None:
 
     wait(condition="delete", resource=storage_cluster_name)
 
-    assert get_cluster_workers(mz, cluster_id) == "'4 4 4 4'"
-    assert get_cluster_scale(mz, cluster_id) == "'4 4 4 4'"
-    assert get_cluster_size(mz, cluster_id) == "'4-4 4-4 4-4 4-4'"
+    assert get_cluster_workers(mz, cluster_id) == "4 4 4 4"
+    assert get_cluster_scale(mz, cluster_id) == "4 4 4 4"
+    assert get_cluster_size(mz, cluster_id) == "4-4 4-4 4-4 4-4"
 
-    [cluster_id, replica_id] = get_cluster_and_replica_id(mz, "mz_sinks", "resize_sink")
+    [cluster_id, replica_id] = mz.get_cluster_and_replica_id("mz_sinks", "resize_sink")
     storage_cluster_name = cluster_pod_name(cluster_id, replica_id)
 
     mz.environmentd.sql("DROP SINK resize_sink")

@@ -298,16 +298,41 @@ impl<'a> ResultSpec<'a> {
             // Otherwise, if our function is monotonic, we can try mapping the input
             // range to an output range.
             Values::Within(min, max) if is_monotone => {
-                let min_column = result_map(Ok(min));
-                let max_column = result_map(Ok(max));
-                if min_column.nullable
-                    || min_column.fallible
-                    || max_column.nullable
-                    || max_column.fallible
-                {
-                    ResultSpec::anything()
-                } else {
-                    min_column.union(max_column)
+                let min_result = result_map(Ok(min));
+                let max_result = result_map(Ok(max));
+                match (min_result, max_result) {
+                    // If both endpoints give us a range, the result is a union of those ranges.
+                    (
+                        ResultSpec {
+                            nullable: false,
+                            fallible: false,
+                            values: a_values,
+                        },
+                        ResultSpec {
+                            nullable: false,
+                            fallible: false,
+                            values: b_values,
+                        },
+                    ) => ResultSpec {
+                        nullable: false,
+                        fallible: false,
+                        values: a_values.union(b_values),
+                    },
+                    // If both endpoints are null, we assume the whole range maps to null.
+                    (
+                        ResultSpec {
+                            nullable: true,
+                            fallible: false,
+                            values: Values::Empty,
+                        },
+                        ResultSpec {
+                            nullable: true,
+                            fallible: false,
+                            values: Values::Empty,
+                        },
+                    ) => ResultSpec::null(),
+                    // Otherwise we can't assume anything about the output.
+                    _ => ResultSpec::anything(),
                 }
             }
             // TODO: we could return a narrower result for eg. `Values::Nested` with all-`Within` fields.
@@ -1546,6 +1571,46 @@ mod tests {
             "like function should not error on non-error input"
         );
         assert!(range_out.may_contain(Datum::True));
+        assert!(range_out.may_contain(Datum::False));
+        assert!(range_out.may_contain(Datum::Null));
+    }
+
+    #[mz_ore::test]
+    fn test_inequality() {
+        let arena = RowArena::new();
+
+        let expr = MirScalarExpr::CallBinary {
+            func: BinaryFunc::Gte,
+            expr1: Box::new(MirScalarExpr::Column(0)),
+            expr2: Box::new(MirScalarExpr::CallUnmaterializable(
+                UnmaterializableFunc::MzNow,
+            )),
+        };
+
+        let relation = RelationType::new(vec![ScalarType::MzTimestamp.nullable(true)]);
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(
+                Datum::MzTimestamp(1704736444949u64.into()),
+                Datum::MzTimestamp(1704736444949u64.into()),
+            )
+            .union(ResultSpec::null()),
+        );
+        interpreter.push_unmaterializable(
+            UnmaterializableFunc::MzNow,
+            ResultSpec::value_between(
+                Datum::MzTimestamp(1704738791000u64.into()),
+                Datum::MzTimestamp(18446744073709551615u64.into()),
+            ),
+        );
+
+        let range_out = interpreter.expr(&expr).range;
+        assert!(
+            !range_out.fallible,
+            "<= function should not error on non-error input"
+        );
+        assert!(!range_out.may_contain(Datum::True));
         assert!(range_out.may_contain(Datum::False));
         assert!(range_out.may_contain(Datum::Null));
     }

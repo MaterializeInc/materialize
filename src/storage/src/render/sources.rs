@@ -27,6 +27,7 @@ use mz_storage_types::errors::{
 };
 use mz_storage_types::parameters::StorageMaxInflightBytesConfig;
 use mz_storage_types::sources::encoding::*;
+use mz_storage_types::sources::envelope::{KeyEnvelope, NoneEnvelope, UpsertEnvelope, UpsertStyle};
 use mz_storage_types::sources::*;
 use mz_timely_util::builder_async::PressOnDropButton;
 use mz_timely_util::operator::CollectionExt;
@@ -615,7 +616,7 @@ fn append_metadata_to_value<G: Scope>(
         let val = res.value.map(|val_result| {
             val_result.map(|mut val| {
                 if !res.metadata.is_empty() {
-                    RowPacker::for_existing_row(&mut val).extend(&*res.metadata);
+                    RowPacker::for_existing_row(&mut val).extend(&res.metadata);
                 }
                 val
             })

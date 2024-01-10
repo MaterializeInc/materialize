@@ -17,4 +17,6 @@ message ProtoBatch {
     string shard_id = 1;
     string version = 2;
     mz_persist_client.internal.state.ProtoHollowBatch batch = 3;
+
+    reserved 4;
 }

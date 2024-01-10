@@ -87,6 +87,10 @@ cluster_replica_def ::=
   replica_name '(' replica_option '=' value ( ',' replica_option '=' value )* ')'
 create_cluster_replica ::=
   'CREATE' 'CLUSTER' 'REPLICA' cluster_name '.' replica_name (option '=' value ( ',' option '=' value )*)?
+create_connection_aws ::=
+  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'AWS'
+  '(' field '='? val ( ',' field '='? val )* ')'
+  ('WITH' with_options)?
 create_connection_kafka ::=
   'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'KAFKA'
   '(' field '='? val ( ',' field '='? val )* ')'

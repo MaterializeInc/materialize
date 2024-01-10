@@ -139,18 +139,10 @@ use std::str::FromStr;
 
 use differential_dataflow::{AsCollection, Collection};
 use futures::TryStreamExt;
-use mz_postgres_util::schemas::PublicationInfoError;
-use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::{Broadcast, CapabilitySet, ConnectLoop, Feedback};
-use timely::dataflow::{Scope, Stream};
-use timely::progress::{Antichain, Timestamp};
-use tokio_postgres::types::PgLsn;
-use tokio_postgres::Client;
-use tracing::trace;
-
 use mz_expr::MirScalarExpr;
 use mz_ore::result::ResultExt;
 use mz_postgres_util::desc::PostgresTableDesc;
+use mz_postgres_util::schemas::PublicationInfoError;
 use mz_postgres_util::simple_query_opt;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
@@ -159,9 +151,16 @@ use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use mz_timely_util::operator::StreamExt as TimelyStreamExt;
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, ConnectLoop, Feedback, Map};
+use timely::dataflow::{Scope, Stream};
+use timely::progress::{Antichain, Timestamp};
+use tokio_postgres::types::PgLsn;
+use tokio_postgres::Client;
+use tracing::trace;
 
 use crate::source::postgres::replication::RewindRequest;
-use crate::source::postgres::{verify_schema, DefiniteError, TransientError};
+use crate::source::postgres::{verify_schema, DefiniteError, ReplicationError, TransientError};
 use crate::source::types::SourceReaderError;
 use crate::source::RawSourceCreationConfig;
 
@@ -175,7 +174,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 ) -> (
     Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
     Stream<G, RewindRequest>,
-    Stream<G, Rc<TransientError>>,
+    Stream<G, ReplicationError>,
     PressOnDropButton,
 ) {
     let op_name = format!("TableReader({})", config.id);
@@ -186,11 +185,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let (mut raw_handle, raw_data) = builder.new_output();
     let (mut rewinds_handle, rewinds) = builder.new_output();
     let (mut snapshot_handle, snapshot) = builder.new_output();
+    let (mut definite_error_handle, definite_errors) = builder.new_output();
 
     // This operator needs to broadcast data to itself in order to synchronize the transaction
     // snapshot. However, none of the feedback capabilities result in output messages and for the
     // feedback edge specifically having a default conncetion would result in a loop.
-    let disconnected = vec![Antichain::new(); 3];
+    let disconnected = vec![Antichain::new(); 4];
     let mut snapshot_input = builder.new_input_connection(&feedback_data, Pipeline, disconnected);
 
     // The export id must be sent to all workes, so we broadcast the feedback connection
@@ -227,12 +227,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         .map(|(k, v)| (*k, v.clone()))
         .collect();
 
-    let (button, errors) = builder.build_fallible(move |caps| {
+    let (button, transient_errors) = builder.build_fallible(move |caps| {
         Box::pin(async move {
             let id = config.id;
             let worker_id = config.worker_id;
 
-            let [data_cap_set, rewind_cap_set, snapshot_cap_set]: &mut [_; 3] = caps.try_into().unwrap();
+            let [data_cap_set, rewind_cap_set, snapshot_cap_set, definite_error_cap_set]: &mut [_; 4] = caps.try_into().unwrap();
             trace!(
                 %id,
                 "timely-{worker_id} initializing table reader with {} tables to snapshot",
@@ -344,6 +344,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                         raw_handle.give(&data_cap_set[0], update).await;
                     }
 
+                    definite_error_handle.give(&definite_error_cap_set[0], ReplicationError::Definite(Rc::new(err))).await;
                     return Ok(());
                 }
                 Err(PublicationInfoError::PostgresError(e)) => Err(e)?,
@@ -415,6 +416,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
         (*output_index, event.err_into())
     });
+
+    let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
 
     (snapshot_updates, rewinds, errors, button.press_on_drop())
 }

@@ -26,6 +26,7 @@ use mz_controller::clusters::{
     ClusterRole, ClusterStatus, ProcessId, ReplicaConfig, ReplicaLogging,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
@@ -580,8 +581,8 @@ impl Source {
                     Some("debezium")
                 }
                 SourceEnvelope::Upsert(upsert_envelope) => match upsert_envelope.style {
-                    mz_storage_types::sources::UpsertStyle::Default(_) => Some("upsert"),
-                    mz_storage_types::sources::UpsertStyle::Debezium { .. } => {
+                    mz_storage_types::sources::envelope::UpsertStyle::Default(_) => Some("upsert"),
+                    mz_storage_types::sources::envelope::UpsertStyle::Debezium { .. } => {
                         // NOTE(aljoscha): Should we somehow mark that this is
                         // using upsert internally? See note above about
                         // DEBEZIUM.
@@ -706,6 +707,7 @@ pub struct MaterializedView {
     pub cluster_id: ClusterId,
     pub non_null_assertions: Vec<usize>,
     pub custom_logical_compaction_window: Option<CompactionWindow>,
+    pub refresh_schedule: Option<RefreshSchedule>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1977,6 +1979,10 @@ impl mz_sql::catalog::CatalogClusterReplica<'_> for ClusterReplica {
 
     fn owner_id(&self) -> RoleId {
         self.owner_id
+    }
+
+    fn internal(&self) -> bool {
+        self.config.location.internal()
     }
 }
 

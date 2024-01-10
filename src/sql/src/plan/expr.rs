@@ -24,7 +24,6 @@ use mz_expr::{func, CollectionPlan, Id, LetRecLimit, RowSetFinishing};
 use mz_expr::AggregateFunc::WindowAggregate;
 pub use mz_expr::{
     BinaryFunc, ColumnOrder, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc, WindowFrame,
-    WindowFrameBound, WindowFrameUnits,
 };
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack;
@@ -1333,10 +1332,23 @@ impl HirRelationExpr {
         }
     }
 
-    pub fn filter(self, predicates: Vec<HirScalarExpr>) -> Self {
-        HirRelationExpr::Filter {
-            input: Box::new(self),
+    pub fn filter(mut self, mut preds: Vec<HirScalarExpr>) -> Self {
+        if let HirRelationExpr::Filter {
+            input: _,
             predicates,
+        } = &mut self
+        {
+            predicates.extend(preds);
+            predicates.sort();
+            predicates.dedup();
+            self
+        } else {
+            preds.sort();
+            preds.dedup();
+            HirRelationExpr::Filter {
+                input: Box::new(self),
+                predicates: preds,
+            }
         }
     }
 
@@ -1373,27 +1385,52 @@ impl HirRelationExpr {
     }
 
     pub fn negate(self) -> Self {
-        HirRelationExpr::Negate {
-            input: Box::new(self),
+        if let HirRelationExpr::Negate { input } = self {
+            *input
+        } else {
+            HirRelationExpr::Negate {
+                input: Box::new(self),
+            }
         }
     }
 
     pub fn distinct(self) -> Self {
-        HirRelationExpr::Distinct {
-            input: Box::new(self),
+        if let HirRelationExpr::Distinct { .. } = self {
+            self
+        } else {
+            HirRelationExpr::Distinct {
+                input: Box::new(self),
+            }
         }
     }
 
     pub fn threshold(self) -> Self {
-        HirRelationExpr::Threshold {
-            input: Box::new(self),
+        if let HirRelationExpr::Threshold { .. } = self {
+            self
+        } else {
+            HirRelationExpr::Threshold {
+                input: Box::new(self),
+            }
         }
     }
 
     pub fn union(self, other: Self) -> Self {
+        let mut terms = Vec::new();
+        if let HirRelationExpr::Union { base, inputs } = self {
+            terms.push(*base);
+            terms.extend(inputs);
+        } else {
+            terms.push(self);
+        }
+        if let HirRelationExpr::Union { base, inputs } = other {
+            terms.push(*base);
+            terms.extend(inputs);
+        } else {
+            terms.push(other);
+        }
         HirRelationExpr::Union {
-            base: Box::new(self),
-            inputs: vec![other],
+            base: Box::new(terms.remove(0)),
+            inputs: terms,
         }
     }
 
@@ -1438,10 +1475,7 @@ impl HirRelationExpr {
     pub fn take(&mut self) -> HirRelationExpr {
         mem::replace(
             self,
-            HirRelationExpr::Constant {
-                rows: vec![],
-                typ: RelationType::new(Vec::new()),
-            },
+            HirRelationExpr::constant(vec![], RelationType::new(Vec::new())),
         )
     }
 
@@ -1805,23 +1839,23 @@ impl HirRelationExpr {
         if !finishing.is_trivial(self.arity()) {
             let old_finishing =
                 mem::replace(finishing, RowSetFinishing::trivial(finishing.project.len()));
-            *self = HirRelationExpr::TopK {
-                input: Box::new(std::mem::replace(
+            *self = HirRelationExpr::top_k(
+                std::mem::replace(
                     self,
                     HirRelationExpr::Constant {
                         rows: vec![],
                         typ: RelationType::new(Vec::new()),
                     },
-                )),
-                group_key: vec![],
-                order_key: old_finishing.order_by,
-                limit: old_finishing
+                ),
+                vec![],
+                old_finishing.order_by,
+                old_finishing
                     .limit
                     .map(|l| HirScalarExpr::literal(Datum::Int64(*l), ScalarType::Int64)),
-                offset: old_finishing.offset,
-                expected_group_size: group_size_hints.limit_input_group_size,
-            }
-            .project(old_finishing.project)
+                old_finishing.offset,
+                group_size_hints.limit_input_group_size,
+            )
+            .project(old_finishing.project);
         }
     }
 
@@ -3033,6 +3067,28 @@ impl HirScalarExpr {
                 None
             } else {
                 Some(datum.unwrap_str().to_owned())
+            }
+        })
+    }
+
+    /// Attempts to simplify this expression to a literal MzTimestamp.
+    ///
+    /// Returns `None` if this expression cannot be simplified, e.g. because it
+    /// contains non-literal values.
+    ///
+    /// TODO: Make this (and the other similar fns above) return Result, so that we can show the
+    /// error when it fails. (E.g., there can be non-trivial cast errors.)
+    ///
+    /// # Panics
+    ///
+    /// Panics if this expression does not have type [`ScalarType::MzTimestamp`].
+    pub fn into_literal_mz_timestamp(self) -> Option<Timestamp> {
+        self.simplify_to_literal().and_then(|row| {
+            let datum = row.unpack_first();
+            if datum.is_null() {
+                None
+            } else {
+                Some(datum.unwrap_mz_timestamp())
             }
         })
     }

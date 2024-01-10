@@ -23,7 +23,7 @@ steps:
     timeout_in_minutes: 10
     if: build.source == "ui"
     agents:
-      queue: linux
+      queue: linux-x86_64-small
 
   - wait: ~
 
@@ -35,7 +35,7 @@ steps:
       label: Detect references to already closed issues
       command: bin/ci-builder run stable bin/ci-closed-issues-detect
       agents:
-        queue: linux-x86_64
+        queue: linux-x86_64-small
 
     - id: unused-deps
       label: Unused dependencies
@@ -109,7 +109,7 @@ steps:
       label: Kafka multi-broker test
       timeout_in_minutes: 10
       agents:
-        queue: linux-x86_64
+        queue: linux-x86_64-small
       artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
@@ -171,7 +171,7 @@ steps:
         label: ":racing_car: testdrive with SIZE 1"
         timeout_in_minutes: 180
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
@@ -195,7 +195,7 @@ steps:
         label: Full Testdrive in Cloudtest (K8s)
         timeout_in_minutes: 300
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
@@ -206,7 +206,7 @@ steps:
         label: ":racing_car: testdrive with --persistent-user-tables"
         timeout_in_minutes: 30
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
@@ -226,7 +226,7 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: limits
-      timeout_in_minutes: 90
+      timeout_in_minutes: 120
 
     - id: limits-instance-size
       label: "Instance size limits"
@@ -256,24 +256,24 @@ steps:
     steps:
     - id: upsert-compaction-enabled
       label: Upsert (compaction enabled)
-      timeout_in_minutes: 30
+      timeout_in_minutes: 60
       artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
             composition: upsert
       agents:
-        queue: linux-x86_64
+        queue: linux-x86_64-small
 
     - id: upsert-compaction-disabled
       label: Upsert (compaction disabled)
-      timeout_in_minutes: 30
+      timeout_in_minutes: 60
       artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
             composition: upsert
             args: [--compaction-disabled]
       agents:
-        queue: linux-x86_64
+        queue: linux-x86_64-small
 
   - id: ssh-connection-extended
     label: Extended SSH connection tests
@@ -293,9 +293,7 @@ steps:
         label: "Zippy Kafka Sources"
         timeout_in_minutes: 120
         agents:
-          # Workload takes slightly more than 8Gb, so it OOMs
-          # on the instances from the linux-x86_64 queue
-          queue: builder-linux-x86_64
+          queue: linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -306,7 +304,7 @@ steps:
         label: "Zippy Kafka Parallel Insert"
         timeout_in_minutes: 120
         agents:
-          queue: builder-linux-x86_64
+          queue: linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -323,6 +321,17 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: zippy
               args: [--scenario=UserTables, --actions=10000, --max-execution-time=30m]
+
+      - id: zippy-user-tables-persist-txn
+        label: "Zippy User Tables + toggle persist-txn"
+        timeout_in_minutes: 180
+        agents:
+          queue: linux-x86_64
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: zippy
+              args: [--scenario=UserTablesTogglePersistTxn, --actions=10000, --max-execution-time=30m]
 
       - id: zippy-postgres-cdc
         label: "Zippy Postgres CDC"
@@ -361,9 +370,7 @@ steps:
         label: "Zippy w/ latest CRDB"
         timeout_in_minutes: 120
         agents:
-          # Workload takes slightly more than 8Gb, so it OOMs
-          # on the instances from the linux-x86_64 queue
-          queue: builder-linux-x86_64
+          queue: linux-x86_64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -384,21 +391,32 @@ steps:
   - group: AWS
     key: aws
     steps:
-      - id: aws-checks
-        label: AWS
+      - id: aws-real
+        label: AWS (Real)
         timeout_in_minutes: 30
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/scratch-aws-access: ~
+          - ./ci/plugins/mzcompose:
+              composition: aws
+
+      - id: aws-localstack
+        label: AWS (Localstack)
+        timeout_in_minutes: 30
+        agents:
+          queue: linux-x86_64-small
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
-              composition: aws
+              composition: aws-localstack
 
       - id: secrets-local-file
         label: "Secrets Local File"
         timeout_in_minutes: 30
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -669,6 +687,39 @@ steps:
               composition: platform-checks
               args: [--scenario=DropCreateDefaultReplica, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-persist-txn-toggle
+        label: "Checks + Toggle persist_txn"
+        timeout_in_minutes: 45
+        artifact_paths: junit_*.xml
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=PersistTxnToggle, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-persist-txn-fencing
+        label: "Checks + persist_txn fencing"
+        timeout_in_minutes: 45
+        artifact_paths: junit_*.xml
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=PersistTxnFencing, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-persist-catalog-toggle
+        label: "Checks + Toggle persist catalog"
+        timeout_in_minutes: 45
+        artifact_paths: junit_*.xml
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=PersistCatalogToggle, "--seed=$BUILDKITE_JOB_ID"]
+
       - id: checks-upgrade-matrix
         label: "Random upgrades over the entire matrix"
         timeout_in_minutes: 600
@@ -703,13 +754,13 @@ steps:
               composition: persist
               args: [--consensus=mem, --blob=mem]
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
 
       - id: persist-maelstrom-single-node
         label: Long single-node Maelstrom coverage of persist
         timeout_in_minutes: 20
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
         artifact_paths: [test/persist/maelstrom/**/*.log, junit_*.xml]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -720,7 +771,7 @@ steps:
         label: Long multi-node Maelstrom coverage of persist with postgres consensus
         timeout_in_minutes: 20
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
         artifact_paths: [test/persist/maelstrom/**/*.log, junit_*.xml]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -731,20 +782,19 @@ steps:
         label: Maelstrom coverage of persist-txn
         timeout_in_minutes: 10
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
         artifact_paths: [test/persist/maelstrom/**/*.log, junit_*.xml]
         plugins:
           - ./ci/plugins/mzcompose:
               composition: persist
               args: [--consensus=mem, --blob=mem, --persist-txn]
-        skip: "TODO(txn): Turn on before enabling by default/in production."
 
   - id: persistence-failpoints
     label: Persistence failpoints
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
     plugins:
       - ./ci/plugins/mzcompose:
           composition: persistence
@@ -759,7 +809,7 @@ steps:
       artifact_paths: junit_*.xml
       timeout_in_minutes: 30
       agents:
-        queue: linux-x86_64
+        queue: linux-x86_64-small
       plugins:
         - ./ci/plugins/mzcompose:
             composition: sql-feature-flags
@@ -769,7 +819,7 @@ steps:
       artifact_paths: junit_*.xml
       timeout_in_minutes: 30
       agents:
-        queue: linux-x86_64
+        queue: linux-x86_64-small
       plugins:
         - ./ci/plugins/mzcompose:
             composition: launchdarkly
@@ -781,7 +831,7 @@ steps:
     concurrency: 1
     concurrency_group: 'cloud-canary'
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cloud-canary
@@ -794,7 +844,7 @@ steps:
     concurrency: 1
     concurrency_group: 'mz-e2e'
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
     plugins:
       - ./ci/plugins/mzcompose:
           composition: mz-e2e
@@ -806,7 +856,7 @@ steps:
         label: "Output consistency (internal)"
         timeout_in_minutes: 30
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -817,7 +867,7 @@ steps:
         label: "Output consistency (Postgres)"
         timeout_in_minutes: 58
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -828,7 +878,7 @@ steps:
         label: "Output consistency (version)"
         timeout_in_minutes: 58
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
@@ -841,9 +891,9 @@ steps:
       - id: sqlsmith
         label: "SQLsmith"
         artifact_paths: junit_*.xml
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlsmith
@@ -852,7 +902,7 @@ steps:
       - id: sqlsmith-explain
         label: "SQLsmith explain"
         artifact_paths: junit_*.xml
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         agents:
           queue: linux-x86_64
         plugins:
@@ -866,9 +916,9 @@ steps:
       - id: sqlancer-pqs
         label: "SQLancer PQS"
         artifact_paths: junit_*.xml
-        timeout_in_minutes: 30
+        timeout_in_minutes: 40
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlancer
@@ -877,9 +927,9 @@ steps:
       - id: sqlancer-norec
         label: "SQLancer NoREC"
         artifact_paths: junit_*.xml
-        timeout_in_minutes: 30
+        timeout_in_minutes: 40
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlancer
@@ -888,9 +938,9 @@ steps:
       - id: sqlancer-query-partitioning
         label: "SQLancer QueryPartitioning"
         artifact_paths: junit_*.xml
-        timeout_in_minutes: 30
+        timeout_in_minutes: 40
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlancer
@@ -899,20 +949,56 @@ steps:
       - id: sqlancer-having
         label: "SQLancer Having"
         artifact_paths: junit_*.xml
-        timeout_in_minutes: 30
+        timeout_in_minutes: 40
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlancer
               args: [--runtime=1500, --oracle=HAVING]
+
+  - group: RQG
+    key: rqg
+    steps:
+    - id: rqg-simple-aggregates
+      label: "RQG simple-aggregates workload"
+      artifact_paths: junit_*.xml
+      timeout_in_minutes: 45
+      agents:
+        queue: linux-x86_64-small
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: rqg
+            args: ["simple-aggregates", "--seed=$BUILDKITE_JOB_ID"]
+
+    - id: rqg-db3-joins
+      label: "RQG dbt3-joins workload"
+      artifact_paths: junit_*.xml
+      timeout_in_minutes: 45
+      agents:
+        queue: linux-x86_64
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: rqg
+            args: ["dbt3-joins", "--seed=$BUILDKITE_JOB_ID"]
+
+    - id: rqg-banking
+      label: "RQG banking workload"
+      artifact_paths: junit_*.xml
+      timeout_in_minutes: 45
+      agents:
+        queue: linux-x86_64
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: rqg
+            args: ["banking", "--seed=$BUILDKITE_JOB_ID"]
 
   - id: crdb-restarts
     label: "CRDB rolling restarts"
     timeout_in_minutes: 15
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
     plugins:
       - ./ci/plugins/mzcompose:
           composition: crdb-restarts
@@ -922,7 +1008,7 @@ steps:
     timeout_in_minutes: 15
     artifact_paths: junit_*.xml
     agents:
-      queue: builder-linux-x86_64
+      queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: pubsub-disruption
@@ -945,7 +1031,7 @@ steps:
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-x86_64
+          queue: linux-x86_64-small
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -956,7 +1042,7 @@ steps:
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-x86_64
+          queue: linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -967,7 +1053,7 @@ steps:
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-x86_64
+          queue: linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -978,7 +1064,7 @@ steps:
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-x86_64
+          queue: linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -989,7 +1075,7 @@ steps:
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-x86_64
+          queue: linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1001,7 +1087,7 @@ steps:
         timeout_in_minutes: 60
         skip: "TODO(def-): Reenable when #2392 is fixed"
         agents:
-          queue: builder-linux-x86_64
+          queue: linux-x86_64-small
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1012,7 +1098,7 @@ steps:
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-x86_64
+          queue: linux-x86_64-small
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1024,11 +1110,22 @@ steps:
         timeout_in_minutes: 60
         skip: "TODO(def-): Properly stop all db actions during backup & restore"
         agents:
-          queue: builder-linux-x86_64
+          queue: linux-x86_64-small
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
               args: [--runtime=1500, --scenario=backup-restore, --naughty-identifiers]
+
+      - id: parallel-workload-persist-txn
+        label: "Parallel Workload (toggle persist-txn)"
+        artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
+        timeout_in_minutes: 60
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1500, --scenario=toggle-persist-txn]
 
   - id: incident-70
     label: "Test for incident 70"
@@ -1060,7 +1157,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: restart
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
 
   - id: legacy-upgrade
     label: Legacy upgrade tests (last version from git)
@@ -1070,6 +1167,17 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: legacy-upgrade
           args: ["--versions-source=git"]
+    agents:
+      queue: linux-x86_64
+
+  - id: persist-txn-fencing
+    label: Persist-txn fencing
+    timeout_in_minutes: 60
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: persist-txn-fencing
+
     agents:
       queue: linux-x86_64
 
@@ -1084,7 +1192,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: csharp
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
 
       - id: lang-js
         label: ":js: tests"
@@ -1094,7 +1202,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: js
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
 
       - id: lang-java
         label: ":java: tests"
@@ -1104,7 +1212,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: java
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
 
       - id: lang-python
         label: ":python: tests"
@@ -1114,7 +1222,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: python
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
 
       - id: lang-ruby
         label: ":ruby: tests"
@@ -1124,7 +1232,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: ruby
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
 
   - wait: ~
     continue_on_failure: true
@@ -1138,4 +1246,4 @@ steps:
           job-uuid-file-pattern: _([^_]*).xml
     priority: 1
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small

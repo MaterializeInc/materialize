@@ -536,18 +536,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 );
             }
 
-            // Note: this interval configures the level of granularity we expect statistics
-            // (at least with this implementation) to have. We expect a statistic in the
-            // system tables to be only accurate to within this interval + whatever
-            // skew the `CollectionManager` adds. The stats task in the controller will
-            // be reporting, for each worker, on some interval,
-            // the statistics reported by the most recent call here. This is known to be
-            // somewhat inaccurate, but people mostly care about either rates, or the
-            // values to within 1 minute.
-            //
-            // TODO(guswynn): Should this be configurable? Maybe via LaunchDarkly?
             if last_stats_time.is_none()
-                || last_stats_time.as_ref().unwrap().elapsed() >= Duration::from_secs(10)
+                || last_stats_time.as_ref().unwrap().elapsed()
+                    >= self
+                        .storage_state
+                        .storage_configuration
+                        .parameters
+                        .statistics_collection_interval
             {
                 self.report_storage_statistics(&response_tx);
                 last_stats_time = Some(Instant::now());

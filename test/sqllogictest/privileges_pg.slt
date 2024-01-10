@@ -102,7 +102,7 @@ GRANT regress_priv_user1 TO regress_priv_user6;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-GRANT create, usage ON cluster default TO regress_priv_user1;
+GRANT create, usage ON cluster quickstart TO regress_priv_user1;
 ----
 COMPLETE 0
 

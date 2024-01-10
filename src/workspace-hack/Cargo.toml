@@ -16,6 +16,8 @@ publish = false
 [dependencies]
 ahash = { version = "0.8.0" }
 anyhow = { version = "1.0.66", features = ["backtrace"] }
+async-compression = { version = "0.4.5", default-features = false, features = ["gzip", "tokio", "zstd"] }
+aws-config = { version = "1.1.1", default-features = false, features = ["sso"] }
 aws-credential-types = { version = "1.1.1", default-features = false, features = ["hardcoded-credentials", "test-util"] }
 aws-runtime = { version = "1.1.1", default-features = false, features = ["event-stream"] }
 aws-sdk-sts = { version = "1.7.0", default-features = false, features = ["rt-tokio"] }
@@ -23,6 +25,7 @@ aws-sigv4 = { version = "1.1.1", features = ["http0-compat", "sign-eventstream"]
 aws-smithy-async = { version = "1.1.1", default-features = false, features = ["rt-tokio"] }
 aws-smithy-http = { version = "0.60.1", default-features = false, features = ["event-stream"] }
 aws-smithy-runtime = { version = "1.1.1", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
+aws-smithy-runtime-api = { version = "1.1.1", features = ["client", "http-02x", "http-auth"] }
 aws-smithy-types = { version = "1.1.1", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "rt-tokio"] }
 axum = { version = "0.6.20", features = ["headers", "ws"] }
 bstr = { version = "0.2.14" }
@@ -60,7 +63,6 @@ kube-core = { version = "0.87.1", default-features = false, features = ["jsonpat
 libc = { version = "0.2.148", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.8", features = ["static"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
-lru = { version = "0.12.0" }
 memchr = { version = "2.5.0", features = ["use_std"] }
 mime_guess = { version = "2.0.3" }
 mio = { version = "0.8.8", features = ["net", "os-ext"] }
@@ -71,7 +73,7 @@ num-bigint = { version = "0.4.3" }
 num-integer = { version = "0.1.44", features = ["i128"] }
 num-traits = { version = "0.2.15", features = ["i128"] }
 openssl = { version = "0.10.55", features = ["vendored"] }
-ordered-float = { version = "3.4.0", features = ["serde"] }
+ordered-float = { version = "4.2.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
 phf = { version = "0.11.1", features = ["uncased"] }
 phf_shared = { version = "0.11.1", features = ["uncased"] }
@@ -89,7 +91,6 @@ rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", feat
 regex = { version = "1.7.0" }
 regex-syntax = { version = "0.6.28" }
 reqwest = { version = "0.11.13", features = ["blocking", "json", "multipart", "native-tls-vendored"] }
-ring = { version = "0.16.20", features = ["std"] }
 schemars = { version = "0.8.11", features = ["uuid1"] }
 scopeguard = { version = "1.1.0" }
 semver = { version = "1.0.16", features = ["serde"] }
@@ -116,7 +117,7 @@ tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit"
 tower-http = { version = "0.4.3", features = ["auth", "cors", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.37", features = ["log"] }
 tracing-core = { version = "0.1.30" }
-tracing-subscriber = { version = "0.3.16", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
 tungstenite = { version = "0.20.1" }
 uncased = { version = "0.9.7" }
 url = { version = "2.3.1", features = ["serde"] }
@@ -127,6 +128,8 @@ zstd-sys = { version = "2.0.9", features = ["std"] }
 [build-dependencies]
 ahash = { version = "0.8.0" }
 anyhow = { version = "1.0.66", features = ["backtrace"] }
+async-compression = { version = "0.4.5", default-features = false, features = ["gzip", "tokio", "zstd"] }
+aws-config = { version = "1.1.1", default-features = false, features = ["sso"] }
 aws-credential-types = { version = "1.1.1", default-features = false, features = ["hardcoded-credentials", "test-util"] }
 aws-runtime = { version = "1.1.1", default-features = false, features = ["event-stream"] }
 aws-sdk-sts = { version = "1.7.0", default-features = false, features = ["rt-tokio"] }
@@ -134,6 +137,7 @@ aws-sigv4 = { version = "1.1.1", features = ["http0-compat", "sign-eventstream"]
 aws-smithy-async = { version = "1.1.1", default-features = false, features = ["rt-tokio"] }
 aws-smithy-http = { version = "0.60.1", default-features = false, features = ["event-stream"] }
 aws-smithy-runtime = { version = "1.1.1", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
+aws-smithy-runtime-api = { version = "1.1.1", features = ["client", "http-02x", "http-auth"] }
 aws-smithy-types = { version = "1.1.1", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "rt-tokio"] }
 axum = { version = "0.6.20", features = ["headers", "ws"] }
 bstr = { version = "0.2.14" }
@@ -172,7 +176,6 @@ kube-core = { version = "0.87.1", default-features = false, features = ["jsonpat
 libc = { version = "0.2.148", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.8", features = ["static"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
-lru = { version = "0.12.0" }
 memchr = { version = "2.5.0", features = ["use_std"] }
 mime_guess = { version = "2.0.3" }
 mio = { version = "0.8.8", features = ["net", "os-ext"] }
@@ -183,7 +186,7 @@ num-bigint = { version = "0.4.3" }
 num-integer = { version = "0.1.44", features = ["i128"] }
 num-traits = { version = "0.2.15", features = ["i128"] }
 openssl = { version = "0.10.55", features = ["vendored"] }
-ordered-float = { version = "3.4.0", features = ["serde"] }
+ordered-float = { version = "4.2.0", features = ["serde"] }
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
 phf = { version = "0.11.1", features = ["uncased"] }
 phf_shared = { version = "0.11.1", features = ["uncased"] }
@@ -201,7 +204,6 @@ rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", feat
 regex = { version = "1.7.0" }
 regex-syntax = { version = "0.6.28" }
 reqwest = { version = "0.11.13", features = ["blocking", "json", "multipart", "native-tls-vendored"] }
-ring = { version = "0.16.20", features = ["std"] }
 schemars = { version = "0.8.11", features = ["uuid1"] }
 scopeguard = { version = "1.1.0" }
 semver = { version = "1.0.16", features = ["serde"] }
@@ -229,7 +231,7 @@ tower = { version = "0.4.13", features = ["balance", "buffer", "filter", "limit"
 tower-http = { version = "0.4.3", features = ["auth", "cors", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.37", features = ["log"] }
 tracing-core = { version = "0.1.30" }
-tracing-subscriber = { version = "0.3.16", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
 tungstenite = { version = "0.20.1" }
 uncased = { version = "0.9.7" }
 url = { version = "2.3.1", features = ["serde"] }
@@ -242,6 +244,7 @@ bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.19.0", features = ["unstable"] }
 openssl-sys = { version = "0.9.90", default-features = false, features = ["vendored"] }
+ring = { version = "0.17.7", features = ["std"] }
 tikv-jemalloc-sys = { version = "0.5.2", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
@@ -249,16 +252,19 @@ bitflags = { version = "2.4.1", default-features = false, features = ["std"] }
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.19.0", features = ["unstable"] }
 openssl-sys = { version = "0.9.90", default-features = false, features = ["vendored"] }
+ring = { version = "0.17.7", features = ["std"] }
 tikv-jemalloc-sys = { version = "0.5.2", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 
 [target.x86_64-apple-darwin.dependencies]
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.19.0", features = ["unstable"] }
+ring = { version = "0.17.7", features = ["std"] }
 security-framework = { version = "2.7.0", features = ["alpn"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
 native-tls = { version = "0.2.11", default-features = false, features = ["vendored"] }
 once_cell = { version = "1.19.0", features = ["unstable"] }
+ring = { version = "0.17.7", features = ["std"] }
 security-framework = { version = "2.7.0", features = ["alpn"] }
 
 ### END HAKARI SECTION

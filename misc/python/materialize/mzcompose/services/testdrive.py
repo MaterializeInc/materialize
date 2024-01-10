@@ -47,6 +47,7 @@ class Testdrive(Service):
         no_consistency_checks: bool = False,
         external_cockroach: bool = False,
         external_minio: bool = False,
+        mz_service: str = "materialized",
     ) -> None:
         depends_graph: dict[str, ServiceDependency] = {}
 
@@ -141,7 +142,7 @@ class Testdrive(Service):
             )
         else:
             entrypoint.append(
-                "--persist-consensus-url=postgres://root@materialized:26257?options=--search_path=consensus"
+                f"--persist-consensus-url=postgres://root@{mz_service}:26257?options=--search_path=consensus"
             )
 
         entrypoint.extend(entrypoint_extra)

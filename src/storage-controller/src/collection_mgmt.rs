@@ -31,7 +31,7 @@ use tracing::{debug, error, info};
 use crate::{persist_handles, StorageError};
 
 // Note(parkmycar): The capacity here was chosen arbitrarily.
-const CHANNEL_CAPACITY: usize = 2048;
+const CHANNEL_CAPACITY: usize = 4096;
 // Default rate at which we append data and advance the uppers of managed collections.
 const DEFAULT_TICK: Duration = Duration::from_secs(1);
 
@@ -108,13 +108,12 @@ where
     /// Also waits until the `CollectionManager` has completed all outstanding work to ensure that
     /// it has stopped referencing the provided `id`.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(super) async fn unregsiter_collection(&self, id: GlobalId) -> bool {
+    pub(super) async fn unregister_collection(&self, id: GlobalId) {
         let prev = self
             .collections
             .lock()
             .expect("CollectionManager panicked")
             .remove(&id);
-        let existed = prev.is_some();
 
         // Wait for the task to complete before reporting as unregisted.
         if let Some((_prev_writer, prev_task, shutdown_tx)) = prev {
@@ -124,8 +123,6 @@ where
             let _ = shutdown_tx.send(());
             let _ = prev_task.await;
         }
-
-        existed
     }
 
     /// Appends `updates` to the collection correlated with `id`, does not wait for the append to
@@ -197,6 +194,9 @@ where
                     // Listen for a shutdown signal so we can gracefully cleanup.
                     _ = &mut shutdown_rx => {
                         let mut senders = Vec::new();
+
+                        // Prevent new messages from being sent.
+                        rx.close();
 
                         // Get as many waiting senders as possible.
                         'collect: while let Ok((_batch, sender)) = rx.try_recv() {

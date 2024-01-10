@@ -105,7 +105,7 @@ SELECT id, name FROM mz_clusters
 ----
 s1 mz_system
 s2 mz_introspection
-u1 default
+u1 quickstart
 u2 foo
 
 statement ok
@@ -119,5 +119,5 @@ SELECT id, name FROM mz_clusters
 ----
 s1 mz_system
 s2 mz_introspection
-u1 default
+u1 quickstart
 u3 bar

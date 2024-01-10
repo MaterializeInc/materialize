@@ -33,9 +33,9 @@ use hyper::client::HttpConnector;
 use hyper_tls::HttpsConnector;
 use opentelemetry::global::Error;
 use opentelemetry::propagation::{Extractor, Injector};
-use opentelemetry::sdk::propagation::TraceContextPropagator;
-use opentelemetry::sdk::{trace, Resource};
 use opentelemetry::{global, KeyValue};
+use opentelemetry_sdk::propagation::TraceContextPropagator;
+use opentelemetry_sdk::{trace, Resource};
 use prometheus::IntCounter;
 use sentry::integrations::debug_images::DebugImagesIntegration;
 use tonic::metadata::MetadataMap;
@@ -318,7 +318,7 @@ where
                 ),
             )
             .with_exporter(exporter)
-            .install_batch(opentelemetry::runtime::Tokio)
+            .install_batch(opentelemetry_sdk::runtime::Tokio)
             .unwrap();
 
         // Create our own error handler to:
@@ -349,10 +349,8 @@ where
                     Error::Trace(err) => {
                         warn!("OpenTelemetry error: {}", err.display_with_causes());
                     }
+                    // TODO(guswynn): turn off the metrics feature?
                     Error::Metric(err) => {
-                        warn!("OpenTelemetry error: {}", err.display_with_causes());
-                    }
-                    Error::Log(err) => {
                         warn!("OpenTelemetry error: {}", err.display_with_causes());
                     }
                     Error::Other(err) => {

@@ -19,6 +19,8 @@ use std::sync::Arc;
 use futures::Future;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
+use mz_ore::soft_assert_or_log;
+use smallvec::SmallVec;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::MutexGuard;
 use tracing::{info, trace};
@@ -31,15 +33,14 @@ use mz_catalog::builtin::{
     BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, BUILTINS,
     BUILTIN_PREFIXES, MZ_INTROSPECTION_CLUSTER,
 };
-use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap, Config, StateConfig};
+use mz_catalog::config::{ClusterReplicaSizeMap, Config, StateConfig};
 use mz_catalog::durable::{
     test_bootstrap_args, DurableCatalogState, OpenableDurableCatalogState, StashConfig, Transaction,
 };
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
-    ClusterVariant, Connection, DataSourceDesc, Database, Func, Index, MaterializedView, Role,
-    Schema, Sink, Source, Type, View,
+    DataSourceDesc, Database, Index, MaterializedView, Role, Schema, Sink, Source,
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -65,10 +66,10 @@ use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
-    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogItemType,
-    CatalogRecordField, CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails,
-    DefaultPrivilegeAclItem, DefaultPrivilegeObject, EnvironmentId, IdReference, NameReference,
-    RoleAttributes, RoleMembership, RoleVars, SessionCatalog, SystemObjectType,
+    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogRecordField,
+    CatalogRole, CatalogSchema, CatalogType, CatalogTypeDetails, DefaultPrivilegeAclItem,
+    DefaultPrivilegeObject, EnvironmentId, IdReference, NameReference, RoleAttributes,
+    RoleMembership, RoleVars, SessionCatalog, SystemObjectType,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId,
@@ -80,7 +81,8 @@ use mz_sql::plan::{
 };
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
-    ConnectionCounter, OwnedVarInput, SystemVars, Var, VarInput, PERSIST_TXN_TABLES,
+    ConnectionCounter, OwnedVarInput, SystemVars, Var, VarInput, CATALOG_KIND_IMPL,
+    PERSIST_TXN_TABLES,
 };
 use mz_sql::{plan, rbac, DEFAULT_SCHEMA};
 use mz_sql_parser::ast::{
@@ -154,11 +156,12 @@ impl Clone for Catalog {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct CatalogPlans {
     optimized_plan_by_id: BTreeMap<GlobalId, DataflowDescription<OptimizedMirRelationExpr>>,
     physical_plan_by_id: BTreeMap<GlobalId, DataflowDescription<mz_compute_types::plan::Plan>>,
-    dataflow_metainfos: BTreeMap<GlobalId, DataflowMetainfo<OptimizerNotice>>,
+    dataflow_metainfos: BTreeMap<GlobalId, DataflowMetainfo<Arc<OptimizerNotice>>>,
+    notices_by_dep_id: BTreeMap<GlobalId, SmallVec<[Arc<OptimizerNotice>; 4]>>,
 }
 
 impl Catalog {
@@ -205,8 +208,16 @@ impl Catalog {
     pub fn set_dataflow_metainfo(
         &mut self,
         id: GlobalId,
-        metainfo: DataflowMetainfo<OptimizerNotice>,
+        metainfo: DataflowMetainfo<Arc<OptimizerNotice>>,
     ) {
+        // Add entries to the `notices_by_dep_id` lookup map.
+        for notice in metainfo.optimizer_notices.iter() {
+            for dep_id in notice.dependencies.iter() {
+                let entry = self.plans.notices_by_dep_id.entry(*dep_id).or_default();
+                entry.push(Arc::clone(notice))
+            }
+        }
+        // Add the dataflow with the scoped entries.
         self.plans.dataflow_metainfos.insert(id, metainfo);
     }
 
@@ -215,19 +226,82 @@ impl Catalog {
     pub fn try_get_dataflow_metainfo(
         &self,
         id: &GlobalId,
-    ) -> Option<&DataflowMetainfo<OptimizerNotice>> {
+    ) -> Option<&DataflowMetainfo<Arc<OptimizerNotice>>> {
         self.plans.dataflow_metainfos.get(id)
     }
 
-    /// Drop all optimized and physical plans and `DataflowMetainfo`s for the item identified by
-    /// `id`.
+    /// Drop all optimized and physical plans and `DataflowMetainfo`s for the
+    /// item identified by `id`.
     ///
     /// Ignore requests for non-existing plans or `DataflowMetainfo`s.
+    ///
+    /// Return a set containing all dropped notices. Note that if for some
+    /// reason we end up with two identical notices being dropped by the same
+    /// call, the result will only contain only one instance of that notice.
     #[tracing::instrument(level = "trace", skip(self))]
-    pub fn drop_plans_and_metainfos(&mut self, id: GlobalId) {
-        self.plans.optimized_plan_by_id.remove(&id);
-        self.plans.physical_plan_by_id.remove(&id);
-        self.plans.dataflow_metainfos.remove(&id);
+    pub fn drop_plans_and_metainfos(
+        &mut self,
+        drop_ids: &BTreeSet<GlobalId>,
+    ) -> BTreeSet<Arc<OptimizerNotice>> {
+        // Collect dropped notices in this set.
+        let mut dropped_notices = BTreeSet::new();
+
+        // Remove plans and metainfo.optimizer_notices entries.
+        for id in drop_ids {
+            self.plans.optimized_plan_by_id.remove(id);
+            self.plans.physical_plan_by_id.remove(id);
+            if let Some(mut metainfo) = self.plans.dataflow_metainfos.remove(id) {
+                for n in metainfo.optimizer_notices.drain(..) {
+                    // Remove the corresponding notices_by_dep_id entries.
+                    for dep_id in n.dependencies.iter() {
+                        if let Some(notices) = self.plans.notices_by_dep_id.get_mut(dep_id) {
+                            notices.retain(|x| &n != x)
+                        }
+                    }
+                    dropped_notices.insert(n);
+                }
+            }
+        }
+
+        // Remove notices_by_dep_id entries.
+        for id in drop_ids {
+            if let Some(mut notices) = self.plans.notices_by_dep_id.remove(id) {
+                for n in notices.drain(..) {
+                    // Remove the corresponding metainfo.optimizer_notices entries.
+                    if let Some(item_id) = n.item_id.as_ref() {
+                        if let Some(metainfo) = self.plans.dataflow_metainfos.get_mut(item_id) {
+                            metainfo.optimizer_notices.retain(|x| &n != x)
+                        }
+                    }
+                    dropped_notices.insert(n);
+                }
+            }
+        }
+
+        // Collect dependency ids not in drop_ids with at least one dropped
+        // notice.
+        let mut todo_dep_ids = BTreeSet::new();
+        for notice in dropped_notices.iter() {
+            for dep_id in notice.dependencies.iter() {
+                if !drop_ids.contains(dep_id) {
+                    todo_dep_ids.insert(*dep_id);
+                }
+            }
+        }
+        // Remove notices in `dropped_notices` for all `notices_by_dep_id`
+        // entries in `todo_dep_ids`.
+        for id in todo_dep_ids {
+            if let Some(notices) = self.plans.notices_by_dep_id.get_mut(&id) {
+                notices.retain(|n| !dropped_notices.contains(n))
+            }
+        }
+
+        soft_assert_or_log!(
+            dropped_notices.iter().all(|n| Arc::strong_count(n) == 1),
+            "all dropped_notices entries have `Arc::strong_count(_) == 1`"
+        );
+
+        return dropped_notices;
     }
 }
 
@@ -849,25 +923,6 @@ impl Catalog {
             );
         }
         let cluster = self.resolve_cluster(session.vars().cluster())?;
-
-        if !self
-            .for_session(session)
-            .system_vars()
-            .enable_unified_clusters()
-        {
-            // Disallow queries on storage clusters. There's no technical reason for
-            // this restriction, just a philosophical one: we want all crashes in
-            // a storage cluster to be the result of sources and sinks, not user
-            // queries.
-            if cluster.bound_objects.iter().any(|id| {
-                matches!(
-                    self.get_entry(id).item_type(),
-                    CatalogItemType::Source | CatalogItemType::Sink
-                )
-            }) {
-                coord_bail!("cannot execute queries on cluster containing sources or sinks");
-            }
-        }
         Ok(cluster)
     }
 
@@ -1081,7 +1136,7 @@ impl Catalog {
         location: mz_catalog::durable::ReplicaLocation,
         allowed_sizes: &Vec<String>,
         allowed_availability_zones: Option<&[String]>,
-    ) -> Result<ReplicaLocation, AdapterError> {
+    ) -> Result<ReplicaLocation, Error> {
         self.state
             .concretize_replica_location(location, allowed_sizes, allowed_availability_zones)
     }
@@ -1090,7 +1145,7 @@ impl Catalog {
         &self,
         allowed_sizes: &[String],
         size: &String,
-    ) -> Result<(), AdapterError> {
+    ) -> Result<(), Error> {
         self.state.ensure_valid_replica_size(allowed_sizes, size)
     }
 
@@ -1194,19 +1249,11 @@ impl Catalog {
         self.state = state;
         self.transient_revision += 1;
 
-        for id in drop_ids {
-            if let Some(df_meta) = self.try_get_dataflow_metainfo(&id) {
-                if self.state().system_config().enable_mz_notices() {
-                    // Generate retractions for the Builtin tables.
-                    self.pack_optimizer_notices(
-                        &mut builtin_table_updates,
-                        df_meta.optimizer_notices.iter(),
-                        -1,
-                    );
-                }
-            }
-            // Drop in-memory planning metadata.
-            self.drop_plans_and_metainfos(id);
+        // Drop in-memory planning metadata.
+        let dropped_notices = self.drop_plans_and_metainfos(&drop_ids);
+        if self.state().system_config().enable_mz_notices() {
+            // Generate retractions for the Builtin tables.
+            self.pack_optimizer_notices(&mut builtin_table_updates, dropped_notices.iter(), -1);
         }
 
         Ok(TransactionResult {
@@ -1936,19 +1983,12 @@ impl Catalog {
                             )));
                         }
                         if let ResolvedDatabaseSpecifier::Ambient = name.qualifiers.database_spec {
-                            // We allow users to create indexes on system objects to speed up
-                            // debugging related queries.
-                            if item.typ() != CatalogItemType::Index {
-                                let schema_name = state
-                                    .resolve_full_name(
-                                        &name,
-                                        session.map(|session| session.conn_id()),
-                                    )
-                                    .schema;
-                                return Err(AdapterError::Catalog(Error::new(
-                                    ErrorKind::ReadOnlySystemSchema(schema_name),
-                                )));
-                            }
+                            let schema_name = state
+                                .resolve_full_name(&name, session.map(|session| session.conn_id()))
+                                .schema;
+                            return Err(AdapterError::Catalog(Error::new(
+                                ErrorKind::ReadOnlySystemSchema(schema_name),
+                            )));
                         }
                         let schema_id = name.qualifiers.schema_spec.clone().into();
                         let serialized_item = item.to_serialized();
@@ -3153,10 +3193,20 @@ impl Catalog {
                 Op::ResetSystemConfiguration { name } => {
                     state.remove_system_configuration(&name)?;
                     tx.remove_system_config(&name);
+                    // This mirrors the `persist_txn_tables` "system var" into the catalog
+                    // storage "config" collection so that we can toggle the flag with
+                    // Launch Darkly, but use it in boot before Launch Darkly is available.
+                    if name == PERSIST_TXN_TABLES.name() {
+                        tx.set_persist_txn_tables(state.system_configuration.persist_txn_tables())?;
+                    } else if name == CATALOG_KIND_IMPL.name() {
+                        tx.set_catalog_kind(None)?;
+                    }
                 }
                 Op::ResetAllSystemConfiguration => {
                     state.clear_system_configuration();
                     tx.clear_system_configs();
+                    tx.set_persist_txn_tables(state.system_configuration.persist_txn_tables())?;
+                    tx.set_catalog_kind(None)?;
                 }
                 Op::UpdateRotatedKeys {
                     id,
@@ -3315,6 +3365,8 @@ impl Catalog {
         // Launch Darkly, but use it in boot before Launch Darkly is available.
         if name == PERSIST_TXN_TABLES.name() {
             tx.set_persist_txn_tables(state.system_configuration.persist_txn_tables())?;
+        } else if name == CATALOG_KIND_IMPL.name() {
+            tx.set_catalog_kind(state.system_configuration.catalog_kind())?;
         }
         Ok(())
     }
@@ -4224,6 +4276,10 @@ impl SessionCatalog for ConnCatalog<'_> {
         }
     }
 
+    fn get_system_type(&self, name: &str) -> &dyn mz_sql::catalog::CatalogItem {
+        self.state.get_system_type(name)
+    }
+
     fn try_get_item(&self, id: &GlobalId) -> Option<&dyn mz_sql::catalog::CatalogItem> {
         Some(self.state.try_get_entry(id)?)
     }
@@ -4451,6 +4507,8 @@ mod tests {
         Builtin, BuiltinType, BUILTINS,
         REALLY_DANGEROUS_DO_NOT_CALL_THIS_IN_PRODUCTION_VIEW_FINGERPRINT_WHITESPACE,
     };
+    use mz_catalog::durable::initialize::CATALOG_KIND_KEY;
+    use mz_catalog::durable::objects::serialization::proto;
     use mz_controller_types::{ClusterId, ReplicaId};
     use mz_expr::MirScalarExpr;
     use mz_ore::collections::CollectionExt;
@@ -4473,7 +4531,7 @@ mod tests {
         Scope, StatementContext,
     };
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
-    use mz_sql::session::vars::VarInput;
+    use mz_sql::session::vars::{CatalogKind, OwnedVarInput, Var, VarInput, CATALOG_KIND_IMPL};
     use mz_stash::DebugStashFactory;
 
     use crate::catalog::{Catalog, CatalogItem, Op, PrivilegeMap, SYSTEM_CONN_ID};
@@ -5799,5 +5857,64 @@ mod tests {
             catalog.expire().await;
         }
         debug_stash_factory.drop().await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_catalog_kind_feature_flag() {
+        Catalog::with_debug(SYSTEM_TIME.clone(), |mut catalog| async move {
+            // Update "catalog_kind" system variable.
+            let op = Op::UpdateSystemConfiguration {
+                name: CATALOG_KIND_IMPL.name().to_string(),
+                value: OwnedVarInput::Flat(CatalogKind::Persist.as_str().to_string()),
+            };
+            catalog
+                .transact(mz_repr::Timestamp::MIN, None, vec![op], |_catalog| Ok(()))
+                .await
+                .expect("failed to transact");
+
+            // Check that the config was also updated.
+            let configs = catalog
+                .storage()
+                .await
+                .snapshot()
+                .await
+                .expect("failed to get snapshot")
+                .configs;
+            let catalog_kind_value = configs
+                .get(&proto::ConfigKey {
+                    key: CATALOG_KIND_KEY.to_string(),
+                })
+                .expect("config should exist")
+                .value;
+            let catalog_kind =
+                CatalogKind::try_from(catalog_kind_value).expect("invalid value persisted");
+            assert_eq!(catalog_kind, CatalogKind::Persist);
+
+            // Remove "catalog_kind" system variable.
+            let op = Op::ResetSystemConfiguration {
+                name: CATALOG_KIND_IMPL.name().to_string(),
+            };
+            catalog
+                .transact(mz_repr::Timestamp::MIN, None, vec![op], |_catalog| Ok(()))
+                .await
+                .expect("failed to transact");
+
+            // Check that the config was also removed.
+            let configs = catalog
+                .storage()
+                .await
+                .snapshot()
+                .await
+                .expect("failed to get snapshot")
+                .configs;
+            let catalog_kind_value = configs.get(&proto::ConfigKey {
+                key: CATALOG_KIND_KEY.to_string(),
+            });
+            assert_eq!(catalog_kind_value, None);
+
+            catalog.expire().await;
+        })
+        .await;
     }
 }

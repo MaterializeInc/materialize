@@ -459,6 +459,55 @@ SELECT * FROM t WHERE x NOT IN (VALUES (1))
 Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: Some(InSubquery { expr: Identifier([Ident("x")]), subquery: Query { ctes: Simple([]), body: Values(Values([[Value(Number("1"))]])), order_by: [], limit: None, offset: None }, negated: true }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
+SELECT * FROM t WHERE x IN (TABLE t)
+----
+SELECT * FROM t WHERE x IN (TABLE t)
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: Some(InSubquery { expr: Identifier([Ident("x")]), subquery: Query { ctes: Simple([]), body: Table(Name(UnresolvedItemName([Ident("t")]))), order_by: [], limit: None, offset: None }, negated: false }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT * FROM t WHERE x IN (SHOW SOURCES)
+----
+SELECT * FROM t WHERE x IN (SHOW SOURCES)
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: Some(InSubquery { expr: Identifier([Ident("x")]), subquery: Query { ctes: Simple([]), body: Show(ShowObjects(ShowObjectsStatement { object_type: Source { in_cluster: None }, from: None, filter: None })), order_by: [], limit: None, offset: None }, negated: false }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT * FROM t WHERE x IN (((SELECT 1)))
+----
+SELECT * FROM t WHERE x IN (SELECT 1)
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: Some(InSubquery { expr: Identifier([Ident("x")]), subquery: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, negated: false }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT * FROM t WHERE x IN ((SELECT 1) UNION (SELECT 1))
+----
+SELECT * FROM t WHERE x IN ((SELECT 1) UNION (SELECT 1))
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: Some(InSubquery { expr: Identifier([Ident("x")]), subquery: Query { ctes: Simple([]), body: SetOperation { op: Union, all: false, left: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), right: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }) }, order_by: [], limit: None, offset: None }, negated: false }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT ((SELECT 1) + 1, 2 + ((SELECT 1) UNION (SELECT 2 WHERE false)));
+----
+SELECT ROW((SELECT 1) + 1, 2 + ((SELECT 1) UNION (SELECT 2 WHERE false)))
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Row { exprs: [Op { op: Op { namespace: None, op: "+" }, expr1: Subquery(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), expr2: Some(Value(Number("1"))) }, Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("2")), expr2: Some(Subquery(Query { ctes: Simple([]), body: SetOperation { op: Union, all: false, left: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), right: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: Some(Value(Boolean(false))), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }) }, order_by: [], limit: None, offset: None })) }] }, alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT * FROM t WHERE x IN ((SELECT 1) + 1, 2 + ((SELECT 1) UNION (SELECT 2 WHERE false)));
+----
+SELECT * FROM t WHERE x IN ((SELECT 1) + 1, 2 + ((SELECT 1) UNION (SELECT 2 WHERE false)))
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: Some(InList { expr: Identifier([Ident("x")]), list: [Op { op: Op { namespace: None, op: "+" }, expr1: Subquery(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), expr2: Some(Value(Number("1"))) }, Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("2")), expr2: Some(Subquery(Query { ctes: Simple([]), body: SetOperation { op: Union, all: false, left: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), right: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: Some(Value(Boolean(false))), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }) }, order_by: [], limit: None, offset: None })) }], negated: false }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT * FROM t WHERE x IN (((SELECT 1)) AND false
+----
+error: Expected right parenthesis, found EOF
+SELECT * FROM t WHERE x IN (((SELECT 1)) AND false
+                                                  ^
+
+parse-statement
 SELECT * FROM customers WHERE age BETWEEN 25 AND 32
 ----
 SELECT * FROM customers WHERE age BETWEEN 25 AND 32
@@ -1551,9 +1600,23 @@ SELECT 1 < ANY (SELECT 1)
 SELECT 1 < ANY (SELECT 1)
 
 parse-statement roundtrip
+SELECT 1 < ANY (1, 1)
+----
+error: ANY requires a single expression or subquery, not an expression list
+SELECT 1 < ANY (1, 1)
+                    ^
+
+parse-statement roundtrip
 SELECT 1 < ALL (SELECT 1)
 ----
 SELECT 1 < ALL (SELECT 1)
+
+parse-statement roundtrip
+SELECT 1 < ALL (1, 1)
+----
+error: ALL requires a single expression or subquery, not an expression list
+SELECT 1 < ALL (1, 1)
+                    ^
 
 parse-statement roundtrip
 SELECT * FROM data ORDER BY a, b AS OF AT LEAST 1

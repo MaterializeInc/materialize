@@ -29,6 +29,7 @@ use mz_build_info::DUMMY_BUILD_INFO;
 use mz_catalog::builtin::{
     Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType, BUILTINS,
 };
+use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, Cluster, ClusterConfig, ClusterReplica, ClusterReplicaProcessStatus,
@@ -83,7 +84,7 @@ use mz_storage_types::connections::inline::{
 use mz_storage_types::connections::ConnectionContext;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
-use crate::catalog::{AwsPrincipalContext, BuiltinTableUpdate, ClusterReplicaSizeMap, ConnCatalog};
+use crate::catalog::{BuiltinTableUpdate, ConnCatalog};
 use crate::coord::ConnMeta;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
@@ -216,11 +217,13 @@ impl CatalogState {
 
     pub fn for_sessionless_user(&self, role_id: RoleId) -> ConnCatalog {
         let (notices_tx, _notices_rx) = mpsc::unbounded_channel();
+        let cluster = self.system_configuration.default_cluster();
+
         ConnCatalog {
             state: Cow::Borrowed(self),
             unresolvable_ids: BTreeSet::new(),
             conn_id: SYSTEM_CONN_ID.clone(),
-            cluster: "default".into(),
+            cluster,
             database: self
                 .resolve_database(DEFAULT_DATABASE_NAME)
                 .ok()
@@ -264,6 +267,40 @@ impl CatalogState {
                     self.dependent_indexes_inner(*id, out)
                 }
             }
+        }
+    }
+
+    /// Returns an iterator over the deduplicated identifiers of all
+    /// objects this catalog entry transitively depends on (where
+    /// "depends on" is meant in the sense of [`CatalogItem::uses`], rather than
+    /// [`CatalogItem::references`]).
+    pub fn transitive_uses(&self, id: GlobalId) -> impl Iterator<Item = GlobalId> + '_ {
+        struct I<'a> {
+            queue: VecDeque<GlobalId>,
+            seen: BTreeSet<GlobalId>,
+            this: &'a CatalogState,
+        }
+        impl<'a> Iterator for I<'a> {
+            type Item = GlobalId;
+            fn next(&mut self) -> Option<Self::Item> {
+                if let Some(next) = self.queue.pop_front() {
+                    for child in self.this.get_entry(&next).item().uses() {
+                        if !self.seen.contains(&child) {
+                            self.queue.push_back(child);
+                            self.seen.insert(child);
+                        }
+                    }
+                    Some(next)
+                } else {
+                    None
+                }
+            }
+        }
+
+        I {
+            queue: [id].into_iter().collect(),
+            seen: [id].into_iter().collect(),
+            this: self,
         }
     }
 
@@ -489,10 +526,7 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn check_unstable_dependencies(
-        &self,
-        item: &CatalogItem,
-    ) -> Result<(), AdapterError> {
+    pub(super) fn check_unstable_dependencies(&self, item: &CatalogItem) -> Result<(), Error> {
         if self.system_config().enable_unstable_dependencies() {
             return Ok(());
         }
@@ -512,9 +546,11 @@ impl CatalogState {
             Ok(())
         } else {
             let object_type = item.typ().to_string();
-            Err(AdapterError::UnstableDependency {
-                object_type,
-                unstable_dependencies,
+            Err(Error {
+                kind: ErrorKind::UnstableDependency {
+                    object_type,
+                    unstable_dependencies,
+                },
             })
         }
     }
@@ -569,7 +605,7 @@ impl CatalogState {
         self.entry_by_id.get_mut(id).expect("catalog out of sync")
     }
 
-    /// Gets an type named `name` from exactly one of the system schemas.
+    /// Gets a type named `name` from exactly one of the system schemas.
     ///
     /// # Panics
     /// - If `name` is not an entry in any system schema
@@ -940,6 +976,7 @@ impl CatalogState {
                     cluster_id: materialized_view.cluster_id,
                     non_null_assertions: materialized_view.non_null_assertions,
                     custom_logical_compaction_window: materialized_view.compaction_window,
+                    refresh_schedule: materialized_view.refresh_schedule,
                 })
             }
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
@@ -1435,7 +1472,7 @@ impl CatalogState {
     }
 
     /// Get system configuration `name`.
-    pub fn get_system_configuration(&self, name: &str) -> Result<&dyn Var, AdapterError> {
+    pub fn get_system_configuration(&self, name: &str) -> Result<&dyn Var, Error> {
         Ok(self.system_configuration.get(name)?)
     }
 
@@ -1444,7 +1481,7 @@ impl CatalogState {
         &mut self,
         name: &str,
         value: VarInput,
-    ) -> Result<(), AdapterError> {
+    ) -> Result<(), Error> {
         Ok(self.system_configuration.set_default(name, value)?)
     }
 
@@ -1456,7 +1493,7 @@ impl CatalogState {
         &mut self,
         name: &str,
         value: VarInput,
-    ) -> Result<bool, AdapterError> {
+    ) -> Result<bool, Error> {
         Ok(self.system_configuration.set(name, value)?)
     }
 
@@ -1464,7 +1501,7 @@ impl CatalogState {
     ///
     /// Return a `bool` value indicating whether the configuration was modified
     /// by the call.
-    pub(super) fn remove_system_configuration(&mut self, name: &str) -> Result<bool, AdapterError> {
+    pub(super) fn remove_system_configuration(&mut self, name: &str) -> Result<bool, Error> {
         Ok(self.system_configuration.reset(name)?)
     }
 
@@ -1983,7 +2020,7 @@ impl CatalogState {
         location: mz_catalog::durable::ReplicaLocation,
         allowed_sizes: &Vec<String>,
         allowed_availability_zones: Option<&[String]>,
-    ) -> Result<ReplicaLocation, AdapterError> {
+    ) -> Result<ReplicaLocation, Error> {
         let location = match location {
             mz_catalog::durable::ReplicaLocation::Unmanaged {
                 storagectl_addrs,
@@ -1993,10 +2030,12 @@ impl CatalogState {
                 workers,
             } => {
                 if allowed_availability_zones.is_some() {
-                    coord_bail!(
-                        "internal error: tried concretize unmanaged replica \
-                        with specific availability_zones"
-                    );
+                    return Err(Error {
+                        kind: ErrorKind::Internal(
+                            "tried concretize unmanaged replica with specific availability_zones"
+                                .to_string(),
+                        ),
+                    });
                 }
                 ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
                     storagectl_addrs,
@@ -2014,10 +2053,11 @@ impl CatalogState {
                 internal,
             } => {
                 if allowed_availability_zones.is_some() && availability_zone.is_some() {
-                    coord_bail!(
-                        "internal error: tried concretize managed replica with \
-                        specific availability zones and availability zone"
-                    );
+                    return Err(Error {
+                        kind: ErrorKind::Internal(
+                            "tried concretize managed replica with specific availability zones and availability zone".to_string(),
+                        ),
+                    });
                 }
                 self.ensure_valid_replica_size(allowed_sizes, &size)?;
                 let cluster_replica_sizes = &self.cluster_replica_sizes;
@@ -2052,7 +2092,7 @@ impl CatalogState {
         &self,
         allowed_sizes: &[String],
         size: &String,
-    ) -> Result<(), AdapterError> {
+    ) -> Result<(), Error> {
         let cluster_replica_sizes = &self.cluster_replica_sizes;
 
         if !cluster_replica_sizes.0.contains_key(size)
@@ -2077,9 +2117,11 @@ impl CatalogState {
                 )| (scale, cpu_limit),
             );
 
-            Err(AdapterError::InvalidClusterReplicaSize {
-                size: size.to_owned(),
-                expected: entries.into_iter().map(|(name, _)| name.clone()).collect(),
+            Err(Error {
+                kind: ErrorKind::InvalidClusterReplicaSize {
+                    size: size.to_owned(),
+                    expected: entries.into_iter().map(|(name, _)| name.clone()).collect(),
+                },
             })
         } else {
             Ok(())
@@ -2218,6 +2260,7 @@ impl ConnectionResolver for CatalogState {
             Ssh(conn) => Ssh(conn),
             Aws(conn) => Aws(conn),
             AwsPrivatelink(conn) => AwsPrivatelink(conn),
+            MySql(conn) => MySql(conn.into_inline_connection(self)),
         }
     }
 }

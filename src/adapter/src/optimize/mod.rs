@@ -59,6 +59,8 @@ pub mod peek;
 pub mod subscribe;
 pub mod view;
 
+use std::panic::AssertUnwindSafe;
+
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_expr::{EvalError, OptimizedMirRelationExpr, UnmaterializableFunc};
@@ -95,6 +97,30 @@ where
     /// `From` to an output plan of type `To`.
     fn optimize(&mut self, plan: From) -> Result<Self::To, OptimizerError>;
 
+    /// Like [`Self::optimize`], but additionally ensures that panics occurring
+    /// in the [`Self::optimize`] call are caught and demoted to an
+    /// [`OptimizerError::Internal`] error.
+    fn catch_unwind_optimize(&mut self, plan: From) -> Result<Self::To, OptimizerError> {
+        match mz_ore::panic::catch_unwind(AssertUnwindSafe(|| self.optimize(plan))) {
+            Ok(result) => {
+                match result.map_err(Into::into) {
+                    Err(OptimizerError::TransformError(TransformError::CallerShouldPanic(msg))) => {
+                        // Promote a `CallerShouldPanic` error from the result
+                        // to a proper panic. This is needed in order to ensure
+                        // that `mz_unsafe.mz_panic('forced panic')` calls still
+                        // panic the caller.
+                        panic!("{}", msg)
+                    }
+                    result => result,
+                }
+            }
+            Err(_) => {
+                let msg = format!("unexpected panic during query optimization");
+                Err(OptimizerError::Internal(msg))
+            }
+        }
+    }
+
     /// Execute the optimization stage and panic if an error occurs.
     ///
     /// See [`Optimize::optimize`].
@@ -128,6 +154,10 @@ pub struct OptimizerConfig {
     pub enable_new_outer_join_lowering: bool,
     /// Enable eager delta joins.
     pub enable_eager_delta_joins: bool,
+    /// Enable fusion of MFPs in reductions.
+    ///
+    /// The fusion happens in MIR ⇒ LIR lowering.
+    pub enable_reduce_mfp_fusion: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -147,6 +177,7 @@ impl From<&SystemVars> for OptimizerConfig {
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_eager_delta_joins: vars.enable_eager_delta_joins(),
+            enable_reduce_mfp_fusion: vars.enable_reduce_mfp_fusion(),
         }
     }
 }

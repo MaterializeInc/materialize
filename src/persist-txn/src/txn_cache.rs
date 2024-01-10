@@ -473,9 +473,6 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64> TxnsCacheState
             );
             let idx = self.next_batch_id;
             self.next_batch_id += 1;
-            // TODO(txn): Pretty sure we could accidentally end up with a dup.
-            // Add some randomness to uncommitted batches before turning this on
-            // anywhere important.
             let prev = self.batch_idx.insert(batch.clone(), idx);
             assert_eq!(prev, None);
             let prev = self

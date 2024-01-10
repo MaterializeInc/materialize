@@ -562,11 +562,12 @@ mz_prepared_statement_history                source <null>  <null>
 mz_scheduling_elapsed_raw                    log   <null>   <null>
 mz_scheduling_parks_histogram_raw            log   <null>   <null>
 mz_session_history                           source <null>  <null>
-mz_sink_statistics                           source <null>  <null>
+mz_sink_statistics_per_worker                source <null>  <null>
 mz_sink_status_history                       source <null>  <null>
-mz_source_statistics                         source <null>  <null>
+mz_source_statistics_per_worker              source <null>  <null>
 mz_source_status_history                     source <null>  <null>
 mz_statement_execution_history               source <null>  <null>
+mz_statement_lifecycle_history               source <null>  <null>
 mz_storage_shards                            source <null>  <null>
 
 > SHOW TABLES FROM mz_internal
@@ -629,6 +630,7 @@ mz_dataflows
 mz_dataflows_per_worker
 mz_expected_group_size_advice
 mz_global_frontiers
+mz_hydration_statuses
 mz_materialization_lag
 mz_message_counts
 mz_message_counts_per_worker
@@ -669,8 +671,11 @@ mz_show_schema_privileges
 mz_show_sinks
 mz_show_sources
 mz_show_system_privileges
+mz_sink_statistics
 mz_sink_statuses
+mz_source_statistics
 mz_source_statuses
+mz_aws_privatelink_connection_statuses
 mz_statement_execution_history_redacted
 
 > SET database = materialize

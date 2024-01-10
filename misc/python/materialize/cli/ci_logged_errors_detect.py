@@ -92,11 +92,13 @@ IGNORE_RE = re.compile(
     | larger\ sizes\ prevent\ running\ out\ of\ memory
     # Old versions won't support new parameters
     | (platform-checks|legacy-upgrade|upgrade-matrix|feature-benchmark)-materialized-.* \| .*cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage
+    # Fencing warnings are OK in fencing test
+    | persist-txn-fencing-mz_first-.* \| .*unexpected\ fence\ epoch
+    | persist-txn-fencing-mz_first-.* \| .*fenced\ by\ new\ catalog\ upper
     # For platform-checks upgrade tests
+    | platform-checks-clusterd.* \| .* received\ persist\ state\ from\ the\ future
     | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage(\ to\ set\ (default|configured)\ parameter)?
     | internal\ error:\ no\ AWS\ external\ ID\ prefix\ configured
-    | failed\ writing\ row\ to\ mz_aws_connections.*no\ AWS\ external\ ID\ prefix\ configured
-    | failed\ writing\ row\ to\ mz_aws_connections.*no\ AWS\ connection\ role\ configured
     )
     """,
     re.VERBOSE | re.MULTILINE,

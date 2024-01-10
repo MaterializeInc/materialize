@@ -1130,8 +1130,9 @@ class UnionsNested(Generator):
 class CaseWhen(Generator):
     # Originally this was working with 1000, but after moving lowering and
     # decorrelation from the `plan_~` to the `sequence_~` method we had to
-    # reduce it a bit in order to avoid overflowing the stack.
-    COUNT = 950
+    # reduce it a bit in order to avoid overflowing the stack. See 24076 for
+    # the latest occurence of this.
+    COUNT = 700
 
     @classmethod
     def body(cls) -> None:
@@ -1453,8 +1454,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         c.sql(
             f"""
-            DROP CLUSTER DEFAULT cascade;
-            CREATE CLUSTER default REPLICAS (
+            DROP CLUSTER quickstart cascade;
+            CREATE CLUSTER quickstart REPLICAS (
                 replica1 (
                     STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
                     STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],

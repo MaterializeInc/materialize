@@ -13,22 +13,26 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source};
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::role_id::RoleId;
+use mz_repr::Timestamp;
 use mz_sql::ast::{
     CopyRelation, CopyStatement, InsertSource, Query, Raw, SetExpr, Statement, SubscribeStatement,
 };
 use mz_sql::catalog::RoleAttributes;
-use mz_sql::names::{PartialItemName, ResolvedIds};
+use mz_sql::names::{Aug, PartialItemName, ResolvedIds};
 use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, Params, Plan, TransactionType,
+};
+use mz_sql::pure::{
+    materialized_view_option_contains_temporal, purify_create_materialized_view_options,
 };
 use mz_sql::rbac;
 use mz_sql::rbac::CREATE_ITEM_USAGE;
@@ -36,6 +40,8 @@ use mz_sql::session::user::User;
 use mz_sql::session::vars::{
     EndTransactionAction, OwnedVarInput, Value, Var, STATEMENT_LOGGING_SAMPLE_RATE,
 };
+use mz_sql_parser::ast::{CreateMaterializedViewStatement, ExplainPlanStatement, Explainee};
+use mz_storage_types::sources::Timeline;
 use opentelemetry::trace::TraceContextExt;
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{debug_span, Instrument};
@@ -51,7 +57,9 @@ use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
-use crate::webhook::{AppendWebhookResponse, AppendWebhookValidator};
+use crate::webhook::{
+    AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
+};
 use crate::{catalog, metrics, ExecuteContext};
 
 use super::ExecuteContextExtra;
@@ -116,15 +124,13 @@ impl Coordinator {
                     self.handle_privileged_cancel(conn_id);
                 }
 
-                Command::AppendWebhook {
+                Command::GetWebhook {
                     database,
                     schema,
                     name,
-                    conn_id,
-                    received_at,
                     tx,
                 } => {
-                    self.handle_append_webhook(database, schema, name, conn_id, received_at, tx);
+                    self.handle_get_webhook(database, schema, name, tx);
                 }
 
                 Command::GetSystemVars { conn_id, tx } => {
@@ -472,14 +478,6 @@ impl Coordinator {
                         "DECLARE CURSOR".into(),
                     )));
                 }
-
-                // TODO(mjibson): The current code causes DDL statements (well, any statement
-                // that doesn't call `add_transaction_ops`) to execute outside of the extended
-                // protocol transaction. For example, executing in extended a SELECT, then
-                // CREATE, then SELECT, followed by a Sync would register the transaction
-                // as read only in the first SELECT, then the CREATE ignores the transaction
-                // ops, and the last SELECT will use the timestamp from the first. This isn't
-                // correct, but this is an edge case that we can fix later.
             }
 
             // Implicit or explicit transactions.
@@ -624,7 +622,7 @@ impl Coordinator {
         let original_stmt = Arc::clone(&stmt);
         // `resolved_ids` should be derivable from `stmt`. If `stmt` is transformed to remove/add
         // IDs, then `resolved_ids` should be updated to also remove/add those IDs.
-        let (stmt, resolved_ids) = match mz_sql::names::resolve(&catalog, (*stmt).clone()) {
+        let (stmt, mut resolved_ids) = match mz_sql::names::resolve(&catalog, (*stmt).clone()) {
             Ok(resolved) => resolved,
             Err(e) => return ctx.retire(Err(e.into())),
         };
@@ -693,11 +691,138 @@ impl Coordinator {
                 "CREATE SUBSOURCE statements",
             ))),
 
+            Statement::CreateMaterializedView(mut cmvs) => {
+                let mz_now = match self
+                    .resolve_mz_now_for_create_materialized_view(&cmvs, &resolved_ids)
+                    .await
+                {
+                    Ok(mz_now) => mz_now,
+                    Err(e) => return ctx.retire(Err(e)),
+                };
+
+                let owned_catalog = self.owned_catalog();
+                let catalog = owned_catalog.for_session(ctx.session());
+
+                purify_create_materialized_view_options(
+                    catalog,
+                    mz_now,
+                    &mut cmvs,
+                    &mut resolved_ids,
+                );
+
+                let purified_stmt =
+                    Statement::CreateMaterializedView(CreateMaterializedViewStatement::<Aug> {
+                        if_exists: cmvs.if_exists,
+                        name: cmvs.name,
+                        columns: cmvs.columns,
+                        in_cluster: cmvs.in_cluster,
+                        query: cmvs.query,
+                        with_options: cmvs.with_options,
+                    });
+
+                // (Purifying CreateMaterializedView doesn't happen async, so no need to send
+                // `Message::PurifiedStatementReady` here.)
+                match self.plan_statement(ctx.session(), purified_stmt, &params, &resolved_ids) {
+                    Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
+                    Err(e) => ctx.retire(Err(e)),
+                }
+            }
+
+            Statement::ExplainPlan(ExplainPlanStatement {
+                stage,
+                config_flags,
+                format,
+                explainee: Explainee::CreateMaterializedView(box_cmvs, broken),
+            }) => {
+                let mut cmvs = *box_cmvs;
+                let mz_now = match self
+                    .resolve_mz_now_for_create_materialized_view(&cmvs, &resolved_ids)
+                    .await
+                {
+                    Ok(mz_now) => mz_now,
+                    Err(e) => return ctx.retire(Err(e)),
+                };
+
+                let owned_catalog = self.owned_catalog();
+                let catalog = owned_catalog.for_session(ctx.session());
+
+                purify_create_materialized_view_options(
+                    catalog,
+                    mz_now,
+                    &mut cmvs,
+                    &mut resolved_ids,
+                );
+
+                let purified_stmt = Statement::ExplainPlan(ExplainPlanStatement {
+                    stage,
+                    config_flags,
+                    format,
+                    explainee: Explainee::CreateMaterializedView(Box::new(cmvs), broken),
+                });
+
+                match self.plan_statement(ctx.session(), purified_stmt, &params, &resolved_ids) {
+                    Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
+                    Err(e) => ctx.retire(Err(e)),
+                }
+            }
+
             // All other statements are handled immediately.
             _ => match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
                 Ok(plan) => self.sequence_plan(ctx, plan, resolved_ids).await,
                 Err(e) => ctx.retire(Err(e)),
             },
+        }
+    }
+
+    async fn resolve_mz_now_for_create_materialized_view(
+        &self,
+        cmvs: &CreateMaterializedViewStatement<Aug>,
+        resolved_ids: &ResolvedIds,
+    ) -> Result<Option<Timestamp>, AdapterError> {
+        // (This won't be the same timestamp as the system table inserts, unfortunately.)
+        if cmvs
+            .with_options
+            .iter()
+            .any(materialized_view_option_contains_temporal)
+        {
+            let timeline_context = self.validate_timeline_context(resolved_ids.0.clone())?;
+
+            // We default to EpochMilliseconds, similarly to `determine_timestamp_for`,
+            // but even in the TimestampIndependent case.
+            // Note that we didn't accurately decide whether we are TimestampDependent
+            // or TimestampIndependent, because for this we'd need to also check whether
+            // `query.contains_temporal()`, similarly to how `peek_stage_validate` does.
+            // However, this doesn't matter here, as we are just going to default to
+            // EpochMilliseconds in both cases.
+            let timeline = timeline_context
+                .timeline()
+                .unwrap_or(&Timeline::EpochMilliseconds);
+            Ok(Some(self.get_timestamp_oracle(timeline).read_ts().await))
+            // TODO: It might be good to take into account `least_valid_read` in addition to
+            // the oracle's `read_ts`, but there are two problems:
+            // 1. At this point, we don't know which indexes would be used. We could do an
+            // overestimation here by grabbing the ids of all indexes that are on ids
+            // involved in the query. (We'd have to recursively follow view definitions,
+            // similarly to `validate_timeline_context`.)
+            // 2. For a peek, when the `least_valid_read` is later than the oracle's
+            // `read_ts`, then the peek doesn't return before it completes at the chosen
+            // timestamp. However, for a CRATE MATERIALIZED VIEW statement, it's not clear
+            // whether we want to make it block until the chosen time. If it doesn't block,
+            // then the initial refresh wouldn't be linearized with the CREATE MATERIALIZED
+            // VIEW statement.
+            //
+            // Note: The Adapter is usually keeping a read hold of all objects at the oracle
+            // read timestamp, so `least_valid_read` usually won't actually be later than
+            // the oracle's `read_ts`. (see `Coordinator::advance_timelines`)
+            //
+            // Note 2: If we choose a timestamp here that is earlier than
+            // `least_valid_read`, that is somewhat bad, but not catastrophic: The only
+            // bad thing that happens is that we won't perform that refresh that was
+            // specified to be at `mz_now()` (which is usually the initial refresh)
+            // (similarly to how we don't perform refreshes that were specified to be in the
+            // past).
+        } else {
+            Ok(None)
         }
     }
 
@@ -830,14 +955,14 @@ impl Coordinator {
         let _builtin_update_notify = self.builtin_table_update().defer(vec![update]);
     }
 
+    /// Returns the necessary metadata for appending to a webhook source, and a channel to send
+    /// rows.
     #[tracing::instrument(level = "debug", skip(self, tx))]
-    fn handle_append_webhook(
+    fn handle_get_webhook(
         &mut self,
         database: String,
         schema: String,
         name: String,
-        conn_id: ConnectionId,
-        received_at: DateTime<Utc>,
         tx: oneshot::Sender<Result<AppendWebhookResponse, AdapterError>>,
     ) {
         /// Attempts to resolve a Webhook source from a provided `database.schema.name` path.
@@ -845,12 +970,10 @@ impl Coordinator {
         /// Returns a struct that can be used to append data to the underlying storate collection, and the
         /// types we should cast the request to.
         fn resolve(
-            coord: &Coordinator,
+            coord: &mut Coordinator,
             database: String,
             schema: String,
             name: String,
-            conn_id: ConnectionId,
-            received_at: DateTime<Utc>,
         ) -> Result<AppendWebhookResponse, PartialItemName> {
             // Resolve our collection.
             let name = PartialItemName {
@@ -860,7 +983,7 @@ impl Coordinator {
             };
             let Ok(entry) = coord
                 .catalog()
-                .resolve_entry(None, &vec![], &name, &conn_id)
+                .resolve_entry(None, &vec![], &name, &SYSTEM_CONN_ID)
             else {
                 return Err(name);
             };
@@ -897,7 +1020,6 @@ impl Coordinator {
                         AppendWebhookValidator::new(
                             validation,
                             coord.caching_secrets_reader.clone(),
-                            received_at,
                         )
                     });
                     (body, headers.clone(), validator)
@@ -911,22 +1033,27 @@ impl Coordinator {
                 .storage
                 .monotonic_appender(entry.id())
                 .map_err(|_| name)?;
+            let invalidator = coord
+                .active_webhooks
+                .entry(entry.id())
+                .or_insert_with(WebhookAppenderInvalidator::new);
+            let tx = WebhookAppender::new(row_tx, invalidator.guard());
+
             Ok(AppendWebhookResponse {
-                tx: row_tx,
+                tx,
                 body_ty,
                 header_tys,
                 validator,
             })
         }
 
-        let response =
-            resolve(self, database, schema, name, conn_id, received_at).map_err(|name| {
-                AdapterError::UnknownWebhookSource {
-                    database: name.database.expect("provided"),
-                    schema: name.schema.expect("provided"),
-                    name: name.item,
-                }
-            });
+        let response = resolve(self, database, schema, name).map_err(|name| {
+            AdapterError::UnknownWebhookSource {
+                database: name.database.expect("provided"),
+                schema: name.schema.expect("provided"),
+                name: name.item,
+            }
+        });
         let _ = tx.send(response);
     }
 }

@@ -16,22 +16,27 @@ from materialize.buildkite_insights.util.data_io import read_results_from_file
 
 # https://instances.vantage.sh/aws/ec2
 instance_cost = {
-    "c5.2xlarge": 0.3400,
-    "c5.12xlarge": 2.0400,
-    "c5a.2xlarge": 0.3080,
-    "c5a.8xlarge": 1.2320,
-    "c6a.2xlarge": 0.3060,
-    "c6a.8xlarge": 1.2240,
-    "c6a.12xlarge": 1.8360,
-    "c6g.2xlarge": 0.2720,
-    "c6g.8xlarge": 1.0880,
-    "m5.4xlarge": 0.7680,
-    "m5a.8xlarge": 1.3760,
-    "m6a.8xlarge": 1.3820,
-    "m6g.4xlarge": 0.6160,
-    "m6g.8xlarge": 1.2320,
-    "m6i.4xlarge": 0.7680,
-    "m6i.12xlarge": 2.3040,
+    "c5.2xlarge": 0.340,
+    "c5.12xlarge": 2.040,
+    "c5a.2xlarge": 0.308,
+    "c5a.8xlarge": 1.232,
+    "c6a.2xlarge": 0.306,
+    "c6a.8xlarge": 1.224,
+    "c6a.12xlarge": 1.836,
+    "c6g.2xlarge": 0.272,
+    "c7g.2xlarge": 0.290,
+    "c6g.8xlarge": 1.088,
+    "c6g.12xlarge": 1.632,
+    "m5.4xlarge": 0.768,
+    "m5a.8xlarge": 1.376,
+    "m6a.8xlarge": 1.382,
+    "m7a.8xlarge": 1.855,
+    "m6g.4xlarge": 0.616,
+    "m6g.8xlarge": 1.232,
+    "m7g.8xlarge": 1.306,
+    "m6i.4xlarge": 0.768,
+    "m6i.12xlarge": 2.304,
+    "m7i.8xlarge": 1.613,
 }
 
 
@@ -68,7 +73,8 @@ def main() -> None:
                     cost = instance_cost[metadata.removeprefix("aws:instance-type=")]
                     break
             else:
-                raise ValueError("jo instance type found")
+                # Can't calculate cost for mac-aarch64
+                cost = 0
 
             start = datetime.fromisoformat(job["started_at"])
             finished = datetime.fromisoformat(job["finished_at"])

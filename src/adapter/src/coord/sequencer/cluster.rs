@@ -21,8 +21,8 @@ use mz_controller::clusters::{
 use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL};
 use mz_ore::cast::CastFrom;
 use mz_repr::role_id::RoleId;
-use mz_sql::catalog::{CatalogCluster, CatalogItem, CatalogItemType, ObjectType, SessionCatalog};
-use mz_sql::names::{ObjectId, QualifiedItemName};
+use mz_sql::catalog::{CatalogCluster, ObjectType};
+use mz_sql::names::ObjectId;
 use mz_sql::plan::{
     AlterClusterPlan, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan, AlterClusterSwapPlan,
     AlterOptionParameter, ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan,
@@ -520,8 +520,10 @@ impl Coordinator {
             });
         }
 
+        let enable_worker_core_affinity =
+            self.catalog().system_config().enable_worker_core_affinity();
         self.controller
-            .create_replicas(replicas_to_start)
+            .create_replicas(replicas_to_start, enable_worker_core_affinity)
             .await
             .expect("creating replicas must not fail");
     }
@@ -1070,42 +1072,6 @@ impl Coordinator {
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::ClusterReplica)),
             Err(err) => Err(err),
-        }
-    }
-
-    /// Determine whether we can create a compute item in the specified cluster.
-    ///
-    /// Returns `Ok` if the item can be created, and an error otherwise.
-    pub(crate) fn ensure_cluster_can_host_compute_item(
-        &self,
-        name: &QualifiedItemName,
-        cluster_id: ClusterId,
-    ) -> Result<(), AdapterError> {
-        let is_system_schema_specifier = self
-            .catalog()
-            .state()
-            .is_system_schema_specifier(&name.qualifiers.schema_spec);
-
-        let enable_unified_clusters = self
-            .catalog()
-            .for_system_session()
-            .system_vars()
-            .enable_unified_clusters();
-
-        let cluster = self.catalog().get_cluster(cluster_id);
-        let is_compute_cluster = cluster.bound_objects().is_empty()
-            || cluster.bound_objects().iter().any(|id| {
-                matches!(
-                    self.catalog().get_entry(id).item_type(),
-                    CatalogItemType::Index | CatalogItemType::MaterializedView
-                )
-            });
-
-        if !is_system_schema_specifier && !enable_unified_clusters && !is_compute_cluster {
-            let cluster_name = self.catalog().get_cluster(cluster_id).name.clone();
-            Err(AdapterError::BadItemInStorageCluster { cluster_name })
-        } else {
-            Ok(())
         }
     }
 }

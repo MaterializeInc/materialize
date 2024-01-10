@@ -62,7 +62,9 @@
 
 use std::collections::BTreeMap;
 
-use mz_expr::{permutation_for_arrangement, AggregateExpr, AggregateFunc, MirScalarExpr};
+use mz_expr::{
+    permutation_for_arrangement, AggregateExpr, AggregateFunc, MapFilterProject, MirScalarExpr,
+};
 use mz_ore::soft_assert_or_log;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::{any, Arbitrary, BoxedStrategy};
@@ -756,6 +758,70 @@ impl ReducePlan {
             .collect::<Vec<_>>();
         let (permutation, thinning) = permutation_for_arrangement(&key, arity);
         AvailableCollections::new_arranged(vec![(key, permutation, thinning)], None)
+    }
+
+    /// Extracts a fusable MFP for the reduction from the given `mfp` along with a residual
+    /// non-fusable MFP and potentially revised output arity. The provided `mfp` must be the
+    /// one sitting on top of the reduction.
+    ///
+    /// Non-fusable parts include temporal predicates or any other parts that cannot be
+    /// conservatively asserted to not increase the memory requirements of the output
+    /// arrangement for the reduction. Either the fusable or non-fusable parts may end up
+    /// being the identity MFP.
+    pub fn extract_mfp_after(
+        &self,
+        mut mfp: MapFilterProject,
+        key_arity: usize,
+    ) -> (MapFilterProject, MapFilterProject, usize) {
+        // Extract temporal predicates, as we cannot push them into `Reduce`.
+        let temporal_mfp = mfp.extract_temporal();
+        let non_temporal = mfp;
+        mfp = temporal_mfp;
+
+        // We ensure we do not attempt to project away the key, as we cannot accomplish
+        // this. This is done by a simple analysis of the non-temporal part of `mfp` to
+        // check if can be directly absorbed; if it can't, we then default to a general
+        // strategy that unpacks the MFP to absorb only the filter and supporting map
+        // parts, followed by a post-MFP step.
+        let input_arity = non_temporal.input_arity;
+        let key = Vec::from_iter(0..key_arity);
+        let mut mfp_push;
+        let output_arity;
+
+        if non_temporal.projection.len() <= input_arity
+            && non_temporal.projection.iter().all(|c| *c < input_arity)
+            && non_temporal.projection.starts_with(&key)
+        {
+            // Special case: The key is preserved as a prefix and the projection is only
+            // of output fields from the reduction. So we know that: (a) We can process the
+            // fused MFP per-key; (b) The MFP application gets rid of all mapped columns;
+            // and (c) The output projection is at most as wide as the output that would be
+            // produced by the reduction, so we are sure to never regress the memory
+            // requirements of the output arrangement.
+            // Note that this strategy may change the arity of the output arrangement.
+            output_arity = non_temporal.projection.len();
+            mfp_push = non_temporal;
+        } else {
+            // General strategy: Unpack MFP as MF followed by P' that removes all M
+            // columns, then MP afterwards.
+            // Note that this strategy does not result in any changes to the arity of
+            // the output arrangement.
+            let (m, f, p) = non_temporal.into_map_filter_project();
+            mfp_push = MapFilterProject::new(input_arity)
+                .map(m.clone())
+                .filter(f)
+                .project(0..input_arity);
+            output_arity = input_arity;
+
+            // We still need to perform the map and projection for the actual output.
+            let mfp_left = MapFilterProject::new(input_arity).map(m).project(p);
+
+            // Compose the non-pushed MFP components.
+            mfp = MapFilterProject::compose(mfp_left, mfp);
+        }
+        mfp_push.optimize();
+        mfp.optimize();
+        (mfp_push, mfp, output_arity)
     }
 }
 

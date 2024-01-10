@@ -11,6 +11,7 @@ from math import ceil
 
 from materialize.feature_benchmark.action import Action, DummyAction, TdAction
 from materialize.feature_benchmark.measurement_source import MeasurementSource
+from materialize.mz_version import MzVersion
 
 BenchmarkingSequence = MeasurementSource | list[Action | MeasurementSource]
 
@@ -19,9 +20,10 @@ class RootScenario:
     SCALE: float = 6
     FIXED_SCALE: bool = False  # Will --scale=N have effect on the scenario
 
-    def __init__(self, scale: float) -> None:
+    def __init__(self, scale: float, mz_version: MzVersion) -> None:
         self._name = self.__class__.__name__
         self._scale = scale
+        self._mz_version = mz_version
         self._n: int = int(10**scale)
 
     def shared(self) -> Action | list[Action] | None:

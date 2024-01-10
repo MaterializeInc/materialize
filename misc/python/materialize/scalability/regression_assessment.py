@@ -32,7 +32,7 @@ class RegressionAssessment:
         self.endpoints_with_regressions_and_justifications: dict[
             Endpoint, str | None
         ] = {}
-        self.check_targets()
+        self.determine_whether_regressions_are_justified()
         assert len(comparison_outcome.endpoints_with_regressions) == len(
             self.endpoints_with_regressions_and_justifications
         )
@@ -49,7 +49,7 @@ class RegressionAssessment:
             for justification in self.endpoints_with_regressions_and_justifications.values()
         )
 
-    def check_targets(self) -> None:
+    def determine_whether_regressions_are_justified(self) -> None:
         if self.baseline_endpoint is None:
             return
 
@@ -66,20 +66,9 @@ class RegressionAssessment:
         )
 
         for endpoint in self.comparison_outcome.endpoints_with_regressions:
-            if not self._endpoint_references_release_version(endpoint):
-                continue
-
-            endpoint_version = get_mz_version_from_image_tag(endpoint.resolved_target())
-
-            if baseline_version >= endpoint_version:
-                # not supported, should not be a relevant case
-                continue
-
             commits_with_accepted_regressions = (
-                get_commits_of_accepted_regressions_between_versions(
-                    ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS,
-                    since_version_exclusive=baseline_version,
-                    to_version_inclusive=endpoint_version,
+                self.collect_accepted_regression_commits_of_endpoint(
+                    endpoint, baseline_version
                 )
             )
 
@@ -89,6 +78,29 @@ class RegressionAssessment:
                 ] = ", ".join(commits_with_accepted_regressions)
             else:
                 self.endpoints_with_regressions_and_justifications[endpoint] = None
+
+    def collect_accepted_regression_commits_of_endpoint(
+        self, endpoint: Endpoint, baseline_version: MzVersion
+    ) -> list[str]:
+        """
+        Collect known regressions (in form of commits) between the endpoint version and baseline version.
+        @returns list of commits representing known regressions
+        """
+        if not self._endpoint_references_release_version(endpoint):
+            # no explicit version referenced: not supported
+            return []
+
+        endpoint_version = get_mz_version_from_image_tag(endpoint.resolved_target())
+
+        if baseline_version >= endpoint_version:
+            # baseline more recent than endpoint: not supported, should not be relevant
+            return []
+
+        return get_commits_of_accepted_regressions_between_versions(
+            ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS,
+            since_version_exclusive=baseline_version,
+            to_version_inclusive=endpoint_version,
+        )
 
     def _mark_all_targets_with_regressions_as_unjustified(self) -> None:
         for endpoint in self.comparison_outcome.endpoints_with_regressions:

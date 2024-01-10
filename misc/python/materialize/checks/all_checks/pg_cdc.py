@@ -97,7 +97,7 @@ class PgCdcBase:
                     else ""
                 ),
                 f"""
-                $[version>=5200] postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $[version>=5200] postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
                 GRANT USAGE ON CONNECTION pg2{self.suffix} TO materialize
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -157,7 +157,7 @@ class PgCdcBase:
         return Testdrive(
             dedent(
                 f"""
-                $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+                $ postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
                 GRANT SELECT ON postgres_source_tableA{self.suffix} TO materialize
                 GRANT SELECT ON postgres_source_tableB{self.suffix} TO materialize
                 GRANT SELECT ON postgres_source_tableC{self.suffix} TO materialize

@@ -41,6 +41,7 @@ from materialize.output_consistency.selection.selection import DataRowSelection
 
 MZ_VERSION_0_77_0 = MzVersion.parse_mz("v0.77.0")
 MZ_VERSION_0_78_0 = MzVersion.parse_mz("v0.78.0")
+MZ_VERSION_0_81_0 = MzVersion.parse_mz("v0.81.0")
 
 
 class VersionConsistencyIgnoreFilter(GenericInconsistencyIgnoreFilter):
@@ -95,6 +96,18 @@ class VersionPreExecutionInconsistencyIgnoreFilter(
             )
         ):
             return YesIgnore("Accepted: no order explicitly specified")
+
+        if (
+            self.lower_version < MZ_VERSION_0_81_0 <= self.higher_version
+            and expression.matches(
+                partial(
+                    matches_fun_by_any_name,
+                    function_names_in_lower_case={"min", "max"},
+                ),
+                True,
+            )
+        ):
+            return YesIgnore("Implemented min/max for interval and time types in 24007")
 
         return super().shall_ignore_expression(expression, row_selection)
 

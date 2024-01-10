@@ -31,6 +31,8 @@ pub enum MaterializedViewOptionName {
     /// The `ASSERT NOT NULL [=] <ident>` option.
     AssertNotNull,
     RetainHistory,
+    /// The `REFRESH [=] ...` option.
+    Refresh,
 }
 
 impl AstDisplay for MaterializedViewOptionName {
@@ -38,6 +40,7 @@ impl AstDisplay for MaterializedViewOptionName {
         match self {
             MaterializedViewOptionName::AssertNotNull => f.write_str("ASSERT NOT NULL"),
             MaterializedViewOptionName::RetainHistory => f.write_str("RETAIN HISTORY"),
+            MaterializedViewOptionName::Refresh => f.write_str("REFRESH"),
         }
     }
 }
@@ -695,7 +698,7 @@ pub enum ConnectionOptionName {
     SslCertificateAuthority,
     SslKey,
     SslMode,
-    Token,
+    SessionToken,
     Url,
     User,
 }
@@ -728,7 +731,7 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::SslCertificateAuthority => "SSL CERTIFICATE AUTHORITY",
             ConnectionOptionName::SslKey => "SSL KEY",
             ConnectionOptionName::SslMode => "SSL MODE",
-            ConnectionOptionName::Token => "TOKEN",
+            ConnectionOptionName::SessionToken => "SESSION TOKEN",
             ConnectionOptionName::Url => "URL",
             ConnectionOptionName::User => "USER",
         })
@@ -762,6 +765,7 @@ pub enum CreateConnectionType {
     Csr,
     Postgres,
     Ssh,
+    MySql,
 }
 
 impl AstDisplay for CreateConnectionType {
@@ -784,6 +788,9 @@ impl AstDisplay for CreateConnectionType {
             }
             Self::Ssh => {
                 f.write_str("SSH TUNNEL");
+            }
+            Self::MySql => {
+                f.write_str("MYSQL");
             }
         }
     }

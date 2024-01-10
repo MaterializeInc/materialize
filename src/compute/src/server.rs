@@ -38,7 +38,7 @@ use timely::scheduling::{Scheduler, SyncActivator};
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::SendError;
-use tracing::trace;
+use tracing::{info, trace};
 
 use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
 use crate::logging::compute::ComputeEvent;
@@ -49,6 +49,8 @@ use crate::metrics::ComputeMetrics;
 pub struct ComputeInstanceContext {
     /// A directory that can be used for scratch work.
     pub scratch_directory: Option<PathBuf>,
+    /// Whether to set core affinity for Timely workers.
+    pub worker_core_affinity: bool,
 }
 
 /// Configures the server with compute-specific metrics.
@@ -204,6 +206,10 @@ impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Co
         persist_clients: Arc<PersistClientCache>,
         tracing_handle: Arc<TracingHandle>,
     ) {
+        if config.context.worker_core_affinity {
+            set_core_affinity(timely_worker.index());
+        }
+
         Worker {
             timely_worker,
             client_rx,
@@ -215,6 +221,50 @@ impl mz_cluster::types::AsRunnableWorker<ComputeCommand, ComputeResponse> for Co
         }
         .run()
     }
+}
+
+/// Set the current thread's core affinity, based on the given `worker_id`.
+#[cfg(not(target_os = "macos"))]
+fn set_core_affinity(worker_id: usize) {
+    use tracing::error;
+
+    let Some(mut core_ids) = core_affinity::get_core_ids() else {
+        error!(worker_id, "unable to get core IDs for setting affinity");
+        return;
+    };
+
+    // The `get_core_ids` docs don't say anything about a guaranteed order of the returned Vec,
+    // so sort it just to be safe.
+    core_ids.sort_unstable_by_key(|i| i.id);
+
+    // On multi-process replicas `worker_id` might be greater than the number of available cores.
+    // However, we assume that we always have at least as many cores as there are local workers.
+    // Violating this assumption is safe but might lead to degraded performance due to skew in core
+    // utilization.
+    let idx = worker_id % core_ids.len();
+    let core_id = core_ids[idx];
+
+    if core_affinity::set_for_current(core_id) {
+        info!(
+            worker_id,
+            core_id = core_id.id,
+            "set core affinity for worker"
+        );
+    } else {
+        error!(
+            worker_id,
+            core_id = core_id.id,
+            "failed to set core affinity for worker"
+        )
+    }
+}
+
+/// Set the current thread's core affinity, based on the given `worker_id`.
+#[cfg(target_os = "macos")]
+fn set_core_affinity(_worker_id: usize) {
+    // Setting core affinity is known to not work on Apple Silicon:
+    // https://github.com/Elzair/core_affinity_rs/issues/22
+    info!("setting core affinity is not supported on macOS");
 }
 
 impl<'w, A: Allocate + 'static> Worker<'w, A> {
@@ -645,7 +695,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             for (_, peek) in std::mem::take(&mut compute_state.pending_peeks) {
                 // Log dropping the peek request.
                 if let Some(logger) = compute_state.compute_logger.as_mut() {
-                    logger.log(ComputeEvent::Peek(peek.as_log_event(), false));
+                    logger.log(peek.as_log_event(false));
                 }
             }
 

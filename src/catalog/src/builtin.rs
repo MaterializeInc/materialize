@@ -46,7 +46,7 @@ use mz_sql::session::user::{
 };
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{
-    MZ_PREPARED_STATEMENT_HISTORY_DESC, MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC,
+    MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_PREPARED_STATEMENT_HISTORY_DESC,
     MZ_SESSION_HISTORY_DESC, MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC,
     MZ_STATEMENT_EXECUTION_HISTORY_DESC,
 };
@@ -2458,15 +2458,47 @@ pub static MZ_SOURCE_STATUS_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinS
     sensitivity: DataSensitivity::Public,
 });
 
-pub static MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY: Lazy<BuiltinSource> =
+pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY: Lazy<BuiltinSource> =
     Lazy::new(|| BuiltinSource {
         name: "mz_aws_privatelink_connection_status_history",
         schema: MZ_INTERNAL_SCHEMA,
         data_source: Some(IntrospectionType::PrivatelinkConnectionStatusHistory),
-        desc: MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC.clone(),
+        desc: MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC.clone(),
         is_retained_metrics_object: false,
         sensitivity: DataSensitivity::Public,
     });
+
+pub const MZ_AWS_PRIVATELINK_CONNECTION_STATUSES: BuiltinView = BuiltinView {
+    name: "mz_aws_privatelink_connection_statuses",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: None,
+    sql: "
+    WITH statuses_w_last_status AS (
+        SELECT
+            connection_id,
+            occurred_at,
+            status,
+            lag(status) OVER (PARTITION BY connection_id ORDER BY occurred_at) AS last_status
+        FROM mz_internal.mz_aws_privatelink_connection_status_history
+    ),
+    latest_events AS (
+        -- Only take the most recent transition for each ID
+        SELECT DISTINCT ON(connection_id) connection_id, occurred_at, status
+        FROM statuses_w_last_status
+        -- Only keep first status transitions
+        WHERE status <> last_status OR last_status IS NULL
+        ORDER BY connection_id, occurred_at DESC
+    )
+    SELECT
+        conns.id,
+        name,
+        occurred_at as last_status_change_at,
+        status
+    FROM latest_events
+    JOIN mz_connections AS conns
+    ON conns.id = latest_events.connection_id",
+    sensitivity: DataSensitivity::Public,
+};
 
 pub static MZ_STATEMENT_EXECUTION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_statement_execution_history",
@@ -2506,7 +2538,7 @@ pub static MZ_PREPARED_STATEMENT_HISTORY_REDACTED: BuiltinView = BuiltinView {
     column_defs: None,
     // everything but "sql"
     sql: "
-SELECT id, session_id, name, redacted_sql, prepared_at, statement_kind
+SELECT id, session_id, name, redacted_sql, prepared_at, statement_type
 FROM mz_internal.mz_prepared_statement_history",
     sensitivity: DataSensitivity::SuperuserAndSupport,
 };
@@ -2529,7 +2561,7 @@ SELECT mseh.id AS execution_id, sample_rate, cluster_id, application_name, clust
 transaction_isolation, execution_timestamp, transient_index_id, params, began_at, finished_at, finished_status,
 error_message, rows_returned, execution_strategy, transaction_id,
 mpsh.id AS prepared_statement_id, sql, mpsh.name AS prepared_statement_name,
-session_id, redacted_sql, prepared_at, statement_kind
+session_id, redacted_sql, prepared_at, statement_type
 FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh
 WHERE mseh.prepared_statement_id = mpsh.id",
     sensitivity: DataSensitivity::Superuser,
@@ -2543,43 +2575,98 @@ pub static MZ_ACTIVITY_LOG_REDACTED: BuiltinView = BuiltinView {
 SELECT execution_id, sample_rate, cluster_id, application_name, cluster_name,
 transaction_isolation, execution_timestamp, transient_index_id, began_at, finished_at, finished_status,
 error_message, rows_returned, execution_strategy, transaction_id, prepared_statement_id,
-prepared_statement_name, session_id, redacted_sql, prepared_at, statement_kind
+prepared_statement_name, session_id, redacted_sql, prepared_at, statement_type
 FROM mz_internal.mz_activity_log",
     sensitivity: DataSensitivity::SuperuserAndSupport,
 };
+
+pub static MZ_STATEMENT_LIFECYCLE_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_statement_lifecycle_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("statement_id", ScalarType::Uuid.nullable(false))
+        .with_column("event_type", ScalarType::String.nullable(false))
+        .with_column(
+            "occurred_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        ),
+    data_source: Some(IntrospectionType::StatementLifecycleHistory),
+    is_retained_metrics_object: false,
+    sensitivity: DataSensitivity::SuperuserAndSupport,
+});
 
 pub const MZ_SOURCE_STATUSES: BuiltinView = BuiltinView {
     name: "mz_source_statuses",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
     sql: "
-WITH latest_events AS (
-    SELECT DISTINCT ON(source_id) occurred_at, source_id, status, error, details
-    FROM mz_internal.mz_source_status_history
-    ORDER BY source_id, occurred_at DESC
-)
+    WITH
+    -- Get the latest events
+    latest_events AS
+    (
+        SELECT DISTINCT ON (source_id)
+            occurred_at, source_id, status, error, details
+        FROM mz_internal.mz_source_status_history
+        ORDER BY source_id, occurred_at DESC
+    ),
+    -- Determine which sources are subsources and which are parent sources
+    subsources AS
+    (
+        SELECT subsources.id AS self, sources.id AS parent
+        FROM
+            mz_sources AS subsources
+                JOIN
+                    mz_internal.mz_object_dependencies AS deps
+                    ON subsources.id = deps.referenced_object_id
+                JOIN mz_sources AS sources ON sources.id = deps.object_id
+    ),
+     -- Determine which collection's ID to use for the status
+    id_of_status_to_use AS
+    (
+        SELECT
+            self_events.source_id,
+            -- If self not errored, but parent is, use parent; else self
+            CASE
+                WHEN
+                    self_events.status <> 'stalled' AND
+                    parent_events.status = 'stalled'
+                THEN parent_events.source_id
+                ELSE self_events.source_id
+            END AS id_to_use
+        FROM
+            latest_events AS self_events
+                LEFT JOIN subsources ON self_events.source_id = self
+                LEFT JOIN
+                    latest_events AS parent_events
+                    ON parent_events.source_id = parent
+    ),
+    -- Swap out events for the ID of the event we plan to use instead
+    latest_events_to_use AS
+    (
+        SELECT occurred_at, s.source_id, status, error, details
+        FROM
+            id_of_status_to_use AS s
+                JOIN latest_events AS e ON e.source_id = s.id_to_use
+    )
 SELECT
     mz_sources.id,
     name,
     mz_sources.type,
-    occurred_at as last_status_change_at,
+    occurred_at AS last_status_change_at,
     -- TODO(parkmycar): Report status of webhook source once #20036 is closed.
     CASE
-      WHEN
-            mz_sources.type = 'webhook'
-              OR
-            mz_sources.type = 'progress'
-          THEN 'running'
-        ELSE COALESCE(status, 'created')
-      END
-      AS status,
+            WHEN
+                mz_sources.type = 'webhook' OR
+                mz_sources.type = 'progress'
+            THEN 'running'
+            ELSE COALESCE(status, 'created')
+    END AS status,
     error,
     details
-FROM mz_sources
-LEFT JOIN latest_events ON mz_sources.id = latest_events.source_id
-WHERE
-    -- This is a convenient way to filter out system sources, like the status_history table itself.
-    mz_sources.id NOT LIKE 's%'",
+FROM
+    mz_sources
+        LEFT JOIN latest_events_to_use AS e ON mz_sources.id = e.source_id
+WHERE mz_sources.id NOT LIKE 's%';",
     sensitivity: DataSensitivity::Public,
 };
 
@@ -2660,6 +2747,12 @@ pub static MZ_AWS_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("region", ScalarType::String.nullable(true))
         .with_column("access_key_id", ScalarType::String.nullable(true))
         .with_column("access_key_id_secret_id", ScalarType::String.nullable(true))
+        .with_column(
+            "secret_access_key_secret_id",
+            ScalarType::String.nullable(true),
+        )
+        .with_column("session_token", ScalarType::String.nullable(true))
+        .with_column("session_token_secret_id", ScalarType::String.nullable(true))
         .with_column("assume_role_arn", ScalarType::String.nullable(true))
         .with_column(
             "assume_role_session_name",
@@ -2807,8 +2900,8 @@ pub static MZ_WEBHOOKS_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
 
 // These will be replaced with per-replica tables once source/sink multiplexing on
 // a single cluster is supported.
-pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
-    name: "mz_source_statistics",
+pub static MZ_SOURCE_STATISTICS_PER_WORKER: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_source_statistics_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     data_source: Some(IntrospectionType::StorageSourceStatistics),
     desc: RelationDesc::empty()
@@ -2816,17 +2909,17 @@ pub static MZ_SOURCE_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSourc
         .with_column("worker_id", ScalarType::UInt64.nullable(false))
         .with_column("snapshot_committed", ScalarType::Bool.nullable(false))
         .with_column("messages_received", ScalarType::UInt64.nullable(false))
+        .with_column("bytes_received", ScalarType::UInt64.nullable(false))
         .with_column("updates_staged", ScalarType::UInt64.nullable(false))
         .with_column("updates_committed", ScalarType::UInt64.nullable(false))
-        .with_column("bytes_received", ScalarType::UInt64.nullable(false))
         .with_column("envelope_state_bytes", ScalarType::UInt64.nullable(false))
         .with_column("envelope_state_records", ScalarType::UInt64.nullable(false))
         .with_column("rehydration_latency", ScalarType::Interval.nullable(true)),
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
     sensitivity: DataSensitivity::Public,
 });
-pub static MZ_SINK_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
-    name: "mz_sink_statistics",
+pub static MZ_SINK_STATISTICS_PER_WORKER: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
+    name: "mz_sink_statistics_per_worker",
     schema: MZ_INTERNAL_SCHEMA,
     data_source: Some(IntrospectionType::StorageSinkStatistics),
     desc: RelationDesc::empty()
@@ -2836,7 +2929,7 @@ pub static MZ_SINK_STATISTICS: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource 
         .with_column("messages_committed", ScalarType::UInt64.nullable(false))
         .with_column("bytes_staged", ScalarType::UInt64.nullable(false))
         .with_column("bytes_committed", ScalarType::UInt64.nullable(false)),
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
     sensitivity: DataSensitivity::Public,
 });
 
@@ -3804,11 +3897,11 @@ pub const MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER: BuiltinView = BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
     sql: "SELECT
-    worker_id, duration_ns, pg_catalog.count(*) AS count
+    worker_id, type, duration_ns, pg_catalog.count(*) AS count
 FROM
     mz_internal.mz_peek_durations_histogram_raw
 GROUP BY
-    worker_id, duration_ns",
+    worker_id, type, duration_ns",
     sensitivity: DataSensitivity::Public,
 };
 
@@ -3818,10 +3911,10 @@ pub const MZ_PEEK_DURATIONS_HISTOGRAM: BuiltinView = BuiltinView {
     column_defs: None,
     sql: "
 SELECT
-    duration_ns,
+    type, duration_ns,
     pg_catalog.sum(count) AS count
 FROM mz_internal.mz_peek_durations_histogram_per_worker
-GROUP BY duration_ns",
+GROUP BY type, duration_ns",
     sensitivity: DataSensitivity::Public,
 };
 
@@ -4093,7 +4186,7 @@ pub const MZ_ACTIVE_PEEKS: BuiltinView = BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
     sql: "
-SELECT id, index_id, time
+SELECT id, object_id, type, time
 FROM mz_internal.mz_active_peeks_per_worker
 WHERE worker_id = 0",
     sensitivity: DataSensitivity::Public,
@@ -5576,6 +5669,91 @@ pub const MZ_CLUSTER_REPLICA_HISTORY: BuiltinView = BuiltinView {
     sensitivity: DataSensitivity::Public,
 };
 
+pub const MZ_HYDRATION_STATUSES: BuiltinView = BuiltinView {
+    name: "mz_hydration_statuses",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: None,
+    sql: r#"WITH
+-- Joining against the linearizable catalog tables ensures that this view
+-- always contains the set of installed objects, even when it depends
+-- on introspection relations that may received delayed updates.
+--
+-- Note that this view only includes objects that are maintained by dataflows.
+-- In particular, some source types (webhook, introspection, ...) are not and
+-- are therefore omitted.
+indexes AS (
+    SELECT
+        i.id AS object_id,
+        h.replica_id,
+        COALESCE(h.hydrated, false) AS hydrated
+    FROM mz_indexes i
+    LEFT JOIN mz_internal.mz_compute_hydration_statuses h
+        ON (h.object_id = i.id)
+),
+materialized_views AS (
+    SELECT
+        i.id AS object_id,
+        h.replica_id,
+        COALESCE(h.hydrated, false) AS hydrated
+    FROM mz_materialized_views i
+    LEFT JOIN mz_internal.mz_compute_hydration_statuses h
+        ON (h.object_id = i.id)
+),
+-- Hydration is a dataflow concept and not all sources are maintained by
+-- dataflows, so we need to find the ones that are. Generally, sources that
+-- have a cluster ID are maintained by a dataflow running on that cluster.
+-- Webhook sources are an exception to this rule.
+sources_maintained_by_dataflows AS (
+    SELECT id, cluster_id
+    FROM mz_sources
+    WHERE cluster_id IS NOT NULL AND type != 'webhook'
+),
+-- Cluster IDs are missing for subsources in `mz_sources` (#24235), so we need
+-- to add them manually here by looking up the parent sources.
+subsources_with_clusters AS (
+    SELECT ss.id, ps.cluster_id
+    FROM mz_sources ss
+    JOIN mz_internal.mz_object_dependencies d
+        ON (d.referenced_object_id = ss.id)
+    JOIN sources_maintained_by_dataflows ps
+        ON (ps.id = d.object_id)
+    WHERE ss.type = 'subsource'
+),
+sources_with_clusters AS (
+    SELECT id, cluster_id FROM sources_maintained_by_dataflows
+    UNION ALL
+    SELECT id, cluster_id FROM subsources_with_clusters
+),
+sources AS (
+    SELECT
+        s.id AS object_id,
+        r.id AS replica_id,
+        ss.rehydration_latency IS NOT NULL AS hydrated
+    FROM sources_with_clusters s
+    LEFT JOIN mz_internal.mz_source_statistics ss USING (id)
+    JOIN mz_cluster_replicas r
+        ON (r.cluster_id = s.cluster_id)
+),
+sinks AS (
+    SELECT
+        s.id AS object_id,
+        r.id AS replica_id,
+        ss.status = 'running' AS hydrated
+    FROM mz_sinks s
+    LEFT JOIN mz_internal.mz_sink_statuses ss USING (id)
+    JOIN mz_cluster_replicas r
+        ON (r.cluster_id = s.cluster_id)
+)
+SELECT * FROM indexes
+UNION ALL
+SELECT * FROM materialized_views
+UNION ALL
+SELECT * FROM sources
+UNION ALL
+SELECT * FROM sinks"#,
+    sensitivity: DataSensitivity::Public,
+};
+
 pub const MZ_MATERIALIZATION_LAG: BuiltinView = BuiltinView {
     name: "mz_materialization_lag",
     schema: MZ_INTERNAL_SCHEMA,
@@ -5881,12 +6059,56 @@ ON mz_internal.mz_sink_status_history (sink_id)",
     is_retained_metrics_object: false,
 };
 
+// In both `mz_source_statistics` and `mz_sink_statistics` we cast the `SUM` of
+// uint8's to `uint8` instead of leaving them as `numeric`. This is because we want to
+// save index space, and we don't expect the sum to be > 2^63
+// (even if a source with 2000 workers, that each produce 400 terabytes in a month ~ 2^61).
+pub const MZ_SOURCE_STATISTICS: BuiltinView = BuiltinView {
+    name: "mz_source_statistics",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: None,
+    sql: "
+SELECT
+    id,
+    bool_and(snapshot_committed) as snapshot_committed,
+    SUM(messages_received)::uint8 AS messages_received,
+    SUM(bytes_received)::uint8 AS bytes_received,
+    SUM(updates_staged)::uint8 AS updates_staged,
+    SUM(updates_committed)::uint8 AS updates_committed,
+    SUM(envelope_state_bytes)::uint8 AS envelope_state_bytes,
+    SUM(envelope_state_records)::uint8 AS envelope_state_records,
+    -- Ensure we aggregate to NULL when not all workers are done rehydrating.
+    CASE
+        WHEN bool_or(rehydration_latency IS NULL) THEN NULL
+        ELSE MAX(rehydration_latency)::interval
+    END AS rehydration_latency
+FROM mz_internal.mz_source_statistics_per_worker
+GROUP BY id",
+    sensitivity: DataSensitivity::Public,
+};
+
 pub const MZ_SOURCE_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_source_statistics_ind",
     schema: MZ_INTERNAL_SCHEMA,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_source_statistics (id)",
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
+};
+
+pub const MZ_SINK_STATISTICS: BuiltinView = BuiltinView {
+    name: "mz_sink_statistics",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: None,
+    sql: "
+SELECT
+    id,
+    SUM(messages_staged)::uint8 AS messages_staged,
+    SUM(messages_committed)::uint8 AS messages_committed,
+    SUM(bytes_staged)::uint8 AS bytes_staged,
+    SUM(bytes_committed)::uint8 AS bytes_committed
+FROM mz_internal.mz_sink_statistics_per_worker
+GROUP BY id",
+    sensitivity: DataSensitivity::Public,
 };
 
 pub const MZ_SINK_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
@@ -5894,7 +6116,7 @@ pub const MZ_SINK_STATISTICS_IND: BuiltinIndex = BuiltinIndex {
     schema: MZ_INTERNAL_SCHEMA,
     sql: "IN CLUSTER mz_introspection
 ON mz_internal.mz_sink_statistics (id)",
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
 };
 
 pub const MZ_CLUSTER_REPLICAS_IND: BuiltinIndex = BuiltinIndex {
@@ -6343,7 +6565,8 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),
         Builtin::View(&MZ_SINK_STATUSES),
         Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),
-        Builtin::Source(&MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY),
+        Builtin::Source(&MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY),
+        Builtin::View(&MZ_AWS_PRIVATELINK_CONNECTION_STATUSES),
         Builtin::Source(&MZ_STATEMENT_EXECUTION_HISTORY),
         Builtin::View(&MZ_STATEMENT_EXECUTION_HISTORY_REDACTED),
         Builtin::Source(&MZ_PREPARED_STATEMENT_HISTORY),
@@ -6352,14 +6575,20 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_ACTIVITY_LOG),
         Builtin::View(&MZ_ACTIVITY_LOG_REDACTED),
         Builtin::View(&MZ_SOURCE_STATUSES),
+        Builtin::Source(&MZ_STATEMENT_LIFECYCLE_HISTORY),
         Builtin::Source(&MZ_STORAGE_SHARDS),
-        Builtin::Source(&MZ_SOURCE_STATISTICS),
-        Builtin::Source(&MZ_SINK_STATISTICS),
+        Builtin::Source(&MZ_SOURCE_STATISTICS_PER_WORKER),
+        Builtin::Source(&MZ_SINK_STATISTICS_PER_WORKER),
+        Builtin::View(&MZ_SOURCE_STATISTICS),
+        Builtin::Index(&MZ_SOURCE_STATISTICS_IND),
+        Builtin::View(&MZ_SINK_STATISTICS),
+        Builtin::Index(&MZ_SINK_STATISTICS_IND),
         Builtin::View(&MZ_STORAGE_USAGE),
         Builtin::Source(&MZ_FRONTIERS),
         Builtin::View(&MZ_GLOBAL_FRONTIERS),
         Builtin::Source(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::Source(&MZ_COMPUTE_HYDRATION_STATUSES),
+        Builtin::View(&MZ_HYDRATION_STATUSES),
         Builtin::View(&MZ_MATERIALIZATION_LAG),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
@@ -6391,8 +6620,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_SOURCE_STATUS_HISTORY_IND),
         Builtin::Index(&MZ_SINK_STATUSES_IND),
         Builtin::Index(&MZ_SINK_STATUS_HISTORY_IND),
-        Builtin::Index(&MZ_SOURCE_STATISTICS_IND),
-        Builtin::Index(&MZ_SINK_STATISTICS_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICAS_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_SIZES_IND),
         Builtin::Index(&MZ_CLUSTER_REPLICA_STATUSES_IND),

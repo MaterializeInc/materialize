@@ -9,6 +9,7 @@
 
 //! A handle to a batch of updates
 
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -29,7 +30,7 @@ use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Atomicity, Blob};
 use mz_persist_types::stats::{trim_to_budget, truncate_bytes, TruncateBound, TRUNCATE_LEN};
 use mz_persist_types::{Codec, Codec64};
-use mz_proto::{RustType, TryFromProtoError};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_timely_util::order::Reverse;
 use proptest_derive::Arbitrary;
 use semver::Version;
@@ -152,6 +153,7 @@ where
     /// marks them as deleted.
     #[instrument(level = "debug", skip_all, fields(shard = %self.shard_id))]
     pub async fn delete(mut self) {
+        self.mark_consumed();
         if !self.batch_delete_enabled {
             return;
         }
@@ -167,7 +169,6 @@ where
             });
         }
         let () = deletes.collect().await;
-        self.batch.parts.clear();
     }
 
     /// Turns this [`Batch`] into a `HollowBatch`.
@@ -247,11 +248,11 @@ impl BatchBuilderConfig {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Arbitrary)]
 pub struct UntrimmableColumns {
     /// Always retain columns whose lowercased names exactly equal any of these strings.
-    pub equals: Vec<String>,
+    pub equals: Vec<Cow<'static, str>>,
     /// Always retain columns whose lowercased names start with any of these strings.
-    pub prefixes: Vec<String>,
+    pub prefixes: Vec<Cow<'static, str>>,
     /// Always retain columns whose lowercased names end with any of these strings.
-    pub suffixes: Vec<String>,
+    pub suffixes: Vec<Cow<'static, str>>,
 }
 
 impl UntrimmableColumns {
@@ -265,12 +266,12 @@ impl UntrimmableColumns {
             }
         }
         for s in &self.prefixes {
-            if name_lower.starts_with(s) {
+            if name_lower.starts_with(s.as_ref()) {
                 return true;
             }
         }
         for s in &self.suffixes {
-            if name_lower.ends_with(s) {
+            if name_lower.ends_with(s.as_ref()) {
                 return true;
             }
         }
@@ -289,9 +290,9 @@ impl RustType<ProtoUntrimmableColumns> for UntrimmableColumns {
 
     fn from_proto(proto: ProtoUntrimmableColumns) -> Result<Self, TryFromProtoError> {
         Ok(Self {
-            equals: proto.equals.into_proto(),
-            prefixes: proto.prefixes.into_proto(),
-            suffixes: proto.suffixes.into_proto(),
+            equals: proto.equals.into_rust()?,
+            prefixes: proto.prefixes.into_rust()?,
+            suffixes: proto.suffixes.into_rust()?,
         })
     }
 }
@@ -1136,9 +1137,9 @@ mod tests {
     #[mz_ore::test]
     fn untrimmable_columns() {
         let untrimmable = UntrimmableColumns {
-            equals: vec!["abc".to_string(), "def".to_string()],
-            prefixes: vec!["123".to_string(), "234".to_string()],
-            suffixes: vec!["xyz".to_string()],
+            equals: vec!["abc".into(), "def".into()],
+            prefixes: vec!["123".into(), "234".into()],
+            suffixes: vec!["xyz".into()],
         };
 
         // equals

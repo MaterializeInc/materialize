@@ -14,7 +14,8 @@
     "@types/pg": "^7.14.3",
     "babel-jest": "^27.0.0",
     "jest": "^27.0.0",
-    "pg": "^8.4.1",
+    "pg": "^8.11.3",
+    "pg-query-stream": "^4.5.3",
     "prettier": "^2.0.4"
   },
   "prettier": {

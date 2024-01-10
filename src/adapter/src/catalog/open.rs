@@ -71,7 +71,7 @@ use mz_storage_types::sources::Timeline;
 use crate::catalog::{
     is_reserved_name, migrate, BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config,
 };
-use crate::coord::timestamp_oracle;
+use crate::coord::catalog_oracle;
 use crate::AdapterError;
 
 #[derive(Debug)]
@@ -271,7 +271,7 @@ impl Catalog {
                 let previous_ts = txn
                     .get_timestamp(&Timeline::EpochMilliseconds)
                     .expect("missing EpochMilliseconds timeline");
-                let boot_ts = timestamp_oracle::catalog_oracle::monotonic_now(
+                let boot_ts = catalog_oracle::monotonic_now(
                     config.now.clone(),
                     previous_ts,
                 );
@@ -417,10 +417,9 @@ impl Catalog {
             Catalog::load_system_configuration(
                 &mut state,
                 &mut txn,
-                config.system_parameter_defaults,
-                config.remote_system_parameters,
-            )
-            .await?;
+                &config.system_parameter_defaults,
+                config.remote_system_parameters.as_ref(),
+            )?;
 
             // Now that LD is loaded, set the intended catalog timeout.
             // TODO: Move this into the catalog constructor.
@@ -856,6 +855,14 @@ impl Catalog {
                 txn.set_catalog_content_version(config.build_info.version.to_string())?;
             }
 
+            // Re-load the system configuration in case it changed after the migrations.
+            Catalog::load_system_configuration(
+                &mut state,
+                &mut txn,
+                &config.system_parameter_defaults,
+                config.remote_system_parameters.as_ref(),
+            )?;
+
             let mut state = Catalog::load_catalog_items(&mut txn, &state)?;
 
             let mut builtin_migration_metadata = Catalog::generate_builtin_migration_metadata(
@@ -917,11 +924,7 @@ impl Catalog {
 
             let mut catalog = Catalog {
                 state,
-                plans: CatalogPlans {
-                    optimized_plan_by_id: Default::default(),
-                    physical_plan_by_id: Default::default(),
-                    dataflow_metainfos: BTreeMap::new(),
-                },
+                plans: CatalogPlans::default(),
                 transient_revision: 1,
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
             };
@@ -1066,10 +1069,17 @@ impl Catalog {
             // To avoid reading over storage_usage events multiple times, do both
             // the table updates and delete calculations in a single read over the
             // data.
+            let wait_for_consolidation = catalog
+                .system_config()
+                .wait_catalog_consolidation_on_startup();
             let storage_usage_events = catalog
                 .storage()
                 .await
-                .get_and_prune_storage_usage(config.storage_usage_retention_period, boot_ts)
+                .get_and_prune_storage_usage(
+                    config.storage_usage_retention_period,
+                    boot_ts,
+                    wait_for_consolidation,
+                )
                 .await?;
             for event in storage_usage_events {
                 builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
@@ -1108,35 +1118,39 @@ impl Catalog {
     ///
     /// # Errors
     #[tracing::instrument(level = "info", skip_all)]
-    async fn load_system_configuration(
+    fn load_system_configuration(
         state: &mut CatalogState,
         txn: &mut Transaction<'_>,
-        system_parameter_defaults: BTreeMap<String, String>,
-        remote_system_parameters: Option<BTreeMap<String, OwnedVarInput>>,
+        system_parameter_defaults: &BTreeMap<String, String>,
+        remote_system_parameters: Option<&BTreeMap<String, OwnedVarInput>>,
     ) -> Result<(), AdapterError> {
         let system_config = txn.get_system_configurations();
 
-        for (name, value) in &system_parameter_defaults {
+        for (name, value) in system_parameter_defaults {
             match state.set_system_configuration_default(name, VarInput::Flat(value)) {
                 Ok(_) => (),
-                Err(AdapterError::VarError(VarError::UnknownParameter(name))) => {
+                Err(Error {
+                    kind: ErrorKind::VarError(VarError::UnknownParameter(name)),
+                }) => {
                     warn!(%name, "cannot load unknown system parameter from catalog storage to set default parameter");
                 }
-                Err(e) => return Err(e),
+                Err(e) => return Err(e.into()),
             };
         }
         for mz_catalog::durable::SystemConfiguration { name, value } in system_config {
             match state.insert_system_configuration(&name, VarInput::Flat(&value)) {
                 Ok(_) => (),
-                Err(AdapterError::VarError(VarError::UnknownParameter(name))) => {
+                Err(Error {
+                    kind: ErrorKind::VarError(VarError::UnknownParameter(name)),
+                }) => {
                     warn!(%name, "cannot load unknown system parameter from catalog storage to set configured parameter");
                 }
-                Err(e) => return Err(e),
+                Err(e) => return Err(e.into()),
             };
         }
         if let Some(remote_system_parameters) = remote_system_parameters {
             for (name, value) in remote_system_parameters {
-                Catalog::update_system_configuration(state, txn, &name, value.borrow())?;
+                Catalog::update_system_configuration(state, txn, name, value.borrow())?;
             }
             txn.set_system_config_synced_once()?;
         }
@@ -1889,13 +1903,13 @@ mod builtin_migration_tests {
                         create_sql: format!(
                             "CREATE MATERIALIZED VIEW mv AS SELECT * FROM {table_list}"
                         ),
-                        raw_expr: mz_sql::plan::HirRelationExpr::Constant {
-                            rows: Vec::new(),
-                            typ: RelationType {
+                        raw_expr: mz_sql::plan::HirRelationExpr::constant(
+                            Vec::new(),
+                            RelationType {
                                 column_types: Vec::new(),
                                 keys: Vec::new(),
                             },
-                        },
+                        ),
                         optimized_expr: OptimizedMirRelationExpr(MirRelationExpr::Constant {
                             rows: Ok(Vec::new()),
                             typ: RelationType {
@@ -1910,6 +1924,7 @@ mod builtin_migration_tests {
                         cluster_id: ClusterId::User(1),
                         non_null_assertions: vec![],
                         custom_logical_compaction_window: None,
+                        refresh_schedule: None,
                     })
                 }
                 SimplifiedItem::Index { on } => {

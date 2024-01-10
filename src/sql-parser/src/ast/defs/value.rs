@@ -92,48 +92,59 @@ impl AstDisplay for Value {
                 f.write_str("'");
             }
             Value::Boolean(v) => f.write_str(v),
-            Value::Interval(IntervalValue {
-                value,
-                precision_high,
-                precision_low,
-                fsec_max_precision,
-            }) => {
+            Value::Interval(interval_value) => {
                 f.write_str("INTERVAL '");
-                f.write_node(&display::escape_single_quote_string(value));
-                f.write_str("'");
-                match (precision_high, precision_low, fsec_max_precision) {
-                    (DateTimeField::Year, DateTimeField::Second, None) => {}
-                    (DateTimeField::Year, DateTimeField::Second, Some(ns)) => {
-                        f.write_str(" SECOND(");
-                        f.write_str(ns);
-                        f.write_str(")");
-                    }
-                    (DateTimeField::Year, low, None) => {
-                        f.write_str(" ");
-                        f.write_str(low);
-                    }
-                    (high, low, None) => {
-                        f.write_str(" ");
-                        f.write_str(high);
-                        f.write_str(" TO ");
-                        f.write_str(low);
-                    }
-                    (high, low, Some(ns)) => {
-                        f.write_str(" ");
-                        f.write_str(high);
-                        f.write_str(" TO ");
-                        f.write_str(low);
-                        f.write_str("(");
-                        f.write_str(ns);
-                        f.write_str(")");
-                    }
-                }
+                f.write_node(interval_value);
             }
             Value::Null => f.write_str("NULL"),
         }
     }
 }
 impl_display!(Value);
+
+impl AstDisplay for IntervalValue {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        if f.redacted() {
+            f.write_str("<REDACTED>'");
+        } else {
+            let IntervalValue {
+                value,
+                precision_high,
+                precision_low,
+                fsec_max_precision,
+            } = self;
+            f.write_node(&display::escape_single_quote_string(value));
+            f.write_str("'");
+            match (precision_high, precision_low, fsec_max_precision) {
+                (DateTimeField::Year, DateTimeField::Second, None) => {}
+                (DateTimeField::Year, DateTimeField::Second, Some(ns)) => {
+                    f.write_str(" SECOND(");
+                    f.write_str(ns);
+                    f.write_str(")");
+                }
+                (DateTimeField::Year, low, None) => {
+                    f.write_str(" ");
+                    f.write_str(low);
+                }
+                (high, low, None) => {
+                    f.write_str(" ");
+                    f.write_str(high);
+                    f.write_str(" TO ");
+                    f.write_str(low);
+                }
+                (high, low, Some(ns)) => {
+                    f.write_str(" ");
+                    f.write_str(high);
+                    f.write_str(" TO ");
+                    f.write_str(low);
+                    f.write_str("(");
+                    f.write_str(ns);
+                    f.write_str(")");
+                }
+            }
+        }
+    }
+}
 
 impl From<Ident> for Value {
     fn from(ident: Ident) -> Self {

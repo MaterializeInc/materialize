@@ -22,7 +22,7 @@ from materialize.mzcompose.service import (
     ServiceConfig,
     ServiceDependency,
 )
-from materialize.mzcompose.services.minio import MINIO_BLOB_URI
+from materialize.mzcompose.services.minio import minio_blob_uri
 
 
 class Materialized(Service):
@@ -31,7 +31,7 @@ class Materialized(Service):
 
     def __init__(
         self,
-        name: str = "materialized",
+        name: str | None = None,
         image: str | None = None,
         environment_extra: list[str] = [],
         volumes_extra: list[str] = [],
@@ -42,8 +42,8 @@ class Materialized(Service):
         default_size: int = Size.DEFAULT_SIZE,
         environment_id: str | None = None,
         propagate_crashes: bool = True,
-        external_cockroach: bool = False,
-        external_minio: bool = False,
+        external_cockroach: str | bool = False,
+        external_minio: str | bool = False,
         unsafe_mode: bool = True,
         restart: str | None = None,
         use_default_volumes: bool = True,
@@ -54,6 +54,9 @@ class Materialized(Service):
         sanity_restart: bool = True,
         catalog_store: str | None = "shadow",
     ) -> None:
+        if name is None:
+            name = "materialized"
+
         depends_graph: dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
         }
@@ -70,6 +73,8 @@ class Materialized(Service):
             "MZ_ORCHESTRATOR_PROCESS_PROMETHEUS_SERVICE_DISCOVERY_DIRECTORY=/mzdata/prometheus",
             "MZ_BOOTSTRAP_ROLE=materialize",
             "MZ_INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR=0.0.0.0:6879",
+            "MZ_AWS_CONNECTION_ROLE_ARN=arn:aws:iam::123456789000:role/MaterializeConnection",
+            "MZ_AWS_EXTERNAL_ID_PREFIX=eb5cb59b-e2fe-41f3-87ca-d2176a495345",
             f"MZ_CATALOG_STORE={catalog_store}",
             # Please think twice before forwarding additional environment
             # variables from the host, as it's easy to write tests that are
@@ -110,7 +115,8 @@ class Materialized(Service):
 
         if external_minio:
             depends_graph["minio"] = {"condition": "service_healthy"}
-            persist_blob_url = MINIO_BLOB_URI
+            address = "minio" if external_minio == True else external_minio
+            persist_blob_url = minio_blob_uri(address)
 
         if persist_blob_url:
             command.append(f"--persist-blob-url={persist_blob_url}")
@@ -142,14 +148,16 @@ class Materialized(Service):
         ]
 
         if external_cockroach:
+            address = "cockroach" if external_cockroach == True else external_cockroach
             depends_graph["cockroach"] = {"condition": "service_healthy"}
             command += [
-                "--adapter-stash-url=postgres://root@cockroach:26257?options=--search_path=adapter",
-                "--storage-stash-url=postgres://root@cockroach:26257?options=--search_path=storage",
-                "--persist-consensus-url=postgres://root@cockroach:26257?options=--search_path=consensus",
+                f"--adapter-stash-url=postgres://root@{address}:26257?options=--search_path=adapter",
+                f"--storage-stash-url=postgres://root@{address}:26257?options=--search_path=storage",
+                f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus",
             ]
             environment += [
-                "MZ_TIMESTAMP_ORACLE_URL=postgres://root@cockroach:26257?options=--search_path=tsoracle"
+                f"MZ_TIMESTAMP_ORACLE_URL=postgres://root@{address}:26257?options=--search_path=tsoracle",
+                "MZ_NO_BUILTIN_COCKROACH=1",
             ]
 
         command += [

@@ -80,6 +80,8 @@ pub enum ComputeControllerResponse<T> {
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
     /// See [`ComputeResponse::SubscribeResponse`].
     SubscribeResponse(GlobalId, SubscribeResponse<T>),
+    /// See [`ComputeResponse::FrontierUpper`]
+    FrontierUpper { id: GlobalId, upper: Antichain<T> },
 }
 
 /// Replica configuration
@@ -197,6 +199,17 @@ impl<T> ComputeController<T> {
     ) -> Result<&CollectionState<T>, CollectionLookupError> {
         let collection = self.instance(instance_id)?.collection(collection_id)?;
         Ok(collection)
+    }
+
+    pub fn find_collection(
+        &self,
+        collection_id: GlobalId,
+    ) -> Result<&CollectionState<T>, CollectionLookupError> {
+        self.instances
+            .values()
+            .flat_map(|i| i.collection(collection_id).ok())
+            .next()
+            .ok_or(CollectionLookupError::CollectionMissing(collection_id))
     }
 
     /// Acquire an [`ActiveComputeController`] by supplying a storage connection.

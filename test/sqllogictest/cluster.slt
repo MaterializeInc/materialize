@@ -89,14 +89,14 @@ SELECT id, name FROM mz_clusters
 ----
 s1  mz_system
 s2  mz_introspection
-u1  default
+u1  quickstart
 u4  foo
 u7  bar
 
 query T rowsort
-SELECT name FROM (SHOW CLUSTERS LIKE 'd%')
+SELECT name FROM (SHOW CLUSTERS LIKE 'q%')
 ----
-default
+quickstart
 
 # Test invalid option combinations.
 
@@ -129,7 +129,7 @@ CREATE CLUSTER baz REPLICAS (r1 (STORAGECTL ADDRESSES ['s:1234'], STORAGE ADDRES
 query T
 SHOW cluster
 ----
-default
+quickstart
 
 statement ok
 SET cluster = 'bar'
@@ -146,7 +146,7 @@ statement ok
 CREATE DEFAULT INDEX ON v
 
 statement ok
-SET cluster = 'default'
+SET cluster = 'quickstart'
 
 query T
 SELECT * FROM v
@@ -249,7 +249,8 @@ bar  mz_message_counts_sent_raw  mz_message_counts_sent_raw_u7_primary_idx  1  c
 bar  mz_message_counts_sent_raw  mz_message_counts_sent_raw_u7_primary_idx  2  from_worker_id  NULL  false
 bar  mz_message_counts_sent_raw  mz_message_counts_sent_raw_u7_primary_idx  3  to_worker_id  NULL  false
 bar  mz_peek_durations_histogram_raw  mz_peek_durations_histogram_raw_u7_primary_idx  1  worker_id  NULL  false
-bar  mz_peek_durations_histogram_raw  mz_peek_durations_histogram_raw_u7_primary_idx  2  duration_ns  NULL  false
+bar  mz_peek_durations_histogram_raw  mz_peek_durations_histogram_raw_u7_primary_idx  2  type  NULL  false
+bar  mz_peek_durations_histogram_raw  mz_peek_durations_histogram_raw_u7_primary_idx  3  duration_ns  NULL  false
 bar  mz_scheduling_elapsed_raw  mz_scheduling_elapsed_raw_u7_primary_idx  1  id  NULL  false
 bar  mz_scheduling_elapsed_raw  mz_scheduling_elapsed_raw_u7_primary_idx  2  worker_id  NULL  false
 bar  mz_scheduling_parks_histogram_raw  mz_scheduling_parks_histogram_raw_u7_primary_idx  1  worker_id  NULL  false
@@ -293,7 +294,7 @@ CREATE VIEW unmat AS SELECT 1
 
 # Test `CREATE INDEX ... IN CLUSTER`.
 statement ok
-SET cluster = 'default'
+SET cluster = 'quickstart'
 
 query T
 SELECT name FROM mz_indexes WHERE name NOT LIKE 'mz_%';
@@ -318,7 +319,7 @@ CREATE DEFAULT INDEX IN CLUSTER noexist ON v
 query T
 SHOW cluster
 ----
-default
+quickstart
 
 statement error unknown cluster 'baz'
 DROP CLUSTER baz
@@ -428,26 +429,26 @@ SELECT COUNT(name) FROM mz_indexes;
 126
 
 simple conn=mz_system,user=mz_system
-ALTER CLUSTER default OWNER TO materialize
+ALTER CLUSTER quickstart OWNER TO materialize
 ----
 COMPLETE 0
 
 statement ok
-ALTER CLUSTER default SET (MANAGED = false);
+ALTER CLUSTER quickstart SET (MANAGED = false);
 
 statement error invalid SIZE: must provide a string value
-CREATE CLUSTER REPLICA default.size_1 SIZE;
+CREATE CLUSTER REPLICA quickstart.size_1 SIZE;
 
 statement ok
-CREATE CLUSTER REPLICA default.size_1 SIZE '1';
+CREATE CLUSTER REPLICA quickstart.size_1 SIZE '1';
 
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  2
-default  size_1  1
 mz_introspection  r1  2
 mz_system  r1  2
+quickstart  r1  2
+quickstart  size_1  1
 
 statement ok
 CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_2 (SIZE '2'))
@@ -455,27 +456,27 @@ CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_2 (SIZE '2'))
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  2
-default  size_1  1
 foo  size_1  1
 foo  size_2  2
 mz_introspection  r1  2
 mz_system  r1  2
+quickstart  r1  2
+quickstart  size_1  1
 
 statement ok
-DROP CLUSTER REPLICA IF EXISTS default.bar
+DROP CLUSTER REPLICA IF EXISTS quickstart.bar
 
 statement ok
 DROP CLUSTER REPLICA IF EXISTS bar.foo
 
 statement ok
-DROP CLUSTER REPLICA IF EXISTS default.foo
+DROP CLUSTER REPLICA IF EXISTS quickstart.foo
 
 query error CLUSTER foo has no CLUSTER REPLICA named "foo"
-DROP CLUSTER REPLICA default.size_1, foo.foo
+DROP CLUSTER REPLICA quickstart.size_1, foo.foo
 
 statement ok
-DROP CLUSTER REPLICA default.size_1
+DROP CLUSTER REPLICA quickstart.size_1
 
 statement ok
 DROP CLUSTER REPLICA foo.size_1, foo.size_2
@@ -483,45 +484,45 @@ DROP CLUSTER REPLICA foo.size_1, foo.size_2
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-default  r1  2
 mz_introspection  r1  2
 mz_system  r1  2
+quickstart  r1  2
 
 statement ok
-CREATE CLUSTER REPLICA default.foo_bar SIZE '1'
+CREATE CLUSTER REPLICA quickstart.foo_bar SIZE '1'
 
 statement error db error: ERROR: Expected dot, found RENAME
-ALTER CLUSTER REPLICA default RENAME TO bar_foo
+ALTER CLUSTER REPLICA quickstart RENAME TO bar_foo
 
 statement ok
-ALTER CLUSTER REPLICA default.foo_bar RENAME TO bar_foo
+ALTER CLUSTER REPLICA quickstart.foo_bar RENAME TO bar_foo
 
-statement error CLUSTER default has no CLUSTER REPLICA named "foo_bar"
-ALTER CLUSTER REPLICA default.foo_bar RENAME TO bar_foo
-
-statement ok
-ALTER CLUSTER REPLICA IF EXISTS default.bar_foo RENAME TO foo_bar
+statement error CLUSTER quickstart has no CLUSTER REPLICA named "foo_bar"
+ALTER CLUSTER REPLICA quickstart.foo_bar RENAME TO bar_foo
 
 statement ok
-ALTER CLUSTER REPLICA IF EXISTS default.bar_foo RENAME TO foo_bar
+ALTER CLUSTER REPLICA IF EXISTS quickstart.bar_foo RENAME TO foo_bar
 
 statement ok
-CREATE CLUSTER REPLICA default.bar_foo SIZE '1'
+ALTER CLUSTER REPLICA IF EXISTS quickstart.bar_foo RENAME TO foo_bar
+
+statement ok
+CREATE CLUSTER REPLICA quickstart.bar_foo SIZE '1'
 
 statement error stash error: uniqueness violation
-ALTER CLUSTER REPLICA default.bar_foo RENAME TO foo_bar
+ALTER CLUSTER REPLICA quickstart.bar_foo RENAME TO foo_bar
 
 statement ok
-DROP CLUSTER REPLICA default.foo_bar
+DROP CLUSTER REPLICA quickstart.foo_bar
 
 statement ok
-DROP CLUSTER REPLICA default.bar_foo
+DROP CLUSTER REPLICA quickstart.bar_foo
 
 statement ok
-CREATE CLUSTER REPLICA default."foo-bar" SIZE '1'
+CREATE CLUSTER REPLICA quickstart."foo-bar" SIZE '1'
 
 statement ok
-DROP CLUSTER REPLICA default."foo-bar"
+DROP CLUSTER REPLICA quickstart."foo-bar"
 
 statement ok
 CREATE CLUSTER "foo-bar" REPLICAS ()
@@ -536,16 +537,16 @@ statement ok
 DROP CLUSTER "foo-bar"
 
 statement ok
-CREATE CLUSTER REPLICA default."好-好" SIZE '1'
+CREATE CLUSTER REPLICA quickstart."好-好" SIZE '1'
 
 statement ok
-DROP CLUSTER REPLICA default."好-好"
+DROP CLUSTER REPLICA quickstart."好-好"
 
 statement ok
-CREATE CLUSTER REPLICA default."好_好" SIZE '1'
+CREATE CLUSTER REPLICA quickstart."好_好" SIZE '1'
 
 statement ok
-DROP CLUSTER REPLICA default."好_好"
+DROP CLUSTER REPLICA quickstart."好_好"
 
 # clusters wo replicas cannot service selects
 
@@ -562,7 +563,7 @@ SELECT generate_series(1, 1);
 # Phillip's tests
 
 statement error zero-length delimited identifier
-CREATE CLUSTER REPLICA default."" SIZE '1';
+CREATE CLUSTER REPLICA quickstart."" SIZE '1';
 
 statement error unknown cluster
 CREATE CLUSTER REPLICA no_such_cluster.size_1 SIZE '1';
@@ -616,19 +617,19 @@ DROP CLUSTER foo CASCADE
 # can't be meaningfully specified
 
 statement error unknown cluster replica availability zone a
-CREATE CLUSTER REPLICA default.replica SIZE '1', AVAILABILITY ZONE 'a'
+CREATE CLUSTER REPLICA quickstart.replica SIZE '1', AVAILABILITY ZONE 'a'
 
 statement error AVAILABILITY ZONE specified more than once
-CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b'
+CREATE CLUSTER REPLICA quickstart.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b'
 
 statement error invalid mixture of managed and unmanaged replica options
-CREATE CLUSTER REPLICA default.replica STORAGECTL ADDRESSES ['host'], AVAILABILITY ZONE 'a'
+CREATE CLUSTER REPLICA quickstart.replica STORAGECTL ADDRESSES ['host'], AVAILABILITY ZONE 'a'
 
 statement error invalid mixture of managed and unmanaged replica options
-CREATE CLUSTER REPLICA default.replica STORAGECTL ADDRESSES ['host'], AVAILABILITY ZONE 'a'
+CREATE CLUSTER REPLICA quickstart.replica STORAGECTL ADDRESSES ['host'], AVAILABILITY ZONE 'a'
 
 statement error invalid mixture of managed and unmanaged replica options
-CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', STORAGECTL ADDRESSES ['host']
+CREATE CLUSTER REPLICA quickstart.replica AVAILABILITY ZONE 'a', STORAGECTL ADDRESSES ['host']
 
 # Test that the contents of mz_cluster_replicas look sensible
 

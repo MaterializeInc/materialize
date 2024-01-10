@@ -814,7 +814,7 @@ Snapshot {
                 },
             ),
         }: ClusterValue {
-            name: "default",
+            name: "quickstart",
             linked_object_id: None,
             owner_id: Some(
                 RoleId {

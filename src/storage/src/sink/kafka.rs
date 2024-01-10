@@ -457,7 +457,7 @@ impl KafkaSinkState {
         storage_configuration: &StorageConfiguration,
         gate_ts: Rc<Cell<Option<Timestamp>>>,
         healthchecker: HealthOutputHandle,
-    ) -> (Self, Option<Timestamp>) {
+    ) -> (Self, Option<Option<Timestamp>>) {
         let metrics = Arc::new(metrics.get_sink_metrics(&connection.topic, sink_id, worker_id));
 
         let retry_manager = Arc::new(Mutex::new(KafkaSinkSendRetryManager::new()));
@@ -599,7 +599,7 @@ impl KafkaSinkState {
             .expect("Infinite retry cannot fail");
     }
 
-    async fn send_progress_record(&self, transaction_id: Timestamp) {
+    async fn send_progress_record(&self, transaction_id: Option<Timestamp>) {
         let encoded = serde_json::to_vec(&ProgressRecord {
             timestamp: transaction_id,
         })
@@ -687,7 +687,7 @@ impl KafkaSinkState {
                     "{}: sending progress for gate ts: {:?}",
                     &self.name, min_frontier
                 );
-                self.send_progress_record(min_frontier).await;
+                self.send_progress_record(Some(min_frontier)).await;
 
                 self.halt_on_err(
                     self.producer
@@ -711,6 +711,24 @@ impl KafkaSinkState {
             write_frontier.clear();
             write_frontier.insert(min_frontier);
         } else {
+            // record the write frontier in the progress topic.
+            self.halt_on_err(
+                self.producer
+                    .retry_on_txn_error(|p| p.begin_transaction())
+                    .await,
+            )
+            .await;
+
+            debug!("{}: sending progress for empty frontier", &self.name);
+            self.send_progress_record(None).await;
+
+            self.halt_on_err(
+                self.producer
+                    .retry_on_txn_error(|p| p.commit_transaction())
+                    .await,
+            )
+            .await;
+
             // If there's no longer an input frontier, we will no longer receive any data forever and, therefore, will
             // never output more data
             info!("{}: advancing write frontier to empty", &self.name);
@@ -952,6 +970,18 @@ where
             "{}: initial as_of: {:?}, latest progress record: {:?}",
             s.name, as_of.frontier, latest_ts
         );
+
+        s.update_status(HealthStatusUpdate::running(), StatusNamespace::Kafka)
+            .await;
+
+        let latest_ts = match latest_ts {
+            Some(Some(latest_ts)) => Some(latest_ts),
+            Some(None) => {
+                info!("{}: sink shutting down", s.name);
+                return;
+            }
+            None => None,
+        };
         shared_gate_ts.set(latest_ts);
 
         if let Some(gate) = latest_ts {
@@ -966,9 +996,6 @@ where
             );
             s.maybe_update_progress(&gate);
         }
-
-        s.update_status(HealthStatusUpdate::running(), StatusNamespace::Kafka)
-            .await;
 
         while let Some(event) = input.next_mut().await {
             match event {
@@ -1076,7 +1103,7 @@ where
 
                         // We don't count this record as part of the message count in user-facing
                         // statistics.
-                        s.send_progress_record(*ts).await;
+                        s.send_progress_record(Some(*ts)).await;
 
                         info!("{}: committing transaction for {:?}", id, ts);
                         s.halt_on_err(

@@ -35,21 +35,13 @@ contains:only one of IN CLUSTER or SIZE can be set
 ! ALTER SOURCE loadgen SET (SIZE = '1')
 contains:cannot change the size of a source or sink created with IN CLUSTER
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unified_clusters = false
-
-# Create indexes and materialized views in a storage cluster is banned.
-! CREATE INDEX bad IN CLUSTER storage ON t (a)
-contains:cannot create this kind of item in a cluster that contains sources or sinks
-! CREATE MATERIALIZED VIEW bad IN CLUSTER storage AS SELECT 1
-contains:cannot create this kind of item in a cluster that contains sources or sinks
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unified_clusters = true
+# Create indexes and materialized views in a storage cluster is allowed.
+> CREATE INDEX t_idx IN CLUSTER storage ON t (a)
+> CREATE MATERIALIZED VIEW mv IN CLUSTER storage AS SELECT 1
 
 > CREATE CLUSTER REPLICA storage.r1 SIZE = '1'
 
-# Executing queries on a storage cluster is banned.
+# Executing queries on a storage cluster is allowed.
 > SELECT generate_series(1, 1)
 1
 
@@ -57,46 +49,15 @@ ALTER SYSTEM SET enable_unified_clusters = true
 ! CREATE CLUSTER REPLICA storage.r2 SIZE '1'
 contains:cannot create more than one replica of a cluster containing sources or sinks
 
-# Creating indexes and materialized views in a cluster is permitted once the
-# source has been dropped.
-> DROP SOURCE loadgen;
-> CREATE INDEX idx IN CLUSTER storage ON t (a)
-> CREATE MATERIALIZED VIEW mv IN CLUSTER storage AS SELECT generate_series(1, 1)
-
-# As is running queries.
-> SELECT generate_series(1, 1)
-1
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unified_clusters = false
-
-# Recreating the source is banned.
-! CREATE SOURCE loadgen IN CLUSTER storage FROM LOAD GENERATOR COUNTER
-contains:cannot create source in cluster containing indexes or materialized views
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_unified_clusters = true
-
-# Creating a second replica is now allowed.
-> CREATE CLUSTER REPLICA storage.r2 SIZE '1'
-
-# The source cannot be readded even after the index and materialized views
-# are dropped because of the second replica.
-> DROP INDEX idx
-> DROP MATERIALIZED VIEW mv
-! CREATE SOURCE loadgen IN CLUSTER storage FROM LOAD GENERATOR COUNTER
-contains:cannot create source in cluster with more than one replica
-
-# Creating the source is allowed after dropping the second replica
-> DROP CLUSTER REPLICA storage.r2
-> CREATE SOURCE loadgen IN CLUSTER storage FROM LOAD GENERATOR COUNTER
+# Creating sources on clusters containing compute objects is allowed
+> CREATE SOURCE lg2 IN CLUSTER storage FROM LOAD GENERATOR COUNTER
 
 # Test that `DROP CLUSTER` only succeeds with `CASCADE`.
 ! DROP CLUSTER storage
 contains:cannot drop cluster "storage" because other objects depend on it
 > DROP CLUSTER storage CASCADE
 
-> SET cluster = default
+> SET cluster = quickstart
 
 # Test that a cluster can contain multiple sources and sinks, and verify that
 # the sources and sinks produce the correct output.

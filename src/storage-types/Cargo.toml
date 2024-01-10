@@ -6,9 +6,12 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = "1.0.66"
-aws-config = { version = "1.1.1", default-features = false }
+aws-config = { version = "1.1.1", default-features = false, features = ["sso"] }
 aws-credential-types = { version = "1.1.1", features = ["hardcoded-credentials"] }
 aws-sdk-sts = { version = "1.7.0", default-features = false, features = ["rt-tokio"] }
 aws-types = "1.1.1"
@@ -18,6 +21,7 @@ derivative = "2.2.0"
 differential-dataflow = "0.12.0"
 fail = { version = "0.5.1", features = ["failpoints"] }
 itertools = { version = "0.10.5" }
+mysql_async = { version = "0.33.0", default-features = false, features = ["minimal"] }
 mz-aws-util = { path = "../aws-util" }
 mz-ccsr = { path = "../ccsr" }
 mz-cloud-resources = { path = "../cloud-resources" }
@@ -25,6 +29,7 @@ mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore", features = ["async", "tracing_"] }
+mz-mysql-util = { path = "../mysql-util" }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-txn = { path = "../persist-txn" }
 mz-persist-types = { path = "../persist-types" }

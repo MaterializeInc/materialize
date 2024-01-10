@@ -144,7 +144,8 @@ mod tests {
     }
 }
 
-fn build_ts_value(value: i64, unit: TsUnit) -> Result<Value, AvroError> {
+/// A convenience function to build timestamp values from underlying longs.
+pub fn build_ts_value(value: i64, unit: TsUnit) -> Result<Value, AvroError> {
     let result = match unit {
         TsUnit::Millis => NaiveDateTime::from_timestamp_millis(value),
         TsUnit::Micros => NaiveDateTime::from_timestamp_micros(value),

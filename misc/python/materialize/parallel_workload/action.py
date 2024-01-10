@@ -12,6 +12,7 @@ import json
 import random
 import time
 import urllib.parse
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import pg8000
@@ -23,7 +24,8 @@ from materialize.data_ingest.data_type import NUMBER_TYPES, Text, TextTextMap
 from materialize.data_ingest.query_error import QueryError
 from materialize.data_ingest.row import Operation
 from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.services.minio import MINIO_BLOB_URI
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.parallel_workload.database import (
     DB,
     MAX_CLUSTER_REPLICAS,
@@ -97,7 +99,11 @@ class Action:
                     "canceling statement due to user request",
                 ]
             )
-        if exe.db.scenario in (Scenario.Kill, Scenario.BackupRestore):
+        if exe.db.scenario in (
+            Scenario.Kill,
+            Scenario.TogglePersistTxn,
+            Scenario.BackupRestore,
+        ):
             result.extend(
                 [
                     "network error",
@@ -265,7 +271,11 @@ class SQLsmithAction(Action):
                 # it. Ignore for now
                 return
         except:
-            if exe.db.scenario not in (Scenario.Kill, Scenario.BackupRestore):
+            if exe.db.scenario not in (
+                Scenario.Kill,
+                Scenario.TogglePersistTxn,
+                Scenario.BackupRestore,
+            ):
                 raise
         finally:
             self.composition.silent = False
@@ -454,7 +464,10 @@ class DropIndexAction(Action):
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if exe.db.scenario != Scenario.Kill or (
+                if exe.db.scenario not in (
+                    Scenario.Kill,
+                    Scenario.TogglePersistTxn,
+                ) or (
                     "unknown catalog item" not in e.msg
                     and "unknown schema" not in e.msg
                 ):
@@ -500,7 +513,10 @@ class DropTableAction(Action):
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if exe.db.scenario != Scenario.Kill or (
+                if exe.db.scenario not in (
+                    Scenario.Kill,
+                    Scenario.TogglePersistTxn,
+                ) or (
                     "unknown catalog item" not in e.msg
                     and "unknown schema" not in e.msg
                 ):
@@ -647,7 +663,10 @@ class DropSchemaAction(Action):
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if exe.db.scenario != Scenario.Kill or "unknown schema" not in e.msg:
+                if (
+                    exe.db.scenario not in (Scenario.Kill, Scenario.TogglePersistTxn)
+                    or "unknown schema" not in e.msg
+                ):
                     raise e
             exe.db.schemas.remove(schema)
         return True
@@ -798,7 +817,10 @@ class DropViewAction(Action):
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if exe.db.scenario != Scenario.Kill or (
+                if exe.db.scenario not in (
+                    Scenario.Kill,
+                    Scenario.TogglePersistTxn,
+                ) or (
                     "unknown catalog item" not in e.msg
                     and "unknown schema" not in e.msg
                 ):
@@ -842,7 +864,10 @@ class DropRoleAction(Action):
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if exe.db.scenario != Scenario.Kill or "unknown role" not in e.msg:
+                if (
+                    exe.db.scenario not in (Scenario.Kill, Scenario.TogglePersistTxn)
+                    or "unknown role" not in e.msg
+                ):
                     raise e
             exe.db.roles.remove(role)
         return True
@@ -891,7 +916,10 @@ class DropClusterAction(Action):
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if exe.db.scenario != Scenario.Kill or "unknown cluster" not in e.msg:
+                if (
+                    exe.db.scenario not in (Scenario.Kill, Scenario.TogglePersistTxn)
+                    or "unknown cluster" not in e.msg
+                ):
                     raise e
             exe.db.clusters.remove(cluster)
         return True
@@ -1001,9 +1029,12 @@ class DropClusterReplicaAction(Action):
             if len(cluster.replicas) <= 1:
                 return False
             replica = self.rng.choice(cluster.replicas)
-        with replica.lock:
+
+        with cluster.lock, replica.lock:
             # Was dropped while we were acquiring lock
             if replica not in cluster.replicas:
+                return False
+            if cluster not in exe.db.clusters:
                 return False
             # Avoid "has no replicas available to service request" error
             if len(cluster.replicas) <= 1:
@@ -1015,7 +1046,7 @@ class DropClusterReplicaAction(Action):
             except QueryError as e:
                 # expected, see #20465
                 if (
-                    exe.db.scenario != Scenario.Kill
+                    exe.db.scenario not in (Scenario.Kill, Scenario.TogglePersistTxn)
                     or "has no CLUSTER REPLICA named" not in e.msg
                 ):
                     raise e
@@ -1163,15 +1194,34 @@ class KillAction(Action):
         self,
         rng: random.Random,
         composition: Composition | None,
+        catalog_store: str,
+        sanity_restart: bool,
+        system_param_fn: Callable[[dict[str, str]], dict[str, str]] = lambda x: x,
     ):
         super().__init__(rng, composition)
+        self.system_param_fn = system_param_fn
+        self.system_parameters = {}
+        self.catalog_store = catalog_store
+        self.sanity_restart = sanity_restart
 
     def run(self, exe: Executor) -> bool:
         assert self.composition
         self.composition.kill("materialized")
         # Otherwise getting failure on "up" locally
         time.sleep(1)
-        self.composition.up("materialized", detach=True)
+        self.system_parameters = self.system_param_fn(self.system_parameters)
+        with self.composition.override(
+            Materialized(
+                restart="on-failure",
+                external_minio="toxiproxy",
+                external_cockroach="toxiproxy",
+                ports=["6975:6875", "6976:6876", "6977:6877"],
+                catalog_store=self.catalog_store,
+                sanity_restart=self.sanity_restart,
+                additional_system_parameter_defaults=self.system_parameters,
+            )
+        ):
+            self.composition.up("materialized", detach=True)
         time.sleep(self.rng.uniform(120, 240))
         return True
 
@@ -1229,7 +1279,7 @@ class BackupRestoreAction(Action):
                 "admin",
                 "--commit",
                 "restore-blob",
-                f"--blob-uri={MINIO_BLOB_URI}",
+                f"--blob-uri={minio_blob_uri()}",
                 "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
             )
             self.composition.up("materialized")
@@ -1239,7 +1289,7 @@ class BackupRestoreAction(Action):
 class CreateWebhookSourceAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
-        if exe.db.scenario == Scenario.Kill:
+        if exe.db.scenario in (Scenario.Kill, Scenario.TogglePersistTxn):
             result.extend(
                 ["cannot create source in cluster with more than one replica"]
             )
@@ -1287,7 +1337,10 @@ class DropWebhookSourceAction(Action):
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if exe.db.scenario != Scenario.Kill or (
+                if exe.db.scenario not in (
+                    Scenario.Kill,
+                    Scenario.TogglePersistTxn,
+                ) or (
                     "unknown catalog item" not in e.msg
                     and "unknown schema" not in e.msg
                 ):
@@ -1299,7 +1352,7 @@ class DropWebhookSourceAction(Action):
 class CreateKafkaSourceAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
-        if exe.db.scenario == Scenario.Kill:
+        if exe.db.scenario in (Scenario.Kill, Scenario.TogglePersistTxn):
             result.extend(
                 ["cannot create source in cluster with more than one replica"]
             )
@@ -1331,7 +1384,7 @@ class CreateKafkaSourceAction(Action):
                 source.create(exe)
                 exe.db.kafka_sources.append(source)
             except:
-                if exe.db.scenario != Scenario.Kill:
+                if exe.db.scenario not in (Scenario.Kill, Scenario.TogglePersistTxn):
                     raise
         return True
 
@@ -1357,7 +1410,10 @@ class DropKafkaSourceAction(Action):
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if exe.db.scenario != Scenario.Kill or (
+                if exe.db.scenario not in (
+                    Scenario.Kill,
+                    Scenario.TogglePersistTxn,
+                ) or (
                     "unknown catalog item" not in e.msg
                     and "unknown schema" not in e.msg
                 ):
@@ -1369,7 +1425,7 @@ class DropKafkaSourceAction(Action):
 class CreatePostgresSourceAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
-        if exe.db.scenario == Scenario.Kill:
+        if exe.db.scenario in (Scenario.Kill, Scenario.TogglePersistTxn):
             result.extend(
                 ["cannot create source in cluster with more than one replica"]
             )
@@ -1405,7 +1461,7 @@ class CreatePostgresSourceAction(Action):
                 source.create(exe)
                 exe.db.postgres_sources.append(source)
             except:
-                if exe.db.scenario != Scenario.Kill:
+                if exe.db.scenario not in (Scenario.Kill, Scenario.TogglePersistTxn):
                     raise
         return True
 
@@ -1431,7 +1487,10 @@ class DropPostgresSourceAction(Action):
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if exe.db.scenario != Scenario.Kill or (
+                if exe.db.scenario not in (
+                    Scenario.Kill,
+                    Scenario.TogglePersistTxn,
+                ) or (
                     "unknown catalog item" not in e.msg
                     and "unknown schema" not in e.msg
                 ):
@@ -1495,7 +1554,10 @@ class DropKafkaSinkAction(Action):
                 exe.execute(query)
             except QueryError as e:
                 # expected, see #20465
-                if exe.db.scenario != Scenario.Kill or (
+                if exe.db.scenario not in (
+                    Scenario.Kill,
+                    Scenario.TogglePersistTxn,
+                ) or (
                     "unknown catalog item" not in e.msg
                     and "unknown schema" not in e.msg
                 ):
@@ -1556,8 +1618,19 @@ class HttpPostAction(Action):
                     raise QueryError(f"{result.status_code}: {result.text}", log)
             except (requests.exceptions.ConnectionError):
                 # Expected when Mz is killed
-                if exe.db.scenario not in (Scenario.Kill, Scenario.BackupRestore):
+                if exe.db.scenario not in (
+                    Scenario.Kill,
+                    Scenario.TogglePersistTxn,
+                    Scenario.BackupRestore,
+                ):
                     raise
+            except QueryError as e:
+                # expected, see #20465
+                if exe.db.scenario not in (
+                    Scenario.Kill,
+                    Scenario.TogglePersistTxn,
+                ) or ("404: no object was found at the path" not in e.msg):
+                    raise e
         return True
 
 

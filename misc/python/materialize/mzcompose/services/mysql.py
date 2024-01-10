@@ -20,7 +20,7 @@ class MySql(Service):
         self,
         root_password: str = DEFAULT_ROOT_PASSWORD,
         name: str = "mysql",
-        image: str = "mysql:8.0.32",
+        image: str = "mysql:8.0.35",
         port: int = 3306,
         volumes: list[str] = ["mydata:/var/lib/mysql-files"],
     ) -> None:
@@ -43,6 +43,7 @@ class MySql(Service):
                         "mysqladmin",
                         "ping",
                         f"--password={root_password}",
+                        "--protocol=TCP",
                     ],
                     "interval": "1s",
                     "start_period": "60s",

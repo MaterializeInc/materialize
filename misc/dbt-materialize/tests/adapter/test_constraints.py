@@ -131,7 +131,7 @@ class TestNullabilityAssertions:
             fetch="one",
         )
         assert (
-            'WITH (ASSERT NOT NULL = "a", ASSERT NOT NULL = "b")'
+            'ASSERT NOT NULL = "a", ASSERT NOT NULL = "b"'
             in nullability_assertions_ddl[1]
         )
 
@@ -153,12 +153,12 @@ class TestContractInvalidCluster:
             "contract_invalid_cluster.sql": test_view,
         }
 
-    # In the absence of the pre-installed `default` cluster, Materialize should
+    # In the absence of the pre-installed `quickstart` cluster, Materialize should
     # not error if data contracts are enforced.
     # See #23600: https://github.com/MaterializeInc/materialize/issues/23600
-    def test_materialize_drop_default(self, project):
-        project.run_sql("DROP CLUSTER default CASCADE")
+    def test_materialize_drop_quickstart(self, project):
+        project.run_sql("DROP CLUSTER quickstart CASCADE")
 
         run_dbt(["run", "--models", "contract_invalid_cluster"], expect_pass=True)
 
-        project.run_sql("CREATE CLUSTER default SIZE = '1'")
+        project.run_sql("CREATE CLUSTER quickstart SIZE = '1'")

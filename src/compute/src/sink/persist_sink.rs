@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{Collection, Hashable};
+use differential_dataflow::{AsCollection, Collection, Hashable};
 use mz_compute_types::sinks::{ComputeSinkDesc, PersistSinkConnection};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashMap;
@@ -42,6 +42,7 @@ use tracing::trace;
 
 use crate::compute_state::ComputeState;
 use crate::render::sinks::SinkRender;
+use crate::sink::refresh::apply_refresh;
 
 impl<G> SinkRender<G> for PersistSinkConnection<CollectionMetadata>
 where
@@ -59,7 +60,13 @@ where
     where
         G: Scope<Timestamp = Timestamp>,
     {
-        let desired_collection = sinked_collection.map(Ok).concat(&err_collection.map(Err));
+        let mut desired_collection = sinked_collection.map(Ok).concat(&err_collection.map(Err));
+
+        // If a `RefreshSchedule` was specified, round up timestamps.
+        if let Some(refresh_schedule) = &sink.refresh_schedule {
+            desired_collection = apply_refresh(desired_collection, refresh_schedule.clone());
+        }
+
         if sink.up_to != Antichain::default() {
             unimplemented!(
                 "UP TO is not supported for persist sinks yet, and shouldn't have been accepted during parsing/planning"
@@ -102,7 +109,6 @@ where
         None,             // no MFP
         None,             // no flow control
     );
-    use differential_dataflow::AsCollection;
     let persist_collection = ok_stream
         .as_collection()
         .map(Ok)

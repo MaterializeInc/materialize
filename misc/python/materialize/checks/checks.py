@@ -8,10 +8,14 @@
 # by the Apache License, Version 2.0.
 
 from random import Random
+from typing import TYPE_CHECKING
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
+
+if TYPE_CHECKING:
+    from materialize.checks.actions import Action
 
 TESTDRIVE_NOP = "$ nop"
 
@@ -44,6 +48,15 @@ class Check:
         else:
             return "mz_internal"
 
+    def _default_cluster(self) -> str:
+        """
+        :return: name of the cluster created in all environments.
+        """
+        if self.base_version >= MzVersion.parse_mz("v0.82.0-dev"):
+            return "quickstart"
+        else:
+            return "default"
+
     def initialize(self) -> Testdrive:
         return Testdrive(TESTDRIVE_NOP)
 
@@ -53,34 +66,37 @@ class Check:
     def validate(self) -> Testdrive:
         assert False
 
-    def start_initialize(self, e: Executor) -> None:
+    def start_initialize(self, e: Executor, a: "Action") -> None:
         if self._can_run(e) and self.enabled:
             self.current_version = e.current_mz_version
             self._initialize = self.initialize()
-            self._initialize.execute(e)
+            self._initialize.execute(e, a.mz_service)
 
     def join_initialize(self, e: Executor) -> None:
         if self._can_run(e) and self.enabled:
             self._initialize.join(e)
 
-    def start_manipulate(self, e: Executor, phase: int) -> None:
+    def start_manipulate(self, e: Executor, a: "Action") -> None:
         if self._can_run(e) and self.enabled:
             self.current_version = e.current_mz_version
             self._manipulate = self.manipulate()
             assert (
                 len(self._manipulate) == 2
             ), f"manipulate() should return a list with exactly 2 elements, but actually returns {len(self._manipulate)} elements"
-            self._manipulate[phase].execute(e)
 
-    def join_manipulate(self, e: Executor, phase: int) -> None:
+            assert a.phase is not None
+            self._manipulate[a.phase].execute(e, a.mz_service)
+
+    def join_manipulate(self, e: Executor, a: "Action") -> None:
         if self._can_run(e) and self.enabled:
-            self._manipulate[phase].join(e)
+            assert a.phase is not None
+            self._manipulate[a.phase].join(e)
 
-    def start_validate(self, e: Executor) -> None:
+    def start_validate(self, e: Executor, a: "Action") -> None:
         if self._can_run(e) and self.enabled:
             self.current_version = e.current_mz_version
             self._validate = self.validate()
-            self._validate.execute(e)
+            self._validate.execute(e, a.mz_service)
 
     def join_validate(self, e: Executor) -> None:
         if self._can_run(e) and self.enabled:

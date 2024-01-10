@@ -86,9 +86,11 @@ class Scenario:
 
         for index, action in enumerate(actions):
             # Implicitly call configure to raise version-dependent limits
-            if isinstance(action, StartMz) or isinstance(
-                action, ReplaceEnvironmentdStatefulSet
-            ):
+            if isinstance(action, StartMz):
+                actions.insert(
+                    index + 1, ConfigureMz(self, mz_service=action.mz_service)
+                )
+            elif isinstance(action, ReplaceEnvironmentdStatefulSet):
                 actions.insert(index + 1, ConfigureMz(self))
 
         for action in actions:
@@ -133,7 +135,7 @@ class DropCreateDefaultReplica(Scenario):
             StartMz(self),
             Initialize(self),
             Manipulate(self, phase=1),
-            DropCreateDefaultReplicaAction(),
+            DropCreateDefaultReplicaAction(self),
             Manipulate(self, phase=2),
             Validate(self),
         ]

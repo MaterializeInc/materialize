@@ -36,7 +36,7 @@ use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Method, Request, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
 use mz_adapter::session::Session;
-use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient};
+use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient, WebhookAppenderCache};
 use mz_frontegg_auth::{
     Authentication as FronteggAuthentication, Error as FronteggError,
     ExchangePasswordForTokenResponse,
@@ -113,6 +113,12 @@ pub struct WsState {
     active_connection_count: SharedConnectionCounter,
 }
 
+#[derive(Clone)]
+pub struct WebhookState {
+    adapter_client: mz_adapter::Client,
+    webhook_cache: WebhookAppenderCache,
+}
+
 #[derive(Debug)]
 pub struct HttpServer {
     tls: Option<TlsConfig>,
@@ -139,6 +145,8 @@ impl HttpServer {
             .send(adapter_client.clone())
             .expect("rx known to be live");
         let adapter_client_rx = adapter_client_rx.shared();
+        let webhook_cache = WebhookAppenderCache::new();
+
         let base_router = base_router(BaseRouterConfig { profiling: false })
             .layer(middleware::from_fn(move |req, next| {
                 let base_frontegg = Arc::clone(&base_frontegg);
@@ -172,7 +180,10 @@ impl HttpServer {
                 "/api/webhook/:database/:schema/:id",
                 routing::post(webhook::handle_webhook),
             )
-            .with_state(adapter_client)
+            .with_state(WebhookState {
+                adapter_client,
+                webhook_cache,
+            })
             .layer(
                 CorsLayer::new()
                     .allow_methods(Method::POST)

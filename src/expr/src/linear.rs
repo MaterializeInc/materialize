@@ -1546,6 +1546,11 @@ pub mod plan {
             self.mfp.predicates.iter().any(|(_pos, e)| e.could_error())
                 || self.mfp.expressions.iter().any(|e| e.could_error())
         }
+
+        /// Returns true when `Self` is the identity.
+        pub fn is_identity(&self) -> bool {
+            self.mfp.is_identity()
+        }
     }
 
     impl std::ops::Deref for SafeMfpPlan {

@@ -40,4 +40,4 @@ prompts:
     default: 'public'
   cluster:
     hint: 'dev cluster'
-    default: 'default'
+    default: 'quickstart'

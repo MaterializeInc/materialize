@@ -347,7 +347,7 @@ impl crate::coord::Coordinator {
                 .storage
                 .collection(*id)
                 .expect("collection does not exist");
-            let read_frontier = collection.read_capabilities.frontier().to_owned();
+            let read_frontier = collection.implied_capability.clone();
             let time = time.join(&read_frontier);
             read_holds
                 .holds
@@ -362,7 +362,7 @@ impl crate::coord::Coordinator {
                 let collection = compute
                     .collection(*compute_instance, *id)
                     .expect("collection does not exist");
-                let read_frontier = collection.read_frontier().to_owned();
+                let read_frontier = collection.read_capability().clone();
                 let time = time.join(&read_frontier);
                 read_holds
                     .holds
@@ -452,10 +452,10 @@ impl crate::coord::Coordinator {
                         .storage
                         .collection(id)
                         .expect("id does not exist");
-                    assert!(collection.read_capabilities.frontier().le(&new_time.borrow()),
+                    assert!(collection.implied_capability.le(&new_time.borrow()),
                             "Storage collection {:?} has read frontier {:?} not less-equal new time {:?}; old time: {:?}",
                             id,
-                            collection.read_capabilities.frontier(),
+                            collection.implied_capability,
                             new_time,
                             old_time,
                     );
@@ -478,11 +478,11 @@ impl crate::coord::Coordinator {
                         let collection = compute
                             .collection(compute_instance, id)
                             .expect("id does not exist");
-                        assert!(collection.read_frontier().le(&new_time.borrow()),
+                        assert!(collection.read_capability().le(&new_time.borrow()),
                                 "Compute collection {:?} (instance {:?}) has read frontier {:?} not less-equal new time {:?}; old time: {:?}",
                                 id,
                                 compute_instance,
-                                collection.read_frontier(),
+                                collection.read_capability(),
                                 new_time,
                                 old_time,
                         );

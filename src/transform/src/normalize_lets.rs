@@ -114,10 +114,13 @@ impl NormalizeLets {
         // placing all `LetRec` nodes around the root, if not always in a single AST node.
         let_motion::promote_let_rec(relation);
         let_motion::assert_no_lets(relation);
+        let_motion::assert_letrec_major(relation);
 
-        inlining::inline_lets(relation, self.inline_mfp)?;
-
+        // Refresh types while we are in letrec-major form.
         support::refresh_types(relation)?;
+
+        // Inlining may violate letrec-major form.
+        inlining::inline_lets(relation, self.inline_mfp)?;
 
         // Renumber bindings for good measure.
         // Ideally we could skip when `action` is a no-op, but hard to thread that through at the moment.
@@ -280,7 +283,7 @@ mod support {
 
     /// Applies `types` to all `Get` nodes in `expr`.
     ///
-    /// This no longer considers new bindings, and will error if applied to `Let` and `LetRec`-free expressions.
+    /// This no longer considers new bindings, and will error if applied to expressions containing `Let` and `LetRec` stages.
     fn refresh_types_effector(
         expr: &mut MirRelationExpr,
         types: &BTreeMap<LocalId, mz_repr::RelationType>,
@@ -567,6 +570,31 @@ mod let_motion {
         expr.visit_pre(|expr| {
             assert!(!matches!(expr, MirRelationExpr::Let { .. }));
         });
+    }
+
+    /// Asserts that `expr` in "LetRec-major" form.
+    ///
+    /// This means `expr` is either `LetRec`-free, or a `LetRec` whose values and body are `LetRec`-major.
+    pub(crate) fn assert_letrec_major(expr: &MirRelationExpr) {
+        let mut todo = vec![expr];
+        while let Some(expr) = todo.pop() {
+            match expr {
+                MirRelationExpr::LetRec {
+                    ids: _,
+                    values,
+                    limits: _,
+                    body,
+                } => {
+                    todo.extend(values.iter());
+                    todo.push(body);
+                }
+                _ => {
+                    expr.visit_pre(|expr| {
+                        assert!(!matches!(expr, MirRelationExpr::LetRec { .. }));
+                    });
+                }
+            }
+        }
     }
 }
 

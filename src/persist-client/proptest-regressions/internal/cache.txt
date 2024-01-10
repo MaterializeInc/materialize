@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 520a1ce380cba2b6a303454a884b5feecbf32e3628eae0f2840b793c9a75b78a # shrinks to state = [Insert { key: 235, weight: 0 }, Get { key: 235 }]

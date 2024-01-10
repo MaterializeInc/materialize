@@ -20,7 +20,7 @@ class Postgres(Service):
         name: str = "postgres",
         mzbuild: str = "postgres",
         image: str | None = None,
-        port: int = 5432,
+        ports: list[str] = ["5432"],
         extra_command: list[str] = [],
         environment: list[str] = ["POSTGRESDB=postgres", "POSTGRES_PASSWORD=postgres"],
         volumes: list[str] = [],
@@ -37,10 +37,12 @@ class Postgres(Service):
             "max_connections=5000",
         ] + extra_command
         config: ServiceConfig = {"image": image} if image else {"mzbuild": mzbuild}
+
         config.update(
             {
                 "command": command,
-                "ports": [port],
+                "allow_host_ports": True,
+                "ports": ports,
                 "environment": environment,
                 "healthcheck": {
                     "test": ["CMD", "pg_isready"],

@@ -82,15 +82,15 @@ public              mz_support=U/mz_system
 query TT rowsort
 SELECT * FROM cluster_privileges ORDER BY name, privilege
 ----
-default           =U/mz_system
-default           mz_system=UC/mz_system
-default           materialize=UC/mz_system
-default           mz_support=U/mz_system
 mz_introspection  =U/mz_system
 mz_introspection  mz_system=UC/mz_system
 mz_introspection  mz_support=UC/mz_system
 mz_system         mz_system=UC/mz_system
 mz_system         mz_support=U/mz_system
+quickstart           =U/mz_system
+quickstart           mz_system=UC/mz_system
+quickstart           materialize=UC/mz_system
+quickstart           mz_support=U/mz_system
 
 ### The materialize privilege comes from the views created above
 ### The mz_support privilege comes from the `_redacted`
@@ -4628,7 +4628,7 @@ statement ok
 CREATE ROLE r1
 
 simple conn=mz_system,user=mz_system
-GRANT CREATE ON CLUSTER default TO r1
+GRANT CREATE ON CLUSTER quickstart TO r1
 ----
 COMPLETE 0
 
@@ -4714,10 +4714,12 @@ materialize,materialize,materialize,public,v,SELECT,NO,YES
 materialize,mz_support,materialize,public,s_progress,SELECT,NO,YES
 materialize,materialize,materialize,public,s_progress,SELECT,NO,YES
 mz_system,mz_support,materialize,mz_internal,mz_session_history,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_notices_redacted,SELECT,NO,YES
 mz_system,mz_support,materialize,mz_internal,mz_activity_log_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
 mz_system,mz_support,materialize,mz_internal,mz_prepared_statement_history_redacted,SELECT,NO,YES
 mz_system,mz_support,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
-COMPLETE 18
+COMPLETE 20
 
 simple conn=mz_system,user=mz_system
 SELECT COUNT(*) >= 166 FROM information_schema.table_privileges WHERE grantee = 'PUBLIC'
@@ -4761,10 +4763,12 @@ materialize,materialize,materialize,public,v,SELECT,NO,YES
 materialize,mz_support,materialize,public,s_progress,SELECT,NO,YES
 materialize,materialize,materialize,public,s_progress,SELECT,NO,YES
 mz_system,mz_support,materialize,mz_internal,mz_session_history,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_notices_redacted,SELECT,NO,YES
 mz_system,mz_support,materialize,mz_internal,mz_activity_log_redacted,SELECT,NO,YES
+mz_system,mz_support,materialize,mz_internal,mz_statement_lifecycle_history,SELECT,NO,YES
 mz_system,mz_support,materialize,mz_internal,mz_prepared_statement_history_redacted,SELECT,NO,YES
 mz_system,mz_support,materialize,mz_internal,mz_statement_execution_history_redacted,SELECT,NO,YES
-COMPLETE 18
+COMPLETE 20
 
 simple conn=mz_system,user=mz_system
 SELECT COUNT(*) >= 166 FROM information_schema.role_table_grants WHERE grantee = 'PUBLIC'

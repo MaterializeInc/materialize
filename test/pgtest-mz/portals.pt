@@ -1,9 +1,13 @@
-# In Materialize we eagerly commint implicit transactions after Execute
-# messages, causing portals to be destroyed.
+# Verify that portals are destroyed after a non-Execute command in an implicit
+# transaction. This is a Materialize-specific deviation from PostgreSQL to allow
+# optimizations for single-statement implicit transactions in the extended
+# query protocol.
+# See #15255 and #24093.
 send
 Parse {"query": "VALUES (1), (2)"}
 Bind {"portal": "c"}
 Execute {"portal": "c", "max_rows": 1}
+Parse {"query": "VALUES (1), (2)"}
 Execute {"portal": "c", "max_rows": 1}
 Sync
 ----
@@ -15,26 +19,6 @@ ParseComplete
 BindComplete
 DataRow {"fields":["1"]}
 PortalSuspended
+ParseComplete
 ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"34000"},{"typ":"M","value":"portal \"c\" does not exist"}]}
-ReadyForQuery {"status":"I"}
-
-# Verify that portals (cursors) are destroyed on Execute.
-send
-Parse {"query": "VALUES (1), (2)"}
-Bind {"portal": "c"}
-Execute {"portal": "c", "max_rows": 1}
-Sync
-Query {"query": "FETCH c"}
-----
-
-until
-ReadyForQuery
-ReadyForQuery
-----
-ParseComplete
-BindComplete
-DataRow {"fields":["1"]}
-PortalSuspended
-ReadyForQuery {"status":"I"}
-ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"34000"},{"typ":"M","value":"cursor \"c\" does not exist"}]}
 ReadyForQuery {"status":"I"}

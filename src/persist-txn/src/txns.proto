@@ -1,0 +1,24 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+import "persist-client/src/batch.proto";
+
+package mz_persist_txn.proto;
+
+// A wrapper for ProtoBatch with an id to ensure that each unique batch's
+// serialization is unique.
+message ProtoIdBatch {
+    bytes batch_id = 1;
+    // We reserved 4 in ProtoBatch so that we can use the presence of this field
+    // as a sentinel for whether persist-txn has encoded a batch as ProtoIdBatch
+    // or (the legacy) ProtoBatch.
+    mz_persist_client.batch.ProtoBatch batch = 4;
+}

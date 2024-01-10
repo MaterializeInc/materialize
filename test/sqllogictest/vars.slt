@@ -295,7 +295,7 @@ SET cluster_replica = 'r1'
 query T
 SELECT current_setting('cluster') || '.' || current_setting('cluster_replica')
 ----
-default.r1
+quickstart.r1
 
 query T
 SELECT current_setting('max_tables')
@@ -453,22 +453,13 @@ RESET max_query_result_size
 statement ok
 CREATE ROLE parker;
 
-statement error setting default session variables for a role is not supported
-ALTER ROLE parker SET cluster TO foo;
-
-# Enable Role variable defaults.
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_role_vars TO true;
-----
-COMPLETE 0
-
 statement ok
 ALTER ROLE parker SET cluster TO foo;
 
 query T
 SHOW cluster;
 ----
-default
+quickstart
 
 simple conn=parker_1,user=parker
 SHOW cluster;
@@ -493,7 +484,7 @@ COMPLETE 1
 simple conn=parker_2,user=parker
 SHOW cluster;
 ----
-default
+quickstart
 COMPLETE 1
 
 # Roles can alter their own variables.

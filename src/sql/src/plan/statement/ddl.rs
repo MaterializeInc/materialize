@@ -19,12 +19,15 @@ use std::time::Duration;
 
 use itertools::{Either, Itertools};
 use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL};
+use mz_expr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
 use mz_interchange::avro::{AvroSchemaGenerator, AvroSchemaOptions, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::collections::HashSet;
+use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
 use mz_proto::RustType;
+use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::adt::system::Oid;
 use mz_repr::role_id::RoleId;
@@ -39,7 +42,8 @@ use mz_sql_parser::ast::{
     CreateConnectionOption, CreateConnectionOptionName, CreateConnectionType, CreateTypeListOption,
     CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
     DocOnIdentifier, DocOnSchema, DropOwnedStatement, KafkaSinkConfigOption,
-    MaterializedViewOption, MaterializedViewOptionName, SetRoleVar, UnresolvedItemName,
+    MaterializedViewOption, MaterializedViewOptionName, RefreshAtOptionValue,
+    RefreshEveryOptionValue, RefreshOptionValue, SetRoleVar, UnresolvedItemName,
     UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 use mz_sql_parser::ident;
@@ -52,12 +56,17 @@ use mz_storage_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
     ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
 };
-use mz_storage_types::sources::{
-    GenericSourceConnection, KafkaMetadataKind, KafkaSourceConnection, KeyEnvelope, LoadGenerator,
-    LoadGeneratorSourceConnection, PostgresSourceConnection, PostgresSourcePublicationDetails,
-    ProtoPostgresSourcePublicationDetails, SourceConnection, SourceDesc, SourceEnvelope,
-    TestScriptSourceConnection, Timeline, UnplannedSourceEnvelope, UpsertStyle,
+use mz_storage_types::sources::envelope::{
+    KeyEnvelope, SourceEnvelope, UnplannedSourceEnvelope, UpsertStyle,
 };
+use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
+use mz_storage_types::sources::load_generator::{LoadGenerator, LoadGeneratorSourceConnection};
+use mz_storage_types::sources::postgres::{
+    PostgresSourceConnection, PostgresSourcePublicationDetails,
+    ProtoPostgresSourcePublicationDetails,
+};
+use mz_storage_types::sources::testscript::TestScriptSourceConnection;
+use mz_storage_types::sources::{GenericSourceConnection, SourceConnection, SourceDesc, Timeline};
 use prost::Message;
 
 use crate::ast::display::AstDisplay;
@@ -93,7 +102,7 @@ use crate::names::{
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
 use crate::plan::expr::ColumnRef;
-use crate::plan::query::{scalar_type_from_catalog, ExprContext, QueryLifetime};
+use crate::plan::query::{plan_expr, scalar_type_from_catalog, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::ddl::connection::{INALTERABLE_OPTIONS, MUTUALLY_EXCLUSIVE_SETS};
 use crate::plan::statement::{scl, StatementContext, StatementDesc};
@@ -117,6 +126,7 @@ use crate::plan::{
     WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars;
+use crate::session::vars::ENABLE_REFRESH_EVERY_MVS;
 
 mod connection;
 
@@ -1295,8 +1305,7 @@ pub fn plan_create_source(
 generate_extracted_config!(
     CreateSubsourceOption,
     (Progress, bool, Default(false)),
-    (References, bool, Default(false)),
-    (RetainHistory, Duration)
+    (References, bool, Default(false))
 );
 
 pub fn plan_create_subsource(
@@ -1314,8 +1323,7 @@ pub fn plan_create_subsource(
     let CreateSubsourceOptionExtracted {
         progress,
         references,
-        retain_history,
-        seen: _,
+        ..
     } = with_options.clone().try_into()?;
 
     // This invariant is enforced during purification; we are responsible for
@@ -1432,13 +1440,6 @@ pub fn plan_create_subsource(
     let typ = RelationType::new(column_types).with_keys(keys);
     let desc = RelationDesc::new(typ, names);
 
-    let compaction_window = retain_history
-        .map(|cw| {
-            scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
-            Ok::<_, PlanError>(cw.try_into()?)
-        })
-        .transpose()?;
-
     let source = Source {
         create_sql,
         data_source: if progress {
@@ -1449,7 +1450,7 @@ pub fn plan_create_subsource(
             unreachable!("state prohibited above")
         },
         desc,
-        compaction_window,
+        compaction_window: None,
     };
 
     Ok(Plan::CreateSource(CreateSourcePlan {
@@ -1620,7 +1621,11 @@ fn source_sink_cluster_config(
     match (in_cluster, size) {
         (None, None) => Ok(SourceSinkClusterConfig::Undefined),
         (Some(in_cluster), None) => {
-            ensure_cluster_can_host_storage_item(scx, in_cluster.id, ty)?;
+            let cluster = scx.catalog.get_cluster(in_cluster.id);
+            // At most 1 replica
+            if cluster.replica_ids().len() > 1 {
+                sql_bail!("cannot create {ty} in cluster with more than one replica")
+            }
 
             // We also don't allow more objects to be added to a cluster that is already
             // linked to another object.
@@ -2079,8 +2084,124 @@ pub fn plan_create_materialized_view(
     let MaterializedViewOptionExtracted {
         assert_not_null,
         retain_history,
+        refresh,
         seen: _,
     }: MaterializedViewOptionExtracted = stmt.with_options.try_into()?;
+
+    let refresh_schedule = {
+        let mut refresh_schedule = RefreshSchedule::empty();
+        let mut on_commits_seen = 0;
+        for refresh_option_value in refresh {
+            if !matches!(refresh_option_value, RefreshOptionValue::OnCommit) {
+                scx.require_feature_flag(&ENABLE_REFRESH_EVERY_MVS)?;
+            }
+            match refresh_option_value {
+                RefreshOptionValue::OnCommit => {
+                    on_commits_seen += 1;
+                }
+                RefreshOptionValue::AtCreation => {
+                    soft_panic_or_log!("REFRESH AT CREATION should have been purified away");
+                    sql_bail!("INTERNAL ERROR: REFRESH AT CREATION should have been purified away")
+                }
+                RefreshOptionValue::At(RefreshAtOptionValue { mut time }) => {
+                    transform_ast::transform(scx, &mut time)?; // Desugar the expression
+                    let ecx = &ExprContext {
+                        qcx: &QueryContext::root(scx, QueryLifetime::OneShot),
+                        name: "REFRESH AT",
+                        scope: &Scope::empty(),
+                        relation_type: &RelationType::empty(),
+                        allow_aggregates: false,
+                        allow_subqueries: false,
+                        allow_parameters: false,
+                        allow_windows: false,
+                    };
+                    let hir = plan_expr(ecx, &time)?.cast_to(
+                        ecx,
+                        CastContext::Assignment,
+                        &ScalarType::MzTimestamp,
+                    )?;
+                    // (mz_now was purified away to a literal earlier)
+                    let timestamp = hir
+                        .into_literal_mz_timestamp()
+                        .ok_or_else(|| PlanError::InvalidRefreshAt)?;
+                    refresh_schedule.ats.push(timestamp);
+                }
+                RefreshOptionValue::Every(RefreshEveryOptionValue {
+                    interval,
+                    aligned_to,
+                }) => {
+                    let interval = Interval::try_from_value(Value::Interval(interval))?;
+                    if interval.as_microseconds() <= 0 {
+                        sql_bail!("REFRESH interval must be positive; got: {}", interval);
+                    }
+                    if interval.months != 0 {
+                        // This limitation is because we want Intervals to be cleanly convertable
+                        // to a unix epoch timestamp difference. When the interval involves months, then
+                        // this is not true anymore, because months have variable lengths.
+                        // See `Timestamp::round_up`.
+                        sql_bail!("REFRESH interval must not involve units larger than days");
+                    }
+                    let interval = interval.duration()?;
+                    if u64::try_from(interval.as_millis()).is_err() {
+                        sql_bail!("REFRESH interval too large");
+                    }
+
+                    let mut aligned_to = match aligned_to {
+                        Some(aligned_to) => aligned_to,
+                        None => {
+                            soft_panic_or_log!(
+                                "ALIGNED TO should have been filled in by purification"
+                            );
+                            sql_bail!(
+                                "INTERNAL ERROR: ALIGNED TO should have been filled in by purification"
+                            )
+                        }
+                    };
+
+                    // Desugar the `aligned_to` expression
+                    transform_ast::transform(scx, &mut aligned_to)?;
+
+                    let ecx = &ExprContext {
+                        qcx: &QueryContext::root(scx, QueryLifetime::OneShot),
+                        name: "REFRESH EVERY ... ALIGNED TO",
+                        scope: &Scope::empty(),
+                        relation_type: &RelationType::empty(),
+                        allow_aggregates: false,
+                        allow_subqueries: false,
+                        allow_parameters: false,
+                        allow_windows: false,
+                    };
+                    let aligned_to_hir = plan_expr(ecx, &aligned_to)?.cast_to(
+                        ecx,
+                        CastContext::Assignment,
+                        &ScalarType::MzTimestamp,
+                    )?;
+                    // (mz_now was purified away to a literal earlier)
+                    let aligned_to_const = aligned_to_hir
+                        .into_literal_mz_timestamp()
+                        .ok_or_else(|| PlanError::InvalidRefreshEveryAlignedTo)?;
+
+                    refresh_schedule.everies.push(RefreshEvery {
+                        interval,
+                        aligned_to: aligned_to_const,
+                    });
+                }
+            }
+        }
+
+        if on_commits_seen > 1 {
+            sql_bail!("REFRESH ON COMMIT cannot be specified multiple times");
+        }
+        if on_commits_seen > 0 && refresh_schedule != RefreshSchedule::empty() {
+            sql_bail!("REFRESH ON COMMIT is not compatible with any of the other REFRESH options");
+        }
+
+        if refresh_schedule == RefreshSchedule::empty() {
+            None
+        } else {
+            Some(refresh_schedule)
+        }
+    };
 
     if !assert_not_null.is_empty() {
         scx.require_feature_flag(&crate::session::vars::ENABLE_ASSERT_NOT_NULL)?;
@@ -2180,6 +2301,7 @@ pub fn plan_create_materialized_view(
             cluster_id,
             non_null_assertions,
             compaction_window,
+            refresh_schedule,
         },
         replace,
         drop_ids,
@@ -2191,7 +2313,8 @@ pub fn plan_create_materialized_view(
 generate_extracted_config!(
     MaterializedViewOption,
     (AssertNotNull, Ident, AllowMultiple),
-    (RetainHistory, Duration)
+    (RetainHistory, Duration),
+    (Refresh, RefreshOptionValue<Aug>, AllowMultiple)
 );
 
 pub fn describe_create_sink(
@@ -3343,8 +3466,14 @@ pub fn plan_create_cluster_replica(
     let cluster = scx
         .catalog
         .resolve_cluster(Some(&normalize::ident(of_cluster)))?;
-    if is_storage_cluster(scx, cluster) && cluster.replica_ids().len() > 0 {
-        sql_bail!("cannot create more than one replica of a cluster containing sources or sinks");
+    let current_replica_count = cluster.replica_ids().iter().count();
+    if contains_storage_objects(scx, cluster) && current_replica_count > 0 {
+        let internal_replica_count = cluster.replicas().iter().filter(|r| r.internal()).count();
+        return Err(PlanError::CreateReplicaFailStorageObjects {
+            current_replica_count,
+            internal_replica_count,
+            hypothetical_replica_count: current_replica_count + 1,
+        });
     }
     ensure_cluster_is_not_linked(scx, cluster.id())?;
 
@@ -3427,6 +3556,8 @@ pub fn plan_create_connection(
     let connection = connection_options_extracted.try_into_connection(scx, connection_type)?;
     if let Connection::Aws(_) = &connection {
         scx.require_feature_flag(&vars::ENABLE_AWS_CONNECTION)?;
+    } else if let Connection::MySql(_) = &connection {
+        scx.require_feature_flag(&vars::ENABLE_MYSQL_SOURCE)?;
     }
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
 
@@ -3632,38 +3763,13 @@ fn plan_drop_cluster(
 
 /// Returns `true` if the cluster has any storage object. Return `false` if the cluster has no
 /// objects.
-fn is_storage_cluster(scx: &StatementContext, cluster: &dyn CatalogCluster) -> bool {
+fn contains_storage_objects(scx: &StatementContext, cluster: &dyn CatalogCluster) -> bool {
     cluster.bound_objects().iter().any(|id| {
         matches!(
             scx.catalog.get_item(id).item_type(),
             CatalogItemType::Source | CatalogItemType::Sink
         )
     })
-}
-
-/// Check that the cluster can host storage items.
-fn ensure_cluster_can_host_storage_item(
-    scx: &StatementContext,
-    cluster_id: ClusterId,
-    ty: &'static str,
-) -> Result<(), PlanError> {
-    let cluster = scx.catalog.get_cluster(cluster_id);
-    // At most 1 replica
-    if cluster.replica_ids().len() > 1 {
-        sql_bail!("cannot create {ty} in cluster with more than one replica")
-    }
-    let enable_unified_cluster = scx.catalog.system_vars().enable_unified_clusters();
-    let only_storage_objects = cluster.bound_objects().iter().all(|id| {
-        matches!(
-            scx.catalog.get_item(id).item_type(),
-            CatalogItemType::Source | CatalogItemType::Sink
-        )
-    });
-    // unified clusters or only storage objects on cluster
-    if !enable_unified_cluster && !only_storage_objects {
-        sql_bail!("cannot create {ty} in cluster containing indexes or materialized views");
-    }
-    Ok(())
 }
 
 fn plan_drop_cluster_replica(
@@ -4218,9 +4324,22 @@ pub fn plan_alter_cluster(
                     if replica_defs.is_some() {
                         sql_bail!("REPLICAS not supported for managed clusters");
                     }
+
                     if let Some(replication_factor) = replication_factor {
-                        if is_storage_cluster(scx, cluster) && replication_factor > 1 {
-                            sql_bail!("cannot create more than one replica of a cluster containing sources or sinks");
+                        let internal_replica_count =
+                            cluster.replicas().iter().filter(|r| r.internal()).count();
+                        let hypothetical_replica_count =
+                            internal_replica_count + usize::cast_from(replication_factor);
+
+                        // Total number of replicas running is internal replicas
+                        // + replication factor.
+                        if contains_storage_objects(scx, cluster) && hypothetical_replica_count > 1
+                        {
+                            return Err(PlanError::CreateReplicaFailStorageObjects {
+                                current_replica_count: cluster.replica_ids().iter().count(),
+                                internal_replica_count,
+                                hypothetical_replica_count,
+                            });
                         }
                     }
                 }
@@ -4868,6 +4987,7 @@ pub fn plan_alter_connection(
         Connection::Csr(_) => CreateConnectionType::Csr,
         Connection::Postgres(_) => CreateConnectionType::Postgres,
         Connection::Ssh(_) => CreateConnectionType::Ssh,
+        Connection::MySql(_) => CreateConnectionType::MySql,
     };
 
     // Collect all options irrespective of action taken on them.

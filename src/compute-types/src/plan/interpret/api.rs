@@ -94,6 +94,7 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
         key_val_plan: &KeyValPlan,
         plan: &ReducePlan,
         input_key: &Option<Vec<MirScalarExpr>>,
+        mfp_after: &MapFilterProject,
     ) -> Self::Domain;
 
     fn top_k(
@@ -374,13 +375,19 @@ where
                     key_val_plan,
                     plan,
                     input_key,
+                    mfp_after,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
-                    Ok(self
-                        .interpret
-                        .reduce(&self.ctx, input, key_val_plan, plan, input_key))
+                    Ok(self.interpret.reduce(
+                        &self.ctx,
+                        input,
+                        key_val_plan,
+                        plan,
+                        input_key,
+                        mfp_after,
+                    ))
                 }
                 TopK { input, top_k_plan } => {
                     // Descend recursively into all children.
@@ -649,6 +656,7 @@ where
                     key_val_plan,
                     plan,
                     input_key,
+                    mfp_after,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -659,6 +667,7 @@ where
                         key_val_plan,
                         plan,
                         input_key,
+                        mfp_after,
                     );
                     // Mutate the current node using the given `action`.
                     (self.action)(expr, &result, &[input]);

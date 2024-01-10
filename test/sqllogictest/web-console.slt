@@ -112,7 +112,7 @@ ORDER BY r.id
 ----
 s1  mz_system  s1  r1  2
 s2  mz_introspection  s2  r1  2
-u1  default  u1  r1  2
+u1  quickstart  u1  r1  2
 
 
 # ---- useClusterUtilization.ts

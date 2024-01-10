@@ -32,11 +32,13 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::command::Command;
 use crate::coord::appends::Deferred;
+use crate::coord::statement_logging::StatementLoggingId;
 use crate::coord::{
     Coordinator, CreateConnectionValidationReady, Message, PeekStage, PeekStageFinish,
     PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
 };
 use crate::session::Session;
+use crate::statement_logging::StatementLifecycleEvent;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterNotice, TimestampContext};
 
@@ -151,11 +153,53 @@ impl Coordinator {
                     otel_ctx.attach_as_parent();
                     self.sequence_peek_stage(ctx, otel_ctx, stage).await;
                 }
+                Message::CreateIndexStageReady {
+                    ctx,
+                    otel_ctx,
+                    stage,
+                } => {
+                    otel_ctx.attach_as_parent();
+                    self.sequence_create_index_stage(ctx, stage, otel_ctx).await;
+                }
+                Message::CreateViewStageReady {
+                    ctx,
+                    otel_ctx,
+                    stage,
+                } => {
+                    otel_ctx.attach_as_parent();
+                    self.sequence_create_view_stage(ctx, stage, otel_ctx).await;
+                }
+                Message::CreateMaterializedViewStageReady {
+                    ctx,
+                    otel_ctx,
+                    stage,
+                } => {
+                    otel_ctx.attach_as_parent();
+                    self.sequence_create_materialized_view_stage(ctx, stage, otel_ctx)
+                        .await;
+                }
+                Message::SubscribeStageReady {
+                    ctx,
+                    otel_ctx,
+                    stage,
+                } => {
+                    otel_ctx.attach_as_parent();
+                    self.sequence_subscribe_stage(ctx, stage, otel_ctx).await;
+                }
                 Message::DrainStatementLog => {
                     self.drain_statement_log().await;
                 }
                 Message::PrivateLinkVpcEndpointEvents(events) => {
-                    self.write_privatelink_status_updates(events).await;
+                    self.controller
+                        .storage
+                        .record_introspection_updates(
+                            mz_storage_client::controller::IntrospectionType::PrivatelinkConnectionStatusHistory,
+                            events
+                                .into_iter()
+                                .map(|e| (mz_repr::Row::from(e), 1))
+                                .collect(),
+                        )
+                        .await;
                 }
             }
         }
@@ -349,6 +393,14 @@ impl Coordinator {
                         insertions
                     };
                     self.builtin_table_update().background(updates);
+                }
+            }
+            ControllerResponse::WatchSetFinished(sets) => {
+                for set in sets {
+                    let (id, ev) = set
+                        .downcast_ref::<(StatementLoggingId, StatementLifecycleEvent)>()
+                        .expect("we currently log all watch sets with this type");
+                    self.record_statement_lifecycle_event(id, ev);
                 }
             }
         }

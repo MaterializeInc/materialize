@@ -12,7 +12,7 @@ $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdri
 > SELECT name FROM (SHOW CLUSTERS)
 mz_system
 mz_introspection
-default
+quickstart
 
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET enable_rbac_checks TO false
@@ -49,7 +49,7 @@ ALTER SYSTEM SET enable_rbac_checks TO true
 > SET CLUSTER TO mz_introspection
 
 > SHOW MATERIALIZED VIEWS
-mv default
+mv quickstart
 
 #! CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
 #contains:system cluster 'mz_introspection' cannot be modified
@@ -58,12 +58,12 @@ mv default
 
 # Query gets automatically run on mz_introspection, despite mz_system being set
 > SHOW MATERIALIZED VIEWS
-mv default
+mv quickstart
 
 #! CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
 #contains:system cluster 'mz_system' cannot be modified
 
-> SET CLUSTER TO default
+> SET CLUSTER TO quickstart
 
 > CREATE TABLE temp (a INT)
 

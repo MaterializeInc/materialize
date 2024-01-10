@@ -151,38 +151,6 @@ Trace {
                         event: Some(
                             V1(
                                 AuditLogEventV1 {
-                                    id: 8,
-                                    event_type: Create,
-                                    object_type: Cluster,
-                                    user: None,
-                                    occurred_at: Some(
-                                        EpochMillis {
-                                            millis: 0,
-                                        },
-                                    ),
-                                    details: Some(
-                                        IdNameV1(
-                                            IdNameV1 {
-                                                id: "u1",
-                                                name: "default",
-                                            },
-                                        ),
-                                    ),
-                                },
-                            ),
-                        ),
-                    },
-                    (),
-                ),
-                "-9223372036854775808",
-                1,
-            ),
-            (
-                (
-                    AuditLogKey {
-                        event: Some(
-                            V1(
-                                AuditLogEventV1 {
                                     id: 6,
                                     event_type: Grant,
                                     object_type: Database,
@@ -233,6 +201,38 @@ Trace {
                                                 grantee_id: "p",
                                                 grantor_id: "s1",
                                                 privileges: "U",
+                                            },
+                                        ),
+                                    ),
+                                },
+                            ),
+                        ),
+                    },
+                    (),
+                ),
+                "-9223372036854775808",
+                1,
+            ),
+            (
+                (
+                    AuditLogKey {
+                        event: Some(
+                            V1(
+                                AuditLogEventV1 {
+                                    id: 8,
+                                    event_type: Create,
+                                    object_type: Cluster,
+                                    user: None,
+                                    occurred_at: Some(
+                                        EpochMillis {
+                                            millis: 0,
+                                        },
+                                    ),
+                                    details: Some(
+                                        IdNameV1(
+                                            IdNameV1 {
+                                                id: "u1",
+                                                name: "quickstart",
                                             },
                                         ),
                                     ),
@@ -317,48 +317,6 @@ Trace {
                         event: Some(
                             V1(
                                 AuditLogEventV1 {
-                                    id: 10,
-                                    event_type: Create,
-                                    object_type: ClusterReplica,
-                                    user: None,
-                                    occurred_at: Some(
-                                        EpochMillis {
-                                            millis: 0,
-                                        },
-                                    ),
-                                    details: Some(
-                                        CreateClusterReplicaV1(
-                                            CreateClusterReplicaV1 {
-                                                cluster_id: "u1",
-                                                cluster_name: "default",
-                                                replica_id: Some(
-                                                    StringWrapper {
-                                                        inner: "u1",
-                                                    },
-                                                ),
-                                                replica_name: "r1",
-                                                logical_size: "1",
-                                                disk: false,
-                                                billed_as: None,
-                                                internal: false,
-                                            },
-                                        ),
-                                    ),
-                                },
-                            ),
-                        ),
-                    },
-                    (),
-                ),
-                "-9223372036854775808",
-                1,
-            ),
-            (
-                (
-                    AuditLogKey {
-                        event: Some(
-                            V1(
-                                AuditLogEventV1 {
                                     id: 7,
                                     event_type: Create,
                                     object_type: Schema,
@@ -390,6 +348,48 @@ Trace {
                 "-9223372036854775808",
                 1,
             ),
+            (
+                (
+                    AuditLogKey {
+                        event: Some(
+                            V1(
+                                AuditLogEventV1 {
+                                    id: 10,
+                                    event_type: Create,
+                                    object_type: ClusterReplica,
+                                    user: None,
+                                    occurred_at: Some(
+                                        EpochMillis {
+                                            millis: 0,
+                                        },
+                                    ),
+                                    details: Some(
+                                        CreateClusterReplicaV1(
+                                            CreateClusterReplicaV1 {
+                                                cluster_id: "u1",
+                                                cluster_name: "quickstart",
+                                                replica_id: Some(
+                                                    StringWrapper {
+                                                        inner: "u1",
+                                                    },
+                                                ),
+                                                replica_name: "r1",
+                                                logical_size: "1",
+                                                disk: false,
+                                                billed_as: None,
+                                                internal: false,
+                                            },
+                                        ),
+                                    ),
+                                },
+                            ),
+                        ),
+                    },
+                    (),
+                ),
+                "-9223372036854775808",
+                1,
+            ),
         ],
     },
     clusters: CollectionTrace {
@@ -408,7 +408,7 @@ Trace {
                         ),
                     },
                     ClusterValue {
-                        name: "default",
+                        name: "quickstart",
                         linked_object_id: None,
                         owner_id: Some(
                             RoleId {

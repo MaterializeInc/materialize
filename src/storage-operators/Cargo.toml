@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 async-stream = "0.3.3"
 differential-dataflow = "0.12.0"

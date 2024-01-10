@@ -27,7 +27,7 @@ steps:
     timeout_in_minutes: 10
     if: build.source == "ui"
     agents:
-      queue: linux
+      queue: linux-x86_64-small
 
   - wait: ~
 
@@ -168,4 +168,4 @@ steps:
           job-uuid-file-pattern: _([^_]*).xml
     priority: 1
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small

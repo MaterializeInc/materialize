@@ -27,7 +27,7 @@ pub static MZ_PREPARED_STATEMENT_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(||
             "prepared_at",
             ScalarType::TimestampTz { precision: None }.nullable(false),
         )
-        .with_column("statement_kind", ScalarType::String.nullable(true))
+        .with_column("statement_type", ScalarType::String.nullable(true))
 });
 
 pub static MZ_SESSION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
@@ -106,12 +106,13 @@ pub static MZ_SINK_STATUS_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
         .with_column("details", ScalarType::Jsonb.nullable(true))
 });
 
-pub static MZ_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {
-    RelationDesc::empty()
-        .with_column(
-            "occurred_at",
-            ScalarType::TimestampTz { precision: None }.nullable(false),
-        )
-        .with_column("connection_id", ScalarType::String.nullable(false))
-        .with_column("status", ScalarType::String.nullable(false))
-});
+pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC: Lazy<RelationDesc> =
+    Lazy::new(|| {
+        RelationDesc::empty()
+            .with_column(
+                "occurred_at",
+                ScalarType::TimestampTz { precision: None }.nullable(false),
+            )
+            .with_column("connection_id", ScalarType::String.nullable(false))
+            .with_column("status", ScalarType::String.nullable(false))
+    });

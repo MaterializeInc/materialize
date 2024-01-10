@@ -287,8 +287,8 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
     }
 }
 
-// These structure represents a full set up updates for the `mz_source_statistics`
-// and `mz_sink_statistics` tables for a specific source-worker/sink-worker pair.
+// These structure represents a full set up updates for the `mz_source_statistics_per_worker`
+// and `mz_sink_statistics_per_worker` tables for a specific source-worker/sink-worker pair.
 // They are structured like this for simplicity
 // and efficiency: Each storage worker can individually collect and consolidate metrics,
 // then control how much `StorageResponse` traffic is produced when sending updates
@@ -300,9 +300,9 @@ pub struct SourceStatisticsUpdate {
     pub worker_id: usize,
     pub snapshot_committed: bool,
     pub messages_received: u64,
+    pub bytes_received: u64,
     pub updates_staged: u64,
     pub updates_committed: u64,
-    pub bytes_received: u64,
     pub envelope_state_bytes: u64,
     pub envelope_state_records: u64,
     pub rehydration_latency_ms: Option<i64>,
@@ -331,9 +331,9 @@ impl PackableStats for SourceStatisticsUpdate {
         packer.push(Datum::from(u64::cast_from(self.worker_id)));
         packer.push(Datum::from(self.snapshot_committed));
         packer.push(Datum::from(self.messages_received));
+        packer.push(Datum::from(self.bytes_received));
         packer.push(Datum::from(self.updates_staged));
         packer.push(Datum::from(self.updates_committed));
-        packer.push(Datum::from(self.bytes_received));
         packer.push(Datum::from(self.envelope_state_bytes));
         packer.push(Datum::from(self.envelope_state_records));
         packer.push(Datum::from(
@@ -437,9 +437,9 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                                 worker_id: u64::cast_from(update.worker_id),
                                 snapshot_committed: update.snapshot_committed,
                                 messages_received: update.messages_received,
+                                bytes_received: update.bytes_received,
                                 updates_staged: update.updates_staged,
                                 updates_committed: update.updates_committed,
-                                bytes_received: update.bytes_received,
                                 envelope_state_bytes: update.envelope_state_bytes,
                                 envelope_state_records: update.envelope_state_records,
                                 rehydration_latency_ms: update.rehydration_latency_ms,

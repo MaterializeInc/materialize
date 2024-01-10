@@ -174,6 +174,7 @@ impl<T> Interpreter<T> for SingleTimeMonotonic<'_, T> {
         _key_val_plan: &KeyValPlan,
         _plan: &ReducePlan,
         _input_key: &Option<Vec<MirScalarExpr>>,
+        _mfp_after: &MapFilterProject,
     ) -> Self::Domain {
         // In a recursive context, reduce will advance across timestamps
         // and may need to retract. Outside of a recursive context, the

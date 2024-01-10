@@ -28,7 +28,7 @@ use chrono::NaiveDate;
 // testdrive modules can import just this one.
 pub use mz_avro::schema::{Schema, SchemaKind, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 pub use mz_avro::types::{DecimalValue, ToAvro, Value};
-pub use mz_avro::{from_avro_datum, to_avro_datum, Codec, Reader, Writer};
+pub use mz_avro::{from_avro_datum, to_avro_datum};
 pub use mz_interchange::avro::parse_schema;
 use serde_json::Value as JsonValue;
 

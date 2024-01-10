@@ -116,7 +116,7 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.up(*dependencies)
 
         if args.replicas > 1:
-            c.sql("DROP CLUSTER default CASCADE")
+            c.sql("DROP CLUSTER quickstart")
             # Make sure a replica named 'r1' always exists
             replica_names = [
                 "r1" if replica_id == 0 else f"replica{replica_id}"
@@ -126,7 +126,7 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
                 f"{replica_name} (SIZE '{materialized.default_replica_size}')"
                 for replica_name in replica_names
             )
-            c.sql(f"CREATE CLUSTER default REPLICAS ({replica_string})")
+            c.sql(f"CREATE CLUSTER quickstart REPLICAS ({replica_string})")
 
         junit_report = ci_util.junit_report_filename(c.name)
 
@@ -234,11 +234,6 @@ def workflow_rehydration(c: Composition) -> None:
 
 def workflow_failpoint(c: Composition) -> None:
     """Test behaviour when upsert state errors"""
-    print("Running failpoint workflow")
-
-    c.down(destroy_volumes=True)
-    c.up("materialized")
-    c.run("testdrive", "failpoint/01-setup.td")
 
     for failpoint in [
         (
@@ -260,11 +255,15 @@ def workflow_failpoint(c: Composition) -> None:
 def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> None:
     print(f">>> Running failpoint test for failpoint {failpoint}")
 
+    dependencies = ["zookeeper", "kafka", "materialized"]
+    c.kill("clusterd1")
+    c.up(*dependencies)
+    c.run("testdrive", "failpoint/00-reset.td")
     with c.override(
         Testdrive(no_reset=True, consistent_seed=True),
     ):
-        dependencies = ["zookeeper", "kafka", "clusterd1", "materialized"]
-        c.up(*dependencies)
+        c.run("testdrive", "failpoint/01-setup.td")
+        c.up("clusterd1")
         c.run("testdrive", "failpoint/02-source.td")
         c.kill("clusterd1")
 
@@ -284,9 +283,6 @@ def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> Non
         # Running without set failpoint
         c.up("clusterd1")
         c.run("testdrive", "failpoint/04-recover.td")
-
-    c.run("testdrive", "failpoint/05-reset.td")
-    c.kill("clusterd1")
 
 
 def workflow_incident_49(c: Composition) -> None:
@@ -377,7 +373,7 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
         return int(num_files)
 
     scenarios = [
-        ("drop-source.td", "DROP SOURCE dropped_upsert", True),
+        ("drop-source.td", "DROP SOURCE dropped_upsert", False),
         ("drop-cluster-cascade.td", "DROP CLUSTER c1 CASCADE", True),
         ("drop-source-in-cluster.td", "DROP SOURCE dropped_upsert", False),
     ]
@@ -423,6 +419,7 @@ def workflow_autospill(c: Composition) -> None:
         "kafka",
         "materialized",
         "schema-registry",
+        "clusterd1",
     ]
 
     with c.override(
@@ -431,15 +428,48 @@ def workflow_autospill(c: Composition) -> None:
                 "--orchestrator-process-scratch-directory=/mzdata/source_data",
             ],
             additional_system_parameter_defaults={
-                "disk_cluster_replicas_default": "false",
+                "disk_cluster_replicas_default": "true",
                 "upsert_rocksdb_auto_spill_to_disk": "true",
                 "upsert_rocksdb_auto_spill_threshold_bytes": "200",
+                "enable_unmanaged_cluster_replicas": "true",
                 "storage_dataflow_delay_sources_past_rehydration": "true",
             },
         ),
+        Clusterd(
+            name="clusterd1",
+            options=[
+                "--scratch-directory=/scratch",
+            ],
+        ),
+        Testdrive(no_reset=True, consistent_seed=True),
     ):
+
+        # Helper function to get worker 0 autospill metrics for clusterd.
+        def fetch_auto_spill_metric() -> int | None:
+            metrics = c.exec(
+                "clusterd1", "curl", "localhost:6878/metrics", capture=True
+            ).stdout
+
+            value = None
+            for metric in metrics.splitlines():
+                if metric.startswith(
+                    "mz_storage_upsert_state_rocksdb_autospill_in_use"
+                ):
+                    if value:
+                        value += int(metric.split()[1])
+                    else:
+                        value = int(metric.split()[1])
+
+            return value
+
         c.up(*dependencies)
-        c.run("testdrive", "autospill/bytes.td")
+        c.run("testdrive", "autospill/01-setup.td")
+
+        c.run("testdrive", "autospill/02-memory.td")
+        assert fetch_auto_spill_metric() == 0
+
+        c.run("testdrive", "autospill/03-rocksdb.td")
+        assert fetch_auto_spill_metric() == 1
 
 
 # This should not be run on ci and is not added to workflow_default above!
@@ -571,13 +601,13 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                     dedent(
                         f"""
                 > select sum(envelope_state_records)
-                  from mz_internal.mz_source_statistics st
+                  from mz_internal.mz_source_statistics_per_worker st
                   join mz_sources s on s.id = st.id
                   where name = 's1';
                 {repeat + 2}
 
                 > select bool_and(rehydration_latency IS NOT NULL)
-                  from mz_internal.mz_source_statistics st
+                  from mz_internal.mz_source_statistics_per_worker st
                   join mz_sources s on s.id = st.id
                   where name = 's1';
                 true
@@ -587,7 +617,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
 
                 rehydration_latency = c.sql_query(
                     """select max(rehydration_latency)
-                    from mz_internal.mz_source_statistics st
+                    from mz_internal.mz_source_statistics_per_worker st
                     join mz_sources s on s.id = st.id
                     where name = 's1';"""
                 )[0]

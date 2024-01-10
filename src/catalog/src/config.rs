@@ -136,7 +136,9 @@ impl Default for ClusterReplicaSizeMap {
                             scale: 1,
                             workers: workers.into(),
                             credits_per_hour: 1.into(),
+                            cpu_exclusive: false,
                             disabled: false,
+                            selectors: BTreeMap::default(),
                         },
                     )
                 })
@@ -154,7 +156,9 @@ impl Default for ClusterReplicaSizeMap {
                     scale,
                     workers: 1,
                     credits_per_hour: scale.into(),
+                    cpu_exclusive: false,
                     disabled: false,
+                    selectors: BTreeMap::default(),
                 },
             );
 
@@ -167,7 +171,9 @@ impl Default for ClusterReplicaSizeMap {
                     scale,
                     workers: scale.into(),
                     credits_per_hour: scale.into(),
+                    cpu_exclusive: false,
                     disabled: false,
+                    selectors: BTreeMap::default(),
                 },
             );
 
@@ -180,7 +186,9 @@ impl Default for ClusterReplicaSizeMap {
                     scale: 1,
                     workers: 8,
                     credits_per_hour: 1.into(),
+                    cpu_exclusive: false,
                     disabled: false,
+                    selectors: BTreeMap::default(),
                 },
             );
         }
@@ -194,7 +202,9 @@ impl Default for ClusterReplicaSizeMap {
                 scale: 2,
                 workers: 4,
                 credits_per_hour: 2.into(),
+                cpu_exclusive: false,
                 disabled: false,
+                selectors: BTreeMap::default(),
             },
         );
 
@@ -207,7 +217,9 @@ impl Default for ClusterReplicaSizeMap {
                 scale: 0,
                 workers: 0,
                 credits_per_hour: 0.into(),
+                cpu_exclusive: false,
                 disabled: true,
+                selectors: BTreeMap::default(),
             },
         );
         Self(inner)

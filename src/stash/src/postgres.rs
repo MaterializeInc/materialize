@@ -811,8 +811,8 @@ impl Stash {
         let stmts = CountedStatements::from(stmts, &self.metrics);
         // Generate statements to execute depending on our mode.
         let (tx_start, tx_end) = match self.txn_mode {
-            TransactionMode::Writeable => ("BEGIN PRIORITY HIGH", "COMMIT"),
-            TransactionMode::Readonly => ("BEGIN READ ONLY PRIORITY HIGH", "COMMIT"),
+            TransactionMode::Writeable => ("BEGIN PRIORITY NORMAL", "COMMIT"),
+            TransactionMode::Readonly => ("BEGIN READ ONLY PRIORITY NORMAL", "COMMIT"),
             TransactionMode::Savepoint => ("SAVEPOINT stash", "RELEASE SAVEPOINT stash"),
         };
         batch_execute(client, tx_start)
@@ -1120,7 +1120,7 @@ impl Consolidator {
                         self.insert(req);
                     }
 
-                    // Pick a random key to consolidate.
+                    // Pick a key to consolidate.
                     let id = *self.consolidations.keys().next().expect("must exist");
                     let (ts, done) = self.consolidations.remove(&id).expect("must exist");
 
@@ -1133,7 +1133,7 @@ impl Consolidator {
                     let mut retry = Box::pin(retry);
                     let mut attempt: u64 = 0;
                     loop {
-                        match self.consolidate(id, &ts).await {
+                        match self.consolidate(id, &ts, attempt).await {
                             Ok(()) => break,
                             Err(e) => {
                                 attempt += 1;
@@ -1169,12 +1169,23 @@ impl Consolidator {
         &mut self,
         id: Id,
         since: &Antichain<Timestamp>,
+        attempt: u64,
     ) -> Result<(), StashError> {
+        const HIGH_PRIORITY_ATTEMPT_THRESHOLD: u64 = 5;
+
         if self.client.is_none() {
             self.connect().await?;
         }
         let client = self.client.as_mut().unwrap();
+
         let tx = client.transaction().await?;
+
+        // If the consolidator has failed to consolidate enough times, elevate our transaction
+        // priority to high. Otherwise we can get into a state where the consolidator is never able
+        // to finish consolidating and the stash grows without bound.
+        if attempt >= HIGH_PRIORITY_ATTEMPT_THRESHOLD {
+            tx.batch_execute("SET TRANSACTION PRIORITY HIGH;").await?;
+        }
         let deleted = match since.borrow().as_option() {
             Some(since) => {
                 // In a single query we can detect all candidate entries (things
@@ -1223,6 +1234,7 @@ impl Consolidator {
         };
         tx.commit().await?;
         event!(Level::DEBUG, deleted);
+
         Ok(())
     }
 

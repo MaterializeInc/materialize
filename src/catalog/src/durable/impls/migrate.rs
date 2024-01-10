@@ -9,12 +9,14 @@
 
 use async_trait::async_trait;
 use mz_ore::now::EpochMillis;
+use mz_sql::session::vars::CatalogKind;
+use tracing::{error, info};
 
 use crate::durable::debug::{DebugCatalogState, Trace};
 use crate::durable::impls::persist::UnopenedPersistCatalogState;
 use crate::durable::impls::stash::OpenableConnection;
 use crate::durable::{
-    BootstrapArgs, CatalogError, DurableCatalogState, OpenableDurableCatalogState,
+    BootstrapArgs, CatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState,
 };
 
 // Note: All reads done in this file can be fenced out by a new writer. All writers start by first
@@ -26,17 +28,40 @@ use crate::durable::{
 // We don't have to worry about race conditions where a new writer updates the stash or persist
 // inbetween steps (1) and (2).
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TargetImplementation {
+    EmergencyStash,
+    MigrationDirection(Direction),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Direction {
     MigrateToPersist,
     RollbackToStash,
+}
+
+impl TryFrom<CatalogKind> for TargetImplementation {
+    type Error = CatalogKind;
+
+    fn try_from(catalog_kind: CatalogKind) -> Result<Self, Self::Error> {
+        match catalog_kind {
+            CatalogKind::Stash => Ok(TargetImplementation::MigrationDirection(
+                Direction::RollbackToStash,
+            )),
+            CatalogKind::Persist => Ok(TargetImplementation::MigrationDirection(
+                Direction::MigrateToPersist,
+            )),
+            CatalogKind::EmergencyStash => Ok(TargetImplementation::EmergencyStash),
+            CatalogKind::Shadow => Err(catalog_kind),
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct CatalogMigrator {
     openable_stash: Box<OpenableConnection>,
     openable_persist: Box<UnopenedPersistCatalogState>,
-    direction: Direction,
+    target: TargetImplementation,
 }
 
 #[async_trait]
@@ -47,15 +72,52 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        let direction = match self.target {
+            TargetImplementation::EmergencyStash => {
+                // Handle emergency stash before opening persist.
+                return self
+                    .openable_stash
+                    .open_savepoint(boot_ts, bootstrap_args, deploy_generation)
+                    .await;
+            }
+            TargetImplementation::MigrationDirection(direction) => direction,
+        };
+
+        let stash_initialized = self.openable_stash.is_initialized().await?;
         let stash = self
             .openable_stash
             .open_savepoint(boot_ts.clone(), bootstrap_args, deploy_generation.clone())
-            .await?;
+            .await;
+        let persist_initialized = self.openable_persist.is_initialized().await?;
         let persist = self
             .openable_persist
             .open_savepoint(boot_ts, bootstrap_args, deploy_generation)
-            .await?;
-        Self::open_inner(stash, persist, self.direction).await
+            .await;
+
+        // If our target implementation is the stash, but persist is uninitialized, then we can
+        // still proceed with only using the stash.
+        if let Err(CatalogError::Durable(e)) = &persist {
+            if e.can_recover_with_write_mode()
+                && !persist_initialized
+                && direction == Direction::RollbackToStash
+            {
+                return stash;
+            }
+        }
+        // If our target implementation is the persist, but the stash is uninitialized, then we can
+        // still proceed with only using persist.
+        if let Err(CatalogError::Durable(e)) = &stash {
+            if e.can_recover_with_write_mode()
+                && !stash_initialized
+                && direction == Direction::MigrateToPersist
+            {
+                return persist;
+            }
+        }
+        let stash = stash?;
+        let persist = persist?;
+
+        Self::open_inner(stash, persist, direction).await
     }
 
     async fn open_read_only(
@@ -72,6 +134,17 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         bootstrap_args: &BootstrapArgs,
         deploy_generation: Option<u64>,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        let direction = match self.target {
+            TargetImplementation::EmergencyStash => {
+                // Handle emergency stash before opening persist.
+                return self
+                    .openable_stash
+                    .open(boot_ts, bootstrap_args, deploy_generation)
+                    .await;
+            }
+            TargetImplementation::MigrationDirection(direction) => direction,
+        };
+
         let stash = self
             .openable_stash
             .open(boot_ts.clone(), bootstrap_args, deploy_generation.clone())
@@ -82,7 +155,7 @@ impl OpenableDurableCatalogState for CatalogMigrator {
             .open(boot_ts, bootstrap_args, deploy_generation)
             .await?;
         fail::fail_point!("post_persist_fence");
-        Self::open_inner(stash, persist, self.direction).await
+        Self::open_inner(stash, persist, direction).await
     }
 
     async fn open_debug(self: Box<Self>) -> Result<DebugCatalogState, CatalogError> {
@@ -95,6 +168,15 @@ impl OpenableDurableCatalogState for CatalogMigrator {
             self.openable_persist.is_initialized().await
         } else {
             self.openable_stash.is_initialized().await
+        }
+    }
+
+    async fn epoch(&mut self) -> Result<Epoch, CatalogError> {
+        let tombstone = self.get_tombstone().await?;
+        if tombstone == Some(true) {
+            self.openable_persist.epoch().await
+        } else {
+            self.openable_stash.epoch().await
         }
     }
 
@@ -111,8 +193,29 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         self.openable_stash.get_tombstone().await
     }
 
+    async fn get_catalog_kind_config(&mut self) -> Result<Option<CatalogKind>, CatalogError> {
+        let tombstone = self.get_tombstone().await?;
+        if tombstone == Some(true) {
+            self.openable_persist.get_catalog_kind_config().await
+        } else {
+            self.openable_stash.get_catalog_kind_config().await
+        }
+    }
+
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
         panic!("cannot get a trace with the migrate implementation")
+    }
+
+    fn set_catalog_kind(&mut self, catalog_kind: CatalogKind) {
+        info!("Switching to {} backed catalog", catalog_kind.as_str());
+        let direction = match catalog_kind.try_into() {
+            Ok(direction) => direction,
+            Err(catalog_kind) => {
+                error!("unable to set catalog kind to {catalog_kind:?}");
+                return;
+            }
+        };
+        self.target = direction;
     }
 
     async fn expire(self: Box<Self>) {
@@ -132,7 +235,7 @@ impl CatalogMigrator {
         CatalogMigrator {
             openable_stash,
             openable_persist,
-            direction,
+            target: TargetImplementation::MigrationDirection(direction),
         }
     }
 
@@ -162,6 +265,8 @@ impl CatalogMigrator {
             return Ok(());
         }
 
+        info!("migrating catalog contents from stash to persist");
+
         let (stash_snapshot, stash_audit_logs, stash_storage_usages) =
             stash.whole_migration_snapshot().await?;
 
@@ -182,6 +287,8 @@ impl CatalogMigrator {
         stash_txn.set_tombstone(true)?;
         stash_txn.commit().await?;
 
+        stash.expire().await;
+
         Ok(())
     }
 
@@ -193,6 +300,8 @@ impl CatalogMigrator {
         if tombstone.is_none() || tombstone == Some(false) {
             return Ok(());
         }
+
+        info!("rolling back catalog contents from persist to stash");
 
         let (persist_snapshot, persist_audit_logs, persist_storage_usages) =
             persist.whole_migration_snapshot().await?;
@@ -209,6 +318,117 @@ impl CatalogMigrator {
         stash_txn.set_tombstone(false)?;
         stash_txn.commit().await?;
 
+        persist.expire().await;
+
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_persist_client::PersistClient;
+    use mz_sql::session::vars::CatalogKind;
+    use uuid::Uuid;
+
+    use crate::durable::impls::migrate::{Direction, TargetImplementation};
+    use crate::durable::{
+        migrate_from_stash_to_persist_state, rollback_from_persist_to_stash_state,
+        test_stash_config, Metrics, OpenableDurableCatalogState,
+    };
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn test_set_catalog_kind() {
+        let (debug_factory, stash_config) = test_stash_config().await;
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
+        let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+
+        {
+            let mut catalog = migrate_from_stash_to_persist_state(
+                stash_config.clone(),
+                persist_client.clone(),
+                organization_id.clone(),
+                Arc::clone(&persist_metrics),
+            )
+            .await;
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::MigrateToPersist)
+            );
+
+            catalog.set_catalog_kind(CatalogKind::Shadow);
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::MigrateToPersist)
+            );
+
+            catalog.set_catalog_kind(CatalogKind::Stash);
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::RollbackToStash)
+            );
+
+            catalog.set_catalog_kind(CatalogKind::Shadow);
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::RollbackToStash)
+            );
+
+            catalog.set_catalog_kind(CatalogKind::Persist);
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::MigrateToPersist)
+            );
+
+            catalog.set_catalog_kind(CatalogKind::EmergencyStash);
+            assert_eq!(catalog.target, TargetImplementation::EmergencyStash);
+        }
+
+        {
+            let mut catalog = rollback_from_persist_to_stash_state(
+                stash_config.clone(),
+                persist_client.clone(),
+                organization_id.clone(),
+                Arc::clone(&persist_metrics),
+            )
+            .await;
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::RollbackToStash)
+            );
+
+            catalog.set_catalog_kind(CatalogKind::Shadow);
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::RollbackToStash)
+            );
+
+            catalog.set_catalog_kind(CatalogKind::Persist);
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::MigrateToPersist)
+            );
+
+            catalog.set_catalog_kind(CatalogKind::Shadow);
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::MigrateToPersist)
+            );
+
+            catalog.set_catalog_kind(CatalogKind::Stash);
+            assert_eq!(
+                catalog.target,
+                TargetImplementation::MigrationDirection(Direction::RollbackToStash)
+            );
+
+            catalog.set_catalog_kind(CatalogKind::EmergencyStash);
+            assert_eq!(catalog.target, TargetImplementation::EmergencyStash);
+        }
+
+        debug_factory.drop().await;
     }
 }

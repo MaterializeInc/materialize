@@ -1174,7 +1174,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.cols {
             // We have a name inferred for the column indexed by `self.expr`. Write `ident`.
-            Some(cols) if !cols[*self.expr].is_empty() => {
+            Some(cols) if cols.len() > *self.expr && !cols[*self.expr].is_empty() => {
                 // Note: using unchecked here is okay since we're directly
                 // converting to a string afterwards.
                 let ident = Ident::new_unchecked(cols[*self.expr].clone()); // TODO: try to avoid the `.clone()` here.

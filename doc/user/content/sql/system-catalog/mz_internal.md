@@ -73,7 +73,54 @@ sampling rate than the one set in this variable.
 | `session_id`              | [`uuid`]                     | An ID that is unique for each session.                                                                                                                                                                                                                                        |
 | `redacted_sql`            | [`text`]                     | The SQL text of the statement, in a normalized form, with all string and numeric literals hidden.                                                                                                                                                                             |
 | `prepared_at`             | [`timestamp with time zone`] | The time at which the statement was prepared.                                                                                                                                                                                                                                 |
-| `statement_kind`          | [`text`]                     | The _kind_ of the statement, e.g. `select` for a `SELECT` query, or `NULL` if the statement was empty.                                                                                                                                                                        |
+| `statement_type`          | [`text`]                     | The _type_ of the statement, e.g. `select` for a `SELECT` query, or `NULL` if the statement was empty.                                                                                                                                                                        |
+
+### `mz_aws_connections`
+
+The `mz_aws_connections` table contains a row for each AWS connection in the
+system.
+
+<!-- RELATION_SPEC mz_internal.mz_aws_connections -->
+| Field                         | Type      | Meaning
+|-------------------------------|-----------|--------
+| `id`                          | [`text`]  | The ID of the connection.
+| `endpoint`                    | [`text`]  | The value of the `ENDPOINT` option, if set.
+| `region`                      | [`text`]  | The value of the `REGION` option, if set.
+| `access_key_id`               | [`text`]  | The value of the `ACCESS KEY ID` option, if provided in line.
+| `access_key_id_secret_id`     | [`text`]  | The ID of the secret referenced by the `ACCESS KEY ID` option, if provided via a secret.
+| `secret_access_key_secret_id` | [`text`]  | The ID of the secret referenced by the `SECRET ACCESS KEY` option, if set.
+| `session_token`               | [`text`]  | The value of the `SESSION TOKEN` option, if provided in line.
+| `session_token_secret_id`     | [`text`]  | The ID of the secret referenced by the `SESSION TOKEN` option, if provided via a secret.
+| `assume_role_arn`             | [`text`]  | The value of the `ASSUME ROLE ARN` option, if set.
+| `assume_role_session_name`    | [`text`]  | The value of the `ASSUME ROLE SESSION NAME` option, if set.
+| `principal`                   | [`text`]  | The ARN of the AWS principal Materialize will use when assuming the provided role, if the connection is configured to use role assumption.
+| `external_id`                 | [`text`]  | The external ID Materialize will use when assuming the provided role, if the connection is configured to use role assumption.
+| `example_trust_policy`        | [`jsonb`] | An example of an IAM role trust policy that allows this connection's principal and external ID to assume the role.
+
+### `mz_aws_privatelink_connection_status_history`
+
+The `mz_aws_privatelink_connection_status_history` table contains a row describing
+the historical status for each AWS PrivateLink connection in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_aws_privatelink_connection_status_history -->
+| Field             | Type                       | Meaning                                                    |
+|-------------------|----------------------------|------------------------------------------------------------|
+| `occurred_at`     | `timestamp with time zone` | Wall-clock timestamp of the status change.       |
+| `connection_id`   | `text`                     | The unique identifier of the AWS PrivateLink connection. Corresponds to [`mz_catalog.mz_connections.id`](../mz_catalog#mz_connections).   |
+| `status`          | `text`                     | The status of the connection: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, or `unknown`.                        |
+
+### `mz_aws_privatelink_connection_statuses`
+
+The `mz_aws_privatelink_connection_statuses` table contains a row describing
+the most recent status for each AWS PrivateLink connection in the system.
+
+<!-- RELATION_SPEC mz_internal.mz_aws_privatelink_connection_statuses -->
+| Field | Type | Meaning |
+|-------|------|---------|
+| `id` | [`text`] | The ID of the connection. Corresponds to [`mz_catalog.mz_connections.id`](../mz_catalog#mz_sinks). |
+| `name` | [`text`] | The name of the connection.  |
+| `last_status_change_at` | [`timestamp with time zone`] | Wall-clock timestamp of the connection status change.|
+| `status` | [`text`] | | The status of the connection: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, or `unknown`. |
 
 ### `mz_cluster_replica_frontiers`
 
@@ -255,11 +302,11 @@ The `mz_compute_hydration_statuses` table describes the per-replica hydration st
 A compute object is hydrated on a given replica when it has fully processed the initial snapshot of data available in its inputs.
 
 <!-- RELATION_SPEC mz_internal.mz_compute_hydration_statuses -->
-| Field        | Type        | Meaning                                                                                                                                                                                                                                  |
-| -----------  | ----------- | --------                                                                                                                                                                                                                                 |
+| Field        | Type        | Meaning  |
+| -----------  | ----------- | -------- |
 | `object_id`  | [`text`]    | The ID of a compute object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions`](#mz_subscriptions). |
-| `replica_id` | [`text`]    | The ID of a cluster replica.                                                                                                                                                                                                             |
-| `hydrated`   | [`boolean`] | Whether the compute object is hydrated on the replica.                                                                                                                                                                                   |
+| `replica_id` | [`text`]    | The ID of a cluster replica. |
+| `hydrated`   | [`boolean`] | Whether the compute object is hydrated on the replica. |
 
 ### `mz_frontiers`
 
@@ -278,6 +325,22 @@ At this time, we do not make any guarantees about the freshness of these numbers
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_global_frontiers -->
 
+### `mz_hydration_statuses`
+
+The `mz_hydration_statuses` view describes the per-replica hydration status of
+each object powered by a dataflow.
+
+A dataflow-powered object is hydrated on a given replica when the respective
+dataflow has fully processed the initial snapshot of data available in its
+inputs.
+
+<!-- RELATION_SPEC mz_internal.mz_hydration_statuses -->
+| Field        | Type        | Meaning  |
+| -----------  | ----------- | -------- |
+| `object_id`  | [`text`]    | The ID of a dataflow-powered object. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_internal.mz_subscriptions`](#mz_subscriptions), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks). |
+| `replica_id` | [`text`]    | The ID of a cluster replica. |
+| `hydrated`   | [`boolean`] | Whether the object is hydrated on the replica. |
+
 ### `mz_kafka_sources`
 
 The `mz_kafka_sources` table contains a row for each Kafka source in the system.
@@ -286,7 +349,7 @@ The `mz_kafka_sources` table contains a row for each Kafka source in the system.
 | Field                  | Type           | Meaning                                                                                                   |
 |------------------------|----------------|-----------------------------------------------------------------------------------------------------------|
 | `id`                   | [`text`]       | The ID of the Kafka source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).        |
-| `group_id_prefix`      | [`text`]       | The prefix of the group ID that Materialize will use when consuming data for the Kafka source.            |
+| `group_id_prefix`      | [`text`]       | The value of the `GROUP ID PREFIX` connection option.                                                     |
 
 ### `mz_materialization_lag`
 
@@ -356,8 +419,10 @@ The view is defined as the transitive closure of [`mz_object_dependencies`](#mz_
 
 ### `mz_notices`
 
-The `mz_notices` view contains a list of currently active optimizer notices
-emitted by the system.
+{{< public-preview />}}
+
+The `mz_notices` view contains a list of currently active notices emitted by the
+system. The view can be accessed by Materialize superusers.
 
 <!-- RELATION_SPEC mz_internal.mz_notices -->
 | Field                   | Type                         | Meaning                                                                                                                                           |
@@ -374,7 +439,25 @@ emitted by the system.
 | `created_at`            | [`timestamp with time zone`] | The time at which the notice was created. Note that some notices are re-created on `environmentd` restart.                                        |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_optimizer_notices -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_notices_redacted -->
+
+### `mz_notices_redacted`
+
+{{< public-preview />}}
+
+The `mz_notices_redacted` view contains a redacted list of currently active
+optimizer notices emitted by the system. The view can be accessed by Materialize
+superusers and Materialize support.
+
+<!-- RELATION_SPEC mz_internal.mz_notices_redacted -->
+| Field                   | Type                         | Meaning                                                                                                                                           |
+| ----------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `notice_type`           | [`text`]                     | The notice type.                                                                                                                                  |
+| `message`               | [`text`]                     | A redacted brief description of the issue highlighted by this notice.                                                                                      |
+| `hint`                  | [`text`]                     | A redacted high-level hint that tells the user what can be improved.                                                                                       |
+| `action`                | [`text`]                     | A redacted concrete action that will resolve the notice.                                                                                                   |
+| `action_type`           | [`text`]                     | The type of the `action` string (`sql_statements` for a valid SQL string or `plain_text` for plain text).                                         |
+| `object_id`             | [`text`]                     | The ID of the materialized view or index. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). For global notices, this column is `NULL`. |
+| `created_at`            | [`timestamp with time zone`] | The time at which the notice was created. Note that some notices are re-created on `environmentd` restart.                                        |
 
 ### `mz_postgres_sources`
 
@@ -661,10 +744,28 @@ only includes rows where the current role is a direct or indirect member of `gra
 | `grantee`        | [`text`] | The role that the privilege was granted to. |
 | `privilege_type` | [`text`] | They type of privilege granted.             |
 
+### `mz_sink_statistics_per_worker`
+
+The `mz_sink_statistics_per_worker` table contains statistics for each worker thread of
+each sink in the system.
+
+Materialize does not make any guarantees about the exactness or freshness of
+these statistics. They are occasionally reset to zero as internal components of
+the system are restarted.
+
+<!-- RELATION_SPEC mz_internal.mz_sink_statistics_per_worker -->
+| Field                | Type      | Meaning                                                                                                             |
+|----------------------|-----------| --------                                                                                                            |
+| `id`                 | [`text`]  | The ID of the source. Corresponds to [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks).                            |
+| `worker_id`          | [`uint8`] | The ID of the worker thread.                                                                                        |
+| `messages_staged`    | [`uint8`] | The number of messages staged but possibly not committed to the sink.                                               |
+| `messages_committed` | [`uint8`] | The number of messages committed to the sink.                                                                       |
+| `bytes_staged`       | [`uint8`] | The number of bytes staged but possibly not committed to the sink. This counts both keys and values, if applicable. |
+| `bytes_committed`    | [`uint8`] | The number of bytes committed to the sink. This counts both keys and values, if applicable.                         |
+
 ### `mz_sink_statistics`
 
-The `mz_sink_statistics` table contains statistics for each worker thread of
-each sink in the system.
+The `mz_sink_statistics` view contains statistics about each sink. It is an aggregated form of `mz_sink_statistics_per_worker`.
 
 Materialize does not make any guarantees about the exactness or freshness of
 these statistics. They are occasionally reset to zero as internal components of
@@ -673,8 +774,7 @@ the system are restarted.
 <!-- RELATION_SPEC mz_internal.mz_sink_statistics -->
 | Field                | Type      | Meaning                                                                                                             |
 |----------------------|-----------| --------                                                                                                            |
-| `id`                 | [`text`]  | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                        |
-| `worker_id`          | [`uint8`] | The ID of the worker thread.                                                                                        |
+| `id`                 | [`text`]  | The ID of the sink. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sinks).                            |
 | `messages_staged`    | [`uint8`] | The number of messages staged but possibly not committed to the sink.                                               |
 | `messages_committed` | [`uint8`] | The number of messages committed to the sink.                                                                       |
 | `bytes_staged`       | [`uint8`] | The number of bytes staged but possibly not committed to the sink. This counts both keys and values, if applicable. |
@@ -712,25 +812,52 @@ messages and additional metadata helpful for debugging.
 | `error`        | [`text`]                        | If the sink is in an error state, the error message.                                                             |
 | `details`      | [`jsonb`]                       | Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions. |
 
-### `mz_source_statistics`
+### `mz_source_statistics_per_worker`
 
-The `mz_source_statistics` table contains statistics for each worker thread of
+The `mz_source_statistics_per_worker` table contains statistics for each worker thread of
 each source in the system.
 
 Materialize does not make any guarantees about the exactness or freshness of
 these statistics. They are occasionally reset to zero as internal components of
 the system are restarted.
 
-<!-- RELATION_SPEC mz_internal.mz_source_statistics -->
+<!-- RELATION_SPEC mz_internal.mz_source_statistics_per_worker -->
 | Field                    | Type        | Meaning                                                                                                                                                                                                                                                                             |
 | -------------------------|-------------| --------                                                                                                                                                                                                                                                                            |
 | `id`                     | [`text`]     | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                                                                                                                                                                                        |
 | `worker_id`              | [`uint8`]    | The ID of the worker thread.                                                                                                                                                                                                                                                        |
 | `snapshot_committed`     | [`boolean`]  | Whether the worker has committed the initial snapshot for a source.                                                                                                                                                                                                                 |
 | `messages_received`      | [`uint8`]    | The number of messages the worker has received from the external system. Messages are counted in a source type-specific manner. Messages do not correspond directly to updates: some messages produce multiple updates, while other messages may be coalesced into a single update. |
+| `bytes_received`         | [`uint8`]    | The number of bytes the worker has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead.                                                                                                                  |
 | `updates_staged`         | [`uint8`]    | The number of updates (insertions plus deletions) the worker has written but not yet committed to the storage layer.                                                                                                                                                                |
 | `updates_committed`      | [`uint8`]    | The number of updates (insertions plus deletions) the worker has committed to the storage layer.                                                                                                                                                                                    |
-| `bytes_received`         | [`uint8`]    | The number of bytes the worker has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead.                                                                                                                  |
+| `envelope_state_bytes`   | [`uint8`]    | The number of bytes stored in the source envelope state.                                                                       |
+| `envelope_state_records` | [`uint8`]    | The number of individual records stored in the source envelope state.                                                                                                                                                                                                               |
+| `rehydration_latency`    | [`interval`] | The amount of time it took for the worker to rehydrate the source envelope state. |
+
+### `mz_source_statistics`
+
+The `mz_source_statistics` view contains statistics about each source. It is an aggregated form of `mz_source_statistics_per_worker`.
+
+Materialize does not make any guarantees about the exactness or freshness of
+these statistics. They are occasionally reset to zero as internal components of
+the system are restarted.
+
+Note that:
+- `updates_staged` can be slightly different than `updates_committed` in steady state, as different threads may be staging and committed updates, while reporting statistics at different times.
+- `messages_received` can be significantly different than `updates_staged/updates_committed`, for multiple reasons:
+    - Different threads may be reading messages and staging and committed updates, while reporting statistics at different times.
+    - messages can be skipped (e.g. a key is updated multiple times in 1 second) or result in multiple updates (for `UPSERT` source, a single message can cause a delete and insert for an updated key).
+
+<!-- RELATION_SPEC mz_internal.mz_source_statistics -->
+| Field                    | Type        | Meaning                                                                                                                                                                                                                                                                             |
+| -------------------------|-------------| --------                                                                                                                                                                                                                                                                            |
+| `id`                     | [`text`]     | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                                                                                                                                                                                        |
+| `snapshot_committed`     | [`boolean`]  | Whether the source has committed the initial snapshot for a source.                                                                                                                                                                                                                 |
+| `messages_received`      | [`uint8`]    | The number of messages the source has received from the external system. Messages are counted in a source type-specific manner. Messages do not correspond directly to updates: some messages produce multiple updates, while other messages may be coalesced into a single update. |
+| `bytes_received`         | [`uint8`]    | The number of bytes the source has read from the external system. Bytes are counted in a source type-specific manner and may or may not include protocol overhead.                                                                                                                  |
+| `updates_staged`         | [`uint8`]    | The number of updates (insertions plus deletions) the source has written but not yet committed to the storage layer.                                                                                                                                                                |
+| `updates_committed`      | [`uint8`]    | The number of updates (insertions plus deletions) the source has committed to the storage layer.                                                                                                                                                                                    |
 | `envelope_state_bytes`   | [`uint8`]    | The number of bytes stored in the source envelope state.                                                                       |
 | `envelope_state_records` | [`uint8`]    | The number of individual records stored in the source envelope state.                                                                                                                                                                                                               |
 | `rehydration_latency`    | [`interval`] | The amount of time it took for the worker to rehydrate the source envelope state. |
@@ -767,20 +894,6 @@ messages and additional metadata helpful for debugging.
 | `error`        | [`text`]                        | If the source is in an error state, the error message.                                                             |
 | `details`      | [`jsonb`]                       | Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions. |
 
-
-### `mz_aws_privatelink_connection_status_history`
-
-The `mz_aws_privatelink_connection_status_history` table contains a row describing
-the historical status for each AWS PrivateLink connection in the system.
-
-<!-- RELATION_SPEC mz_internal.mz_aws_privatelink_connection_status_history -->
-| Field             | Type                       | Meaning                                                    |
-|-------------------|----------------------------|------------------------------------------------------------|
-| `occurred_at`     | `timestamp with time zone` | Wall-clock timestamp of the status change.       |
-| `connection_id`   | `text`                     | The unique identifier of the AWS PrivateLink connection. Corresponds to [`mz_catalog.mz_connections.id`](../mz_catalog#mz_connections).   |
-| `status`          | `text`                     | The status of the connection: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, or `unknown`.                        |
-
-
 <!--
 ### `mz_statement_execution_history`
 
@@ -810,6 +923,14 @@ and cannot be changed by users), the latter is used instead.
 | `execution_strategy`    | [`text`]                     | `'standard'`, `'fast-path'` `'constant'`, or `NULL`. `'standard'` means a dataflow was built on a cluster to compute the result. `'fast-path'` means a cluster read the result from an existing arrangement. `'constant'` means the result was computed in the serving layer, without involving a cluster. |
 -->
 
+### `mz_statement_lifecycle_history`
+
+<!-- RELATION_SPEC mz_internal.mz_statement_lifecycle_history -->
+| Field          | Type                         | Meaning                                                                                                                                                |
+|----------------|------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `statement_id` | [`uuid`]                     | The ID of the execution event. Corresponds to [`mz_activity_log.id`](#mz_activity_log)                                   |
+| `event_type`   | [`text`]                     | The type of lifecycle event, e.g. `'execution-began'`, `'storage-dependencies-finished'`, `'compute-dependencies-finished'`, or `'execution-finished'` |
+| `occurred_at`  | [`timestamp with time zone`] | The time at which the event took place.                                                                                                                |
 
 ### `mz_subscriptions`
 
@@ -853,11 +974,12 @@ Per-worker relations expose the same data as their global counterparts, but have
 The `mz_active_peeks` view describes all read queries ("peeks") that are pending in the [dataflow] layer.
 
 <!-- RELATION_SPEC mz_internal.mz_active_peeks -->
-| Field       | Type               | Meaning                                                                                                                                              |
-| ----------- | ------------------ |------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `id`        | [`uuid`]           | The ID of the peek request.                                                                                                                          |
-| `index_id`  | [`text`]           | The ID of the collection the peek is targeting. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables). |
-| `time`      | [`mz_timestamp`]   | The timestamp the peek has requested.                                                                                                                |
+| Field       | Type             | Meaning                                                                                                                                                                                                                                                                                                               |
+|-------------|------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `id`        | [`uuid`]         | The ID of the peek request.                                                                                                                                                                                                                                                                                           |
+| `object_id` | [`text`]         | The ID of the collection the peek is targeting. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources), or [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables). |
+| `type`      | [`text`]         | The type of the corresponding peek: `index` if targeting an index or temporary dataflow; `persist` for a source, materialized view, or table.                                                                                                                                                                         |
+| `time`      | [`mz_timestamp`] | The timestamp the peek has requested.                                                                                                                                                                                                                                                                                 |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_active_peeks_per_worker -->
 
@@ -1151,10 +1273,11 @@ It distinguishes between individual records (`sent`, `received`) and batches of 
 The `mz_peek_durations_histogram` view describes a histogram of the duration in nanoseconds of read queries ("peeks") in the [dataflow] layer.
 
 <!-- RELATION_SPEC mz_internal.mz_peek_durations_histogram -->
-| Field          | Type        | Meaning                                            |
-| -------------- |-------------| --------                                           |
-| `duration_ns`  | [`uint8`]   | The upper bound of the bucket in nanoseconds.      |
-| `count`        | [`numeric`] | The (noncumulative) count of peeks in this bucket. |
+| Field         | Type        | Meaning                                            |
+|---------------|-------------|----------------------------------------------------|
+| `type`        | [`text`]    | The peek variant: `index` or `persist`.            |
+| `duration_ns` | [`uint8`]   | The upper bound of the bucket in nanoseconds.      |
+| `count`       | [`numeric`] | The (noncumulative) count of peeks in this bucket. |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_peek_durations_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_peek_durations_histogram_raw -->
@@ -1244,7 +1367,6 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aws_connections -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability_raw -->

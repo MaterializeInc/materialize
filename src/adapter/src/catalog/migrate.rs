@@ -17,7 +17,10 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::namespaces::PG_CATALOG_SCHEMA;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::catalog::NameReference;
-use mz_sql_parser::ast::{visit_mut, Ident, Raw, RawDataType, Statement};
+use mz_sql_parser::ast::{
+    visit_mut, CreateMaterializedViewStatement, Ident, MaterializedViewOption,
+    MaterializedViewOptionName, Raw, RawDataType, RefreshOptionValue, Statement,
+};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::sources::GenericSourceConnection;
@@ -95,6 +98,10 @@ pub(crate) async fn migrate(
             }
             ast_rewrite_rewrite_type_schemas_0_81_0(stmt);
 
+            if catalog_version <= Version::new(0, 81, u64::MAX) {
+                ast_rewrite_create_materialized_view_refresh_options_0_82_0(stmt)?;
+            }
+
             Ok(())
         })
     })
@@ -108,6 +115,12 @@ pub(crate) async fn migrate(
     // This function blocks for at most 1 second per PG source.
     ast_rewrite_postgres_source_timeline_id_0_80_0(tx, &conn_cat, connection_context.clone())
         .await?;
+
+    // In v0.82.0 we changed the 'default' cluster to be named 'quickstart'. For all _existing_
+    // customers we want to retain the cluster name of 'default'.
+    if catalog_version > Version::new(0, 0, 0) && catalog_version <= Version::new(0, 81, u64::MAX) {
+        persist_default_cluster_0_82_0(tx, &conn_cat, connection_context)?;
+    }
 
     info!(
         "migration from catalog version {:?} complete",
@@ -139,7 +152,7 @@ async fn ast_rewrite_postgres_source_timeline_id_0_80_0(
     use mz_sql_parser::ast::{PgConfigOption, PgConfigOptionName, Value, WithOptionValue};
     use mz_storage_types::connections::inline::IntoInlineConnection;
     use mz_storage_types::connections::PostgresConnection;
-    use mz_storage_types::sources::{
+    use mz_storage_types::sources::postgres::{
         PostgresSourcePublicationDetails, ProtoPostgresSourcePublicationDetails,
     };
     use prost::Message;
@@ -322,6 +335,55 @@ fn ast_rewrite_rewrite_type_schemas_0_81_0(stmt: &mut Statement<Raw>) {
     }
 
     Rewriter.visit_statement_mut(stmt);
+}
+
+fn persist_default_cluster_0_82_0(
+    txn: &mut Transaction<'_>,
+    _conn_catalog: &ConnCatalog<'_>,
+    _connection_context: &ConnectionContext,
+) -> Result<(), anyhow::Error> {
+    const CLUSTER_KEY: &str = "cluster";
+
+    // Only update the default cluster, if a user hasn't already overriden it.
+    let already_set = txn
+        .get_system_configurations()
+        .any(|config| config.name == CLUSTER_KEY);
+    if !already_set {
+        txn.upsert_system_config(CLUSTER_KEY, "default".to_string())?;
+    }
+
+    Ok(())
+}
+
+fn ast_rewrite_create_materialized_view_refresh_options_0_82_0(
+    stmt: &mut Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::visit_mut::VisitMut;
+    use mz_sql::ast::WithOptionValue;
+
+    struct Rewriter;
+
+    impl<'ast> VisitMut<'ast, Raw> for Rewriter {
+        fn visit_create_materialized_view_statement_mut(
+            &mut self,
+            node: &'ast mut CreateMaterializedViewStatement<Raw>,
+        ) {
+            if !node
+                .with_options
+                .iter()
+                .any(|option| matches!(option.name, MaterializedViewOptionName::Refresh))
+            {
+                node.with_options.push(MaterializedViewOption {
+                    name: MaterializedViewOptionName::Refresh,
+                    value: Some(WithOptionValue::Refresh(RefreshOptionValue::OnCommit)),
+                })
+            }
+        }
+    }
+
+    Rewriter.visit_statement_mut(stmt);
+
+    Ok(())
 }
 
 fn _add_to_audit_log(

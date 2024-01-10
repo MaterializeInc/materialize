@@ -732,10 +732,10 @@ DROP PUBLICATION mz_source;
 DROP PUBLICATION mz_source_narrow;
 INSERT INTO pk_table VALUES (99999);
 
-# Ensure that all subsources have error
+# Ensure that source + all subsources have error
 > SELECT bool_and(error ~* 'publication .+ does not exist')
   FROM mz_internal.mz_source_statuses
-  WHERE id IN ( SELECT id FROM mz_sources WHERE type = 'subsource' );
+  WHERE id IN ( SELECT id FROM mz_sources WHERE type != 'progress' );
 true
 
 > DROP SOURCE enum_source CASCADE;
