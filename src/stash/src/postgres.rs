@@ -648,7 +648,7 @@ impl Stash {
                 // current epoch has been bumped exactly once, then gets recreated by another
                 // connection that also bumps it once).
                 let epoch_lower_bound = epoch_lower_bound.unwrap_or(NonZeroI64::MIN).get();
-                let row = tx.query_one(&format!("UPDATE fence SET epoch=GREATEST(epoch+1, {epoch_lower_bound}), nonce=$1 RETURNING epoch"), &[&self.nonce.to_vec()]).await?;
+                let row = tx.query_one(&format!("UPDATE fence SET epoch=GREATEST(epoch+1, $1), nonce=$2 RETURNING epoch"), &[&epoch_lower_bound, &self.nonce.to_vec()]).await?;
                 NonZeroI64::new(row.get(0)).unwrap()
             } else {
                 let row = tx.query_one("SELECT epoch, nonce FROM fence", &[]).await?;
