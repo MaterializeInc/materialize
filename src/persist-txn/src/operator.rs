@@ -224,9 +224,8 @@ where
     let name = format!("txns_progress_frontiers({}) [{}]", name, unique_id);
     let mut builder = AsyncOperatorBuilder::new(name.clone(), passthrough.scope());
     let name = format!(
-        "{} [{}] {}/{}",
+        "{} {}/{}",
         name,
-        unique_id,
         passthrough.scope().index(),
         passthrough.scope().peers(),
     );
