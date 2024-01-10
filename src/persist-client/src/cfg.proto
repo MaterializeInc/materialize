@@ -55,5 +55,6 @@ message ProtoFlagUpdate {
     string name = 1;
     oneof value {
         bool bool = 2;
+        uint64 usize = 3;
     }
 }

@@ -1005,7 +1005,7 @@ where
             .applier
             .cfg
             .dynamic
-            .enabled(flags::STREAMING_SNAPSHOT_AND_FETCH)
+            .get_feature_flag(flags::STREAMING_SNAPSHOT_AND_FETCH)
         {
             return self.snapshot_and_fetch_streaming(as_of).await;
         }

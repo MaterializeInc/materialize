@@ -18,8 +18,8 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::batch::UntrimmableColumns;
-use crate::cfg::proto_flag_update::Value;
 use mz_build_info::BuildInfo;
+use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_persist::cfg::BlobKnobs;
 use mz_persist::retry::Retry;
@@ -35,23 +35,29 @@ include!(concat!(env!("OUT_DIR"), "/mz_persist_client.cfg.rs"));
 #[derive(Debug, Clone, Arbitrary, Serialize, Deserialize, PartialEq, Eq)]
 pub enum FlagValue {
     Bool(bool),
+    Usize(usize),
 }
 
 #[derive(Debug)]
 pub enum FlagShared {
     Bool(AtomicBool),
+    Usize(AtomicUsize),
 }
 
 impl FlagShared {
     fn new(value: FlagValue) -> Self {
         match value {
             FlagValue::Bool(b) => FlagShared::Bool(AtomicBool::new(b)),
+            FlagValue::Usize(u) => FlagShared::Usize(AtomicUsize::new(u)),
         }
     }
 
     fn get(&self) -> FlagValue {
         match self {
             FlagShared::Bool(atomic) => FlagValue::Bool(atomic.load(DynamicConfig::LOAD_ORDERING)),
+            FlagShared::Usize(atomic) => {
+                FlagValue::Usize(atomic.load(DynamicConfig::LOAD_ORDERING))
+            }
         }
     }
 
@@ -60,33 +66,53 @@ impl FlagShared {
             (FlagShared::Bool(atomic), FlagValue::Bool(var)) => {
                 atomic.store(var, DynamicConfig::STORE_ORDERING)
             }
+            (FlagShared::Usize(atomic), FlagValue::Usize(var)) => {
+                atomic.store(var, DynamicConfig::STORE_ORDERING)
+            }
+            (shared, value) => {
+                panic!("applied unexpected config value {value:?} to {shared:?}")
+            }
         }
     }
 }
 
 pub trait FlagType: ToOwned {
-    fn into_value(self) -> FlagValue;
+    fn into_value(&self) -> FlagValue;
     fn from_value(value: FlagValue) -> Option<Self::Owned>;
 }
 
 impl FlagType for FlagValue {
-    fn into_value(self) -> FlagValue {
-        self
+    fn into_value(&self) -> FlagValue {
+        self.clone()
     }
 
-    fn from_value(value: FlagValue) -> Option<Self> {
+    fn from_value(value: FlagValue) -> Option<Self::Owned> {
         Some(value)
     }
 }
 
 impl FlagType for bool {
-    fn into_value(self) -> FlagValue {
-        FlagValue::Bool(self)
+    fn into_value(&self) -> FlagValue {
+        FlagValue::Bool(*self)
     }
 
-    fn from_value(flag: FlagValue) -> Option<Self> {
+    fn from_value(flag: FlagValue) -> Option<bool> {
         match flag {
             FlagValue::Bool(b) => Some(b),
+            _ => None,
+        }
+    }
+}
+
+impl FlagType for usize {
+    fn into_value(&self) -> FlagValue {
+        FlagValue::Usize(*self)
+    }
+
+    fn from_value(flag: FlagValue) -> Option<Self::Owned> {
+        match flag {
+            FlagValue::Usize(u) => Some(u),
+            _ => None,
         }
     }
 }
@@ -607,7 +633,7 @@ impl DynamicConfig {
     const LOAD_ORDERING: Ordering = Ordering::SeqCst;
     const STORE_ORDERING: Ordering = Ordering::SeqCst;
 
-    pub fn enabled<T: FlagType>(&self, flag: PersistFeatureFlag<T>) -> T::Owned {
+    pub fn get_feature_flag<T: FlagType>(&self, flag: PersistFeatureFlag<T>) -> T::Owned {
         T::from_value(self.feature_flags[flag.name].get()).expect("flag names should be unique")
     }
 
@@ -1272,12 +1298,14 @@ impl RustType<proto_flag_update::Value> for FlagValue {
     fn into_proto(&self) -> proto_flag_update::Value {
         match self {
             FlagValue::Bool(b) => proto_flag_update::Value::Bool(*b),
+            FlagValue::Usize(v) => proto_flag_update::Value::Usize(u64::cast_from(*v)),
         }
     }
 
     fn from_proto(proto: proto_flag_update::Value) -> Result<Self, TryFromProtoError> {
         match proto {
-            Value::Bool(b) => Ok(FlagValue::Bool(b)),
+            proto_flag_update::Value::Bool(b) => Ok(FlagValue::Bool(b)),
+            proto_flag_update::Value::Usize(v) => Ok(FlagValue::Usize(usize::cast_from(v))),
         }
     }
 }

@@ -2878,6 +2878,7 @@ impl Default for SystemVars {
 
 enum PersistVar {
     Bool(ServerVar<bool>),
+    Usize(ServerVar<usize>),
 }
 
 impl From<PersistFeatureFlag> for PersistVar {
@@ -2887,6 +2888,12 @@ impl From<PersistFeatureFlag> for PersistVar {
         let internal = true;
         match flag.default {
             FlagValue::Bool(value) => PersistVar::Bool(ServerVar {
+                name,
+                value,
+                description,
+                internal,
+            }),
+            FlagValue::Usize(value) => PersistVar::Usize(ServerVar {
                 name,
                 value,
                 description,
@@ -3090,6 +3097,7 @@ impl SystemVars {
         for flag in persist_flags::all() {
             match flag.into() {
                 PersistVar::Bool(var) => vars = vars.with_var(&var),
+                PersistVar::Usize(var) => vars = vars.with_var(&var),
             };
         }
 
@@ -3770,7 +3778,8 @@ impl SystemVars {
             .map(|f| {
                 let name = f.name.to_owned();
                 let value = match f.into() {
-                    PersistVar::Bool(bool) => FlagValue::Bool(*self.expect_value(&bool)),
+                    PersistVar::Bool(var) => FlagValue::Bool(*self.expect_value(&var)),
+                    PersistVar::Usize(var) => FlagValue::Usize(self.expect_value(&var).clone()),
                 };
                 (name, value)
             })

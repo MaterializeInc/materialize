@@ -87,7 +87,7 @@ impl CompactConfig {
             compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
             version: value.build_version.clone(),
             batch: BatchBuilderConfig::new(value, writer_id),
-            streaming_compact: value.dynamic.enabled(flags::STREAMING_COMPACTION),
+            streaming_compact: value.dynamic.get_feature_flag(flags::STREAMING_COMPACTION),
         }
     }
 }

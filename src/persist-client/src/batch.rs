@@ -230,7 +230,7 @@ impl BatchBuilderConfig {
         BatchBuilderConfig {
             writer_key,
             blob_target_size: value.dynamic.blob_target_size(),
-            batch_delete_enabled: value.dynamic.enabled(flags::BATCH_DELETE_ENABLED),
+            batch_delete_enabled: value.dynamic.get_feature_flag(flags::BATCH_DELETE_ENABLED),
             batch_builder_max_outstanding_parts: value
                 .dynamic
                 .batch_builder_max_outstanding_parts(),
