@@ -987,10 +987,10 @@ async fn purify_create_source(
                     // just the first one
                     mz_mysql_util::MySqlError::UnsupportedDataType {
                         qualified_table_name,
-                        data_type,
+                        column_type,
                         column_name,
                     } => PlanError::from(MySqlSourcePurificationError::UnrecognizedTypes {
-                        cols: vec![(qualified_table_name, column_name, data_type)],
+                        cols: vec![(qualified_table_name, column_name, column_type)],
                     }),
                     _ => err.into(),
                 })?;

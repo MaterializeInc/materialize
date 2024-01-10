@@ -73,21 +73,9 @@ impl<C: ConnectionAccess> Arbitrary for MySqlSourceConnection<C> {
 
 pub static MYSQL_PROGRESS_DESC: Lazy<RelationDesc> = Lazy::new(|| {
     RelationDesc::empty()
-        // TODO(petrosagg): UUIDs in ranges are not supported and additionally the
-        // Partitioned timestamp type forces you to deal with open/closed ranges which are
-        // difficult to represent manually. In this case they are unecessary though because
-        // we could just have two columns `source_id_start`, `source_id_end` that are always
-        // inclusive and have the convention that a range of a single element corresponds to
-        // an actual source_id being ingested.
-        // use
-        // .with_column(
-        //     "source_id",
-        //     ScalarType::Range {
-        //         element_type: Box::new(ScalarType::Uuid),
-        //     }
-        //     .nullable(false),
-        // )
-        .with_column("transaction_id", ScalarType::UInt64.nullable(false))
+        .with_column("source_id_lower", ScalarType::Uuid.nullable(false))
+        .with_column("source_id_upper", ScalarType::Uuid.nullable(false))
+        .with_column("transaction_id", ScalarType::UInt64.nullable(true))
 });
 
 impl<C: ConnectionAccess> SourceConnection for MySqlSourceConnection<C> {

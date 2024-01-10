@@ -29,9 +29,9 @@ pub use schemas::schema_info;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MySqlError {
-    #[error("unsupported data type: '{data_type}' for '{qualified_table_name}.{column_name}'.")]
+    #[error("unsupported data type: '{column_type}' for '{qualified_table_name}.{column_name}'.")]
     UnsupportedDataType {
-        data_type: String,
+        column_type: String,
         qualified_table_name: String,
         column_name: String,
     },

@@ -12,6 +12,10 @@ use itertools::Itertools;
 use mysql_async::prelude::Queryable;
 use mysql_async::Conn;
 
+use mz_repr::adt::char::CharLength;
+use mz_repr::adt::numeric::{NumericMaxScale, NUMERIC_DATUM_MAX_PRECISION};
+use mz_repr::adt::timestamp::TimestampPrecision;
+use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{ColumnType, ScalarType};
 
 use crate::desc::{MySqlColumnDesc, MySqlKeyDesc, MySqlTableDesc};
@@ -24,6 +28,7 @@ const INFO_SCHEMA_COLS: &[&str] = &[
     "column_type",
     "is_nullable",
     "ordinal_position",
+    "numeric_precision",
     "numeric_scale",
     "datetime_precision",
     "character_maximum_length",
@@ -35,6 +40,7 @@ type InfoSchemaColumnsRow = (
     String,      // column_type
     String,      // is_nullable
     u16,         // ordinal_position
+    Option<i64>, // numeric_precision
     Option<i64>, // numeric_scale
     Option<i64>, // datetime_precision
     Option<i64>, // character_maximum_length
@@ -90,6 +96,7 @@ pub async fn schema_info(
             column_type,
             is_nullable,
             _,
+            numeric_precision,
             numeric_scale,
             datetime_precision,
             character_maximum_length,
@@ -121,39 +128,72 @@ pub async fn schema_info(
                 }
                 "float" => ScalarType::Float32,
                 "double" => ScalarType::Float64,
-                "timestamp" => ScalarType::Timestamp {
-                    precision: datetime_precision.and_then(|f| f.try_into().ok()),
-                },
                 "date" => ScalarType::Date,
-                "datetime" => ScalarType::Timestamp {
-                    precision: datetime_precision.and_then(|f| f.try_into().ok()),
+                "datetime" | "timestamp" => ScalarType::Timestamp {
+                    // both mysql and our scalar type use a max six-digit fractional-second precision
+                    // this is bounds-checked in the TryFrom impl
+                    precision: datetime_precision
+                        .and_then(|precision| Some(TimestampPrecision::try_from(precision)))
+                        .transpose()
+                        .map_err(|_| MySqlError::UnsupportedDataType {
+                            column_type,
+                            qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
+                            column_name: column_name.clone(),
+                        })?,
                 },
                 "time" => ScalarType::Time,
-                "year" => ScalarType::Int32,
-                "decimal" => ScalarType::Numeric {
-                    max_scale: numeric_scale.and_then(|f| f.try_into().ok()),
-                },
-                "numeric" => ScalarType::Numeric {
-                    max_scale: numeric_scale.and_then(|f| f.try_into().ok()),
-                },
+                "decimal" | "numeric" => {
+                    // validate the precision is within the bounds of our numeric type
+                    // here since we don't use this precision on the ScalarType itself
+                    // whereas the scale will be bounds-checked in the TryFrom impl
+                    if numeric_precision.unwrap_or_default() > NUMERIC_DATUM_MAX_PRECISION.into() {
+                        Err(MySqlError::UnsupportedDataType {
+                            column_type: column_type.clone(),
+                            qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
+                            column_name: column_name.clone(),
+                        })?
+                    }
+                    ScalarType::Numeric {
+                        max_scale: numeric_scale
+                            .and_then(|f| Some(NumericMaxScale::try_from(f)))
+                            .transpose()
+                            .map_err(|_| MySqlError::UnsupportedDataType {
+                                column_type,
+                                qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
+                                column_name: column_name.clone(),
+                            })?,
+                    }
+                }
                 "char" => ScalarType::Char {
-                    length: character_maximum_length.and_then(|f| f.try_into().ok()),
+                    length: character_maximum_length
+                        .and_then(|f| Some(CharLength::try_from(f)))
+                        .transpose()
+                        .map_err(|_| MySqlError::UnsupportedDataType {
+                            column_type,
+                            qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
+                            column_name: column_name.clone(),
+                        })?,
                 },
                 "varchar" => ScalarType::VarChar {
-                    max_length: character_maximum_length.and_then(|f| f.try_into().ok()),
+                    max_length: character_maximum_length
+                        .and_then(|f| Some(VarCharMaxLength::try_from(f)))
+                        .transpose()
+                        .map_err(|_| MySqlError::UnsupportedDataType {
+                            column_type,
+                            qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
+                            column_name: column_name.clone(),
+                        })?,
                 },
                 "text" | "mediumtext" | "longtext" => ScalarType::String,
                 "binary" | "varbinary" | "tinyblob" | "blob" | "mediumblob" | "longblob" => {
                     ScalarType::Bytes
                 }
                 // TODO: Implement other types
-                ref data_type => {
-                    return Err(MySqlError::UnsupportedDataType {
-                        data_type: data_type.to_string(),
-                        qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
-                        column_name,
-                    })
-                }
+                _ => Err(MySqlError::UnsupportedDataType {
+                    column_type,
+                    qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
+                    column_name: column_name.clone(),
+                })?,
             };
             columns.push(MySqlColumnDesc {
                 name: column_name,
