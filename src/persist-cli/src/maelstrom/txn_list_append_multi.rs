@@ -58,7 +58,7 @@ impl Transactor {
         txns_id: ShardId,
         mut oracle: MaelstromOracle,
     ) -> Result<Self, MaelstromError> {
-        let init_ts = oracle.read_ts().await? + 1;
+        let init_ts = oracle.write_ts().await?;
         let txns = TxnsHandle::open(
             init_ts,
             client.clone(),
@@ -68,6 +68,7 @@ impl Transactor {
             Arc::new(UnitSchema),
         )
         .await;
+        oracle.apply_write(init_ts).await?;
         Ok(Transactor {
             txns_id,
             oracle,
@@ -103,7 +104,7 @@ impl Transactor {
 
         // Run the core read+write, retry-at-a-higher-ts-on-conflict loop.
         let mut read_ts = self.oracle.read_ts().await?;
-        debug!("read ts {}", read_ts);
+        info!("read ts {}", read_ts);
         let mut reads = self.read_at(read_ts, read_ids.iter()).await;
         if writes.is_empty() {
             debug!("req committed at read_ts={}", read_ts);
@@ -114,11 +115,22 @@ impl Transactor {
                     txn.write(&data_id, data, (), diff).await;
                 }
             }
-            // TODO: Figure out how to stay linearizable while getting this
-            // write_ts from the oracle instead.
-            let mut write_ts = read_ts + 1;
-            debug!("write ts {}", write_ts);
+            let mut write_ts = self.oracle.write_ts().await?;
             loop {
+                // To be linearizable, we need to ensure that reads are done at
+                // the timestamp previous to the write_ts. However, we're not
+                // guaranteed that this is readable (someone could have consumed
+                // the write_ts and then crashed), so we first have to do an
+                // empty write at read_ts.
+                let new_read_ts = write_ts.checked_sub(1).expect("write_ts should be > 0");
+                info!("read ts {} write ts {}", new_read_ts, write_ts);
+                if new_read_ts != read_ts {
+                    // TODO: Read this incrementally between the old and new
+                    // read timestamps, instead.
+                    reads = self.unblock_and_read_at(new_read_ts, read_ids.iter()).await;
+                    read_ts = new_read_ts;
+                }
+
                 txn.tidy(std::mem::take(&mut self.tidy));
                 match txn.commit_at(&mut self.txns, write_ts).await {
                     Ok(maintenance) => {
@@ -134,17 +146,9 @@ impl Transactor {
                         break;
                     }
                     Err(current) => {
-                        // TODO: Make the ts selection in the loop match how we
-                        // think we're going to do this in prod. In particular,
-                        // using the upper of the txns shard instead of the
-                        // oracle is quite sus.
                         write_ts = current;
-                        // Have to redo our reads.
-                        read_ts = write_ts.checked_sub(1).expect("write_ts should be > 0");
-                        debug!("read ts {} write ts {}", read_ts, write_ts);
-                        // TODO: Read this incrementally between the old and new
-                        // read timestamps, instead.
-                        reads = self.read_at(read_ts, read_ids.iter()).await;
+                        // Have to redo our reads, but that's taken care of at
+                        // the top of the loop.
                         continue;
                     }
                 }
@@ -281,6 +285,23 @@ impl Transactor {
         reads
     }
 
+    async fn unblock_and_read_at(
+        &mut self,
+        read_ts: u64,
+        data_ids: impl Iterator<Item = &ShardId>,
+    ) -> BTreeMap<ShardId, Vec<(String, u64, i64)>> {
+        debug!("unblock_and_read_at {}", read_ts);
+        let txn = self.txns.begin();
+        match txn.commit_at(&mut self.txns, read_ts).await {
+            Ok(apply) => {
+                self.tidy.merge(apply.apply(&mut self.txns).await);
+            }
+            // Already unblocked.
+            Err(_) => {}
+        }
+        self.read_at(read_ts, data_ids).await
+    }
+
     fn read_data_at(
         client: PersistClient,
         txns_id: ShardId,
@@ -301,7 +322,12 @@ impl Transactor {
                 while subscribe.progress() <= read_ts {
                     subscribe.step();
                 }
-                subscribe.output().clone()
+                let mut output = subscribe.output().clone();
+                // The DataSubscribe only guarantees that this output contains
+                // everything <= read_ts, but it might contain things after it,
+                // too. Filter them out.
+                output.retain(|(_, ts, _)| ts <= &read_ts);
+                output
             },
         )
     }
