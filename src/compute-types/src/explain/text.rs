@@ -46,10 +46,10 @@ impl DisplayText<PlanRenderingContext<'_, IdPlan>> for IdPlan {
         use Plan::*;
 
         match &self {
-            Constant { rows, node_id: _ } => match rows {
+            Constant { rows, node_id } => match rows {
                 Ok(rows) => {
                     if !rows.is_empty() {
-                        writeln!(f, "{}Constant", ctx.indent)?;
+                        writeln!(f, "{}[{node_id}] Constant", ctx.indent)?;
                         ctx.indented(|ctx| {
                             fmt_text_constant_rows(
                                 f,
@@ -59,18 +59,23 @@ impl DisplayText<PlanRenderingContext<'_, IdPlan>> for IdPlan {
                             )
                         })?;
                     } else {
-                        writeln!(f, "{}Constant <empty>", ctx.indent)?;
+                        writeln!(f, "{}[{node_id}] Constant <empty>", ctx.indent)?;
                     }
                 }
                 Err(err) => {
-                    writeln!(f, "{}Error {}", ctx.indent, err.to_string().quoted())?;
+                    writeln!(
+                        f,
+                        "{}[{node_id}] Error {}",
+                        ctx.indent,
+                        err.to_string().quoted()
+                    )?;
                 }
             },
             Get {
                 id,
                 keys,
                 plan,
-                node_id: _,
+                node_id,
             } => {
                 ctx.indent.set(); // mark the current indent level
 
@@ -86,11 +91,11 @@ impl DisplayText<PlanRenderingContext<'_, IdPlan>> for IdPlan {
                 use crate::plan::GetPlan;
                 match plan {
                     GetPlan::PassArrangements => {
-                        writeln!(f, "{}Get::PassArrangements {}", ctx.indent, id)?;
+                        writeln!(f, "{}[{node_id}] Get::PassArrangements {}", ctx.indent, id)?;
                         ctx.indent += 1;
                     }
                     GetPlan::Arrangement(key, val, mfp) => {
-                        writeln!(f, "{}Get::Arrangement {}", ctx.indent, id)?;
+                        writeln!(f, "{}[{node_id}] Get::Arrangement {}", ctx.indent, id)?;
                         ctx.indent += 1;
                         mfp.fmt_text(f, ctx)?;
                         {
@@ -102,7 +107,7 @@ impl DisplayText<PlanRenderingContext<'_, IdPlan>> for IdPlan {
                         }
                     }
                     GetPlan::Collection(mfp) => {
-                        writeln!(f, "{}Get::Collection {}", ctx.indent, id)?;
+                        writeln!(f, "{}[{node_id}] Get::Collection {}", ctx.indent, id)?;
                         ctx.indent += 1;
                         mfp.fmt_text(f, ctx)?;
                     }
@@ -117,7 +122,7 @@ impl DisplayText<PlanRenderingContext<'_, IdPlan>> for IdPlan {
                 id,
                 value,
                 body,
-                node_id: _,
+                node_id,
             } => {
                 let mut bindings = vec![(id, value.as_ref())];
                 let mut head = body.as_ref();
@@ -135,7 +140,7 @@ impl DisplayText<PlanRenderingContext<'_, IdPlan>> for IdPlan {
                     head = body.as_ref();
                 }
 
-                writeln!(f, "{}Return", ctx.indent)?;
+                writeln!(f, "{}[{node_id}] Return", ctx.indent)?;
                 ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 writeln!(f, "{}With", ctx.indent)?;
                 ctx.indented(|ctx| {
@@ -151,12 +156,12 @@ impl DisplayText<PlanRenderingContext<'_, IdPlan>> for IdPlan {
                 values,
                 limits,
                 body,
-                node_id: _,
+                node_id,
             } => {
                 let bindings = izip!(ids.iter(), values, limits).collect_vec();
                 let head = body.as_ref();
 
-                writeln!(f, "{}Return", ctx.indent)?;
+                writeln!(f, "{}[{node_id}] Return", ctx.indent)?;
                 ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 writeln!(f, "{}With Mutually Recursive", ctx.indent)?;
                 ctx.indented(|ctx| {
@@ -175,9 +180,9 @@ impl DisplayText<PlanRenderingContext<'_, IdPlan>> for IdPlan {
                 input,
                 mfp,
                 input_key_val,
-                node_id: _,
+                node_id,
             } => {
-                writeln!(f, "{}Mfp", ctx.indent)?;
+                writeln!(f, "{}[{node_id}] Mfp", ctx.indent)?;
                 ctx.indented(|ctx| {
                     mfp.fmt_text(f, ctx)?;
                     if let Some((key, val)) = input_key_val {
@@ -198,10 +203,10 @@ impl DisplayText<PlanRenderingContext<'_, IdPlan>> for IdPlan {
                 exprs,
                 mfp_after,
                 input_key,
-                node_id: _,
+                node_id,
             } => {
                 let exprs = CompactScalarSeq(exprs);
-                writeln!(f, "{}FlatMap {}({})", ctx.indent, func, exprs)?;
+                writeln!(f, "{}[{node_id}] FlatMap {}({})", ctx.indent, func, exprs)?;
                 ctx.indented(|ctx| {
                     if !mfp_after.is_identity() {
                         writeln!(f, "{}mfp_after", ctx.indent)?;
@@ -217,16 +222,16 @@ impl DisplayText<PlanRenderingContext<'_, IdPlan>> for IdPlan {
             Join {
                 inputs,
                 plan,
-                node_id: _,
+                node_id,
             } => {
                 use crate::plan::join::JoinPlan;
                 match plan {
                     JoinPlan::Linear(plan) => {
-                        writeln!(f, "{}Join::Linear", ctx.indent)?;
+                        writeln!(f, "{}[{node_id}] Join::Linear", ctx.indent)?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                     JoinPlan::Delta(plan) => {
-                        writeln!(f, "{}Join::Delta", ctx.indent)?;
+                        writeln!(f, "{}[{node_id}] Join::Delta", ctx.indent)?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                 }
@@ -243,27 +248,27 @@ impl DisplayText<PlanRenderingContext<'_, IdPlan>> for IdPlan {
                 plan,
                 input_key,
                 mfp_after,
-                node_id: _,
+                node_id,
             } => {
                 use crate::plan::reduce::ReducePlan;
                 match plan {
                     ReducePlan::Distinct => {
-                        writeln!(f, "{}Reduce::Distinct", ctx.indent)?;
+                        writeln!(f, "{}[{node_id}] Reduce::Distinct", ctx.indent)?;
                     }
                     ReducePlan::Accumulable(plan) => {
-                        writeln!(f, "{}Reduce::Accumulable", ctx.indent)?;
+                        writeln!(f, "{}[{node_id}] Reduce::Accumulable", ctx.indent)?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                     ReducePlan::Hierarchical(plan) => {
-                        writeln!(f, "{}Reduce::Hierarchical", ctx.indent)?;
+                        writeln!(f, "{}[{node_id}] Reduce::Hierarchical", ctx.indent)?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                     ReducePlan::Basic(plan) => {
-                        writeln!(f, "{}Reduce::Basic", ctx.indent)?;
+                        writeln!(f, "{}[{node_id}] Reduce::Basic", ctx.indent)?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                     ReducePlan::Collation(plan) => {
-                        writeln!(f, "{}Reduce::Collation", ctx.indent)?;
+                        writeln!(f, "{}[{node_id}] Reduce::Collation", ctx.indent)?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                 }
@@ -295,12 +300,12 @@ impl DisplayText<PlanRenderingContext<'_, IdPlan>> for IdPlan {
             TopK {
                 input,
                 top_k_plan,
-                node_id: _,
+                node_id,
             } => {
                 use crate::plan::top_k::TopKPlan;
                 match top_k_plan {
                     TopKPlan::MonotonicTop1(plan) => {
-                        write!(f, "{}TopK::MonotonicTop1", ctx.indent)?;
+                        write!(f, "{}[{node_id}] TopK::MonotonicTop1", ctx.indent)?;
                         if plan.group_key.len() > 0 {
                             let group_by = Indices(&plan.group_key);
                             write!(f, " group_by=[{}]", group_by)?;
@@ -314,7 +319,7 @@ impl DisplayText<PlanRenderingContext<'_, IdPlan>> for IdPlan {
                         }
                     }
                     TopKPlan::MonotonicTopK(plan) => {
-                        write!(f, "{}TopK::MonotonicTopK", ctx.indent)?;
+                        write!(f, "{}[{node_id}] TopK::MonotonicTopK", ctx.indent)?;
                         if plan.group_key.len() > 0 {
                             let group_by = Indices(&plan.group_key);
                             write!(f, " group_by=[{}]", group_by)?;
@@ -331,7 +336,7 @@ impl DisplayText<PlanRenderingContext<'_, IdPlan>> for IdPlan {
                         }
                     }
                     TopKPlan::Basic(plan) => {
-                        write!(f, "{}TopK::Basic", ctx.indent)?;
+                        write!(f, "{}[{node_id}] TopK::Basic", ctx.indent)?;
                         if plan.group_key.len() > 0 {
                             let group_by = Indices(&plan.group_key);
                             write!(f, " group_by=[{}]", group_by)?;
@@ -351,20 +356,20 @@ impl DisplayText<PlanRenderingContext<'_, IdPlan>> for IdPlan {
                 writeln!(f)?;
                 ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
-            Negate { input, node_id: _ } => {
-                writeln!(f, "{}Negate", ctx.indent)?;
+            Negate { input, node_id } => {
+                writeln!(f, "{}[{node_id}] Negate", ctx.indent)?;
                 ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
             Threshold {
                 input,
                 threshold_plan,
-                node_id: _,
+                node_id,
             } => {
                 use crate::plan::threshold::ThresholdPlan;
                 match threshold_plan {
                     ThresholdPlan::Basic(plan) => {
                         let ensure_arrangement = Arrangement::from(&plan.ensure_arrangement);
-                        write!(f, "{}Threshold::Basic", ctx.indent)?;
+                        write!(f, "{}[{node_id}] Threshold::Basic", ctx.indent)?;
                         writeln!(f, " ensure_arrangement={}", ensure_arrangement)?;
                     }
                 };
@@ -373,16 +378,16 @@ impl DisplayText<PlanRenderingContext<'_, IdPlan>> for IdPlan {
             Union {
                 inputs,
                 consolidate_output,
-                node_id: _,
+                node_id,
             } => {
                 if *consolidate_output {
                     writeln!(
                         f,
-                        "{}Union consolidate_output={}",
+                        "{}[{node_id}] Union consolidate_output={}",
                         ctx.indent, consolidate_output
                     )?;
                 } else {
-                    writeln!(f, "{}Union", ctx.indent)?;
+                    writeln!(f, "{}[{node_id}] Union", ctx.indent)?;
                 }
                 ctx.indented(|ctx| {
                     for input in inputs.iter() {
@@ -396,9 +401,9 @@ impl DisplayText<PlanRenderingContext<'_, IdPlan>> for IdPlan {
                 forms,
                 input_key,
                 input_mfp,
-                node_id: _,
+                node_id,
             } => {
-                writeln!(f, "{}ArrangeBy", ctx.indent)?;
+                writeln!(f, "{}[{node_id}] ArrangeBy", ctx.indent)?;
                 ctx.indented(|ctx| {
                     if let Some(key) = input_key {
                         let key = CompactScalarSeq(key);
