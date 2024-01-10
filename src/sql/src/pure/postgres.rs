@@ -29,6 +29,7 @@ use crate::normalize;
 use crate::plan::{PlanError, StatementContext};
 
 use super::error::PgSourcePurificationError;
+use super::RequestedSubsource;
 
 pub(super) fn derive_catalog_from_publication_tables<'a>(
     database: &'a str,
@@ -51,7 +52,7 @@ pub(super) fn derive_catalog_from_publication_tables<'a>(
 
 pub(super) async fn validate_requested_subsources_privileges(
     config: &Config,
-    requested_subsources: &[(UnresolvedItemName, UnresolvedItemName, &PostgresTableDesc)],
+    requested_subsources: &[RequestedSubsource<'_, PostgresTableDesc>],
     ssh_tunnel_manager: &SshTunnelManager,
 ) -> Result<(), PlanError> {
     // Ensure that we have select permissions on all tables; we have to do this before we
@@ -59,7 +60,12 @@ pub(super) async fn validate_requested_subsources_privileges(
     // snapshotting, we break the entire source.
     let tables_to_check_permissions = requested_subsources
         .iter()
-        .map(|(UnresolvedItemName(inner), _, _)| [inner[1].as_str(), inner[2].as_str()])
+        .map(
+            |RequestedSubsource {
+                 upstream_name: UnresolvedItemName(inner),
+                 ..
+             }| [inner[1].as_str(), inner[2].as_str()],
+        )
         .collect();
 
     privileges::check_table_privileges(config, tables_to_check_permissions, ssh_tunnel_manager)
@@ -67,7 +73,7 @@ pub(super) async fn validate_requested_subsources_privileges(
 
     let oids: Vec<_> = requested_subsources
         .iter()
-        .map(|(_, _, table_desc)| table_desc.oid)
+        .map(|RequestedSubsource { table, .. }| table.oid)
         .collect();
 
     replica_identity::check_replica_identity_full(config, oids, ssh_tunnel_manager).await?;
@@ -151,11 +157,7 @@ pub(super) fn generate_text_columns(
 
 pub(crate) fn generate_targeted_subsources<F>(
     scx: &StatementContext,
-    validated_requested_subsources: Vec<(
-        UnresolvedItemName,
-        UnresolvedItemName,
-        &PostgresTableDesc,
-    )>,
+    validated_requested_subsources: Vec<RequestedSubsource<'_, PostgresTableDesc>>,
     mut text_cols_dict: BTreeMap<u32, BTreeSet<String>>,
     mut get_transient_subsource_id: F,
     publication_tables: &[PostgresTableDesc],
@@ -176,7 +178,12 @@ where
     let mut unsupported_cols = vec![];
 
     // Now that we have an explicit list of validated requested subsources we can create them
-    for (upstream_name, subsource_name, table) in validated_requested_subsources.into_iter() {
+    for RequestedSubsource {
+        upstream_name,
+        subsource_name,
+        table,
+    } in validated_requested_subsources.into_iter()
+    {
         // Figure out the schema of the subsource
         let mut columns = vec![];
         let text_cols_dict = text_cols_dict.remove(&table.oid);

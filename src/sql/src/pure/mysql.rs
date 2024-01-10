@@ -23,6 +23,8 @@ use crate::catalog::SubsourceCatalog;
 use crate::names::Aug;
 use crate::plan::{PlanError, StatementContext};
 
+use super::RequestedSubsource;
+
 /// The name of the fake database that we use for MySQL sources
 /// to fit our model of a 3-layer catalog. MySQL doesn't have a concept
 /// of databases AND schemas, it treats both as the same thing.
@@ -58,7 +60,7 @@ pub(super) fn derive_catalog_from_tables<'a>(
 
 pub(super) fn generate_targeted_subsources<F>(
     scx: &StatementContext,
-    validated_requested_subsources: Vec<(UnresolvedItemName, UnresolvedItemName, &MySqlTableDesc)>,
+    validated_requested_subsources: Vec<RequestedSubsource<MySqlTableDesc>>,
     mut get_transient_subsource_id: F,
 ) -> Result<
     (
@@ -74,7 +76,12 @@ where
     let mut subsources = vec![];
 
     // Now that we have an explicit list of validated requested subsources we can create them
-    for (upstream_name, subsource_name, table) in validated_requested_subsources.into_iter() {
+    for RequestedSubsource {
+        upstream_name,
+        subsource_name,
+        table,
+    } in validated_requested_subsources.into_iter()
+    {
         // Figure out the schema of the subsource
         let mut columns = vec![];
         for c in table.columns.iter() {
@@ -100,8 +107,7 @@ where
 
         let mut constraints = vec![];
         for key in table.keys.iter() {
-            let columns: Result<Vec<Ident>, _> =
-                key.columns.iter().map(Ident::new).collect();
+            let columns: Result<Vec<Ident>, _> = key.columns.iter().map(Ident::new).collect();
 
             let constraint = mz_sql_parser::ast::TableConstraint::Unique {
                 name: Some(Ident::new(&key.name)?),

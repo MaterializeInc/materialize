@@ -80,11 +80,17 @@ pub(crate) mod error;
 mod mysql;
 mod postgres;
 
+pub(crate) struct RequestedSubsource<'a, T> {
+    upstream_name: UnresolvedItemName,
+    subsource_name: UnresolvedItemName,
+    table: &'a T,
+}
+
 fn subsource_gen<'a, T>(
     selected_subsources: &mut Vec<CreateSourceSubsource<Aug>>,
     catalog: &SubsourceCatalog<&'a T>,
     source_name: &UnresolvedItemName,
-) -> Result<Vec<(UnresolvedItemName, UnresolvedItemName, &'a T)>, PlanError> {
+) -> Result<Vec<RequestedSubsource<'a, T>>, PlanError> {
     let mut validated_requested_subsources = vec![];
 
     for subsource in selected_subsources {
@@ -117,7 +123,11 @@ fn subsource_gen<'a, T>(
 
         let (qualified_upstream_name, desc) = catalog.resolve(subsource.reference.clone())?;
 
-        validated_requested_subsources.push((qualified_upstream_name, subsource_name, *desc));
+        validated_requested_subsources.push(RequestedSubsource {
+            upstream_name: qualified_upstream_name,
+            subsource_name,
+            table: *desc,
+        });
     }
 
     Ok(validated_requested_subsources)
@@ -149,21 +159,27 @@ fn subsource_name_gen(
 /// Validates the requested subsources do not have name conflicts with each other
 /// and that the same upstream table is not referenced multiple times.
 fn validate_subsource_names<T>(
-    requested_subsources: &[(UnresolvedItemName, UnresolvedItemName, &T)],
+    requested_subsources: &[RequestedSubsource<T>],
 ) -> Result<(), PlanError> {
     // This condition would get caught during the catalog transaction, but produces a
     // vague, non-contextual error. Instead, error here so we can suggest to the user
     // how to fix the problem.
     if let Some(name) = requested_subsources
         .iter()
-        .map(|(_, subsource_name, _)| subsource_name)
+        .map(|subsource| &subsource.subsource_name)
         .duplicates()
         .next()
         .cloned()
     {
         let mut upstream_references: Vec<_> = requested_subsources
             .into_iter()
-            .filter_map(|(u, t, _)| if t == &name { Some(u.clone()) } else { None })
+            .filter_map(|subsource| {
+                if &subsource.subsource_name == &name {
+                    Some(subsource.upstream_name.clone())
+                } else {
+                    None
+                }
+            })
             .collect();
 
         upstream_references.sort();
@@ -178,14 +194,20 @@ fn validate_subsource_names<T>(
     // it is almost certainly an error on the user's end.
     if let Some(name) = requested_subsources
         .iter()
-        .map(|(referenced_name, _, _)| referenced_name)
+        .map(|subsource| &subsource.upstream_name)
         .duplicates()
         .next()
         .cloned()
     {
         let mut target_names: Vec<_> = requested_subsources
             .into_iter()
-            .filter_map(|(u, t, _)| if u == &name { Some(t.clone()) } else { None })
+            .filter_map(|subsource| {
+                if &subsource.upstream_name == &name {
+                    Some(subsource.subsource_name.clone())
+                } else {
+                    None
+                }
+            })
             .collect();
 
         target_names.sort();
@@ -724,7 +746,11 @@ async fn purify_create_source(
                             Ident::new(&table.name)?,
                         ]);
                         let subsource_name = subsource_name_gen(source_name, &table.name)?;
-                        validated_requested_subsources.push((upstream_name, subsource_name, table));
+                        validated_requested_subsources.push(RequestedSubsource {
+                            upstream_name,
+                            subsource_name,
+                            table,
+                        });
                     }
                 }
                 ReferencedSubsources::SubsetSchemas(schemas) => {
@@ -763,7 +789,11 @@ async fn purify_create_source(
                             Ident::new(&table.name)?,
                         ]);
                         let subsource_name = subsource_name_gen(source_name, &table.name)?;
-                        validated_requested_subsources.push((upstream_name, subsource_name, table));
+                        validated_requested_subsources.push(RequestedSubsource {
+                            upstream_name,
+                            subsource_name,
+                            table,
+                        });
                     }
                 }
                 ReferencedSubsources::SubsetTables(subsources) => {
@@ -980,7 +1010,11 @@ async fn purify_create_source(
                     for table in &tables {
                         let upstream_name = mysql::mysql_upstream_name(table)?;
                         let subsource_name = subsource_name_gen(source_name, &table.name)?;
-                        validated_requested_subsources.push((upstream_name, subsource_name, table));
+                        validated_requested_subsources.push(RequestedSubsource {
+                            upstream_name,
+                            subsource_name,
+                            table,
+                        });
                     }
                 }
                 ReferencedSubsources::SubsetSchemas(schemas) => {
@@ -1005,7 +1039,11 @@ async fn purify_create_source(
 
                         let upstream_name = mysql::mysql_upstream_name(table)?;
                         let subsource_name = subsource_name_gen(source_name, &table.name)?;
-                        validated_requested_subsources.push((upstream_name, subsource_name, table));
+                        validated_requested_subsources.push(RequestedSubsource {
+                            upstream_name,
+                            subsource_name,
+                            table,
+                        });
                     }
                 }
                 ReferencedSubsources::SubsetTables(subsources) => {
@@ -1349,7 +1387,7 @@ async fn purify_alter_source(
         );
     }
 
-    for (upstream_name, _, _) in validated_requested_subsources.iter() {
+    for RequestedSubsource { upstream_name, .. } in validated_requested_subsources.iter() {
         if current_subsources.contains_key(upstream_name) {
             Err(PlanError::SubsourceAlreadyReferredTo {
                 name: upstream_name.clone(),
