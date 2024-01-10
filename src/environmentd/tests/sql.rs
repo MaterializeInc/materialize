@@ -2451,7 +2451,10 @@ fn test_isolation_level_notice() {
 fn test_emit_tracing_notice() {
     let server = test_util::TestHarness::default()
         .with_enable_tracing(true)
-        .with_system_parameter_default("opentelemetry_filter".to_string(), "debug".to_string())
+        // NB: Make sure to keep opentelemetry_filter as "info" to match the
+        // configuration in staging (and that we hope to run in prod).
+        .with_system_parameter_default("opentelemetry_filter".to_string(), "info".to_string())
+        .with_system_parameter_default("log_filter".to_string(), "info".to_string())
         .start_blocking();
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
