@@ -26,7 +26,6 @@ use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::container::columnation::Columnation;
 use timely::dataflow::operators::OkErr;
-use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::{Refines, Timestamp};
 
@@ -145,8 +144,12 @@ where
         inputs: Vec<CollectionBundle<G, T>>,
         linear_plan: LinearJoinPlan,
     ) -> CollectionBundle<G, T> {
-        self.scope.clone().region_named("Join(Linear)", |inner| {
-            self.render_join_inner(inputs, linear_plan, inner)
+        self.region_named("Join(Linear)", |inner| {
+            let inputs = inputs
+                .into_iter()
+                .map(|i| i.enter_region(&inner.scope))
+                .collect();
+            inner.render_join_inner(inputs, linear_plan).leave_region()
         })
     }
 
@@ -154,7 +157,6 @@ where
         &mut self,
         inputs: Vec<CollectionBundle<G, T>>,
         linear_plan: LinearJoinPlan,
-        inner: &mut Child<G, G::Timestamp>,
     ) -> CollectionBundle<G, T> {
         // Collect all error streams, and concatenate them at the end.
         let mut errors = Vec::new();
@@ -170,20 +172,19 @@ where
         // We can use an arrangement if it exists and an initial closure does not.
         let mut joined = match (arrangement, linear_plan.initial_closure) {
             (Some(ArrangementFlavor::Local(oks, errs)), None) => {
-                errors.push(errs.as_collection(|k, _v| k.clone()).enter_region(inner));
-                JoinedFlavor::Local(oks.enter_region(inner))
+                errors.push(errs.as_collection(|k, _v| k.clone()));
+                JoinedFlavor::Local(oks)
             }
             (Some(ArrangementFlavor::Trace(_gid, oks, errs)), None) => {
-                errors.push(errs.as_collection(|k, _v| k.clone()).enter_region(inner));
-                JoinedFlavor::Trace(oks.enter_region(inner))
+                errors.push(errs.as_collection(|k, _v| k.clone()));
+                JoinedFlavor::Trace(oks)
             }
             (_, initial_closure) => {
                 // TODO: extract closure from the first stage in the join plan, should it exist.
                 // TODO: apply that closure in `flat_map_ref` rather than calling `.collection`.
-                let (joined, errs) = inputs[linear_plan.source_relation]
+                let (mut joined, errs) = inputs[linear_plan.source_relation]
                     .as_specific_collection(linear_plan.source_key.as_deref());
-                errors.push(errs.enter_region(inner));
-                let mut joined = joined.enter_region(inner);
+                errors.push(errs);
 
                 // In the current code this should always be `None`, but we have this here should
                 // we change that and want to know what we should be doing.
@@ -220,7 +221,7 @@ where
             // and the logic is centralized there.
             let stream = self.differential_join(
                 joined,
-                inputs[stage_plan.lookup_relation].enter_region(inner),
+                inputs[stage_plan.lookup_relation].clone(),
                 stage_plan,
                 &mut errors,
             );
@@ -256,20 +257,19 @@ where
             // Return joined results and all produced errors collected together.
             CollectionBundle::from_collections(
                 joined,
-                differential_dataflow::collection::concatenate(inner, errors),
+                differential_dataflow::collection::concatenate(&mut self.scope, errors),
             )
         } else {
             panic!("Unexpectedly arranged join output");
         }
-        .leave_region()
     }
 
     /// Looks up the arrangement for the next input and joins it to the arranged
     /// version of the join of previous inputs.
-    fn differential_join<S>(
+    fn differential_join(
         &self,
-        mut joined: JoinedFlavor<S, T>,
-        lookup_relation: CollectionBundle<S, T>,
+        mut joined: JoinedFlavor<G, T>,
+        lookup_relation: CollectionBundle<G, T>,
         LinearStagePlan {
             stream_key,
             stream_thinning,
@@ -277,11 +277,8 @@ where
             closure,
             lookup_relation: _,
         }: LinearStagePlan,
-        errors: &mut Vec<Collection<S, DataflowError, Diff>>,
-    ) -> Collection<S, Row, Diff>
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
+        errors: &mut Vec<Collection<G, DataflowError, Diff>>,
+    ) -> Collection<G, Row, Diff> {
         // If we have only a streamed collection, we must first form an arrangement.
         if let JoinedFlavor::Collection(stream) = joined {
             let (keyed, errs) = stream.map_fallible("LinearJoinKeyPreparation", {
@@ -333,10 +330,10 @@ where
             JoinedFlavor::Local(local) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = match (local, oks) {
-                        (SpecializedArrangement::RowUnit(prev_keyed), SpecializedArrangement::RowUnit(next_input)) => self.differential_join_inner::<_,TraceAgent<RowSpine<_, _>>,TraceAgent<RowSpine<_, _>>>(prev_keyed, next_input, None, Some(vec![]), Some(vec![]), closure),
-                        (SpecializedArrangement::RowUnit(prev_keyed), SpecializedArrangement::RowRow(next_input))  => self.differential_join_inner::<_,TraceAgent<RowSpine<_, _>>,TraceAgent<RowRowSpine<_, _>>>(prev_keyed, next_input, None, Some(vec![]), None, closure),
-                        (SpecializedArrangement::RowRow(prev_keyed),  SpecializedArrangement::RowUnit(next_input)) => self.differential_join_inner::<_,TraceAgent<RowRowSpine<_, _>>,TraceAgent<RowSpine<_, _>>>(prev_keyed, next_input, None, None, Some(vec![]), closure),
-                        (SpecializedArrangement::RowRow(prev_keyed),  SpecializedArrangement::RowRow(next_input))  => self.differential_join_inner::<_,TraceAgent<RowRowSpine<_, _>>,TraceAgent<RowRowSpine<_, _>>>(prev_keyed, next_input, None, None, None, closure),
+                        (SpecializedArrangement::RowUnit(prev_keyed), SpecializedArrangement::RowUnit(next_input)) => self.differential_join_inner::<TraceAgent<RowSpine<_, _>>,TraceAgent<RowSpine<_, _>>>(prev_keyed, next_input, None, Some(vec![]), Some(vec![]), closure),
+                        (SpecializedArrangement::RowUnit(prev_keyed), SpecializedArrangement::RowRow(next_input))  => self.differential_join_inner::<TraceAgent<RowSpine<_, _>>,TraceAgent<RowRowSpine<_, _>>>(prev_keyed, next_input, None, Some(vec![]), None, closure),
+                        (SpecializedArrangement::RowRow(prev_keyed),  SpecializedArrangement::RowUnit(next_input)) => self.differential_join_inner::<TraceAgent<RowRowSpine<_, _>>,TraceAgent<RowSpine<_, _>>>(prev_keyed, next_input, None, None, Some(vec![]), closure),
+                        (SpecializedArrangement::RowRow(prev_keyed),  SpecializedArrangement::RowRow(next_input))  => self.differential_join_inner::<TraceAgent<RowRowSpine<_, _>>,TraceAgent<RowRowSpine<_, _>>>(prev_keyed, next_input, None, None, None, closure),
                     };
 
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
@@ -345,10 +342,10 @@ where
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = match (local, oks) {
-                        (SpecializedArrangement::RowUnit(prev_keyed), SpecializedArrangementImport::RowUnit(next_input)) => self.differential_join_inner::<_,TraceAgent<RowSpine<_, _>>,RowEnter<T, Diff, G::Timestamp>>(prev_keyed, next_input, None, Some(vec![]), Some(vec![]), closure),
-                        (SpecializedArrangement::RowUnit(prev_keyed), SpecializedArrangementImport::RowRow(next_input))  => self.differential_join_inner::<_,TraceAgent<RowSpine<_, _>>,RowRowEnter<T, Diff, G::Timestamp>>(prev_keyed, next_input, None, Some(vec![]), None, closure),
-                        (SpecializedArrangement::RowRow(prev_keyed),  SpecializedArrangementImport::RowUnit(next_input)) => self.differential_join_inner::<_,TraceAgent<RowRowSpine<_, _>>,RowEnter<T, Diff, G::Timestamp>>(prev_keyed, next_input, None, None, Some(vec![]), closure),
-                        (SpecializedArrangement::RowRow(prev_keyed),  SpecializedArrangementImport::RowRow(next_input))  => self.differential_join_inner::<_,TraceAgent<RowRowSpine<_, _>>,RowRowEnter<T, Diff, G::Timestamp>>(prev_keyed, next_input, None, None, None, closure),
+                        (SpecializedArrangement::RowUnit(prev_keyed), SpecializedArrangementImport::RowUnit(next_input)) => self.differential_join_inner::<TraceAgent<RowSpine<_, _>>,RowEnter<T, Diff, G::Timestamp>>(prev_keyed, next_input, None, Some(vec![]), Some(vec![]), closure),
+                        (SpecializedArrangement::RowUnit(prev_keyed), SpecializedArrangementImport::RowRow(next_input))  => self.differential_join_inner::<TraceAgent<RowSpine<_, _>>,RowRowEnter<T, Diff, G::Timestamp>>(prev_keyed, next_input, None, Some(vec![]), None, closure),
+                        (SpecializedArrangement::RowRow(prev_keyed),  SpecializedArrangementImport::RowUnit(next_input)) => self.differential_join_inner::<TraceAgent<RowRowSpine<_, _>>,RowEnter<T, Diff, G::Timestamp>>(prev_keyed, next_input, None, None, Some(vec![]), closure),
+                        (SpecializedArrangement::RowRow(prev_keyed),  SpecializedArrangementImport::RowRow(next_input))  => self.differential_join_inner::<TraceAgent<RowRowSpine<_, _>>,RowRowEnter<T, Diff, G::Timestamp>>(prev_keyed, next_input, None, None, None, closure),
                     };
 
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
@@ -362,7 +359,7 @@ where
                             (
                                 SpecializedArrangementImport::RowUnit(prev_keyed),
                                 SpecializedArrangement::RowUnit(next_input),
-                            ) => self.differential_join_inner::<_, TraceEnter<
+                            ) => self.differential_join_inner::<TraceEnter<
                                 TraceFrontier<RowAgent<T, Diff>>,
                                 G::Timestamp,
                             >, TraceAgent<RowSpine<_, _>>>(
@@ -376,7 +373,7 @@ where
                             (
                                 SpecializedArrangementImport::RowUnit(prev_keyed),
                                 SpecializedArrangement::RowRow(next_input),
-                            ) => self.differential_join_inner::<_, TraceEnter<
+                            ) => self.differential_join_inner::<TraceEnter<
                                 TraceFrontier<RowAgent<T, Diff>>,
                                 G::Timestamp,
                             >, TraceAgent<RowRowSpine<_, _>>>(
@@ -390,7 +387,7 @@ where
                             (
                                 SpecializedArrangementImport::RowRow(prev_keyed),
                                 SpecializedArrangement::RowUnit(next_input),
-                            ) => self.differential_join_inner::<_, TraceEnter<
+                            ) => self.differential_join_inner::<TraceEnter<
                                 TraceFrontier<RowRowAgent<T, Diff>>,
                                 G::Timestamp,
                             >, TraceAgent<RowSpine<_, _>>>(
@@ -404,7 +401,7 @@ where
                             (
                                 SpecializedArrangementImport::RowRow(prev_keyed),
                                 SpecializedArrangement::RowRow(next_input),
-                            ) => self.differential_join_inner::<_, TraceEnter<
+                            ) => self.differential_join_inner::<TraceEnter<
                                 TraceFrontier<RowRowAgent<T, Diff>>,
                                 G::Timestamp,
                             >, TraceAgent<RowRowSpine<_, _>>>(
@@ -421,7 +418,7 @@ where
                             (
                                 SpecializedArrangementImport::RowUnit(prev_keyed),
                                 SpecializedArrangementImport::RowUnit(next_input),
-                            ) => self.differential_join_inner::<_, TraceEnter<
+                            ) => self.differential_join_inner::<TraceEnter<
                                 TraceFrontier<RowAgent<T, Diff>>,
                                 G::Timestamp,
                             >, TraceEnter<
@@ -438,7 +435,7 @@ where
                             (
                                 SpecializedArrangementImport::RowUnit(prev_keyed),
                                 SpecializedArrangementImport::RowRow(next_input),
-                            ) => self.differential_join_inner::<_, TraceEnter<
+                            ) => self.differential_join_inner::<TraceEnter<
                                 TraceFrontier<RowAgent<T, Diff>>,
                                 G::Timestamp,
                             >, TraceEnter<
@@ -450,7 +447,7 @@ where
                             (
                                 SpecializedArrangementImport::RowRow(prev_keyed),
                                 SpecializedArrangementImport::RowUnit(next_input),
-                            ) => self.differential_join_inner::<_, TraceEnter<
+                            ) => self.differential_join_inner::<TraceEnter<
                                 TraceFrontier<RowRowAgent<T, Diff>>,
                                 G::Timestamp,
                             >, TraceEnter<
@@ -462,7 +459,7 @@ where
                             (
                                 SpecializedArrangementImport::RowRow(prev_keyed),
                                 SpecializedArrangementImport::RowRow(next_input),
-                            ) => self.differential_join_inner::<_, TraceEnter<
+                            ) => self.differential_join_inner::<TraceEnter<
                                 TraceFrontier<RowRowAgent<T, Diff>>,
                                 G::Timestamp,
                             >, TraceEnter<
@@ -487,20 +484,19 @@ where
     ///
     /// The return type includes an optional error collection, which may be
     /// `None` if we can determine that `closure` cannot error.
-    fn differential_join_inner<S, Tr1, Tr2>(
+    fn differential_join_inner<Tr1, Tr2>(
         &self,
-        prev_keyed: Arranged<S, Tr1>,
-        next_input: Arranged<S, Tr2>,
+        prev_keyed: Arranged<G, Tr1>,
+        next_input: Arranged<G, Tr2>,
         key_types: Option<Vec<ColumnType>>,
         prev_types: Option<Vec<ColumnType>>,
         next_types: Option<Vec<ColumnType>>,
         closure: JoinClosure,
     ) -> (
-        Collection<S, Row, Diff>,
-        Option<Collection<S, DataflowError, Diff>>,
+        Collection<G, Row, Diff>,
+        Option<Collection<G, DataflowError, Diff>>,
     )
     where
-        S: Scope<Timestamp = G::Timestamp>,
         Tr1: TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
         Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = G::Timestamp, Diff = Diff>
             + Clone
