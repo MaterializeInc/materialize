@@ -37,7 +37,6 @@ use mz_timely_util::operator::CollectionExt;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use timely::container::columnation::{Columnation, CopyRegion};
-use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::progress::Timestamp;
@@ -69,15 +68,11 @@ where
         input_key: Option<Vec<MirScalarExpr>>,
         mfp_after: Option<MapFilterProject>,
     ) -> CollectionBundle<G, T> {
-        input.scope().region_named("Reduce", |inner| {
-            self.render_reduce_inner(
-                input,
-                key_val_plan,
-                reduce_plan,
-                input_key,
-                mfp_after,
-                inner,
-            )
+        self.region_named("Reduce", |inner| {
+            let input = input.enter_region(&inner.scope);
+            inner
+                .render_reduce_inner(input, key_val_plan, reduce_plan, input_key, mfp_after)
+                .leave_region()
         })
     }
 
@@ -88,7 +83,6 @@ where
         reduce_plan: ReducePlan,
         input_key: Option<Vec<MirScalarExpr>>,
         mfp_after: Option<MapFilterProject>,
-        inner: &mut Child<G, G::Timestamp>,
     ) -> CollectionBundle<G, T> {
         // Convert `mfp_after` to an actionable plan.
         let mfp_after = mfp_after.map(|m| {
@@ -107,61 +101,59 @@ where
         let (key_val_input, err_input): (
             timely::dataflow::Stream<_, (Result<(Row, Row), DataflowError>, _, _)>,
             _,
-        ) = input
-            .enter_region(inner)
-            .flat_map(input_key.map(|k| (k, None)), || {
-                // Determine the columns we'll need from the row.
-                let mut demand = Vec::new();
-                demand.extend(key_plan.demand());
-                demand.extend(val_plan.demand());
-                demand.sort();
-                demand.dedup();
-                // remap column references to the subset we use.
-                let mut demand_map = BTreeMap::new();
-                for column in demand.iter() {
-                    demand_map.insert(*column, demand_map.len());
-                }
-                let demand_map_len = demand_map.len();
-                key_plan.permute(demand_map.clone(), demand_map_len);
-                val_plan.permute(demand_map, demand_map_len);
-                let skips = mz_compute_types::plan::reduce::convert_indexes_to_skips(demand);
-                move |row_datums, time, diff| {
-                    let binding = SharedRow::get();
-                    let mut row_builder = binding.borrow_mut();
-                    let temp_storage = RowArena::new();
+        ) = input.flat_map(input_key.map(|k| (k, None)), || {
+            // Determine the columns we'll need from the row.
+            let mut demand = Vec::new();
+            demand.extend(key_plan.demand());
+            demand.extend(val_plan.demand());
+            demand.sort();
+            demand.dedup();
+            // remap column references to the subset we use.
+            let mut demand_map = BTreeMap::new();
+            for column in demand.iter() {
+                demand_map.insert(*column, demand_map.len());
+            }
+            let demand_map_len = demand_map.len();
+            key_plan.permute(demand_map.clone(), demand_map_len);
+            val_plan.permute(demand_map, demand_map_len);
+            let skips = mz_compute_types::plan::reduce::convert_indexes_to_skips(demand);
+            move |row_datums, time, diff| {
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
+                let temp_storage = RowArena::new();
 
-                    let mut row_iter = row_datums.drain(..);
-                    let mut datums_local = datums.borrow();
-                    // Unpack only the demanded columns.
-                    for skip in skips.iter() {
-                        datums_local.push(row_iter.nth(*skip).unwrap());
+                let mut row_iter = row_datums.drain(..);
+                let mut datums_local = datums.borrow();
+                // Unpack only the demanded columns.
+                for skip in skips.iter() {
+                    datums_local.push(row_iter.nth(*skip).unwrap());
+                }
+
+                // Evaluate the key expressions.
+                let key = match key_plan.evaluate_into(
+                    &mut datums_local,
+                    &temp_storage,
+                    &mut row_builder,
+                ) {
+                    Err(e) => {
+                        return Some((Err(DataflowError::from(e)), time.clone(), diff.clone()))
                     }
-
-                    // Evaluate the key expressions.
-                    let key = match key_plan.evaluate_into(
-                        &mut datums_local,
-                        &temp_storage,
-                        &mut row_builder,
-                    ) {
-                        Err(e) => {
-                            return Some((Err(DataflowError::from(e)), time.clone(), diff.clone()))
-                        }
-                        Ok(key) => key.expect("Row expected as no predicate was used"),
-                    };
-                    // Evaluate the value expressions.
-                    // The prior evaluation may have left additional columns we should delete.
-                    datums_local.truncate(skips.len());
-                    let val = match val_plan.evaluate_iter(&mut datums_local, &temp_storage) {
-                        Err(e) => {
-                            return Some((Err(DataflowError::from(e)), time.clone(), diff.clone()))
-                        }
-                        Ok(val) => val.expect("Row expected as no predicate was used"),
-                    };
-                    row_builder.packer().extend(val);
-                    let row = row_builder.clone();
-                    Some((Ok((key, row)), time.clone(), diff.clone()))
-                }
-            });
+                    Ok(key) => key.expect("Row expected as no predicate was used"),
+                };
+                // Evaluate the value expressions.
+                // The prior evaluation may have left additional columns we should delete.
+                datums_local.truncate(skips.len());
+                let val = match val_plan.evaluate_iter(&mut datums_local, &temp_storage) {
+                    Err(e) => {
+                        return Some((Err(DataflowError::from(e)), time.clone(), diff.clone()))
+                    }
+                    Ok(val) => val.expect("Row expected as no predicate was used"),
+                };
+                row_builder.packer().extend(val);
+                let row = row_builder.clone();
+                Some((Ok((key, row)), time.clone(), diff.clone()))
+            }
+        });
 
         // Demux out the potential errors from key and value selector evaluation.
         let (ok, mut err) = key_val_input
@@ -173,7 +165,6 @@ where
 
         // Render the reduce plan
         self.render_reduce_plan(reduce_plan, ok, err, key_arity, mfp_after)
-            .leave_region()
     }
 
     /// Render a dataflow based on the provided plan.
@@ -181,17 +172,14 @@ where
     /// The output will be an arrangements that looks the same as if
     /// we just had a single reduce operator computing everything together, and
     /// this arrangement can also be re-used.
-    fn render_reduce_plan<S>(
-        &self,
+    fn render_reduce_plan(
+        &mut self,
         plan: ReducePlan,
-        collection: Collection<S, (Row, Row), Diff>,
-        err_input: Collection<S, DataflowError, Diff>,
+        collection: Collection<G, (Row, Row), Diff>,
+        err_input: Collection<G, DataflowError, Diff>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> CollectionBundle<S, T>
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
+    ) -> CollectionBundle<G, T> {
         let mut errors = Default::default();
         let arrangement =
             self.render_reduce_plan_inner(plan, collection, &mut errors, key_arity, mfp_after);
@@ -202,17 +190,14 @@ where
         )
     }
 
-    fn render_reduce_plan_inner<S>(
-        &self,
+    fn render_reduce_plan_inner(
+        &mut self,
         plan: ReducePlan,
-        collection: Collection<S, (Row, Row), Diff>,
-        errors: &mut Vec<Collection<S, DataflowError, Diff>>,
+        collection: Collection<G, (Row, Row), Diff>,
+        errors: &mut Vec<Collection<G, DataflowError, Diff>>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> SpecializedArrangement<S>
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
+    ) -> SpecializedArrangement<G> {
         // TODO(vmarcos): Arrangement specialization here could eventually be extended to keys,
         // not only values (#22103).
         let arrangement = match plan {
@@ -284,12 +269,7 @@ where
                 }
 
                 // Now we need to collate them together.
-                let (oks, errs) = self.build_collation(
-                    to_collate,
-                    expr.aggregate_types,
-                    &mut collection.scope(),
-                    mfp_after,
-                );
+                let (oks, errs) = self.build_collation(to_collate, expr.aggregate_types, mfp_after);
                 errors.push(errs);
                 SpecializedArrangement::RowRow(oks)
             }
@@ -304,16 +284,12 @@ where
     /// the values into the correct order. This implementation assumes that all input
     /// arrangements present values in a way that respects the desired output order,
     /// so we can do a linear merge to form the output.
-    fn build_collation<S>(
-        &self,
-        arrangements: Vec<(ReductionType, RowRowArrangement<S>)>,
+    fn build_collation(
+        &mut self,
+        arrangements: Vec<(ReductionType, RowRowArrangement<G>)>,
         aggregate_types: Vec<ReductionType>,
-        scope: &mut S,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
+    ) -> (RowRowArrangement<G>, Collection<G, DataflowError, Diff>) {
         let error_logger = self.error_logger();
 
         // We must have more than one arrangement to collate.
@@ -349,32 +325,102 @@ where
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
         let aggregate_types_err = aggregate_types.clone();
-        let (oks, errs) = differential_dataflow::collection::concatenate(scope, to_concat)
-            .mz_arrange::<RowValSpine<_, _, _>>("Arrange ReduceCollation")
-            .reduce_pair::<_, RowRowSpine<_, _>, _, RowErrSpine<_, _>>(
-                "ReduceCollation",
-                "ReduceCollation Errors",
-                {
-                    move |key, input, output| {
-                        // The inputs are pairs of a reduction type, and a row consisting of densely
-                        // packed fused aggregate values.
-                        //
-                        // We need to reconstitute the final value by:
-                        // 1. Extracting out the fused rows by type
-                        // 2. For each aggregate, figure out what type it is, and grab the relevant
-                        //    value from the corresponding fused row.
-                        // 3. Stitch all the values together into one row.
-                        let mut accumulable = DatumList::empty().iter();
-                        let mut hierarchical = DatumList::empty().iter();
-                        let mut basic = DatumList::empty().iter();
+        let (oks, errs) =
+            differential_dataflow::collection::concatenate(&mut self.scope, to_concat)
+                .mz_arrange::<RowValSpine<_, _, _>>("Arrange ReduceCollation")
+                .reduce_pair::<_, RowRowSpine<_, _>, _, RowErrSpine<_, _>>(
+                    "ReduceCollation",
+                    "ReduceCollation Errors",
+                    {
+                        move |key, input, output| {
+                            // The inputs are pairs of a reduction type, and a row consisting of densely
+                            // packed fused aggregate values.
+                            //
+                            // We need to reconstitute the final value by:
+                            // 1. Extracting out the fused rows by type
+                            // 2. For each aggregate, figure out what type it is, and grab the relevant
+                            //    value from the corresponding fused row.
+                            // 3. Stitch all the values together into one row.
+                            let mut accumulable = DatumList::empty().iter();
+                            let mut hierarchical = DatumList::empty().iter();
+                            let mut basic = DatumList::empty().iter();
 
-                        // Note that hierarchical and basic reductions guard against negative
-                        // multiplicities, and if we only had accumulable aggregations, we would not
-                        // have produced a collation plan, so we do not repeat the check here.
+                            // Note that hierarchical and basic reductions guard against negative
+                            // multiplicities, and if we only had accumulable aggregations, we would not
+                            // have produced a collation plan, so we do not repeat the check here.
+                            if input.len() != n_distinct_aggregate_types {
+                                return;
+                            }
+
+                            for (item, _) in input.iter() {
+                                let reduction_type = &item.0;
+                                let row = &item.1;
+                                match reduction_type {
+                                    ReductionType::Accumulable => accumulable = row.iter(),
+                                    ReductionType::Hierarchical => hierarchical = row.iter(),
+                                    ReductionType::Basic => basic = row.iter(),
+                                }
+                            }
+
+                            let temp_storage = RowArena::new();
+                            let datum_iter = key.into_datum_iter(None);
+                            let mut datums_local = datums1.borrow();
+                            datums_local.extend(datum_iter);
+                            let key_len = datums_local.len();
+
+                            // Merge results into the order they were asked for.
+                            for typ in aggregate_types.iter() {
+                                let datum = match typ {
+                                    ReductionType::Accumulable => accumulable.next(),
+                                    ReductionType::Hierarchical => hierarchical.next(),
+                                    ReductionType::Basic => basic.next(),
+                                };
+                                let Some(datum) = datum else { return };
+                                datums_local.push(datum);
+                            }
+
+                            // If we did not have enough values to stitch together, then we do not
+                            // generate an output row. Not outputting here corresponds to the semantics
+                            // of an equi-join on the key, similarly to the proposal in PR #17013.
+                            //
+                            // Note that we also do not want to have anything left over to stich. If we
+                            // do, then we also have an error, reported elsewhere, and would violate
+                            // join semantics.
+                            if (accumulable.next(), hierarchical.next(), basic.next())
+                                == (None, None, None)
+                            {
+                                if let Some(row) = evaluate_mfp_after(
+                                    &mfp_after1,
+                                    &mut datums_local,
+                                    &temp_storage,
+                                    key_len,
+                                ) {
+                                    output.push((row, 1));
+                                }
+                            }
+                        }
+                    },
+                    move |key, input, output| {
                         if input.len() != n_distinct_aggregate_types {
+                            // We expected to stitch together exactly as many aggregate types as requested
+                            // by the collation. If we cannot, we log an error and produce no output for
+                            // this key.
+                            let message = "Mismatched aggregates for key in ReduceCollation";
+                            error_logger.log(
+                                message,
+                                &format!(
+                                    "key={key:?}, n_aggregates_requested={requested}, \
+                                 n_distinct_aggregate_types={n_distinct_aggregate_types}",
+                                    requested = input.len(),
+                                ),
+                            );
+                            output.push((EvalError::Internal(message.to_string()).into(), 1));
                             return;
                         }
 
+                        let mut accumulable = DatumList::empty().iter();
+                        let mut hierarchical = DatumList::empty().iter();
+                        let mut basic = DatumList::empty().iter();
                         for (item, _) in input.iter() {
                             let reduction_type = &item.0;
                             let row = &item.1;
@@ -387,143 +433,72 @@ where
 
                         let temp_storage = RowArena::new();
                         let datum_iter = key.into_datum_iter(None);
-                        let mut datums_local = datums1.borrow();
+                        let mut datums_local = datums2.borrow();
                         datums_local.extend(datum_iter);
-                        let key_len = datums_local.len();
 
-                        // Merge results into the order they were asked for.
-                        for typ in aggregate_types.iter() {
+                        for typ in aggregate_types_err.iter() {
                             let datum = match typ {
                                 ReductionType::Accumulable => accumulable.next(),
                                 ReductionType::Hierarchical => hierarchical.next(),
                                 ReductionType::Basic => basic.next(),
                             };
-                            let Some(datum) = datum else { return };
-                            datums_local.push(datum);
-                        }
-
-                        // If we did not have enough values to stitch together, then we do not
-                        // generate an output row. Not outputting here corresponds to the semantics
-                        // of an equi-join on the key, similarly to the proposal in PR #17013.
-                        //
-                        // Note that we also do not want to have anything left over to stich. If we
-                        // do, then we also have an error, reported elsewhere, and would violate
-                        // join semantics.
-                        if (accumulable.next(), hierarchical.next(), basic.next())
-                            == (None, None, None)
-                        {
-                            if let Some(row) = evaluate_mfp_after(
-                                &mfp_after1,
-                                &mut datums_local,
-                                &temp_storage,
-                                key_len,
-                            ) {
-                                output.push((row, 1));
+                            if let Some(datum) = datum {
+                                datums_local.push(datum);
+                            } else {
+                                // We cannot properly reconstruct a row if aggregates are missing.
+                                // This situation is not expected, so we log an error if it occurs.
+                                let message = "Missing value for key in ReduceCollation";
+                                error_logger.log(message, &format!("typ={typ:?}, key={key:?}"));
+                                output.push((EvalError::Internal(message.to_string()).into(), 1));
+                                return;
                             }
                         }
-                    }
-                },
-                move |key, input, output| {
-                    if input.len() != n_distinct_aggregate_types {
-                        // We expected to stitch together exactly as many aggregate types as requested
-                        // by the collation. If we cannot, we log an error and produce no output for
-                        // this key.
-                        let message = "Mismatched aggregates for key in ReduceCollation";
-                        error_logger.log(
-                            message,
-                            &format!(
-                                "key={key:?}, n_aggregates_requested={requested}, \
-                                 n_distinct_aggregate_types={n_distinct_aggregate_types}",
-                                requested = input.len(),
-                            ),
-                        );
-                        output.push((EvalError::Internal(message.to_string()).into(), 1));
-                        return;
-                    }
 
-                    let mut accumulable = DatumList::empty().iter();
-                    let mut hierarchical = DatumList::empty().iter();
-                    let mut basic = DatumList::empty().iter();
-                    for (item, _) in input.iter() {
-                        let reduction_type = &item.0;
-                        let row = &item.1;
-                        match reduction_type {
-                            ReductionType::Accumulable => accumulable = row.iter(),
-                            ReductionType::Hierarchical => hierarchical = row.iter(),
-                            ReductionType::Basic => basic = row.iter(),
-                        }
-                    }
-
-                    let temp_storage = RowArena::new();
-                    let datum_iter = key.into_datum_iter(None);
-                    let mut datums_local = datums2.borrow();
-                    datums_local.extend(datum_iter);
-
-                    for typ in aggregate_types_err.iter() {
-                        let datum = match typ {
-                            ReductionType::Accumulable => accumulable.next(),
-                            ReductionType::Hierarchical => hierarchical.next(),
-                            ReductionType::Basic => basic.next(),
-                        };
-                        if let Some(datum) = datum {
-                            datums_local.push(datum);
-                        } else {
-                            // We cannot properly reconstruct a row if aggregates are missing.
-                            // This situation is not expected, so we log an error if it occurs.
-                            let message = "Missing value for key in ReduceCollation";
-                            error_logger.log(message, &format!("typ={typ:?}, key={key:?}"));
+                        // Note that we also do not want to have anything left over to stich.
+                        // If we do, then we also have an error and would violate join semantics.
+                        if (accumulable.next(), hierarchical.next(), basic.next())
+                            != (None, None, None)
+                        {
+                            let message = "Rows too large for key in ReduceCollation";
+                            error_logger.log(message, &format!("key={key:?}"));
                             output.push((EvalError::Internal(message.to_string()).into(), 1));
-                            return;
                         }
-                    }
 
-                    // Note that we also do not want to have anything left over to stich.
-                    // If we do, then we also have an error and would violate join semantics.
-                    if (accumulable.next(), hierarchical.next(), basic.next()) != (None, None, None)
-                    {
-                        let message = "Rows too large for key in ReduceCollation";
-                        error_logger.log(message, &format!("key={key:?}"));
-                        output.push((EvalError::Internal(message.to_string()).into(), 1));
-                    }
-
-                    // Finally, if `mfp_after` can produce errors, then we should also report
-                    // these here.
-                    let Some(mfp) = &mfp_after2 else { return };
-                    if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
-                        output.push((e.into(), 1));
-                    }
-                },
-            );
+                        // Finally, if `mfp_after` can produce errors, then we should also report
+                        // these here.
+                        let Some(mfp) = &mfp_after2 else { return };
+                        if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
+                        {
+                            output.push((e.into(), 1));
+                        }
+                    },
+                );
         (oks, errs.as_collection(|_, v| v.into_owned()))
     }
 
-    fn dispatch_build_distinct<S>(
+    fn dispatch_build_distinct(
         &self,
-        collection: Collection<S, (Row, Row), Diff>,
+        collection: Collection<G, (Row, Row), Diff>,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
-        SpecializedArrangement<S>,
-        Collection<S, DataflowError, Diff>,
-    )
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
+        SpecializedArrangement<G>,
+        Collection<G, DataflowError, Diff>,
+    ) {
         if self.enable_specialized_arrangements {
             let collection = collection.map(|(k, v)| {
                 assert!(v.is_empty());
                 (k, ())
             });
-            let (arrangement, errs) = self
-                .build_distinct::<RowSpine<_, _>, RowValSpine<_, _, _>, _>(
-                    collection,
-                    " [val: empty]",
-                    mfp_after,
-                );
+            let (arrangement, errs) = self.build_distinct::<RowSpine<_, _>, RowValSpine<_, _, _>>(
+                collection,
+                " [val: empty]",
+                mfp_after,
+            );
             (SpecializedArrangement::RowUnit(arrangement), errs)
         } else {
             let collection = collection.inspect(|((_, v), _, _)| assert!(v.is_empty()));
             let (arrangement, errs) = self
-                .build_distinct::<RowRowSpine<_, _>, RowValSpine<_, _, _>, _>(
+                .build_distinct::<RowRowSpine<_, _>, RowValSpine<_, _, _>>(
                     collection, "", mfp_after,
                 );
             (SpecializedArrangement::RowRow(arrangement), errs)
@@ -531,23 +506,22 @@ where
     }
 
     /// Build the dataflow to compute the set of distinct keys.
-    fn build_distinct<T1, T2, S>(
+    fn build_distinct<T1, T2>(
         &self,
-        collection: Collection<S, (Row, T1::ValOwned), Diff>,
+        collection: Collection<G, (Row, T1::ValOwned), Diff>,
         tag: &str,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
-        Arranged<S, TraceAgent<T1>>,
-        Collection<S, DataflowError, Diff>,
+        Arranged<G, TraceAgent<T1>>,
+        Collection<G, DataflowError, Diff>,
     )
     where
-        S: Scope<Timestamp = G::Timestamp>,
         T1: Trace<KeyOwned = Row, Time = G::Timestamp, Diff = Diff> + 'static,
         T1::Batch: Batch,
         T1::Batcher: Batcher<Item = ((Row, T1::ValOwned), G::Timestamp, Diff)>,
         for<'a> T1::Key<'a>: std::fmt::Debug + IntoRowByTypes,
         T1::ValOwned: Columnation + ExchangeData + Default,
-        Arranged<S, TraceAgent<T1>>: ArrangementSize,
+        Arranged<G, TraceAgent<T1>>: ArrangementSize,
         T2: for<'a> Trace<
                 Key<'a> = T1::Key<'a>,
                 KeyOwned = Row,
@@ -557,7 +531,7 @@ where
             > + 'static,
         T2::Batch: Batch,
         T2::Batcher: Batcher<Item = ((Row, T2::ValOwned), G::Timestamp, Diff)>,
-        Arranged<S, TraceAgent<T2>>: ArrangementSize,
+        Arranged<G, TraceAgent<T2>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
 
@@ -629,15 +603,12 @@ where
     /// For each aggregate, we render a different reduce operator, and then fuse
     /// results together into a final arrangement that presents all the results
     /// in the order specified by `aggrs`.
-    fn build_basic_aggregates<S>(
+    fn build_basic_aggregates(
         &self,
-        input: Collection<S, (Row, Row), Diff>,
+        input: Collection<G, (Row, Row), Diff>,
         aggrs: Vec<(usize, AggregateExpr)>,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
+    ) -> (RowRowArrangement<G>, Collection<G, DataflowError, Diff>) {
         // We are only using this function to render multiple basic aggregates and
         // stitch them together. If that's not true we should complain.
         if aggrs.len() <= 1 {
@@ -725,20 +696,17 @@ where
     /// Build the dataflow to compute a single basic aggregation.
     ///
     /// This method also applies distinctness if required.
-    fn build_basic_aggregate<S>(
+    fn build_basic_aggregate(
         &self,
-        input: Collection<S, (Row, Row), Diff>,
+        input: Collection<G, (Row, Row), Diff>,
         index: usize,
         aggr: &AggregateExpr,
         validating: bool,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
-        RowRowArrangement<S>,
-        Option<Collection<S, DataflowError, Diff>>,
-    )
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
+        RowRowArrangement<G>,
+        Option<Collection<G, DataflowError, Diff>>,
+    ) {
         let AggregateExpr {
             func,
             expr: _,
@@ -760,7 +728,7 @@ where
         if distinct {
             if validating {
                 let (oks, errs) = self
-                    .build_reduce_inaccumulable_distinct::<_, KeyValSpine<_, Result<(), String>, _, _>>(partial, None)
+                    .build_reduce_inaccumulable_distinct::<KeyValSpine<_, Result<(), String>, _, _>>(partial, None)
                     .as_collection(|k, v| (k.into_owned(), v.into_owned()))
                     .map_fallible("Demux Errors", move |(key, result)| match result {
                         Ok(()) => Ok(key),
@@ -770,7 +738,7 @@ where
                 partial = oks;
             } else {
                 partial = self
-                    .build_reduce_inaccumulable_distinct::<_, KeySpine<_, _, _>>(
+                    .build_reduce_inaccumulable_distinct::<KeySpine<_, _, _>>(
                         partial,
                         Some(" [val: empty]"),
                     )
@@ -883,13 +851,12 @@ where
         (oks, err_output)
     }
 
-    fn build_reduce_inaccumulable_distinct<S, Tr>(
+    fn build_reduce_inaccumulable_distinct<Tr>(
         &self,
-        input: Collection<S, (Row, Row), Diff>,
+        input: Collection<G, (Row, Row), Diff>,
         name_tag: Option<&str>,
-    ) -> Arranged<S, TraceAgent<Tr>>
+    ) -> Arranged<G, TraceAgent<Tr>>
     where
-        S: Scope<Timestamp = G::Timestamp>,
         Tr::ValOwned: MaybeValidatingRow<(), String>,
         Tr: Trace
             + for<'a> TraceReader<
@@ -900,7 +867,7 @@ where
             > + 'static,
         Tr::Batch: Batch,
         Tr::Batcher: Batcher<Item = (((Row, Row), Tr::ValOwned), G::Timestamp, Diff)>,
-        Arranged<S, TraceAgent<Tr>>: ArrangementSize,
+        Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
 
@@ -942,36 +909,30 @@ where
     /// Note that this implementation currently ignores the distinct bit because we
     /// currently only perform min / max hierarchically and the reduction tree
     /// efficiently suppresses non-distinct updates.
-    fn build_bucketed<S>(
-        &self,
-        input: Collection<S, (Row, Row), Diff>,
+    fn build_bucketed(
+        &mut self,
+        input: Collection<G, (Row, Row), Diff>,
         bucketed_plan: BucketedPlan,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
-        input.scope().region_named("ReduceHierarchical", |inner| {
-            self.build_bucketed_inner(input, bucketed_plan, mfp_after, inner)
+    ) -> (RowRowArrangement<G>, Collection<G, DataflowError, Diff>) {
+        self.region_named("ReduceHierarchical", |inner| {
+            let input = input.enter_region(&inner.scope);
+            let (arranged, errors) = inner.build_bucketed_inner(input, bucketed_plan, mfp_after);
+            (arranged.leave_region(), errors.leave_region())
         })
     }
 
-    fn build_bucketed_inner<S>(
+    fn build_bucketed_inner(
         &self,
-        input: Collection<S, (Row, Row), Diff>,
+        input: Collection<G, (Row, Row), Diff>,
         BucketedPlan {
             aggr_funcs,
             skips,
             buckets,
         }: BucketedPlan,
         mfp_after: Option<SafeMfpPlan>,
-        inner: &mut Child<S, S::Timestamp>,
-    ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
-        let input = input.enter(inner);
-        let mut err_output: Option<Collection<S, _, _>> = None;
+    ) -> (RowRowArrangement<G>, Collection<G, DataflowError, Diff>) {
+        let mut err_output: Option<Collection<G, _, _>> = None;
 
         // Gather the relevant values into a vec of rows ordered by aggregation_index
         let input = input.map(move |(key, row)| {
@@ -997,7 +958,7 @@ where
             // stream or produce correct data in the output stream.
             let negated_output = if err_output.is_none() {
                 let (oks, errs) = self
-                    .build_bucketed_negated_output::<_, Result<Vec<Row>, (Row, u64)>>(
+                    .build_bucketed_negated_output::<Result<Vec<Row>, (Row, u64)>>(
                         &input,
                         aggr_funcs.clone(),
                     )
@@ -1014,10 +975,10 @@ where
                             Ok(values) => Ok((key, values)),
                         },
                     );
-                err_output = Some(errs.leave_region());
+                err_output = Some(errs);
                 oks
             } else {
-                self.build_bucketed_negated_output::<_, Vec<Row>>(&input, aggr_funcs.clone())
+                self.build_bucketed_negated_output::<Vec<Row>>(&input, aggr_funcs.clone())
             };
 
             stage = negated_output
@@ -1085,16 +1046,15 @@ where
                         }
                     },
                 )
-                .as_collection(|_, v| v.into_owned())
-                .leave_region();
+                .as_collection(|_, v| v.into_owned());
             if let Some(e) = &err_output {
                 err_output = Some(e.concat(&errs));
             } else {
                 err_output = Some(errs);
             }
         }
-        let arranged_output = arranged
-            .mz_reduce_abelian::<_, RowRowSpine<_, _>>("ReduceMinsMaxes", {
+        let arranged_output =
+            arranged.mz_reduce_abelian::<_, RowRowSpine<_, _>>("ReduceMinsMaxes", {
                 move |key, source, target| {
                     let temp_storage = RowArena::new();
                     let datum_iter = key.into_datum_iter(None);
@@ -1114,8 +1074,7 @@ where
                         target.push((row, 1));
                     }
                 }
-            })
-            .leave_region();
+            });
 
         (
             arranged_output,
@@ -1134,13 +1093,12 @@ where
     /// `validating` indicates whether we want this stage to perform error detection
     /// for invalid accumulations. Once a stage is clean of such errors, subsequent
     /// stages can skip validation.
-    fn build_bucketed_negated_output<S, R>(
+    fn build_bucketed_negated_output<R>(
         &self,
-        input: &Collection<S, ((Row, u64), Vec<Row>), Diff>,
+        input: &Collection<G, ((Row, u64), Vec<Row>), Diff>,
         aggrs: Vec<AggregateFunc>,
-    ) -> Collection<S, ((Row, u64), R), Diff>
+    ) -> Collection<G, ((Row, u64), R), Diff>
     where
-        S: Scope<Timestamp = G::Timestamp>,
         R: MaybeValidatingRow<Vec<Row>, (Row, u64)>,
     {
         let error_logger = self.error_logger();
@@ -1197,19 +1155,16 @@ where
 
     /// Build the dataflow to compute and arrange multiple hierarchical aggregations
     /// on monotonic inputs.
-    fn build_monotonic<S>(
+    fn build_monotonic(
         &self,
-        collection: Collection<S, (Row, Row), Diff>,
+        collection: Collection<G, (Row, Row), Diff>,
         MonotonicPlan {
             aggr_funcs,
             skips,
             must_consolidate,
         }: MonotonicPlan,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
+    ) -> (RowRowArrangement<G>, Collection<G, DataflowError, Diff>) {
         // Gather the relevant values into a vec of rows ordered by aggregation_index
         let collection = collection
             .map(move |(key, row)| {
@@ -1316,19 +1271,16 @@ where
     /// they can be accumulated in place. The `count` operator promotes the accumulated
     /// values to data, at which point a final map applies operator-specific logic to
     /// yield the final aggregate.
-    fn build_accumulable<S>(
+    fn build_accumulable(
         &self,
-        collection: Collection<S, (Row, Row), Diff>,
+        collection: Collection<G, (Row, Row), Diff>,
         AccumulablePlan {
             full_aggrs,
             simple_aggrs,
             distinct_aggrs,
         }: AccumulablePlan,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
+    ) -> (RowRowArrangement<G>, Collection<G, DataflowError, Diff>) {
         // we must have called this function with something to reduce
         if full_aggrs.len() == 0 || simple_aggrs.len() + distinct_aggrs.len() != full_aggrs.len() {
             self.error_logger().soft_panic_or_log(

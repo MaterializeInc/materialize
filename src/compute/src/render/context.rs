@@ -302,14 +302,6 @@ impl<S: Scope> SpecializedArrangement<S>
 where
     <S as ScopeParent>::Timestamp: Lattice + Columnation,
 {
-    /// The scope of the underlying arrangement's stream.
-    pub fn scope(&self) -> S {
-        match self {
-            SpecializedArrangement::RowUnit(inner) => inner.stream.scope(),
-            SpecializedArrangement::RowRow(inner) => inner.stream.scope(),
-        }
-    }
-
     /// Brings the underlying arrangement into a region.
     pub fn enter_region<'a>(
         &self,
@@ -657,14 +649,6 @@ where
     T: Timestamp + Lattice + Columnation,
     S::Timestamp: Lattice + Refines<T> + Columnation,
 {
-    /// The scope containing the collection bundle.
-    pub fn scope(&self) -> S {
-        match self {
-            ArrangementFlavor::Local(oks, _errs) => oks.scope(),
-            ArrangementFlavor::Trace(_gid, oks, _errs) => oks.scope(),
-        }
-    }
-
     /// Brings the arrangement flavor into a region.
     pub fn enter_region<'a>(
         &self,
@@ -751,19 +735,6 @@ where
             keys.push(MirScalarExpr::Column(column));
         }
         Self::from_expressions(keys, arrangements)
-    }
-
-    /// The scope containing the collection bundle.
-    pub fn scope(&self) -> S {
-        if let Some((oks, _errs)) = &self.collection {
-            oks.inner.scope()
-        } else {
-            self.arranged
-                .values()
-                .next()
-                .expect("Must contain a valid collection")
-                .scope()
-        }
     }
 
     /// Brings the collection bundle into a region.
