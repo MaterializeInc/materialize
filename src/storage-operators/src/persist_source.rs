@@ -327,11 +327,20 @@ where
         Arc::new(metadata.relation_desc),
         Arc::new(UnitSchema),
         move |stats, frontier| {
-            let time_range = if let Some(lower) = frontier.as_option().copied() {
-                ResultSpec::value_between(Datum::MzTimestamp(lower), Datum::MzTimestamp(upper))
-            } else {
-                ResultSpec::nothing()
+            let Some(lower) = frontier.as_option().copied() else {
+                // If the frontier has advanced to the empty antichain,
+                // we'll never emit any rows from any part.
+                return false;
             };
+
+            if lower > upper {
+                // The frontier timestamp is larger than the until of the dataflow:
+                // anything from this part will necessarily be filtered out.
+                return false;
+            }
+
+            let time_range =
+                ResultSpec::value_between(Datum::MzTimestamp(lower), Datum::MzTimestamp(upper));
             if let Some(plan) = &filter_plan {
                 let stats = RelationPartStats::new(&filter_name, &metrics, &desc, stats);
                 filter_may_match(desc.typ(), time_range, stats, plan)
