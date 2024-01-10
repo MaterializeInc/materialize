@@ -19,16 +19,19 @@ SERVICES = [
     Minio(setup_materialize=True),
     Cockroach(setup_materialize=True),
     Materialized(catalog_store="stash"),
-    Testdrive(),
+    Testdrive(no_reset=True),
 ]
 
 
 def workflow_default(c: Composition) -> None:
     workflow_test_migration_and_rollback(c)
     workflow_test_epoch_migration(c)
-    # for i, name in enumerate(c.workflows):
-    #     with c.test_case(name):
-    #         c.workflow(name)
+
+    for i, name in enumerate(c.workflows):
+        if name == "default":
+            continue
+        with c.test_case(name):
+            c.workflow(name)
 
 
 def workflow_test_migration_and_rollback(c: Composition) -> None:
@@ -36,83 +39,68 @@ def workflow_test_migration_and_rollback(c: Composition) -> None:
     c.up("minio", "cockroach")
 
     # Create some data in .
-    with c.override(
-            Testdrive(no_reset=True),
-    ):
-        c.up("testdrive", persistent=True)
-        c.up("materialized")
-        c.testdrive(
-            input=dedent(
-                """
-        > CREATE DATABASE db3
-    """
-            )
+    c.up("testdrive", persistent=True)
+    c.up("materialized")
+    c.testdrive(
+        input=dedent(
+            """
+    > CREATE DATABASE db3
+"""
         )
-        c.down("materialized")
+    )
+    c.kill("materialized")
 
     # Switch to persist catalog.
-    # with c.override(
-    #         Testdrive(no_reset=True),
-    # ):
-    #     c.up("testdrive", persistent=True)
-    #     c.up("materialized")
-    #     c.testdrive(
-    #         input=dedent(
-    #             """
-    #     $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
-    #     ALTER SYSTEM SET catalog_kind TO 'persist'
-    # """
-    #         )
+    # c.up("testdrive", persistent=True)
+    # c.up("materialized")
+    # c.testdrive(
+    #     input=dedent(
+    #         """
+    # $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+    # ALTER SYSTEM SET catalog_kind TO 'persist'
+    #
     #     )
-    #     c.down("materialized")
+    # )
+    # c.kill("materialized")
 
     # Reboot and check that database still exists.
-    with c.override(
-            Testdrive(no_reset=True),
-    ):
-        c.up("testdrive", persistent=True)
-        c.up("materialized")
-        c.testdrive(
-            input=dedent(
-                """
-        > SELECT name FROM mz_databases WHERE id LIKE 'u%' AND NAME != 'materialize';
-        db3
-        
-        > CREATE DATABASE db4
-    """
-            )
+    c.up("testdrive", persistent=True)
+    c.up("materialized")
+    c.testdrive(
+        input=dedent(
+            """
+    > SELECT name FROM mz_databases WHERE id LIKE 'u%' AND NAME != 'materialize';
+    db3
+
+    > CREATE DATABASE db4
+"""
         )
+    )
 
     # # Rollback to stash.
-    # with c.override(
-    #         Testdrive(no_reset=True),
-    # ):
-    #     c.up("testdrive", persistent=True)
-    #     c.testdrive(
-    #         input=dedent(
-    #             """
-    #     $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
-    #     ALTER SYSTEM SET catalog_kind TO 'stash'
-    # """
-    #         )
+    # c.up("testdrive", persistent=True)
+    # c.testdrive(
+    #     input=dedent(
+    #         """
+    # $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+    # ALTER SYSTEM SET catalog_kind TO 'stash'
+    #
     #     )
-    #     c.down("materialized")
+    # )
+    # c.kill("materialized")
     #
     # # Reboot and check that database still exists.
-    # with c.override(
-    #         Testdrive(no_reset=True),
-    # ):
-    #     c.up("testdrive", persistent=True)
-    #     c.up("materialized")
-    #     c.testdrive(
-    #         input=dedent(
-    #             """
-    #     > SELECT name FROM mz_databases WHERE id LIKE 'u%' AND NAME != 'materialize';
-    #     db3
-    #     db4
+    # c.up("testdrive", persistent=True)
+    # c.up("materialized")
+    # c.testdrive(
+    #     input=dedent(
+    #         """
+    # > SELECT name FROM mz_databases WHERE id LIKE 'u%' AND NAME != 'materialize';
+    # db3
+    # db4
     # """
-    #         )
     #     )
+    # )
 
 
 def workflow_test_epoch_migration(c: Composition) -> None:
@@ -121,62 +109,53 @@ def workflow_test_epoch_migration(c: Composition) -> None:
     # c.up("minio", "cockroach")
     #
     # # Switch to emergency stash catalog so only the stash epoch is incremented.
-    # with c.override(
-    #         Testdrive(no_reset=True),
-    # ):
-    #     c.up("testdrive", persistent=True)
-    #     c.up("materialized")
-    #     c.testdrive(
-    #         input=dedent(
-    #             """
-    #     $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
-    #     ALTER SYSTEM SET catalog_kind TO 'emergency-stash'
+    # c.up("testdrive", persistent=True)
+    # c.up("materialized")
+    # c.testdrive(
+    #     input=dedent(
+    #         """
+    # $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+    # ALTER SYSTEM SET catalog_kind TO 'emergency-stash'
     # """
-    #         )
     #     )
-    #     c.down("materialized")
+    # )
+    # c.kill("materialized")
     #
     # # Start and stop Materialize with stash multiple times to increment the epoch.
     # for _ in range(0, 2):
     #     c.up("materialized")
-    #     c.down("materialized")
+    #     c.kill("materialized")
     #
     # # Switch to persist catalog.
-    # with c.override(
-    #         Testdrive(no_reset=True),
-    # ):
-    #     c.up("testdrive", persistent=True)
-    #     c.up("materialized")
-    #     c.testdrive(
-    #         input=dedent(
-    #             """
-    #     $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
-    #     ALTER SYSTEM SET catalog_kind TO 'persist'
+    # c.up("testdrive", persistent=True)
+    # c.up("materialized")
+    # c.testdrive(
+    #     input=dedent(
+    #         """
+    # $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+    # ALTER SYSTEM SET catalog_kind TO 'persist'
     # """
-    #         )
     #     )
-    #     c.down("materialized")
+    # )
+    #     c.kill("materialized")
     #
     # # Start and stop Materialize with persist multiple times to increment the epoch.
     # # for _ in range(0, 1):
     # c.up("materialized")
-    # # c.down("materialized")
+    # # c.kill("materialized")
     # #
     # # # Switch to stash catalog.
-    # # with c.override(
-    # #         Testdrive(no_reset=True),
-    # # ):
-    # #     c.up("testdrive", persistent=True)
-    # #     c.up("materialized")
-    # #     c.testdrive(
-    # #         input=dedent(
-    # #             """
-    # #     $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
-    # #     ALTER SYSTEM SET catalog_kind TO 'stash'
+    # # c.up("testdrive", persistent=True)
+    # # c.up("materialized")
+    # # c.testdrive(
+    # #     input=dedent(
+    # #         """
+    # # $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+    # # ALTER SYSTEM SET catalog_kind TO 'stash'
     # # """
-    # #         )
     # #     )
-    # #     c.down("materialized")
+    # # )
+    # # c.kill("materialized")
     # #
     # # c.up("materialized")
-    # # c.down("materialized")
+    # # c.kill("materialized")
