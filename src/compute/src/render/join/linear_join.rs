@@ -15,6 +15,8 @@ use std::time::{Duration, Instant};
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
+use differential_dataflow::operators::arrange::TraceAgent;
+use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::{AsCollection, Collection, Data};
 use mz_compute_types::dataflows::YieldSpec;
@@ -35,6 +37,7 @@ use crate::render::context::{
     SpecializedArrangementImport,
 };
 use crate::render::join::mz_join_core::mz_join_core;
+use crate::row_spine::RowRowSpine;
 
 /// Available linear join implementations.
 ///
@@ -304,13 +307,6 @@ where
             joined = JoinedFlavor::Local(SpecializedArrangement::RowRow(arranged));
         }
 
-        use crate::typedefs::{
-            RowAgent, RowEnter, RowRowAgent, RowRowEnter, RowRowSpine, RowSpine,
-        };
-        use differential_dataflow::operators::arrange::TraceAgent;
-        use differential_dataflow::trace::wrappers::enter::TraceEnter;
-        use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
-
         // Demultiplex the four different cross products of arrangement types we might have.
         let arrangement = lookup_relation
             .arrangement(&lookup_key[..])
@@ -322,10 +318,45 @@ where
             JoinedFlavor::Local(local) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = match (local, oks) {
-                        (SpecializedArrangement::RowUnit(prev_keyed), SpecializedArrangement::RowUnit(next_input)) => self.differential_join_inner::<_,TraceAgent<RowSpine<_, _>>,TraceAgent<RowSpine<_, _>>>(prev_keyed, next_input, None, Some(vec![]), Some(vec![]), closure),
-                        (SpecializedArrangement::RowUnit(prev_keyed), SpecializedArrangement::RowRow(next_input))  => self.differential_join_inner::<_,TraceAgent<RowSpine<_, _>>,TraceAgent<RowRowSpine<_, _>>>(prev_keyed, next_input, None, Some(vec![]), None, closure),
-                        (SpecializedArrangement::RowRow(prev_keyed),  SpecializedArrangement::RowUnit(next_input)) => self.differential_join_inner::<_,TraceAgent<RowRowSpine<_, _>>,TraceAgent<RowSpine<_, _>>>(prev_keyed, next_input, None, None, Some(vec![]), closure),
-                        (SpecializedArrangement::RowRow(prev_keyed),  SpecializedArrangement::RowRow(next_input))  => self.differential_join_inner::<_,TraceAgent<RowRowSpine<_, _>>,TraceAgent<RowRowSpine<_, _>>>(prev_keyed, next_input, None, None, None, closure),
+                        (
+                            SpecializedArrangement::RowUnit(prev_keyed),
+                            SpecializedArrangement::RowUnit(next_input),
+                        ) => self.differential_join_inner::<_, TraceAgent<_>, TraceAgent<_>>(
+                            prev_keyed,
+                            next_input,
+                            None,
+                            Some(vec![]),
+                            Some(vec![]),
+                            closure,
+                        ),
+                        (
+                            SpecializedArrangement::RowUnit(prev_keyed),
+                            SpecializedArrangement::RowRow(next_input),
+                        ) => self.differential_join_inner::<_, TraceAgent<_>, TraceAgent<_>>(
+                            prev_keyed,
+                            next_input,
+                            None,
+                            Some(vec![]),
+                            None,
+                            closure,
+                        ),
+                        (
+                            SpecializedArrangement::RowRow(prev_keyed),
+                            SpecializedArrangement::RowUnit(next_input),
+                        ) => self.differential_join_inner::<_, TraceAgent<_>, TraceAgent<_>>(
+                            prev_keyed,
+                            next_input,
+                            None,
+                            None,
+                            Some(vec![]),
+                            closure,
+                        ),
+                        (
+                            SpecializedArrangement::RowRow(prev_keyed),
+                            SpecializedArrangement::RowRow(next_input),
+                        ) => self.differential_join_inner::<_, TraceAgent<_>, TraceAgent<_>>(
+                            prev_keyed, next_input, None, None, None, closure,
+                        ),
                     };
 
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
@@ -334,10 +365,45 @@ where
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = match (local, oks) {
-                        (SpecializedArrangement::RowUnit(prev_keyed), SpecializedArrangementImport::RowUnit(next_input)) => self.differential_join_inner::<_,TraceAgent<RowSpine<_, _>>,RowEnter<T, Diff, G::Timestamp>>(prev_keyed, next_input, None, Some(vec![]), Some(vec![]), closure),
-                        (SpecializedArrangement::RowUnit(prev_keyed), SpecializedArrangementImport::RowRow(next_input))  => self.differential_join_inner::<_,TraceAgent<RowSpine<_, _>>,RowRowEnter<T, Diff, G::Timestamp>>(prev_keyed, next_input, None, Some(vec![]), None, closure),
-                        (SpecializedArrangement::RowRow(prev_keyed),  SpecializedArrangementImport::RowUnit(next_input)) => self.differential_join_inner::<_,TraceAgent<RowRowSpine<_, _>>,RowEnter<T, Diff, G::Timestamp>>(prev_keyed, next_input, None, None, Some(vec![]), closure),
-                        (SpecializedArrangement::RowRow(prev_keyed),  SpecializedArrangementImport::RowRow(next_input))  => self.differential_join_inner::<_,TraceAgent<RowRowSpine<_, _>>,RowRowEnter<T, Diff, G::Timestamp>>(prev_keyed, next_input, None, None, None, closure),
+                        (
+                            SpecializedArrangement::RowUnit(prev_keyed),
+                            SpecializedArrangementImport::RowUnit(next_input),
+                        ) => self.differential_join_inner::<_, TraceAgent<_>, TraceEnter<_, _>>(
+                            prev_keyed,
+                            next_input,
+                            None,
+                            Some(vec![]),
+                            Some(vec![]),
+                            closure,
+                        ),
+                        (
+                            SpecializedArrangement::RowUnit(prev_keyed),
+                            SpecializedArrangementImport::RowRow(next_input),
+                        ) => self.differential_join_inner::<_, TraceAgent<_>, TraceEnter<_, _>>(
+                            prev_keyed,
+                            next_input,
+                            None,
+                            Some(vec![]),
+                            None,
+                            closure,
+                        ),
+                        (
+                            SpecializedArrangement::RowRow(prev_keyed),
+                            SpecializedArrangementImport::RowUnit(next_input),
+                        ) => self.differential_join_inner::<_, TraceAgent<_>, TraceEnter<_, _>>(
+                            prev_keyed,
+                            next_input,
+                            None,
+                            None,
+                            Some(vec![]),
+                            closure,
+                        ),
+                        (
+                            SpecializedArrangement::RowRow(prev_keyed),
+                            SpecializedArrangementImport::RowRow(next_input),
+                        ) => self.differential_join_inner::<_, TraceAgent<_>, TraceEnter<_, _>>(
+                            prev_keyed, next_input, None, None, None, closure,
+                        ),
                     };
 
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
@@ -348,58 +414,46 @@ where
             JoinedFlavor::Trace(trace) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = match (trace, oks) {
-                            (
-                                SpecializedArrangementImport::RowUnit(prev_keyed),
-                                SpecializedArrangement::RowUnit(next_input),
-                            ) => self.differential_join_inner::<_, TraceEnter<
-                                TraceFrontier<RowAgent<T, Diff>>,
-                                G::Timestamp,
-                            >, TraceAgent<RowSpine<_, _>>>(
-                                prev_keyed,
-                                next_input,
-                                None,
-                                Some(vec![]),
-                                Some(vec![]),
-                                closure,
-                            ),
-                            (
-                                SpecializedArrangementImport::RowUnit(prev_keyed),
-                                SpecializedArrangement::RowRow(next_input),
-                            ) => self.differential_join_inner::<_, TraceEnter<
-                                TraceFrontier<RowAgent<T, Diff>>,
-                                G::Timestamp,
-                            >, TraceAgent<RowRowSpine<_, _>>>(
-                                prev_keyed,
-                                next_input,
-                                None,
-                                Some(vec![]),
-                                None,
-                                closure,
-                            ),
-                            (
-                                SpecializedArrangementImport::RowRow(prev_keyed),
-                                SpecializedArrangement::RowUnit(next_input),
-                            ) => self.differential_join_inner::<_, TraceEnter<
-                                TraceFrontier<RowRowAgent<T, Diff>>,
-                                G::Timestamp,
-                            >, TraceAgent<RowSpine<_, _>>>(
-                                prev_keyed,
-                                next_input,
-                                None,
-                                None,
-                                Some(vec![]),
-                                closure,
-                            ),
-                            (
-                                SpecializedArrangementImport::RowRow(prev_keyed),
-                                SpecializedArrangement::RowRow(next_input),
-                            ) => self.differential_join_inner::<_, TraceEnter<
-                                TraceFrontier<RowRowAgent<T, Diff>>,
-                                G::Timestamp,
-                            >, TraceAgent<RowRowSpine<_, _>>>(
-                                prev_keyed, next_input, None, None, None, closure,
-                            ),
-                        };
+                        (
+                            SpecializedArrangementImport::RowUnit(prev_keyed),
+                            SpecializedArrangement::RowUnit(next_input),
+                        ) => self.differential_join_inner::<_, TraceEnter<_, _>, TraceAgent<_>>(
+                            prev_keyed,
+                            next_input,
+                            None,
+                            Some(vec![]),
+                            Some(vec![]),
+                            closure,
+                        ),
+                        (
+                            SpecializedArrangementImport::RowUnit(prev_keyed),
+                            SpecializedArrangement::RowRow(next_input),
+                        ) => self.differential_join_inner::<_, TraceEnter<_, _>, TraceAgent<_>>(
+                            prev_keyed,
+                            next_input,
+                            None,
+                            Some(vec![]),
+                            None,
+                            closure,
+                        ),
+                        (
+                            SpecializedArrangementImport::RowRow(prev_keyed),
+                            SpecializedArrangement::RowUnit(next_input),
+                        ) => self.differential_join_inner::<_, TraceEnter<_, _>, TraceAgent<_>>(
+                            prev_keyed,
+                            next_input,
+                            None,
+                            None,
+                            Some(vec![]),
+                            closure,
+                        ),
+                        (
+                            SpecializedArrangementImport::RowRow(prev_keyed),
+                            SpecializedArrangement::RowRow(next_input),
+                        ) => self.differential_join_inner::<_, TraceEnter<_, _>, TraceAgent<_>>(
+                            prev_keyed, next_input, None, None, None, closure,
+                        ),
+                    };
 
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.extend(errs2);
@@ -407,60 +461,46 @@ where
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = match (trace, oks) {
-                            (
-                                SpecializedArrangementImport::RowUnit(prev_keyed),
-                                SpecializedArrangementImport::RowUnit(next_input),
-                            ) => self.differential_join_inner::<_, TraceEnter<
-                                TraceFrontier<RowAgent<T, Diff>>,
-                                G::Timestamp,
-                            >, TraceEnter<
-                                TraceFrontier<RowAgent<T, Diff>>,
-                                G::Timestamp,
-                            >>(
-                                prev_keyed,
-                                next_input,
-                                None,
-                                Some(vec![]),
-                                Some(vec![]),
-                                closure,
-                            ),
-                            (
-                                SpecializedArrangementImport::RowUnit(prev_keyed),
-                                SpecializedArrangementImport::RowRow(next_input),
-                            ) => self.differential_join_inner::<_, TraceEnter<
-                                TraceFrontier<RowAgent<T, Diff>>,
-                                G::Timestamp,
-                            >, TraceEnter<
-                                TraceFrontier<RowRowAgent<T, Diff>>,
-                                G::Timestamp,
-                            >>(
-                                prev_keyed, next_input, None, Some(vec![]), None, closure
-                            ),
-                            (
-                                SpecializedArrangementImport::RowRow(prev_keyed),
-                                SpecializedArrangementImport::RowUnit(next_input),
-                            ) => self.differential_join_inner::<_, TraceEnter<
-                                TraceFrontier<RowRowAgent<T, Diff>>,
-                                G::Timestamp,
-                            >, TraceEnter<
-                                TraceFrontier<RowAgent<T, Diff>>,
-                                G::Timestamp,
-                            >>(
-                                prev_keyed, next_input, None, None, Some(vec![]), closure
-                            ),
-                            (
-                                SpecializedArrangementImport::RowRow(prev_keyed),
-                                SpecializedArrangementImport::RowRow(next_input),
-                            ) => self.differential_join_inner::<_, TraceEnter<
-                                TraceFrontier<RowRowAgent<T, Diff>>,
-                                G::Timestamp,
-                            >, TraceEnter<
-                                TraceFrontier<RowRowAgent<T, Diff>>,
-                                G::Timestamp,
-                            >>(
-                                prev_keyed, next_input, None, None, None, closure
-                            ),
-                        };
+                        (
+                            SpecializedArrangementImport::RowUnit(prev_keyed),
+                            SpecializedArrangementImport::RowUnit(next_input),
+                        ) => self.differential_join_inner::<_, TraceEnter<_, _>, TraceEnter<_, _>>(
+                            prev_keyed,
+                            next_input,
+                            None,
+                            Some(vec![]),
+                            Some(vec![]),
+                            closure,
+                        ),
+                        (
+                            SpecializedArrangementImport::RowUnit(prev_keyed),
+                            SpecializedArrangementImport::RowRow(next_input),
+                        ) => self.differential_join_inner::<_, TraceEnter<_, _>, TraceEnter<_, _>>(
+                            prev_keyed,
+                            next_input,
+                            None,
+                            Some(vec![]),
+                            None,
+                            closure,
+                        ),
+                        (
+                            SpecializedArrangementImport::RowRow(prev_keyed),
+                            SpecializedArrangementImport::RowUnit(next_input),
+                        ) => self.differential_join_inner::<_, TraceEnter<_, _>, TraceEnter<_, _>>(
+                            prev_keyed,
+                            next_input,
+                            None,
+                            None,
+                            Some(vec![]),
+                            closure,
+                        ),
+                        (
+                            SpecializedArrangementImport::RowRow(prev_keyed),
+                            SpecializedArrangementImport::RowRow(next_input),
+                        ) => self.differential_join_inner::<_, TraceEnter<_, _>, TraceEnter<_, _>>(
+                            prev_keyed, next_input, None, None, None, closure,
+                        ),
+                    };
 
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.extend(errs2);

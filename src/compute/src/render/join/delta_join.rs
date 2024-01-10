@@ -16,7 +16,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Collection, ExchangeData, Hashable};
 use mz_compute_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
@@ -324,35 +325,29 @@ where
     G::Timestamp: crate::render::RenderTimestamp,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
-    use crate::typedefs::{RowRowSpine, RowSpine};
-    use differential_dataflow::operators::arrange::TraceAgent;
     match trace {
-        SpecializedArrangement::RowUnit(inner) => {
-            build_halfjoin::<_, TraceAgent<RowSpine<_, _>>, _>(
-                updates,
-                inner,
-                None,
-                Some(vec![]),
-                prev_key,
-                prev_thinning,
-                comparison,
-                closure,
-                shutdown_token,
-            )
-        }
-        SpecializedArrangement::RowRow(inner) => {
-            build_halfjoin::<_, TraceAgent<RowRowSpine<_, _>>, _>(
-                updates,
-                inner,
-                None,
-                None,
-                prev_key,
-                prev_thinning,
-                comparison,
-                closure,
-                shutdown_token,
-            )
-        }
+        SpecializedArrangement::RowUnit(inner) => build_halfjoin::<_, TraceAgent<_>, _>(
+            updates,
+            inner,
+            None,
+            Some(vec![]),
+            prev_key,
+            prev_thinning,
+            comparison,
+            closure,
+            shutdown_token,
+        ),
+        SpecializedArrangement::RowRow(inner) => build_halfjoin::<_, TraceAgent<_>, _>(
+            updates,
+            inner,
+            None,
+            None,
+            prev_key,
+            prev_thinning,
+            comparison,
+            closure,
+            shutdown_token,
+        ),
     }
 }
 
@@ -375,34 +370,29 @@ where
     G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T> + Columnation,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
-    use crate::typedefs::{RowEnter, RowRowEnter};
     match trace {
-        SpecializedArrangementImport::RowUnit(inner) => {
-            build_halfjoin::<_, RowEnter<T, Diff, G::Timestamp>, _>(
-                updates,
-                inner,
-                None,
-                Some(vec![]),
-                prev_key,
-                prev_thinning,
-                comparison,
-                closure,
-                shutdown_token,
-            )
-        }
-        SpecializedArrangementImport::RowRow(inner) => {
-            build_halfjoin::<_, RowRowEnter<T, Diff, G::Timestamp>, _>(
-                updates,
-                inner,
-                None,
-                None,
-                prev_key,
-                prev_thinning,
-                comparison,
-                closure,
-                shutdown_token,
-            )
-        }
+        SpecializedArrangementImport::RowUnit(inner) => build_halfjoin::<_, TraceEnter<_, _>, _>(
+            updates,
+            inner,
+            None,
+            Some(vec![]),
+            prev_key,
+            prev_thinning,
+            comparison,
+            closure,
+            shutdown_token,
+        ),
+        SpecializedArrangementImport::RowRow(inner) => build_halfjoin::<_, TraceEnter<_, _>, _>(
+            updates,
+            inner,
+            None,
+            None,
+            prev_key,
+            prev_thinning,
+            comparison,
+            closure,
+            shutdown_token,
+        ),
     }
 }
 
@@ -563,9 +553,8 @@ where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
 {
-    use crate::typedefs::{RowAgent, RowRowAgent};
     match trace {
-        SpecializedArrangement::RowUnit(inner) => build_update_stream::<_, RowAgent<_, _>>(
+        SpecializedArrangement::RowUnit(inner) => build_update_stream::<_, TraceAgent<_>>(
             inner,
             None,
             Some(vec![]),
@@ -573,7 +562,7 @@ where
             source_relation,
             initial_closure,
         ),
-        SpecializedArrangement::RowRow(inner) => build_update_stream::<_, RowRowAgent<_, _>>(
+        SpecializedArrangement::RowRow(inner) => build_update_stream::<_, TraceAgent<_>>(
             inner,
             None,
             None,
@@ -596,28 +585,23 @@ where
     T: Timestamp + Lattice + Columnation,
     G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T> + Columnation,
 {
-    use crate::typedefs::{RowEnter, RowRowEnter};
     match trace {
-        SpecializedArrangementImport::RowUnit(inner) => {
-            build_update_stream::<_, RowEnter<T, Diff, G::Timestamp>>(
-                inner,
-                None,
-                Some(vec![]),
-                as_of,
-                source_relation,
-                initial_closure,
-            )
-        }
-        SpecializedArrangementImport::RowRow(inner) => {
-            build_update_stream::<_, RowRowEnter<T, Diff, G::Timestamp>>(
-                inner,
-                None,
-                None,
-                as_of,
-                source_relation,
-                initial_closure,
-            )
-        }
+        SpecializedArrangementImport::RowUnit(inner) => build_update_stream::<_, TraceEnter<_, _>>(
+            inner,
+            None,
+            Some(vec![]),
+            as_of,
+            source_relation,
+            initial_closure,
+        ),
+        SpecializedArrangementImport::RowRow(inner) => build_update_stream::<_, TraceEnter<_, _>>(
+            inner,
+            None,
+            None,
+            as_of,
+            source_relation,
+            initial_closure,
+        ),
     }
 }
 
