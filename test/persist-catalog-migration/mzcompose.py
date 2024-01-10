@@ -136,7 +136,7 @@ def workflow_test_epoch_migration(c: Composition) -> None:
     c.up("materialized")
 
     # Check that objects still exists.
-    for i in range(0, reboots*2):
+    for i in range(0, reboots * 2):
         check_objects(c, i)
 
 
@@ -153,7 +153,7 @@ def create_objects(c: Composition, i: int):
     > CREATE MATERIALIZED VIEW mv{i} AS SELECT * FROM t{i};
     > CREATE INDEX i{i} ON t{i}(a);
     > COMMENT ON TABLE t{i} IS 'comment{i}';
-    
+
     $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
     ALTER DEFAULT PRIVILEGES FOR ROLE role{i} IN SCHEMA sc{i} GRANT SELECT ON TABLES TO PUBLIC;
     GRANT CREATEROLE ON SYSTEM TO role{i};
@@ -165,31 +165,31 @@ def create_objects(c: Composition, i: int):
 def check_objects(c: Composition, i: int):
     c.testdrive(
         input=dedent(
-            f"""    
+            f"""
     > SELECT name FROM mz_clusters WHERE id LIKE 'u%' AND name LIKE '%{i}';
     c{i}
-    
+
     > SELECT name FROM mz_databases WHERE id LIKE 'u%' AND name LIKE '%{i}';
     db{i}
-    
+
     > SELECT name FROM mz_roles WHERE id LIKE 'u%' AND name LIKE '%{i}';
     role{i}
-    
+
     > SELECT name FROM mz_schemas WHERE id LIKE 'u%' AND name LIKE '%{i}';
     sc{i}
-    
+
     > SELECT name FROM mz_objects WHERE ID LIKE 'u%' AND name LIKE '%{i}' ORDER BY name;
     i{i}
     mv{i}
     t{i}
     v{i}
-    
+
     > SELECT c.comment FROM mz_internal.mz_comments c JOIN mz_objects o ON c.id = o.id WHERE c.id LIKE 'u%' AND o.name LIKE '%{i}';
     comment{i}
-    
+
     > SELECT r.name, s.name, dp.grantee, dp.privileges FROM mz_default_privileges dp JOIN mz_roles r ON dp.role_id = r.id JOIN mz_schemas s ON dp.schema_id = s.id WHERE dp.role_id LIKE 'u%' AND r.name LIKE '%{i}';
     role{i}  sc{i}  p  r
-    
+
     > SELECT grantee, privilege_type FROM (SHOW PRIVILEGES ON SYSTEM) WHERE grantee LIKE '%{i}';
     role{i} CREATEROLE
     """
