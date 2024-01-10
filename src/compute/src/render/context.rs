@@ -54,15 +54,16 @@ use crate::typedefs::{
 /// former must refine the latter. The former is the timestamp used by the scope in question,
 /// and the latter is the timestamp of imported traces. The two may be different in the case
 /// of regions or iteration.
-pub struct Context<S: Scope, T = mz_repr::Timestamp>
+pub(super) struct Context<S, T = mz_repr::Timestamp>
 where
     T: Timestamp + Lattice + Columnation,
+    S: Scope,
     S::Timestamp: Lattice + Refines<T> + Columnation,
 {
     /// The scope within which all managed collections exist.
     ///
     /// It is an error to add any collections not contained in this scope.
-    pub(crate) scope: S,
+    pub scope: S,
     /// The debug name of the dataflow associated with this context.
     pub debug_name: String,
     /// The Timely ID of the dataflow associated with this context.
@@ -78,19 +79,21 @@ where
     /// Bindings of identifiers to collections.
     pub bindings: BTreeMap<Id, CollectionBundle<S, T>>,
     /// A token that operators can probe to know whether the dataflow is shutting down.
-    pub(super) shutdown_token: ShutdownToken,
+    pub shutdown_token: ShutdownToken,
     /// Specification for rendering linear joins.
-    pub(super) linear_join_spec: LinearJoinSpec,
-    pub(super) enable_specialized_arrangements: bool,
+    pub linear_join_spec: LinearJoinSpec,
+    pub enable_specialized_arrangements: bool,
 }
 
-impl<S: Scope> Context<S>
+impl<S, T> Context<S, T>
 where
-    S::Timestamp: Lattice + Refines<mz_repr::Timestamp> + Columnation,
+    T: Timestamp + Lattice + Columnation,
+    S: Scope,
+    S::Timestamp: Lattice + Refines<T> + Columnation,
 {
     /// Creates a new empty Context.
-    pub fn for_dataflow_in<Plan>(
-        dataflow: &DataflowDescription<Plan, CollectionMetadata>,
+    pub fn for_dataflow_in<P>(
+        dataflow: &DataflowDescription<P, CollectionMetadata, T>,
         scope: S,
     ) -> Self {
         use mz_ore::collections::CollectionExt as IteratorExt;
@@ -112,13 +115,7 @@ where
             enable_specialized_arrangements: Default::default(),
         }
     }
-}
 
-impl<S: Scope, T> Context<S, T>
-where
-    T: Timestamp + Lattice + Columnation,
-    S::Timestamp: Lattice + Refines<T> + Columnation,
-{
     /// Insert a collection bundle by an identifier.
     ///
     /// This is expected to be used to install external collections (sources, indexes, other views),
@@ -130,12 +127,14 @@ where
     ) -> Option<CollectionBundle<S, T>> {
         self.bindings.insert(id, collection)
     }
+
     /// Remove a collection bundle by an identifier.
     ///
     /// The primary use of this method is uninstalling `Let` bindings.
     pub fn remove_id(&mut self, id: Id) -> Option<CollectionBundle<S, T>> {
         self.bindings.remove(&id)
     }
+
     /// Melds a collection bundle to whatever exists.
     pub fn update_id(&mut self, id: Id, collection: CollectionBundle<S, T>) {
         if !self.bindings.contains_key(&id) {
@@ -153,12 +152,13 @@ where
             }
         }
     }
+
     /// Look up a collection bundle by an identifier.
     pub fn lookup_id(&self, id: Id) -> Option<CollectionBundle<S, T>> {
         self.bindings.get(&id).cloned()
     }
 
-    pub(super) fn error_logger(&self) -> ErrorLogger {
+    pub fn error_logger(&self) -> ErrorLogger {
         ErrorLogger::new(self.shutdown_token.clone(), self.debug_name.clone())
     }
 }
