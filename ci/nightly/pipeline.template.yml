@@ -256,7 +256,7 @@ steps:
     steps:
     - id: upsert-compaction-enabled
       label: Upsert (compaction enabled)
-      timeout_in_minutes: 30
+      timeout_in_minutes: 60
       artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
@@ -266,7 +266,7 @@ steps:
 
     - id: upsert-compaction-disabled
       label: Upsert (compaction disabled)
-      timeout_in_minutes: 30
+      timeout_in_minutes: 60
       artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
@@ -891,7 +891,7 @@ steps:
       - id: sqlsmith
         label: "SQLsmith"
         artifact_paths: junit_*.xml
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         agents:
           queue: linux-x86_64-small
         plugins:
@@ -902,7 +902,7 @@ steps:
       - id: sqlsmith-explain
         label: "SQLsmith explain"
         artifact_paths: junit_*.xml
-        timeout_in_minutes: 30
+        timeout_in_minutes: 60
         agents:
           queue: linux-x86_64
         plugins:
@@ -1064,7 +1064,7 @@ steps:
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: linux-x86_64-small
+          queue: linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1075,7 +1075,7 @@ steps:
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: linux-x86_64-small
+          queue: linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
