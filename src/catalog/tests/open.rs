@@ -66,7 +66,7 @@ async fn test_is_initialized(
     );
 
     let state = Box::new(openable_state1)
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
         .await
         .unwrap();
     state.expire().await;
@@ -127,7 +127,7 @@ async fn test_get_deployment_generation(
     );
 
     let state = Box::new(openable_state1)
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), Some(42))
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), Some(42), None)
         .await
         .unwrap();
     state.expire().await;
@@ -213,7 +213,7 @@ async fn test_open_savepoint(
     {
         // Can't open a savepoint catalog until it's been initialized.
         let err = Box::new(openable_state1)
-            .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args(), None)
+            .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
             .await
             .unwrap_err();
         match err {
@@ -224,7 +224,7 @@ async fn test_open_savepoint(
         // Initialize the catalog.
         {
             let mut state = Box::new(openable_state2)
-                .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+                .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
                 .await
                 .unwrap();
             assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
@@ -233,7 +233,7 @@ async fn test_open_savepoint(
 
         // Open catalog in check mode.
         let mut state = Box::new(openable_state3)
-            .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args(), None)
+            .open_savepoint(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
         // Savepoint catalogs do not increment the epoch.
@@ -260,7 +260,7 @@ async fn test_open_savepoint(
     {
         // Open catalog normally.
         let mut state = Box::new(openable_state4)
-            .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+            .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
         // Write should not have persisted.
@@ -369,7 +369,7 @@ async fn test_open_read_only(
 
     // Initialize the catalog.
     let mut state = Box::new(openable_state2)
-        .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
         .await
         .unwrap();
     assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
@@ -501,7 +501,7 @@ async fn test_open(
     let (snapshot, audit_log) = {
         let mut state = Box::new(openable_state1)
             // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-            .open(NOW_ZERO(), &test_bootstrap_args(), None)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -517,7 +517,7 @@ async fn test_open(
     // Reopening the catalog will increment the epoch, but shouldn't change the initial snapshot.
     {
         let mut state = Box::new(openable_state2)
-            .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+            .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -529,7 +529,7 @@ async fn test_open(
     // Reopen the catalog a third time for good measure.
     {
         let mut state = Box::new(openable_state3)
-            .open(SYSTEM_TIME(), &test_bootstrap_args(), None)
+            .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
             .await
             .unwrap();
 
@@ -633,6 +633,7 @@ async fn test_unopened_fencing(
                 NOW_ZERO(),
                 &test_bootstrap_args(),
                 Some(deployment_generation),
+                None,
             )
             .await
             .unwrap();
@@ -652,6 +653,7 @@ async fn test_unopened_fencing(
             NOW_ZERO(),
             &test_bootstrap_args(),
             Some(deployment_generation + 1),
+            None,
         )
         .await
         .unwrap();
@@ -746,7 +748,7 @@ async fn test_tombstone(
 
     let mut state = Box::new(openable_state1)
         // Use `NOW_ZERO` for consistent timestamps in the snapshots.
-        .open(NOW_ZERO(), &test_bootstrap_args(), None)
+        .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
         .await
         .unwrap();
     assert_eq!(state.get_tombstone().await.unwrap(), None);

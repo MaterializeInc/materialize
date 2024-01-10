@@ -562,7 +562,7 @@ impl Catalog {
             .await,
         );
         let storage = openable_storage
-            .open(now(), &test_bootstrap_args(), None)
+            .open(now(), &test_bootstrap_args(), None, None)
             .await?;
         Self::open_debug_catalog_inner(storage, now, environment_id).await
     }
@@ -589,7 +589,7 @@ impl Catalog {
             stash_config,
         ));
         let storage = openable_storage
-            .open(now(), &test_bootstrap_args(), None)
+            .open(now(), &test_bootstrap_args(), None, None)
             .await?;
         Self::open_debug_catalog_inner(storage, now, environment_id).await
     }

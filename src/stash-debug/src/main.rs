@@ -141,12 +141,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             value,
         } => {
             // edit needs a mutable stash, so reconnect.
-            let stash = factory.open(args.postgres_url, schema, tls).await?;
+            let stash = factory.open(args.postgres_url, schema, tls, None).await?;
             edit(stash, usage, collection, key, value).await
         }
         Action::Delete { collection, key } => {
             // delete needs a mutable stash, so reconnect.
-            let stash = factory.open(args.postgres_url, schema, tls).await?;
+            let stash = factory.open(args.postgres_url, schema, tls, None).await?;
             delete(stash, usage, collection, key).await
         }
         Action::UpgradeCheck {
@@ -448,6 +448,7 @@ impl Usage {
                         default_cluster_replica_size: "1".into(),
                         bootstrap_role: None,
                     },
+                    None,
                     None,
                 )
                 .await?;

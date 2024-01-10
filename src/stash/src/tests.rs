@@ -34,7 +34,7 @@ async fn test_stash_invalid_url() {
 
     // Verify invalid URLs fail on connect.
     assert!(factory
-        .open("host=invalid".into(), None, tls)
+        .open("host=invalid".into(), None, tls, None)
         .await
         .unwrap_err()
         .to_string()

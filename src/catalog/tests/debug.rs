@@ -79,7 +79,7 @@ async fn test_debug(
 
     // Use `NOW_ZERO` for consistent timestamps in the snapshots.
     let _ = Box::new(openable_state1)
-        .open(NOW_ZERO(), &test_bootstrap_args(), None)
+        .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
         .await
         .unwrap();
 

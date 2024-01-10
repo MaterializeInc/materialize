@@ -393,6 +393,7 @@ async fn upgrade_check(
                 bootstrap_role: None,
             },
             None,
+            None,
         )
         .await?;
 
