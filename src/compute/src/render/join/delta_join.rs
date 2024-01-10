@@ -34,7 +34,7 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::render::context::{
-    ArrangementFlavor, CollectionBundle, Context, ShutdownToken, SpecializedArrangement,
+    ArrangementFlavor, CollectionBundle, Context, ShutdownProbe, SpecializedArrangement,
     SpecializedArrangementImport,
 };
 use crate::render::RenderTimestamp;
@@ -208,7 +208,7 @@ where
                                             stream_thinning,
                                             |t1, t2| t1.le(t2),
                                             closure,
-                                            self.shutdown_token.clone(),
+                                            self.shutdown_probe.clone(),
                                         )
                                     } else {
                                         dispatch_build_halfjoin_local(
@@ -218,7 +218,7 @@ where
                                             stream_thinning,
                                             |t1, t2| t1.lt(t2),
                                             closure,
-                                            self.shutdown_token.clone(),
+                                            self.shutdown_probe.clone(),
                                         )
                                     }
                                 }
@@ -231,7 +231,7 @@ where
                                             stream_thinning,
                                             |t1, t2| t1.le(t2),
                                             closure,
-                                            self.shutdown_token.clone(),
+                                            self.shutdown_probe.clone(),
                                         )
                                     } else {
                                         dispatch_build_halfjoin_trace(
@@ -241,7 +241,7 @@ where
                                             stream_thinning,
                                             |t1, t2| t1.lt(t2),
                                             closure,
-                                            self.shutdown_token.clone(),
+                                            self.shutdown_probe.clone(),
                                         )
                                     }
                                 }
@@ -314,7 +314,7 @@ fn dispatch_build_halfjoin_local<G, CF>(
     prev_thinning: Vec<usize>,
     comparison: CF,
     closure: JoinClosure,
-    shutdown_token: ShutdownToken,
+    shutdown_probe: ShutdownProbe,
 ) -> (
     Collection<G, (Row, G::Timestamp), Diff>,
     Collection<G, DataflowError, Diff>,
@@ -337,7 +337,7 @@ where
                 prev_thinning,
                 comparison,
                 closure,
-                shutdown_token,
+                shutdown_probe,
             )
         }
         SpecializedArrangement::RowRow(inner) => {
@@ -350,7 +350,7 @@ where
                 prev_thinning,
                 comparison,
                 closure,
-                shutdown_token,
+                shutdown_probe,
             )
         }
     }
@@ -364,7 +364,7 @@ fn dispatch_build_halfjoin_trace<G, T, CF>(
     prev_thinning: Vec<usize>,
     comparison: CF,
     closure: JoinClosure,
-    shutdown_token: ShutdownToken,
+    shutdown_probe: ShutdownProbe,
 ) -> (
     Collection<G, (Row, G::Timestamp), Diff>,
     Collection<G, DataflowError, Diff>,
@@ -387,7 +387,7 @@ where
                 prev_thinning,
                 comparison,
                 closure,
-                shutdown_token,
+                shutdown_probe,
             )
         }
         SpecializedArrangementImport::RowRow(inner) => {
@@ -400,7 +400,7 @@ where
                 prev_thinning,
                 comparison,
                 closure,
-                shutdown_token,
+                shutdown_probe,
             )
         }
     }
@@ -425,7 +425,7 @@ fn build_halfjoin<G, Tr, CF>(
     prev_thinning: Vec<usize>,
     comparison: CF,
     closure: JoinClosure,
-    shutdown_token: ShutdownToken,
+    shutdown_probe: ShutdownProbe,
 ) -> (
     Collection<G, (Row, G::Timestamp), Diff>,
     Collection<G, DataflowError, Diff>,
@@ -478,7 +478,7 @@ where
             move |key, stream_row, lookup_row, initial, time, diff1, diff2| {
                 // Check the shutdown token to avoid doing unnecessary work when the dataflow is
                 // shutting down.
-                shutdown_token.probe()?;
+                shutdown_probe.probe()?;
 
                 let binding = SharedRow::get();
                 let mut row_builder = binding.borrow_mut();
@@ -525,7 +525,7 @@ where
             move |key, stream_row, lookup_row, initial, time, diff1, diff2| {
                 // Check the shutdown token to avoid doing unnecessary work when the dataflow is
                 // shutting down.
-                shutdown_token.probe()?;
+                shutdown_probe.probe()?;
 
                 let binding = SharedRow::get();
                 let mut row_builder = binding.borrow_mut();

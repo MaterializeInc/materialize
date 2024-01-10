@@ -102,9 +102,10 @@
 
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 use std::sync::Arc;
 
+use differential_dataflow::difference::Semigroup;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
@@ -119,7 +120,6 @@ use mz_repr::{Diff, GlobalId};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
-use mz_timely_util::operator::CollectionExt;
 use timely::communication::Allocate;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
@@ -138,7 +138,9 @@ use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::{LogDataflowErrors, LogImportFrontiers};
-use crate::render::context::{ArrangementFlavor, Context, ShutdownToken, SpecializedArrangement};
+use crate::render::context::{
+    shutdown_token, ArrangementFlavor, Context, ShutdownProbe, SpecializedArrangement,
+};
 use crate::typedefs::{ErrSpine, KeySpine};
 
 pub mod context;
@@ -288,9 +290,9 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Build declared objects.
                 for object in dataflow.objects_to_build {
-                    let object_token = Rc::new(());
-                    context.shutdown_token = ShutdownToken::new(Rc::downgrade(&object_token));
-                    tokens.insert(object.id, object_token);
+                    let (probe, token) = shutdown_token(region);
+                    context.shutdown_probe = probe;
+                    tokens.insert(object.id, Rc::new(token));
 
                     let bundle = context.render_recursive_plan(0, object.plan);
                     context.insert_id(Id::Global(object.id), bundle);
@@ -342,9 +344,9 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Build declared objects.
                 for object in dataflow.objects_to_build {
-                    let object_token = Rc::new(());
-                    context.shutdown_token = ShutdownToken::new(Rc::downgrade(&object_token));
-                    tokens.insert(object.id, object_token);
+                    let (probe, token) = shutdown_token(region);
+                    context.shutdown_probe = probe;
+                    tokens.insert(object.id, Rc::new(token));
 
                     context.build_object(object);
                 }
@@ -676,9 +678,6 @@ where
 
                 // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
                 let mut oks = oks.consolidate_named::<KeySpine<_, _, _>>("LetRecConsolidation");
-                if let Some(token) = &self.shutdown_token.get_inner() {
-                    oks = oks.with_token(Weak::clone(token));
-                }
 
                 if let Some(limit) = limit {
                     // We swallow the results of the `max_iter`th iteration, because
@@ -702,24 +701,26 @@ where
                     }
                 }
 
-                oks_v.set(&oks);
-
                 // Set err variable to the distinct elements of `err`.
                 // Distinctness is important, as we otherwise might add the same error each iteration,
                 // say if the limit of `oks` has an error. This would result in non-terminating rather
                 // than a clean report of the error. The trade-off is that we lose information about
                 // multiplicities of errors, but .. this seems to be the better call.
                 let err: KeyCollection<_, _, _> = err.into();
-                let mut errs = err
+                let errs = err
                     .mz_arrange::<ErrSpine<_, _>>("Arrange recursive err")
                     .mz_reduce_abelian::<_, ErrSpine<_, _>>(
                         "Distinct recursive err",
                         move |_k, _s, t| t.push(((), 1)),
                     )
                     .as_collection(|k, _| k.clone());
-                if let Some(token) = &self.shutdown_token.get_inner() {
-                    errs = errs.with_token(Weak::clone(token));
-                }
+
+                // Actively interrupt the data flow during shutdown, to ensure to ensure we won't
+                // keep iterating for long (or even forever).
+                let oks = render_shutdown_fuse(oks, self.shutdown_probe.clone());
+                let errs = render_shutdown_fuse(errs, self.shutdown_probe.clone());
+
+                oks_v.set(&oks);
                 err_v.set(&errs);
             }
             // Now extract each of the bindings into the outer scope.
@@ -1052,4 +1053,31 @@ where
             }
         }
     })
+}
+
+/// Wraps the provided `Collection` with an operator that passes through all received inputs as
+/// long as the provided `ShutdownToken` does not announce dataflow shutdown. Once the token
+/// dataflow is shutting down, all data flowing into the operator is dropped.
+fn render_shutdown_fuse<G, D, R>(
+    collection: Collection<G, D, R>,
+    probe: ShutdownProbe,
+) -> Collection<G, D, R>
+where
+    G: Scope,
+    D: Data,
+    R: Semigroup,
+{
+    let stream = collection.inner;
+    let stream = stream.unary(Pipeline, "ShutdownFuse", move |_cap, _info| {
+        let mut vector = Default::default();
+        move |input, output| {
+            input.for_each(|cap, data| {
+                if !probe.in_shutdown() {
+                    data.swap(&mut vector);
+                    output.session(&cap).give_container(&mut vector);
+                }
+            });
+        }
+    });
+    stream.as_collection()
 }

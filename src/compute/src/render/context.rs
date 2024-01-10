@@ -10,8 +10,9 @@
 //! Management of dataflow-local state, like arrangements, while building a
 //! dataflow.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::rc::Weak;
+use std::rc::Rc;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
@@ -24,6 +25,7 @@ use mz_repr::fixed_length::{FromRowByTypes, IntoRowByTypes};
 use mz_repr::{ColumnType, DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
+use mz_timely_util::builder_async::{ButtonHandle, PressOnDropButton};
 use mz_timely_util::operator::CollectionExt;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
@@ -77,8 +79,8 @@ where
     pub until: Antichain<T>,
     /// Bindings of identifiers to collections.
     pub bindings: BTreeMap<Id, CollectionBundle<S, T>>,
-    /// A token that operators can probe to know whether the dataflow is shutting down.
-    pub(super) shutdown_token: ShutdownToken,
+    /// A handle that operators can probe to know whether the dataflow is shutting down.
+    pub(super) shutdown_probe: ShutdownProbe,
     /// Specification for rendering linear joins.
     pub(super) linear_join_spec: LinearJoinSpec,
     pub(super) enable_specialized_arrangements: bool,
@@ -107,7 +109,7 @@ where
             as_of_frontier,
             until: dataflow.until.clone(),
             bindings: BTreeMap::new(),
-            shutdown_token: Default::default(),
+            shutdown_probe: Default::default(),
             linear_join_spec: Default::default(),
             enable_specialized_arrangements: Default::default(),
         }
@@ -159,22 +161,29 @@ where
     }
 
     pub(super) fn error_logger(&self) -> ErrorLogger {
-        ErrorLogger::new(self.shutdown_token.clone(), self.debug_name.clone())
+        ErrorLogger::new(self.shutdown_probe.clone(), self.debug_name.clone())
     }
 }
 
-/// Convenient wrapper around an optional `Weak` instance that can be used to check whether a
+pub(super) fn shutdown_token<G: Scope>(scope: &mut G) -> (ShutdownProbe, PressOnDropButton) {
+    let (button_handle, button) = mz_timely_util::builder_async::button(scope, &scope.addr());
+    let probe = ShutdownProbe::new(button_handle);
+    let token = button.press_on_drop();
+    (probe, token)
+}
+
+/// Convenient wrapper around an optional `ButtonHandle` that can be used to check whether a
 /// datalow is shutting down.
 ///
 /// Instances created through the `Default` impl act as if the dataflow never shuts down.
-/// Instances created through [`ShutdownToken::new`] defer to the wrapped token.
+/// Instances created through [`ShutdownProbe::new`] defer to the wrapped button.
 #[derive(Clone, Default)]
-pub(super) struct ShutdownToken(Option<Weak<()>>);
+pub(super) struct ShutdownProbe(Option<Rc<RefCell<ButtonHandle>>>);
 
-impl ShutdownToken {
-    /// Construct a `ShutdownToken` instance that defers to `token`.
-    pub(super) fn new(token: Weak<()>) -> Self {
-        Self(Some(token))
+impl ShutdownProbe {
+    /// Construct a `ShutdownProbe` instance that defers to `button`.
+    fn new(button: ButtonHandle) -> Self {
+        Self(Some(Rc::new(RefCell::new(button))))
     }
 
     /// Probe the token for dataflow shutdown.
@@ -182,20 +191,18 @@ impl ShutdownToken {
     /// This method is meant to be used with the `?` operator: It returns `None` if the dataflow is
     /// in the process of shutting down and `Some` otherwise.
     pub(super) fn probe(&self) -> Option<()> {
-        match &self.0 {
-            Some(t) => t.upgrade().map(|_| ()),
-            None => Some(()),
+        match self.in_shutdown() {
+            false => Some(()),
+            true => None,
         }
     }
 
     /// Returns whether the dataflow is in the process of shutting down.
     pub(super) fn in_shutdown(&self) -> bool {
-        self.probe().is_none()
-    }
-
-    /// Returns a reference to the wrapped `Weak`.
-    pub(crate) fn get_inner(&self) -> Option<&Weak<()>> {
-        self.0.as_ref()
+        match &self.0 {
+            Some(t) => t.borrow_mut().all_pressed(),
+            None => false,
+        }
     }
 }
 

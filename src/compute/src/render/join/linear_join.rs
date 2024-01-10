@@ -31,7 +31,7 @@ use timely::progress::timestamp::{Refines, Timestamp};
 
 use crate::extensions::arrange::MzArrange;
 use crate::render::context::{
-    ArrangementFlavor, CollectionBundle, Context, ShutdownToken, SpecializedArrangement,
+    ArrangementFlavor, CollectionBundle, Context, ShutdownProbe, SpecializedArrangement,
     SpecializedArrangementImport,
 };
 use crate::render::join::mz_join_core::mz_join_core;
@@ -75,7 +75,7 @@ impl LinearJoinSpec {
         &self,
         arranged1: &Arranged<G, Tr1>,
         arranged2: &Arranged<G, Tr2>,
-        shutdown_token: ShutdownToken,
+        shutdown_probe: ShutdownProbe,
         result: L,
     ) -> Collection<G, I::Item, Diff>
     where
@@ -100,19 +100,19 @@ impl LinearJoinSpec {
             (Materialize, Some(work_limit), Some(time_limit)) => {
                 let yield_fn =
                     move |start: Instant, work| work >= work_limit || start.elapsed() >= time_limit;
-                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn)
+                mz_join_core(arranged1, arranged2, shutdown_probe, result, yield_fn)
             }
             (Materialize, Some(work_limit), None) => {
                 let yield_fn = move |_start, work| work >= work_limit;
-                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn)
+                mz_join_core(arranged1, arranged2, shutdown_probe, result, yield_fn)
             }
             (Materialize, None, Some(time_limit)) => {
                 let yield_fn = move |start: Instant, _work| start.elapsed() >= time_limit;
-                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn)
+                mz_join_core(arranged1, arranged2, shutdown_probe, result, yield_fn)
             }
             (Materialize, None, None) => {
                 let yield_fn = |_start, _work| false;
-                mz_join_core(arranged1, arranged2, shutdown_token, result, yield_fn)
+                mz_join_core(arranged1, arranged2, shutdown_probe, result, yield_fn)
             }
         }
     }
@@ -507,7 +507,7 @@ where
                 .render(
                     &prev_keyed,
                     &next_input,
-                    self.shutdown_token.clone(),
+                    self.shutdown_probe.clone(),
                     move |key, old, new| {
                         let binding = SharedRow::get();
                         let mut row_builder = binding.borrow_mut();
@@ -542,7 +542,7 @@ where
             let oks = self.linear_join_spec.render(
                 &prev_keyed,
                 &next_input,
-                self.shutdown_token.clone(),
+                self.shutdown_probe.clone(),
                 move |key, old, new| {
                     let binding = SharedRow::get();
                     let mut row_builder = binding.borrow_mut();

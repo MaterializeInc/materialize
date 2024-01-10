@@ -15,7 +15,7 @@ use differential_dataflow::ExchangeData;
 use mz_repr::Row;
 use timely::container::columnation::Columnation;
 
-use crate::render::context::ShutdownToken;
+use crate::render::context::ShutdownProbe;
 
 /// Used to make possibly-validating code generic: think of this as a kind of `MaybeResult`,
 /// specialized for use in compute.  Validation code will only run when the error constructor is
@@ -78,12 +78,12 @@ where
 /// the process of shutting down.
 #[derive(Clone)]
 pub(super) struct ErrorLogger {
-    token: ShutdownToken,
+    token: ShutdownProbe,
     dataflow_name: String,
 }
 
 impl ErrorLogger {
-    pub fn new(token: ShutdownToken, dataflow_name: String) -> Self {
+    pub fn new(token: ShutdownProbe, dataflow_name: String) -> Self {
         Self {
             token,
             dataflow_name,
