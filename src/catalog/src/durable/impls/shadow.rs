@@ -158,6 +158,10 @@ where
         compare_and_return_async!(self, get_deployment_generation)
     }
 
+    async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError> {
+        compare_and_return_async!(self, has_system_config_synced_once)
+    }
+
     async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
         compare_and_return_async!(self, get_tombstone)
     }
@@ -357,10 +361,6 @@ impl ReadOnlyDurableCatalogState for ShadowCatalogState {
         &mut self,
     ) -> Result<Option<PersistTxnTablesImpl>, CatalogError> {
         compare_and_return_async!(self, get_persist_txn_tables)
-    }
-
-    async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError> {
-        compare_and_return_async!(self, has_system_config_synced_once)
     }
 
     async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {

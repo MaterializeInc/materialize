@@ -189,6 +189,15 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         }
     }
 
+    async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError> {
+        let tombstone = self.get_tombstone().await?;
+        if tombstone == Some(true) {
+            self.openable_persist.has_system_config_synced_once().await
+        } else {
+            self.openable_stash.has_system_config_synced_once().await
+        }
+    }
+
     async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError> {
         self.openable_stash.get_tombstone().await
     }

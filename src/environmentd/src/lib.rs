@@ -26,6 +26,7 @@ use anyhow::{anyhow, bail, Context};
 use clap::ValueEnum;
 use futures::FutureExt;
 use mz_adapter::config::{system_parameter_sync, SystemParameterSyncConfig};
+use mz_adapter::load_remote_system_parameters;
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
 use mz_build_info::{build_info, BuildInfo};
 use mz_catalog::config::ClusterReplicaSizeMap;
@@ -44,7 +45,7 @@ use mz_secrets::SecretsController;
 use mz_server_core::{ConnectionStream, ListenerHandle, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::session::vars::{
-    CatalogKind, ConnectionCounter, Var, CATALOG_KIND_IMPL, PERSIST_TXN_TABLES,
+    CatalogKind, ConnectionCounter, Var, VarInput, CATALOG_KIND_IMPL, PERSIST_TXN_TABLES,
 };
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use tokio::sync::oneshot;
@@ -362,22 +363,68 @@ impl Listeners {
             })
             .transpose()?;
 
+        let mut openable_adapter_storage = catalog_opener(
+            &config.catalog_config,
+            &config.controller,
+            &config.environment_id,
+        )
+        .boxed()
+        .await?;
+
+        // Initialize the system parameter frontend if `launchdarkly_sdk_key` is set.
+        let system_parameter_sync_config = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
+            Some(SystemParameterSyncConfig::new(
+                config.environment_id.clone(),
+                &BUILD_INFO,
+                &config.metrics_registry,
+                config.now.clone(),
+                ld_sdk_key,
+                config.launchdarkly_key_map,
+            ))
+        } else {
+            None
+        };
+        let remote_system_parameters = load_remote_system_parameters(
+            &mut openable_adapter_storage,
+            system_parameter_sync_config.clone(),
+        )
+        .await?;
+
+        let catalog_kind_impl_ld = remote_system_parameters
+            .as_ref()
+            .and_then(|params| params.get(CATALOG_KIND_IMPL.name()))
+            .map(|value| match value.borrow() {
+                VarInput::Flat(s) => Ok(s),
+                VarInput::SqlSet([s]) => Ok(s.as_str()),
+                VarInput::SqlSet(v) => Err(anyhow!(
+                    "Invalid remote value for {}: {:?}",
+                    CATALOG_KIND_IMPL.name(),
+                    v,
+                )),
+            })
+            .transpose()?
+            .map(|x| {
+                CatalogKind::from_str(x, true).map_err(|err| {
+                    anyhow!(
+                        "failed to parse remote value for {}: {}",
+                        CATALOG_KIND_IMPL.name(),
+                        err
+                    )
+                })
+            })
+            .transpose()?;
+
         'leader_promotion: {
             let Some(deploy_generation) = config.deploy_generation else {
                 break 'leader_promotion;
             };
             tracing::info!("Requested deploy generation {deploy_generation}");
 
-            let mut openable_adapter_storage = catalog_opener(
-                &config.catalog_config,
-                &config.controller,
-                &config.environment_id,
-            )
-            .boxed()
-            .await?;
-            let catalog_kind_impl_ld = openable_adapter_storage.get_catalog_kind_config().await?;
+            let catalog_kind_impl_config =
+                openable_adapter_storage.get_catalog_kind_config().await?;
             let catalog_kind_impl = catalog_kind_impl_reconcile(
                 catalog_kind_impl_ld,
+                catalog_kind_impl_config,
                 catalog_kind_impl_default,
                 config.catalog_config.catalog_kind(),
             );
@@ -386,7 +433,6 @@ impl Listeners {
             }
             if !openable_adapter_storage.is_initialized().await? {
                 tracing::info!("Catalog storage doesn't exist so there's no current deploy generation. We won't wait to be leader");
-                openable_adapter_storage.expire().await;
                 break 'leader_promotion;
             }
             // TODO: once all catalogs have a deploy_generation, don't need to handle the Option
@@ -427,25 +473,25 @@ impl Listeners {
                         "internal http server closed its end of promote_leader"
                     ));
                 }
+
+                openable_adapter_storage = catalog_opener(
+                    &config.catalog_config,
+                    &config.controller,
+                    &config.environment_id,
+                )
+                .boxed()
+                .await?;
             } else if catalog_generation == Some(deploy_generation) {
                 tracing::info!("Server requested generation {deploy_generation} which is equal to catalog's generation");
-                openable_adapter_storage.expire().await;
             } else {
-                openable_adapter_storage.expire().await;
                 mz_ore::halt!("Server started with requested generation {deploy_generation} but catalog was already at {catalog_generation:?}. Deploy generations must increase monotonically");
             }
         }
 
-        let mut openable_adapter_storage = catalog_opener(
-            &config.catalog_config,
-            &config.controller,
-            &config.environment_id,
-        )
-        .boxed()
-        .await?;
-        let catalog_kind_impl_ld = openable_adapter_storage.get_catalog_kind_config().await?;
+        let catalog_kind_impl_config = openable_adapter_storage.get_catalog_kind_config().await?;
         let catalog_kind_impl = catalog_kind_impl_reconcile(
             catalog_kind_impl_ld,
+            catalog_kind_impl_config,
             catalog_kind_impl_default,
             config.catalog_config.catalog_kind(),
         );
@@ -520,20 +566,6 @@ impl Listeners {
             config.persist_txn_tables_cli,
         );
 
-        // Initialize the system parameter frontend if `launchdarkly_sdk_key` is set.
-        let system_parameter_sync_config = if let Some(ld_sdk_key) = config.launchdarkly_sdk_key {
-            Some(SystemParameterSyncConfig::new(
-                config.environment_id.clone(),
-                &BUILD_INFO,
-                &config.metrics_registry,
-                config.now.clone(),
-                ld_sdk_key,
-                config.launchdarkly_key_map,
-            ))
-        } else {
-            None
-        };
-
         // Initialize adapter.
         let segment_client = config.segment_api_key.map(mz_segment::Client::new);
         let webhook_concurrency_limit = WebhookConcurrencyLimiter::default();
@@ -562,7 +594,7 @@ impl Listeners {
             storage_usage_retention_period: config.storage_usage_retention_period,
             segment_client: segment_client.clone(),
             egress_ips: config.egress_ips,
-            system_parameter_sync_config: system_parameter_sync_config.clone(),
+            remote_system_parameters,
             aws_account_id: config.aws_account_id,
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             active_connection_count: Arc::clone(&active_connection_count),
@@ -811,16 +843,20 @@ async fn catalog_opener(
 
 fn catalog_kind_impl_reconcile(
     catalog_kind_impl_ld: Option<CatalogKind>,
+    catalog_kind_impl_config: Option<CatalogKind>,
     catalog_kind_impl_default: Option<CatalogKind>,
     catalog_kind_impl_cli: CatalogKind,
 ) -> Option<CatalogKind> {
-    let catalog_kind_impl = catalog_kind_impl_ld.or(catalog_kind_impl_default);
+    let catalog_kind_impl = catalog_kind_impl_ld
+        .or(catalog_kind_impl_config)
+        .or(catalog_kind_impl_default);
     match catalog_kind_impl {
         Some(catalog_kind_impl) if catalog_kind_impl != catalog_kind_impl_cli => {
             info!(
-                "catalog_kind value of {:?} computed from default: {:?}, catalog: {:?}, and flag: {:?}",
+                "catalog_kind value of {:?} computed from default: {:?}, catalog: {:?}, remote: {:?}, and flag: {:?}",
                 catalog_kind_impl,
                 catalog_kind_impl_default,
+                catalog_kind_impl_config,
                 catalog_kind_impl_ld,
                 catalog_kind_impl_cli,
             );
