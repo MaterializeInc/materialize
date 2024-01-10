@@ -69,12 +69,14 @@ WORKLOADS = [
         dataset=Dataset.SIMPLE,
         grammar="conf/mz/simple-aggregates.yy",
         reference_implementation=ReferenceImplementation.POSTGRES,
+        validator="ResultsetComparatorSimplify",
     ),
     Workload(
         name="dbt3-joins",
         dataset=Dataset.DBT3,
         grammar="conf/mz/dbt3-joins.yy",
         reference_implementation=ReferenceImplementation.POSTGRES,
+        validator="ResultsetComparatorSimplify",
     ),
     Workload(
         # A workload that performs DML that preserve the dataset's invariants
