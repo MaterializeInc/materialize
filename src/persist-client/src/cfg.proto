@@ -33,10 +33,9 @@ message ProtoPersistParameters {
     mz_proto.ProtoDuration consensus_connection_pool_ttl = 15;
     mz_proto.ProtoDuration consensus_connection_pool_ttl_stagger = 16;
     mz_proto.ProtoDuration reader_lease_duration = 20;
-    optional uint64 stats_budget_bytes = 17;
     optional ProtoUntrimmableColumns stats_untrimmable_columns = 18;
     repeated ProtoFlagUpdate feature_flags = 23;
-    reserved 19;
+    reserved 17, 19;
 }
 
 message ProtoRetryParameters {

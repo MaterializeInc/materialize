@@ -235,7 +235,9 @@ impl BatchBuilderConfig {
                 .dynamic
                 .batch_builder_max_outstanding_parts(),
             stats_collection_enabled: value.dynamic.stats_collection_enabled(),
-            stats_budget: value.dynamic.stats_budget_bytes(),
+            stats_budget: value
+                .dynamic
+                .get_feature_flag(flags::PERSIST_STATS_BUDGET_BYTES),
             stats_untrimmable_columns: Arc::new(value.dynamic.stats_untrimmable_columns()),
         }
     }

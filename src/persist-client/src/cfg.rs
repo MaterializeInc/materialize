@@ -157,11 +157,18 @@ pub mod flags {
         description: "Whether to actually delete blobs when batch delete is called (Materialize).",
     };
 
+    pub const PERSIST_STATS_BUDGET_BYTES: PersistFeatureFlag<usize> = PersistFeatureFlag {
+        name: "persist_stats_budget_bytes",
+        default: 1024,
+        description: "The budget (in bytes) of how many stats to maintain per batch part.",
+    };
+
     pub fn all() -> impl Iterator<Item = PersistFeatureFlag> {
         [
             STREAMING_COMPACTION.into_generic(),
             STREAMING_SNAPSHOT_AND_FETCH.into_generic(),
             BATCH_DELETE_ENABLED.into_generic(),
+            PERSIST_STATS_BUDGET_BYTES.into_generic(),
         ]
         .into_iter()
     }
@@ -311,7 +318,6 @@ impl PersistConfig {
                 stats_audit_percent: AtomicUsize::new(Self::DEFAULT_STATS_AUDIT_PERCENT),
                 stats_collection_enabled: AtomicBool::new(Self::DEFAULT_STATS_COLLECTION_ENABLED),
                 stats_filter_enabled: AtomicBool::new(Self::DEFAULT_STATS_FILTER_ENABLED),
-                stats_budget_bytes: AtomicUsize::new(Self::DEFAULT_STATS_BUDGET_BYTES),
                 stats_untrimmable_columns: RwLock::new(
                     Self::DEFAULT_STATS_UNTRIMMABLE_COLUMNS.clone(),
                 ),
@@ -414,8 +420,6 @@ impl PersistConfig {
     pub const DEFAULT_STATS_COLLECTION_ENABLED: bool = true;
     /// Default value for [`DynamicConfig::stats_filter_enabled`].
     pub const DEFAULT_STATS_FILTER_ENABLED: bool = true;
-    /// Default value for [`DynamicConfig::stats_budget_bytes`].
-    pub const DEFAULT_STATS_BUDGET_BYTES: usize = 1024;
     /// Default value for [`DynamicConfig::pubsub_client_enabled`].
     pub const DEFAULT_PUBSUB_CLIENT_ENABLED: bool = true;
     /// Default value for [`DynamicConfig::pubsub_push_diff_enabled`].
@@ -570,7 +574,6 @@ pub struct DynamicConfig {
     stats_audit_percent: AtomicUsize,
     stats_collection_enabled: AtomicBool,
     stats_filter_enabled: AtomicBool,
-    stats_budget_bytes: AtomicUsize,
     stats_untrimmable_columns: RwLock<UntrimmableColumns>,
     pubsub_client_enabled: AtomicBool,
     pubsub_push_diff_enabled: AtomicBool,
@@ -800,13 +803,6 @@ impl DynamicConfig {
         self.stats_filter_enabled.load(Self::LOAD_ORDERING)
     }
 
-    /// The budget (in bytes) of how many stats to write down per batch part.
-    /// When the budget is exceeded, stats will be trimmed away according to
-    /// a variety of heuristics.
-    pub fn stats_budget_bytes(&self) -> usize {
-        self.stats_budget_bytes.load(Self::LOAD_ORDERING)
-    }
-
     /// The stats columns that will never be trimmed, even if they go over budget.
     pub fn stats_untrimmable_columns(&self) -> UntrimmableColumns {
         self.stats_untrimmable_columns
@@ -939,8 +935,6 @@ pub struct PersistParameters {
     pub stats_collection_enabled: Option<bool>,
     /// Configures [`DynamicConfig::stats_filter_enabled`].
     pub stats_filter_enabled: Option<bool>,
-    /// Configures [`DynamicConfig::stats_budget_bytes`].
-    pub stats_budget_bytes: Option<usize>,
     /// Configures [`DynamicConfig::stats_untrimmable_columns`].
     pub stats_untrimmable_columns: Option<UntrimmableColumns>,
     /// Configures [`DynamicConfig::pubsub_client_enabled`]
@@ -975,7 +969,6 @@ impl PersistParameters {
             stats_audit_percent: self_stats_audit_percent,
             stats_collection_enabled: self_stats_collection_enabled,
             stats_filter_enabled: self_stats_filter_enabled,
-            stats_budget_bytes: self_stats_budget_bytes,
             stats_untrimmable_columns: self_stats_untrimmable_columns,
             pubsub_client_enabled: self_pubsub_client_enabled,
             pubsub_push_diff_enabled: self_pubsub_push_diff_enabled,
@@ -999,7 +992,6 @@ impl PersistParameters {
             stats_audit_percent: other_stats_audit_percent,
             stats_collection_enabled: other_stats_collection_enabled,
             stats_filter_enabled: other_stats_filter_enabled,
-            stats_budget_bytes: other_stats_budget_bytes,
             stats_untrimmable_columns: other_stats_untrimmable_columns,
             pubsub_client_enabled: other_pubsub_client_enabled,
             pubsub_push_diff_enabled: other_pubsub_push_diff_enabled,
@@ -1054,9 +1046,6 @@ impl PersistParameters {
         if let Some(v) = other_stats_filter_enabled {
             *self_stats_filter_enabled = Some(v)
         }
-        if let Some(v) = other_stats_budget_bytes {
-            *self_stats_budget_bytes = Some(v)
-        }
         if let Some(v) = other_stats_untrimmable_columns {
             *self_stats_untrimmable_columns = Some(v)
         }
@@ -1095,7 +1084,6 @@ impl PersistParameters {
             stats_audit_percent,
             stats_collection_enabled,
             stats_filter_enabled,
-            stats_budget_bytes,
             stats_untrimmable_columns,
             pubsub_client_enabled,
             pubsub_push_diff_enabled,
@@ -1118,7 +1106,6 @@ impl PersistParameters {
             && stats_audit_percent.is_none()
             && stats_collection_enabled.is_none()
             && stats_filter_enabled.is_none()
-            && stats_budget_bytes.is_none()
             && stats_untrimmable_columns.is_none()
             && pubsub_client_enabled.is_none()
             && pubsub_push_diff_enabled.is_none()
@@ -1150,7 +1137,6 @@ impl PersistParameters {
             stats_audit_percent,
             stats_collection_enabled,
             stats_filter_enabled,
-            stats_budget_bytes,
             stats_untrimmable_columns,
             pubsub_client_enabled,
             pubsub_push_diff_enabled,
@@ -1258,11 +1244,6 @@ impl PersistParameters {
                 .stats_filter_enabled
                 .store(*stats_filter_enabled, DynamicConfig::STORE_ORDERING);
         }
-        if let Some(stats_budget_bytes) = stats_budget_bytes {
-            cfg.dynamic
-                .stats_budget_bytes
-                .store(*stats_budget_bytes, DynamicConfig::STORE_ORDERING);
-        }
         if let Some(stats_untrimmable_columns) = stats_untrimmable_columns {
             let mut columns = cfg
                 .dynamic
@@ -1333,7 +1314,6 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             stats_audit_percent: self.stats_audit_percent.into_proto(),
             stats_collection_enabled: self.stats_collection_enabled.into_proto(),
             stats_filter_enabled: self.stats_filter_enabled.into_proto(),
-            stats_budget_bytes: self.stats_budget_bytes.into_proto(),
             stats_untrimmable_columns: self.stats_untrimmable_columns.into_proto(),
             pubsub_client_enabled: self.pubsub_client_enabled.into_proto(),
             pubsub_push_diff_enabled: self.pubsub_push_diff_enabled.into_proto(),
@@ -1372,7 +1352,6 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             stats_audit_percent: proto.stats_audit_percent.into_rust()?,
             stats_collection_enabled: proto.stats_collection_enabled.into_rust()?,
             stats_filter_enabled: proto.stats_filter_enabled.into_rust()?,
-            stats_budget_bytes: proto.stats_budget_bytes.into_rust()?,
             stats_untrimmable_columns: proto.stats_untrimmable_columns.into_rust()?,
             pubsub_client_enabled: proto.pubsub_client_enabled.into_rust()?,
             pubsub_push_diff_enabled: proto.pubsub_push_diff_enabled.into_rust()?,
