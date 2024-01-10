@@ -203,62 +203,53 @@ def workflow_test_epoch_migration(c: Composition) -> None:
     # c.up("minio", "cockroach")
     #
     # # Switch to emergency stash catalog so only the stash epoch is incremented.
-    # with c.override(
-    #         Testdrive(no_reset=True),
-    # ):
-    #     c.up("testdrive", persistent=True)
-    #     c.up("materialized")
-    #     c.testdrive(
-    #         input=dedent(
-    #             """
-    #     $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
-    #     ALTER SYSTEM SET catalog_kind TO 'emergency-stash'
+    # c.up("testdrive", persistent=True)
+    # c.up("materialized")
+    # c.testdrive(
+    #     input=dedent(
+    #         """
+    # $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+    # ALTER SYSTEM SET catalog_kind TO 'emergency-stash'
     # """
-    #         )
     #     )
-    #     c.down("materialized")
+    # )
+    # c.kill("materialized")
     #
     # # Start and stop Materialize with stash multiple times to increment the epoch.
     # for _ in range(0, 2):
     #     c.up("materialized")
-    #     c.down("materialized")
+    #     c.kill("materialized")
     #
     # # Switch to persist catalog.
-    # with c.override(
-    #         Testdrive(no_reset=True),
-    # ):
-    #     c.up("testdrive", persistent=True)
-    #     c.up("materialized")
-    #     c.testdrive(
-    #         input=dedent(
-    #             """
-    #     $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
-    #     ALTER SYSTEM SET catalog_kind TO 'persist'
+    # c.up("testdrive", persistent=True)
+    # c.up("materialized")
+    # c.testdrive(
+    #     input=dedent(
+    #         """
+    # $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+    # ALTER SYSTEM SET catalog_kind TO 'persist'
     # """
-    #         )
     #     )
-    #     c.down("materialized")
+    # )
+    #     c.kill("materialized")
     #
     # # Start and stop Materialize with persist multiple times to increment the epoch.
     # # for _ in range(0, 1):
     # c.up("materialized")
-    # # c.down("materialized")
+    # # c.kill("materialized")
     # #
     # # # Switch to stash catalog.
-    # # with c.override(
-    # #         Testdrive(no_reset=True),
-    # # ):
-    # #     c.up("testdrive", persistent=True)
-    # #     c.up("materialized")
-    # #     c.testdrive(
-    # #         input=dedent(
-    # #             """
-    # #     $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
-    # #     ALTER SYSTEM SET catalog_kind TO 'stash'
+    # # c.up("testdrive", persistent=True)
+    # # c.up("materialized")
+    # # c.testdrive(
+    # #     input=dedent(
+    # #         """
+    # # $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+    # # ALTER SYSTEM SET catalog_kind TO 'stash'
     # # """
-    # #         )
     # #     )
-    # #     c.down("materialized")
+    # # )
+    # # c.kill("materialized")
     # #
     # # c.up("materialized")
-    # # c.down("materialized")
+    # # c.kill("materialized")
