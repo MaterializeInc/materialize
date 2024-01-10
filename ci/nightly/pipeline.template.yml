@@ -1013,6 +1013,16 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: pubsub-disruption
 
+  - id: retain-history
+    label: "Check retain history"
+    timeout_in_minutes: 15
+    artifact_paths: junit_*.xml
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: retain-history
+
   - id: data-ingest
     label: "Data Ingest"
     artifact_paths: junit_*.xml
