@@ -161,6 +161,86 @@ where
     pub fn error_logger(&self) -> ErrorLogger {
         ErrorLogger::new(self.shutdown_token.clone(), self.debug_name.clone())
     }
+
+    /// Creates a dataflow region and supplies a new `Context` for it.
+    ///
+    /// Any changes made to the child context by `func` are also reflected in the parent context
+    /// once this method returns.
+    pub fn region_named<F, R>(&mut self, name: &str, func: F) -> R
+    where
+        F: FnOnce(&mut Context<Child<S, S::Timestamp>, T>) -> R,
+    {
+        self.scope.clone().region_named(name, |region| {
+            let mut inner = self.take().enter_region(region.clone());
+            let result = func(&mut inner);
+            *self = inner.leave_region();
+            result
+        })
+    }
+
+    /// Takes this `Context`, leaving behind a vacant one.
+    fn take(&mut self) -> Self {
+        Self {
+            scope: self.scope.clone(),
+            debug_name: std::mem::take(&mut self.debug_name),
+            dataflow_id: self.dataflow_id,
+            as_of_frontier: std::mem::take(&mut self.as_of_frontier),
+            until: std::mem::take(&mut self.until),
+            bindings: std::mem::take(&mut self.bindings),
+            shutdown_token: std::mem::take(&mut self.shutdown_token),
+            linear_join_spec: self.linear_join_spec,
+            enable_specialized_arrangements: self.enable_specialized_arrangements,
+        }
+    }
+
+    /// Moves this `Context` into the given region.
+    fn enter_region(self, region: Child<S, S::Timestamp>) -> Context<Child<S, S::Timestamp>, T> {
+        let bindings = self
+            .bindings
+            .into_iter()
+            .map(|(id, bundle)| (id, bundle.enter_region(&region)))
+            .collect();
+
+        Context {
+            scope: region,
+            debug_name: self.debug_name,
+            dataflow_id: self.dataflow_id,
+            as_of_frontier: self.as_of_frontier,
+            until: self.until,
+            bindings,
+            shutdown_token: self.shutdown_token,
+            linear_join_spec: self.linear_join_spec,
+            enable_specialized_arrangements: self.enable_specialized_arrangements,
+        }
+    }
+}
+
+impl<S, T> Context<Child<'_, S, S::Timestamp>, T>
+where
+    S: Scope,
+    S::Timestamp: Lattice + Refines<T> + Columnation,
+    T: Timestamp + Lattice + Columnation,
+{
+    /// Moves this `Context` into its parent region.
+    fn leave_region(self) -> Context<S, T> {
+        let bindings = self
+            .bindings
+            .into_iter()
+            .map(|(id, bundle)| (id, bundle.leave_region()))
+            .collect();
+
+        Context {
+            scope: self.scope.parent,
+            debug_name: self.debug_name,
+            dataflow_id: self.dataflow_id,
+            as_of_frontier: self.as_of_frontier,
+            until: self.until,
+            bindings,
+            shutdown_token: self.shutdown_token,
+            linear_join_spec: self.linear_join_spec,
+            enable_specialized_arrangements: self.enable_specialized_arrangements,
+        }
+    }
 }
 
 /// Convenient wrapper around an optional `Weak` instance that can be used to check whether a
