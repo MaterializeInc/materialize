@@ -2523,6 +2523,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ebdb29d2ea9ed0083cd8cece49bbd968021bd99b0849edb4a9a7ee0fdf6a4e0"
 
 [[package]]
+name = "hi_sparse_bitset"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d608d5f3820f93ce18d242a48ebc108125a9660bad78f2c809fef210da12b5"
+dependencies = [
+ "num-traits",
+ "wide",
+]
+
+[[package]]
+name = "hibitset"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3ede5cfa60c958e60330d65163adbc4211e15a2653ad80eb0cce878de120121"
+dependencies = [
+ "rayon",
+]
+
+[[package]]
 name = "hmac"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4746,9 +4765,12 @@ dependencies = [
  "clap",
  "compact_bytes",
  "console-subscriber",
+ "criterion",
  "ctor",
  "either",
  "futures",
+ "hi_sparse_bitset",
+ "hibitset",
  "http",
  "hyper",
  "hyper-tls",
@@ -4765,6 +4787,8 @@ dependencies = [
  "pin-project",
  "prometheus",
  "proptest",
+ "rand",
+ "roaring",
  "scopeguard",
  "sentry",
  "sentry-tracing",
@@ -7530,9 +7554,9 @@ dependencies = [
 
 [[package]]
 name = "retain_mut"
-version = "0.1.9"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4389f1d5789befaf6029ebd9f7dac4af7f7e3d61b69d4f30e2ac02b57e7712b0"
+checksum = "8c31b5c4033f8fdde8700e4657be2c497e7288f01515be52168c631e2e4d4086"
 
 [[package]]
 name = "retry-policies"
@@ -7566,6 +7590,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f7278a1ec8bfd4a4e07515c589f5ff7b309a373f987393aef44813d9dcf87aa3"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "roaring"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6106b5cf8587f5834158895e9715a3c6c9716c8aefab57f1f7680917191c7873"
+dependencies = [
+ "bytemuck",
+ "byteorder",
+ "retain_mut",
 ]
 
 [[package]]
@@ -7667,6 +7702,15 @@ name = "ryu"
 version = "1.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b4b9743ed687d4b4bcedf9ff5eaa7398495ae14e61cba0a295704edbc7decde"
+
+[[package]]
+name = "safe_arch"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f398075ce1e6a179b46f51bd88d0598b92b00d3551f1a2d4ac49e771b56ac354"
+dependencies = [
+ "bytemuck",
+]
 
 [[package]]
 name = "same-file"
@@ -9591,6 +9635,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "wide"
+version = "0.7.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c68938b57b33da363195412cfc5fc37c9ed49aa9cfe2156fde64b8d2c9498242"
+dependencies = [
+ "bytemuck",
+ "safe_arch",
+]
+
+[[package]]
 name = "winapi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9791,22 +9845,21 @@ dependencies = [
  "axum",
  "bitflags 2.4.1",
  "bstr 0.2.14",
- "byteorder",
+ "bytemuck",
  "bytes",
  "cc",
  "chrono",
  "clap",
  "console",
  "criterion",
- "crossbeam-deque",
  "crossbeam-epoch",
- "crossbeam-utils",
  "crypto-common",
  "debugid",
  "dec",
  "digest",
  "either",
  "flate2",
+ "futures",
  "futures-channel",
  "futures-core",
  "futures-executor",

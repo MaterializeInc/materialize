@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_ore::id_gen::IdHandle;
+use mz_ore::id_gen::{IdAllocatorInnerBitSet, IdHandle};
 
 /// Inner type of a [`ConnectionId`], `u32` for postgres compatibility.
 ///
@@ -15,4 +15,4 @@ use mz_ore::id_gen::IdHandle;
 pub type ConnectionIdType = u32;
 
 /// An abstraction allowing us to name different connections.
-pub type ConnectionId = IdHandle<ConnectionIdType>;
+pub type ConnectionId = IdHandle<ConnectionIdType, IdAllocatorInnerBitSet>;
