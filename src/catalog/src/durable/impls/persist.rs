@@ -44,7 +44,7 @@ use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::{SourceData, Timeline};
 use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 use uuid::Uuid;
 
 use crate::durable::debug::{Collection, DebugCatalogState, Trace};
@@ -200,10 +200,14 @@ impl UnopenedPersistCatalogState {
         let mut current_epoch = prev_epoch.unwrap_or(MIN_EPOCH).get();
         // Only writable catalogs attempt to increment the epoch.
         if matches!(mode, Mode::Writable) {
-            current_epoch = current_epoch + 1;
-            if let Some(epoch_lower_bound) = epoch_lower_bound {
-                current_epoch = max(current_epoch, epoch_lower_bound.get());
+            if let Some(epoch_lower_bound) = &epoch_lower_bound {
+                info!(?epoch_lower_bound);
             }
+
+            current_epoch = max(
+                current_epoch + 1,
+                epoch_lower_bound.unwrap_or(Epoch::MIN).get(),
+            );
         }
         let current_epoch = Epoch::new(current_epoch).expect("known to be non-zero");
         fence_updates.push(StateUpdate {
@@ -214,6 +218,7 @@ impl UnopenedPersistCatalogState {
         debug!(
             ?upper,
             ?prev_epoch,
+            ?epoch_lower_bound,
             ?current_epoch,
             "fencing previous catalogs"
         );
