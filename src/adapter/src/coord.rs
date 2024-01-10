@@ -2241,11 +2241,6 @@ impl Coordinator {
         mut cmd_rx: mpsc::UnboundedReceiver<(OpenTelemetryContext, Command)>,
         group_commit_rx: appends::GroupCommitWaiter,
     ) -> LocalBoxFuture<'static, ()> {
-        struct LastMessage {
-            kind: &'static str,
-            stmt: Option<Arc<Statement<Raw>>>,
-        }
-
         async move {
             // Watcher that listens for and reports cluster service status changes.
             let mut cluster_events = self.controller.events_stream();
@@ -2570,6 +2565,23 @@ impl Coordinator {
         let compute_instance = ComputeInstanceId::User(1);
 
         let _: () = self.ship_dataflow(dataflow, compute_instance).await;
+    }
+}
+
+/// Contains information about the last message the [`Coordinator`] processed.
+#[derive(Debug)]
+struct LastMessage {
+    kind: &'static str,
+    stmt: Option<Arc<Statement<Raw>>>,
+}
+
+impl Drop for LastMessage {
+    fn drop(&mut self) {
+        // Only print the last message if we're currently panicking, otherwise we'd spam our logs.
+        if std::thread::panicking() {
+            // If we're panicking theres no guarantee `tracing` still works, so print to stderr.
+            eprintln!("Coordinator panicking, dumping last message\n{:?}", self);
+        }
     }
 }
 
