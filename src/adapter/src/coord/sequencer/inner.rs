@@ -2769,18 +2769,26 @@ impl Coordinator {
                 .await
             }
             plan::ExplaineeStatement::CreateMaterializedView {
-                name,
-                raw_plan,
-                column_names,
-                cluster_id,
                 broken,
-                non_null_assertions,
-                refresh_schedule,
+                plan:
+                    plan::CreateMaterializedViewPlan {
+                        name,
+                        materialized_view:
+                            plan::MaterializedView {
+                                expr,
+                                column_names,
+                                cluster_id,
+                                non_null_assertions,
+                                refresh_schedule,
+                                ..
+                            },
+                        ..
+                    },
             } => {
                 // Please see the docs on `explain_query_optimizer_pipeline` above.
                 self.explain_create_materialized_view_optimizer_pipeline(
                     name,
-                    raw_plan,
+                    expr,
                     column_names,
                     cluster_id,
                     broken,

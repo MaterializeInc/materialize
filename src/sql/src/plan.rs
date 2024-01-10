@@ -81,6 +81,7 @@ pub(crate) mod transform_expr;
 pub(crate) mod typeconv;
 pub(crate) mod with_options;
 
+use crate::plan;
 use crate::plan::with_options::OptionalDuration;
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
@@ -614,7 +615,7 @@ pub struct CreateViewPlan {
     pub ambiguous_columns: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CreateMaterializedViewPlan {
     pub name: QualifiedItemName,
     pub materialized_view: MaterializedView,
@@ -814,14 +815,9 @@ pub enum ExplaineeStatement {
     },
     /// The object to be explained is a CREATE MATERIALIZED VIEW.
     CreateMaterializedView {
-        name: QualifiedItemName,
-        raw_plan: HirRelationExpr,
-        column_names: Vec<ColumnName>,
-        cluster_id: ClusterId,
         /// Broken flag (see [`ExplaineeStatement::broken()`]).
         broken: bool,
-        non_null_assertions: Vec<usize>,
-        refresh_schedule: Option<RefreshSchedule>,
+        plan: plan::CreateMaterializedViewPlan,
     },
     /// The object to be explained is a CREATE INDEX.
     CreateIndex {
@@ -836,7 +832,7 @@ impl ExplaineeStatement {
     pub fn depends_on(&self) -> BTreeSet<GlobalId> {
         match self {
             Self::Select { raw_plan, .. } => raw_plan.depends_on(),
-            Self::CreateMaterializedView { raw_plan, .. } => raw_plan.depends_on(),
+            Self::CreateMaterializedView { plan, .. } => plan.materialized_view.expr.depends_on(),
             Self::CreateIndex { index, .. } => btreeset! {index.on},
         }
     }
