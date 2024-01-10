@@ -112,11 +112,13 @@ def workflow_test_epoch_migration(c: Composition) -> None:
     )
     c.kill("materialized")
 
-    # Start and stop Materialize with persist multiple times to increment the epoch. Also Check
-    # that objects still exist and create some more.
+    # Reboot and check that objects still exist.
     c.up("materialized")
     for j in range(0, reboots):
         check_objects(c, j)
+
+    # Start and stop Materialize with persist multiple times to increment the epoch. Create some
+    # objects each time.
     for i in range(0, reboots):
         create_objects(c, reboots + i)
         c.kill("materialized")
