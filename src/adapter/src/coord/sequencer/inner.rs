@@ -2570,6 +2570,9 @@ impl Coordinator {
                         plan::ExplaineeStatement::CreateMaterializedView { .. } => {
                             self.explain_create_materialized_view(ctx, plan).await;
                         }
+                        plan::ExplaineeStatement::CreateIndex { .. } => {
+                            self.explain_create_index(ctx, plan).await;
+                        }
                         _ => {
                             let result =
                                 self.explain_statement(&mut ctx, plan, target_cluster).await;

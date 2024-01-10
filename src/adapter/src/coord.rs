@@ -469,6 +469,7 @@ pub enum CreateIndexStage {
     Validate(CreateIndexValidate),
     Optimize(CreateIndexOptimize),
     Finish(CreateIndexFinish),
+    Explain(CreateIndexExplain),
 }
 
 impl CreateIndexStage {
@@ -477,6 +478,7 @@ impl CreateIndexStage {
             Self::Validate(_) => None,
             Self::Optimize(stage) => Some(&mut stage.validity),
             Self::Finish(stage) => Some(&mut stage.validity),
+            Self::Explain(stage) => Some(&mut stage.validity),
         }
     }
 }
@@ -485,6 +487,9 @@ impl CreateIndexStage {
 pub struct CreateIndexValidate {
     plan: plan::CreateIndexPlan,
     resolved_ids: ResolvedIds,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
@@ -492,16 +497,29 @@ pub struct CreateIndexOptimize {
     validity: PlanValidity,
     plan: plan::CreateIndexPlan,
     resolved_ids: ResolvedIds,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
 pub struct CreateIndexFinish {
     validity: PlanValidity,
-    id: GlobalId,
+    exported_index_id: GlobalId,
     plan: plan::CreateIndexPlan,
     resolved_ids: ResolvedIds,
     global_mir_plan: optimize::index::GlobalMirPlan,
     global_lir_plan: optimize::index::GlobalLirPlan,
+}
+
+#[derive(Debug)]
+pub struct CreateIndexExplain {
+    validity: PlanValidity,
+    exported_index_id: GlobalId,
+    plan: plan::CreateIndexPlan,
+    df_meta: DataflowMetainfo,
+    used_indexes: UsedIndexes,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
