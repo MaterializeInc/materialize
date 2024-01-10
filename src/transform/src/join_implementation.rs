@@ -25,8 +25,8 @@ use mz_expr::{
     MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
 use mz_ore::cast::{CastFrom, CastLossy, TryCastFrom};
-use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 
 use crate::attribute::cardinality::{FactorizerVariable, SymExp};
 use crate::attribute::{Cardinality, DerivedAttributesBuilder};
@@ -504,7 +504,6 @@ impl JoinImplementation {
             //       (i) we wouldn't create more arrangements than a differential join would
             //       (ii) `enable_eager_delta_joins` is on
             //
-            //
             // A differential join of k relations requires k-2 arrangements of intermediate
             // results (plus k arrangements of the inputs).
             //
@@ -639,6 +638,8 @@ mod index_map {
 
 mod delta_queries {
 
+    use std::collections::BTreeSet;
+
     use mz_expr::{
         FilterCharacteristics, JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr,
     };
@@ -676,18 +677,20 @@ mod delta_queries {
             )?;
 
             // Count new arrangements.
-            let new_arrangements: usize = orders
-                .iter()
-                .flat_map(|o| {
-                    o.iter().skip(1).filter_map(|(c, key, input)| {
-                        if c.arranged {
-                            None
-                        } else {
-                            Some((*input, key.clone()))
-                        }
+            let new_arrangements: usize =
+                orders
+                    .iter()
+                    .flat_map(|o| {
+                        o.iter().skip(1).filter_map(|(c, key, input)| {
+                            if c.arranged {
+                                None
+                            } else {
+                                Some((input, key))
+                            }
+                        })
                     })
-                })
-                .count();
+                    .collect::<BTreeSet<_>>()
+                    .len();
 
             // Convert the order information into specific (input, key, characteristics) information.
             let mut orders = orders
@@ -725,6 +728,8 @@ mod delta_queries {
 }
 
 mod differential {
+    use std::collections::BTreeSet;
+
     use mz_expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
     use mz_ore::soft_assert_eq_or_log;
 
@@ -782,7 +787,8 @@ mod differential {
                                 Some((*input, key.clone()))
                             }
                         })
-                        .count()
+                        .collect::<BTreeSet<_>>()
+                        .len()
                 })
                 .collect();
 
@@ -841,7 +847,7 @@ mod differential {
             let (start, mut start_key, start_characteristics) = order[0].clone();
 
             // Count new arrangements for this choice of ordering.
-            let new_arrangements = inputs.len() + new_input_arrangements[start];
+            let new_arrangements = inputs.len() - 2 + new_input_arrangements[start];
 
             // Implement arrangements in each of the inputs.
             let (lifted_mfp, lifted_projections) =
