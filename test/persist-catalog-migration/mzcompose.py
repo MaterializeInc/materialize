@@ -95,13 +95,13 @@ def workflow_test_epoch_migration(c: Composition) -> None:
 
     # Start and stop Materialize with stash multiple times to increment the epoch. Create some
     # objects each time.
+    c.up("materialized")
     for i in range(0, reboots):
-        c.up("materialized")
         create_objects(c, i)
         c.kill("materialized")
+        c.up("materialized")
 
     # Switch to persist catalog.
-    c.up("materialized")
     c.testdrive(
         input=dedent(
             """
@@ -114,16 +114,15 @@ def workflow_test_epoch_migration(c: Composition) -> None:
 
     # Start and stop Materialize with persist multiple times to increment the epoch. Also Check
     # that objects still exist and create some more.
+    c.up("materialized")
+    for j in range(0, reboots):
+        check_objects(c, j)
     for i in range(0, reboots):
-        c.up("materialized")
-        if i == 0:
-            for j in range(0, reboots):
-                check_objects(c, j)
         create_objects(c, reboots + i)
         c.kill("materialized")
+        c.up("materialized")
 
     # Switch back to stash catalog.
-    c.up("materialized")
     c.testdrive(
         input=dedent(
             """
