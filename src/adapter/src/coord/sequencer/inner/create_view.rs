@@ -143,7 +143,7 @@ impl Coordinator {
 
                 // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
                 let raw_expr = plan.view.expr.clone();
-                let optimized_expr = return_if_err!(optimizer.optimize(raw_expr), ctx);
+                let optimized_expr = return_if_err!(optimizer.catch_unwind_optimize(raw_expr), ctx);
 
                 let stage = CreateViewStage::Finish(CreateViewFinish {
                     validity,

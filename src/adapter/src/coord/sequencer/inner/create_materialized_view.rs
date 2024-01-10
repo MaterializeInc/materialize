@@ -202,12 +202,14 @@ impl Coordinator {
 
                 // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
                 let raw_expr = plan.materialized_view.expr.clone();
-                let local_mir_plan = return_if_err!(optimizer.optimize(raw_expr), ctx);
+                let local_mir_plan = return_if_err!(optimizer.catch_unwind_optimize(raw_expr), ctx);
                 let global_mir_plan =
-                    return_if_err!(optimizer.optimize(local_mir_plan.clone()), ctx);
+                    return_if_err!(optimizer.catch_unwind_optimize(local_mir_plan.clone()), ctx);
                 // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                let global_lir_plan =
-                    return_if_err!(optimizer.optimize(global_mir_plan.clone()), ctx);
+                let global_lir_plan = return_if_err!(
+                    optimizer.catch_unwind_optimize(global_mir_plan.clone()),
+                    ctx
+                );
 
                 let stage = CreateMaterializedViewStage::Finish(CreateMaterializedViewFinish {
                     validity,

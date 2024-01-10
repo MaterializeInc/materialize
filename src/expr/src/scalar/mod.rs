@@ -788,7 +788,7 @@ impl MirScalarExpr {
                     | MirScalarExpr::Literal(_, _)
                     | MirScalarExpr::CallUnmaterializable(_) => (),
                     MirScalarExpr::CallUnary { func, expr } => {
-                        if expr.is_literal() {
+                        if expr.is_literal() && *func != UnaryFunc::Panic(func::Panic) {
                             *e = eval(e);
                         } else if let UnaryFunc::RecordGet(func::RecordGet(i)) = *func {
                             if let MirScalarExpr::CallVariadic {

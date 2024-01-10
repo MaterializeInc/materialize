@@ -148,6 +148,12 @@ pub enum TransformError {
     Internal(String),
     /// A reference to an apparently unbound identifier.
     IdentifierMissing(mz_expr::LocalId),
+    /// Notify the caller to panic with the given message.
+    ///
+    /// This is used to bypass catch_unwind-wrapped calls of the optimizer and
+    /// support `SELECT mz_unsafe.mz_panic(<literal>)` statements as a mechanism to kill
+    /// environmentd in various tests.
+    CallerShouldPanic(String),
 }
 
 impl fmt::Display for TransformError {
@@ -156,6 +162,9 @@ impl fmt::Display for TransformError {
             TransformError::Internal(msg) => write!(f, "internal transform error: {}", msg),
             TransformError::IdentifierMissing(i) => {
                 write!(f, "apparently unbound identifier: {:?}", i)
+            }
+            TransformError::CallerShouldPanic(msg) => {
+                write!(f, "caller should panic with message: {}", msg)
             }
         }
     }

@@ -149,10 +149,13 @@ impl Coordinator {
                 // MIR ⇒ MIR optimization (global)
                 let index_plan =
                     optimize::index::Index::new(&plan.name, &plan.index.on, &plan.index.keys);
-                let global_mir_plan = return_if_err!(optimizer.optimize(index_plan), ctx);
+                let global_mir_plan =
+                    return_if_err!(optimizer.catch_unwind_optimize(index_plan), ctx);
                 // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                let global_lir_plan =
-                    return_if_err!(optimizer.optimize(global_mir_plan.clone()), ctx);
+                let global_lir_plan = return_if_err!(
+                    optimizer.catch_unwind_optimize(global_mir_plan.clone()),
+                    ctx
+                );
 
                 let stage = CreateIndexStage::Finish(CreateIndexFinish {
                     validity,
