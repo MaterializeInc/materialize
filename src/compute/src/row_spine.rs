@@ -101,6 +101,8 @@ mod container {
     /// A slice container with four bytes overhead per slice.
     pub struct DatumContainer {
         batches: Vec<DatumBatch>,
+        /// Stored out of line from batches to allow more effective binary search.
+        offsets: Vec<usize>,
     }
 
     impl DatumContainer {
@@ -111,6 +113,10 @@ mod container {
             callback(
                 self.batches.len() * std::mem::size_of::<DatumBatch>(),
                 self.batches.capacity() * std::mem::size_of::<DatumBatch>(),
+            );
+            callback(
+                self.offsets.len() * std::mem::size_of::<usize>(),
+                self.offsets.capacity() * std::mem::size_of::<usize>(),
             );
             for batch in self.batches.iter() {
                 use crate::extensions::arrange;
@@ -130,9 +136,14 @@ mod container {
                 if !success {
                     // double the lengths from `batch`.
                     let item_cap = 2 * batch.offsets.len();
-                    let byte_cap = std::cmp::max(2 * batch.storage.capacity(), item.bytes.len());
+                    // New byte capacity should be in the range 2MB - 128MB, and at least the item length.
+                    let mut byte_cap = 2 * batch.storage.capacity();
+                    byte_cap = std::cmp::max(byte_cap, 2 << 20);
+                    byte_cap = std::cmp::min(byte_cap, 128 << 20);
+                    byte_cap = std::cmp::max(byte_cap, item.bytes.len());
                     let mut new_batch = DatumBatch::with_capacities(item_cap, byte_cap);
                     assert!(new_batch.try_push(item.bytes));
+                    self.offsets.push(self.len());
                     self.batches.push(new_batch);
                 }
             }
@@ -141,6 +152,7 @@ mod container {
         fn with_capacity(size: usize) -> Self {
             Self {
                 batches: vec![DatumBatch::with_capacities(size, size)],
+                offsets: vec![0],
             }
         }
 
@@ -155,29 +167,36 @@ mod container {
                 item_cap += batch.offsets.len() - 1;
                 byte_cap += batch.storage.len();
             }
+
+            // TODO: should we limit `item_cap` to avoid an inappropriately large allocation?
+            // It would be "when we cross the `128 << 20` byte boundary" or something like that.
+            byte_cap = std::cmp::max(byte_cap, 2 << 20);
+            byte_cap = std::cmp::min(byte_cap, 128 << 20);
+
             Self {
                 batches: vec![DatumBatch::with_capacities(item_cap, byte_cap)],
+                offsets: vec![0],
             }
         }
 
-        fn index(&self, mut index: usize) -> Self::ReadItem<'_> {
-            for batch in self.batches.iter() {
-                if index < batch.len() {
-                    return DatumSeq {
-                        bytes: batch.index(index),
-                    };
-                }
-                index -= batch.len();
+        fn index(&self, index: usize) -> Self::ReadItem<'_> {
+            // Determine which batch the index belongs to.
+            // Binary search gives different answers based on whether it finds
+            // the result or not, and we need to tidy up those results to point
+            // at the first batch for which the offset is less or equal to `index`.
+            let batch_idx = match self.offsets.binary_search(&index) {
+                Ok(x) => x,
+                Err(x) => x - 1,
+            };
+
+            DatumSeq {
+                bytes: self.batches[batch_idx].index(index - self.offsets[batch_idx]),
             }
-            panic!("Index out of bounds");
         }
 
         fn len(&self) -> usize {
-            let mut result = 0;
-            for batch in self.batches.iter() {
-                result += batch.len();
-            }
-            result
+            self.offsets.last().map(|x| *x).unwrap_or(0)
+                + self.batches.last().map(|x| x.len()).unwrap_or(0)
         }
     }
 
