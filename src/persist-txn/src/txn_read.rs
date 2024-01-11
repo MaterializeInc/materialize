@@ -9,6 +9,8 @@
 
 //! Interfaces for reading txn shards as well as data shards.
 
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::future::Future;
 use std::sync::Arc;
@@ -18,18 +20,19 @@ use differential_dataflow::lattice::Lattice;
 use futures::Stream;
 use mz_ore::task::AbortOnDropHandle;
 use mz_persist_client::critical::SinceHandle;
-use mz_persist_client::read::{Cursor, LazyPartStats, ReadHandle, Since};
+use mz_persist_client::read::{Cursor, LazyPartStats, ListenEvent, ReadHandle, Since, Subscribe};
 use mz_persist_client::stats::SnapshotStats;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{PersistClient, ShardId};
+use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, instrument, warn};
+use uuid::Uuid;
 
-use crate::txn_cache::TxnsCache;
-use crate::{TxnsCodec, TxnsCodecDefault};
+use crate::txn_cache::{TxnsCache, TxnsCacheState};
+use crate::{TxnsCodec, TxnsCodecDefault, TxnsEntry};
 
 /// A token exchangeable for a data shard snapshot.
 ///
@@ -260,27 +263,42 @@ pub enum DataListenNext<T> {
 #[derive(Debug, Clone)]
 pub struct TxnsRead<T> {
     txns_id: ShardId,
-    tx: mpsc::Sender<TxnsReadCmd<T>>,
-    _task: Arc<AbortOnDropHandle<()>>,
+    tx: mpsc::UnboundedSender<TxnsReadCmd<T>>,
+    _read_task: Arc<AbortOnDropHandle<()>>,
+    _subscribe_task: Arc<AbortOnDropHandle<()>>,
 }
 
 impl<T: Timestamp + Lattice + Codec64> TxnsRead<T> {
     /// Starts the task worker and returns a handle for communicating with it.
-    pub fn start<C>(client: PersistClient, txns_id: ShardId) -> Self
+    pub async fn start<C>(client: PersistClient, txns_id: ShardId) -> Self
     where
         T: TotalOrder + StepForward,
-        C: TxnsCodec,
+        C: TxnsCodec + 'static,
     {
-        let (tx, rx) = mpsc::channel(128);
-        let task = mz_ore::task::spawn(|| "persist-txn::cache", async move {
-            let cache = TxnsCache::<T, C>::open(&client, txns_id, None).await;
-            let mut task = TxnsReadTask { cache, rx };
-            task.run().await
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        let (mut subscribe_task, cache) =
+            TxnsSubscribeTask::<T, C>::open(&client, txns_id, None, tx.clone()).await;
+
+        let mut task = TxnsReadTask {
+            cache,
+            rx,
+            pending_waits_by_ts: BTreeSet::new(),
+            pending_waits_by_id: BTreeMap::new(),
+        };
+
+        let read_task =
+            mz_ore::task::spawn(|| "persist-txn::read_task", async move { task.run().await });
+
+        let subscribe_task = mz_ore::task::spawn(|| "persist-txn::subscribe_task", async move {
+            subscribe_task.run().await
         });
+
         TxnsRead {
             txns_id,
             tx,
-            _task: Arc::new(task.abort_on_drop()),
+            _read_task: Arc::new(read_task.abort_on_drop()),
+            _subscribe_task: Arc::new(subscribe_task.abort_on_drop()),
         }
     }
 
@@ -303,14 +321,37 @@ impl<T: Timestamp + Lattice + Codec64> TxnsRead<T> {
 
     /// See [TxnsCache::update_ge].
     pub async fn update_ge(&self, ts: T) {
-        let ts = WaitTs::GreaterEqual(ts);
-        self.send(|tx| TxnsReadCmd::Wait { ts, tx }).await
+        let wait = WaitTs::GreaterEqual(ts);
+        self.update(wait).await
     }
 
     /// See [TxnsCache::update_gt].
     pub async fn update_gt(&self, ts: T) {
-        let ts = WaitTs::GreaterThan(ts);
-        self.send(|tx| TxnsReadCmd::Wait { ts, tx }).await
+        let wait = WaitTs::GreaterThan(ts);
+        self.update(wait).await
+    }
+
+    async fn update(&self, wait: WaitTs<T>) {
+        let id = Uuid::new_v4();
+        let res = self.send(|tx| TxnsReadCmd::Wait {
+            id: id.clone(),
+            ts: wait,
+            tx,
+        });
+
+        // We install a drop guard so that we can cancel the wait in case the
+        // future is cancelled/dropped.
+        let mut cancel_guard = CancelWaitOnDrop {
+            id,
+            tx: Some(self.tx.clone()),
+        };
+
+        let res = res.await;
+
+        // We don't have to cancel the wait on drop anymore.
+        cancel_guard.complete();
+
+        res
     }
 
     async fn send<R: std::fmt::Debug>(
@@ -319,17 +360,48 @@ impl<T: Timestamp + Lattice + Codec64> TxnsRead<T> {
     ) -> R {
         let (tx, rx) = oneshot::channel();
         let req = cmd(tx);
-        let () = self
-            .tx
-            .send(req)
-            .await
-            .expect("task unexpectedly shut down");
+        let () = self.tx.send(req).expect("task unexpectedly shut down");
         rx.await.expect("task unexpectedly shut down")
+    }
+}
+
+/// Cancels an in-flight wait command when dropped, unless the given `tx` is
+/// yanked before that.
+struct CancelWaitOnDrop<T> {
+    id: Uuid,
+    tx: Option<mpsc::UnboundedSender<TxnsReadCmd<T>>>,
+}
+
+impl<T> CancelWaitOnDrop<T> {
+    /// Marks the wait command as complete. This guard will no longer send a
+    /// cancel command when dropped.
+    pub fn complete(&mut self) {
+        self.tx.take();
+    }
+}
+
+impl<T> Drop for CancelWaitOnDrop<T> {
+    fn drop(&mut self) {
+        let tx = match self.tx.take() {
+            Some(tx) => tx,
+            None => {
+                // No need to cancel anymore!
+                return;
+            }
+        };
+
+        let _ = tx.send(TxnsReadCmd::CancelWait {
+            id: self.id.clone(),
+        });
     }
 }
 
 #[derive(Debug)]
 enum TxnsReadCmd<T> {
+    Updates {
+        entries: Vec<(TxnsEntry, T, i64)>,
+        frontier: T,
+    },
     DataSnapshot {
         data_id: ShardId,
         as_of: T,
@@ -341,31 +413,171 @@ enum TxnsReadCmd<T> {
         tx: oneshot::Sender<DataListenNext<T>>,
     },
     Wait {
+        id: Uuid,
         ts: WaitTs<T>,
         tx: oneshot::Sender<()>,
     },
+    CancelWait {
+        id: Uuid,
+    },
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 enum WaitTs<T> {
     GreaterEqual(T),
     GreaterThan(T),
 }
 
-#[derive(Debug)]
-struct TxnsReadTask<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecDefault> {
-    rx: mpsc::Receiver<TxnsReadCmd<T>>,
-    cache: TxnsCache<T, C>,
+// Specially made for keeping `WaitTs` in a `BTreeSet` and peeling them off in
+// the order in which they would be retired.
+//
+// [`WaitTs`] with different timestamps are ordered according to their
+// timestamps. For [`WaitTs`] with the same timestamp, we have to order
+// `GreaterEqual` before `GreaterThan`, because those can be retired
+// earlier/they are less "strict" in how far they need the frontier to advance.
+impl<T: Ord> Ord for WaitTs<T> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let self_ts = match self {
+            WaitTs::GreaterEqual(ts) => ts,
+            WaitTs::GreaterThan(ts) => ts,
+        };
+        let other_ts = match other {
+            WaitTs::GreaterEqual(ts) => ts,
+            WaitTs::GreaterThan(ts) => ts,
+        };
+
+        if self_ts < other_ts {
+            Ordering::Less
+        } else if *self_ts > *other_ts {
+            Ordering::Greater
+        } else if matches!(self, WaitTs::GreaterEqual(_)) && matches!(other, WaitTs::GreaterThan(_))
+        {
+            Ordering::Less
+        } else if matches!(self, WaitTs::GreaterThan(_)) && matches!(other, WaitTs::GreaterEqual(_))
+        {
+            Ordering::Greater
+        } else {
+            Ordering::Equal
+        }
+    }
 }
 
-impl<T, C> TxnsReadTask<T, C>
+impl<T: Ord> PartialOrd for WaitTs<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T: Timestamp + Lattice + Codec64> WaitTs<T> {
+    /// Returns `true` iff (sic) this [WaitTs] is ready.
+    fn is_ready(&self, frontier: &T) -> bool {
+        match &self {
+            WaitTs::GreaterEqual(ts) => {
+                if frontier >= ts {
+                    return true;
+                }
+            }
+            WaitTs::GreaterThan(ts) => {
+                if frontier > ts {
+                    return true;
+                }
+            }
+        };
+
+        false
+    }
+}
+
+#[derive(Debug)]
+struct TxnsReadTask<T: Timestamp + Lattice + Codec64> {
+    rx: mpsc::UnboundedReceiver<TxnsReadCmd<T>>,
+    cache: TxnsCacheState<T>,
+    pending_waits_by_ts: BTreeSet<(WaitTs<T>, Uuid)>,
+    pending_waits_by_id: BTreeMap<Uuid, PendingWait<T>>,
+}
+
+/// A pending "wait" notification that we will complete once the frontier
+/// advances far enough.
+#[derive(Debug)]
+struct PendingWait<T: Timestamp + Lattice + Codec64> {
+    ts: WaitTs<T>,
+    tx: Option<oneshot::Sender<()>>,
+}
+
+impl<T: Timestamp + Lattice + Codec64> PendingWait<T> {
+    /// Returns `true` if this [PendingWait] is completed.
+    ///
+    /// A pending wait is completed when the frontier advances far enough or
+    /// when the receiver side hangs up.
+    fn maybe_complete(&mut self, frontier: &T) -> bool {
+        if self.tx.is_none() {
+            // Already completed!
+            return true;
+        }
+
+        if self.ts.is_ready(frontier) {
+            let _ = self.tx.take().expect("known to exist").send(());
+            return true;
+        }
+
+        if let Some(tx) = self.tx.as_ref() {
+            if tx.is_closed() {
+                // Receiver dropped, so also complete.
+                self.tx.take();
+                return true;
+            }
+        }
+
+        false
+    }
+}
+
+impl<T> TxnsReadTask<T>
 where
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-    C: TxnsCodec,
 {
     async fn run(&mut self) {
         while let Some(cmd) = self.rx.recv().await {
             match cmd {
+                TxnsReadCmd::Updates { entries, frontier } => {
+                    tracing::trace!(
+                        "updates from subscribe task at ({:?}): {:?}",
+                        frontier,
+                        entries
+                    );
+
+                    self.cache.push_entries(entries, frontier.clone());
+
+                    // The frontier has advanced, so respond to waits and retain
+                    // those that still have to wait.
+
+                    loop {
+                        let first_wait = self.pending_waits_by_ts.first();
+
+                        let (wait_ts, id) = match first_wait {
+                            Some(wait) => wait,
+                            None => break,
+                        };
+
+                        let completed = wait_ts.is_ready(&frontier);
+
+                        if completed {
+                            let mut wait = self
+                                .pending_waits_by_id
+                                .remove(id)
+                                .expect("wait must be in map");
+
+                            let really_completed = wait.maybe_complete(&frontier);
+                            assert!(really_completed);
+
+                            self.pending_waits_by_ts.pop_first();
+                        } else {
+                            // All further wait's timestamps are higher. We're
+                            // using a `BTreeSet`, which is ordered!
+                            break;
+                        }
+                    }
+                }
                 TxnsReadCmd::DataSnapshot { data_id, as_of, tx } => {
                     let res = self.cache.data_snapshot(data_id, as_of.clone());
                     let _ = tx.send(res);
@@ -374,17 +586,159 @@ where
                     let res = self.cache.data_listen_next(&data_id, ts);
                     let _ = tx.send(res);
                 }
-                TxnsReadCmd::Wait { ts, tx } => {
-                    // TODO(txn-lazy): This could be arbitrarily far in the
-                    // future. Don't block other commands on this.
-                    let res = match &ts {
-                        WaitTs::GreaterEqual(ts) => self.cache.update_ge(ts).await,
-                        WaitTs::GreaterThan(ts) => self.cache.update_gt(ts).await,
-                    };
-                    let _ = tx.send(res);
+                TxnsReadCmd::Wait { id, ts, tx } => {
+                    let mut pending_wait = PendingWait { ts, tx: Some(tx) };
+                    let completed = pending_wait.maybe_complete(&self.cache.progress_exclusive);
+                    if !completed {
+                        let wait_ts = pending_wait.ts.clone();
+                        self.pending_waits_by_ts.insert((wait_ts, id.clone()));
+                        self.pending_waits_by_id.insert(id, pending_wait);
+                    }
+                }
+                TxnsReadCmd::CancelWait { id } => {
+                    let pending_wait = self.pending_waits_by_id.remove(&id).expect("missing wait");
+                    let wait_ts = pending_wait.ts.clone();
+                    self.pending_waits_by_ts.remove(&(wait_ts, id));
                 }
             }
         }
         warn!("TxnsReadTask shutting down");
+    }
+}
+
+/// Reads txn updates from a [Subscribe] and forwards them to a [TxnsReadTask]
+/// when receiving a progress update.
+#[derive(Debug)]
+struct TxnsSubscribeTask<T: Timestamp + Lattice + Codec64, C: TxnsCodec = TxnsCodecDefault> {
+    txns_subscribe: Subscribe<C::Key, C::Val, T, i64>,
+
+    /// Staged update that we will consume and forward to the [TxnsReadTask]
+    /// when we receive a progress update.
+    buf: Vec<(TxnsEntry, T, i64)>,
+
+    /// For sending updates to the main [TxnsReadTask].
+    tx: mpsc::UnboundedSender<TxnsReadCmd<T>>,
+
+    /// If Some, this cache only tracks the indicated data shard as a
+    /// performance optimization. When used, only some methods (in particular,
+    /// the ones necessary for the txns_progress operator) are supported.
+    ///
+    /// TODO: It'd be nice to make this a compile time thing. I have some ideas,
+    /// but they're decently invasive, so leave it for a followup.
+    only_data_id: Option<ShardId>,
+}
+
+impl<T, C> TxnsSubscribeTask<T, C>
+where
+    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+    C: TxnsCodec,
+{
+    /// Creates a [TxnsSubscribeTask] reading from the given txn shard that
+    /// forwards updates (entries and progress) to the given `tx`.
+    ///
+    /// This returns both the created task and a [TxnsCacheState] that can be
+    /// used to interact with the txn system and into which the updates should
+    /// be funneled.
+    ///
+    /// NOTE: We create both the [TxnsSubscribeTask] and the [TxnsCacheState] at
+    /// the same time because the cache is initialized with a `since_ts`, which
+    /// we get from the same [ReadHandle] that we use to initialize the
+    /// [Subscribe].
+    pub async fn open(
+        client: &PersistClient,
+        txns_id: ShardId,
+        only_data_id: Option<ShardId>,
+        tx: mpsc::UnboundedSender<TxnsReadCmd<T>>,
+    ) -> (Self, TxnsCacheState<T>) {
+        let (txns_key_schema, txns_val_schema) = C::schemas();
+        let txns_read: ReadHandle<<C as TxnsCodec>::Key, <C as TxnsCodec>::Val, T, i64> = client
+            .open_leased_reader(
+                txns_id,
+                Arc::new(txns_key_schema),
+                Arc::new(txns_val_schema),
+                Diagnostics {
+                    shard_name: "txns".to_owned(),
+                    handle_purpose: "read txns".to_owned(),
+                },
+            )
+            .await
+            .expect("txns schema shouldn't change");
+        let as_of = txns_read.since().clone();
+        let txns_id = txns_read.shard_id();
+        let since_ts = as_of.as_option().expect("txns shard is not closed").clone();
+        let txns_subscribe = txns_read
+            .subscribe(as_of)
+            .await
+            .expect("handle holds a capability");
+
+        let state = TxnsCacheState::new(txns_id, since_ts, only_data_id);
+
+        let subscribe_task = TxnsSubscribeTask {
+            txns_subscribe,
+            buf: Vec::new(),
+            tx,
+            only_data_id,
+        };
+
+        (subscribe_task, state)
+    }
+
+    async fn run(&mut self) {
+        loop {
+            let events = self.txns_subscribe.next(None).await;
+            for event in events {
+                match event {
+                    ListenEvent::Progress(frontier) => {
+                        let frontier_ts = frontier
+                            .into_option()
+                            .expect("nothing should close the txns shard");
+                        let entries = std::mem::take(&mut self.buf);
+                        let res = self.tx.send(TxnsReadCmd::Updates {
+                            entries,
+                            frontier: frontier_ts,
+                        });
+                        if let Err(e) = res {
+                            warn!("TxnsSubscribeTask shutting down: {}", e);
+                            return;
+                        }
+                    }
+                    ListenEvent::Updates(parts) => {
+                        TxnsCache::<T, C>::fetch_parts(
+                            self.only_data_id.clone(),
+                            &mut self.txns_subscribe,
+                            parts,
+                            &mut self.buf,
+                        )
+                        .await;
+                    }
+                };
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WaitTs;
+
+    #[mz_ore::test]
+    fn wait_ts_ord() {
+        let mut waits = vec![
+            WaitTs::GreaterThan(3),
+            WaitTs::GreaterThan(2),
+            WaitTs::GreaterEqual(2),
+            WaitTs::GreaterThan(1),
+        ];
+
+        waits.sort();
+
+        let expected = vec![
+            WaitTs::GreaterThan(1),
+            WaitTs::GreaterEqual(2),
+            WaitTs::GreaterThan(2),
+            WaitTs::GreaterThan(3),
+        ];
+
+        assert_eq!(waits, expected);
     }
 }
