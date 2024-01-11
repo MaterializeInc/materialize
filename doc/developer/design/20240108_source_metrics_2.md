@@ -115,7 +115,7 @@ We will introduce 2 new columns in `mz_source_statistics_per_worker`:
 The unit of _values_ depends on the source type, and will be _rows_ for MySQL and Postgres, and _offsets_ for kafka.
 
 These values can be summed across workers and compared (`snapshot_progress / snapshot_total`) to produce
-a _lower-bound_ estimate on the progress we have made reading the source's snapshot.
+a _lower-bound_ estimate on the % progress we have made reading the source's snapshot.
 
 ### Source frontier difference
 
@@ -137,8 +137,10 @@ and summing across partitions. Similarly, `snapshot_progress` can be derived fro
 #### Postgres and MySQL
 
 `snapshot_total` will need to be calculated, in the unit of rows by performing `SELECT count(*)` on the tables that participate in the snapshot.
-Both the Postgres and MySQL implementations will be required to perform this query, per-table, during snapshotting. For RDBMSes, this
-should be cheap.
+Both the Postgres and MySQL implementations will be required to perform this query, per-table, during snapshotting. Note that `count(*)` is not
+guaranteed to be cheap on Postgres and MySQL. To avoid this, we will perform this query _concurrently_ with the beginning of
+snapshotting, allowing the user to see their source's progress before a percentage can be calculated.
+
 
 `snapshot_progress` will need to be exposed by the source operators themselves, as the data itself during snapshotting all has
 the same frontier. This means the operators will need to track and periodically report a frontier describing the progress they
@@ -234,3 +236,4 @@ implement them in a feasible way. The attached example charts capture the desire
     The metrics added by this proposal would allow us to easily distinguish between those cases.
 - Should `upstream_rate` and `process_rate` be exposed as rates (as described in this design document), or should we instead expose the maximum value, and
 leaving calculating the rate to the client?
+- Will `count(*)` be prohibitively expensive, or do we need to use estimates?
