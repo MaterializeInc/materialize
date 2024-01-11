@@ -2143,6 +2143,106 @@ async fn test_set_emergency_stash_rollback() {
     debug_factory.drop().await;
 }
 
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_emergency_stash_tombstone() {
+    let (debug_factory, stash_config) = test_stash_config().await;
+    let persist_client = PersistClient::new_for_tests().await;
+    let organization_id = Uuid::new_v4();
+    let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+
+    {
+        // Open a persist catalog.
+        let persist_openable_state = Box::new(
+            migrate_from_stash_to_persist_state(
+                stash_config.clone(),
+                persist_client.clone(),
+                organization_id.clone(),
+                Arc::clone(&persist_metrics),
+            )
+            .await,
+        );
+        let mut persist_state = persist_openable_state
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
+            .await
+            .unwrap();
+
+        // Update catalog_kind (in persist) to emergency-stash.
+        let mut txn = persist_state.transaction().await.unwrap();
+        txn.set_catalog_kind(Some(CatalogKind::EmergencyStash))
+            .unwrap();
+        txn.commit().await.unwrap();
+    }
+
+    {
+        // Open an emergency stash catalog (it doesn't matter if we start with a migrate or rollback
+        // catalog because we change it to emergency-stash).
+        let mut emergency_stash_openable_state = Box::new(
+            rollback_from_persist_to_stash_state(
+                stash_config.clone(),
+                persist_client.clone(),
+                organization_id.clone(),
+                Arc::clone(&persist_metrics),
+            )
+            .await,
+        );
+        emergency_stash_openable_state.set_catalog_kind(CatalogKind::EmergencyStash);
+        let mut emergency_stash_state = emergency_stash_openable_state
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
+            .await
+            .unwrap();
+
+        // Update catalog_kind (in the stash) to persist.
+        let mut txn = emergency_stash_state.transaction().await.unwrap();
+        txn.set_catalog_kind(Some(CatalogKind::Persist)).unwrap();
+        txn.commit().await.unwrap();
+    }
+
+    // Check that a migrate implementation reads from the correct location pre-boot.
+    {
+        let mut openable_state = Box::new(
+            migrate_from_stash_to_persist_state(
+                stash_config.clone(),
+                persist_client.clone(),
+                organization_id.clone(),
+                Arc::clone(&persist_metrics),
+            )
+            .await,
+        );
+        assert_eq!(
+            CatalogKind::Persist,
+            openable_state
+                .get_catalog_kind_config()
+                .await
+                .unwrap()
+                .unwrap()
+        )
+    }
+
+    // Check that a rollback implementation reads from the correct location pre-boot.
+    {
+        let mut openable_state = Box::new(
+            rollback_from_persist_to_stash_state(
+                stash_config.clone(),
+                persist_client.clone(),
+                organization_id.clone(),
+                Arc::clone(&persist_metrics),
+            )
+            .await,
+        );
+        assert_eq!(
+            CatalogKind::Persist,
+            openable_state
+                .get_catalog_kind_config()
+                .await
+                .unwrap()
+                .unwrap()
+        )
+    }
+
+    debug_factory.drop().await;
+}
+
 /// Test that the epoch is migrated and rolled back correctly.
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
