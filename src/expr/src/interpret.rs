@@ -196,10 +196,13 @@ impl<'a> ResultSpec<'a> {
     pub fn value_between(min: Datum<'a>, max: Datum<'a>) -> ResultSpec<'a> {
         assert!(!min.is_null());
         assert!(!max.is_null());
-        assert!(min <= max);
-        ResultSpec {
-            values: Values::Within(min, max),
-            ..ResultSpec::nothing()
+        if min <= max {
+            ResultSpec {
+                values: Values::Within(min, max),
+                ..ResultSpec::nothing()
+            }
+        } else {
+            ResultSpec::nothing()
         }
     }
 
