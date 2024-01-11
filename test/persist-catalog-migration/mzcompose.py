@@ -10,9 +10,7 @@
 from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
