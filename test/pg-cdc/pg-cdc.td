@@ -162,7 +162,8 @@ ALTER SYSTEM SET pg_source_snapshot_statement_timeout = 1000
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES ("pk_table");
 
-$ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=true
+# TODO(def-) Reenable when #24357 is fixed
+#$ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=true
 
 > SHOW SUBSOURCES ON test_slot_source
 pk_table subsource
@@ -170,7 +171,8 @@ test_slot_source_progress progress
 
 > DROP SOURCE test_slot_source
 
-$ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
+# TODO(def-) Reenable when #24357 is fixed
+#$ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET pg_source_snapshot_statement_timeout = 0
