@@ -70,8 +70,8 @@ impl Arbitrary for MySqlTableDesc {
         (
             any::<String>(),
             any::<String>(),
-            any::<Vec<MySqlColumnDesc>>(),
-            any::<BTreeSet<MySqlKeyDesc>>(),
+            proptest::collection::vec(any::<MySqlColumnDesc>(), 1..4),
+            proptest::collection::btree_set(any::<MySqlKeyDesc>(), 1..4),
         )
             .prop_map(|(schema_name, name, columns, keys)| Self {
                 schema_name,
