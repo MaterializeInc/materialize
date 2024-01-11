@@ -613,6 +613,17 @@ steps:
     agents:
       queue: linux-x86_64-small
 
+  - id: persist-catalog-migration
+    label: "Persist Catalog Migration"
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: persist-catalog-migration
+    agents:
+      queue: linux-x86_64-small
+
   - id: deploy-website
     label: Deploy website
     depends_on: lint-docs

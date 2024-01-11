@@ -75,7 +75,6 @@ class Materialized(Service):
             "MZ_INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR=0.0.0.0:6879",
             "MZ_AWS_CONNECTION_ROLE_ARN=arn:aws:iam::123456789000:role/MaterializeConnection",
             "MZ_AWS_EXTERNAL_ID_PREFIX=eb5cb59b-e2fe-41f3-87ca-d2176a495345",
-            f"MZ_CATALOG_STORE={catalog_store}",
             # Please think twice before forwarding additional environment
             # variables from the host, as it's easy to write tests that are
             # then accidentally dependent on the state of the host machine.
@@ -103,6 +102,9 @@ class Materialized(Service):
                     f"{key}={value}" for key, value in system_parameter_defaults.items()
                 )
             ]
+
+        if catalog_store:
+            environment.append(f"MZ_CATALOG_STORE={catalog_store}")
 
         command = []
 
