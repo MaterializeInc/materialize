@@ -144,7 +144,7 @@ $ kafka-verify-data format=avro sink=materialize.public.snk3 sort-messages=true
 {"before": null, "after": {"row":{"c": "jackjill"}}}
 
 # Test Avro serialization of unsigned values.
-> CREATE MATERIALIZED VIEW unsigned WITH (RETAIN HISTORY FOR '30s') (a, b, c, d, e, f) AS
+> CREATE MATERIALIZED VIEW unsigned (a, b, c, d, e, f) WITH (RETAIN HISTORY FOR '30s') AS
   VALUES ('1'::uint2, '2'::uint2, '3'::uint4, '4'::uint4, '5'::uint8, '6'::uint8)
 > CREATE SINK snk_unsigned
   IN CLUSTER ${arg.single-replica-cluster}

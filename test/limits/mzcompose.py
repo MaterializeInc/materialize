@@ -536,7 +536,7 @@ class KafkaSinksSameSource(Generator):
         print(
             f"ALTER SYSTEM SET max_objects_per_schema = {KafkaSinksSameSource.COUNT * 10};"
         )
-        print("> CREATE MATERIALIZED VIEW v1 WITH (RETAIN HISTORY FOR '30s') (f1) AS VALUES (123)")
+        print("> CREATE MATERIALIZED VIEW v1 (f1) WITH (RETAIN HISTORY FOR '30s') AS VALUES (123)")
         print(
             """> CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);"""
         )
@@ -801,7 +801,7 @@ class ViewsMaterializedNested(Generator):
         )
         print("> CREATE TABLE t (f1 INTEGER);")
         print("> INSERT INTO t VALUES (0);")
-        print("> CREATE MATERIALIZED VIEW v0 WITH (RETAIN HISTORY FOR '30s') (f1) AS SELECT f1 FROM t;")
+        print("> CREATE MATERIALIZED VIEW (f1) v0 WITH (RETAIN HISTORY FOR '30s') AS SELECT f1 FROM t;")
 
         for i in cls.all():
             print(

@@ -488,32 +488,32 @@ ReduceAccumulable
 > CREATE TABLE mods (num bigint, mod text)
 > CREATE MATERIALIZED VIEW test1 WITH (RETAIN HISTORY FOR '30s') AS
   SELECT * FROM names JOIN mods USING (num)
-> CREATE MATERIALIZED VIEW test2 WITH (RETAIN HISTORY FOR '30s') (names_num, names_name, mods_num, mods_mod) AS
+> CREATE MATERIALIZED VIEW test2 (names_num, names_name, mods_num, mods_mod) WITH (RETAIN HISTORY FOR '30s') AS
   SELECT * FROM names JOIN mods ON names.num = mods.num
-> CREATE MATERIALIZED VIEW test3 WITH (RETAIN HISTORY FOR '30s') (names_num, names_name, mods_num, mods_mod) AS
+> CREATE MATERIALIZED VIEW test3 (names_num, names_name, mods_num, mods_mod) WITH (RETAIN HISTORY FOR '30s') AS
   SELECT * FROM names, mods WHERE names.num = mods.num
-> CREATE MATERIALIZED VIEW test4 WITH (RETAIN HISTORY FOR '30s') (names_num, names_name, mods_num, mods_mod) AS
+> CREATE MATERIALIZED VIEW test4 (names_num, names_name, mods_num, mods_mod) WITH (RETAIN HISTORY FOR '30s') AS
   SELECT * FROM names, mods WHERE names.num = mods.num AND mods.mod = 'even'
-> CREATE MATERIALIZED VIEW test5 WITH (RETAIN HISTORY FOR '30s') (names_num, names_name, mods_num, mods_mod) AS
+> CREATE MATERIALIZED VIEW test5 (names_num, names_name, mods_num, mods_mod) WITH (RETAIN HISTORY FOR '30s') AS
   SELECT * FROM names LEFT JOIN mods ON names.num = mods.num
-> CREATE MATERIALIZED VIEW test6 WITH (RETAIN HISTORY FOR '30s') (names_num, names_name, mods_num, mods_mod) AS
+> CREATE MATERIALIZED VIEW test6 (names_num, names_name, mods_num, mods_mod) WITH (RETAIN HISTORY FOR '30s') AS
   SELECT * FROM names RIGHT JOIN mods ON names.num = mods.num
-> CREATE MATERIALIZED VIEW test7 WITH (RETAIN HISTORY FOR '30s') (names_num, names_name, mods_num, mods_mod) AS
+> CREATE MATERIALIZED VIEW test7 (names_num, names_name, mods_num, mods_mod) WITH (RETAIN HISTORY FOR '30s') AS
   SELECT * FROM names, mods WHERE names.num = mods.num AND mods.mod = 'even'
 > CREATE MATERIALIZED VIEW test8 WITH (RETAIN HISTORY FOR '30s') AS
   SELECT mods.* FROM names, mods WHERE names.num = mods.num AND mods.mod = 'even'
 > CREATE MATERIALIZED VIEW test9 WITH (RETAIN HISTORY FOR '30s') AS
   SELECT foo.mod, foo.num, bar.name FROM names as bar, mods as foo
   WHERE bar.num = foo.num AND foo.mod = 'even'
-> CREATE MATERIALIZED VIEW test10 WITH (RETAIN HISTORY FOR '30s') (names_num, names_name, mods_num, mods_mod) AS
+> CREATE MATERIALIZED VIEW test10 (names_num, names_name, mods_num, mods_mod) WITH (RETAIN HISTORY FOR '30s') AS
   SELECT * FROM names, mods
-> CREATE MATERIALIZED VIEW test11 WITH (RETAIN HISTORY FOR '30s') (names_num, names_name, mods_num, mods_mod) AS
+> CREATE MATERIALIZED VIEW test11 (names_num, names_name, mods_num, mods_mod) WITH (RETAIN HISTORY FOR '30s') AS
   SELECT * FROM names CROSS JOIN mods
-> CREATE MATERIALIZED VIEW test12 WITH (RETAIN HISTORY FOR '30s') (names_num, names_name, mods_num, mods_mod) AS
+> CREATE MATERIALIZED VIEW test12 (names_num, names_name, mods_num, mods_mod) WITH (RETAIN HISTORY FOR '30s') AS
   SELECT * FROM names LEFT JOIN mods ON 1 = 0
-> CREATE MATERIALIZED VIEW test13 WITH (RETAIN HISTORY FOR '30s') (names_num, names_name, mods_num, mods_mod) AS
+> CREATE MATERIALIZED VIEW test13 (names_num, names_name, mods_num, mods_mod) WITH (RETAIN HISTORY FOR '30s') AS
   SELECT * FROM names RIGHT JOIN mods ON 1 = 0
-> CREATE MATERIALIZED VIEW test14 WITH (RETAIN HISTORY FOR '30s') (names_num, names_name, mods_num, mods_mod) AS
+> CREATE MATERIALIZED VIEW test14 (names_num, names_name, mods_num, mods_mod) WITH (RETAIN HISTORY FOR '30s') AS
   SELECT * FROM names FULL OUTER JOIN mods ON 1 = 0
 
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;

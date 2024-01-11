@@ -42,8 +42,8 @@ ALTER SYSTEM SET max_clusters = 15
   IN CLUSTER compute
   ON src_plus_tbl (a)
 
-> CREATE MATERIALIZED VIEW mv WITH (RETAIN HISTORY FOR '30s')
-  IN CLUSTER compute
+> CREATE MATERIALIZED VIEW mv
+  IN CLUSTER compute WITH (RETAIN HISTORY FOR '30s')
   AS SELECT * FROM src_plus_tbl
 
 > CREATE CONNECTION kafka_conn

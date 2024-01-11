@@ -16,7 +16,7 @@ ALTER SYSTEM SET enable_envelope_materialize = true
 
 
 
-> CREATE MATERIALIZED VIEW data WITH (RETAIN HISTORY FOR '30s') (a, b) AS VALUES (1, 1), (2, 1), (3, 1), (1, 2)
+> CREATE MATERIALIZED VIEW data (a, b) WITH (RETAIN HISTORY FOR '30s') AS VALUES (1, 1), (2, 1), (3, 1), (1, 2)
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);

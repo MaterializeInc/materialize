@@ -65,7 +65,7 @@ contains:cannot be run inside a transaction block
 
 > COMMIT
 
-> CREATE MATERIALIZED VIEW v WITH (RETAIN HISTORY FOR '30s') (a, b, c) AS SELECT 11, 12::real, 'f';
+> CREATE MATERIALIZED VIEW v (a, b, c) WITH (RETAIN HISTORY FOR '30s') AS SELECT 11, 12::real, 'f';
 
 > INSERT INTO t (i, f, t) SELECT a, b, c FROM v;
 

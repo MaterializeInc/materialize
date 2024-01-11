@@ -12,4 +12,4 @@ SELECT mz_version_num() >= 6700;
 
 > CREATE VIEW view_with_avg_internal (a) AS SELECT AVG(position) FROM mz_catalog.mz_columns;
 
-> CREATE MATERIALIZED VIEW mat_view_with_avg_internal WITH (RETAIN HISTORY FOR '30s') (a) AS SELECT AVG(position) FROM mz_catalog.mz_columns;
+> CREATE MATERIALIZED VIEW mat_view_with_avg_internal (a) WITH (RETAIN HISTORY FOR '30s') AS SELECT AVG(position) FROM mz_catalog.mz_columns;

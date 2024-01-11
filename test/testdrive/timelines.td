@@ -154,11 +154,11 @@ contains:unacceptable timeline name "mz_foo"
 
 > CREATE MATERIALIZED VIEW input_values_mview WITH (RETAIN HISTORY FOR '30s') AS VALUES (1), (2), (3);
 
-! CREATE MATERIALIZED VIEW must_fail WITH (RETAIN HISTORY FOR '30s') (a, b, c) AS SELECT * FROM source_system, source_cdcv2;
+! CREATE MATERIALIZED VIEW must_fail (a, b, c) WITH (RETAIN HISTORY FOR '30s') AS SELECT * FROM source_system, source_cdcv2;
 contains:multiple timelines within one dataflow are not supported
 
 # Verify that user timelines don't allow things to be joinable with their non-user versions.
-! CREATE MATERIALIZED VIEW must_fail WITH (RETAIN HISTORY FOR '30s') (a, b) AS SELECT * FROM source_system, source_system_user;
+! CREATE MATERIALIZED VIEW must_fail (a, b) WITH (RETAIN HISTORY FOR '30s') AS SELECT * FROM source_system, source_system_user;
 contains:multiple timelines within one dataflow are not supported
 
 # Can join static view with anything.
@@ -199,7 +199,7 @@ contains:multiple timelines within one dataflow are not supported
 contains:multiple timelines within one dataflow are not supported
 
 # Can join user-specified timelines.
-> CREATE MATERIALIZED VIEW source_system_cdcv2_user WITH (RETAIN HISTORY FOR '30s') (a, b, c) AS SELECT * FROM source_system_user, source_cdcv2_user;
+> CREATE MATERIALIZED VIEW source_system_cdcv2_user (a, b, c) WITH (RETAIN HISTORY FOR '30s') AS SELECT * FROM source_system_user, source_cdcv2_user;
 
 # CDCv2 can only be joined with system time stuff if specified
 > CREATE MATERIALIZED VIEW source_cdcv2_table_system WITH (RETAIN HISTORY FOR '30s') AS SELECT * FROM source_cdcv2_system, input_table;
