@@ -139,7 +139,7 @@ use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::{LogDataflowErrors, LogImportFrontiers};
 use crate::render::context::{ArrangementFlavor, Context, ShutdownToken, SpecializedArrangement};
-use crate::typedefs::{ErrSpine, KeySpine};
+use crate::typedefs::{ErrSpine, KeyBatcher};
 
 pub mod context;
 mod errors;
@@ -675,7 +675,7 @@ where
                 let (oks_v, err_v) = variables.remove(&Id::Local(*id)).unwrap();
 
                 // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
-                let mut oks = oks.consolidate_named::<KeySpine<_, _, _>>("LetRecConsolidation");
+                let mut oks = oks.consolidate_named::<KeyBatcher<_, _, _>>("LetRecConsolidation");
                 if let Some(token) = &self.shutdown_token.get_inner() {
                     oks = oks.with_token(Weak::clone(token));
                 }
@@ -923,7 +923,7 @@ where
                 }
                 let mut oks = differential_dataflow::collection::concatenate(&mut self.scope, oks);
                 if consolidate_output {
-                    oks = oks.consolidate_named::<KeySpine<_, _, _>>("UnionConsolidation")
+                    oks = oks.consolidate_named::<KeyBatcher<_, _, _>>("UnionConsolidation")
                 }
                 let errs = differential_dataflow::collection::concatenate(&mut self.scope, errs);
                 CollectionBundle::from_collections(oks, errs)
