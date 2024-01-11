@@ -1079,7 +1079,8 @@ impl<'a> RunnerInner<'a> {
             deploy_generation: None,
             http_host_name: Some(host_name),
             internal_console_redirect_url: None,
-            persist_txn_tables_cli: Some(PersistTxnTablesImpl::Lazy),
+            // TODO(txn-lazy): Get "lazy" flipped on before turning "lazy" on in prod.
+            persist_txn_tables_cli: Some(PersistTxnTablesImpl::Eager),
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned
