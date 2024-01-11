@@ -4178,6 +4178,11 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_unresolved_item_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
+        let _ = self.consume_token(&Token::Eq);
+        Ok(WithOptionValue::UnresolvedItemName(self.parse_item_name()?))
+    }
+
     fn parse_data_type_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
         let _ = self.consume_token(&Token::Eq);
         Ok(WithOptionValue::DataType(self.parse_data_type()?))
@@ -5191,17 +5196,34 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_copy_option(&mut self) -> Result<CopyOption<Raw>, ParserError> {
-        let name =
-            match self.expect_one_of_keywords(&[FORMAT, DELIMITER, NULL, ESCAPE, QUOTE, HEADER])? {
-                FORMAT => CopyOptionName::Format,
-                DELIMITER => CopyOptionName::Delimiter,
-                NULL => CopyOptionName::Null,
-                ESCAPE => CopyOptionName::Escape,
-                QUOTE => CopyOptionName::Quote,
-                HEADER => CopyOptionName::Header,
-                _ => unreachable!(),
-            };
-        let value = self.parse_optional_option_value()?;
+        let (name, value) = match self
+            .expect_one_of_keywords(&[FORMAT, DELIMITER, NULL, ESCAPE, QUOTE, HEADER, AWS, MAX])?
+        {
+            FORMAT => (CopyOptionName::Format, self.parse_optional_option_value()?),
+            DELIMITER => (
+                CopyOptionName::Delimiter,
+                self.parse_optional_option_value()?,
+            ),
+            NULL => (CopyOptionName::Null, self.parse_optional_option_value()?),
+            ESCAPE => (CopyOptionName::Escape, self.parse_optional_option_value()?),
+            QUOTE => (CopyOptionName::Quote, self.parse_optional_option_value()?),
+            HEADER => (CopyOptionName::Header, self.parse_optional_option_value()?),
+            AWS => {
+                self.expect_keyword(CONNECTION)?;
+                (
+                    CopyOptionName::AwsConnection,
+                    Some(self.parse_unresolved_item_option_value()?),
+                )
+            }
+            MAX => {
+                self.expect_keywords(&[FILE, SIZE])?;
+                (
+                    CopyOptionName::MaxFileSize,
+                    self.parse_optional_option_value()?,
+                )
+            }
+            _ => unreachable!(),
+        };
         Ok(CopyOption { name, value })
     }
 

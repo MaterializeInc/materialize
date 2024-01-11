@@ -1150,6 +1150,7 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::GrantedPrivilege
         | ExecuteResponse::GrantedRole
         | ExecuteResponse::Inserted(_)
+        | ExecuteResponse::Copied(_)
         | ExecuteResponse::Raised
         | ExecuteResponse::ReassignOwned
         | ExecuteResponse::RevokedPrivilege

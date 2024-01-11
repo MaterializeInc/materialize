@@ -14,13 +14,17 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::str::FromStr;
 
+use http::Uri;
 use itertools::Itertools;
+
 use mz_expr::MirRelationExpr;
+use mz_ore::str::StrExt;
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
-use mz_repr::{RelationDesc, ScalarType};
+use mz_repr::{ColumnName, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
     ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
     IfExistsBehavior, OrderByExpr, SubscribeOutput, UnresolvedItemName,
@@ -38,12 +42,13 @@ use crate::ast::{
 use crate::catalog::CatalogItemType;
 use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
-use crate::plan::query::{plan_up_to, ExprContext, QueryLifetime};
+use crate::plan::query::{evaluate_string_expression, plan_up_to, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::{ddl, StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{
-    self, side_effecting_func, CreateSinkPlan, ExplainSinkSchemaPlan, ExplainTimestampPlan,
+    self, side_effecting_func, CopyToFrom, CopyToPlan, CreateSinkPlan, ExplainSinkSchemaPlan,
+    ExplainTimestampPlan,
 };
 use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan,
@@ -761,6 +766,41 @@ pub fn describe_copy(
     .with_is_copy())
 }
 
+fn plan_copy_to(
+    scx: &StatementContext,
+    from: CopyToFrom,
+    to: Uri,
+    format: CopyFormat,
+    options: CopyOptionExtracted,
+) -> Result<Plan, PlanError> {
+    let aws_connection_name = match options.aws_connection {
+        Some(conn) => conn,
+        None => sql_bail!("AWS CONNECTION is required for COPY TO S3"),
+    };
+    let connection = scx
+        .resolve_item(mz_sql_parser::ast::RawItemName::Name(aws_connection_name))?
+        .connection()?;
+
+    if format != CopyFormat::Csv {
+        sql_bail!("Only CSV format is supported for COPY TO S3");
+    }
+
+    let format_params = CopyFormatParams::Csv(CopyCsvFormatParams {
+        delimiter: b',',
+        quote: b'"',
+        escape: b'"',
+        null: Cow::from(""),
+        header: false,
+    });
+
+    Ok(Plan::CopyTo(CopyToPlan {
+        from,
+        to,
+        connection: connection.to_owned(),
+        format_params,
+    }))
+}
+
 fn plan_copy_from(
     scx: &StatementContext,
     table_name: ResolvedItemName,
@@ -843,7 +883,9 @@ generate_extracted_config!(
     (Null, String),
     (Escape, String),
     (Quote, String),
-    (Header, bool)
+    (Header, bool),
+    (AwsConnection, UnresolvedItemName),
+    (MaxFileSize, String) // TODO(mouli): Fix after Bytes is merged
 );
 
 pub fn plan_copy(
@@ -886,6 +928,56 @@ pub fn plan_copy(
             }
             _ => sql_bail!("COPY FROM {} not supported", target),
         },
+        (CopyDirection::To, CopyTarget::S3(url_expr)) => {
+            scx.require_feature_flag(&vars::ENABLE_COPY_TO_S3)?;
+
+            let copy_to_from = match relation {
+                CopyRelation::Table { name, columns } => {
+                    let entry = scx.get_item_by_resolved_name(&name)?;
+                    let desc = entry
+                        .desc(&scx.catalog.resolve_full_name(entry.name()))?
+                        .into_owned();
+                    let columns: Vec<_> = columns.into_iter().map(normalize::column_name).collect();
+                    let column_by_name: BTreeMap<&ColumnName, usize> = desc
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, (name, _))| (name, idx))
+                        .collect();
+                    let mut column_indices = Vec::with_capacity(columns.len());
+                    for c in &columns {
+                        if let Some(idx) = column_by_name.get(c) {
+                            column_indices.push(*idx);
+                        } else {
+                            sql_bail!(
+                                "column {} of relation {} does not exist",
+                                c.as_str().quoted(),
+                                name.full_name_str().quoted()
+                            );
+                        }
+                    }
+                    CopyToFrom::Id {
+                        id: entry.id(),
+                        columns: column_indices,
+                    }
+                }
+                CopyRelation::Select(stmt) => {
+                    let query =
+                        plan_query(scx, stmt.query, &Params::empty(), QueryLifetime::OneShot)?;
+                    CopyToFrom::Query {
+                        expr: query.expr,
+                        desc: query.desc,
+                    }
+                }
+                _ => sql_bail!("COPY {} {} not supported", direction, target),
+            };
+
+            let url = evaluate_string_expression(scx, "S3 url", url_expr.clone())?;
+
+            let parsed_url =
+                Uri::from_str(&url).map_err(|e| sql_err!("invalid s3 url {}: {}", url, e))?;
+
+            plan_copy_to(scx, copy_to_from, parsed_url, format, options)
+        }
         _ => sql_bail!("COPY {} {} not supported", direction, target),
     }
 }

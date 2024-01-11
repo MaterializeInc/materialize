@@ -736,6 +736,7 @@ fn generate_rbac_requirements(
             ],
             ..Default::default()
         },
+        Plan::CopyTo(_) => todo!("mouli"),
         Plan::ExplainPlan(plan::ExplainPlanPlan {
             stage: _,
             format: _,

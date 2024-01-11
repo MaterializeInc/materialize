@@ -218,6 +218,9 @@ impl Coordinator {
                     let result = self.sequence_comment_on(ctx.session(), plan).await;
                     ctx.retire(result);
                 }
+                Plan::CopyTo(_) => {
+                    todo!("mouli")
+                }
                 Plan::DropObjects(plan) => {
                     let result = self.sequence_drop_objects(ctx.session_mut(), plan).await;
                     ctx.retire(result);

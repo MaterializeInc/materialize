@@ -900,6 +900,39 @@ pub fn plan_up_to(
         .lower_uncorrelated()
 }
 
+/// Evaluates an expression as a string in the given `name` position of a statement.
+pub fn evaluate_string_expression(
+    scx: &StatementContext,
+    name: &str,
+    mut str_expr: Expr<Aug>,
+) -> Result<String, PlanError> {
+    let scope = Scope::empty();
+    let desc = RelationDesc::empty();
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
+    transform_ast::transform(scx, &mut str_expr)?;
+    let ecx = &ExprContext {
+        qcx: &qcx,
+        name,
+        scope: &scope,
+        relation_type: desc.typ(),
+        allow_aggregates: false,
+        allow_subqueries: false,
+        allow_parameters: false,
+        allow_windows: false,
+    };
+
+    let arena = RowArena::new();
+
+    // TODO(mouli): fix this
+    Ok(plan_expr(ecx, &str_expr)?
+        .type_as_any(ecx)?
+        .lower_uncorrelated()?
+        .eval(&[], &arena)
+        .map_err(|_| sql_err!("error evaluating expr"))?
+        .unwrap_str()
+        .to_string())
+}
+
 /// Plans an expression in the AS OF position of a `SELECT` or `SUBSCRIBE` statement.
 pub fn plan_as_of(
     scx: &StatementContext,

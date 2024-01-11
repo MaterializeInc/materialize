@@ -32,6 +32,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use enum_kinds::EnumKind;
+use http::Uri;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -136,6 +137,7 @@ pub enum Plan {
     Select(SelectPlan),
     Subscribe(SubscribePlan),
     CopyFrom(CopyFromPlan),
+    CopyTo(CopyToPlan),
     ExplainPlan(ExplainPlanPlan),
     ExplainTimestamp(ExplainTimestampPlan),
     ExplainSinkSchema(ExplainSinkSchemaPlan),
@@ -235,7 +237,12 @@ impl Plan {
             StatementKind::Close => vec![PlanKind::Close],
             StatementKind::Comment => vec![PlanKind::Comment],
             StatementKind::Commit => vec![PlanKind::CommitTransaction],
-            StatementKind::Copy => vec![PlanKind::CopyFrom, PlanKind::Select, PlanKind::Subscribe],
+            StatementKind::Copy => vec![
+                PlanKind::CopyFrom,
+                PlanKind::Select,
+                PlanKind::Subscribe,
+                PlanKind::CopyTo,
+            ],
             StatementKind::CreateCluster => vec![PlanKind::CreateCluster],
             StatementKind::CreateClusterReplica => vec![PlanKind::CreateClusterReplica],
             StatementKind::CreateConnection => vec![PlanKind::CreateConnection],
@@ -347,6 +354,7 @@ impl Plan {
             Plan::Select(_) => "select",
             Plan::Subscribe(_) => "subscribe",
             Plan::CopyFrom(_) => "copy from",
+            Plan::CopyTo(_) => "copy to",
             Plan::ExplainPlan(_) => "explain plan",
             Plan::ExplainTimestamp(_) => "explain timestamp",
             Plan::ExplainSinkSchema(_) => "explain schema",
@@ -779,6 +787,26 @@ pub struct CopyFromPlan {
     pub id: GlobalId,
     pub columns: Vec<usize>,
     pub params: CopyFormatParams<'static>,
+}
+
+#[derive(Debug)]
+pub struct CopyToPlan {
+    pub from: CopyToFrom,
+    pub to: Uri,
+    pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
+    pub format_params: CopyFormatParams<'static>,
+}
+
+#[derive(Debug, Clone)]
+pub enum CopyToFrom {
+    Id {
+        id: GlobalId,
+        columns: Vec<usize>,
+    },
+    Query {
+        expr: MirRelationExpr,
+        desc: RelationDesc,
+    },
 }
 
 #[derive(Clone, Debug)]
