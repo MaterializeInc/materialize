@@ -45,6 +45,10 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
             plan.source.depends_on(),
             plan.source.could_run_expensive_function(),
         ),
+        Plan::ShowColumns(plan) => (
+            plan.select_plan.source.depends_on(),
+            plan.select_plan.source.could_run_expensive_function(),
+        ),
         Plan::Subscribe(plan) => (
             plan.from.depends_on(),
             match &plan.from {
@@ -86,7 +90,6 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::EmptyQuery
         | Plan::ShowAllVariables
         | Plan::ShowCreate(_)
-        | Plan::ShowColumns(_)
         | Plan::ShowVariable(_)
         | Plan::InspectShard(_)
         | Plan::SetVariable(_)
