@@ -171,12 +171,16 @@ The second set of metrics this design document proposes describe the _rate_ at w
 These metrics are designed to answer #2 in [the problem statement](#the-problem).
 
 ```
-| `upstream_rate`      | [`uint8`] | The rate at which data is appearing in the upstream service.       |
-| `process_rate`       | [`uint8`] | The rate at which Materialize is processing upstream data.         |
+| `upstream_frontier`    | [`uint8`] | The frontier of the in the upstream service.                       |
+| `process_frontier`     | [`uint8`] | The rate to which Materialize has processed upstream data.         |
 ```
 
-This rate has units that depend on the source type (replication bytes for Postgres, offsets for Kafka, gtid's for MySQL) and are
-designed to be _compared_. The following charts show what these metrics will look like, depending on whether Materialize is keeping up
+These values are primarily designed to be calculated into _rates_ (which will happen client-side), and users should
+not be expected to understand them as anything else. These rates have units that depend on the source type
+(replication bytes for Postgres, offsets for Kafka, transactions for MySQL). Note that we may add prometheus metrics
+for these metrics that are broken down by partition/mysql-source-id/etc.
+
+These rates are also designed to be _compared_ with each other. The following charts show what these metrics will look like, depending on whether Materialize is keeping up
 or falling behind.
 
 ![steady-state](./static/source_metrics_2/steady_state.png)
@@ -234,6 +238,4 @@ implement them in a feasible way. The attached example charts capture the desire
 - Are there other scenarios than the ones predicted in the above charts that we aren't capturing?
     - One case might be: people's sources that fall behind upstream just use more memory, while Materialize continues to read as fast as possible.
     The metrics added by this proposal would allow us to easily distinguish between those cases.
-- Should `upstream_rate` and `process_rate` be exposed as rates (as described in this design document), or should we instead expose the maximum value, and
-leaving calculating the rate to the client?
 - Will `count(*)` be prohibitively expensive, or do we need to use estimates?
