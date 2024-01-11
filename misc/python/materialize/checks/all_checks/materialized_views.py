@@ -80,7 +80,7 @@ class MaterializedViewsAssertNotNull(Check):
                 """
                 > CREATE TABLE not_null_table (x INT, y INT, z INT);
                 > INSERT INTO not_null_table VALUES (NULL, 2, 3), (4, NULL, 6), (7, 8, NULL);
-                > CREATE MATERIALIZED VIEW not_null_view1 WITH (ASSERT NOT NULL x) AS SELECT * FROM not_null_table;
+                > CREATE MATERIALIZED VIEW not_null_view1 WITH (RETAIN HISTORY FOR '30s', ASSERT NOT NULL x) AS SELECT * FROM not_null_table;
             """
             )
         )
@@ -90,11 +90,11 @@ class MaterializedViewsAssertNotNull(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE MATERIALIZED VIEW not_null_view2 WITH (ASSERT NOT NULL y) AS SELECT * FROM not_null_table;
+                > CREATE MATERIALIZED VIEW not_null_view2 WITH (RETAIN HISTORY FOR '30s', ASSERT NOT NULL y) AS SELECT * FROM not_null_table;
                 > INSERT INTO not_null_table VALUES (NULL, 12, 13), (14, NULL, 16), (17, 18, NULL);
                 """,
                 """
-                > CREATE MATERIALIZED VIEW not_null_view3 WITH (ASSERT NOT NULL z) AS SELECT * FROM not_null_table;
+                > CREATE MATERIALIZED VIEW not_null_view3 WITH (RETAIN HISTORY FOR '30s', ASSERT NOT NULL z) AS SELECT * FROM not_null_table;
                 > INSERT INTO not_null_table VALUES (NULL, 22, 23), (24, NULL, 26), (27, 28, NULL);
                 """,
             ]
@@ -193,9 +193,9 @@ class MaterializedViewsRefresh(Check):
                 """
                 > CREATE TABLE refresh_table (x INT);
                 > INSERT INTO refresh_table VALUES (1);
-                > CREATE MATERIALIZED VIEW refresh_view_2s_1 WITH (REFRESH EVERY '2 seconds') AS SELECT DISTINCT(x) FROM refresh_table;
-                > CREATE MATERIALIZED VIEW refresh_view_at_1 WITH (REFRESH AT mz_now()::string::int8) AS SELECT DISTINCT(x) FROM refresh_table;
-                > CREATE MATERIALIZED VIEW refresh_view_late_1 WITH (REFRESH AT mz_now()::string::int8 + 86400000) AS SELECT DISTINCT(x) FROM refresh_table;
+                > CREATE MATERIALIZED VIEW refresh_view_2s_1 WITH (RETAIN HISTORY FOR '30s', REFRESH EVERY '2 seconds') AS SELECT DISTINCT(x) FROM refresh_table;
+                > CREATE MATERIALIZED VIEW refresh_view_at_1 WITH (RETAIN HISTORY FOR '30s', REFRESH AT mz_now()::string::int8) AS SELECT DISTINCT(x) FROM refresh_table;
+                > CREATE MATERIALIZED VIEW refresh_view_late_1 WITH (RETAIN HISTORY FOR '30s', REFRESH AT mz_now()::string::int8 + 86400000) AS SELECT DISTINCT(x) FROM refresh_table;
             """
             )
         )
@@ -206,15 +206,15 @@ class MaterializedViewsRefresh(Check):
             for s in [
                 """
                 > INSERT INTO refresh_table VALUES (2);
-                > CREATE MATERIALIZED VIEW refresh_view_2s_2 WITH (REFRESH EVERY '2 seconds') AS SELECT DISTINCT(x) FROM refresh_table;
-                > CREATE MATERIALIZED VIEW refresh_view_at_2 WITH (REFRESH AT mz_now()::string::int8) AS SELECT DISTINCT(x) FROM refresh_table;
-                > CREATE MATERIALIZED VIEW refresh_view_late_2 WITH (REFRESH AT mz_now()::string::int8 + 86400000) AS SELECT DISTINCT(x) FROM refresh_table;
+                > CREATE MATERIALIZED VIEW refresh_view_2s_2 WITH (RETAIN HISTORY FOR '30s', REFRESH EVERY '2 seconds') AS SELECT DISTINCT(x) FROM refresh_table;
+                > CREATE MATERIALIZED VIEW refresh_view_at_2 WITH (RETAIN HISTORY FOR '30s', REFRESH AT mz_now()::string::int8) AS SELECT DISTINCT(x) FROM refresh_table;
+                > CREATE MATERIALIZED VIEW refresh_view_late_2 WITH (RETAIN HISTORY FOR '30s', REFRESH AT mz_now()::string::int8 + 86400000) AS SELECT DISTINCT(x) FROM refresh_table;
                 """,
                 """
                 > INSERT INTO refresh_table VALUES (3);
-                > CREATE MATERIALIZED VIEW refresh_view_2s_3 WITH (REFRESH EVERY '2 seconds') AS SELECT DISTINCT(x) FROM refresh_table;
-                > CREATE MATERIALIZED VIEW refresh_view_at_3 WITH (REFRESH AT mz_now()::string::int8) AS SELECT DISTINCT(x) FROM refresh_table;
-                > CREATE MATERIALIZED VIEW refresh_view_late_3 WITH (REFRESH AT mz_now()::string::int8 + 86400000) AS SELECT DISTINCT(x) FROM refresh_table;
+                > CREATE MATERIALIZED VIEW refresh_view_2s_3 WITH (RETAIN HISTORY FOR '30s', REFRESH EVERY '2 seconds') AS SELECT DISTINCT(x) FROM refresh_table;
+                > CREATE MATERIALIZED VIEW refresh_view_at_3 WITH (RETAIN HISTORY FOR '30s', REFRESH AT mz_now()::string::int8) AS SELECT DISTINCT(x) FROM refresh_table;
+                > CREATE MATERIALIZED VIEW refresh_view_late_3 WITH (RETAIN HISTORY FOR '30s', REFRESH AT mz_now()::string::int8 + 86400000) AS SELECT DISTINCT(x) FROM refresh_table;
                 """,
             ]
         ]

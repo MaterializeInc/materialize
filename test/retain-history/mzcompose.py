@@ -48,13 +48,13 @@ def run_test_with_mv_on_table(c: Composition) -> None:
 
             > INSERT INTO retain_history_table VALUES (1, 100), (2, 200);
 
-            > CREATE MATERIALIZED VIEW retain_history_mv1 WITH (RETAIN HISTORY FOR '10s') AS
+            > CREATE MATERIALIZED VIEW retain_history_mv1 WITH (RETAIN HISTORY FOR '30s', RETAIN HISTORY FOR '10s') AS
                     SELECT * FROM retain_history_table;
 
-            > CREATE MATERIALIZED VIEW retain_history_mv_on_mv1 WITH (RETAIN HISTORY FOR '{mv_on_mv1_retention_in_sec}s') AS
+            > CREATE MATERIALIZED VIEW retain_history_mv_on_mv1 WITH (RETAIN HISTORY FOR '30s', RETAIN HISTORY FOR '{mv_on_mv1_retention_in_sec}s') AS
                     SELECT * FROM retain_history_mv1;
 
-            > CREATE MATERIALIZED VIEW retain_history_mv_on_mv_on_mv1 WITH (RETAIN HISTORY FOR '{mv_on_mv_on_mv1_retention_in_sec}s') AS
+            > CREATE MATERIALIZED VIEW retain_history_mv_on_mv_on_mv1 WITH (RETAIN HISTORY FOR '30s', RETAIN HISTORY FOR '{mv_on_mv_on_mv1_retention_in_sec}s') AS
                     SELECT * FROM retain_history_mv_on_mv1;
 
             > SELECT count(*) FROM retain_history_mv1;
@@ -215,7 +215,7 @@ def run_test_with_mv_on_counter_source(c: Composition) -> None:
               FROM LOAD GENERATOR COUNTER
               (TICK INTERVAL '100ms');
 
-            > CREATE MATERIALIZED VIEW retain_history_mv2 WITH (RETAIN HISTORY FOR '10s') AS
+            > CREATE MATERIALIZED VIEW retain_history_mv2 WITH (RETAIN HISTORY FOR '30s', RETAIN HISTORY FOR '10s') AS
                     SELECT * FROM retain_history_source1;
 
             > SELECT count(*) > 0 FROM retain_history_mv2;

@@ -155,7 +155,7 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 > CREATE TABLE t3(x int);
 > INSERT INTO t3 VALUES (1);
 
-> CREATE MATERIALIZED VIEW mv6 WITH (REFRESH AT mz_now()::text::int8 + 6000, REFRESH EVERY '8 seconds') AS SELECT * FROM t3;
+> CREATE MATERIALIZED VIEW mv6 WITH (RETAIN HISTORY FOR '30s', REFRESH AT mz_now()::text::int8 + 6000, REFRESH EVERY '8 seconds') AS SELECT * FROM t3;
 > SELECT * FROM mv6
 1
 
