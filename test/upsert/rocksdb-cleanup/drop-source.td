@@ -24,8 +24,6 @@ $ kafka-create-topic topic=upsert
 
 > CREATE CLUSTER dropped_cluster SIZE '1'
 
-> CREATE CLUSTER dropped_cluster SIZE '1'
-
 > CREATE SOURCE dropped_upsert
   IN CLUSTER dropped_cluster
   FROM KAFKA CONNECTION conn (TOPIC
