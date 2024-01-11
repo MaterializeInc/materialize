@@ -49,7 +49,8 @@ use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{get_monoid, ReductionMonoid};
 use crate::render::ArrangementFlavor;
 use crate::typedefs::{
-    KeySpine, KeyValSpine, RowErrSpine, RowRowArrangement, RowRowSpine, RowSpine, RowValSpine,
+    KeyBatcher, KeySpine, KeyValSpine, RowErrSpine, RowRowArrangement, RowRowSpine, RowSpine,
+    RowValSpine,
 };
 
 impl<G, T> Context<G, T>
@@ -997,7 +998,7 @@ where
                 stage = negated_output
                     .negate()
                     .concat(&input)
-                    .consolidate_named::<KeySpine<_, _, _>>("Consolidated MinsMaxesHierarchical");
+                    .consolidate_named::<KeyBatcher<_, _, _>>("Consolidated MinsMaxesHierarchical");
             }
 
             // Discard the hash from the key and return to the format of the input data.
@@ -1205,7 +1206,7 @@ where
 
                 (key, values)
             })
-            .consolidate_named_if::<KeySpine<_, _, _>>(
+            .consolidate_named_if::<KeyBatcher<_, _, _>>(
                 must_consolidate,
                 "Consolidated ReduceMonotonic input",
             );
