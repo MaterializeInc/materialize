@@ -221,12 +221,11 @@ impl OpenableDurableCatalogState for CatalogMigrator {
     }
 
     async fn is_initialized(&mut self) -> Result<bool, CatalogError> {
-        match self.target {
-            if tombstone == Some(true) {
-                self.openable_persist.is_initialized().await
-            } else {
+        let tombstone = self.get_tombstone().await?;
+        if tombstone == Some(true) {
+            self.openable_persist.is_initialized().await
+        } else {
             self.openable_stash.is_initialized().await
-            }
         }
     }
 
