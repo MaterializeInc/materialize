@@ -912,7 +912,7 @@ impl_display_t!(KafkaSinkConfigOption);
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PgConfigOptionName {
     /// Hex encoded string of binary serialization of
-    /// [`mz_storage_types::sources::postgres::PostgresSourcePublicationDetails`]
+    /// `mz_storage_types::sources::postgres::PostgresSourcePublicationDetails`
     Details,
     /// The name of the publication to sync
     Publication,
@@ -952,7 +952,7 @@ impl_display_t!(PgConfigOption);
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MySqlConfigOptionName {
     /// Hex encoded string of binary serialization of
-    /// [`mz_storage_types::sources::mysql::MySqlSourceDetails`]
+    /// `mz_storage_types::sources::mysql::MySqlSourceDetails`
     Details,
 }
 
