@@ -5153,9 +5153,12 @@ impl<'a> Parser<'a> {
                 (CopyDirection::From, CopyTarget::Stdin)
             }
             TO => {
-                self.expect_keyword(STDOUT)
-                    .map_parser_err(StatementKind::Copy)?;
-                (CopyDirection::To, CopyTarget::Stdout)
+                if self.parse_keyword(STDOUT) {
+                    (CopyDirection::To, CopyTarget::Stdout)
+                } else {
+                    let url_expr = self.parse_expr().map_parser_err(StatementKind::Copy)?;
+                    (CopyDirection::To, CopyTarget::S3(url_expr))
+                }
             }
             _ => unreachable!(),
         };
