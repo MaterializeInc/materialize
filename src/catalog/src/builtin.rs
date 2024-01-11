@@ -2559,7 +2559,7 @@ pub static MZ_SESSION_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource 
     data_source: Some(IntrospectionType::SessionHistory),
     desc: MZ_SESSION_HISTORY_DESC.clone(),
     is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
+    access: vec![SUPPORT_SELECT],
 });
 
 pub static MZ_ACTIVITY_LOG: Lazy<BuiltinView> = Lazy::new(|| {
