@@ -178,8 +178,7 @@ impl Coordinator {
             )?;
             if &current_desc != desc {
                 Err(AdapterError::ChangedPlan(format!(
-                    "cached plan must not change result type, plan changed from {:?} to {:?}",
-                    desc, current_desc
+                    "cached plan must not change result type",
                 )))
             } else {
                 Ok(Some(current_revision))
