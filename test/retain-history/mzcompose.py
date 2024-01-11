@@ -25,7 +25,8 @@ SERVICES = [
 def workflow_default(c: Composition) -> None:
     """Test the retain history feature."""
     setup(c)
-    run_test_with_mv(c)
+    run_test_with_mv_on_table(c)
+    run_test_with_mv_on_counter_source(c)
 
 
 def setup(c: Composition) -> None:
@@ -33,7 +34,7 @@ def setup(c: Composition) -> None:
     c.up("testdrive", persistent=True)
 
 
-def run_test_with_mv(c: Composition) -> None:
+def run_test_with_mv_on_table(c: Composition) -> None:
     mv_on_mv1_retention_in_sec = 1
     mv_on_mv_on_mv1_retention_in_sec = 60
 
@@ -211,6 +212,46 @@ def run_test_with_mv(c: Composition) -> None:
             """,
         )
     )
+
+
+def run_test_with_mv_on_counter_source(c: Composition) -> None:
+    sleep_duration_between_mz_time1_and_mz_time2 = 1.5
+
+    c.testdrive(
+        dedent(
+            """
+            > CREATE SOURCE retain_history_source1
+              FROM LOAD GENERATOR COUNTER
+              (TICK INTERVAL '100ms');
+
+            > CREATE MATERIALIZED VIEW retain_history_mv2 WITH (RETAIN HISTORY FOR '10s') AS
+                    SELECT * FROM retain_history_source1;
+
+            > SELECT count(*) > 0 FROM retain_history_mv2;
+            true
+            """,
+        )
+    )
+
+    mz_time1 = fetch_now_from_mz(c)
+    count_at_mz_time1 = c.sql_query(
+        f"SELECT count(*) FROM retain_history_mv2 AS OF '{mz_time1}'::TIMESTAMP"
+    )[0][0]
+
+    time.sleep(sleep_duration_between_mz_time1_and_mz_time2)
+
+    mz_time2 = fetch_now_from_mz(c)
+    count_at_mz_time2 = c.sql_query(
+        f"SELECT count(*) FROM retain_history_mv2 AS OF '{mz_time2}'::TIMESTAMP"
+    )[0][0]
+    count_at_mz_time1_queried_at_mz_time2 = c.sql_query(
+        f"SELECT count(*) FROM retain_history_mv2 AS OF '{mz_time1}'::TIMESTAMP"
+    )[0][0]
+
+    assert count_at_mz_time1 == count_at_mz_time1_queried_at_mz_time2
+    assert (
+        count_at_mz_time2 > count_at_mz_time1
+    ), f"value at time2 did not progress ({count_at_mz_time2} vs. {count_at_mz_time1}), consider increasing 'sleep_duration_between_mz_time1_and_mz_time2'"
 
 
 def fetch_now_from_mz(c: Composition) -> str:
