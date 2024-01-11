@@ -29,7 +29,7 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
 
 # For now sources are not considered in blue-green deployments, so create them separately
 > DROP SOURCE IF EXISTS counter
-> CREATE SOURCE counter FROM LOAD GENERATOR counter (TICK INTERVAL '0.1s')
+> CREATE SOURCE counter FROM LOAD GENERATOR counter (TICK INTERVAL '1s')
 
 > DROP SOURCE IF EXISTS tpch
 > CREATE SOURCE tpch
