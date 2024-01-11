@@ -354,6 +354,11 @@ where
 
         let mut shard_stream = pin!(listen_head.chain(listen_tail));
 
+        // Ideally, we'd like our audit overhead to be proportional to the actual amount of "real"
+        // work we're doing in the source. So: start with a small, constant budget; add to the
+        // budget when we do real work; and skip auditing a part if we don't have the budget for it.
+        let mut audit_budget_bytes = cfg.dynamic.blob_target_size().saturating_mul(2);
+
         // Read from the subscription and pass them on.
         let mut upper = Antichain::from_elem(Timestamp::minimum());
         // If `until.less_equal(progress)`, it means that all subsequent batches will contain only
@@ -376,6 +381,8 @@ where
                     });
                     let bytes = u64::cast_from(part_desc.encoded_size_bytes);
                     if should_fetch {
+                        audit_budget_bytes =
+                            audit_budget_bytes.saturating_add(part_desc.encoded_size_bytes);
                         metrics.pushdown.parts_fetched_count.inc();
                         metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
                     } else {
@@ -386,7 +393,8 @@ where
                             part_desc.key.hash(&mut h);
                             usize::cast_from(h.finish()) % 100 < cfg.dynamic.stats_audit_percent()
                         };
-                        if should_audit {
+                        if should_audit && part_desc.encoded_size_bytes < audit_budget_bytes {
+                            audit_budget_bytes -= part_desc.encoded_size_bytes;
                             metrics.pushdown.parts_audited_count.inc();
                             metrics.pushdown.parts_audited_bytes.inc_by(bytes);
                             part_desc.request_filter_pushdown_audit();
