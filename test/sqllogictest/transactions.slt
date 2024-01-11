@@ -1223,6 +1223,34 @@ SELECT * FROM blue_t1 LIMIT 1;
 ----
 10
 
+# Make sure SHOW COLUMNS does not use a different cluster during a transaction.
+#
+# SHOW COLUMNS is planned separately from other SHOW statements, and previously it would ignore
+# the mz_introspection auto-routing. This resulted in its dependents being outside the timedomain
+# of the transaction.
+
+statement ok
+BEGIN;
+
+query T
+SELECT name FROM mz_columns WHERE name = 'foobar';
+----
+
+query TTT
+SHOW COLUMNS IN mz_columns
+----
+id  false  text
+name  false  text
+position  false  uint8
+nullable  false  boolean
+type  false  text
+default  true  text
+type_oid  false  oid
+type_mod  false  integer
+
+statement ok
+COMMIT;
+
 # Cleanup.
 
 statement ok
