@@ -2153,7 +2153,7 @@ async fn test_emergency_stash_tombstone() {
 
     {
         // Open a persist catalog.
-        let mut persist_openable_state = Box::new(
+        let persist_openable_state = Box::new(
             migrate_from_stash_to_persist_state(
                 stash_config.clone(),
                 persist_client.clone(),
@@ -2175,7 +2175,7 @@ async fn test_emergency_stash_tombstone() {
     }
 
     {
-        // Open an emergency stash catalog (It doesn't matter if we start with a migrate or rollback
+        // Open an emergency stash catalog (it doesn't matter if we start with a migrate or rollback
         // catalog because we change it to emergency-stash).
         let mut emergency_stash_openable_state = Box::new(
             rollback_from_persist_to_stash_state(
