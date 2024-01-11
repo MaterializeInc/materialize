@@ -107,7 +107,7 @@ use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::{soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
-use mz_repr::explain::ExplainFormat;
+use mz_repr::explain::{ExplainConfig, ExplainFormat, UsedIndexes};
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
@@ -120,12 +120,14 @@ use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::{self, ConnectionCounter, OwnedVarInput, SystemVars};
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::ExplainStage;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::WriteTimestamp;
+use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
 use timely::progress::Antichain;
 use timely::PartialOrder;
@@ -147,6 +149,7 @@ use crate::coord::peek::PendingPeek;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
+use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{
     dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
@@ -541,10 +544,20 @@ pub struct CreateViewFinish {
 }
 
 #[derive(Debug)]
+pub struct ExplainContext {
+    pub broken: bool,
+    pub config: ExplainConfig,
+    pub format: ExplainFormat,
+    pub stage: ExplainStage,
+    pub optimizer_trace: OptimizerTrace,
+}
+
+#[derive(Debug)]
 pub enum CreateMaterializedViewStage {
     Validate(CreateMaterializedViewValidate),
     Optimize(CreateMaterializedViewOptimize),
     Finish(CreateMaterializedViewFinish),
+    Explain(CreateMaterializedViewExplain),
 }
 
 impl CreateMaterializedViewStage {
@@ -553,6 +566,7 @@ impl CreateMaterializedViewStage {
             Self::Validate(_) => None,
             Self::Optimize(stage) => Some(&mut stage.validity),
             Self::Finish(stage) => Some(&mut stage.validity),
+            Self::Explain(stage) => Some(&mut stage.validity),
         }
     }
 }
@@ -561,6 +575,9 @@ impl CreateMaterializedViewStage {
 pub struct CreateMaterializedViewValidate {
     plan: plan::CreateMaterializedViewPlan,
     resolved_ids: ResolvedIds,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
@@ -568,17 +585,30 @@ pub struct CreateMaterializedViewOptimize {
     validity: PlanValidity,
     plan: plan::CreateMaterializedViewPlan,
     resolved_ids: ResolvedIds,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
 pub struct CreateMaterializedViewFinish {
     validity: PlanValidity,
-    id: GlobalId,
+    exported_sink_id: GlobalId,
     plan: plan::CreateMaterializedViewPlan,
     resolved_ids: ResolvedIds,
     local_mir_plan: optimize::materialized_view::LocalMirPlan,
     global_mir_plan: optimize::materialized_view::GlobalMirPlan,
     global_lir_plan: optimize::materialized_view::GlobalLirPlan,
+}
+
+#[derive(Debug)]
+pub struct CreateMaterializedViewExplain {
+    validity: PlanValidity,
+    exported_sink_id: GlobalId,
+    plan: plan::CreateMaterializedViewPlan,
+    df_meta: DataflowMetainfo,
+    used_indexes: UsedIndexes,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]

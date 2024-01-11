@@ -175,7 +175,7 @@ impl Coordinator {
                     stage,
                 } => {
                     otel_ctx.attach_as_parent();
-                    self.sequence_create_materialized_view_stage(ctx, stage, otel_ctx)
+                    self.execute_create_materialized_view_stage(ctx, stage, otel_ctx)
                         .await;
                 }
                 Message::SubscribeStageReady {

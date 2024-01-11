@@ -8,11 +8,14 @@
 // by the Apache License, Version 2.0.
 
 use differential_dataflow::lattice::Lattice;
+use maplit::btreemap;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
 use mz_expr::CollectionPlan;
 use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_repr::explain::{trace_plan, ExprHumanizerExt, TransientItem, UsedIndexes};
+use mz_repr::{Datum, Row};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::{ObjectId, ResolvedIds};
 use mz_sql::plan;
@@ -22,16 +25,17 @@ use timely::progress::Antichain;
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
-    Coordinator, CreateMaterializedViewFinish, CreateMaterializedViewOptimize,
-    CreateMaterializedViewStage, CreateMaterializedViewValidate, Message, PlanValidity,
+    Coordinator, CreateMaterializedViewExplain, CreateMaterializedViewFinish,
+    CreateMaterializedViewOptimize, CreateMaterializedViewStage, CreateMaterializedViewValidate,
+    ExplainContext, Message, PlanValidity,
 };
 use crate::error::AdapterError;
+use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
-use crate::{catalog, AdapterNotice, ExecuteContext, TimestampProvider};
-
 use crate::util::ResultExt;
+use crate::{catalog, AdapterNotice, ExecuteContext, TimestampProvider};
 
 impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
@@ -41,11 +45,59 @@ impl Coordinator {
         plan: plan::CreateMaterializedViewPlan,
         resolved_ids: ResolvedIds,
     ) {
-        self.sequence_create_materialized_view_stage(
+        self.execute_create_materialized_view_stage(
             ctx,
             CreateMaterializedViewStage::Validate(CreateMaterializedViewValidate {
                 plan,
                 resolved_ids,
+                explain_ctx: None,
+            }),
+            OpenTelemetryContext::obtain(),
+        )
+        .await;
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(crate) async fn explain_create_materialized_view(
+        &mut self,
+        ctx: ExecuteContext,
+        plan::ExplainPlanPlan {
+            stage,
+            format,
+            config,
+            explainee,
+        }: plan::ExplainPlanPlan,
+    ) {
+        let plan::Explainee::Statement(stmt) = explainee else {
+            // This is currently asserted in the `sequence_explain_plan` code that
+            // calls this method.
+            unreachable!()
+        };
+        let plan::ExplaineeStatement::CreateMaterializedView { broken, plan } = stmt else {
+            // This is currently asserted in the `sequence_explain_plan` code that
+            // calls this method.
+            unreachable!()
+        };
+
+        // Create an OptimizerTrace instance to collect plans emitted when
+        // executing the optimizer pipeline.
+        let optimizer_trace = OptimizerTrace::new(broken, stage.path());
+
+        // Not used in the EXPLAIN path so it's OK to generate a dummy value.
+        let resolved_ids = ResolvedIds(Default::default());
+
+        self.execute_create_materialized_view_stage(
+            ctx,
+            CreateMaterializedViewStage::Validate(CreateMaterializedViewValidate {
+                plan,
+                resolved_ids,
+                explain_ctx: Some(ExplainContext {
+                    broken,
+                    config,
+                    format,
+                    stage,
+                    optimizer_trace,
+                }),
             }),
             OpenTelemetryContext::obtain(),
         )
@@ -54,7 +106,7 @@ impl Coordinator {
 
     /// Processes as many `create materialized view` stages as possible.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn sequence_create_materialized_view_stage(
+    pub(crate) async fn execute_create_materialized_view_stage(
         &mut self,
         mut ctx: ExecuteContext,
         mut stage: CreateMaterializedViewStage,
@@ -88,6 +140,11 @@ impl Coordinator {
                     ctx.retire(result);
                     return;
                 }
+                Explain(stage) => {
+                    let result = self.create_materialized_view_explain(&mut ctx, stage);
+                    ctx.retire(result);
+                    return;
+                }
             }
         }
     }
@@ -95,7 +152,11 @@ impl Coordinator {
     fn create_materialized_view_validate(
         &mut self,
         session: &Session,
-        CreateMaterializedViewValidate { plan, resolved_ids }: CreateMaterializedViewValidate,
+        CreateMaterializedViewValidate {
+            plan,
+            resolved_ids,
+            explain_ctx,
+        }: CreateMaterializedViewValidate,
     ) -> Result<CreateMaterializedViewOptimize, AdapterError> {
         let plan::CreateMaterializedViewPlan {
             materialized_view:
@@ -141,6 +202,7 @@ impl Coordinator {
             validity,
             plan,
             resolved_ids,
+            explain_ctx,
         })
     }
 
@@ -151,6 +213,7 @@ impl Coordinator {
             validity,
             plan,
             resolved_ids,
+            explain_ctx,
         }: CreateMaterializedViewOptimize,
         otel_ctx: OpenTelemetryContext,
     ) {
@@ -175,16 +238,24 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
-        let id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
+        let exported_sink_id = if explain_ctx.is_some() {
+            return_if_err!(self.allocate_transient_id(), ctx)
+        } else {
+            return_if_err!(self.catalog_mut().allocate_user_id().await, ctx)
+        };
         let internal_view_id = return_if_err!(self.allocate_transient_id(), ctx);
         let debug_name = self.catalog().resolve_full_name(name, None).to_string();
-        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+        let optimizer_config = if let Some(explain_ctx) = explain_ctx.as_ref() {
+            optimize::OptimizerConfig::from((self.catalog().system_config(), &explain_ctx.config))
+        } else {
+            optimize::OptimizerConfig::from(self.catalog().system_config())
+        };
 
         // Build an optimizer for this MATERIALIZED VIEW.
         let mut optimizer = optimize::materialized_view::Optimizer::new(
             self.owned_catalog(),
             compute_instance,
-            id,
+            exported_sink_id,
             internal_view_id,
             column_names.clone(),
             non_null_assertions.clone(),
@@ -193,33 +264,114 @@ impl Coordinator {
             optimizer_config,
         );
 
-        let span = tracing::debug_span!("optimize create materialized view task");
-
         mz_ore::task::spawn_blocking(
             || "optimize create materialized view",
             move || {
-                let _guard = span.enter();
+                let mut pipeline = || -> Result<(
+                    optimize::materialized_view::LocalMirPlan,
+                    optimize::materialized_view::GlobalMirPlan,
+                    optimize::materialized_view::GlobalLirPlan,
+                    UsedIndexes,
+                ), AdapterError> {
+                    // In `explain_~` contexts, set the trace-derived dispatch
+                    // as default while optimizing.
+                    let _dispatch_guard = if let Some(explain_ctx) = explain_ctx.as_ref() {
+                        let dispatch = tracing::Dispatch::from(&explain_ctx.optimizer_trace);
+                        Some(tracing::dispatcher::set_default(&dispatch))
+                    } else {
+                        None
+                    };
 
-                // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
-                let raw_expr = plan.materialized_view.expr.clone();
-                let local_mir_plan = return_if_err!(optimizer.catch_unwind_optimize(raw_expr), ctx);
-                let global_mir_plan =
-                    return_if_err!(optimizer.catch_unwind_optimize(local_mir_plan.clone()), ctx);
-                // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                let global_lir_plan = return_if_err!(
-                    optimizer.catch_unwind_optimize(global_mir_plan.clone()),
-                    ctx
-                );
+                    let _span_guard =
+                        tracing::debug_span!(target: "optimizer", "optimize").entered();
 
-                let stage = CreateMaterializedViewStage::Finish(CreateMaterializedViewFinish {
-                    validity,
-                    id,
-                    plan,
-                    resolved_ids,
-                    local_mir_plan,
-                    global_mir_plan,
-                    global_lir_plan,
-                });
+                    let raw_expr = plan.materialized_view.expr.clone();
+
+                    // Trace the pipeline input under `optimize/raw`.
+                    tracing::debug_span!(target: "optimizer", "raw").in_scope(|| {
+                        trace_plan(&raw_expr);
+                    });
+
+                    // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
+                    let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
+                    let global_mir_plan =
+                        optimizer.catch_unwind_optimize(local_mir_plan.clone())?;
+
+                    // Collect the list of indexes used by the dataflow at this point
+                    let used_indexes = {
+                        let df_desc = global_mir_plan.df_desc();
+                        let df_meta = global_mir_plan.df_meta();
+                        UsedIndexes::new(
+                            df_desc
+                                .index_imports
+                                .iter()
+                                .map(|(id, _index_import)| {
+                                    (*id, df_meta.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
+                                })
+                                .collect(),
+                        )
+                    };
+
+                    // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                    let global_lir_plan =
+                        optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
+
+                    // Trace the resulting plan for the top-level `optimize` path.
+                    trace_plan(global_lir_plan.df_desc());
+
+                    Ok((
+                        local_mir_plan,
+                        global_mir_plan,
+                        global_lir_plan,
+                        used_indexes,
+                    ))
+                };
+
+                let stage = match pipeline() {
+                    Ok((local_mir_plan, global_mir_plan, global_lir_plan, used_indexes)) => {
+                        if let Some(explain_ctx) = explain_ctx {
+                            let (_, df_meta) = global_lir_plan.unapply();
+                            CreateMaterializedViewStage::Explain(CreateMaterializedViewExplain {
+                                validity,
+                                exported_sink_id,
+                                plan,
+                                df_meta,
+                                used_indexes,
+                                explain_ctx,
+                            })
+                        } else {
+                            CreateMaterializedViewStage::Finish(CreateMaterializedViewFinish {
+                                validity,
+                                exported_sink_id,
+                                plan,
+                                resolved_ids,
+                                local_mir_plan,
+                                global_mir_plan,
+                                global_lir_plan,
+                            })
+                        }
+                    }
+                    // Pipeline errors are handled fifferently depending on the caller.
+                    Err(err) => {
+                        if let Some(explain_ctx) = explain_ctx {
+                            // In `explain_~` contexts, just move to the next
+                            // stage with default parameters.
+                            tracing::error!("error while handling EXPLAIN statement: {}", err);
+                            CreateMaterializedViewStage::Explain(CreateMaterializedViewExplain {
+                                validity,
+                                exported_sink_id,
+                                plan,
+                                df_meta: Default::default(),
+                                used_indexes: Default::default(),
+                                explain_ctx,
+                            })
+                        } else {
+                            // In `sequence_~` contexts, immediately retire the
+                            // execution with the error.
+                            return ctx.retire(Err(err));
+                        }
+                    }
+                };
 
                 let _ = internal_cmd_tx.send(Message::CreateMaterializedViewStageReady {
                     ctx,
@@ -234,7 +386,7 @@ impl Coordinator {
         &mut self,
         ctx: &mut ExecuteContext,
         CreateMaterializedViewFinish {
-            id,
+            exported_sink_id,
             plan:
                 plan::CreateMaterializedViewPlan {
                     name,
@@ -264,7 +416,7 @@ impl Coordinator {
                 .into_iter()
                 .map(|id| catalog::Op::DropObject(ObjectId::Item(id))),
             std::iter::once(catalog::Op::CreateItem {
-                id,
+                id: exported_sink_id,
                 oid: self.catalog_mut().allocate_oid()?,
                 name: name.clone(),
                 item: CatalogItem::MaterializedView(MaterializedView {
@@ -320,10 +472,10 @@ impl Coordinator {
                 // Save plan structures.
                 coord
                     .catalog_mut()
-                    .set_optimized_plan(id, global_mir_plan.df_desc().clone());
+                    .set_optimized_plan(exported_sink_id, global_mir_plan.df_desc().clone());
                 coord
                     .catalog_mut()
-                    .set_physical_plan(id, global_lir_plan.df_desc().clone());
+                    .set_physical_plan(exported_sink_id, global_lir_plan.df_desc().clone());
 
                 let output_desc = global_lir_plan.desc().clone();
                 let (mut df_desc, df_meta) = global_lir_plan.unapply();
@@ -338,10 +490,12 @@ impl Coordinator {
                 coord.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
 
                 // Notices rendering
-                let df_meta = coord.catalog().render_notices(df_meta, Some(id));
+                let df_meta = coord
+                    .catalog()
+                    .render_notices(df_meta, Some(exported_sink_id));
                 coord
                     .catalog_mut()
-                    .set_dataflow_metainfo(id, df_meta.clone());
+                    .set_dataflow_metainfo(exported_sink_id, df_meta.clone());
 
                 // Announce the creation of the materialized view source.
                 coord
@@ -350,7 +504,7 @@ impl Coordinator {
                     .create_collections(
                         None,
                         vec![(
-                            id,
+                            exported_sink_id,
                             CollectionDescription {
                                 desc: output_desc,
                                 data_source: DataSource::Other(DataSourceOther::Compute),
@@ -364,7 +518,7 @@ impl Coordinator {
 
                 coord
                     .initialize_storage_read_policies(
-                        vec![id],
+                        vec![exported_sink_id],
                         compaction_window.unwrap_or(CompactionWindow::Default),
                     )
                     .await;
@@ -410,5 +564,102 @@ impl Coordinator {
             }
             Err(err) => Err(err),
         }
+    }
+
+    fn create_materialized_view_explain(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        CreateMaterializedViewExplain {
+            exported_sink_id,
+            plan:
+                plan::CreateMaterializedViewPlan {
+                    name,
+                    materialized_view: plan::MaterializedView { column_names, .. },
+                    ..
+                },
+            df_meta,
+            used_indexes,
+            explain_ctx:
+                ExplainContext {
+                    broken,
+                    config,
+                    format,
+                    stage,
+                    optimizer_trace,
+                },
+            ..
+        }: CreateMaterializedViewExplain,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let session_catalog = self.catalog().for_session(ctx.session());
+        let expr_humanizer = {
+            let full_name = self.catalog().resolve_full_name(&name, None);
+            let transient_items = btreemap! {
+                exported_sink_id => TransientItem::new(
+                    Some(full_name.to_string()),
+                    Some(full_name.item.to_string()),
+                    Some(column_names.iter().map(|c| c.to_string()).collect()),
+                )
+            };
+            ExprHumanizerExt::new(transient_items, &session_catalog)
+        };
+
+        let trace = optimizer_trace.drain_all(
+            format,
+            &config,
+            &expr_humanizer,
+            None,
+            used_indexes,
+            None,
+            df_meta,
+        )?;
+
+        let rows = match stage.path() {
+            None => {
+                // For the `Trace` (pseudo-)stage, return the entire trace as
+                // triples of (time, path, plan) values.
+                let rows = trace
+                    .into_iter()
+                    .map(|entry| {
+                        // The trace would have to take over 584 years to overflow a u64.
+                        let span_duration = u64::try_from(entry.span_duration.as_nanos());
+                        Row::pack_slice(&[
+                            Datum::from(span_duration.unwrap_or(u64::MAX)),
+                            Datum::from(entry.path.as_str()),
+                            Datum::from(entry.plan.as_str()),
+                        ])
+                    })
+                    .collect();
+                rows
+            }
+            Some(path) => {
+                // For everything else, return the plan for the stage identified
+                // by the corresponding path.
+                let row = trace
+                    .into_iter()
+                    .find(|entry| entry.path == path)
+                    .map(|entry| Row::pack_slice(&[Datum::from(entry.plan.as_str())]))
+                    .ok_or_else(|| {
+                        let stmt_kind = plan::ExplaineeStatementKind::CreateMaterializedView;
+                        if !stmt_kind.supports(&stage) {
+                            // Print a nicer error for unsupported stages.
+                            AdapterError::Unstructured(anyhow::anyhow!(format!(
+                                "cannot EXPLAIN {stage} FOR {stmt_kind}"
+                            )))
+                        } else {
+                            // We don't expect this stage to be missing.
+                            AdapterError::Internal(format!(
+                                "stage `{path}` not present in the collected optimizer trace",
+                            ))
+                        }
+                    })?;
+                vec![row]
+            }
+        };
+
+        if broken {
+            tracing_core::callsite::rebuild_interest_cache();
+        }
+
+        Ok(Self::send_immediate_rows(rows))
     }
 }
