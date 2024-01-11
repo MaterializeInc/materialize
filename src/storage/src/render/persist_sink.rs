@@ -415,7 +415,8 @@ where
 
     // The description and the data-passthrough outputs are both driven by this input, so
     // they use a standard input connection.
-    let mut desired_input = mint_op.new_input(&desired_collection.inner, Pipeline);
+    let mut desired_input =
+        mint_op.new_input_for_many(&desired_collection.inner, Pipeline, [&output, &data_output]);
 
     let shutdown_button = mint_op.build(move |capabilities| async move {
         // Non-active workers should just pass the data through.
@@ -424,10 +425,12 @@ where
             // its capability here. The data-passthrough output just uses the data
             // capabilities.
             drop(capabilities);
-            while let Some(event) = desired_input.next_mut().await {
+            while let Some(event) = desired_input.next().await {
                 match event {
-                    Event::Data(cap, data) => {
-                        data_output.give_container(&cap, data).await;
+                    Event::Data([_output_cap, data_output_cap], mut data) => {
+                        data_output
+                            .give_container(&data_output_cap, &mut data)
+                            .await;
                     }
                     Event::Progress(_) => {}
                 }
@@ -481,11 +484,13 @@ where
         let mut desired_frontier;
 
         loop {
-            if let Some(event) = desired_input.next_mut().await {
+            if let Some(event) = desired_input.next().await {
                 match event {
-                    Event::Data(cap, data) => {
+                    Event::Data([_output_cap, data_output_cap], mut data) => {
                         // Just passthrough the data.
-                        data_output.give_container(&cap, data).await;
+                        data_output
+                            .give_container(&data_output_cap, &mut data)
+                            .await;
                         continue;
                     }
                     Event::Progress(frontier) => {
@@ -589,8 +594,9 @@ where
 
     let (mut output, output_stream) = write_op.new_output();
 
-    let mut descriptions_input = write_op.new_input(&batch_descriptions.broadcast(), Pipeline);
-    let mut desired_input = write_op.new_input(&desired_collection.inner, Pipeline);
+    let mut descriptions_input =
+        write_op.new_input_for(&batch_descriptions.broadcast(), Pipeline, &output);
+    let mut desired_input = write_op.new_disconnected_input(&desired_collection.inner, Pipeline);
 
     // This operator accepts the current and desired update streams for a `persist` shard.
     // It attempts to write out updates, starting from the current's upper frontier, that
@@ -645,11 +651,11 @@ where
 
         loop {
             tokio::select! {
-                Some(event) = descriptions_input.next_mut() => {
+                Some(event) = descriptions_input.next() => {
                     match event {
                         Event::Data(cap, data) => {
                             // Ingest new batch descriptions.
-                            for description in data.drain(..) {
+                            for description in data {
                                 if collection_id.is_user() {
                                     trace!(
                                         "persist_sink {collection_id}/{shard_id}: \
@@ -692,7 +698,7 @@ where
                         }
                     }
                 }
-                Some(event) = desired_input.next_mut() => {
+                Some(event) = desired_input.next() => {
                     match event {
                         Event::Data(_cap, data) => {
                             // Extract desired rows as positive contributions to `correction`.
@@ -711,7 +717,7 @@ where
                             }
 
                             let minimum_batch_updates = persist_clients.cfg().storage_sink_minimum_batch_updates();
-                            for (row, ts, diff) in data.drain(..) {
+                            for (row, ts, diff) in data {
                                 if write.upper().less_equal(&ts){
                                     let builder = stashed_batches.entry(ts).or_insert_with(|| {
                                         BatchBuilderAndMetadata::new()
@@ -937,13 +943,10 @@ where
     // any output of this operator is entirely driven by the `compare_and_append`s. Currently
     // this operator has no outputs, but they may be added in the future, when merging with
     // the compute `persist_sink`.
-    let mut descriptions_input = append_op.new_input_connection(
-        batch_descriptions,
-        Exchange::new(move |_| hashed_id),
-        vec![],
-    );
+    let mut descriptions_input =
+        append_op.new_disconnected_input(batch_descriptions, Exchange::new(move |_| hashed_id));
     let mut batches_input =
-        append_op.new_input_connection(batches, Exchange::new(move |_| hashed_id), vec![]);
+        append_op.new_disconnected_input(batches, Exchange::new(move |_| hashed_id));
 
     let current_upper = Rc::clone(&storage_state.source_uppers[&collection_id]);
     if !active_worker {
@@ -959,7 +962,7 @@ where
         .clone();
 
     // An output whose frontier tracks the last successful compare and append of this operator
-    let (_upper_output, upper_stream) = append_op.new_output_connection(vec![Antichain::new(); 2]);
+    let (_upper_output, upper_stream) = append_op.new_output();
 
     // This operator accepts the batch descriptions and tokens that represent
     // written batches. Written batches get appended to persist when we learn
@@ -1048,11 +1051,11 @@ where
 
         loop {
             tokio::select! {
-                Some(event) = descriptions_input.next_mut() => {
+                Some(event) = descriptions_input.next() => {
                     match event {
                         Event::Data(_cap, data) => {
                             // Ingest new batch descriptions.
-                            for batch_description in data.drain(..) {
+                            for batch_description in data {
                                 if collection_id.is_user() {
                                     trace!(
                                         "persist_sink {collection_id}/{shard_id}: \
@@ -1086,10 +1089,10 @@ where
                         }
                     }
                 }
-                Some(event) = batches_input.next_mut() => {
+                Some(event) = batches_input.next() => {
                     match event {
                         Event::Data(_cap, data) => {
-                            for batch in data.drain(..) {
+                            for batch in data {
                                 match batch.batch {
                                     Either::Left(hollow_batch) => {
                                         let finished_batch = write.batch_from_transmittable_batch(hollow_batch);

@@ -24,11 +24,10 @@ use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 use mz_persist_types::{Codec, Codec64, StepForward};
 use mz_timely_util::builder_async::{
-    AsyncInputHandle, Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+    AsyncInputHandle, Disconnected, Event, OperatorBuilder as AsyncOperatorBuilder,
+    PressOnDropButton,
 };
-use timely::communication::Pull;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::channels::BundleCore;
 use timely::dataflow::operators::capture::EventCore;
 use timely::dataflow::operators::{Broadcast, Capture, Leave, Map, Probe};
 use timely::dataflow::{ProbeHandle, Scope, Stream};
@@ -231,9 +230,8 @@ where
         passthrough.scope().peers(),
     );
     let (mut passthrough_output, passthrough_stream) = builder.new_output();
-    let txns_input = builder.new_input_connection(&txns, Pipeline, vec![Antichain::new()]);
-    let mut passthrough_input =
-        builder.new_input_connection(&passthrough, Pipeline, vec![Antichain::new()]);
+    let txns_input = builder.new_disconnected_input(&txns, Pipeline);
+    let mut passthrough_input = builder.new_disconnected_input(&passthrough, Pipeline);
 
     let shutdown_button = builder.build(move |capabilities| async move {
         let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
@@ -277,14 +275,14 @@ where
                 // it into an empty frontier progress so we can re-use the
                 // shutdown code below.
                 let event = passthrough_input
-                    .next_mut()
+                    .next()
                     .await
                     .unwrap_or_else(|| Event::Progress(Antichain::new()));
                 match event {
                     // NB: Ignore the data_cap because this input is
                     // disconnected.
                     Event::Data(_data_cap, data) => {
-                        for data in data.drain(..) {
+                        for data in data {
                             debug!(
                                 "{} {:.9} emitting data {:?}",
                                 name,
@@ -396,20 +394,16 @@ where
 
 // NB: The API of this intentionally mirrors TxnsCache and TxnsRead. Consider
 // making them all implement the same trait?
-struct TxnsCacheTimely<
-    T: Timestamp + Lattice + Codec64,
-    P: Pull<BundleCore<T, Vec<(TxnsEntry, T, i64)>>> + 'static,
-> {
+struct TxnsCacheTimely<T: Timestamp + Lattice + Codec64> {
     name: String,
     state: TxnsCacheState<T>,
-    input: AsyncInputHandle<T, Vec<(TxnsEntry, T, i64)>, P>,
+    input: AsyncInputHandle<T, Vec<(TxnsEntry, T, i64)>, Disconnected>,
     buf: Vec<(TxnsEntry, T, i64)>,
 }
 
-impl<T, P> TxnsCacheTimely<T, P>
+impl<T> TxnsCacheTimely<T>
 where
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-    P: Pull<BundleCore<T, Vec<(TxnsEntry, T, i64)>>> + 'static,
 {
     /// See [TxnsCacheState::compact_to].
     fn compact_to(&mut self, since_ts: &T) {
@@ -436,7 +430,7 @@ where
 
     async fn update<F: Fn(&T) -> bool>(&mut self, done: F) {
         while !done(&self.state.progress_exclusive) {
-            let Some(event) = self.input.next_mut().await else {
+            let Some(event) = self.input.next().await else {
                 unreachable!("txns shard unexpectedly closed")
             };
             match event {
@@ -448,9 +442,9 @@ where
                     self.state
                         .push_entries(std::mem::take(&mut self.buf), progress);
                 }
-                Event::Data(_cap, entries) => {
+                Event::Data(_cap, mut entries) => {
                     debug!("{} got updates {:?}", self.name, entries);
-                    self.buf.append(entries);
+                    self.buf.append(&mut entries);
                 }
             }
         }

@@ -206,7 +206,7 @@ where
         format!("shard_source_descs_return({})", name),
         scope.clone(),
     );
-    let mut completed_fetches = builder.new_input(
+    let mut completed_fetches = builder.new_disconnected_input(
         &completed_fetches_stream,
         // We must ensure all completed fetches are fed into
         // the worker responsible for managing part leases
@@ -220,11 +220,11 @@ where
             // subscriber was even created.
             return;
         };
-        while let Some(event) = completed_fetches.next_mut().await {
+        while let Some(event) = completed_fetches.next().await {
             let Event::Data(_cap, data) = event else {
                 continue;
             };
-            for part in data.drain(..) {
+            for part in data {
                 lease_returner.return_leased_part(
                     lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part),
                 );
@@ -449,12 +449,13 @@ where
 {
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_fetch({})", name), descs.scope());
-    let mut descs_input = builder.new_input(
-        descs,
-        Exchange::new(|&(i, _): &(usize, _)| u64::cast_from(i)),
-    );
     let (mut fetched_output, fetched_stream) = builder.new_output();
     let (mut completed_fetches_output, completed_fetches_stream) = builder.new_output();
+    let mut descs_input = builder.new_input_for_many(
+        descs,
+        Exchange::new(|&(i, _): &(usize, _)| u64::cast_from(i)),
+        [&fetched_output, &completed_fetches_output],
+    );
     let name_owned = name.to_owned();
 
     let shutdown_button = builder.build(move |_capabilities| async move {
@@ -473,11 +474,11 @@ where
                 .await
         };
 
-        while let Some(event) = descs_input.next_mut().await {
-            if let Event::Data(cap, data) = event {
+        while let Some(event) = descs_input.next().await {
+            if let Event::Data([fetched_cap, completed_fetches_cap], data) = event {
                 // `LeasedBatchPart`es cannot be dropped at this point w/o
                 // panicking, so swap them to an owned version.
-                for (_idx, part) in data.drain(..) {
+                for (_idx, part) in data {
                     let leased_part = fetcher.leased_part_from_exchangeable(part);
                     let fetched = fetcher
                         .fetch_leased_part(&leased_part)
@@ -489,9 +490,9 @@ where
                         // outputs or sessions across await points, which
                         // would prevent messages from being flushed from
                         // the shared timely output buffer.
-                        fetched_output.give(&cap, fetched).await;
+                        fetched_output.give(&fetched_cap, fetched).await;
                         completed_fetches_output
-                            .give(&cap, leased_part.into_exchangeable_part())
+                            .give(&completed_fetches_cap, leased_part.into_exchangeable_part())
                             .await;
                     }
                 }

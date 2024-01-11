@@ -353,7 +353,7 @@ where
 
     let health = health_stream.enter(scope);
 
-    let mut input = health_op.new_input(
+    let mut input = health_op.new_disconnected_input(
         &health,
         Exchange::new(move |_| u64::cast_from(chosen_worker_id)),
     );
@@ -388,17 +388,14 @@ where
         }
 
         let mut outputs_seen = BTreeMap::<usize, BTreeSet<_>>::new();
-        while let Some(event) = input.next_mut().await {
+        while let Some(event) = input.next().await {
             if let AsyncEvent::Data(_cap, rows) = event {
-                for (
-                    worker_id,
-                    HealthStatusMessage {
+                for (worker_id, message) in rows {
+                    let HealthStatusMessage {
                         index: output_index,
                         namespace: ns,
                         update: health_event,
-                    },
-                ) in rows.drain(..)
-                {
+                    } = message;
                     let HealthState {
                         id,
                         healths,

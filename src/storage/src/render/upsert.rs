@@ -156,7 +156,7 @@ pub fn rehydration_finished<G, T>(
     let worker_id = source_config.worker_id;
     let id = source_config.id;
     let mut builder = AsyncOperatorBuilder::new(format!("rehydration_finished({id}"), scope);
-    let mut input = builder.new_input(input, Pipeline);
+    let mut input = builder.new_disconnected_input(input, Pipeline);
 
     builder.build(move |_capabilities| async move {
         let mut input_upper = Antichain::from_elem(Timestamp::minimum());
@@ -390,11 +390,6 @@ where
 
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
 
-    let mut input = builder.new_input(
-        &input.inner,
-        Exchange::new(move |((key, _, _), _, _)| UpsertKey::hashed(key)),
-    );
-
     // We only care about UpsertValueError since this is the only error that we can retract
     let previous = previous.flat_map(move |result| {
         let value = match result {
@@ -407,12 +402,19 @@ where
         };
         Some((UpsertKey::from_value(value.as_ref(), &key_indices), value))
     });
-    let mut previous = builder.new_input(
-        &previous.inner,
-        Exchange::new(|((key, _), _, _)| UpsertKey::hashed(key)),
-    );
     let (mut output_handle, output) = builder.new_output();
     let (mut health_output, health_stream) = builder.new_output();
+    let mut input = builder.new_input_for(
+        &input.inner,
+        Exchange::new(move |((key, _, _), _, _)| UpsertKey::hashed(key)),
+        &output_handle,
+    );
+
+    let mut previous = builder.new_input_for(
+        &previous.inner,
+        Exchange::new(|((key, _), _, _)| UpsertKey::hashed(key)),
+        &output_handle,
+    );
 
     let upsert_shared_metrics = Arc::clone(&upsert_metrics.shared);
     let shutdown_button = builder.build(move |caps| async move {
@@ -439,13 +441,13 @@ where
                 // Note that these are both cancel-safe. The reason we drain the `input` is to
                 // ensure the `output_frontier` (and therefore flow control on `previous`) make
                 // progress.
-                previous_event = previous.next_mut(), if !PartialOrder::less_equal(&resume_upper, &snapshot_upper) => {
+                previous_event = previous.next(), if !PartialOrder::less_equal(&resume_upper, &snapshot_upper) => {
                     previous_event
                 }
-                input_event = input.next_mut() => {
+                input_event = input.next() => {
                     match input_event {
-                        Some(AsyncEvent::Data(_cap, data)) => {
-                            stage_input(&mut stash, data, &input_upper, &resume_upper, upsert_config.shrink_upsert_unused_buffers_by_ratio);
+                        Some(AsyncEvent::Data(_cap, mut data)) => {
+                            stage_input(&mut stash, &mut data, &input_upper, &resume_upper, upsert_config.shrink_upsert_unused_buffers_by_ratio);
                         }
                         Some(AsyncEvent::Progress(upper)) => {
                             input_upper = upper;
@@ -459,7 +461,7 @@ where
             };
             match previous_event {
                 Some(AsyncEvent::Data(_cap, data)) => {
-                    events.extend(data.drain(..).filter_map(|((key, value), ts, diff)| {
+                    events.extend(data.into_iter().filter_map(|((key, value), ts, diff)| {
                         if !resume_upper.less_equal(&ts) {
                             Some((key, value, diff))
                         } else {
@@ -470,10 +472,10 @@ where
                 Some(AsyncEvent::Progress(upper)) => snapshot_upper = upper,
                 None => snapshot_upper = Antichain::new(),
             };
-            while let Some(event) = previous.next_mut().now_or_never() {
+            while let Some(event) = previous.next().now_or_never() {
                 match event {
                     Some(AsyncEvent::Data(_cap, data)) => {
-                        events.extend(data.drain(..).filter_map(|((key, value), ts, diff)| {
+                        events.extend(data.into_iter().filter_map(|((key, value), ts, diff)| {
                             if !resume_upper.less_equal(&ts) {
                                 Some((key, value, diff))
                             } else {
@@ -585,12 +587,12 @@ where
                 post_snapshot = false;
                 Some(AsyncEvent::Progress(input_upper.clone()))
             } else {
-                input.next_mut().await
+                input.next().await
             }
         } {
             match event {
-                AsyncEvent::Data(_cap, data) => {
-                    stage_input(&mut stash, data, &input_upper, &resume_upper, upsert_config.shrink_upsert_unused_buffers_by_ratio);
+                AsyncEvent::Data(_cap, mut data) => {
+                    stage_input(&mut stash, &mut data, &input_upper, &resume_upper, upsert_config.shrink_upsert_unused_buffers_by_ratio);
                 }
                 AsyncEvent::Progress(upper) => {
                     // Ignore progress updates before the `resume_upper`, which is our initial

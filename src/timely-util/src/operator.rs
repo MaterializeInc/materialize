@@ -29,7 +29,8 @@ use timely::{Data, ExchangeData};
 
 use crate::buffer::ConsolidateBuffer;
 use crate::builder_async::{
-    AsyncInputHandle, AsyncOutputHandle, OperatorBuilder as OperatorBuilderAsync,
+    AsyncInputHandle, AsyncOutputHandle, ConnectedToOne, Disconnected,
+    OperatorBuilder as OperatorBuilderAsync,
 };
 
 /// Extension methods for timely [`Stream`]s.
@@ -78,7 +79,7 @@ where
         B: FnOnce(
             Capability<G::Timestamp>,
             OperatorInfo,
-            AsyncInputHandle<G::Timestamp, Vec<D1>, P::Puller>,
+            AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
             AsyncOutputHandle<G::Timestamp, Vec<D2>, Tee<G::Timestamp, D2>>,
         ) -> BFut,
         BFut: Future + 'static,
@@ -101,8 +102,8 @@ where
         B: FnOnce(
             Capability<G::Timestamp>,
             OperatorInfo,
-            AsyncInputHandle<G::Timestamp, Vec<D1>, P1::Puller>,
-            AsyncInputHandle<G::Timestamp, Vec<D2>, P2::Puller>,
+            AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
+            AsyncInputHandle<G::Timestamp, Vec<D2>, ConnectedToOne>,
             AsyncOutputHandle<G::Timestamp, Vec<D3>, Tee<G::Timestamp, D3>>,
         ) -> BFut,
         BFut: Future + 'static,
@@ -114,7 +115,7 @@ where
     /// inspect the frontier at the input.
     fn sink_async<P, B, BFut>(&self, pact: P, name: String, constructor: B)
     where
-        B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, Vec<D1>, P::Puller>) -> BFut,
+        B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, Vec<D1>, Disconnected>) -> BFut,
         BFut: Future + 'static,
         P: ParallelizationContract<G::Timestamp, D1>;
 
@@ -294,7 +295,7 @@ where
         B: FnOnce(
             Capability<G::Timestamp>,
             OperatorInfo,
-            AsyncInputHandle<G::Timestamp, Vec<D1>, P::Puller>,
+            AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
             AsyncOutputHandle<G::Timestamp, Vec<D2>, Tee<G::Timestamp, D2>>,
         ) -> BFut,
         BFut: Future + 'static,
@@ -303,8 +304,8 @@ where
         let mut builder = OperatorBuilderAsync::new(name, self.scope());
         let operator_info = builder.operator_info();
 
-        let input = builder.new_input(self, pact);
         let (output, stream) = builder.new_output();
+        let input = builder.new_input_for(self, pact, &output);
 
         builder.build(move |mut capabilities| {
             // `capabilities` should be a single-element vector.
@@ -329,8 +330,8 @@ where
         B: FnOnce(
             Capability<G::Timestamp>,
             OperatorInfo,
-            AsyncInputHandle<G::Timestamp, Vec<D1>, P1::Puller>,
-            AsyncInputHandle<G::Timestamp, Vec<D2>, P2::Puller>,
+            AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
+            AsyncInputHandle<G::Timestamp, Vec<D2>, ConnectedToOne>,
             AsyncOutputHandle<G::Timestamp, Vec<D3>, Tee<G::Timestamp, D3>>,
         ) -> BFut,
         BFut: Future + 'static,
@@ -340,9 +341,9 @@ where
         let mut builder = OperatorBuilderAsync::new(name, self.scope());
         let operator_info = builder.operator_info();
 
-        let input1 = builder.new_input(self, pact1);
-        let input2 = builder.new_input(other, pact2);
         let (output, stream) = builder.new_output();
+        let input1 = builder.new_input_for(self, pact1, &output);
+        let input2 = builder.new_input_for(other, pact2, &output);
 
         builder.build(move |mut capabilities| {
             // `capabilities` should be a single-element vector.
@@ -358,14 +359,14 @@ where
     /// inspect the frontier at the input.
     fn sink_async<P, B, BFut>(&self, pact: P, name: String, constructor: B)
     where
-        B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, Vec<D1>, P::Puller>) -> BFut,
+        B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, Vec<D1>, Disconnected>) -> BFut,
         BFut: Future + 'static,
         P: ParallelizationContract<G::Timestamp, D1>,
     {
         let mut builder = OperatorBuilderAsync::new(name, self.scope());
         let operator_info = builder.operator_info();
 
-        let input = builder.new_input(self, pact);
+        let input = builder.new_disconnected_input(self, pact);
 
         builder.build(move |_capabilities| constructor(operator_info, input));
     }

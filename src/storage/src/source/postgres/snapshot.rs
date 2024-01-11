@@ -190,8 +190,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     // This operator needs to broadcast data to itself in order to synchronize the transaction
     // snapshot. However, none of the feedback capabilities result in output messages and for the
     // feedback edge specifically having a default conncetion would result in a loop.
-    let disconnected = vec![Antichain::new(); 4];
-    let mut snapshot_input = builder.new_input_connection(&feedback_data, Pipeline, disconnected);
+    let mut snapshot_input = builder.new_disconnected_input(&feedback_data, Pipeline);
 
     // The export id must be sent to all workes, so we broadcast the feedback connection
     snapshot.broadcast().connect_loop(feedback_handle);
@@ -299,8 +298,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             }, "SET statement_timeout in PG snapshot did not take effect"};
 
             let (snapshot, snapshot_lsn) = loop {
-                match snapshot_input.next_mut().await {
-                    Some(AsyncEvent::Data(_, data)) => break data.pop().expect("snapshot sent above"),
+                match snapshot_input.next().await {
+                    Some(AsyncEvent::Data(_, mut data)) => break data.pop().expect("snapshot sent above"),
                     Some(AsyncEvent::Progress(_)) => continue,
                     None => panic!("feedback closed before sending snapshot info"),
                 }
