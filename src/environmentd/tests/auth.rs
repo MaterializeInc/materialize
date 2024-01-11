@@ -30,7 +30,7 @@ use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
     Authentication as FronteggAuthentication, AuthenticationConfig as FronteggConfig, Claims,
 };
-use mz_frontegg_mock::FronteggMockServer;
+use mz_frontegg_mock::{FronteggMockServer, UserApiToken, UserConfig};
 use mz_ore::assert_contains;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
@@ -417,22 +417,37 @@ async fn test_auth_expiry() {
     let metrics_registry = MetricsRegistry::new();
 
     let tenant_id = Uuid::new_v4();
+    let email = "user@_.com".to_string();
+    let password = Uuid::new_v4().to_string();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
+    let initial_api_tokens = vec![UserApiToken {
+        client_id: client_id.clone(),
+        secret: secret.clone(),
+    }];
+    let roles = Vec::new();
     let users = BTreeMap::from([(
-        (client_id.to_string(), secret.to_string()),
-        "user@_.com".to_string(),
+        email.clone(),
+        UserConfig {
+            email,
+            password,
+            tenant_id,
+            initial_api_tokens,
+            roles,
+        },
     )]);
-    let roles = BTreeMap::from([("user@_.com".to_string(), Vec::new())]);
+
+    let issuer = "frontegg-mock".to_owned();
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
 
     let frontegg_server = FronteggMockServer::start(
         None,
+        issuer,
         encoding_key,
-        tenant_id,
+        decoding_key,
         users,
-        roles,
         SYSTEM_TIME.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
@@ -441,7 +456,7 @@ async fn test_auth_expiry() {
 
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
-            admin_api_token_url: frontegg_server.url.clone(),
+            admin_api_token_url: frontegg_server.auth_api_token_url(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
@@ -516,26 +531,46 @@ async fn test_auth_base_require_tls_frontegg() {
     let metrics_registry = MetricsRegistry::new();
 
     let tenant_id = Uuid::new_v4();
+    let password = Uuid::new_v4().to_string();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
+    let initial_api_tokens = vec![UserApiToken {
+        client_id: client_id.clone(),
+        secret: secret.clone(),
+    }];
+    let system_password = Uuid::new_v4().to_string();
     let system_client_id = Uuid::new_v4();
     let system_secret = Uuid::new_v4();
+    let system_initial_api_tokens = vec![UserApiToken {
+        client_id: system_client_id.clone(),
+        secret: system_secret.clone(),
+    }];
     let users = BTreeMap::from([
         (
-            (client_id.to_string(), secret.to_string()),
             "uSeR@_.com".to_string(),
+            UserConfig {
+                email: "uSeR@_.com".to_string(),
+                password,
+                tenant_id,
+                initial_api_tokens,
+                roles: Vec::new(),
+            },
         ),
         (
-            (system_client_id.to_string(), system_secret.to_string()),
             SYSTEM_USER.name.to_string(),
+            UserConfig {
+                email: SYSTEM_USER.name.to_string(),
+                password: system_password,
+                tenant_id,
+                initial_api_tokens: system_initial_api_tokens,
+                roles: Vec::new(),
+            },
         ),
     ]);
-    let roles = BTreeMap::from([
-        ("uSeR@_.com".to_string(), Vec::new()),
-        (SYSTEM_USER.name.to_string(), Vec::new()),
-    ]);
+    let issuer = "frontegg-mock".to_owned();
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
     let timestamp = Arc::new(Mutex::new(500_000));
     let now = {
         let timestamp = Arc::clone(&timestamp);
@@ -544,6 +579,7 @@ async fn test_auth_base_require_tls_frontegg() {
     let claims = Claims {
         exp: 1000,
         email: "uSeR@_.com".to_string(),
+        iss: "frontegg-mock".to_string(),
         sub: Uuid::new_v4(),
         user_id: None,
         tenant_id,
@@ -580,10 +616,10 @@ async fn test_auth_base_require_tls_frontegg() {
     .unwrap();
     let frontegg_server = FronteggMockServer::start(
         None,
+        issuer,
         encoding_key,
-        tenant_id,
+        decoding_key,
         users,
-        roles,
         now.clone(),
         1_000,
         None,
@@ -592,7 +628,7 @@ async fn test_auth_base_require_tls_frontegg() {
 
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
-            admin_api_token_url: frontegg_server.url,
+            admin_api_token_url: frontegg_server.auth_api_token_url(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now,
@@ -1302,8 +1338,10 @@ async fn test_auth_admin_non_superuser() {
     let metrics_registry = MetricsRegistry::new();
 
     let tenant_id = Uuid::new_v4();
+    let password = Uuid::new_v4().to_string();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
+    let admin_password = Uuid::new_v4().to_string();
     let admin_client_id = Uuid::new_v4();
     let admin_secret = Uuid::new_v4();
 
@@ -1314,31 +1352,41 @@ async fn test_auth_admin_non_superuser() {
 
     let users = BTreeMap::from([
         (
-            (client_id.to_string(), secret.to_string()),
             frontegg_user.to_string(),
+            UserConfig {
+                email: frontegg_user.to_string(),
+                password,
+                tenant_id,
+                initial_api_tokens: vec![UserApiToken { client_id, secret }],
+                roles: Vec::new(),
+            },
         ),
         (
-            (admin_client_id.to_string(), admin_secret.to_string()),
             admin_frontegg_user.to_string(),
+            UserConfig {
+                email: admin_frontegg_user.to_string(),
+                password: admin_password,
+                tenant_id,
+                initial_api_tokens: vec![UserApiToken {
+                    client_id: admin_client_id,
+                    secret: admin_secret,
+                }],
+                roles: vec![admin_role.to_string()],
+            },
         ),
     ]);
-    let roles = BTreeMap::from([
-        (frontegg_user.to_string(), Vec::new()),
-        (
-            admin_frontegg_user.to_string(),
-            vec![admin_role.to_string()],
-        ),
-    ]);
+    let issuer = "frontegg-mock".to_owned();
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
         None,
+        issuer,
         encoding_key,
-        tenant_id,
+        decoding_key,
         users,
-        roles,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
@@ -1348,7 +1396,7 @@ async fn test_auth_admin_non_superuser() {
     let password_prefix = "mzp_";
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
-            admin_api_token_url: frontegg_server.url.clone(),
+            admin_api_token_url: frontegg_server.auth_api_token_url(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now,
@@ -1413,8 +1461,10 @@ async fn test_auth_admin_superuser() {
     let metrics_registry = MetricsRegistry::new();
 
     let tenant_id = Uuid::new_v4();
+    let password = Uuid::new_v4().to_string();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
+    let admin_password = Uuid::new_v4().to_string();
     let admin_client_id = Uuid::new_v4();
     let admin_secret = Uuid::new_v4();
 
@@ -1425,31 +1475,41 @@ async fn test_auth_admin_superuser() {
 
     let users = BTreeMap::from([
         (
-            (client_id.to_string(), secret.to_string()),
             frontegg_user.to_string(),
+            UserConfig {
+                email: frontegg_user.to_string(),
+                password,
+                tenant_id,
+                initial_api_tokens: vec![UserApiToken { client_id, secret }],
+                roles: Vec::new(),
+            },
         ),
         (
-            (admin_client_id.to_string(), admin_secret.to_string()),
             admin_frontegg_user.to_string(),
+            UserConfig {
+                email: admin_frontegg_user.to_string(),
+                password: admin_password,
+                tenant_id,
+                initial_api_tokens: vec![UserApiToken {
+                    client_id: admin_client_id,
+                    secret: admin_secret,
+                }],
+                roles: vec![admin_role.to_string()],
+            },
         ),
     ]);
-    let roles = BTreeMap::from([
-        (frontegg_user.to_string(), Vec::new()),
-        (
-            admin_frontegg_user.to_string(),
-            vec![admin_role.to_string()],
-        ),
-    ]);
+    let issuer = "frontegg-mock".to_owned();
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
         None,
+        issuer,
         encoding_key,
-        tenant_id,
+        decoding_key,
         users,
-        roles,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
@@ -1459,7 +1519,7 @@ async fn test_auth_admin_superuser() {
     let password_prefix = "mzp_";
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
-            admin_api_token_url: frontegg_server.url.clone(),
+            admin_api_token_url: frontegg_server.auth_api_token_url(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now,
@@ -1524,8 +1584,10 @@ async fn test_auth_admin_superuser_revoked() {
     let metrics_registry = MetricsRegistry::new();
 
     let tenant_id = Uuid::new_v4();
+    let password = Uuid::new_v4().to_string();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
+    let admin_password = Uuid::new_v4().to_string();
     let admin_client_id = Uuid::new_v4();
     let admin_secret = Uuid::new_v4();
 
@@ -1536,31 +1598,41 @@ async fn test_auth_admin_superuser_revoked() {
 
     let users = BTreeMap::from([
         (
-            (client_id.to_string(), secret.to_string()),
             frontegg_user.to_string(),
+            UserConfig {
+                email: frontegg_user.to_string(),
+                password,
+                tenant_id,
+                initial_api_tokens: vec![UserApiToken { client_id, secret }],
+                roles: Vec::new(),
+            },
         ),
         (
-            (admin_client_id.to_string(), admin_secret.to_string()),
             admin_frontegg_user.to_string(),
+            UserConfig {
+                email: admin_frontegg_user.to_string(),
+                password: admin_password,
+                tenant_id,
+                initial_api_tokens: vec![UserApiToken {
+                    client_id: admin_client_id,
+                    secret: admin_secret,
+                }],
+                roles: vec![admin_role.to_string()],
+            },
         ),
     ]);
-    let roles = BTreeMap::from([
-        (frontegg_user.to_string(), Vec::new()),
-        (
-            admin_frontegg_user.to_string(),
-            vec![admin_role.to_string()],
-        ),
-    ]);
+    let issuer = "frontegg-mock".to_owned();
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
         None,
+        issuer,
         encoding_key,
-        tenant_id,
+        decoding_key,
         users,
-        roles,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
@@ -1570,7 +1642,7 @@ async fn test_auth_admin_superuser_revoked() {
     let password_prefix = "mzp_";
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
-            admin_api_token_url: frontegg_server.url.clone(),
+            admin_api_token_url: frontegg_server.auth_api_token_url(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now,
@@ -1650,31 +1722,43 @@ async fn test_auth_deduplication() {
     let metrics_registry = MetricsRegistry::new();
 
     let tenant_id = Uuid::new_v4();
+    let password = Uuid::new_v4().to_string();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
+
+    let frontegg_user = "user@_.com";
+
     let users = BTreeMap::from([(
-        (client_id.to_string(), secret.to_string()),
-        "user@_.com".to_string(),
+        frontegg_user.to_string(),
+        UserConfig {
+            email: frontegg_user.to_string(),
+            password,
+            tenant_id,
+            initial_api_tokens: vec![UserApiToken { client_id, secret }],
+            roles: Vec::new(),
+        },
     )]);
-    let roles = BTreeMap::from([("user@_.com".to_string(), Vec::new())]);
+    let issuer = "frontegg-mock".to_owned();
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
         None,
+        issuer,
         encoding_key,
-        tenant_id,
+        decoding_key,
         users,
-        roles,
-        SYSTEM_TIME.clone(),
+        now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
-        Some(Duration::from_secs(2)),
+        None,
     )
     .unwrap();
 
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
-            admin_api_token_url: frontegg_server.url.clone(),
+            admin_api_token_url: frontegg_server.auth_api_token_url(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
@@ -1767,23 +1851,35 @@ async fn test_refresh_task_metrics() {
     let metrics_registry = MetricsRegistry::new();
 
     let tenant_id = Uuid::new_v4();
+    let password = Uuid::new_v4().to_string();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
+
+    let frontegg_user = "user@_.com";
+
     let users = BTreeMap::from([(
-        (client_id.to_string(), secret.to_string()),
-        "user@_.com".to_string(),
+        frontegg_user.to_string(),
+        UserConfig {
+            email: frontegg_user.to_string(),
+            password,
+            tenant_id,
+            initial_api_tokens: vec![UserApiToken { client_id, secret }],
+            roles: Vec::new(),
+        },
     )]);
-    let roles = BTreeMap::from([("user@_.com".to_string(), Vec::new())]);
+    let issuer = "frontegg-mock".to_owned();
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
         None,
+        issuer,
         encoding_key,
-        tenant_id,
+        decoding_key,
         users,
-        roles,
-        SYSTEM_TIME.clone(),
+        now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
     )
@@ -1791,7 +1887,7 @@ async fn test_refresh_task_metrics() {
 
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
-            admin_api_token_url: frontegg_server.url.clone(),
+            admin_api_token_url: frontegg_server.auth_api_token_url(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
@@ -1884,8 +1980,10 @@ async fn test_superuser_can_alter_cluster() {
     let metrics_registry = MetricsRegistry::new();
 
     let tenant_id = Uuid::new_v4();
+    let password = Uuid::new_v4().to_string();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
+    let admin_password = Uuid::new_v4().to_string();
     let admin_client_id = Uuid::new_v4();
     let admin_secret = Uuid::new_v4();
 
@@ -1896,31 +1994,41 @@ async fn test_superuser_can_alter_cluster() {
 
     let users = BTreeMap::from([
         (
-            (client_id.to_string(), secret.to_string()),
             frontegg_user.to_string(),
+            UserConfig {
+                email: frontegg_user.to_string(),
+                password,
+                tenant_id,
+                initial_api_tokens: vec![UserApiToken { client_id, secret }],
+                roles: Vec::new(),
+            },
         ),
         (
-            (admin_client_id.to_string(), admin_secret.to_string()),
             admin_frontegg_user.to_string(),
+            UserConfig {
+                email: admin_frontegg_user.to_string(),
+                password: admin_password.clone(),
+                tenant_id,
+                initial_api_tokens: vec![UserApiToken {
+                    client_id: admin_client_id,
+                    secret: admin_secret,
+                }],
+                roles: vec![admin_role.to_string()],
+            },
         ),
     ]);
-    let roles = BTreeMap::from([
-        (frontegg_user.to_string(), Vec::new()),
-        (
-            admin_frontegg_user.to_string(),
-            vec![admin_role.to_string()],
-        ),
-    ]);
+    let issuer = "frontegg-mock".to_owned();
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
         None,
+        issuer,
         encoding_key,
-        tenant_id,
+        decoding_key,
         users,
-        roles,
         now.clone(),
         i64::try_from(EXPIRES_IN_SECS).unwrap(),
         None,
@@ -1930,7 +2038,7 @@ async fn test_superuser_can_alter_cluster() {
     let password_prefix = "mzp_";
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
-            admin_api_token_url: frontegg_server.url.clone(),
+            admin_api_token_url: frontegg_server.auth_api_token_url(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now,

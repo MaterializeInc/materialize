@@ -527,6 +527,7 @@ fn continuously_refresh(
 pub struct Claims {
     pub exp: i64,
     pub email: String,
+    pub iss: String,
     pub sub: Uuid,
     pub user_id: Option<Uuid>,
     pub tenant_id: Uuid,

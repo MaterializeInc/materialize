@@ -22,7 +22,7 @@ use mz_environmentd::test_util::{self, make_pg_tls, Ca};
 use mz_frontegg_auth::{
     Authentication as FronteggAuthentication, AuthenticationConfig as FronteggConfig,
 };
-use mz_frontegg_mock::FronteggMockServer;
+use mz_frontegg_mock::{FronteggMockServer, UserApiToken, UserConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -44,23 +44,38 @@ async fn test_balancer() {
     let metrics_registry = MetricsRegistry::new();
 
     let tenant_id = Uuid::new_v4();
+    let email = "user@_.com".to_string();
+    let password = Uuid::new_v4().to_string();
     let client_id = Uuid::new_v4();
     let secret = Uuid::new_v4();
+    let initial_api_tokens = vec![UserApiToken {
+        client_id: client_id.clone(),
+        secret: secret.clone(),
+    }];
+    let roles = Vec::new();
     let users = BTreeMap::from([(
-        (client_id.to_string(), secret.to_string()),
-        "user@_.com".to_string(),
+        email.clone(),
+        UserConfig {
+            email,
+            password,
+            tenant_id,
+            initial_api_tokens,
+            roles,
+        },
     )]);
-    let roles = BTreeMap::from([("user@_.com".to_string(), Vec::new())]);
+
+    let issuer = "frontegg-mock".to_owned();
     let encoding_key =
         EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
 
     const EXPIRES_IN_SECS: i64 = 50;
     let frontegg_server = FronteggMockServer::start(
         None,
+        issuer,
         encoding_key,
-        tenant_id,
+        decoding_key,
         users,
-        roles,
         SYSTEM_TIME.clone(),
         EXPIRES_IN_SECS,
         // Add a bit of delay so we can test connection de-duplication.
@@ -70,7 +85,7 @@ async fn test_balancer() {
 
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
-            admin_api_token_url: frontegg_server.url.clone(),
+            admin_api_token_url: frontegg_server.auth_api_token_url(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),

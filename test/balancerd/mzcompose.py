@@ -22,23 +22,37 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.test_certs import TestCerts
 
 TENANT_ID = str(uuid.uuid4())
-ADMIN_USER = "u1"
-OTHER_USER = "u2"
-OTHER_USER_CLIENT = str(uuid.uuid4())
-OTHER_USER_PASSWORD = str(uuid.uuid4())
+ADMIN_USER = "u1@example.com"
+OTHER_USER = "u2@example.com"
+ADMIN_ROLE = "MaterializePlatformAdmin"
+OTHER_ROLE = "MaterializePlatform"
 USERS = {
     ADMIN_USER: {
-        "client": str(uuid.uuid4()),
+        "email": ADMIN_USER,
         "password": str(uuid.uuid4()),
+        "tenant_id": TENANT_ID,
+        "initial_api_tokens": [
+            {
+                "client_id": str(uuid.uuid4()),
+                "secret": str(uuid.uuid4()),
+            }
+        ],
+        "roles": [OTHER_ROLE, ADMIN_ROLE],
     },
     OTHER_USER: {
-        "client": OTHER_USER_CLIENT,
-        "password": OTHER_USER_PASSWORD,
+        "email": OTHER_USER,
+        "password": str(uuid.uuid4()),
+        "tenant_id": TENANT_ID,
+        "initial_api_tokens": [
+            {
+                "client_id": str(uuid.uuid4()),
+                "secret": str(uuid.uuid4()),
+            }
+        ],
+        "roles": [OTHER_ROLE],
     },
 }
-ADMIN_ROLE = "admin"
-ROLES = {ADMIN_USER: ["users", ADMIN_ROLE], OTHER_USER: ["users"]}
-FRONTEGG_URL = "http://frontegg-mock:6880/"
+FRONTEGG_URL = "http://frontegg-mock:6880"
 
 SERVICES = [
     TestCerts(),
@@ -50,7 +64,7 @@ SERVICES = [
             "--internal-http-listen-addr=0.0.0.0:6878",
             "--frontegg-resolver-template=materialized:6880",
             "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
-            f"--frontegg-api-token-url={FRONTEGG_URL}",
+            f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
             f"--frontegg-admin-role={ADMIN_ROLE}",
             "--https-resolver-template=materialized:6881",
             "--tls-key=/secrets/balancerd.key",
@@ -62,10 +76,10 @@ SERVICES = [
         ],
     ),
     FronteggMock(
-        tenant_id=TENANT_ID,
+        issuer=FRONTEGG_URL,
         encoding_key_file="/secrets/frontegg-mock.key",
-        users=json.dumps(USERS),
-        roles=json.dumps(ROLES),
+        decoding_key_file="/secrets/frontegg-mock.crt",
+        users=json.dumps(list(USERS.values())),
         depends_on=["test-certs"],
         volumes=[
             "secrets:/secrets",
@@ -80,7 +94,7 @@ SERVICES = [
             "--tls-cert=/secrets/materialized.crt",
             f"--frontegg-tenant={TENANT_ID}",
             "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
-            f"--frontegg-api-token-url={FRONTEGG_URL}",
+            f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
             f"--frontegg-admin-role={ADMIN_ROLE}",
         ],
         # We do not do anything interesting on the Mz side
@@ -94,14 +108,21 @@ SERVICES = [
 ]
 
 
-def sql_cursor(c: Composition, service="balancerd", user="u1") -> Cursor:
+def app_password(email: str) -> str:
+    api_token = USERS[email]["initial_api_tokens"][0]
+    password = f"mzp_{api_token['client_id']}{api_token['secret']}".replace("-", "")
+    return password
+
+
+def sql_cursor(c: Composition, service="balancerd", email="u1@example.com") -> Cursor:
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
-    creds = USERS[user]
-    password = "mzp_" + creds["client"] + creds["password"]
     return c.sql_cursor(
-        service=service, user=user, password=password, ssl_context=ssl_context
+        service=service,
+        user=email,
+        password=app_password(email),
+        ssl_context=ssl_context,
     )
 
 
@@ -127,7 +148,7 @@ def workflow_http(c: Composition) -> None:
         "--header",
         "Content-Type: application/json",
         "--user",
-        f"{OTHER_USER}:mzp_{OTHER_USER_CLIENT}{OTHER_USER_PASSWORD}",
+        f"{OTHER_USER}:{app_password(OTHER_USER)}",
         "--data",
         '{"query": "SELECT 123"}',
         capture=True,
@@ -290,7 +311,7 @@ def workflow_user(c: Composition) -> None:
     c.up("balancerd", "frontegg-mock", "materialized")
 
     # Non-admin user.
-    cursor = sql_cursor(c, user=OTHER_USER)
+    cursor = sql_cursor(c, email=OTHER_USER)
 
     try:
         cursor.execute("DROP DATABASE materialize CASCADE")

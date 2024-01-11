@@ -15,7 +15,7 @@ import requests
 from requests.exceptions import ConnectionError, ReadTimeout
 
 from materialize.cloudtest.util.common import retry
-from materialize.cloudtest.util.jwt_key import fetch_jwt, make_jwt
+from materialize.cloudtest.util.jwt_key import fetch_jwt
 
 
 @dataclass
@@ -28,6 +28,7 @@ class AuthConfig:
     refresh_fn: Callable[[AuthConfig], None]
 
     pgwire_ssl_mode: str = "require"
+    tls_ca_cert_path: str | None = None
 
     def refresh(self) -> None:
         self.refresh_fn(self)
@@ -47,7 +48,7 @@ DEFAULT_ORG_ID = "80b1a04a-2277-11ed-a1ce-5405dbb9e0f7"
 # connections getting frequently (but sporadically) interrupted here - we
 # should track this down and remove these retries
 def create_auth(
-    user: TestUserConfig | None,
+    user: TestUserConfig,
     refresh_fn: Callable[[AuthConfig], None],
 ) -> AuthConfig:
     config: AuthConfig = retry(
@@ -62,32 +63,32 @@ def create_auth(
 
 
 def _create_auth(
-    user: TestUserConfig | None,
+    user: TestUserConfig,
     refresh_fn: Callable[[AuthConfig], None],
 ) -> AuthConfig:
-    if user is not None:
-        token = fetch_jwt(
-            email=user.email,
-            password=user.password,
-            host=user.frontegg_host,
-        )
-
-        identity_url = f"https://{user.frontegg_host}/identity/resources/users/v2/me"
-        response = requests.get(
-            identity_url,
-            headers={"authorization": f"Bearer {token}"},
-            timeout=10,
-        )
-        response.raise_for_status()
-
-        organization_id = response.json()["tenantId"]
-        app_user = user.email
-        app_password = make_app_password(user.frontegg_host, token)
+    if user.frontegg_host.startswith("127.0.0.1"):
+        scheme = "http"
     else:
-        organization_id = DEFAULT_ORG_ID
-        token = make_jwt(tenant_id=organization_id)
-        app_user = None
-        app_password = None
+        scheme = "https"
+    token = fetch_jwt(
+        email=user.email,
+        password=user.password,
+        host=user.frontegg_host,
+        scheme=scheme,
+    )
+
+    identity_url = f"{scheme}://{user.frontegg_host}/identity/resources/users/v2/me"
+    response = requests.get(
+        identity_url,
+        headers={"authorization": f"Bearer {token}"},
+        timeout=10,
+    )
+    response.raise_for_status()
+
+    organization_id = response.json()["tenantId"]
+    app_user = user.email
+    app_password = make_app_password(user.frontegg_host, token, scheme)
+    tls_ca_cert_path = None
 
     return AuthConfig(
         organization_id=organization_id,
@@ -95,11 +96,12 @@ def _create_auth(
         app_user=app_user,
         app_password=app_password,
         refresh_fn=refresh_fn,
+        tls_ca_cert_path=tls_ca_cert_path,
     )
 
 
 def update_auth(
-    user: TestUserConfig | None,
+    user: TestUserConfig,
     auth: AuthConfig,
 ) -> None:
     new_auth = create_auth(user, auth.refresh_fn)
@@ -108,9 +110,9 @@ def update_auth(
         setattr(auth, field.name, getattr(new_auth, field.name))
 
 
-def make_app_password(frontegg_host: str, token: str) -> str:
+def make_app_password(frontegg_host: str, token: str, scheme: str) -> str:
     response = requests.post(
-        f"https://{frontegg_host}/frontegg/identity/resources/users/api-tokens/v1",
+        f"{scheme}://{frontegg_host}/identity/resources/users/api-tokens/v1",
         json={"description": "e2e test password"},
         headers={"authorization": f"Bearer {token}"},
         timeout=10,
