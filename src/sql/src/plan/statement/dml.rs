@@ -20,11 +20,10 @@ use http::Uri;
 use itertools::Itertools;
 
 use mz_expr::MirRelationExpr;
-use mz_ore::str::StrExt;
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
-use mz_repr::{ColumnName, RelationDesc, ScalarType};
+use mz_repr::{RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
     ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
     IfExistsBehavior, OrderByExpr, SubscribeOutput, UnresolvedItemName,
@@ -931,36 +930,20 @@ pub fn plan_copy(
         (CopyDirection::To, CopyTarget::S3(url_expr)) => {
             scx.require_feature_flag(&vars::ENABLE_COPY_TO_S3)?;
 
-            let copy_to_from = match relation {
+            let from = match relation {
                 CopyRelation::Table { name, columns } => {
-                    let entry = scx.get_item_by_resolved_name(&name)?;
-                    let desc = entry
-                        .desc(&scx.catalog.resolve_full_name(entry.name()))?
-                        .into_owned();
-                    let columns: Vec<_> = columns.into_iter().map(normalize::column_name).collect();
-                    let column_by_name: BTreeMap<&ColumnName, usize> = desc
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, (name, _))| (name, idx))
-                        .collect();
-                    let mut column_indices = Vec::with_capacity(columns.len());
-                    for c in &columns {
-                        if let Some(idx) = column_by_name.get(c) {
-                            column_indices.push(*idx);
-                        } else {
-                            sql_bail!(
-                                "column {} of relation {} does not exist",
-                                c.as_str().quoted(),
-                                name.full_name_str().quoted()
-                            );
-                        }
+                    if !columns.is_empty() {
+                        // TODO(mouli): Add support for this
+                        sql_bail!("Specifying columns for COPY <table_name> TO commands not yet supported. Please use COPY (SELECT...) TO ... instead");
                     }
                     CopyToFrom::Id {
-                        id: entry.id(),
-                        columns: column_indices,
+                        id: *name.item_id(),
                     }
                 }
                 CopyRelation::Select(stmt) => {
+                    if !stmt.query.order_by.is_empty() {
+                        sql_bail!("ORDER BY is not supported in SELECT query for COPY statements")
+                    }
                     let query =
                         plan_query(scx, stmt.query, &Params::empty(), QueryLifetime::OneShot)?;
                     CopyToFrom::Query {
@@ -973,10 +956,10 @@ pub fn plan_copy(
 
             let url = evaluate_string_expression(scx, "S3 url", url_expr.clone())?;
 
-            let parsed_url =
+            let to_url =
                 Uri::from_str(&url).map_err(|e| sql_err!("invalid s3 url {}: {}", url, e))?;
 
-            plan_copy_to(scx, copy_to_from, parsed_url, format, options)
+            plan_copy_to(scx, from, to_url, format, options)
         }
         _ => sql_bail!("COPY {} {} not supported", direction, target),
     }

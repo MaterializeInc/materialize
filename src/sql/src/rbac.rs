@@ -736,7 +736,26 @@ fn generate_rbac_requirements(
             ],
             ..Default::default()
         },
-        Plan::CopyTo(_) => todo!("mouli"),
+        Plan::CopyTo(plan::CopyToPlan {
+            from,
+            to: _,
+            connection: _,
+            format_params: _,
+        }) => {
+            let mut privileges =
+                generate_read_privileges(catalog, from.depends_on().into_iter(), role_id);
+            if let Some(cluster_id) = target_cluster_id {
+                privileges.push((
+                    SystemObjectId::Object(cluster_id.into()),
+                    AclMode::USAGE,
+                    role_id,
+                ));
+            }
+            RbacRequirements {
+                privileges,
+                ..Default::default()
+            }
+        }
         Plan::ExplainPlan(plan::ExplainPlanPlan {
             stage: _,
             format: _,

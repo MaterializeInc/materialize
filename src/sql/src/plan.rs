@@ -801,12 +801,20 @@ pub struct CopyToPlan {
 pub enum CopyToFrom {
     Id {
         id: GlobalId,
-        columns: Vec<usize>,
+        // TODO(mouli): add support to specify columns
     },
     Query {
         expr: MirRelationExpr,
         desc: RelationDesc,
     },
+}
+impl CopyToFrom {
+    pub fn depends_on(&self) -> BTreeSet<GlobalId> {
+        match self {
+            CopyToFrom::Id { id } => BTreeSet::from([*id]),
+            CopyToFrom::Query { expr, .. } => expr.depends_on(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
