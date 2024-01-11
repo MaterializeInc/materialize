@@ -62,32 +62,64 @@ impl FromRow for InfoSchema {
     }
 }
 
+/// Request for table schemas from MySQL
+pub enum SchemaRequest<'a> {
+    /// Request schemas for all tables in the database
+    All,
+    /// Request schemas for all tables in the specified schemas/databases
+    Schemas(Vec<&'a str>),
+    /// Request schemas for all specified tables, specified as (schema_name, table_name)
+    Tables(Vec<(&'a str, &'a str)>),
+}
+
 /// Retrieve the tables and column descriptions for tables in the given schemas.
-pub async fn schema_info(
+pub async fn schema_info<'a>(
     conn: &mut Conn,
-    schemas: &Option<Vec<String>>,
+    schema_request: &SchemaRequest<'a>,
 ) -> Result<Vec<MySqlTableDesc>, MySqlError> {
-    let table_rows: Vec<(String, String)> = if let Some(schemas) = schemas {
-        // Get all tables of type 'Base Table' in specified schemas
-        assert!(!schemas.is_empty());
-        let table_q = format!(
-            "SELECT table_name, table_schema
-            FROM information_schema.tables
-            WHERE table_type = 'BASE TABLE'
-            AND table_schema IN ({})",
-            schemas.iter().map(|_| "?").join(", ")
-        );
-        conn.exec(table_q, schemas).await?
-    } else {
-        // Get all tables in non-system schemas.
-        // TODO(roshan): Many users create user-defined tables in the `mysql` system schema, since mysql doesn't
-        // prevent this. We may want to consider adding a warning for this in the docs, since that schema
-        // contains dozens of built-in system tables that we need to filter out.
-        let table_q = "SELECT table_name, table_schema
-                       FROM information_schema.tables
-                       WHERE table_type = 'BASE TABLE'
-                       AND table_schema NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys')";
-        conn.exec(table_q, ()).await?
+    let table_rows: Vec<(String, String)> = match schema_request {
+        SchemaRequest::All => {
+            // Get all tables in non-system schemas.
+            // TODO(roshan): Many users create user-defined tables in the `mysql` system schema, since mysql doesn't
+            // prevent this. We may want to consider adding a warning for this in the docs, since that schema
+            // contains dozens of built-in system tables that we need to filter out.
+            let table_q = "SELECT table_name, table_schema
+                FROM information_schema.tables
+                WHERE table_type = 'BASE TABLE'
+                AND table_schema NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys')";
+            conn.exec(table_q, ()).await?
+        }
+        SchemaRequest::Schemas(schemas) => {
+            // Get all tables of type 'Base Table' in specified schemas
+            assert!(!schemas.is_empty());
+            let table_q = format!(
+                "SELECT table_name, table_schema
+                FROM information_schema.tables
+                WHERE table_type = 'BASE TABLE'
+                AND table_schema IN ({})",
+                schemas.iter().map(|_| "?").join(", ")
+            );
+            conn.exec(table_q, schemas).await?
+        }
+        SchemaRequest::Tables(tables) => {
+            // Get all specified tables
+            assert!(!tables.is_empty());
+            let table_q = format!(
+                "SELECT table_name, table_schema
+                FROM information_schema.tables
+                WHERE table_type = 'BASE TABLE'
+                AND (table_schema, table_name) IN ({})",
+                tables.iter().map(|_| "(?, ?)").join(", ")
+            );
+            conn.exec(
+                table_q,
+                tables
+                    .iter()
+                    .flat_map(|(s, t)| [*s, *t])
+                    .collect::<Vec<_>>(),
+            )
+            .await?
+        }
     };
 
     let mut tables = vec![];

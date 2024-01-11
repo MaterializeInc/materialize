@@ -25,7 +25,7 @@ pub use replication::{
 };
 
 pub mod schemas;
-pub use schemas::schema_info;
+pub use schemas::{schema_info, SchemaRequest};
 
 #[derive(Debug, thiserror::Error)]
 pub enum MySqlError {

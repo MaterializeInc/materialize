@@ -946,23 +946,20 @@ async fn purify_create_source(
                 ))?;
             }
 
-            // Determine which schemas to request from mysql. Note that in mysql
+            // Determine which table schemas to request from mysql. Note that in mysql
             // a 'schema' is the same as a 'database', and a fully qualified table
             // name is 'schema_name.table_name' (there is no db_name)
-            let requested_schemas = match referenced_subsources
+            let table_schema_request = match referenced_subsources
                 .as_mut()
                 .ok_or(MySqlSourcePurificationError::RequiresReferencedSubsources)?
             {
-                ReferencedSubsources::All => {
-                    None // All schemas
+                ReferencedSubsources::All => mz_mysql_util::SchemaRequest::All,
+                ReferencedSubsources::SubsetSchemas(schemas) => {
+                    mz_mysql_util::SchemaRequest::Schemas(
+                        schemas.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                    )
                 }
-                ReferencedSubsources::SubsetSchemas(schemas) => Some(
-                    schemas
-                        .iter()
-                        .map(|s| s.as_str().to_string())
-                        .collect::<Vec<_>>(),
-                ),
-                ReferencedSubsources::SubsetTables(tables) => Some(
+                ReferencedSubsources::SubsetTables(tables) => mz_mysql_util::SchemaRequest::Tables(
                     tables
                         .iter()
                         .map(|t| {
@@ -973,14 +970,14 @@ async fn purify_create_source(
                                     t.reference.to_ast_string(),
                                 ))?;
                             }
-                            Ok(idents.first().unwrap().as_str().to_string())
+                            Ok((idents[0].as_str(), idents[1].as_str()))
                         })
                         .collect::<Result<Vec<_>, MySqlSourcePurificationError>>()?,
                 ),
             };
 
-            // Retrieve all tables for the requested schemas
-            let tables = mz_mysql_util::schema_info(&mut conn, &requested_schemas)
+            // Retrieve schemas for all requested tables
+            let tables = mz_mysql_util::schema_info(&mut conn, &table_schema_request)
                 .await
                 .map_err(|err| match err {
                     // TODO: Refactor schema_info to return all unsupported columns rather than
