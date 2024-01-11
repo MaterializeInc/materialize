@@ -11,7 +11,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use itertools::Itertools;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::Config;
 use mz_repr::adt::system::Oid;
@@ -24,17 +23,18 @@ use mz_sql_parser::ast::{
 use mz_sql_parser::ast::{CreateSourceSubsource, UnresolvedItemName};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 
-use crate::catalog::ErsatzCatalog;
+use crate::catalog::SubsourceCatalog;
 use crate::names::{Aug, PartialItemName};
 use crate::normalize;
 use crate::plan::{PlanError, StatementContext};
 
 use super::error::PgSourcePurificationError;
+use super::RequestedSubsource;
 
 pub(super) fn derive_catalog_from_publication_tables<'a>(
     database: &'a str,
     publication_tables: &'a [PostgresTableDesc],
-) -> Result<ErsatzCatalog<'a, PostgresTableDesc>, PlanError> {
+) -> Result<SubsourceCatalog<&'a PostgresTableDesc>, PlanError> {
     // An index from table name -> schema name -> database name -> PostgresTableDesc
     let mut tables_by_name = BTreeMap::new();
     for table in publication_tables.iter() {
@@ -47,62 +47,25 @@ pub(super) fn derive_catalog_from_publication_tables<'a>(
             .or_insert(table);
     }
 
-    Ok(ErsatzCatalog(tables_by_name))
+    Ok(SubsourceCatalog(tables_by_name))
 }
 
-pub(super) async fn validate_requested_subsources(
+pub(super) async fn validate_requested_subsources_privileges(
     config: &Config,
-    requested_subsources: &[(UnresolvedItemName, UnresolvedItemName, &PostgresTableDesc)],
+    requested_subsources: &[RequestedSubsource<'_, PostgresTableDesc>],
     ssh_tunnel_manager: &SshTunnelManager,
 ) -> Result<(), PlanError> {
-    // This condition would get caught during the catalog transaction, but produces a
-    // vague, non-contextual error. Instead, error here so we can suggest to the user
-    // how to fix the problem.
-    if let Some(name) = requested_subsources
-        .iter()
-        .map(|(_, subsource_name, _)| subsource_name)
-        .duplicates()
-        .next()
-        .cloned()
-    {
-        let mut upstream_references: Vec<_> = requested_subsources
-            .into_iter()
-            .filter_map(|(u, t, _)| if t == &name { Some(u.clone()) } else { None })
-            .collect();
-
-        upstream_references.sort();
-
-        Err(PgSourcePurificationError::SubsourceNameConflict {
-            name,
-            upstream_references,
-        })?;
-    }
-
-    // We technically could allow multiple subsources to ingest the same upstream table, but
-    // it is almost certainly an error on the user's end.
-    if let Some(name) = requested_subsources
-        .iter()
-        .map(|(referenced_name, _, _)| referenced_name)
-        .duplicates()
-        .next()
-        .cloned()
-    {
-        let mut target_names: Vec<_> = requested_subsources
-            .into_iter()
-            .filter_map(|(u, t, _)| if u == &name { Some(t.clone()) } else { None })
-            .collect();
-
-        target_names.sort();
-
-        Err(PgSourcePurificationError::SubsourceDuplicateReference { name, target_names })?;
-    }
-
     // Ensure that we have select permissions on all tables; we have to do this before we
     // start snapshotting because if we discover we cannot `COPY` from a table while
     // snapshotting, we break the entire source.
     let tables_to_check_permissions = requested_subsources
         .iter()
-        .map(|(UnresolvedItemName(inner), _, _)| [inner[1].as_str(), inner[2].as_str()])
+        .map(
+            |RequestedSubsource {
+                 upstream_name: UnresolvedItemName(inner),
+                 ..
+             }| [inner[1].as_str(), inner[2].as_str()],
+        )
         .collect();
 
     privileges::check_table_privileges(config, tables_to_check_permissions, ssh_tunnel_manager)
@@ -110,7 +73,7 @@ pub(super) async fn validate_requested_subsources(
 
     let oids: Vec<_> = requested_subsources
         .iter()
-        .map(|(_, _, table_desc)| table_desc.oid)
+        .map(|RequestedSubsource { table, .. }| table.oid)
         .collect();
 
     replica_identity::check_replica_identity_full(config, oids, ssh_tunnel_manager).await?;
@@ -119,7 +82,7 @@ pub(super) async fn validate_requested_subsources(
 }
 
 pub(super) fn generate_text_columns(
-    publication_catalog: &ErsatzCatalog<'_, PostgresTableDesc>,
+    publication_catalog: &SubsourceCatalog<&PostgresTableDesc>,
     text_columns: &mut [UnresolvedItemName],
     option_name: &str,
 ) -> Result<BTreeMap<u32, BTreeSet<String>>, PlanError> {
@@ -194,11 +157,7 @@ pub(super) fn generate_text_columns(
 
 pub(crate) fn generate_targeted_subsources<F>(
     scx: &StatementContext,
-    validated_requested_subsources: Vec<(
-        UnresolvedItemName,
-        UnresolvedItemName,
-        &PostgresTableDesc,
-    )>,
+    validated_requested_subsources: Vec<RequestedSubsource<'_, PostgresTableDesc>>,
     mut text_cols_dict: BTreeMap<u32, BTreeSet<String>>,
     mut get_transient_subsource_id: F,
     publication_tables: &[PostgresTableDesc],
@@ -219,7 +178,12 @@ where
     let mut unsupported_cols = vec![];
 
     // Now that we have an explicit list of validated requested subsources we can create them
-    for (upstream_name, subsource_name, table) in validated_requested_subsources.into_iter() {
+    for RequestedSubsource {
+        upstream_name,
+        subsource_name,
+        table,
+    } in validated_requested_subsources.into_iter()
+    {
         // Figure out the schema of the subsource
         let mut columns = vec![];
         let text_cols_dict = text_cols_dict.remove(&table.oid);

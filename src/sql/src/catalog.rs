@@ -1269,11 +1269,9 @@ impl Error for CatalogError {}
 
 /// Provides a method of generating a 3-layer catalog on the fly, and then
 /// resolving objects within it.
-pub(crate) struct ErsatzCatalog<'a, T>(
-    pub BTreeMap<String, BTreeMap<String, BTreeMap<String, &'a T>>>,
-);
+pub(crate) struct SubsourceCatalog<T>(pub BTreeMap<String, BTreeMap<String, BTreeMap<String, T>>>);
 
-impl<'a, T> ErsatzCatalog<'a, T> {
+impl<T> SubsourceCatalog<T> {
     /// Returns the fully qualified name for `item`, as well as the `T` that it
     /// describes.
     ///
@@ -1281,10 +1279,10 @@ impl<'a, T> ErsatzCatalog<'a, T> {
     /// - If `item` cannot be normalized to a [`PartialItemName`]
     /// - If the normalized `PartialItemName` does not resolve to an item in
     ///   `self.0`.
-    pub fn resolve(
+    pub(crate) fn resolve(
         &self,
         item: UnresolvedItemName,
-    ) -> Result<(UnresolvedItemName, &'a T), PlanError> {
+    ) -> Result<(UnresolvedItemName, &T), PlanError> {
         let name = normalize::unresolved_item_name(item)?;
 
         let schemas = match self.0.get(&name.item) {
@@ -1318,7 +1316,7 @@ impl<'a, T> ErsatzCatalog<'a, T> {
         };
 
         let desc = match databases.get(database) {
-            Some(desc) => *desc,
+            Some(desc) => desc,
             None => sql_bail!("database {database} not found source"),
         };
 

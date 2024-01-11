@@ -13,18 +13,28 @@ mod tunnel;
 pub use tunnel::{Config, TunnelConfig};
 
 mod desc;
-pub use desc::{MySqlColumnDesc, MySqlDataType, MySqlTableDesc};
+pub use desc::{
+    MySqlColumnDesc, MySqlKeyDesc, MySqlTableDesc, ProtoMySqlColumnDesc, ProtoMySqlKeyDesc,
+    ProtoMySqlTableDesc,
+};
 
 mod replication;
-pub use replication::{ensure_full_row_binlog_format, ensure_gtid_consistency, query_sys_var};
+pub use replication::{
+    ensure_full_row_binlog_format, ensure_gtid_consistency, ensure_replication_commit_order,
+    query_sys_var,
+};
 
 pub mod schemas;
-pub use schemas::schema_info;
+pub use schemas::{schema_info, SchemaRequest};
 
 #[derive(Debug, thiserror::Error)]
 pub enum MySqlError {
-    #[error("unsupported data type: {0}")]
-    UnsupportedDataType(String),
+    #[error("unsupported data type: '{column_type}' for '{qualified_table_name}.{column_name}'.")]
+    UnsupportedDataType {
+        column_type: String,
+        qualified_table_name: String,
+        column_name: String,
+    },
     #[error("invalid mysql system setting '{setting}'. Expected '{expected}'. Got '{actual}'.")]
     InvalidSystemSetting {
         setting: String,

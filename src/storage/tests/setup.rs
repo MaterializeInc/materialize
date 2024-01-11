@@ -212,6 +212,7 @@ where
                         GenericSourceConnection::Postgres(c) => minimum_frontier(c),
                         GenericSourceConnection::TestScript(c) => minimum_frontier(c),
                         GenericSourceConnection::LoadGenerator(c) => minimum_frontier(c),
+                        GenericSourceConnection::MySql(c) => minimum_frontier(c),
                     },
                 )]);
 

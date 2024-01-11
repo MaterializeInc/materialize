@@ -171,6 +171,20 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
                 .collect();
             (streams, health, source_tokens)
         }
+        GenericSourceConnection::MySql(connection) => {
+            let (streams, health, source_tokens) = source::create_raw_source(
+                scope,
+                resume_stream,
+                base_source_config.clone(),
+                connection,
+                start_signal,
+            );
+            let streams: Vec<_> = streams
+                .into_iter()
+                .map(|(ok, err)| (SourceType::Row(ok), err))
+                .collect();
+            (streams, health, source_tokens)
+        }
         GenericSourceConnection::LoadGenerator(connection) => {
             let (streams, health, source_tokens) = source::create_raw_source(
                 scope,
