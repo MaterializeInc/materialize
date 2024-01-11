@@ -27,6 +27,7 @@ def workflow_default(c: Composition) -> None:
     setup(c)
     run_test_with_mv_on_table(c)
     run_test_with_mv_on_counter_source(c)
+    run_test_with_counter_source(c)
 
 
 def setup(c: Composition) -> None:
@@ -215,8 +216,6 @@ def run_test_with_mv_on_table(c: Composition) -> None:
 
 
 def run_test_with_mv_on_counter_source(c: Composition) -> None:
-    sleep_duration_between_mz_time1_and_mz_time2 = 1.5
-
     c.testdrive(
         dedent(
             """
@@ -233,19 +232,40 @@ def run_test_with_mv_on_counter_source(c: Composition) -> None:
         )
     )
 
+    _validate_count_of_counter_source(c, "retain_history_mv2")
+
+
+def run_test_with_counter_source(c: Composition) -> None:
+    c.testdrive(
+        dedent(
+            """
+            > CREATE SOURCE retain_history_source2
+              FROM LOAD GENERATOR COUNTER
+              (TICK INTERVAL '100ms')
+              WITH (RETAIN HISTORY FOR '10s');
+            """,
+        )
+    )
+
+    _validate_count_of_counter_source(c, "retain_history_source2")
+
+
+def _validate_count_of_counter_source(c: Composition, object_name: str) -> None:
+    sleep_duration_between_mz_time1_and_mz_time2 = 1.5
+
     mz_time1 = fetch_now_from_mz(c)
     count_at_mz_time1 = c.sql_query(
-        f"SELECT count(*) FROM retain_history_mv2 AS OF '{mz_time1}'::TIMESTAMP"
+        f"SELECT count(*) FROM {object_name} AS OF '{mz_time1}'::TIMESTAMP"
     )[0][0]
 
     time.sleep(sleep_duration_between_mz_time1_and_mz_time2)
 
     mz_time2 = fetch_now_from_mz(c)
     count_at_mz_time2 = c.sql_query(
-        f"SELECT count(*) FROM retain_history_mv2 AS OF '{mz_time2}'::TIMESTAMP"
+        f"SELECT count(*) FROM {object_name} AS OF '{mz_time2}'::TIMESTAMP"
     )[0][0]
     count_at_mz_time1_queried_at_mz_time2 = c.sql_query(
-        f"SELECT count(*) FROM retain_history_mv2 AS OF '{mz_time1}'::TIMESTAMP"
+        f"SELECT count(*) FROM {object_name} AS OF '{mz_time1}'::TIMESTAMP"
     )[0][0]
 
     assert count_at_mz_time1 == count_at_mz_time1_queried_at_mz_time2
