@@ -16,7 +16,6 @@ use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::pin::pin;
 use std::rc::Rc;
-use std::slice;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -302,12 +301,6 @@ where
         // NOTE: We have to do this before our `snapshot()` call because that
         // will block when there is no data yet available in the shard.
         cap_set.downgrade(as_of.clone());
-        let mut current_ts = match as_of.clone().into_option() {
-            Some(ts) => ts,
-            None => {
-                return;
-            }
-        };
 
         let mut snapshot_parts = match snapshot_mode {
             SnapshotMode::Include => match read.snapshot(as_of.clone()).await {
@@ -359,25 +352,26 @@ where
         // budget when we do real work; and skip auditing a part if we don't have the budget for it.
         let mut audit_budget_bytes = cfg.dynamic.blob_target_size().saturating_mul(2);
 
-        // Read from the subscription and pass them on.
-        let mut upper = Antichain::from_elem(Timestamp::minimum());
-        // If `until.less_equal(progress)`, it means that all subsequent batches will contain only
+        // All future updates will be timestamped after this frontier.
+        let mut current_frontier = as_of.clone();
+
+        // If `until.less_equal(current_frontier)`, it means that all subsequent batches will contain only
         // times greater or equal to `until`, which means they can be dropped in their entirety.
-        while !PartialOrder::less_equal(&until, &upper) {
+        while !PartialOrder::less_equal(&until, &current_frontier) {
             let (parts, progress) = shard_stream.next().await.expect("infinite stream");
 
             // Emit the part at the `(ts, 0)` time. The `granular_backpressure`
             // operator will refine this further, if its enabled.
-            let session_cap = cap_set.delayed(&current_ts);
+            let current_ts = current_frontier
+                .as_option()
+                .expect("until should always be <= the empty frontier");
+            let session_cap = cap_set.delayed(current_ts);
 
             for mut part_desc in parts {
                 // TODO: Push the filter down into the Subscribe?
                 if cfg.dynamic.stats_filter_enabled() {
                     let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| {
-                        should_fetch_part(
-                            &stats.decode(),
-                            AntichainRef::new(slice::from_ref(&current_ts)),
-                        )
+                        should_fetch_part(&stats.decode(), current_frontier.borrow())
                     });
                     let bytes = u64::cast_from(part_desc.encoded_size_bytes);
                     if should_fetch {
@@ -424,11 +418,8 @@ where
                     .await;
             }
 
-            if let Some(ts) = progress.as_option() {
-                current_ts = ts.clone();
-            }
+            current_frontier.join_assign(&progress);
             cap_set.downgrade(progress.iter());
-            upper = progress;
         }
     });
 
