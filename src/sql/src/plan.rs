@@ -629,7 +629,7 @@ pub struct CreateMaterializedViewPlan {
     pub ambiguous_columns: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CreateIndexPlan {
     pub name: QualifiedItemName,
     pub index: Index,
@@ -821,10 +821,9 @@ pub enum ExplaineeStatement {
     },
     /// The object to be explained is a CREATE INDEX.
     CreateIndex {
-        name: QualifiedItemName,
-        index: Index,
         /// Broken flag (see [`ExplaineeStatement::broken()`]).
         broken: bool,
+        plan: plan::CreateIndexPlan,
     },
 }
 
@@ -833,7 +832,7 @@ impl ExplaineeStatement {
         match self {
             Self::Select { raw_plan, .. } => raw_plan.depends_on(),
             Self::CreateMaterializedView { plan, .. } => plan.materialized_view.expr.depends_on(),
-            Self::CreateIndex { index, .. } => btreeset! {index.on},
+            Self::CreateIndex { plan, .. } => btreeset! {plan.index.on},
         }
     }
 

@@ -2570,6 +2570,9 @@ impl Coordinator {
                         plan::ExplaineeStatement::CreateMaterializedView { .. } => {
                             self.explain_create_materialized_view(ctx, plan).await;
                         }
+                        plan::ExplaineeStatement::CreateIndex { .. } => {
+                            self.explain_create_index(ctx, plan).await;
+                        }
                         _ => {
                             let result =
                                 self.explain_statement(&mut ctx, plan, target_cluster).await;
@@ -2817,9 +2820,8 @@ impl Coordinator {
                 .await
             }
             plan::ExplaineeStatement::CreateIndex {
-                name,
-                index,
                 broken,
+                plan: plan::CreateIndexPlan { name, index, .. },
             } => {
                 // Please see the docs on `explain_query_optimizer_pipeline` above.
                 self.explain_create_index_optimizer_pipeline(
