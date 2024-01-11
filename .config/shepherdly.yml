@@ -1,0 +1,15 @@
+configurations:
+  - name: scoringCommentEnabled
+    value: true
+  - name: scoringCommentRiskScoreThreshold
+    value: 0
+mitigations:
+  - name: code_review
+    score_threshold: 0
+  - name: feature_flag
+    score_threshold: 75
+  - name: integration_test
+    score_threshold: 80
+  - name: observability
+    score_threshold: 75
+default_system_mitigations: false
