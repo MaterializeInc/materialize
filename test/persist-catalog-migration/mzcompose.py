@@ -100,7 +100,7 @@ def workflow_test_migration_panic_after_stash_fence_then_migrate(c: Composition)
         with c.override(
             Materialized(
                 catalog_store="stash",
-                environment_extra=["FAILPOINTS=post_stash_fence=panic"]
+                environment_extra=["FAILPOINTS=post_stash_fence=panic"],
             )
         ):
             # Note: We actually want to retry this 0 times, but we need to retry at least once so a
@@ -150,7 +150,7 @@ def workflow_test_rollback_panic_after_stash_fence_then_rollback(c: Composition)
         with c.override(
             Materialized(
                 catalog_store="stash",
-                environment_extra=["FAILPOINTS=post_stash_fence=panic"]
+                environment_extra=["FAILPOINTS=post_stash_fence=panic"],
             )
         ):
             # Note: We actually want to retry this 0 times, but we need to retry at least once so a
@@ -187,7 +187,7 @@ def workflow_test_migration_panic_after_fence_then_migrate(c: Composition):
         with c.override(
             Materialized(
                 catalog_store="stash",
-                environment_extra=["FAILPOINTS=post_persist_fence=panic"]
+                environment_extra=["FAILPOINTS=post_persist_fence=panic"],
             )
         ):
             # Note: We actually want to retry this 0 times, but we need to retry at least once so a
@@ -237,7 +237,7 @@ def workflow_test_rollback_panic_after_fence_then_rollback(c: Composition):
         with c.override(
             Materialized(
                 catalog_store="stash",
-                environment_extra=["FAILPOINTS=post_persist_fence=panic"]
+                environment_extra=["FAILPOINTS=post_persist_fence=panic"],
             )
         ):
             # Note: We actually want to retry this 0 times, but we need to retry at least once so a
@@ -274,7 +274,7 @@ def workflow_test_migration_panic_after_write_then_migrate(c: Composition):
         with c.override(
             Materialized(
                 catalog_store="stash",
-                environment_extra=["FAILPOINTS=migrate_post_write=panic"]
+                environment_extra=["FAILPOINTS=migrate_post_write=panic"],
             )
         ):
             # Note: We actually want to retry this 0 times, but we need to retry at least once so a
