@@ -80,12 +80,22 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         );
 
         let direction = match self.target {
+            // Handle emergency stash before opening persist.
             TargetImplementation::EmergencyStash => {
-                // Handle emergency stash before opening persist.
-                return self
+                let tombstone = self.get_tombstone().await?;
+                let mut stash = self
                     .openable_stash
                     .open_savepoint(boot_ts, bootstrap_args, deploy_generation, None)
-                    .await;
+                    .await?;
+                // Forcibly mark the rollback as complete so we look at the correct implementation
+                // (stash) on re-boot. This is really a no-op because it's a savepoint catalog, but
+                // we do it anyway for consistency.
+                if tombstone == Some(true) {
+                    let mut txn = stash.transaction().await?;
+                    txn.set_tombstone(false)?;
+                    txn.commit().await?;
+                }
+                return Ok(stash);
             }
             TargetImplementation::MigrationDirection(direction) => direction,
         };
@@ -156,12 +166,21 @@ impl OpenableDurableCatalogState for CatalogMigrator {
         );
 
         let direction = match self.target {
+            // Handle emergency stash before opening persist.
             TargetImplementation::EmergencyStash => {
-                // Handle emergency stash before opening persist.
-                return self
+                let tombstone = self.get_tombstone().await?;
+                let mut stash = self
                     .openable_stash
                     .open(boot_ts, bootstrap_args, deploy_generation, None)
-                    .await;
+                    .await?;
+                // Forcibly mark the rollback as complete so we look at the correct implementation
+                // (stash) on re-boot.
+                if tombstone == Some(true) {
+                    let mut txn = stash.transaction().await?;
+                    txn.set_tombstone(false)?;
+                    txn.commit().await?;
+                }
+                return Ok(stash);
             }
             TargetImplementation::MigrationDirection(direction) => direction,
         };
@@ -202,11 +221,12 @@ impl OpenableDurableCatalogState for CatalogMigrator {
     }
 
     async fn is_initialized(&mut self) -> Result<bool, CatalogError> {
-        let tombstone = self.get_tombstone().await?;
-        if tombstone == Some(true) {
-            self.openable_persist.is_initialized().await
-        } else {
+        match self.target {
+            if tombstone == Some(true) {
+                self.openable_persist.is_initialized().await
+            } else {
             self.openable_stash.is_initialized().await
+            }
         }
     }
 
