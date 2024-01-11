@@ -31,6 +31,7 @@ use mz_timely_util::operator::CollectionExt;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
+use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 
 use crate::extensions::arrange::{KeyCollection, MzArrange};
@@ -50,186 +51,190 @@ where
         input: CollectionBundle<G>,
         top_k_plan: TopKPlan,
     ) -> CollectionBundle<G> {
-        let (ok_input, err_input) = input.as_specific_collection(None);
-
         // We create a new region to compartmentalize the topk logic.
-        let (ok_result, err_collection) = ok_input.scope().region_named("TopK", |inner| {
-            let ok_input = ok_input.enter_region(inner);
-            let mut err_collection = err_input.enter_region(inner);
-
-            // Determine if there should be errors due to limit evaluation; update `err_collection`.
-            // TODO(vmarcos): We evaluate the limit expression below for each input update. There
-            // is an opportunity to do so for every group key instead if the error handling is
-            // integrated with: 1. The intra-timestamp thinning step in monotonic top-k, e.g., by
-            // adding an error output there; 2. The validating reduction on basic top-k (#23687).
-            let limit_err = match &top_k_plan {
-                TopKPlan::MonotonicTop1(MonotonicTop1Plan { .. }) => None,
-                TopKPlan::MonotonicTopK(MonotonicTopKPlan { limit, .. }) => Some(limit),
-                TopKPlan::Basic(BasicTopKPlan { limit, .. }) => Some(limit),
-            };
-            if let Some(limit) = limit_err {
-                if let Some(expr) = limit {
-                    // Produce errors from limit selectors that error or are
-                    // negative, and nothing from limit selectors that do
-                    // not. Note that even if expr.could_error() is false,
-                    // the expression might still return a negative limit and
-                    // thus needs to be checked.
-                    let expr = expr.clone();
-                    let mut datum_vec = mz_repr::DatumVec::new();
-                    let errors = ok_input.flat_map(move |row| {
-                        let temp_storage = mz_repr::RowArena::new();
-                        let datums = datum_vec.borrow_with(&row);
-                        match expr.eval(&datums[..], &temp_storage) {
-                            Ok(l) if l != Datum::Null && l.unwrap_int64() < 0 => {
-                                Some(EvalError::NegLimit.into())
-                            }
-                            Ok(_) => None,
-                            Err(e) => Some(e.into()),
-                        }
-                    });
-                    err_collection = err_collection.concat(&errors);
-                }
-            }
-
-            let ok_result = match top_k_plan {
-                TopKPlan::MonotonicTop1(MonotonicTop1Plan {
-                    group_key,
-                    order_key,
-                    must_consolidate,
-                }) => {
-                    let (oks, errs) = self.render_top1_monotonic(
-                        ok_input,
-                        group_key,
-                        order_key,
-                        must_consolidate,
-                    );
-                    err_collection = err_collection.concat(&errs);
-                    oks
-                }
-                TopKPlan::MonotonicTopK(MonotonicTopKPlan {
-                    order_key,
-                    group_key,
-                    arity,
-                    mut limit,
-                    must_consolidate,
-                }) => {
-                    // Must permute `limit` to reference `group_key` elements as if in order.
-                    if let Some(expr) = limit.as_mut() {
-                        let mut map = BTreeMap::new();
-                        for (index, column) in group_key.iter().enumerate() {
-                            map.insert(*column, index);
-                        }
-                        expr.permute_map(&map);
-                    }
-
-                    // Map the group key along with the row and consolidate if required to do so.
-                    let mut datum_vec = mz_repr::DatumVec::new();
-                    let collection = ok_input
-                        .map(move |row| {
-                            let binding = SharedRow::get();
-                            let mut row_builder = binding.borrow_mut();
-                            let group_row = {
-                                let datums = datum_vec.borrow_with(&row);
-                                let iterator = group_key.iter().map(|i| datums[*i]);
-                                row_builder.packer().extend(iterator);
-                                row_builder.clone()
-                            };
-                            (group_row, row)
-                        })
-                        .consolidate_named_if::<KeySpine<_, _, _>>(
-                            must_consolidate,
-                            "Consolidated MonotonicTopK input",
-                        );
-
-                    // It should be now possible to ensure that we have a monotonic collection.
-                    let error_logger = self.error_logger();
-                    let (collection, errs) = collection.ensure_monotonic(move |data, diff| {
-                        error_logger.log(
-                            "Non-monotonic input to MonotonicTopK",
-                            &format!("data={data:?}, diff={diff}"),
-                        );
-                        let m = "tried to build monotonic top-k on non-monotonic input".to_string();
-                        (DataflowError::from(EvalError::Internal(m)), 1)
-                    });
-                    err_collection = err_collection.concat(&errs);
-
-                    // For monotonic inputs, we are able to thin the input relation in two stages:
-                    // 1. First, we can do an intra-timestamp thinning which has the advantage of
-                    //    being computed in a streaming fashion, even for the initial snapshot.
-                    // 2. Then, we can do inter-timestamp thinning by feeding back negations for
-                    //    any records that have been invalidated.
-                    let collection = if let Some(limit) = limit.clone() {
-                        render_intra_ts_thinning(collection, order_key.clone(), limit)
-                    } else {
-                        collection
-                    };
-
-                    let collection =
-                        collection.map(|(group_row, row)| ((group_row, row.hashed()), row));
-
-                    // For monotonic inputs, we are able to retract inputs that can no longer be produced
-                    // as outputs. Any inputs beyond `offset + limit` will never again be produced as
-                    // outputs, and can be removed. The simplest form of this is when `offset == 0` and
-                    // these removable records are those in the input not produced in the output.
-                    // TODO: consider broadening this optimization to `offset > 0` by first filtering
-                    // down to `offset = 0` and `limit = offset + limit`, followed by a finishing act
-                    // of `offset` and `limit`, discarding only the records not produced in the intermediate
-                    // stage.
-                    use differential_dataflow::operators::iterate::Variable;
-                    let delay = std::time::Duration::from_secs(10);
-                    let retractions = Variable::new(
-                        &mut ok_input.scope(),
-                        <G::Timestamp as crate::render::RenderTimestamp>::system_delay(
-                            delay.try_into().expect("must fit"),
-                        ),
-                    );
-                    let thinned = collection.concat(&retractions.negate());
-
-                    // As an additional optimization, we can skip creating the full topk hierachy
-                    // here since we now have an upper bound on the number records due to the
-                    // intra-ts thinning. The maximum number of records per timestamp is
-                    // (num_workers * limit), which we expect to be a small number and so we render
-                    // a single topk stage.
-                    let (result, errs) =
-                        self.build_topk_stage(thinned, order_key, 1u64, 0, limit, arity, false);
-                    retractions.set(&collection.concat(&result.negate()));
-                    soft_assert_or_log!(
-                        errs.is_none(),
-                        "requested no validation, but received error collection"
-                    );
-
-                    result.map(|((_key, _hash), row)| row)
-                }
-                TopKPlan::Basic(BasicTopKPlan {
-                    group_key,
-                    order_key,
-                    offset,
-                    mut limit,
-                    arity,
-                    buckets,
-                }) => {
-                    // Must permute `limit` to reference `group_key` elements as if in order.
-                    if let Some(expr) = limit.as_mut() {
-                        let mut map = BTreeMap::new();
-                        for (index, column) in group_key.iter().enumerate() {
-                            map.insert(*column, index);
-                        }
-                        expr.permute_map(&map);
-                    }
-
-                    let (oks, errs) = self.build_topk(
-                        ok_input, group_key, order_key, offset, limit, arity, buckets,
-                    );
-                    err_collection = err_collection.concat(&errs);
-                    oks
-                }
-            };
-
-            // Extract the results from the region.
-            (ok_result.leave_region(), err_collection.leave_region())
+        let (ok_result, err_collection) = input.scope().region_named("TopK", |inner| {
+            self.render_topk_inner(input, top_k_plan, inner)
         });
 
         CollectionBundle::from_collections(ok_result, err_collection)
+    }
+
+    fn render_topk_inner(
+        &mut self,
+        input: CollectionBundle<G>,
+        top_k_plan: TopKPlan,
+        inner: &mut Child<G, G::Timestamp>,
+    ) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>) {
+        let (ok_input, err_input) = input.as_specific_collection(None);
+        let ok_input = ok_input.enter_region(inner);
+        let mut err_collection = err_input.enter_region(inner);
+
+        // Determine if there should be errors due to limit evaluation; update `err_collection`.
+        // TODO(vmarcos): We evaluate the limit expression below for each input update. There
+        // is an opportunity to do so for every group key instead if the error handling is
+        // integrated with: 1. The intra-timestamp thinning step in monotonic top-k, e.g., by
+        // adding an error output there; 2. The validating reduction on basic top-k (#23687).
+        let limit_err = match &top_k_plan {
+            TopKPlan::MonotonicTop1(MonotonicTop1Plan { .. }) => None,
+            TopKPlan::MonotonicTopK(MonotonicTopKPlan { limit, .. }) => Some(limit),
+            TopKPlan::Basic(BasicTopKPlan { limit, .. }) => Some(limit),
+        };
+        if let Some(limit) = limit_err {
+            if let Some(expr) = limit {
+                // Produce errors from limit selectors that error or are
+                // negative, and nothing from limit selectors that do
+                // not. Note that even if expr.could_error() is false,
+                // the expression might still return a negative limit and
+                // thus needs to be checked.
+                let expr = expr.clone();
+                let mut datum_vec = mz_repr::DatumVec::new();
+                let errors = ok_input.flat_map(move |row| {
+                    let temp_storage = mz_repr::RowArena::new();
+                    let datums = datum_vec.borrow_with(&row);
+                    match expr.eval(&datums[..], &temp_storage) {
+                        Ok(l) if l != Datum::Null && l.unwrap_int64() < 0 => {
+                            Some(EvalError::NegLimit.into())
+                        }
+                        Ok(_) => None,
+                        Err(e) => Some(e.into()),
+                    }
+                });
+                err_collection = err_collection.concat(&errors);
+            }
+        }
+
+        let ok_result = match top_k_plan {
+            TopKPlan::MonotonicTop1(MonotonicTop1Plan {
+                group_key,
+                order_key,
+                must_consolidate,
+            }) => {
+                let (oks, errs) =
+                    self.render_top1_monotonic(ok_input, group_key, order_key, must_consolidate);
+                err_collection = err_collection.concat(&errs);
+                oks
+            }
+            TopKPlan::MonotonicTopK(MonotonicTopKPlan {
+                order_key,
+                group_key,
+                arity,
+                mut limit,
+                must_consolidate,
+            }) => {
+                // Must permute `limit` to reference `group_key` elements as if in order.
+                if let Some(expr) = limit.as_mut() {
+                    let mut map = BTreeMap::new();
+                    for (index, column) in group_key.iter().enumerate() {
+                        map.insert(*column, index);
+                    }
+                    expr.permute_map(&map);
+                }
+
+                // Map the group key along with the row and consolidate if required to do so.
+                let mut datum_vec = mz_repr::DatumVec::new();
+                let collection = ok_input
+                    .map(move |row| {
+                        let binding = SharedRow::get();
+                        let mut row_builder = binding.borrow_mut();
+                        let group_row = {
+                            let datums = datum_vec.borrow_with(&row);
+                            let iterator = group_key.iter().map(|i| datums[*i]);
+                            row_builder.packer().extend(iterator);
+                            row_builder.clone()
+                        };
+                        (group_row, row)
+                    })
+                    .consolidate_named_if::<KeySpine<_, _, _>>(
+                        must_consolidate,
+                        "Consolidated MonotonicTopK input",
+                    );
+
+                // It should be now possible to ensure that we have a monotonic collection.
+                let error_logger = self.error_logger();
+                let (collection, errs) = collection.ensure_monotonic(move |data, diff| {
+                    error_logger.log(
+                        "Non-monotonic input to MonotonicTopK",
+                        &format!("data={data:?}, diff={diff}"),
+                    );
+                    let m = "tried to build monotonic top-k on non-monotonic input".to_string();
+                    (DataflowError::from(EvalError::Internal(m)), 1)
+                });
+                err_collection = err_collection.concat(&errs);
+
+                // For monotonic inputs, we are able to thin the input relation in two stages:
+                // 1. First, we can do an intra-timestamp thinning which has the advantage of
+                //    being computed in a streaming fashion, even for the initial snapshot.
+                // 2. Then, we can do inter-timestamp thinning by feeding back negations for
+                //    any records that have been invalidated.
+                let collection = if let Some(limit) = limit.clone() {
+                    render_intra_ts_thinning(collection, order_key.clone(), limit)
+                } else {
+                    collection
+                };
+
+                let collection =
+                    collection.map(|(group_row, row)| ((group_row, row.hashed()), row));
+
+                // For monotonic inputs, we are able to retract inputs that can no longer be produced
+                // as outputs. Any inputs beyond `offset + limit` will never again be produced as
+                // outputs, and can be removed. The simplest form of this is when `offset == 0` and
+                // these removable records are those in the input not produced in the output.
+                // TODO: consider broadening this optimization to `offset > 0` by first filtering
+                // down to `offset = 0` and `limit = offset + limit`, followed by a finishing act
+                // of `offset` and `limit`, discarding only the records not produced in the intermediate
+                // stage.
+                use differential_dataflow::operators::iterate::Variable;
+                let delay = std::time::Duration::from_secs(10);
+                let retractions = Variable::new(
+                    &mut ok_input.scope(),
+                    <G::Timestamp as crate::render::RenderTimestamp>::system_delay(
+                        delay.try_into().expect("must fit"),
+                    ),
+                );
+                let thinned = collection.concat(&retractions.negate());
+
+                // As an additional optimization, we can skip creating the full topk hierachy
+                // here since we now have an upper bound on the number records due to the
+                // intra-ts thinning. The maximum number of records per timestamp is
+                // (num_workers * limit), which we expect to be a small number and so we render
+                // a single topk stage.
+                let (result, errs) =
+                    self.build_topk_stage(thinned, order_key, 1u64, 0, limit, arity, false);
+                retractions.set(&collection.concat(&result.negate()));
+                soft_assert_or_log!(
+                    errs.is_none(),
+                    "requested no validation, but received error collection"
+                );
+
+                result.map(|((_key, _hash), row)| row)
+            }
+            TopKPlan::Basic(BasicTopKPlan {
+                group_key,
+                order_key,
+                offset,
+                mut limit,
+                arity,
+                buckets,
+            }) => {
+                // Must permute `limit` to reference `group_key` elements as if in order.
+                if let Some(expr) = limit.as_mut() {
+                    let mut map = BTreeMap::new();
+                    for (index, column) in group_key.iter().enumerate() {
+                        map.insert(*column, index);
+                    }
+                    expr.permute_map(&map);
+                }
+
+                let (oks, errs) = self.build_topk(
+                    ok_input, group_key, order_key, offset, limit, arity, buckets,
+                );
+                err_collection = err_collection.concat(&errs);
+                oks
+            }
+        };
+
+        // Extract the results from the region.
+        (ok_result.leave_region(), err_collection.leave_region())
     }
 
     /// Constructs a TopK dataflow subgraph.
