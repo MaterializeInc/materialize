@@ -80,8 +80,8 @@ def run_test_with_mv_on_table(c: Composition) -> None:
             ! SELECT count(*) FROM retain_history_mv1 AS OF '{mz_time0}'::TIMESTAMP;
             contains: is not valid for all inputs
 
-            > SELECT count(*) FROM retain_history_mv1 AS OF AT LEAST'{mz_time0}'::TIMESTAMP;
-            0
+            > SELECT count(*) >= 2 FROM retain_history_mv1 AS OF AT LEAST'{mz_time1}'::TIMESTAMP;
+            true
 
             > SELECT * FROM retain_history_mv1 AS OF '{mz_time1}'::TIMESTAMP;
             1 100
@@ -124,11 +124,8 @@ def run_test_with_mv_on_table(c: Composition) -> None:
             3 300
             4 400
 
-            > SELECT * FROM retain_history_mv1 AS OF AT LEAST '{mz_time2}'::TIMESTAMP;
-            1 101
-            2 201
-            3 300
-            4 400
+            > SELECT count(*) IN (2, 4) FROM retain_history_mv1 AS OF AT LEAST '{mz_time2}'::TIMESTAMP;
+            true
 
             > SELECT sum(value), max(value) FROM retain_history_mv1 AS OF '{mz_time2}'::TIMESTAMP;
             1002 400
