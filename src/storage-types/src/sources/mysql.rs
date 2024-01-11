@@ -13,7 +13,6 @@ use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use once_cell::sync::Lazy;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::connections::inline::{
@@ -127,9 +126,20 @@ impl RustType<ProtoMySqlSourceConnection> for MySqlSourceConnection {
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MySqlSourceDetails {
     pub tables: Vec<mz_mysql_util::MySqlTableDesc>,
+}
+
+impl Arbitrary for MySqlSourceDetails {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        proptest::collection::vec(any::<mz_mysql_util::MySqlTableDesc>(), 1..4)
+            .prop_map(|tables| Self { tables })
+            .boxed()
+    }
 }
 
 impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {

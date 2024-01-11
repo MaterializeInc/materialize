@@ -137,8 +137,8 @@ impl Arbitrary for PostgresTableDesc {
             any::<String>(),
             any::<String>(),
             any::<u32>(),
-            any::<Vec<PostgresColumnDesc>>(),
-            any::<BTreeSet<PostgresKeyDesc>>(),
+            proptest::collection::vec(any::<PostgresColumnDesc>(), 1..4),
+            proptest::collection::btree_set(any::<PostgresKeyDesc>(), 1..4),
         )
             .prop_map(|(name, namespace, oid, columns, keys)| PostgresTableDesc {
                 name,
