@@ -398,7 +398,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-resumption
         agents:
-          queue: linux-x86_64-small
+          queue: linux-x86_64
 
       - id: kafka-auth
         label: Kafka auth test
