@@ -32,78 +32,57 @@ and they can use them to answer questions about their source's snapshotting and 
 
 ## Solution Proposal
 
-### Background: _Source Frontier Differences_
+### Progress Aggregation
 
-We define a _source frontier difference_ as the _difference_ between two source frontiers,
-as a single, numerical value. The unit of this value depends on the source frontier type.
+Sources implementations expose their progress in various incompatible ways. This progress
+information can be partially ordered and have various shapes. In the context of metrics,
+we want to be able to _calculate rates_ and _compare progress against a total_ in a
+way consistent across all sources.
 
-Each source implementation (critically, Kafka, Postgres, and MySQL) expose different _source timestamp_
-types. These types are partially ordered, and have an inconsistent shape. A _source frontier difference_
-is a way to capture _how different_ two frontiers are in, in a way that is consistent between source types.
+This means sources will need to implement a way to aggregate their notions of progress into
+a single 64-bit unsigned integer. Clients processing this data can then consistently calculate rates
+and percentages from these numbers. Note that the _unit_ of the single integer does not need to be
+consistent across sources.
 
-Source frontier differences are used in some form in the metrics proposed in [Snapshot Progress](#snapshot-progress) and
-[Steady-state](#steady-state).
+#### Kafka progress aggregation
 
-#### Kafka frontier differences
-
-For example, consider the following 2 kafka source frontiers:
+For example, consider the following expression of progress that can be exposed by the Kafka
+source implementation.
 ```
 # Partition Id: Offset
-f1: {0: 100, 1: 150}
-f2: {0: 150, 1: 170}
+{0: 100, 1: 150}
 ```
 
-In this case, the source frontier difference is `f2 - f1 = 70 offsets`. Similarly:
+In this case, the Kafka source can be said to have processed 240 offsets.
 
+#### Postgres frontier aggregation
+
+The Postgres source has 1 way to expose progress: the lsn of the replication slot.
+However, during snapshotting it can also sum the number of rows it has read across
+all tables. For example:
 ```
-{0: 100, 1: 100} - {0: 0} = 200 offsets
-```
-
-#### Postgres frontier differences
-
-Postgres has two separate definitions:
-
-For the number of rows in each table:
-```
-{table1: 110 rows, table2: 15 rows} - {table1: 100 rows, table2: 10 rows} = 15 rows
+{table1: 110 rows, table2: 15 rows} = 125 rows processed
 ```
 
-And for lsn's during replication:
-```
-100100 lsn - 100050 lsn = 50 bytes
-```
+During replication, the source can report the `lsn` as the number of bytes processed.
 
-#### MySQL frontier differences
+#### MySQL frontier aggregation
 
-Similar to Postgres, mysql has a rows-per-table difference, as well as a replication difference.
+Similar to Postgres, The MySQL source has a rows-per-table defined during snapshotting.
 
 However, during replication, MySQL's source timestamp is partially ordered, instead of just a single
 lsn number:
-
 ```
 # source id: transaction id
-f1: {0: 1000th txid, 1: 0th txid}
-f2: {0: 1010th txid, 1: 10th txid}
+{0: 1000th txid, 1: 10th txid} = 1010 transactions processed.
 ```
-In this case, `f2 - f1 = 20 transactions`
-
-#### Comparisons
-
-As you can see, source frontier differences depend on the source, and are primarily useful for _calculating rates_ and when
-_comparing values_. For example:
-
-- If a source's frontier has moved from `{0: 10}` to `{0: 70}` in 1 minute, Materialize can be said to have processed 1 offset/second.
-- If a source's frontier snapshot frontier is `{table1: 100 rows}` and its current frontier is `{table1: 50}`, Materialize can be said
-to have processed about 50% of the snapshot.
-
-Additionally, differences are designed to be _lower-bounded estimates_. For example, `{0: 100} - {0: 0, 1: 50}` is 100, as we
-choose the lower bound where we assume no offsets past 50 for partition 1 exist.
 
 
 ## Snapshot Progress
 
-The first set of metrics this design document proposes involve _snapshot progress_, which is a _lower bound_ on the _percentage_ of the source's snapshot Materialize
-has _read_. These metrics are designed to answer #1 in [the problem statement](#the-problem).
+The first set of metrics this design document proposes involve _snapshot progress_, which is a _lower bound estimate_
+on the _percentage_ of the source's snapshot Materialize has _read_. These metrics are designed to
+answer #1 in [the problem statement](#the-problem).
 
 We will introduce 2 new columns in `mz_source_statistics_per_worker`:
 
@@ -116,13 +95,6 @@ The unit of _values_ depends on the source type, and will be _rows_ for MySQL an
 
 These values can be summed across workers and compared (`snapshot_progress / snapshot_total`) to produce
 a _lower-bound_ estimate on the % progress we have made reading the source's snapshot.
-
-### Source frontier difference
-
-Note that this percentage is calculated using _source frontier difference_, between the `snapshot_total` and `snapshot_progress`.
-For consistency within schema of the `mz_source_statistics_per_worker` table, each worker in the source pipeline is required to
-pre-aggregate these values from the possibly complex frontier that represents the total and progress of a snapshot.
-This primarily means summing offsets/rows across partitions/tables.
 
 ### Source specifics
 
@@ -171,8 +143,8 @@ The second set of metrics this design document proposes describe the _rate_ at w
 These metrics are designed to answer #2 in [the problem statement](#the-problem).
 
 ```
-| `upstream_frontier`    | [`uint8`] | The frontier of the in the upstream service.                       |
-| `process_frontier`     | [`uint8`] | The rate to which Materialize has processed upstream data.         |
+| `outstanding_values`    | [`uint8`] | The total number of outstanding values in the upstream source. The unit is source-specific.        |
+| `processed_values`      | [`uint8`] | The total number of upstream values Materialized has processed. Same unit as `outstanding_values`. |
 ```
 
 These values are primarily designed to be calculated into _rates_ (which will happen client-side), and users should
@@ -186,26 +158,23 @@ or falling behind.
 ![steady-state](./static/source_metrics_2/steady_state.png)
 
 
-Note that when our _process rate_ is consistently below the `upstream_rate`, the user knows their source isn't keeping up with upstream.
+Note that when our _process rate_ is consistently below the _outstanding rate_, the user knows their source isn't keeping up with upstream.
 
 ### Implementation
 
-These rates are _source frontier differences_. Each source's `SourceReader` implementation will
-be required to expose a continuous stream of _upstream source frontiers_. This means:
+Each source's `SourceReader` implementation will be required to expose a continuous stream of `outstanding_values` values. This means:
 
-- The Kafka source will periodically fetch metadata and expose per-partition offset high-watermarks.
-- The MySQL source will periodically expose the result of `SELECT @gtid_executed`, which is the set of gtids representing the latest transactions committed.
+- The Kafka source will periodically fetch metadata and expose aggregated per-partition offset high-watermarks.
+- The MySQL source will periodically expose the result of `SELECT @gtid_executed`, which is the set of gtids representing the latest transactions committed,
+aggregated as defined above.
 - The Postgres source will periodically expose the result of `SELECT pg_current_wal_lsn()`, which is the lsn of the latest transaction.
 
 Additionally, the source pipeline will periodically invert the latest frontier we have committed for the source, from the Materialize timestamp
 domain to the source-timestamp domain. For MySQL and Postgres sources, this frontier will the `meet` of the subsource frontiers (as in,
-calculate their minimum).
-
-`upstream_rate` will be derived from the two latest _upstream source frontiers_, by calculating _source frontier difference_ between them.
-Similarly `process_rate` will be derived from the two latest committed frontiers.
+calculate their minimum). These will be aggregated just like the above.
 
 
-### Existing metrics
+## Existing metrics
 
 Existing metrics such as `messages_received` and `bytes_received` continue to be useful for understanding the general performance of a given source.
 If users find some of them confusing or not useful, we can remove them in the future.
