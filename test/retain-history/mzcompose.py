@@ -34,16 +34,6 @@ def setup(c: Composition) -> None:
     c.up("materialized")
     c.up("testdrive", persistent=True)
 
-    c.testdrive(
-        dedent(
-            """
-            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-            ALTER SYSTEM SET enable_logical_compaction_window = true;
-            ALTER SYSTEM SET enable_refresh_every_mvs = true;
-            """,
-        )
-    )
-
 
 def run_test_with_mv_on_table(c: Composition) -> None:
     mv_on_mv1_retention_in_sec = 1

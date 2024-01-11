@@ -22,9 +22,6 @@ class RetainHistory(Check):
         return Testdrive(
             dedent(
                 """
-                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-                ALTER SYSTEM SET enable_logical_compaction_window = true
-
                 > CREATE TABLE retain_history_table (key INT NOT NULL, value INT NOT NULL);
                 > INSERT INTO retain_history_table VALUES (1, 100), (2, 200);
 
