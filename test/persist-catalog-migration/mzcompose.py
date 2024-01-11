@@ -16,8 +16,6 @@ from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
-    Minio(setup_materialize=True),
-    Cockroach(setup_materialize=True),
     Materialized(catalog_store="stash"),
     Testdrive(no_reset=True),
 ]
@@ -33,7 +31,6 @@ def workflow_default(c: Composition) -> None:
 
 def workflow_test_migration_and_rollback(c: Composition) -> None:
     c.down(destroy_volumes=True)
-    c.up("minio", "cockroach")
     c.up("testdrive", persistent=True)
 
     # Create some objects.
@@ -78,39 +75,28 @@ def workflow_test_migration_and_rollback(c: Composition) -> None:
 def workflow_test_epoch_migration(c: Composition) -> None:
     reboots = 2
     c.down(destroy_volumes=True)
-    c.up("minio", "cockroach")
     c.up("testdrive", persistent=True)
 
-    # Switch to emergency stash catalog so only the stash epoch is incremented.
-    c.up("materialized")
-    c.testdrive(
-        input=dedent(
-            """
-    $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
-    ALTER SYSTEM SET catalog_kind TO 'emergency-stash'
-    """
-        )
-    )
-    c.kill("materialized")
-
-    # Start and stop Materialize with stash multiple times to increment the epoch. Create some
-    # objects each time.
-    c.up("materialized")
-    for i in range(0, reboots):
-        create_objects(c, i)
-        c.kill("materialized")
+    # Use emergency stash catalog so only the stash epoch is incremented.
+    with c.override(Materialized(catalog_store="emergency-stash")):
+        # Start and stop Materialize with stash multiple times to increment the epoch. Create some
+        # objects each time.
         c.up("materialized")
+        for i in range(0, reboots):
+            create_objects(c, i)
+            c.kill("materialized")
+            c.up("materialized")
 
-    # Switch to persist catalog.
-    c.testdrive(
-        input=dedent(
-            """
-    $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
-    ALTER SYSTEM SET catalog_kind TO 'persist'
-    """
+        # Switch to persist catalog.
+        c.testdrive(
+            input=dedent(
+                """
+        $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+        ALTER SYSTEM SET catalog_kind TO 'persist'
+        """
+            )
         )
-    )
-    c.kill("materialized")
+        c.kill("materialized")
 
     # Reboot and check that objects still exist.
     c.up("materialized")
