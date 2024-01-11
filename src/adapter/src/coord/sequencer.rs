@@ -36,7 +36,7 @@ use tracing::{event, Instrument, Level, Span};
 use crate::catalog::Catalog;
 use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::{introspection, Coordinator, Message};
+use crate::coord::{introspection, Coordinator, Message, TargetCluster};
 use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
@@ -81,14 +81,19 @@ impl Coordinator {
 
             // Scope the borrow of the Catalog because we need to mutate the Coordinator state below.
             let (target_cluster_id, target_cluster) = {
-                let session_catalog = self.catalog.for_session(ctx.session());
-                // If our query only depends on system tables, a LaunchDarkly flag is enabled, and a
-                // session var is set, then we automatically run the query on the mz_introspection cluster.
-                let target_cluster = introspection::auto_run_on_introspection(
-                    &session_catalog,
-                    ctx.session(),
-                    &plan,
-                );
+                let target_cluster = match ctx.session().transaction().cluster() {
+                    // Use the current transaction's cluster.
+                    Some(cluster_id) => TargetCluster::Transaction(cluster_id),
+                    // If there isn't a current cluster set for a transaction, then try to auto route.
+                    None => {
+                        let session_catalog = self.catalog.for_session(ctx.session());
+                        introspection::auto_run_on_introspection(
+                            &session_catalog,
+                            ctx.session(),
+                            &plan,
+                        )
+                    }
+                };
                 let target_cluster_id = self
                     .catalog()
                     .resolve_target_cluster(target_cluster, ctx.session())
