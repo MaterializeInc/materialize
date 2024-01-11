@@ -30,5 +30,5 @@
   FROM KAFKA CONNECTION kafka_fixed (TOPIC 'testdrive-progress-fixed-${testdrive.seed}')
   FORMAT JSON ENVELOPE NONE
 
-> SELECT COUNT(*) FROM progress_check WHERE data->'timestamp' = 'null'::jsonb;
+> SELECT COUNT(*) FROM progress_check WHERE data->'frontier' = '[]'::jsonb;
 1

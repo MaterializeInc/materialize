@@ -25,7 +25,7 @@ use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::error::KafkaError;
 use rdkafka::message::ToBytes;
 use rdkafka::{ClientContext, Message, Offset, TopicPartitionList};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use timely::progress::Antichain;
 use timely::PartialOrder;
 use tracing::{info, warn};
@@ -327,7 +327,19 @@ pub async fn publish_kafka_schemas(
 /// timestamp forward.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct LegacyProgressRecord {
-    pub timestamp: Timestamp,
+    // Double Option to tell apart an omitted field from one set to null explicitly
+    // https://github.com/serde-rs/serde/issues/984
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub timestamp: Option<Option<Timestamp>>,
+}
+
+// Any value that is present is considered Some value, including null.
+fn deserialize_some<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    Deserialize::deserialize(deserializer).map(Some)
 }
 
 /// This struct is emitted as part of a transactional produce, and contains the upper frontier of
@@ -335,6 +347,25 @@ pub struct LegacyProgressRecord {
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProgressRecord {
     pub frontier: Vec<Timestamp>,
+}
+
+fn parse_progress_record(payload: &[u8]) -> Result<Antichain<Timestamp>, anyhow::Error> {
+    Ok(match serde_json::from_slice::<ProgressRecord>(payload) {
+        Ok(progress) => Antichain::from(progress.frontier),
+        // If we fail to deserialize we might be reading a legacy progress record
+        Err(_) => match serde_json::from_slice::<LegacyProgressRecord>(payload) {
+            Ok(LegacyProgressRecord {
+                timestamp: Some(Some(time)),
+            }) => Antichain::from_elem(time.step_forward()),
+            Ok(LegacyProgressRecord {
+                timestamp: Some(None),
+            }) => Antichain::new(),
+            _ => match std::str::from_utf8(payload) {
+                Ok(payload) => bail!("invalid progress record: {payload}"),
+                Err(_) => bail!("invalid progress record bytes: {payload:?}"),
+            },
+        },
+    })
 }
 
 /// Determines the latest progress record from the specified topic for the given
@@ -586,17 +617,7 @@ pub async fn determine_sink_resume_upper(
             let Some(payload) = message.payload() else {
                 continue
             };
-            let upper = match serde_json::from_slice::<ProgressRecord>(payload) {
-                Ok(progress) => Antichain::from(progress.frontier),
-                // If we fail to deserialize we might be reading a legacy progress record
-                Err(_) => match serde_json::from_slice::<LegacyProgressRecord>(payload) {
-                    Ok(legacy) => Antichain::from_elem(legacy.timestamp.step_forward()),
-                    Err(_) => match std::str::from_utf8(payload) {
-                        Ok(payload) => bail!("invalid progress record: {payload}"),
-                        Err(_) => bail!("invalid progress record bytes: {payload:?}"),
-                    },
-                },
-            };
+            let upper = parse_progress_record(payload)?;
 
             match last_upper {
                 Some(last_upper) if !PartialOrder::less_equal(&last_upper, &upper) => {
@@ -622,26 +643,28 @@ mod test {
 
     #[mz_ore::test]
     fn progress_record_migration() {
-        let empty_bytes = b"{}";
-        assert!(serde_json::from_slice::<ProgressRecord>(empty_bytes).is_err());
-        assert!(serde_json::from_slice::<LegacyProgressRecord>(empty_bytes).is_err());
+        assert!(parse_progress_record(b"{}").is_err());
 
-        let legacy_bytes = b"{\"timestamp\":1}";
-        assert!(serde_json::from_slice::<ProgressRecord>(legacy_bytes).is_err());
         assert_eq!(
-            serde_json::from_slice::<LegacyProgressRecord>(legacy_bytes).unwrap(),
-            LegacyProgressRecord {
-                timestamp: 1.into()
-            }
+            parse_progress_record(b"{\"timestamp\":1}").unwrap(),
+            Antichain::from_elem(2.into()),
         );
 
-        let new_bytes = b"{\"frontier\":[1]}";
         assert_eq!(
-            serde_json::from_slice::<ProgressRecord>(new_bytes).unwrap(),
-            ProgressRecord {
-                frontier: vec![1.into()]
-            }
+            parse_progress_record(b"{\"timestamp\":null}").unwrap(),
+            Antichain::new(),
         );
-        assert!(serde_json::from_slice::<LegacyProgressRecord>(new_bytes).is_err());
+
+        assert_eq!(
+            parse_progress_record(b"{\"frontier\":[1]}").unwrap(),
+            Antichain::from_elem(1.into()),
+        );
+
+        assert_eq!(
+            parse_progress_record(b"{\"frontier\":[]}").unwrap(),
+            Antichain::new(),
+        );
+
+        assert!(parse_progress_record(b"{\"frontier\":null}").is_err());
     }
 }
