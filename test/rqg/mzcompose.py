@@ -155,7 +155,14 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
 
     psql_urls = ["postgresql://materialize@mz_this:6875/materialize"]
 
-    match workload.reference_implementation:
+    # If we have --other-tag, assume we want to run a comparison test against Materialize
+    reference_implementation = (
+        ReferenceImplementation.MATERIALIZE
+        if args.other_tag and workload.reference_implementation is not None
+        else workload.reference_implementation
+    )
+
+    match reference_implementation:
         case ReferenceImplementation.MATERIALIZE:
             participants.append(
                 Materialized(
@@ -179,8 +186,8 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
     files = [] if workload.dataset is None else workload.dataset.files()
 
     dsn2 = (
-        [f"--dsn2=dbi:Pg:{workload.reference_implementation.dsn()}"]
-        if workload.reference_implementation is not None
+        [f"--dsn2=dbi:Pg:{reference_implementation.dsn()}"]
+        if reference_implementation is not None
         else []
     )
 
