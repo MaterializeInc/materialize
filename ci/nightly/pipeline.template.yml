@@ -720,6 +720,17 @@ steps:
               composition: platform-checks
               args: [--scenario=PersistCatalogToggle, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-timestamp-oracle-toggle
+        label: "Checks + Toggle timestamp oracle"
+        timeout_in_minutes: 45
+        artifact_paths: junit_*.xml
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=TimestampOracleToggle, "--seed=$BUILDKITE_JOB_ID"]
+
       - id: checks-upgrade-matrix
         label: "Random upgrades over the entire matrix"
         timeout_in_minutes: 600
