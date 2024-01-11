@@ -10,16 +10,19 @@
 //! Interfaces for reading txn shards as well as data shards.
 
 use std::fmt::Debug;
+use std::future::Future;
 use std::sync::Arc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::Stream;
 use mz_ore::task::AbortOnDropHandle;
+use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::{Cursor, LazyPartStats, ReadHandle, Since};
+use mz_persist_client::stats::SnapshotStats;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{PersistClient, ShardId};
-use mz_persist_types::{Codec, Codec64, StepForward};
+use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
@@ -181,6 +184,35 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         data_read
             .snapshot_and_stream(Antichain::from_elem(self.as_of.clone()))
             .await
+    }
+
+    /// See [SinceHandle::snapshot_stats].
+    pub fn snapshot_stats<K, V, D, O>(
+        &self,
+        data_since: &SinceHandle<K, V, T, D, O>,
+    ) -> impl Future<Output = Result<SnapshotStats<T>, Since<T>>> + Send + 'static
+    where
+        K: Debug + Codec + Ord,
+        V: Debug + Codec + Ord,
+        D: Semigroup + Codec64 + Send + Sync,
+        O: Opaque + Codec64,
+    {
+        // This is used by the optimizer in planning to get cost statistics, so
+        // it can't use `unblock_reads`. Instead use the "translated as_of"
+        // trick we invented but didn't end up using for read of the shard
+        // contents. The reason we didn't use it for that was because we'd have
+        // to deal with advancing timestamps of the updates we read, but the
+        // stats we return here don't have that issue.
+        let as_of = if let Some(latest_write) = self.latest_write.as_ref() {
+            latest_write
+        } else {
+            let since = data_since
+                .since()
+                .as_option()
+                .expect("cannot read at empty antichain");
+            std::cmp::min(since, &self.as_of)
+        };
+        data_since.snapshot_stats(Antichain::from_elem(as_of.clone()))
     }
 
     pub(crate) fn validate(&self) -> Result<(), String> {

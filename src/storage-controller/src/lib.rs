@@ -77,6 +77,7 @@ use tracing::{debug, info, warn};
 
 use crate::command_wals::ProtoShardId;
 
+use crate::persist_handles::SnapshotStatsAsOf;
 use crate::rehydration::RehydratingStorageClient;
 
 mod collection_mgmt;
@@ -1404,7 +1405,22 @@ where
         id: GlobalId,
         as_of: Antichain<Self::Timestamp>,
     ) -> Result<SnapshotStats<Self::Timestamp>, StorageError> {
-        // TODO(txn-lazy): Fix stats for persist-txn shards.
+        let metadata = &self.collection(id)?.collection_metadata;
+        // See the comments in Self::snapshot for what's going on here.
+        let as_of = match metadata.txns_shard.as_ref() {
+            None => SnapshotStatsAsOf::Direct(as_of),
+            Some(txns_id) => {
+                let txns_read = self.txns.expect_enabled_lazy(txns_id);
+                let as_of = as_of
+                    .into_option()
+                    .expect("cannot read as_of the empty antichain");
+                txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = txns_read
+                    .data_snapshot(metadata.data_shard, as_of.clone())
+                    .await;
+                SnapshotStatsAsOf::Txns(data_snapshot)
+            }
+        };
         self.persist_read_handles.snapshot_stats(id, as_of).await
     }
 
