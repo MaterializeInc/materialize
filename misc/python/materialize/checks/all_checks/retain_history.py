@@ -67,14 +67,14 @@ class RetainHistory(Check):
                 1 110
                 2 200
 
-                > SELECT replace(create_sql, '"', '') FROM (SHOW CREATE MATERIALIZED VIEW retain_history_mv1);
-                "CREATE MATERIALIZED VIEW materialize.public.retain_history_mv1 IN CLUSTER quickstart WITH (RETAIN HISTORY = FOR '30s', REFRESH = ON COMMIT) AS SELECT * FROM materialize.public.retain_history_table"
+                > SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW retain_history_mv1);
+                "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"retain_history_mv1\\" IN CLUSTER \\"quickstart\\" WITH (RETAIN HISTORY = FOR '30s', REFRESH = ON COMMIT) AS SELECT * FROM \\"materialize\\".\\"public\\".\\"retain_history_table\\""
 
-                > SELECT replace(create_sql, '"', '') FROM (SHOW CREATE MATERIALIZED VIEW retain_history_mv2);
-                "CREATE MATERIALIZED VIEW materialize.public.retain_history_mv2 IN CLUSTER quickstart WITH (RETAIN HISTORY = FOR '30s', REFRESH = ON COMMIT) AS SELECT * FROM materialize.public.retain_history_table"
+                > SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW retain_history_mv2);
+                "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"retain_history_mv2\\" IN CLUSTER \\"quickstart\\" WITH (RETAIN HISTORY = FOR '30s', REFRESH = ON COMMIT) AS SELECT * FROM \\"materialize\\".\\"public\\".\\"retain_history_table\\""
 
-                > SELECT replace(create_sql, '"', '') FROM (SHOW CREATE MATERIALIZED VIEW retain_history_mv3);
-                "CREATE MATERIALIZED VIEW materialize.public.retain_history_mv3 IN CLUSTER quickstart WITH (RETAIN HISTORY = FOR '30s', REFRESH = ON COMMIT) AS SELECT * FROM materialize.public.retain_history_mv2"
+                > SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW retain_history_mv3);
+                "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"retain_history_mv3\\" IN CLUSTER \\"quickstart\\" WITH (RETAIN HISTORY = FOR '30s', REFRESH = ON COMMIT) AS SELECT * FROM \\"materialize\\".\\"public\\".\\"retain_history_mv2\\""
 
                 ? EXPLAIN OPTIMIZED PLAN AS TEXT FOR SELECT * FROM retain_history_mv1
                 Explained Query:
