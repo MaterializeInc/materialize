@@ -27,7 +27,7 @@ SHOW MATERIALIZED VIEWS;
 ```nofmt
      name     | cluster
 --------------+----------
- winning_bids | default
+ winning_bids | quickstart
 ```
 
 ```sql
@@ -37,7 +37,7 @@ SHOW MATERIALIZED VIEWS LIKE '%bid%';
 ```nofmt
      name     | cluster
 --------------+----------
- winning_bids | default
+ winning_bids | quickstart
 ```
 
 ## Related pages

@@ -31,12 +31,12 @@ SHOW PRIVILEGES;
   grantor  |   grantee   |  database   | schema |    name     | object_type | privilege_type
 -----------+-------------+-------------+--------+-------------+-------------+----------------
  mz_system | PUBLIC      | materialize |        | public      | schema      | USAGE
- mz_system | PUBLIC      |             |        | default     | cluster     | USAGE
+ mz_system | PUBLIC      |             |        | quickstart  | cluster     | USAGE
  mz_system | PUBLIC      |             |        | materialize | database    | USAGE
  mz_system | materialize | materialize |        | public      | schema      | CREATE
  mz_system | materialize | materialize |        | public      | schema      | USAGE
- mz_system | materialize |             |        | default     | cluster     | CREATE
- mz_system | materialize |             |        | default     | cluster     | USAGE
+ mz_system | materialize |             |        | quickstart  | cluster     | CREATE
+ mz_system | materialize |             |        | quickstart  | cluster     | USAGE
  mz_system | materialize |             |        | materialize | database    | CREATE
  mz_system | materialize |             |        | materialize | database    | USAGE
  mz_system | materialize |             |        |             | system      | CREATECLUSTER
@@ -65,8 +65,8 @@ SHOW PRIVILEGES FOR materialize;
 -----------+-------------+-------------+--------+-------------+-------------+----------------
  mz_system | materialize | materialize |        | public      | schema      | CREATE
  mz_system | materialize | materialize |        | public      | schema      | USAGE
- mz_system | materialize |             |        | default     | cluster     | CREATE
- mz_system | materialize |             |        | default     | cluster     | USAGE
+ mz_system | materialize |             |        | quickstart  | cluster     | CREATE
+ mz_system | materialize |             |        | quickstart  | cluster     | USAGE
  mz_system | materialize |             |        | materialize | database    | CREATE
  mz_system | materialize |             |        | materialize | database    | USAGE
  mz_system | materialize |             |        |             | system      | CREATECLUSTER
