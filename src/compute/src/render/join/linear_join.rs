@@ -310,6 +310,10 @@ where
         let arrangement = lookup_relation
             .arrangement(&lookup_key[..])
             .expect("Arrangement absent despite explicit construction");
+
+        use SpecializedArrangement as A;
+        use SpecializedArrangementImport as I;
+
         match joined {
             JoinedFlavor::Collection(_) => {
                 unreachable!("JoinedFlavor::Collection variant avoided at top of method");
@@ -317,43 +321,34 @@ where
             JoinedFlavor::Local(local) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = match (local, oks) {
-                        (
-                            SpecializedArrangement::RowUnit(prev_keyed),
-                            SpecializedArrangement::RowUnit(next_input),
-                        ) => self.differential_join_inner::<_, RowAgent<_, _>, RowAgent<_, _>>(
-                            prev_keyed,
-                            next_input,
-                            None,
-                            Some(vec![]),
-                            Some(vec![]),
-                            closure,
-                        ),
-                        (
-                            SpecializedArrangement::RowUnit(prev_keyed),
-                            SpecializedArrangement::RowRow(next_input),
-                        ) => self.differential_join_inner::<_, RowAgent<_, _>, RowRowAgent<_, _>>(
-                            prev_keyed,
-                            next_input,
-                            None,
-                            Some(vec![]),
-                            None,
-                            closure,
-                        ),
-                        (
-                            SpecializedArrangement::RowRow(prev_keyed),
-                            SpecializedArrangement::RowUnit(next_input),
-                        ) => self.differential_join_inner::<_, RowRowAgent<_, _>, RowAgent<_, _>>(
-                            prev_keyed,
-                            next_input,
-                            None,
-                            None,
-                            Some(vec![]),
-                            closure,
-                        ),
-                        (
-                            SpecializedArrangement::RowRow(prev_keyed),
-                            SpecializedArrangement::RowRow(next_input),
-                        ) => self
+                        (A::RowUnit(prev_keyed), A::RowUnit(next_input)) => self
+                            .differential_join_inner::<_, RowAgent<_, _>, RowAgent<_, _>>(
+                                prev_keyed,
+                                next_input,
+                                None,
+                                Some(vec![]),
+                                Some(vec![]),
+                                closure,
+                            ),
+                        (A::RowUnit(prev_keyed), A::RowRow(next_input)) => self
+                            .differential_join_inner::<_, RowAgent<_, _>, RowRowAgent<_, _>>(
+                                prev_keyed,
+                                next_input,
+                                None,
+                                Some(vec![]),
+                                None,
+                                closure,
+                            ),
+                        (A::RowRow(prev_keyed), A::RowUnit(next_input)) => self
+                            .differential_join_inner::<_, RowRowAgent<_, _>, RowAgent<_, _>>(
+                                prev_keyed,
+                                next_input,
+                                None,
+                                None,
+                                Some(vec![]),
+                                closure,
+                            ),
+                        (A::RowRow(prev_keyed), A::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowRowAgent<_, _>, RowRowAgent<_, _>>(
                                 prev_keyed, next_input, None, None, None, closure,
                             ),
@@ -365,21 +360,16 @@ where
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = match (local, oks) {
-                        (
-                            SpecializedArrangement::RowUnit(prev_keyed),
-                            SpecializedArrangementImport::RowUnit(next_input),
-                        ) => self.differential_join_inner::<_, RowAgent<_, _>, RowEnter<_, _, _>>(
-                            prev_keyed,
-                            next_input,
-                            None,
-                            Some(vec![]),
-                            Some(vec![]),
-                            closure,
-                        ),
-                        (
-                            SpecializedArrangement::RowUnit(prev_keyed),
-                            SpecializedArrangementImport::RowRow(next_input),
-                        ) => self
+                        (A::RowUnit(prev_keyed), I::RowUnit(next_input)) => self
+                            .differential_join_inner::<_, RowAgent<_, _>, RowEnter<_, _, _>>(
+                                prev_keyed,
+                                next_input,
+                                None,
+                                Some(vec![]),
+                                Some(vec![]),
+                                closure,
+                            ),
+                        (A::RowUnit(prev_keyed), I::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowAgent<_, _>, RowRowEnter<_, _, _>>(
                                 prev_keyed,
                                 next_input,
@@ -388,10 +378,7 @@ where
                                 None,
                                 closure,
                             ),
-                        (
-                            SpecializedArrangement::RowRow(prev_keyed),
-                            SpecializedArrangementImport::RowUnit(next_input),
-                        ) => self
+                        (A::RowRow(prev_keyed), I::RowUnit(next_input)) => self
                             .differential_join_inner::<_, RowRowAgent<_, _>, RowEnter<_, _, _>>(
                                 prev_keyed,
                                 next_input,
@@ -400,10 +387,7 @@ where
                                 Some(vec![]),
                                 closure,
                             ),
-                        (
-                            SpecializedArrangement::RowRow(prev_keyed),
-                            SpecializedArrangementImport::RowRow(next_input),
-                        ) => self
+                        (A::RowRow(prev_keyed), I::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowRowAgent<_, _>, RowRowEnter<_, _, _>>(
                                 prev_keyed, next_input, None, None, None, closure,
                             ),
@@ -417,21 +401,16 @@ where
             JoinedFlavor::Trace(trace) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = match (trace, oks) {
-                        (
-                            SpecializedArrangementImport::RowUnit(prev_keyed),
-                            SpecializedArrangement::RowUnit(next_input),
-                        ) => self.differential_join_inner::<_, RowEnter<_, _, _>, RowAgent<_, _>>(
-                            prev_keyed,
-                            next_input,
-                            None,
-                            Some(vec![]),
-                            Some(vec![]),
-                            closure,
-                        ),
-                        (
-                            SpecializedArrangementImport::RowUnit(prev_keyed),
-                            SpecializedArrangement::RowRow(next_input),
-                        ) => self
+                        (I::RowUnit(prev_keyed), A::RowUnit(next_input)) => self
+                            .differential_join_inner::<_, RowEnter<_, _, _>, RowAgent<_, _>>(
+                                prev_keyed,
+                                next_input,
+                                None,
+                                Some(vec![]),
+                                Some(vec![]),
+                                closure,
+                            ),
+                        (I::RowUnit(prev_keyed), A::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowEnter<_, _, _>, RowRowAgent<_, _>>(
                                 prev_keyed,
                                 next_input,
@@ -440,10 +419,7 @@ where
                                 None,
                                 closure,
                             ),
-                        (
-                            SpecializedArrangementImport::RowRow(prev_keyed),
-                            SpecializedArrangement::RowUnit(next_input),
-                        ) => self
+                        (I::RowRow(prev_keyed), A::RowUnit(next_input)) => self
                             .differential_join_inner::<_, RowRowEnter<_, _, _>, RowAgent<_, _>>(
                                 prev_keyed,
                                 next_input,
@@ -452,10 +428,7 @@ where
                                 Some(vec![]),
                                 closure,
                             ),
-                        (
-                            SpecializedArrangementImport::RowRow(prev_keyed),
-                            SpecializedArrangement::RowRow(next_input),
-                        ) => self
+                        (I::RowRow(prev_keyed), A::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowRowEnter<_, _, _>, RowRowAgent<_, _>>(
                                 prev_keyed, next_input, None, None, None, closure,
                             ),
@@ -467,10 +440,7 @@ where
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = match (trace, oks) {
-                        (
-                            SpecializedArrangementImport::RowUnit(prev_keyed),
-                            SpecializedArrangementImport::RowUnit(next_input),
-                        ) => self
+                        (I::RowUnit(prev_keyed), I::RowUnit(next_input)) => self
                             .differential_join_inner::<_, RowEnter<_, _, _>, RowEnter<_, _, _>>(
                                 prev_keyed,
                                 next_input,
@@ -479,10 +449,7 @@ where
                                 Some(vec![]),
                                 closure,
                             ),
-                        (
-                            SpecializedArrangementImport::RowUnit(prev_keyed),
-                            SpecializedArrangementImport::RowRow(next_input),
-                        ) => self
+                        (I::RowUnit(prev_keyed), I::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowEnter<_, _, _>, RowRowEnter<_, _, _>>(
                                 prev_keyed,
                                 next_input,
@@ -491,10 +458,7 @@ where
                                 None,
                                 closure,
                             ),
-                        (
-                            SpecializedArrangementImport::RowRow(prev_keyed),
-                            SpecializedArrangementImport::RowUnit(next_input),
-                        ) => self
+                        (I::RowRow(prev_keyed), I::RowUnit(next_input)) => self
                             .differential_join_inner::<_, RowRowEnter<_, _, _>, RowEnter<_, _, _>>(
                                 prev_keyed,
                                 next_input,
@@ -503,10 +467,7 @@ where
                                 Some(vec![]),
                                 closure,
                             ),
-                        (
-                            SpecializedArrangementImport::RowRow(prev_keyed),
-                            SpecializedArrangementImport::RowRow(next_input),
-                        ) => self
+                        (I::RowRow(prev_keyed), I::RowRow(next_input)) => self
                             .differential_join_inner::<_, RowRowEnter<_, _, _>, RowRowEnter<_, _, _>>(
                                 prev_keyed, next_input, None, None, None, closure,
                             ),
