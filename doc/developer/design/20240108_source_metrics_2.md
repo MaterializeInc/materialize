@@ -81,9 +81,9 @@ However, during replication, MySQL's source timestamp is partially ordered, inst
 lsn number:
 
 ```
-# source id: gtid
-f1: {0: 1000th gtid, 1: 0th gtid}
-f2: {0: 1010th gtid, 1: 10th gtid}
+# source id: transaction id
+f1: {0: 1000th txid, 1: 0th txid}
+f2: {0: 1010th txid, 1: 10th txid}
 ```
 In this case, `f2 - f1 = 20 transactions`
 
@@ -92,7 +92,7 @@ In this case, `f2 - f1 = 20 transactions`
 As you can see, source frontier differences depend on the source, and are primarily useful for _calculating rates_ and when
 _comparing values_. For example:
 
-- If a source's frontier has moved from `{0: 10}` to `{0: 70}` in 1 minute, Materialize can be said to have processed 1 offset/minute.
+- If a source's frontier has moved from `{0: 10}` to `{0: 70}` in 1 minute, Materialize can be said to have processed 1 offset/second.
 - If a source's frontier snapshot frontier is `{table1: 100 rows}` and its current frontier is `{table1: 50}`, Materialize can be said
 to have processed about 50% of the snapshot.
 
@@ -109,12 +109,12 @@ We will introduce 2 new columns in `mz_source_statistics_per_worker`:
 
 ```
 | `snapshot_total`     | [`uint8`] | The total number of upstream values that are part of the snapshot. |
-| `snapshot_progress   | [`uint8`] | The number of upstream values Materialize has read so far.         |
+| `snapshot_progress`  | [`uint8`] | The number of upstream values Materialize has read so far.         |
 ```
 
 The unit of _values_ depends on the source type, and will be _rows_ for MySQL and Postgres, and _offsets_ for kafka.
 
-These values can be summed across workers and compared (`snapshot_progress / snapshot_progress - snapshot_total`) to produce
+These values can be summed across workers and compared (`snapshot_progress / snapshot_total`) to produce
 a _lower-bound_ estimate on the progress we have made reading the source's snapshot.
 
 ### Source frontier difference
@@ -142,7 +142,7 @@ should be cheap.
 
 `snapshot_progress` will need to be exposed by the source operators themselves, as the data itself during snapshotting all has
 the same frontier. This means the operators will need to track and periodically report a frontier describing the progress they
-have made reading the snapshot. In practice, this number of rows they have read, per-table.
+have made reading the snapshot. In practice, this is the number of rows they have read, per-table.
 
 #### Example Scenarios and Hydration Backpressure
 
@@ -188,11 +188,12 @@ These rates are _source frontier differences_. Each source's `SourceReader` impl
 be required to expose a continuous stream of _upstream source frontiers_. This means:
 
 - The Kafka source will periodically fetch metadata and expose per-partition offset high-watermarks.
-- The MySQL source will periodically expose the result of `SELECT @gtid_executed`, which is the gtid of the latest transaction.
+- The MySQL source will periodically expose the result of `SELECT @gtid_executed`, which is the set of gtids representing the latest transactions committed.
 - The Postgres source will periodically expose the result of `SELECT pg_current_wal_lsn()`, which is the lsn of the latest transaction.
 
 Additionally, the source pipeline will periodically invert the latest frontier we have committed for the source, from the Materialize timestamp
-domain to the source-timestamp domain. For MySQL and Postgres sources, this frontier will the `meet` of the subsource frontiers.
+domain to the source-timestamp domain. For MySQL and Postgres sources, this frontier will the `meet` of the subsource frontiers (as in,
+calculate their minimum).
 
 `upstream_rate` will be derived from the two latest _upstream source frontiers_, by calculating _source frontier difference_ between them.
 Similarly `process_rate` will be derived from the two latest committed frontiers.
@@ -205,7 +206,8 @@ If users find some of them confusing or not useful, we can remove them in the fu
 
 ## Minimal Viable Prototype
 
-N/A for now. This design document is primarily designed to expose
+N/A for now. This design document is primarily designed to capture the two core metrics we should add to sources, and how to
+implement them in a feasible way. The attached example charts capture the desired output.
 
 
 ## Alternatives
@@ -219,6 +221,9 @@ N/A for now. This design document is primarily designed to expose
     - Rejected due to its complexity.
 - Expose more information to users about their sources.
     - This design document is intentionally constrained, to help users answer 2 well-known questions about their sources.
+- Replace the 2nd metric set with [Relocking the upstream frontier](https://github.com/MaterializeInc/materialize/issues/23345).
+    - Rejected to decouple this design with a reclocking policy decision.
+    - Note that the schema and semantics of this design document are forward-compatible with that policy change.
 
 
 ## Open questions
