@@ -172,6 +172,7 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             config.kafka_transaction_timeout(),
             config.kafka_socket_connection_setup_timeout(),
             config.kafka_fetch_metadata_timeout(),
+            config.kafka_progress_record_fetch_timeout(),
         ),
         statistics_interval: config.storage_statistics_interval(),
         statistics_collection_interval: config.storage_statistics_collection_interval(),

@@ -78,7 +78,9 @@ $ set-from-sql var=sink_id
 SELECT id FROM mz_sinks WHERE name = 'kafka_sink'
 
 # Verify we get a starting -- it's possible we move to running by the time this query runs.
-> SELECT * FROM mz_internal.mz_sink_status_history WHERE sink_id = '${sink_id}' ORDER BY occurred_at ASC LIMIT 1;
+# Additionally it can happen that both 'starting' and 'running' are reported on the same millisecond
+# so we filter out any other statuses.
+> SELECT * FROM mz_internal.mz_sink_status_history WHERE sink_id = '${sink_id}' AND status = 'starting' ORDER BY occurred_at ASC LIMIT 1;
 "<TIMESTAMP> UTC" ${sink_id} starting <null> <null>
 
 $ kafka-ingest format=bytes topic=status-history

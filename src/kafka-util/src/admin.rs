@@ -33,11 +33,13 @@ use rdkafka::error::{KafkaError, RDKafkaErrorCode};
 /// requested in `new_topic`. Empirically, this seems to be the condition that
 /// guarantees that future attempts to consume from or produce to the topic will
 /// succeed.
+///
+/// Returns a boolean indicating whether the topic already existed.
 pub async fn create_new_topic<'a, C>(
     client: &'a AdminClient<C>,
     admin_opts: &AdminOptions,
     new_topic: &'a NewTopic<'a>,
-) -> Result<(), CreateTopicError>
+) -> Result<bool, CreateTopicError>
 where
     C: ClientContext,
 {
@@ -49,7 +51,7 @@ pub async fn ensure_topic<'a, C>(
     client: &'a AdminClient<C>,
     admin_opts: &AdminOptions,
     new_topic: &'a NewTopic<'a>,
-) -> Result<(), CreateTopicError>
+) -> Result<bool, CreateTopicError>
 where
     C: ClientContext,
 {
@@ -61,7 +63,7 @@ async fn create_topic_helper<'a, C>(
     admin_opts: &AdminOptions,
     new_topic: &'a NewTopic<'a>,
     allow_existing: bool,
-) -> Result<(), CreateTopicError>
+) -> Result<bool, CreateTopicError>
 where
     C: ClientContext,
 {
@@ -79,7 +81,7 @@ where
 
     // We don't need to read in metadata / do any validation if the topic already exists.
     if already_exists {
-        return Ok(());
+        return Ok(true);
     }
 
     // Topic creation is asynchronous, and if we don't wait for it to complete,
@@ -115,7 +117,7 @@ where
                     });
                 }
             }
-            Ok(())
+            Ok(false)
         })
         .await
 }
