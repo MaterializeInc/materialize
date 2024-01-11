@@ -156,7 +156,7 @@ def main() -> None:
         prev = PrevStats(time.time(), 0.0, 0.0)
         for _ in range(args.trials):
             cur.execute("DROP VIEW IF EXISTS cnt")
-            cur.execute("CREATE MATERIALIZED VIEW cnt AS SELECT count(*) FROM src")
+            cur.execute("CREATE MATERIALIZED VIEW cnt WITH (RETAIN HISTORY FOR '30s') AS SELECT count(*) FROM src")
             while True:
                 try:
                     cur.execute("SELECT * FROM cnt")

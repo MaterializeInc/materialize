@@ -28,7 +28,7 @@ class TextByteaTypes(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE MATERIALIZED VIEW string_bytea_types_view1 AS
+                > CREATE MATERIALIZED VIEW string_bytea_types_view1 WITH (RETAIN HISTORY FOR '30s') AS
                   SELECT text_col, bytea_col, 'това'::TEXT, '\\xAAAA'::BYTEA
                   FROM text_bytea_types_table
                   WHERE text_col >= ''::TEXT AND bytea_col >= ''::BYTEA;

@@ -24,7 +24,7 @@ SELECT '${arg.default-replica-size}' != '4-4'
 
 > CREATE TABLE t (a int)
 
-> CREATE MATERIALIZED VIEW mv AS SELECT * FROM t
+> CREATE MATERIALIZED VIEW mv WITH (RETAIN HISTORY FOR '30s') AS SELECT * FROM t
 
 > SELECT count_all > 0
   FROM (SELECT SUM(count) as count_all
@@ -106,7 +106,7 @@ true
     time > 0
 16
 
-> CREATE MATERIALIZED VIEW mvv AS SELECT * FROM vv
+> CREATE MATERIALIZED VIEW mvv WITH (RETAIN HISTORY FOR '30s') AS SELECT * FROM vv
 
 > SELECT COUNT(*)
   FROM (SELECT DISTINCT delays.export_id, delays.import_id
@@ -182,7 +182,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 # Test that mz_compute_exports contains correct dataflow IDs.
 
-> CREATE MATERIALIZED VIEW my_unique_mv_name AS SELECT * FROM t
+> CREATE MATERIALIZED VIEW my_unique_mv_name WITH (RETAIN HISTORY FOR '30s') AS SELECT * FROM t
 
 > SELECT count(*)
   FROM
@@ -260,7 +260,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > CREATE VIEW vv_arr AS SELECT sum(a) FROM t JOIN t2 ON t.a = t2.b
 
-> CREATE MATERIALIZED VIEW mv_arr AS SELECT * FROM vv_arr
+> CREATE MATERIALIZED VIEW mv_arr WITH (RETAIN HISTORY FOR '30s') AS SELECT * FROM vv_arr
 
 > CREATE DEFAULT INDEX ii_arr ON vv_arr
 
@@ -338,11 +338,11 @@ true true true true true
 
 > INSERT INTO ten VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10);
 
-> CREATE MATERIALIZED VIEW c1 AS
+> CREATE MATERIALIZED VIEW c1 WITH (RETAIN HISTORY FOR '30s') AS
   SELECT COUNT(DISTINCT 100 * a1.f1 + 10 * a2.f1 + a3.f1)
   FROM ten AS a1, ten AS a2, ten AS a3;
 
-> CREATE MATERIALIZED VIEW c2 AS
+> CREATE MATERIALIZED VIEW c2 WITH (RETAIN HISTORY FOR '30s') AS
   SELECT 100 * a1.f1 + 10 * a2.f1 + a3.f1, COUNT(*)
   FROM ten AS a1, ten AS a2, ten AS a3
   GROUP BY 1
@@ -373,7 +373,7 @@ true true true true true true true
 true true true true true true true
 
 # For coverage, we also include a recursive materialized view to account for dynamic timestamps.
-> CREATE MATERIALIZED VIEW rec AS
+> CREATE MATERIALIZED VIEW rec WITH (RETAIN HISTORY FOR '30s') AS
   WITH MUTUALLY RECURSIVE (ERROR AT RECURSION LIMIT 3) term (key int, iter int) AS (
     SELECT 100 * a1.f1 + 10 * a2.f1 + a3.f1 AS key, 0 AS iter
     FROM ten AS a1, ten AS a2, ten AS a3
@@ -409,16 +409,16 @@ true true true true true true true
 > CREATE CLUSTER counter_cluster SIZE = '1';
 > CREATE SOURCE counter IN CLUSTER counter_cluster FROM LOAD GENERATOR COUNTER (TICK INTERVAL '2ms');
 
-> CREATE MATERIALIZED VIEW input AS
+> CREATE MATERIALIZED VIEW input WITH (RETAIN HISTORY FOR '30s') AS
   SELECT counter % 1000 + 1 AS f1, counter % 10 + 1 AS f2
   FROM counter;
 
-> CREATE MATERIALIZED VIEW m_minmax AS
+> CREATE MATERIALIZED VIEW m_minmax WITH (RETAIN HISTORY FOR '30s') AS
   SELECT f1, MIN(f2), MAX(f2)
   FROM input
   GROUP BY f1;
 
-> CREATE MATERIALIZED VIEW m_top1 AS
+> CREATE MATERIALIZED VIEW m_top1 WITH (RETAIN HISTORY FOR '30s') AS
   SELECT DISTINCT ON (f1) f1, f2
   FROM input
   ORDER BY f1, f2 DESC;
@@ -454,7 +454,7 @@ true true true true true true true
 > CREATE TABLE zeros (a int)
 > CREATE VIEW v_div_by_zero AS SELECT 1 / a AS x FROM zeros
 > CREATE INDEX idx1_div_by_zero ON v_div_by_zero (x)
-> CREATE MATERIALIZED VIEW mv_div_by_zero AS SELECT 1 / a AS x FROM zeros
+> CREATE MATERIALIZED VIEW mv_div_by_zero WITH (RETAIN HISTORY FOR '30s') AS SELECT 1 / a AS x FROM zeros
 > CREATE INDEX idx2_div_by_zero ON mv_div_by_zero (x)
 
 > SELECT name, count
@@ -519,8 +519,8 @@ mv_div_by_zero   2
 
 # Test logging of errors in things that advance to the empty frontier.
 
-> CREATE MATERIALIZED VIEW mv_zero AS SELECT 0 AS x
-> CREATE MATERIALIZED VIEW mv2_div_by_zero AS SELECT 1 / x FROM mv_zero
+> CREATE MATERIALIZED VIEW mv_zero WITH (RETAIN HISTORY FOR '30s') AS SELECT 0 AS x
+> CREATE MATERIALIZED VIEW mv2_div_by_zero WITH (RETAIN HISTORY FOR '30s') AS SELECT 1 / x FROM mv_zero
 
 > SELECT name, count
   FROM mz_internal.mz_compute_error_counts c

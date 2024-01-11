@@ -11,7 +11,7 @@
 # Test various errors that can happen at CREATE SINK time and check how they are reported to the user
 #
 
-> CREATE MATERIALIZED VIEW v1 (f1) AS VALUES (1);
+> CREATE MATERIALIZED VIEW v1 WITH (RETAIN HISTORY FOR '30s') (f1) AS VALUES (1);
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);

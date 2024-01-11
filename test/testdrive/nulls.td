@@ -35,7 +35,7 @@ $ kafka-ingest format=avro topic=foo schema=${foo-schema} timestamp=1
 2
 <null>
 
-> CREATE MATERIALIZED VIEW test1 AS
+> CREATE MATERIALIZED VIEW test1 WITH (RETAIN HISTORY FOR '30s') AS
   SELECT * FROM foo JOIN foo as foo2 USING (a);
 
 > SELECT * FROM test1;

@@ -16,7 +16,7 @@
 
 $ set-sql-timeout duration=30s
 
-> CREATE MATERIALIZED VIEW most_recent_mz_metrics AS
+> CREATE MATERIALIZED VIEW most_recent_mz_metrics WITH (RETAIN HISTORY FOR '30s') AS
   SELECT * FROM
   (SELECT DISTINCT metric FROM mz_metrics) grp,
   LATERAL (

@@ -28,7 +28,7 @@ class WindowFunctions(Check):
             Testdrive(dedent(s))
             for s in [
                 """
-                > CREATE MATERIALIZED VIEW window_functions_view1 AS
+                > CREATE MATERIALIZED VIEW window_functions_view1 WITH (RETAIN HISTORY FOR '30s') AS
                   SELECT
                   row_number() OVER (PARTITION BY f1 ORDER BY f2),
                   dense_rank() OVER (PARTITION BY f2 ORDER BY f1 DESC),
@@ -42,7 +42,7 @@ class WindowFunctions(Check):
                 > INSERT INTO window_functions_table VALUES (1, 2), (2, 2), (3, 2);
                 """,
                 """
-                > CREATE MATERIALIZED VIEW window_functions_view2 AS
+                > CREATE MATERIALIZED VIEW window_functions_view2 WITH (RETAIN HISTORY FOR '30s') AS
                   SELECT
                   row_number() OVER (PARTITION BY f1 ORDER BY f2),
                   dense_rank() OVER (PARTITION BY f2 ORDER BY f1 DESC),

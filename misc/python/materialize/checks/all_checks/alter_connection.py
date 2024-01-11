@@ -84,7 +84,7 @@ class AlterConnectionSshChangeBase(Check):
                 > CREATE TABLE alter_connection_table_{i} (f1 INTEGER, PRIMARY KEY (f1));
                 > INSERT INTO alter_connection_table_{i} VALUES (1);
 
-                > CREATE MATERIALIZED VIEW mv_alter_connection_{i} AS SELECT f1 FROM alter_connection_table_{i};
+                > CREATE MATERIALIZED VIEW mv_alter_connection_ WITH (RETAIN HISTORY FOR '30s'){i} AS SELECT f1 FROM alter_connection_table_{i};
 
                 > CREATE SINK alter_connection_sink_{i} FROM mv_alter_connection_{i}
                   INTO KAFKA CONNECTION kafka_conn_alter_connection_{i}a (TOPIC 'testdrive-alter-connection-sink-{i}-${{testdrive.seed}}')

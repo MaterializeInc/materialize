@@ -37,7 +37,7 @@ goofus,gallant
 > CREATE VIEW v2 AS
   SELECT a || b AS c FROM src_materialized
 
-> CREATE MATERIALIZED VIEW v3 AS
+> CREATE MATERIALIZED VIEW v3 WITH (RETAIN HISTORY FOR '30s') AS
   SELECT a || b AS c FROM src
 
 # We should refuse to create a sink with invalid WITH options
@@ -144,7 +144,7 @@ $ kafka-verify-data format=avro sink=materialize.public.snk3 sort-messages=true
 {"before": null, "after": {"row":{"c": "jackjill"}}}
 
 # Test Avro serialization of unsigned values.
-> CREATE MATERIALIZED VIEW unsigned (a, b, c, d, e, f) AS
+> CREATE MATERIALIZED VIEW unsigned WITH (RETAIN HISTORY FOR '30s') (a, b, c, d, e, f) AS
   VALUES ('1'::uint2, '2'::uint2, '3'::uint4, '4'::uint4, '5'::uint8, '6'::uint8)
 > CREATE SINK snk_unsigned
   IN CLUSTER ${arg.single-replica-cluster}
@@ -157,7 +157,7 @@ $ kafka-verify-data format=avro sink=materialize.public.snk_unsigned sort-messag
 
 # Test the case where we have non +/- 1 multiplicities
 
-> CREATE MATERIALIZED VIEW v4 AS
+> CREATE MATERIALIZED VIEW v4 WITH (RETAIN HISTORY FOR '30s') AS
   SELECT true AS c FROM src
 
 > CREATE SINK snk4
@@ -207,7 +207,7 @@ $ kafka-verify-data format=avro sink=materialize.public.snk6 sort-messages=true
 
 # Test that we are correctly handling SNAPSHOT on views with empty upper
 # frontier
-> CREATE MATERIALIZED VIEW foo AS VALUES (1), (2), (3);
+> CREATE MATERIALIZED VIEW foo WITH (RETAIN HISTORY FOR '30s') AS VALUES (1), (2), (3);
 
 > CREATE SINK snk7
   IN CLUSTER ${arg.single-replica-cluster}

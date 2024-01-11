@@ -44,5 +44,5 @@ $ kafka-create-topic topic=load-test partitions=4
 # the data is append only. Note that this approach will not accurately count
 # the number of rows that have been ingested when something suppresses duplicate
 # keys such as the upsert envelope.
-> CREATE MATERIALIZED VIEW load_test_count AS SELECT
+> CREATE MATERIALIZED VIEW load_test_count WITH (RETAIN HISTORY FOR '30s') AS SELECT
   COUNT(*) FROM intermediate;

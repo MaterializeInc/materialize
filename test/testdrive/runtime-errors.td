@@ -10,11 +10,11 @@
 > CREATE TABLE data (id text, a bigint, b bigint)
 > INSERT INTO data VALUES ('valid1', 2, 1), ('valid2', 17, 5)
 
-> CREATE MATERIALIZED VIEW multiply AS SELECT id, a * b AS product FROM data
+> CREATE MATERIALIZED VIEW multiply WITH (RETAIN HISTORY FOR '30s') AS SELECT id, a * b AS product FROM data
 
-> CREATE MATERIALIZED VIEW divide AS SELECT id, a / b AS quotient FROM data
+> CREATE MATERIALIZED VIEW divide WITH (RETAIN HISTORY FOR '30s') AS SELECT id, a / b AS quotient FROM data
 
-> CREATE MATERIALIZED VIEW both AS
+> CREATE MATERIALIZED VIEW both WITH (RETAIN HISTORY FOR '30s') AS
   SELECT * FROM multiply NATURAL JOIN divide
 
 > SELECT * FROM both

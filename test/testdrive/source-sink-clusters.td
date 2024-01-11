@@ -33,7 +33,7 @@ contains:altering size of sources and sinks no longer supported
 
 # Create indexes and materialized views in a storage cluster is allowed.
 > CREATE INDEX t_idx IN CLUSTER storage ON t (a)
-> CREATE MATERIALIZED VIEW mv IN CLUSTER storage AS SELECT 1
+> CREATE MATERIALIZED VIEW mv WITH (RETAIN HISTORY FOR '30s') IN CLUSTER storage AS SELECT 1
 
 > CREATE CLUSTER REPLICA storage.r1 SIZE = '1'
 
@@ -93,9 +93,9 @@ b
 aa
 bb
 
-> CREATE MATERIALIZED VIEW view1 AS SELECT text FROM data1
+> CREATE MATERIALIZED VIEW view1 WITH (RETAIN HISTORY FOR '30s') AS SELECT text FROM data1
 
-> CREATE MATERIALIZED VIEW view2 AS SELECT text || text AS text FROM data2
+> CREATE MATERIALIZED VIEW view2 WITH (RETAIN HISTORY FOR '30s') AS SELECT text || text AS text FROM data2
 
 > CREATE SINK sink1
   IN CLUSTER storage

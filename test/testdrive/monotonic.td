@@ -41,7 +41,7 @@ $ kafka-ingest format=avro topic=non-dbz-data schema=${non-dbz-schema} timestamp
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
 
-> CREATE MATERIALIZED VIEW monotonic_min AS SELECT a, min(b) FROM non_dbz_data group by a
+> CREATE MATERIALIZED VIEW monotonic_min WITH (RETAIN HISTORY FOR '30s') AS SELECT a, min(b) FROM non_dbz_data group by a
 
 > SELECT * FROM monotonic_min
 a min
@@ -49,7 +49,7 @@ a min
 1 2
 2 3
 
-> CREATE MATERIALIZED VIEW monotonic_max AS SELECT a, max(b) FROM non_dbz_data group by a
+> CREATE MATERIALIZED VIEW monotonic_max WITH (RETAIN HISTORY FOR '30s') AS SELECT a, max(b) FROM non_dbz_data group by a
 
 > SELECT * FROM monotonic_max
 a max
@@ -58,7 +58,7 @@ a max
 2 4
 
 # Smoke test for aggregate fusion
-> CREATE MATERIALIZED VIEW monotonic_fused AS SELECT a, min(b), max(b + 1)  FROM non_dbz_data group by a
+> CREATE MATERIALIZED VIEW monotonic_fused WITH (RETAIN HISTORY FOR '30s') AS SELECT a, min(b), max(b + 1)  FROM non_dbz_data group by a
 
 > SELECT * FROM monotonic_fused
 a min max
@@ -183,7 +183,7 @@ Explained Query:
 Used Indexes:
   - materialize.public.i9_primary_idx (*** full scan ***)
 
-> CREATE MATERIALIZED VIEW m1 AS SELECT b FROM non_dbz_data;
+> CREATE MATERIALIZED VIEW m1 WITH (RETAIN HISTORY FOR '30s') AS SELECT b FROM non_dbz_data;
 
 > CREATE VIEW v11 AS SELECT * FROM m1 ORDER BY b LIMIT 3;
 

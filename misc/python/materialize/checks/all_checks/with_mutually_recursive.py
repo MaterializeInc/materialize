@@ -20,7 +20,7 @@ class WithMutuallyRecursive(Check):
                 $[version<7100] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_with_mutually_recursive = true
 
-                > CREATE MATERIALIZED VIEW wmr1 AS WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 100)
+                > CREATE MATERIALIZED VIEW wmr1 WITH (RETAIN HISTORY FOR '30s') AS WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 100)
                   foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
                   bar (a int) as (SELECT a FROM foo)
                   SELECT * FROM bar;
@@ -35,17 +35,17 @@ class WithMutuallyRecursive(Check):
                 """
                 > CREATE DEFAULT INDEX ON wmr1;
 
-                > CREATE MATERIALIZED VIEW wmr1A AS SELECT a + 1 FROM wmr1;
+                > CREATE MATERIALIZED VIEW wmr1A WITH (RETAIN HISTORY FOR '30s') AS SELECT a + 1 FROM wmr1;
 
-                > CREATE MATERIALIZED VIEW wmr2 AS WITH MUTUALLY RECURSIVE (ERROR AT RECURSION LIMIT 1)
+                > CREATE MATERIALIZED VIEW wmr2 WITH (RETAIN HISTORY FOR '30s') AS WITH MUTUALLY RECURSIVE (ERROR AT RECURSION LIMIT 1)
                   foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
                   bar (a int) as (SELECT a FROM foo)
                   SELECT * FROM bar;
                 """,
                 """
-                > CREATE MATERIALIZED VIEW wmr2A AS SELECT a + 1 FROM wmr2;
+                > CREATE MATERIALIZED VIEW wmr2A WITH (RETAIN HISTORY FOR '30s') AS SELECT a + 1 FROM wmr2;
 
-                > CREATE MATERIALIZED VIEW wmr3 AS WITH MUTUALLY RECURSIVE
+                > CREATE MATERIALIZED VIEW wmr3 WITH (RETAIN HISTORY FOR '30s') AS WITH MUTUALLY RECURSIVE
                   foo (a int, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
                   bar (a int) as (SELECT a FROM foo)
                   SELECT * FROM bar;

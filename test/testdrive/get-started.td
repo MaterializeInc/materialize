@@ -50,7 +50,7 @@ id false bigint
   JOIN auctions ON bids.auction_id = auctions.id
   WHERE bids.bid_time < auctions.end_time
 
-> CREATE MATERIALIZED VIEW avg_bids AS
+> CREATE MATERIALIZED VIEW avg_bids WITH (RETAIN HISTORY FOR '30s') AS
   SELECT auction_id, avg(amount) AS amount
   FROM on_time_bids
   GROUP BY auction_id
@@ -75,7 +75,7 @@ id false bigint
     )
 
 
-> CREATE MATERIALIZED VIEW winning_bids AS
+> CREATE MATERIALIZED VIEW winning_bids WITH (RETAIN HISTORY FOR '30s') AS
   SELECT * FROM highest_bid_per_auction WHERE end_time < mz_now()
 
 > SELECT auction_id, bid_id, item, amount FROM winning_bids ORDER BY auction_id LIMIT 5

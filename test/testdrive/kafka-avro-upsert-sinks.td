@@ -152,7 +152,7 @@ $ kafka-create-topic topic=input
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
-> CREATE MATERIALIZED VIEW input_keyed AS SELECT a, max(b) as b FROM input GROUP BY a
+> CREATE MATERIALIZED VIEW input_keyed WITH (RETAIN HISTORY FOR '30s') AS SELECT a, max(b) as b FROM input GROUP BY a
 
 > CREATE SINK input_sink
   IN CLUSTER ${arg.single-replica-cluster}
@@ -227,7 +227,7 @@ $ kafka-create-topic topic=input-with-deletions
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-with-deletions-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
-> CREATE MATERIALIZED VIEW input_with_deletions_keyed AS SELECT a, max(b) as b FROM input_with_deletions GROUP BY a
+> CREATE MATERIALIZED VIEW input_with_deletions_keyed WITH (RETAIN HISTORY FOR '30s') AS SELECT a, max(b) as b FROM input_with_deletions GROUP BY a
 
 > CREATE SINK input_with_deletions_sink
   IN CLUSTER ${arg.single-replica-cluster}
@@ -339,7 +339,7 @@ contains:upsert key could not be validated as unique
   USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
 contains:upsert key could not be validated as unique
 
-> CREATE MATERIALIZED VIEW input_keyed_ab AS SELECT a, b FROM input GROUP BY a, b
+> CREATE MATERIALIZED VIEW input_keyed_ab WITH (RETAIN HISTORY FOR '30s') AS SELECT a, b FROM input GROUP BY a, b
 
 ! CREATE SINK invalid_sub_key
   IN CLUSTER ${arg.single-replica-cluster}

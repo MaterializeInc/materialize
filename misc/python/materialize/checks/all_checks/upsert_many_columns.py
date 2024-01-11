@@ -78,7 +78,7 @@ class UpsertManyValueColumns(Check):
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
-                > CREATE MATERIALIZED VIEW upsert_many_value_columns_view AS
+                > CREATE MATERIALIZED VIEW upsert_many_value_columns_view WITH (RETAIN HISTORY FOR '30s') AS
                   SELECT key1, f1, f1000
                   FROM upsert_many_value_columns
                 """
@@ -136,7 +136,7 @@ class UpsertManyKeyColumns(Check):
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE UPSERT
 
-                > CREATE MATERIALIZED VIEW upsert_many_key_columns_view AS
+                > CREATE MATERIALIZED VIEW upsert_many_key_columns_view WITH (RETAIN HISTORY FOR '30s') AS
                   SELECT key1, key1000, f1
                   FROM upsert_many_key_columns
                 """

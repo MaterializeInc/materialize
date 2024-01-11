@@ -7,4 +7,4 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> CREATE MATERIALIZED VIEW char_type_quoted_view AS SELECT 'a'::"char"
+> CREATE MATERIALIZED VIEW char_type_quoted_view WITH (RETAIN HISTORY FOR '30s') AS SELECT 'a'::"char"

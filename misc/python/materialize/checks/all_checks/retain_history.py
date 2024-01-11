@@ -25,7 +25,7 @@ class RetainHistory(Check):
                 > CREATE TABLE retain_history_table (key INT NOT NULL, value INT NOT NULL);
                 > INSERT INTO retain_history_table VALUES (1, 100), (2, 200);
 
-                > CREATE MATERIALIZED VIEW retain_history_mv1 WITH (RETAIN HISTORY FOR '30s', RETAIN HISTORY FOR '30s') AS
+                > CREATE MATERIALIZED VIEW retain_history_mv1 WITH (RETAIN HISTORY FOR '30s') AS
                     SELECT * FROM retain_history_table;
 
                 > SELECT count(*) FROM retain_history_mv1;
@@ -41,11 +41,11 @@ class RetainHistory(Check):
                 """
                 > UPDATE retain_history_table SET value = value + 10 WHERE key = 1;
 
-                > CREATE MATERIALIZED VIEW retain_history_mv2 WITH (RETAIN HISTORY FOR '30s', RETAIN HISTORY FOR '30s') AS
+                > CREATE MATERIALIZED VIEW retain_history_mv2 WITH (RETAIN HISTORY FOR '30s') AS
                     SELECT * FROM retain_history_table;
                 """,
                 """
-                > CREATE MATERIALIZED VIEW retain_history_mv3 WITH (RETAIN HISTORY FOR '30s', RETAIN HISTORY FOR '30s') AS
+                > CREATE MATERIALIZED VIEW retain_history_mv3 WITH (RETAIN HISTORY FOR '30s') AS
                     SELECT * FROM retain_history_mv2;
                 """,
             ]

@@ -313,7 +313,7 @@ $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${k
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
-> CREATE MATERIALIZED VIEW realtimeavroavro_view as SELECT * from realtimeavroavro;
+> CREATE MATERIALIZED VIEW realtimeavroavro_view WITH (RETAIN HISTORY FOR '30s') as SELECT * from realtimeavroavro;
 
 > select f3, f4, f1, f2 from realtimeavroavro_view
 f3        f4      f1             f2
@@ -393,7 +393,7 @@ $ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=$
   ENVELOPE UPSERT
 
 # filter on key only
-> CREATE MATERIALIZED VIEW filterforkey AS
+> CREATE MATERIALIZED VIEW filterforkey WITH (RETAIN HISTORY FOR '30s') AS
   SELECT f1 FROM realtimefilteravro WHERE k1='épicerie';
 
 > SELECT * from filterforkey
@@ -402,7 +402,7 @@ f1
 pear
 
 # filter on value only
-> CREATE MATERIALIZED VIEW filterforvalue AS
+> CREATE MATERIALIZED VIEW filterforvalue WITH (RETAIN HISTORY FOR '30s') AS
   SELECT f2 FROM realtimefilteravro WHERE f1='date';
 
 > SELECT * from filterforvalue
@@ -411,7 +411,7 @@ f2
 <null>
 
 # filter with a predicate containing key + value
-> CREATE MATERIALIZED VIEW filterforkeyvalue AS
+> CREATE MATERIALIZED VIEW filterforkeyvalue WITH (RETAIN HISTORY FOR '30s') AS
   SELECT f1, f2 FROM realtimefilteravro WHERE k2+f2=12;
 
 > SELECT * from filterforkeyvalue
@@ -420,7 +420,7 @@ f1   f2
 pear 2
 
 # filter on both a predicate containing a key and a predicate containing a value
-> CREATE MATERIALIZED VIEW keyfiltervaluefilter AS
+> CREATE MATERIALIZED VIEW keyfiltervaluefilter WITH (RETAIN HISTORY FOR '30s') AS
   SELECT k1, k2 FROM realtimefilteravro WHERE k2 > 5 AND f2 < 5
 
 > SELECT * from keyfiltervaluefilter

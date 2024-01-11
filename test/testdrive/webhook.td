@@ -333,7 +333,7 @@ $ webhook-append name=webhook_for_batch_events
   { "event_id": 4 }
 ]
 
-> CREATE MATERIALIZED VIEW webhook_for_batch_events_flattened (body)
+> CREATE MATERIALIZED VIEW webhook_for_batch_events_flattened WITH (RETAIN HISTORY FOR '30s') (body)
   IN CLUSTER webhook_compute
   AS (
     SELECT jsonb_array_elements(body) as body FROM webhook_for_batch_events

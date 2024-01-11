@@ -37,9 +37,9 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
   FOR ALL TABLES
 
 > CREATE SCHEMA prod
-> CREATE MATERIALIZED VIEW prod.counter_mv IN CLUSTER prod AS SELECT count(*) FROM counter
+> CREATE MATERIALIZED VIEW prod.counter_mv WITH (RETAIN HISTORY FOR '30s') IN CLUSTER prod AS SELECT count(*) FROM counter
 > CREATE DEFAULT INDEX IN CLUSTER prod ON counter
-> CREATE MATERIALIZED VIEW prod.tpch_mv
+> CREATE MATERIALIZED VIEW prod.tpch_mv WITH (RETAIN HISTORY FOR '30s')
   IN CLUSTER prod AS
   SELECT
     l_returnflag,

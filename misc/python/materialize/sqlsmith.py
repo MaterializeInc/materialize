@@ -111,7 +111,7 @@ known_errors = [
     '" does not exist',  # role does not exist
     "attempt to create relation with too many columns",
     "target replica failed or was dropped",  # expected on replica OoMs with #21587
-    "cannot materialize call to",  # create materialized view on some internal views
+    "cannot materialize call to",  # create materialized view on WITH (RETAIN HISTORY FOR '30s') some internal views
     "arrays must not contain null values",  # aclexplode, mz_aclexplode
     "OVER clause not allowed on",  # window functions
     "cannot reference pseudo type",

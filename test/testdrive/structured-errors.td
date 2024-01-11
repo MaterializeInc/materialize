@@ -19,7 +19,7 @@
   )
 contains:error connecting to server:
 
-> CREATE MATERIALIZED VIEW mv as SELECT 1;
+> CREATE MATERIALIZED VIEW mv WITH (RETAIN HISTORY FOR '30s') as SELECT 1;
 
 # test that `hint:` works!
 ! DROP VIEW mv

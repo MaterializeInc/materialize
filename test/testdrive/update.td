@@ -63,7 +63,7 @@ contains:invalid input syntax for type double precision
 > SELECT * FROM t
 4 6 xy
 
-> CREATE MATERIALIZED VIEW v (a) AS SELECT 4;
+> CREATE MATERIALIZED VIEW v WITH (RETAIN HISTORY FOR '30s') (a) AS SELECT 4;
 
 > UPDATE t SET i = i + 1 WHERE i IN (SELECT a FROM v);
 
@@ -136,7 +136,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
-> CREATE MATERIALIZED VIEW source_data_mat_view AS
+> CREATE MATERIALIZED VIEW source_data_mat_view WITH (RETAIN HISTORY FOR '30s') AS
   SELECT * FROM source_data;
 
 ! UPDATE t SET i = i + 1 WHERE i IN (SELECT a FROM source_data_mat_view)

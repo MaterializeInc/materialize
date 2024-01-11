@@ -8,10 +8,10 @@
 # by the Apache License, Version 2.0.
 
 > CREATE SCHEMA prod_deploy
-> CREATE MATERIALIZED VIEW prod_deploy.counter_mv IN CLUSTER prod_deploy AS SELECT count(*), 'some new value' FROM counter
+> CREATE MATERIALIZED VIEW prod_deploy.counter_mv WITH (RETAIN HISTORY FOR '30s') IN CLUSTER prod_deploy AS SELECT count(*), 'some new value' FROM counter
 > CREATE DEFAULT INDEX IN CLUSTER prod_deploy ON counter
 > CREATE DEFAULT INDEX IN CLUSTER prod_deploy ON prod_deploy.counter_mv
-> CREATE MATERIALIZED VIEW prod_deploy.tpch_mv
+> CREATE MATERIALIZED VIEW prod_deploy.tpch_mv WITH (RETAIN HISTORY FOR '30s')
   IN CLUSTER prod_deploy AS
   SELECT
     l_returnflag,

@@ -83,7 +83,7 @@ data_view_primary_idx   data_view   <VARIABLE_OUTPUT>   {a,b}
 > SET CLUSTER TO quickstart
 
 # Materialized views do not have indexes automatically created
-> CREATE MATERIALIZED VIEW matv AS
+> CREATE MATERIALIZED VIEW matv WITH (RETAIN HISTORY FOR '30s') AS
   SELECT b, sum(a) FROM data GROUP BY b
 
 > SET CLUSTER TO mz_introspection

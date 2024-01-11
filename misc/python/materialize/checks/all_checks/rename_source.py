@@ -45,7 +45,7 @@ class RenameSource(Check):
                 $ kafka-ingest format=avro topic=rename-source schema=${rename-source-schema}
                 {"f1": "B"}
 
-                > CREATE MATERIALIZED VIEW rename_source_view AS SELECT DISTINCT f1 FROM rename_source1;
+                > CREATE MATERIALIZED VIEW rename_source_view WITH (RETAIN HISTORY FOR '30s') AS SELECT DISTINCT f1 FROM rename_source1;
 
                 $ kafka-ingest format=avro topic=rename-source schema=${rename-source-schema}
                 {"f1": "C"}

@@ -128,7 +128,7 @@ $ kafka-ingest format=avro topic=multi-topic-9 schema=${schema} repeat=${count}
   (TOPIC 'testdrive-multi-topic-9-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;
 
-> CREATE MATERIALIZED VIEW v1 AS
+> CREATE MATERIALIZED VIEW v1 WITH (RETAIN HISTORY FOR '30s') AS
   SELECT SUM(f1) AS f1 FROM
   (SELECT
     COUNT(*) AS f1 FROM s0

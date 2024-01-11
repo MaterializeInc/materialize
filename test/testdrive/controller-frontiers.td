@@ -31,7 +31,7 @@
 
 # Test that frontiers of materialized views are reported.
 
-> CREATE MATERIALIZED VIEW mv1 AS SELECT * FROM t1
+> CREATE MATERIALIZED VIEW mv1 WITH (RETAIN HISTORY FOR '30s') AS SELECT * FROM t1
 
 > SELECT
     mvs.name,
@@ -287,7 +287,7 @@ mv1  r3
 
 # Test that empty frontiers show up as NULL.
 
-> CREATE MATERIALIZED VIEW mv2 AS SELECT 1
+> CREATE MATERIALIZED VIEW mv2 WITH (RETAIN HISTORY FOR '30s') AS SELECT 1
 
 > SELECT
     replicas.name,

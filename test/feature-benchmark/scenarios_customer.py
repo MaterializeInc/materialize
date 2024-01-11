@@ -36,7 +36,7 @@ class CustomerWorkload1(Scenario):
                 f"""
                 > DROP MATERIALIZED VIEW IF EXISTS v1;
 
-                > CREATE MATERIALIZED VIEW v1 AS SELECT MAX(f1) FROM t1
+                > CREATE MATERIALIZED VIEW v1 WITH (RETAIN HISTORY FOR '30s') AS SELECT MAX(f1) FROM t1
                   /* A */;
 
                 > SELECT * FROM v1

@@ -114,7 +114,7 @@ $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink4-$
 > CREATE TABLE t (c1 point, c2 text NOT NULL, c3 custom_map, c4 point list);
 > INSERT INTO t SELECT ROW(1, 1)::point AS c1, 'text' AS c2, '{a=>true}'::custom_map as c3, LIST[ROW(1, 1)::point] as c4;
 
-> CREATE MATERIALIZED VIEW v AS SELECT * from t;
+> CREATE MATERIALIZED VIEW v WITH (RETAIN HISTORY FOR '30s') AS SELECT * from t;
 
 > CREATE SINK sink1
   IN CLUSTER ${arg.single-replica-cluster}

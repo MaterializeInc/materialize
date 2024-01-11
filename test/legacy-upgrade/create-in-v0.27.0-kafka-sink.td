@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> CREATE MATERIALIZED VIEW static_view (f1) AS VALUES (1),(2),(3);
+> CREATE MATERIALIZED VIEW static_view WITH (RETAIN HISTORY FOR '30s') (f1) AS VALUES (1),(2),(3);
 
 >[version>=7800] CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (
     BROKER '${testdrive.kafka-addr}',

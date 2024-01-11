@@ -119,7 +119,7 @@ class ParallelDataflows(Concurrency):
         create_views = "\n".join(
             [
                 f"""
-> CREATE MATERIALIZED VIEW v{v} AS
+> CREATE MATERIALIZED VIEW v WITH (RETAIN HISTORY FOR '30s'){v} AS
   SELECT COUNT(DISTINCT generate_series) + {v} - {v} AS f1
   FROM generate_series(1,{self.n()})
 """

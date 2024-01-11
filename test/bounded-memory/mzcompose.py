@@ -82,7 +82,7 @@ class PgCdcScenario(Scenario):
           FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
           FOR ALL TABLES;
 
-        > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
+        > CREATE MATERIALIZED VIEW v1 WITH (RETAIN HISTORY FOR '30s') AS SELECT COUNT(*) FROM t1;
         """
     )
 
@@ -130,7 +130,7 @@ class KafkaScenario(Scenario):
           FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
           ENVELOPE UPSERT;
 
-        > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM s1;
+        > CREATE MATERIALIZED VIEW v1 WITH (RETAIN HISTORY FOR '30s') AS SELECT COUNT(*) FROM s1;
         """
     )
 
@@ -320,7 +320,7 @@ SCENARIOS = [
             ALTER SYSTEM SET max_result_size = 2147483648;
 
             > CREATE TABLE t1 (f1 STRING, f2 STRING)
-            > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) FROM t1;
+            > CREATE MATERIALIZED VIEW v1 WITH (RETAIN HISTORY FOR '30s') AS SELECT COUNT(*) FROM t1;
             """
         )
         + "\n".join(
@@ -405,7 +405,7 @@ SCENARIOS = [
             > DROP TABLE IF EXISTS t CASCADE;
             > CREATE TABLE t (a int, b int, c int, d int);
 
-            > CREATE MATERIALIZED VIEW data AS
+            > CREATE MATERIALIZED VIEW data WITH (RETAIN HISTORY FOR '30s') AS
               SELECT a, a AS b FROM generate_series(1, 10000000) AS a
               UNION ALL
               SELECT a, b FROM t;

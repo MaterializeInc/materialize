@@ -23,7 +23,7 @@
 > CREATE TABLE t2 (b int)
 
 > CREATE VIEW v1 AS SELECT * FROM t1, t2
-> CREATE MATERIALIZED VIEW mv1 AS SELECT * FROM v1
+> CREATE MATERIALIZED VIEW mv1 WITH (RETAIN HISTORY FOR '30s') AS SELECT * FROM v1
 
 > SELECT object.name, import.name
   FROM mz_internal.mz_compute_dependencies dep
@@ -63,7 +63,7 @@ mv1             t2
 # Test that compute object without dependencies don't show up in
 # `mz_compute_dependencies`.
 
-> CREATE MATERIALIZED VIEW mv2 AS SELECT 1;
+> CREATE MATERIALIZED VIEW mv2 WITH (RETAIN HISTORY FOR '30s') AS SELECT 1;
 
 > SELECT * FROM mz_internal.mz_compute_dependencies WHERE object_id LIKE 'u%'
 
@@ -76,7 +76,7 @@ true
 
 > CREATE CLUSTER cleanup SIZE '1'
 > CREATE INDEX idx_cleanup IN CLUSTER cleanup ON t1 (a)
-> CREATE MATERIALIZED VIEW mv_cleanup IN CLUSTER cleanup AS SELECT * FROM t2
+> CREATE MATERIALIZED VIEW mv_cleanup WITH (RETAIN HISTORY FOR '30s') IN CLUSTER cleanup AS SELECT * FROM t2
 
 > SELECT object.name, import.name
   FROM mz_internal.mz_compute_dependencies dep

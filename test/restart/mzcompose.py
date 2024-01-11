@@ -70,7 +70,7 @@ def workflow_retain_history(c: Composition) -> None:
     c.sql("CREATE TABLE retain_t (i INT)")
     c.sql("INSERT INTO retain_t VALUES (1)")
     c.sql(
-        "CREATE MATERIALIZED VIEW retain_mv WITH (RETAIN HISTORY FOR '30s', RETAIN HISTORY = FOR '2s') AS SELECT * FROM retain_t"
+        "CREATE MATERIALIZED VIEW retain_mv WITH (RETAIN HISTORY = FOR '2s') AS SELECT * FROM retain_t"
     )
     c.sql(
         "CREATE SOURCE retain_s FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY = FOR '5s')"

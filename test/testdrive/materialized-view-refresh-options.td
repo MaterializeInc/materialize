@@ -19,7 +19,7 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 
 # This refresh interval needs to be not too small and not too big. See the constraints in comments below.
 > CREATE MATERIALIZED VIEW mv1
-  WITH (REFRESH EVERY '8sec')
+  WITH (REFRESH EVERY '8sec', RETAIN HISTORY FOR '30s')
   AS SELECT x+x as x2 FROM t1;
 
 > INSERT INTO t1 VALUES (3);
@@ -48,7 +48,7 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 # Check that I can query it together with other objects, even between refreshes, and that data added later than the last
 # refresh in other objects is reflected in the result.
 > CREATE MATERIALIZED VIEW mv2
-  WITH (REFRESH = EVERY '10000sec')
+  WITH (REFRESH = EVERY '10000sec', RETAIN HISTORY FOR '30s')
   AS SELECT x+x as x2 FROM t1;
 
 > CREATE TABLE t2(y int);
@@ -72,7 +72,7 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 
 # Check that there is an implicit refresh immediately at the creation of the MV, even if it's REFRESH EVERY.
 > CREATE MATERIALIZED VIEW mv3
-  WITH (REFRESH EVERY '10000sec')
+  WITH (REFRESH EVERY '10000sec', RETAIN HISTORY FOR '30s')
   AS SELECT y+y as y2 FROM t2;
 
 > SELECT * FROM mv3;
@@ -85,7 +85,7 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 # Also tests that planning uses `cast_to` with `CastContext::Implicit` (instead of `type_as`) when planning the
 # REFRESH AT.
 > CREATE MATERIALIZED VIEW mv4
-  WITH (REFRESH AT mz_now()::string::int8 + 2000)
+  WITH (REFRESH AT mz_now()::string::int8 + 2000, RETAIN HISTORY FOR '30s')
   AS SELECT y*y as y2 FROM t2;
 
 > SELECT * FROM mv4;
@@ -96,7 +96,7 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 > CREATE CLUSTER refresh_cluster SIZE = '1', REPLICATION FACTOR = 1;
 > SET cluster = refresh_cluster;
 > CREATE MATERIALIZED VIEW mv5
-  WITH (REFRESH EVERY '8 sec' ALIGNED TO mz_now()::text::int8 + 5000)
+  WITH (REFRESH EVERY '8 sec' ALIGNED TO mz_now()::text::int8 + 5000, RETAIN HISTORY FOR '30s')
   AS SELECT 3*y as y2 FROM t2;
 > SET cluster = default;
 

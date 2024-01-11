@@ -39,7 +39,7 @@ $ kafka-create-topic topic=data
 
 > SELECT * FROM data_view
 
-> CREATE MATERIALIZED VIEW test1 AS
+> CREATE MATERIALIZED VIEW test1 WITH (RETAIN HISTORY FOR '30s') AS
   SELECT b, sum(a) FROM data GROUP BY b
 
 > SHOW VIEWS
@@ -83,7 +83,7 @@ name                      create_sql
 materialize.public.test1  "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"test1\" IN CLUSTER \"quickstart\" WITH (REFRESH = ON COMMIT) AS SELECT \"b\", \"pg_catalog\".\"sum\"(\"a\") FROM \"materialize\".\"public\".\"data\" GROUP BY \"b\""
 
 # Materialized view can be built on a not-materialized view.
-> CREATE MATERIALIZED VIEW test2 AS
+> CREATE MATERIALIZED VIEW test2 WITH (RETAIN HISTORY FOR '30s') AS
   SELECT b, 1 + sum(a + 1) FROM data_view GROUP BY b
 
 > SELECT * FROM test2
@@ -112,7 +112,7 @@ b  min
 1  1
 2  1
 
-> CREATE MATERIALIZED VIEW test4 AS
+> CREATE MATERIALIZED VIEW test4 WITH (RETAIN HISTORY FOR '30s') AS
   SELECT b, max(a) FROM data_view GROUP BY b
 
 > SELECT * FROM test4
@@ -216,7 +216,7 @@ b  c
 
 # Test that materialized views can be even if it requires multiple layers of
 # recursing through the AST to find a source.
-> CREATE MATERIALIZED VIEW test6 AS SELECT (-c + 2*b) AS d FROM test5
+> CREATE MATERIALIZED VIEW test6 WITH (RETAIN HISTORY FOR '30s') AS SELECT (-c + 2*b) AS d FROM test5
 
 > SELECT * from test6
 d
@@ -364,7 +364,7 @@ mat_data_progress progress  <null>                        <null>
 
 # Can create both materialized and unmaterialized views from materialized
 # source.
-> CREATE MATERIALIZED VIEW test7 as SELECT count(*) from mat_data
+> CREATE MATERIALIZED VIEW test7 WITH (RETAIN HISTORY FOR '30s') as SELECT count(*) from mat_data
 
 > SELECT * from test7
 count

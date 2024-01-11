@@ -34,9 +34,9 @@ $ kafka-ingest format=avro topic=data schema=${schema}
 {"X": 3, "Y": 1}
 {"X": 1, "Y": 2}
 
-> CREATE MATERIALIZED VIEW v AS SELECT 42 AS a
+> CREATE MATERIALIZED VIEW v WITH (RETAIN HISTORY FOR '30s') AS SELECT 42 AS a
 
-> CREATE MATERIALIZED VIEW v2 AS SELECT 0 AS x
+> CREATE MATERIALIZED VIEW v2 WITH (RETAIN HISTORY FOR '30s') AS SELECT 0 AS x
 
 > CREATE INDEX i ON v(a)
 
@@ -44,7 +44,7 @@ $ kafka-ingest format=avro topic=data schema=${schema}
 
 # Test that creating objects of the same name does not work
 
-! CREATE MATERIALIZED VIEW i AS SELECT 1.5 AS c
+! CREATE MATERIALIZED VIEW i WITH (RETAIN HISTORY FOR '30s') AS SELECT 1.5 AS c
 contains:index "materialize.public.i" already exists
 
 ! CREATE INDEX i ON s("Y")
@@ -98,7 +98,7 @@ contains:index "materialize.public.i" already exists
 ! CREATE INDEX s ON v2(x)
 contains:source "materialize.public.s" already exists
 
-! CREATE MATERIALIZED VIEW s AS SELECT 'bloop' AS d
+! CREATE MATERIALIZED VIEW s WITH (RETAIN HISTORY FOR '30s') AS SELECT 'bloop' AS d
 contains:source "materialize.public.s" already exists
 
 # Test that objects do not get dropped if the drop command does not specify the correct type
@@ -149,7 +149,7 @@ exact:"materialize.public.s" is a source not a view
 > DROP SOURCE s
 
 # test that the names of the deleted objects can be used to create objects of other types
-> CREATE MATERIALIZED VIEW s AS SELECT 84 AS b
+> CREATE MATERIALIZED VIEW s WITH (RETAIN HISTORY FOR '30s') AS SELECT 84 AS b
 
 > CREATE SOURCE i
   IN CLUSTER ${arg.single-replica-cluster}

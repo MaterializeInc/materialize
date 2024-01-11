@@ -15,13 +15,13 @@
 
 > CREATE TABLE special_functions (f1 BIGINT);
 
-> CREATE MATERIALIZED VIEW special_functions_view AS SELECT * FROM special_functions where mz_now() > f1;
+> CREATE MATERIALIZED VIEW special_functions_view WITH (RETAIN HISTORY FOR '30s') AS SELECT * FROM special_functions where mz_now() > f1;
 
 # Do not allow NOW / CURRENT_TIMESTAMP to be persisted at all
 # if they ever are allowed, add an upgrade test for them
 
-! CREATE MATERIALIZED VIEW foo AS SELECT NOW();
+! CREATE MATERIALIZED VIEW foo WITH (RETAIN HISTORY FOR '30s') AS SELECT NOW();
 regex:(cannot be used in static queries|cannot materialize call to current_timestamp)
 
-! CREATE MATERIALIZED VIEW bar AS SELECT CURRENT_TIMESTAMP();
+! CREATE MATERIALIZED VIEW bar WITH (RETAIN HISTORY FOR '30s') AS SELECT CURRENT_TIMESTAMP();
 regex:(cannot be used in static queries|cannot materialize call to current_timestamp)

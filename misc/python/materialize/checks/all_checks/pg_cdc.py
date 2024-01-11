@@ -265,7 +265,7 @@ class PgCdcMzNow(Check):
                   FOR TABLES (postgres_mz_now_table);
 
                 # Return all rows fresher than 60 seconds
-                > CREATE MATERIALIZED VIEW postgres_mz_now_view AS
+                > CREATE MATERIALIZED VIEW postgres_mz_now_view WITH (RETAIN HISTORY FOR '30s') AS
                   SELECT * FROM postgres_mz_now_table
                   WHERE mz_now() <= ROUND(EXTRACT(epoch FROM f1 + INTERVAL '60' SECOND) * 1000)
                 """

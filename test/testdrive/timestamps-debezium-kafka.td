@@ -112,11 +112,11 @@ $ kafka-ingest format=avro topic=bar schema=${schema}
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
   WITH (TIMELINE '${testdrive.seed}-timestamps-debezium-kafka')
 
-> CREATE MATERIALIZED VIEW foo AS SELECT b, sum(a) FROM data_foo GROUP BY b
+> CREATE MATERIALIZED VIEW foo WITH (RETAIN HISTORY FOR '30s') AS SELECT b, sum(a) FROM data_foo GROUP BY b
 
-> CREATE MATERIALIZED VIEW bar AS SELECT b, sum(a) FROM data_bar GROUP BY b
+> CREATE MATERIALIZED VIEW bar WITH (RETAIN HISTORY FOR '30s') AS SELECT b, sum(a) FROM data_bar GROUP BY b
 
-> CREATE MATERIALIZED VIEW join (b, foo_sum, bar_sum) AS SELECT * FROM foo JOIN bar USING (b);
+> CREATE MATERIALIZED VIEW join WITH (RETAIN HISTORY FOR '30s') (b, foo_sum, bar_sum) AS SELECT * FROM foo JOIN bar USING (b);
 
 # Verify that we don't see any data yet. We can't use `set-sql-timeout` here
 # because the SELECT is blocked in the coordinator. For the same reason we

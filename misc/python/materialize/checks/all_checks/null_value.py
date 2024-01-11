@@ -38,7 +38,7 @@ class NullValue(Check):
                 > INSERT INTO null_value_table SELECT * FROM null_value_table;
                 """,
                 """
-                > CREATE MATERIALIZED VIEW null_value_view2 AS
+                > CREATE MATERIALIZED VIEW null_value_view2 WITH (RETAIN HISTORY FOR '30s') AS
                   SELECT f1, f2, NULL
                   FROM null_value_table
                   WHERE f1 IS NULL OR f1 IS NOT NULL OR f1 = NULL;

@@ -16,7 +16,7 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE TABLE t (a text, b text)
-> CREATE MATERIALIZED VIEW simple_view AS SELECT * from t;
+> CREATE MATERIALIZED VIEW simple_view WITH (RETAIN HISTORY FOR '30s') AS SELECT * from t;
 > INSERT INTO t VALUES ('key1', 'value')
 
 # Setup various sinks and sources

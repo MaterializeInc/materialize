@@ -181,10 +181,10 @@ def populate(c: Composition) -> None:
             > INSERT INTO t1 SELECT * FROM generate_series(1, 10);
             > CREATE VIEW ct1 AS SELECT COUNT(*) AS c1 FROM t1;
             > CREATE DEFAULT INDEX ON ct1;
-            > CREATE MATERIALIZED VIEW v1 AS SELECT COUNT(*) AS c1 FROM t1;
+            > CREATE MATERIALIZED VIEW v1 WITH (RETAIN HISTORY FOR '30s') AS SELECT COUNT(*) AS c1 FROM t1;
             > CREATE TABLE ten (f1 INTEGER);
             > INSERT INTO ten SELECT * FROM generate_series(1, 10);
-            > CREATE MATERIALIZED VIEW expensive AS SELECT (a1.f1 * 1) +
+            > CREATE MATERIALIZED VIEW expensive WITH (RETAIN HISTORY FOR '30s') AS SELECT (a1.f1 * 1) +
               (a2.f1 * 10) +
               (a3.f1 * 100) +
               (a4.f1 * 1000) +
@@ -202,7 +202,7 @@ def populate(c: Composition) -> None:
               IN CLUSTER c
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-source1-${testdrive.seed}')
               FORMAT BYTES
-            > CREATE MATERIALIZED VIEW v2 AS SELECT COUNT(*) FROM source1
+            > CREATE MATERIALIZED VIEW v2 WITH (RETAIN HISTORY FOR '30s') AS SELECT COUNT(*) FROM source1
             """
         ),
     )
@@ -284,7 +284,7 @@ def validate(c: Composition) -> None:
             11
 
             # New materialized views
-            > CREATE MATERIALIZED VIEW v3 AS SELECT COUNT(*) AS c1 FROM t1;
+            > CREATE MATERIALIZED VIEW v3 WITH (RETAIN HISTORY FOR '30s') AS SELECT COUNT(*) AS c1 FROM t1;
             > SELECT * FROM v3;
             11
 

@@ -13,7 +13,7 @@
 
 > CREATE SOURCE generator1 IN CLUSTER canary_load_generator FROM LOAD GENERATOR COUNTER;
 
-> CREATE MATERIALIZED VIEW generator_view1 AS SELECT COUNT(*) AS cnt FROM generator1;
+> CREATE MATERIALIZED VIEW generator_view1 WITH (RETAIN HISTORY FOR '30s') AS SELECT COUNT(*) AS cnt FROM generator1;
 
 > CREATE DEFAULT INDEX ON generator_view1;
 
