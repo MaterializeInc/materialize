@@ -49,7 +49,7 @@ ALTER SYSTEM SET enable_sink_doc_on_option = true;
   )
   ENVELOPE UPSERT;
 
-$ set-regex match=quickstart|testdrive_single_replica_cluster replacement=<VARIABLE_OUTPUT>
+$ set-regex match=default|testdrive_single_replica_cluster replacement=<VARIABLE_OUTPUT>
 > SHOW CREATE SINK sink1;
 name                            create_sql
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -275,7 +275,7 @@ contains: DOC ON option for sinks is not supported
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
 
-$ set-regex match=quickstart|testdrive_single_replica_cluster replacement=<VARIABLE_OUTPUT>
+$ set-regex match=default|testdrive_single_replica_cluster replacement=<VARIABLE_OUTPUT>
 > SHOW CREATE SINK doc_on_disabled;
 name                            create_sql
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

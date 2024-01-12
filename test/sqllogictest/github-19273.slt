@@ -14,7 +14,8 @@
 statement ok
 CREATE SOURCE tpch
               FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.00001)
-              FOR ALL TABLES;
+              FOR ALL TABLES
+              WITH (SIZE = '1');
 
 statement ok
 select

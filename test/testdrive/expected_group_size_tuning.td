@@ -11,8 +11,7 @@
 > SET cluster_replica = r1
 
 # Start from a TPC-H load generator source with small data.
-> CREATE CLUSTER lgtpch_cluster_tuning SIZE '1';
-> CREATE SOURCE lgtpch IN CLUSTER lgtpch_cluster_tuning FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.0001, TICK INTERVAL 0.1) FOR ALL TABLES;
+> CREATE SOURCE lgtpch FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.0001, TICK INTERVAL 0.1) FOR ALL TABLES WITH (SIZE = '1');
 
 # Create a set of materialized views for testing based on the TPC-H schema.
 > CREATE MATERIALIZED VIEW lineitem_by_orderkey AS

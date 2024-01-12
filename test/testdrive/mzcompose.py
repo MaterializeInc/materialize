@@ -135,7 +135,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
             single_replica_cluster = "testdrive_single_replica_cluster"
         else:
-            single_replica_cluster = "quickstart"
+            single_replica_cluster = "default"
 
         junit_report = ci_util.junit_report_filename(c.name)
 

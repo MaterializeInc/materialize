@@ -406,8 +406,8 @@ true true true true true true true
 # Test mz_dataflow_arrangement_sizes with hierarchical reductions and top-k over
 # monotonic inputs. The latter is when there is a possibility for memory misestimation
 # since we include monoids in the diff field.
-> CREATE CLUSTER counter_cluster SIZE = '1';
-> CREATE SOURCE counter IN CLUSTER counter_cluster FROM LOAD GENERATOR COUNTER (TICK INTERVAL '2ms');
+
+> CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (TICK INTERVAL '2ms') WITH (SIZE = '1');
 
 > CREATE MATERIALIZED VIEW input AS
   SELECT counter % 1000 + 1 AS f1, counter % 10 + 1 AS f2

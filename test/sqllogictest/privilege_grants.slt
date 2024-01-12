@@ -155,7 +155,7 @@ SELECT name, privilege FROM item_privileges WHERE name = 'mv'
 mv  materialize=r/materialize
 
 statement ok
-CREATE SOURCE s FROM LOAD GENERATOR COUNTER;
+CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
 
 query TT
 SELECT name, privilege FROM item_privileges WHERE name = 's'
@@ -4650,7 +4650,7 @@ statement ok
 GRANT r2 TO r1
 
 statement ok
-CREATE SOURCE s FROM LOAD GENERATOR COUNTER;
+CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
 
 statement ok
 GRANT SELECT ON s TO r2

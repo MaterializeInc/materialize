@@ -41,7 +41,7 @@ contains:failed to lookup address information
 ! CREATE SOURCE bad_definition1
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'any_topic')
-  FORMAT BYTES FOR ALL TABLES;
+  FORMAT BYTES FOR ALL TABLES WITH (SIZE = '1');
 contains: FOR ALL TABLES is only valid for multi-output sources
 
 # Check that for tables() clause is rejected

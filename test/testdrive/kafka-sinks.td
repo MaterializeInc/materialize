@@ -230,6 +230,19 @@ $ kafka-verify-data format=avro sink=materialize.public.snk8 sort-messages=true
 {"before": null, "after": {"row":{"column1": 2}}}
 {"before": null, "after": {"row":{"column1": 3}}}
 
+> SHOW SINKS
+name               type   size  cluster
+---------------------------------------
+snk1             kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
+snk2             kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
+snk3             kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
+snk4             kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
+snk5             kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
+snk6             kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
+snk7             kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
+snk8             kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
+snk_unsigned     kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
+
 # test already existing topic with non-default partition count
 $ kafka-create-topic topic=snk9 partitions=4
 
@@ -240,61 +253,43 @@ $ kafka-create-topic topic=snk9 partitions=4
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> SET cluster TO ${arg.single-replica-cluster}
-
-# create sink without specifying CLUSTER
-> CREATE SINK default_cluster_sink
+# create sink with SIZE set
+> CREATE SINK sink_with_size
   FROM src
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
-
-> SET cluster TO default
-
-# create sink with vestigial size specified
-! CREATE SINK sink_with_size FROM src
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
   WITH (SIZE = '2')
-contains:specifying sink SIZE deprecated; use IN CLUSTER
 
-# create sink with SNAPSHOT set
+# create sink with SIZE and SNAPSHOT set
 > CREATE SINK sink_with_options
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM src
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-  WITH (SNAPSHOT = false)
+  WITH (SIZE = '2', SNAPSHOT = false)
 
-> CREATE CLUSTER c SIZE '4'
+# Check that the size is properly filled in the `mz_sinks` table
+> SELECT size FROM mz_sinks WHERE name = 'sink_with_size'
+2
 
-> CREATE SINK cluster_c_sink
-  IN CLUSTER c
-  FROM src
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
-
-# All sinks are unlinked
-> SELECT bool_and(size IS NULL) FROM mz_sinks;
-true
+# Unlinked sinks have null size
+> SELECT size FROM mz_sinks WHERE name = 'snk9'
+<null>
 
 # Check that SHOW SINKS shows the size correctly
 > SHOW SINKS
 name               type   size  cluster
 ---------------------------------------
-cluster_c_sink        kafka  4                            c
-default_cluster_sink  kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
-sink_with_options     kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
-snk1                  kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
-snk2                  kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
-snk3                  kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
-snk4                  kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
-snk5                  kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
-snk6                  kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
-snk7                  kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
-snk8                  kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
-snk9                  kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
-snk_unsigned          kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
+snk1               kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
+snk2               kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
+snk3               kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
+snk4               kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
+snk5               kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
+snk6               kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
+snk7               kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
+snk8               kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
+snk9               kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}
+sink_with_size     kafka  2                            materialize_public_sink_with_size
+sink_with_options  kafka  2                            materialize_public_sink_with_options
+snk_unsigned       kafka  ${arg.default-replica-size}  ${arg.single-replica-cluster}

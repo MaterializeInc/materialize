@@ -39,7 +39,6 @@ $ kafka-ingest format=avro topic=kafka-parallel-ingestion key-format=avro key-sc
             [
                 f"""
 > DROP SOURCE IF EXISTS s{s}
-> DROP CLUSTER IF EXISTS s{s}_cluster
 """
                 for s in sources
             ]
@@ -55,10 +54,7 @@ $ kafka-ingest format=avro topic=kafka-parallel-ingestion key-format=avro key-sc
 >[version<7800]  CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
 >[version>=7800] CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE CLUSTER s{s}_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
-
 > CREATE SOURCE s{s}
-  IN CLUSTER s{s}_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-parallel-ingestion-${{testdrive.seed}}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 """

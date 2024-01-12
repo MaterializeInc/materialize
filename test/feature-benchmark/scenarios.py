@@ -899,15 +899,11 @@ $ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat={self.n()}
         return Td(
             f"""
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
-> DROP CLUSTER IF EXISTS source_cluster CASCADE
 
 >[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
 >[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
-
 > CREATE SOURCE s1
-  IN CLUSTER source_cluster
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-envelope-none-bytes-${{testdrive.seed}}')
   FORMAT BYTES
   ENVELOPE NONE
@@ -938,22 +934,18 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
 
     def benchmark(self) -> MeasurementSource:
         return Td(
-            f"""
+            """
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
-> DROP CLUSTER IF EXISTS source_cluster CASCADE
 
->[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
->[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
+>[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}');
+>[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
-    URL '${{testdrive.schema-registry-url}}'
+    URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
-
 > CREATE SOURCE s1
-  IN CLUSTER source_cluster
-  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-upsert-${{testdrive.seed}}')
+  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-upsert-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
   /* A */
@@ -1032,7 +1024,6 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
             f"""
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 > DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
-> DROP CLUSTER IF EXISTS source_cluster CASCADE
 
 >[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
 >[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
@@ -1040,10 +1031,7 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
   TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
-
 > CREATE SOURCE s1
-  IN CLUSTER source_cluster
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-recovery-${{testdrive.seed}}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE UPSERT;
@@ -1114,16 +1102,12 @@ class KafkaRestartBig(ScenarioBig):
 
     def init(self) -> Action:
         return TdAction(
-            f"""
+            """
 >[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
 >[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
-> DROP CLUSTER IF EXISTS source_cluster CASCADE
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
-
 > CREATE SOURCE s1
-  IN CLUSTER source_cluster
-  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-recovery-big-${{testdrive.seed}}')
+  FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-recovery-big-${testdrive.seed}')
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
   ENVELOPE UPSERT;
@@ -1180,15 +1164,11 @@ $ kafka-create-topic topic=kafka-scalability partitions=8
         return Td(
             f"""
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
-> DROP CLUSTER IF EXISTS source_cluster CASCADE
 
 >[version<7800]  CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
 >[version>=7800] CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
-
 > CREATE SOURCE s1
-  IN CLUSTER source_cluster
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-kafka-scalability-${{testdrive.seed}}')
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
@@ -1232,16 +1212,11 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
 >[version<7800]  CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
 >[version>=7800] CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
-> DROP CLUSTER IF EXISTS source_cluster CASCADE
-
 > CREATE CONNECTION IF NOT EXISTS csr_conn
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${{testdrive.schema-registry-url}}';
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
-
 > CREATE SOURCE source1
-  IN CLUSTER source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-input-${{testdrive.seed}}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
@@ -1253,18 +1228,13 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
 
     def benchmark(self) -> MeasurementSource:
         return Td(
-            f"""
+            """
 > DROP SINK IF EXISTS sink1;
 > DROP SOURCE IF EXISTS sink1_check CASCADE;
   /* A */
 
-> DROP CLUSTER IF EXISTS sink_cluster CASCADE
-> CREATE CLUSTER sink_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
-
-> CREATE SINK sink1
-  IN CLUSTER sink_cluster
-  FROM source1
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${{testdrive.seed}}')
+> CREATE SINK sink1 FROM source1
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${testdrive.seed}')
   KEY (f1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -1273,11 +1243,8 @@ $ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true await
 
 # Wait until all the records have been emited from the sink, as observed by the sink1_check source
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
-
 > CREATE SOURCE sink1_check
-  IN CLUSTER source_cluster
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${{testdrive.seed}}')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${testdrive.seed}')
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
@@ -1320,7 +1287,6 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
         return TdAction(
             """
 > DROP SOURCE IF EXISTS mz_source_pgcdc;
-> DROP CLUSTER IF EXISTS source_cluster CASCADE
             """
         )
 
@@ -1336,10 +1302,7 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
     PASSWORD SECRET pgpass
   )
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
-
 > CREATE SOURCE mz_source_pgcdc
-  IN CLUSTER source_cluster
   FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source')
   FOR TABLES ("pk_table")
   /* A */
@@ -1371,9 +1334,8 @@ CREATE PUBLICATION p1 FOR ALL TABLES;
 
     def before(self) -> Action:
         return TdAction(
-            f"""
+            """
 > DROP SOURCE IF EXISTS s1;
-> DROP CLUSTER IF EXISTS source_cluster CASCADE;
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP TABLE IF EXISTS t1;
@@ -1389,10 +1351,7 @@ ALTER TABLE t1 REPLICA IDENTITY FULL;
     PASSWORD SECRET pgpass
   )
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
-
 > CREATE SOURCE s1
-  IN CLUSTER source_cluster
   FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'p1')
   FOR TABLES ("t1")
             """
@@ -1527,11 +1486,7 @@ $ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
         )
         create_sources = "\n".join(
             f"""
-> DROP CLUSTER IF EXISTS source{i}_cluster CASCADE;
-> CREATE CLUSTER source{i}_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
-
 > CREATE SOURCE source{i}
-  IN CLUSTER source{i}_cluster
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-startup-time-${{testdrive.seed}}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE NONE
@@ -1549,11 +1504,7 @@ $ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
 
         create_sinks = "\n".join(
             f"""
-> DROP CLUSTER IF EXISTS sink{i}_cluster;
-> CREATE CLUSTER sink{i}_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
-> CREATE SINK sink{i}
-  IN CLUSTER sink{i}_cluster
-  FROM source{i}
+> CREATE SINK sink{i} FROM source{i}
   INTO KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-sink-output-${{testdrive.seed}}')
   KEY (f2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
@@ -1571,9 +1522,6 @@ ALTER SYSTEM SET max_materialized_views = {self.n() * 2};
 ALTER SYSTEM SET max_sources = {self.n() * 2};
 ALTER SYSTEM SET max_sinks = {self.n() * 2};
 ALTER SYSTEM SET max_tables = {self.n() * 2};
-ALTER SYSTEM SET max_clusters = {self.n() * 6};
-
-> DROP OWNED BY materialize CASCADE;
 
 >[version<7800]  CREATE CONNECTION IF NOT EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
 >[version>=7800] CREATE CONNECTION IF NOT EXISTS s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);

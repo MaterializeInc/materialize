@@ -115,13 +115,9 @@ class SubscribeParallelKafka(SubscribeParallel):
              >[version<7800]  CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}');
              >[version>=7800] CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
-             > DROP CLUSTER IF EXISTS source_cluster CASCADE;
-             > CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
-
              > DROP SOURCE IF EXISTS s1;
 
              > CREATE SOURCE s1
-               IN CLUSTER source_cluster
                FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-subscribe-kafka-{self._unique_topic_id}-${{testdrive.seed}}')
                FORMAT BYTES ENVELOPE NONE;
 

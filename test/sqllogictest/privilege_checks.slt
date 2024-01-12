@@ -290,12 +290,12 @@ COMPLETE 0
 # CREATE SOURCE
 
 simple conn=joe,user=joe
-CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER;
+CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 
 simple conn=child,user=child
-CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER;
+CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 
@@ -305,17 +305,27 @@ GRANT CREATE ON SCHEMA materialize.public TO joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER;
+CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
 ----
-db error: ERROR: permission denied for CLUSTER "quickstart"
+db error: ERROR: permission denied for SYSTEM
+
+simple conn=child,user=child
+CREATE SOURCE s3 FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+db error: ERROR: permission denied for SYSTEM
 
 simple conn=mz_system,user=mz_system
-GRANT CREATE ON CLUSTER quickstart TO joe;
+GRANT CREATECLUSTER ON SYSTEM TO joe;
 ----
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER;
+CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+simple conn=child,user=child
+CREATE SOURCE s3 FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
 ----
 COMPLETE 0
 
@@ -482,7 +492,7 @@ COMPLETE 0
 # mz_support reading from progress source
 
 simple conn=mz_system,user=mz_system
-CREATE SOURCE s IN CLUSTER quickstart FROM LOAD GENERATOR COUNTER;
+CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
 ----
 COMPLETE 0
 
@@ -786,11 +796,6 @@ GRANT CREATE ON SCHEMA materialize.public TO joe;
 ----
 COMPLETE 0
 
-simple conn=mz_system,user=mz_system
-REVOKE CREATE ON CLUSTER quickstart FROM joe;
-----
-COMPLETE 0
-
 simple conn=joe,user=joe
 CREATE MATERIALIZED VIEW mv AS SELECT ROW(1)::ty;
 ----
@@ -1062,6 +1067,11 @@ DROP SOURCE s1;
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 
+simple conn=child,user=child
+DROP SOURCE s3;
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+
 simple conn=joe,user=joe
 DROP SOURCE s2;
 ----
@@ -1079,6 +1089,11 @@ COMPLETE 0
 
 simple conn=joe,user=joe
 DROP SOURCE s1
+----
+COMPLETE 0
+
+simple conn=child,user=child
+DROP SOURCE s3
 ----
 COMPLETE 0
 
@@ -2849,6 +2864,63 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 DROP TABLE t;
+----
+COMPLETE 0
+
+# ALTER
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON SCHEMA materialize.public TO joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATECLUSTER ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+CREATE SOURCE s FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+simple conn=child,user=child
+CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER WITH (SIZE '1');
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATE ON SCHEMA materialize.public FROM joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATECLUSTER ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER SOURCE s SET (SIZE = '4');
+----
+COMPLETE 0
+
+simple conn=child,user=child
+ALTER SOURCE s1 SET (SIZE = '4');
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP SOURCE s;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP SOURCE s1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 

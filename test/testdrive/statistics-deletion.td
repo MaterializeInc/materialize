@@ -20,14 +20,13 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
 > INSERT INTO t VALUES ('key1', 'value')
 
 # Setup various sinks and sources
-> CREATE CLUSTER sink_size_cluster SIZE '2';
 > CREATE SINK sink_size
-  IN CLUSTER sink_size_cluster
   FROM simple_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'topic-${testdrive.seed}')
   KEY (a)
   FORMAT JSON
   ENVELOPE DEBEZIUM
+  WITH (SIZE = '2')
 
 > CREATE SINK sink_cluster
   IN CLUSTER cluster1
@@ -41,15 +40,14 @@ $ kafka-create-topic topic=upsert partitions=1
 $ kafka-ingest format=bytes topic=upsert key-format=bytes key-terminator=:
 one:two
 
-> CREATE CLUSTER upsert_size_cluster SIZE '2';
 > CREATE SOURCE upsert_size
-  IN CLUSTER upsert_size_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-upsert-${testdrive.seed}'
   )
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
+  WITH (SIZE = '2')
 
 > CREATE SOURCE upsert_cluster
   IN CLUSTER cluster1
@@ -62,8 +60,7 @@ one:two
 
 > CREATE SCHEMA subsources_size;
 > CREATE SCHEMA subsources_cluster;
-> CREATE CLUSTER subsource_size_s_cluster SIZE '2';
-> CREATE SOURCE subsources_size.s IN CLUSTER subsource_size_s_cluster FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
+> CREATE SOURCE subsources_size.s FROM LOAD GENERATOR AUCTION FOR ALL TABLES WITH (SIZE = '2');
 > CREATE SOURCE subsources_cluster.s IN CLUSTER cluster1 FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 # NOTE: These queries are slow to succeed because the default metrics scraping
