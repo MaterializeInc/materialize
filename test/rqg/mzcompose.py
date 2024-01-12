@@ -111,6 +111,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Run the Workload for the specifid time in seconds",
     )
     parser.add_argument(
+        "--threads",
+        type=int,
+        help="Run the Workload with the specified number of concurrent threads",
+    )
+    parser.add_argument(
         "--debug", action="store_true", help="Run the RQG With RQG_DEBUG=1"
     )
     parser.add_argument(
@@ -191,11 +196,9 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
         else []
     )
 
-    duration = args.duration if args.duration is not None else workload.duration
-    assert duration is not None
-
-    grammar = args.grammar if args.grammar is not None else workload.grammar
-    assert grammar is not None
+    duration = args.duration or workload.duration
+    grammar = args.grammar or workload.grammar
+    threads = args.threads or workload.threads
 
     env_extra = {"RQG_DEBUG": "1"} if args.debug else {}
 
@@ -222,8 +225,8 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
                     f"--starting-rule={args.starting_rule}"
                     if args.starting_rule is not None
                     else "",
-                    "--queries=10000000",
-                    f"--threads={workload.threads}",
+                    "--queries=100000000",
+                    f"--threads={threads}",
                     f"--duration={duration}",
                     f"--seed={args.seed}",
                     env_extra=env_extra,
