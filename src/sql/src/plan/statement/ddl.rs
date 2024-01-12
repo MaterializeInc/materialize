@@ -36,7 +36,7 @@ use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
     AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
     AlterConnectionOptionName, AlterRoleOption, AlterRoleStatement, AlterSetClusterStatement,
-    AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
+    AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
     AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, CommentObjectType, CommentStatement,
     CreateConnectionOption, CreateConnectionOptionName, CreateConnectionType, CreateTypeListOption,
@@ -117,7 +117,7 @@ use crate::plan::{
     AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan,
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan,
     AlterOptionParameter, AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan,
-    AlterSecretPlan, AlterSetClusterPlan, AlterSourcePlan, AlterSystemResetAllPlan,
+    AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
     AlterSystemResetPlan, AlterSystemSetPlan, CommentPlan, CompactionWindow, ComputeReplicaConfig,
     ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
     CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
@@ -5173,14 +5173,21 @@ pub fn plan_alter_sink(
     let AlterSinkStatement {
         sink_name,
         if_exists,
-        action: _,
+        action,
     } = stmt;
 
     let sink_name = normalize::unresolved_item_name(sink_name)?;
     let entry = match scx.catalog.resolve_item(&sink_name) {
         Ok(sink) => sink,
         Err(_) if if_exists => {
-            bail_unsupported!("ALTER SINK");
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: sink_name.to_string(),
+                object_type: ObjectType::Sink,
+            });
+
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Sink,
+            }));
         }
         Err(e) => return Err(e.into()),
     };
@@ -5191,8 +5198,39 @@ pub fn plan_alter_sink(
             entry.item_type()
         )
     }
+    let id = entry.id();
 
-    bail_unsupported!("ALTER SINK");
+    let mut size = AlterOptionParameter::Unchanged;
+    match action {
+        AlterSinkAction::SetOptions(options) => {
+            let CreateSinkOptionExtracted {
+                size: size_opt,
+                snapshot,
+                seen: _,
+            } = options.try_into()?;
+
+            if let Some(value) = size_opt {
+                size = AlterOptionParameter::Set(value);
+            }
+            if let Some(_) = snapshot {
+                sql_bail!("Cannot modify the SNAPSHOT of a SINK.");
+            }
+        }
+        AlterSinkAction::ResetOptions(reset) => {
+            for name in reset {
+                match name {
+                    CreateSinkOptionName::Size => {
+                        size = AlterOptionParameter::Reset;
+                    }
+                    CreateSinkOptionName::Snapshot => {
+                        sql_bail!("Cannot modify the SNAPSHOT of a SINK.");
+                    }
+                }
+            }
+        }
+    };
+
+    Ok(Plan::AlterSink(AlterSinkPlan { id, size }))
 }
 
 pub fn describe_alter_source(
@@ -5241,10 +5279,14 @@ pub fn plan_alter_source(
     }
     let id = entry.id();
 
+    let mut size = AlterOptionParameter::Unchanged;
     let action = match action {
         AlterSourceAction::SetOptions(options) => {
-            let CreateSourceOptionExtracted { seen, .. } =
-                CreateSourceOptionExtracted::try_from(options)?;
+            let CreateSourceOptionExtracted {
+                seen,
+                size: size_opt,
+                ..
+            } = CreateSourceOptionExtracted::try_from(options)?;
 
             if let Some(option) = seen
                 .iter()
@@ -5253,37 +5295,25 @@ pub fn plan_alter_source(
                 sql_bail!("Cannot modify the {} of a SOURCE.", option.to_ast_string());
             }
 
-            // This used to be supported to resize source's linked clusters, but
-            // we no longer support linked clusters.
-            match entry.cluster_id() {
-                None => bail_never_supported!("ALTER SOURCE...SET SIZE for non-cluster source"),
-                Some(cluster_id) => {
-                    let cluster = scx.catalog.get_cluster(cluster_id);
-                    return Err(crate::plan::PlanError::AlterSourceSinkSizeUnsupported {
-                        cluster: cluster.name().to_string(),
-                    });
-                }
-            }
-        }
-        AlterSourceAction::ResetOptions(reset) => {
-            if let Some(option) = reset
-                .iter()
-                .find(|o| !matches!(o, CreateSourceOptionName::Size))
-            {
-                sql_bail!("Cannot modify the {} of a SOURCE.", option.to_ast_string());
+            if let Some(value) = size_opt {
+                size = AlterOptionParameter::Set(value);
             }
 
-            // This used to be supported to resize source's linked clusters, but
-            // we no longer support linked clusters.
-            match entry.cluster_id() {
-                None => bail_never_supported!("ALTER SOURCE...RESET SIZE for non-cluster source"),
-                Some(cluster_id) => {
-                    let cluster = scx.catalog.get_cluster(cluster_id);
-                    return Err(crate::plan::PlanError::AlterSourceSinkSizeUnsupported {
-                        cluster: cluster.name().to_string(),
-                    });
+            crate::plan::AlterSourceAction::Resize(size)
+        }
+        AlterSourceAction::ResetOptions(reset) => {
+            for name in reset {
+                match name {
+                    CreateSourceOptionName::Size => {
+                        size = AlterOptionParameter::Reset;
+                    }
+                    o => {
+                        sql_bail!("Cannot modify the {} of a SOURCE.", o.to_ast_string());
+                    }
                 }
             }
+
+            crate::plan::AlterSourceAction::Resize(size)
         }
         AlterSourceAction::DropSubsources {
             if_exists,

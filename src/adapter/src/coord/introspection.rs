@@ -109,6 +109,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::AlterCluster(_)
         | Plan::AlterIndexSetOptions(_)
         | Plan::AlterIndexResetOptions(_)
+        | Plan::AlterSink(_)
         | Plan::AlterConnection(_)
         | Plan::AlterSource(_)
         | Plan::PurifiedAlterSource { .. }

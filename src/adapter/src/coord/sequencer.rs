@@ -408,6 +408,7 @@ impl Coordinator {
                     let result = self.sequence_alter_secret(ctx.session(), plan).await;
                     ctx.retire(result);
                 }
+                Plan::AlterSink(_plan) => unreachable!("errors in planning"),
                 Plan::PurifiedAlterSource {
                     alter_source,
                     subsources,
