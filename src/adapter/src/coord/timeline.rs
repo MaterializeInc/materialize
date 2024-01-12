@@ -17,9 +17,9 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
-use mz_catalog::memory::objects::CatalogItem;
+use mz_catalog::memory::objects::{CatalogItem, MaterializedView, View};
 use mz_compute_types::ComputeInstanceId;
-use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
+use mz_expr::CollectionPlan;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::vec::VecExt;
@@ -489,79 +489,45 @@ impl Coordinator {
     where
         I: IntoIterator<Item = GlobalId>,
     {
-        let mut timelines: BTreeMap<GlobalId, TimelineContext> = BTreeMap::new();
-        let mut contains_temporal = false;
+        let mut seen: BTreeSet<GlobalId> = BTreeSet::new();
+        let mut timelines: BTreeSet<TimelineContext> = BTreeSet::new();
 
         // Recurse through IDs to find all sources and tables, adding new ones to
         // the set until we reach the bottom.
         let mut ids: Vec<_> = ids.into_iter().collect();
-        // Helper function for both materialized views and views.
-        fn visit_view_expr(
-            id: GlobalId,
-            optimized_expr: &OptimizedMirRelationExpr,
-            ids: &mut Vec<GlobalId>,
-            timelines: &mut BTreeMap<GlobalId, TimelineContext>,
-            contains_temporal: &mut bool,
-        ) {
-            if !*contains_temporal && optimized_expr.contains_temporal() {
-                *contains_temporal = true;
-            }
-            let depends_on = optimized_expr.depends_on();
-            if depends_on.is_empty() {
-                // If the definition contains a temporal function, the timeline must
-                // be timestamp dependent.
-                if *contains_temporal {
-                    timelines.insert(id, TimelineContext::TimestampDependent);
-                } else {
-                    timelines.insert(id, TimelineContext::TimestampIndependent);
-                }
-            } else {
-                ids.extend(depends_on);
-            }
-        }
         while let Some(id) = ids.pop() {
             // Protect against possible infinite recursion. Not sure if it's possible, but
             // a cheap prevention for the future.
-            if timelines.contains_key(&id) {
+            if !seen.insert(id) {
                 continue;
             }
             if let Some(entry) = self.catalog().try_get_entry(&id) {
                 match entry.item() {
                     CatalogItem::Source(source) => {
-                        timelines.insert(
-                            id,
-                            TimelineContext::TimelineDependent(source.timeline.clone()),
-                        );
+                        timelines
+                            .insert(TimelineContext::TimelineDependent(source.timeline.clone()));
                     }
                     CatalogItem::Index(index) => {
                         ids.push(index.on);
                     }
-                    CatalogItem::View(view) => {
-                        visit_view_expr(
-                            id,
-                            &view.optimized_expr,
-                            &mut ids,
-                            &mut timelines,
-                            &mut contains_temporal,
-                        );
-                    }
-                    CatalogItem::MaterializedView(mview) => {
-                        visit_view_expr(
-                            id,
-                            &mview.optimized_expr,
-                            &mut ids,
-                            &mut timelines,
-                            &mut contains_temporal,
-                        );
+                    CatalogItem::View(View { optimized_expr, .. })
+                    | CatalogItem::MaterializedView(MaterializedView { optimized_expr, .. }) => {
+                        // If the definition contains a temporal function, the timeline must
+                        // be timestamp dependent.
+                        if optimized_expr.contains_temporal() {
+                            timelines.insert(TimelineContext::TimestampDependent);
+                        } else {
+                            timelines.insert(TimelineContext::TimestampIndependent);
+                        }
+                        ids.extend(optimized_expr.depends_on());
                     }
                     CatalogItem::Table(table) => {
-                        timelines.insert(id, TimelineContext::TimelineDependent(table.timeline()));
+                        timelines.insert(TimelineContext::TimelineDependent(table.timeline()));
                     }
                     CatalogItem::Log(_) => {
-                        timelines.insert(
-                            id,
-                            TimelineContext::TimelineDependent(Timeline::EpochMilliseconds),
-                        );
+                        timelines.insert(TimelineContext::TimelineDependent(
+                            Timeline::EpochMilliseconds,
+                        ));
                     }
                     CatalogItem::Sink(_)
                     | CatalogItem::Type(_)
@@ -573,9 +539,6 @@ impl Coordinator {
         }
 
         timelines
-            .into_iter()
-            .map(|(_, timeline)| timeline)
-            .collect()
     }
 
     /// Returns an iterator that partitions an id bundle by the timeline context that each id belongs to.

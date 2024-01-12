@@ -30,7 +30,7 @@ use mz_environmentd::test_util::{
 };
 use mz_ore::assert_contains;
 use mz_ore::collections::CollectionExt;
-use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
+use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO, SYSTEM_TIME};
 use mz_ore::result::ResultExt;
 use mz_ore::retry::Retry;
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
@@ -3644,4 +3644,103 @@ async fn test_retain_history() {
             "not valid for all inputs"
         );
     }
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+async fn test_temporal_static_queries() {
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
+
+    client
+        .batch_execute("CREATE SCHEMA dev_fy2023;")
+        .await
+        .unwrap();
+    client
+        .batch_execute("CREATE SCHEMA dev_warm;")
+        .await
+        .unwrap();
+    client.batch_execute("CREATE SCHEMA dev;").await.unwrap();
+    client
+        .batch_execute(
+            "CREATE VIEW dev.mock_data_days AS
+                WITH
+                    days AS (
+                        SELECT generate_series(
+                            CAST('2022-12-01 11:00:00' AS timestamp),
+                            CAST('2024-02-01' AS timestamp),
+                            CAST('1 hour' AS interval)
+                        ) AS \"day\"
+                    )
+                SELECT
+                    \"day\" AS ts,
+                    datediff('hour', CAST('2020-01-01' AS timestamp), \"day\") AS id
+                FROM days;",
+        )
+        .await
+        .unwrap();
+    client
+        .batch_execute(
+            "CREATE VIEW dev_warm.stg_data_days AS
+                SELECT *
+                FROM dev.mock_data_days
+                WHERE
+                    mz_now() <= date_trunc('year', ts + CAST('1 year' AS interval)) AND
+                    ts + CAST('7 days' AS interval) - CAST('1 month' AS interval) < mz_now();",
+        )
+        .await
+        .unwrap();
+    client
+        .batch_execute(
+            "CREATE VIEW dev_warm.count_by_day AS
+                SELECT
+                    date_trunc('day', ts) AS \"day\",
+                    count(*) AS cnt
+                FROM dev_warm.stg_data_days
+                GROUP BY 1
+                HAVING
+                    NOT (mz_now() <= date_trunc('day', ts) + CAST('7 days' AS interval)) AND
+                    mz_now() <= date_trunc('year', date_trunc('day', ts) + CAST('1 year' AS interval));",
+        )
+        .await
+        .unwrap();
+    client
+        .batch_execute(
+            "CREATE VIEW dev_fy2023.stg_data_days AS
+                SELECT *
+                FROM dev.mock_data_days
+                WHERE
+                    CAST('2023-01-01' AS timestamp) <= ts AND
+                    ts - CAST('1 month' AS interval) < CAST('2024-01-01' AS timestamp) AND
+                    ts - CAST('0 month' AS interval) < CAST('2025-01-01' AS timestamp);",
+        )
+        .await
+        .unwrap();
+    client
+        .batch_execute(
+            "CREATE VIEW dev_fy2023.count_by_day AS
+                SELECT
+                    date_trunc('day', ts) AS \"day\",
+                    count(*) AS cnt
+                FROM dev_fy2023.stg_data_days
+                GROUP BY 1
+                HAVING
+                    NOT (CAST('2024-01-01' AS timestamp) <= date_trunc('day', ts)) AND
+                    CAST('2023-01-01' AS timestamp) <= date_trunc('day', ts);",
+        )
+        .await
+        .unwrap();
+
+    let timestamp = get_explain_timestamp(
+        "(SELECT *, 'fy2023' AS origin FROM dev_fy2023.count_by_day
+        UNION ALL
+        SELECT *, 'warm' AS origin FROM dev_warm.count_by_day)",
+        &client,
+    )
+    .await;
+    assert!(
+        timestamp < EpochMillis::MAX,
+        "expected temporal query to have timestamps less than max timestamp of {}, instead found {}",
+        EpochMillis::MAX,
+        timestamp
+    )
 }
