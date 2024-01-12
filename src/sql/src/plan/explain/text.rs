@@ -21,7 +21,7 @@
 use itertools::Itertools;
 use std::fmt;
 
-use mz_expr::explain::fmt_text_constant_rows;
+use mz_expr::explain::{fmt_text_constant_rows, HumanizedExplain, HumanizerMode};
 use mz_expr::virtual_syntax::{AlgExcept, Except};
 use mz_expr::{Id, WindowFrame};
 use mz_ore::str::{separated, IndentLike};
@@ -75,6 +75,9 @@ impl HirRelationExpr {
         ctx: &mut PlanRenderingContext<'_, HirRelationExpr>,
     ) -> fmt::Result {
         use HirRelationExpr::*;
+
+        let mode = HumanizedExplain::new(ctx.config.redacted);
+
         match &self {
             Constant { rows, .. } => {
                 if !rows.is_empty() {
@@ -235,7 +238,8 @@ impl HirRelationExpr {
                     write!(f, " group_by=[{}]", group_by)?;
                 }
                 if order_key.len() > 0 {
-                    let order_by = separated(", ", order_key);
+                    let order_by = mode.seq(order_key, None);
+                    let order_by = separated(", ", order_by);
                     write!(f, " order_by=[{}]", order_by)?;
                 }
                 if let Some(limit) = limit {
@@ -459,13 +463,13 @@ impl fmt::Display for AggregateExpr {
             return write!(f, "count(*)");
         }
 
-        write!(
-            f,
-            "{}({}",
-            self.func.clone().into_expr(),
-            if self.distinct { "distinct " } else { "" }
-        )?;
+        // TODO(cloud#8196)
+        let mode = HumanizedExplain::new(false);
+        let func = self.func.clone().into_expr();
+        let func = mode.expr(&func, None);
+        let distinct = if self.distinct { "distinct " } else { "" };
 
+        write!(f, "{}({}", func, distinct)?;
         self.expr.fmt(f)?;
         write!(f, ")")
     }

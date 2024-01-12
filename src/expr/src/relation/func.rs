@@ -38,6 +38,7 @@ use proptest_derive::Arbitrary;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+use crate::explain::{HumanizedExpr, HumanizerMode};
 use crate::relation::proto_aggregate_func::{self, ProtoColumnOrders};
 use crate::relation::proto_table_func::ProtoTabletizedScalar;
 use crate::relation::{
@@ -2246,9 +2247,12 @@ fn unnest_list<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
         .map(move |e| (Row::pack_slice(&[e]), 1))
 }
 
-impl fmt::Display for AggregateFunc {
+impl<'a, M> fmt::Display for HumanizedExpr<'a, AggregateFunc, M>
+where
+    M: HumanizerMode,
+{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
+        match self.expr {
             AggregateFunc::MaxNumeric => f.write_str("max"),
             AggregateFunc::MaxInt16 => f.write_str("max"),
             AggregateFunc::MaxInt32 => f.write_str("max"),
@@ -2294,9 +2298,11 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::Any => f.write_str("any"),
             AggregateFunc::All => f.write_str("all"),
             AggregateFunc::JsonbAgg { order_by } => {
+                let order_by = order_by.iter().map(|col| self.child(col));
                 write!(f, "jsonb_agg[order_by=[{}]]", separated(", ", order_by))
             }
             AggregateFunc::JsonbObjectAgg { order_by } => {
+                let order_by = order_by.iter().map(|col| self.child(col));
                 write!(
                     f,
                     "jsonb_object_agg[order_by=[{}]]",
@@ -2304,21 +2310,27 @@ impl fmt::Display for AggregateFunc {
                 )
             }
             AggregateFunc::ArrayConcat { order_by } => {
+                let order_by = order_by.iter().map(|col| self.child(col));
                 write!(f, "array_agg[order_by=[{}]]", separated(", ", order_by))
             }
             AggregateFunc::ListConcat { order_by } => {
+                let order_by = order_by.iter().map(|col| self.child(col));
                 write!(f, "list_agg[order_by=[{}]]", separated(", ", order_by))
             }
             AggregateFunc::StringAgg { order_by } => {
+                let order_by = order_by.iter().map(|col| self.child(col));
                 write!(f, "string_agg[order_by=[{}]]", separated(", ", order_by))
             }
             AggregateFunc::RowNumber { order_by } => {
+                let order_by = order_by.iter().map(|col| self.child(col));
                 write!(f, "row_number[order_by=[{}]]", separated(", ", order_by))
             }
             AggregateFunc::Rank { order_by } => {
+                let order_by = order_by.iter().map(|col| self.child(col));
                 write!(f, "rank[order_by=[{}]]", separated(", ", order_by))
             }
             AggregateFunc::DenseRank { order_by } => {
+                let order_by = order_by.iter().map(|col| self.child(col));
                 write!(f, "dense_rank[order_by=[{}]]", separated(", ", order_by))
             }
             AggregateFunc::LagLead {
@@ -2326,6 +2338,7 @@ impl fmt::Display for AggregateFunc {
                 ignore_nulls,
                 order_by,
             } => {
+                let order_by = order_by.iter().map(|col| self.child(col));
                 f.write_str("lag")?;
                 f.write_str("[")?;
                 if *ignore_nulls {
@@ -2339,6 +2352,7 @@ impl fmt::Display for AggregateFunc {
                 ignore_nulls,
                 order_by,
             } => {
+                let order_by = order_by.iter().map(|col| self.child(col));
                 f.write_str("lag")?;
                 f.write_str("[")?;
                 if *ignore_nulls {
@@ -2351,6 +2365,7 @@ impl fmt::Display for AggregateFunc {
                 order_by,
                 window_frame,
             } => {
+                let order_by = order_by.iter().map(|col| self.child(col));
                 f.write_str("first_value")?;
                 f.write_str("[")?;
                 write!(f, "order_by=[{}]", separated(", ", order_by))?;
@@ -2363,6 +2378,7 @@ impl fmt::Display for AggregateFunc {
                 order_by,
                 window_frame,
             } => {
+                let order_by = order_by.iter().map(|col| self.child(col));
                 f.write_str("last_value")?;
                 f.write_str("[")?;
                 write!(f, "order_by=[{}]", separated(", ", order_by))?;
@@ -2376,6 +2392,8 @@ impl fmt::Display for AggregateFunc {
                 order_by,
                 window_frame,
             } => {
+                let order_by = order_by.iter().map(|col| self.child(col));
+                let wrapped_aggregate = self.child(wrapped_aggregate.deref());
                 f.write_str("window_agg")?;
                 f.write_str("[")?;
                 write!(f, "{} ", wrapped_aggregate)?;

@@ -197,17 +197,6 @@ where
     }
 }
 
-// TODO(cloud#8196): delete this
-impl<C> DisplayText<C> for MapFilterProject
-where
-    C: AsMut<Indent>,
-{
-    fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
-        let mode = HumanizedExplain::default();
-        mode.expr(self, None).fmt_text(f, ctx)
-    }
-}
-
 impl<'a, C, M> DisplayText<C> for HumanizedExpr<'a, MapFilterProject, M>
 where
     C: AsMut<Indent>,
@@ -1015,10 +1004,10 @@ impl fmt::Display for MirScalarExpr {
 #[derive(Debug, Clone)]
 pub struct HumanizedExpr<'a, T, M = HumanizedExplain> {
     /// The expression to be humanized.
-    pub(crate) expr: &'a T,
+    pub expr: &'a T,
     /// An optional vector of inferred column names to be used when rendering
     /// column references in `expr`.
-    pub(crate) cols: Option<&'a Vec<String>>,
+    pub cols: Option<&'a Vec<String>>,
     /// The rendering mode to use. See [`HumanizerMode`] for details.
     pub mode: M,
 }
@@ -1026,7 +1015,7 @@ pub struct HumanizedExpr<'a, T, M = HumanizedExplain> {
 impl<'a, T, M: HumanizerMode> HumanizedExpr<'a, T, M> {
     /// Wrap the given child `expr` into a [`HumanizedExpr`] using the same
     /// `cols` and `mode` as `self`.
-    pub(crate) fn child<U>(&self, expr: &'a U) -> HumanizedExpr<'a, U, M> {
+    pub fn child<U>(&self, expr: &'a U) -> HumanizedExpr<'a, U, M> {
         HumanizedExpr {
             expr,
             cols: self.cols,
@@ -1199,6 +1188,16 @@ impl<'a, M> ScalarOps for HumanizedExpr<'a, MirScalarExpr, M> {
     }
 }
 
+impl<'a, M> ScalarOps for HumanizedExpr<'a, usize, M> {
+    fn match_col_ref(&self) -> Option<usize> {
+        Some(*self.expr)
+    }
+
+    fn references(&self, col_ref: usize) -> bool {
+        col_ref == *self.expr
+    }
+}
+
 impl<'a, M> fmt::Display for HumanizedExpr<'a, MirScalarExpr, M>
 where
     M: HumanizerMode,
@@ -1279,13 +1278,6 @@ where
     }
 }
 
-impl fmt::Display for AggregateExpr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mode = HumanizedExplain::default();
-        mode.expr(self, None).fmt(f)
-    }
-}
-
 impl<'a, M> fmt::Display for HumanizedExpr<'a, AggregateExpr, M>
 where
     M: HumanizerMode,
@@ -1298,7 +1290,7 @@ where
         write!(
             f,
             "{}({}",
-            self.expr.func.clone(),
+            self.child(&self.expr.func),
             if self.expr.distinct { "distinct " } else { "" }
         )?;
 
