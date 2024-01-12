@@ -19,15 +19,12 @@
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE SINK sink
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM supplier
+> CREATE SINK sink FROM supplier
   INTO KAFKA CONNECTION kafka_fixed (TOPIC 'testdrive-supplier-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
 > CREATE SOURCE progress_check
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_fixed (TOPIC 'testdrive-progress-fixed-${testdrive.seed}')
   FORMAT JSON ENVELOPE NONE
 
