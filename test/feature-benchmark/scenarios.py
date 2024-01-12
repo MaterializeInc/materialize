@@ -1273,8 +1273,6 @@ $ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true await
 
 # Wait until all the records have been emited from the sink, as observed by the sink1_check source
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
-
 > CREATE SOURCE sink1_check
   IN CLUSTER source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${{testdrive.seed}}')
