@@ -19,74 +19,61 @@ use mz_ore::cast::CastLossy;
 /// `bytesize::ByteSize`. Instead of MiB or GiB and so on, it uses MB, GB for the sizes
 /// with 1024 multiplier.
 /// Valid units are B, kB, MB, GB, TB with multiples of 1024
-/// where 1MB = 1024kB
+/// where 1MB = 1024kB.
+/// 
+/// In postgres, each setting has a base unit (for eg. B, kB) and the value can either
+/// be integer or float. The base unit serves as the default unit if a number is provided
+/// without a unit and it's also the minimum unit in which values
+/// can be rounded to. For example, with base unit of kB, 30.1kB will be rounded to
+/// 30kB since it can't have a lower unit, but 30.1MB will be rounded to 30822kB.
+/// For [`ByteSize`], the value is an integer and the base unit is bytes (`B`).
 #[derive(
     Arbitrary, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default,
 )]
-pub struct ByteSize {
-    size: u32,
-    unit: BytesUnit,
-}
+pub struct ByteSize(u64);
 
 impl ByteSize {
-    const fn new(size: u32, unit: BytesUnit) -> ByteSize {
-        ByteSize { size, unit }
+    pub const fn b(size: u64) -> ByteSize {
+        ByteSize(size)
     }
 
-    pub const fn b(size: u32) -> ByteSize {
-        ByteSize::new(size, BytesUnit::B)
+    pub const fn kb(size: u64) -> ByteSize {
+        ByteSize(size * BytesUnit::Kb.value())
     }
 
-    pub const fn kb(size: u32) -> ByteSize {
-        ByteSize::new(size, BytesUnit::Kb)
+    pub const fn mb(size: u64) -> ByteSize {
+        ByteSize(size * BytesUnit::Mb.value())
     }
 
-    pub const fn mb(size: u32) -> ByteSize {
-        ByteSize::new(size, BytesUnit::Mb)
+    pub const fn gb(size: u64) -> ByteSize {
+        ByteSize(size * BytesUnit::Gb.value())
     }
 
-    pub const fn gb(size: u32) -> ByteSize {
-        ByteSize::new(size, BytesUnit::Gb)
-    }
-
-    pub const fn tb(size: u32) -> ByteSize {
-        ByteSize::new(size, BytesUnit::Tb)
+    pub const fn tb(size: u64) -> ByteSize {
+        ByteSize(size * BytesUnit::Tb.value())
     }
 
     pub fn as_bytes(&self) -> u64 {
-        Into::<u64>::into(self.size) * self.unit.value()
+        self.0
     }
 
     fn format_string(&self) -> String {
-        let (size, unit) = Self::normalize_size_unit(&self.size, &self.unit);
-
-        if size == 0 {
-            // If the size is 0, then no unit is returned in postgres
-            return "0".to_string();
-        }
-        format!("{}{}", size, unit)
-    }
-
-    // Helper method which converts to a higher unit if it's perfectly divisible by 1024
-    // For eg: 1024B will be 1kB
-    fn normalize_size_unit(size: &u32, unit: &BytesUnit) -> (u32, BytesUnit) {
-        let mut size = *size;
-        let mut unit = unit.clone();
-
-        if size == 0 {
-            unit = BytesUnit::B
-        } else {
-            loop {
-                if size % 1024 == 0 && unit != BytesUnit::Tb {
-                    size = size / 1024;
-                    unit = unit.higher();
-                } else {
-                    break;
-                }
+        match self.0 {
+            zero if zero == 0 => format!("0"),
+            tb if tb % BytesUnit::Tb.value() == 0 => {
+                format!("{}{}", tb / BytesUnit::Tb.value(), BytesUnit::Tb)
             }
+            gb if gb % BytesUnit::Gb.value() == 0 => {
+                format!("{}{}", gb / BytesUnit::Gb.value(), BytesUnit::Gb)
+            }
+            mb if mb % BytesUnit::Mb.value() == 0 => {
+                format!("{}{}", mb / BytesUnit::Mb.value(), BytesUnit::Mb)
+            }
+            kb if kb % BytesUnit::Kb.value() == 0 => {
+                format!("{}{}", kb / BytesUnit::Kb.value(), BytesUnit::Kb)
+            }
+            b => format!("{}{}", b, BytesUnit::B),
         }
-
-        (size, unit)
     }
 }
 
@@ -105,8 +92,6 @@ impl FromStr for ByteSize {
     // lower unit than B. But 30.1kB will be rounded to
     // 31642B.
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let u32_err = |_| format!("number exceeds u32 limit");
-
         let number: String = value
             .chars()
             .take_while(|c| c.is_digit(10) || c == &'.')
@@ -117,38 +102,40 @@ impl FromStr for ByteSize {
             .skip_while(|c| c.is_whitespace() || c.is_digit(10) || c == &'.')
             .collect();
 
-        let num = number
-            .parse::<f64>()
-            .map_err(|e| format!("couldn't parse {} as a number, {}", number, e))?;
-
-        if suffix.is_empty() {
-            let size = u64::cast_lossy(num).try_into().map_err(u32_err)?;
-            let (size, unit) = Self::normalize_size_unit(&size, &BytesUnit::B);
-            Ok(Self::new(size, unit))
+        let unit = if suffix.is_empty() {
+            BytesUnit::B
         } else {
-            let unit = suffix
-                .parse::<BytesUnit>()
-                .map_err(|e| format!("couldn't parse {:?} into a known SI unit, {}. Valid units are B, kB, MB, GB, and TB", suffix, e))?;
+            suffix
+            .parse::<BytesUnit>()
+            .map_err(|e| format!("couldn't parse {:?} into a known SI unit, {}. Valid units are B, kB, MB, GB, and TB", suffix, e))?
+        };
+
+        let (size, unit) = if let Ok(integer) = number.parse::<u64>() {
+            (integer, unit)
+        } else {
+            let num = number
+                .parse::<f64>()
+                .map_err(|e| format!("couldn't parse {} as a number, {}", number, e))?;
 
             // checking if number has no fractional part
             if num.trunc() == num {
-                let size: u32 = u64::cast_lossy(num).try_into().map_err(u32_err)?;
-                let (size, unit) = Self::normalize_size_unit(&size, &unit);
-                Ok(Self::new(size, unit))
+                let size = u64::cast_lossy(num);
+                (size, unit)
             } else {
                 match unit {
-                    BytesUnit::B => Ok(Self::b(
-                        u64::cast_lossy(num.round()).try_into().map_err(u32_err)?,
-                    )),
-                    _ => {
-                        let size = u64::cast_lossy((num * 1024.0).round())
-                            .try_into()
-                            .map_err(u32_err)?;
-                        Ok(Self::new(size, unit.lower()))
-                    }
+                    BytesUnit::B => (u64::cast_lossy(num.round()), BytesUnit::B),
+                    BytesUnit::Kb => (u64::cast_lossy((num * 1024.0).round()), BytesUnit::B),
+                    BytesUnit::Mb => (u64::cast_lossy((num * 1024.0).round()), BytesUnit::Kb),
+                    BytesUnit::Gb => (u64::cast_lossy((num * 1024.0).round()), BytesUnit::Mb),
+                    BytesUnit::Tb => (u64::cast_lossy((num * 1024.0).round()), BytesUnit::Gb),
                 }
             }
-        }
+        };
+
+        let bytes = size
+            .checked_mul(unit.value())
+            .ok_or_else(|| format!("bytes value exceeds u64 range"))?;
+        Ok(Self(bytes))
     }
 }
 
@@ -173,28 +160,6 @@ impl BytesUnit {
             BytesUnit::Mb => 1_048_576,
             BytesUnit::Gb => 1_073_741_824,
             BytesUnit::Tb => 1_099_511_627_776,
-        }
-    }
-
-    // Returns the next higher unit
-    fn higher(&self) -> Self {
-        match &self {
-            BytesUnit::B => BytesUnit::Kb,
-            BytesUnit::Kb => BytesUnit::Mb,
-            BytesUnit::Mb => BytesUnit::Gb,
-            BytesUnit::Gb => BytesUnit::Tb,
-            BytesUnit::Tb => BytesUnit::Tb,
-        }
-    }
-
-    // Returns the previous lower unit
-    fn lower(&self) -> Self {
-        match &self {
-            BytesUnit::B => BytesUnit::B,
-            BytesUnit::Kb => BytesUnit::B,
-            BytesUnit::Mb => BytesUnit::Kb,
-            BytesUnit::Gb => BytesUnit::Mb,
-            BytesUnit::Tb => BytesUnit::Gb,
         }
     }
 }
@@ -232,30 +197,27 @@ impl FromStr for BytesUnit {
 #[cfg(test)]
 mod tests {
     use crate::bytes::ByteSize;
-    use crate::bytes::BytesUnit;
     use proptest::prelude::*;
     use proptest::proptest;
 
-    fn assert_to_string_and_display(expected: &str, b: ByteSize) {
-        assert_eq!(expected.to_string(), b.to_string());
-        assert_eq!(expected, format!("{}", b));
-    }
-
     #[mz_ore::test]
     fn test_to_string() {
-        assert_to_string_and_display("0", ByteSize::gb(0));
-        assert_to_string_and_display("1GB", ByteSize::mb(1024)); // 1024MB is convered to 1GB
-        assert_to_string_and_display("215B", ByteSize::b(215));
-        assert_to_string_and_display("1kB", ByteSize::kb(1));
-        assert_to_string_and_display("301kB", ByteSize::kb(301));
-        assert_to_string_and_display("419MB", ByteSize::mb(419));
-        assert_to_string_and_display("518GB", ByteSize::gb(518));
-        assert_to_string_and_display("815TB", ByteSize::tb(815));
-        assert_to_string_and_display("10kB", ByteSize::b(10240));
-        assert_to_string_and_display("10MB", ByteSize::kb(10240));
-        assert_to_string_and_display("10GB", ByteSize::mb(10240));
-        assert_to_string_and_display("10TB", ByteSize::gb(10240));
-        assert_to_string_and_display("10240TB", ByteSize::tb(10240));
+        fn assert_to_string(expected: &str, b: ByteSize) {
+            assert_eq!(expected.to_string(), b.to_string());
+        }
+        assert_to_string("0", ByteSize::gb(0));
+        assert_to_string("1GB", ByteSize::mb(1024));
+        assert_to_string("215B", ByteSize::b(215));
+        assert_to_string("1kB", ByteSize::kb(1));
+        assert_to_string("301kB", ByteSize::kb(301));
+        assert_to_string("419MB", ByteSize::mb(419));
+        assert_to_string("518GB", ByteSize::gb(518));
+        assert_to_string("815TB", ByteSize::tb(815));
+        assert_to_string("10kB", ByteSize::b(10240));
+        assert_to_string("10MB", ByteSize::kb(10240));
+        assert_to_string("10GB", ByteSize::mb(10240));
+        assert_to_string("10TB", ByteSize::gb(10240));
+        assert_to_string("10240TB", ByteSize::tb(10240));
     }
 
     #[mz_ore::test]
@@ -266,6 +228,7 @@ mod tests {
         }
 
         assert_eq!(parse("0"), ByteSize::b(0));
+        assert_eq!(parse("9.9"), ByteSize::b(10));
         assert_eq!(parse("0B"), ByteSize::b(0));
         assert_eq!(parse("0MB"), ByteSize::b(0));
         assert_eq!(parse("500"), ByteSize::b(500));
@@ -280,9 +243,9 @@ mod tests {
 
         // parsing errors
         assert!("".parse::<ByteSize>().is_err());
-        assert!("4294967298".parse::<ByteSize>().is_err()); // > u32::MAX
         assert!("a124GB".parse::<ByteSize>().is_err());
         assert!("1K".parse::<ByteSize>().is_err());
+        assert!("B".parse::<ByteSize>().is_err());
         // postgres is strict about matching capitalization
         assert!("1gb".parse::<ByteSize>().is_err());
         assert!("1KB".parse::<ByteSize>().is_err());
@@ -296,15 +259,25 @@ mod tests {
         }
 
         fn assert_equivalent(v1: &str, v2: &str) {
-            assert_eq!(parse(v1).to_string(), v2)
+            assert_eq!(parse(v1), parse(v2))
         }
 
         assert_equivalent("0", "0");
         assert_equivalent("0 TB", "0");
         assert_equivalent("0kB", "0");
+        assert_equivalent("13.89", "14B");
         assert_equivalent("500", "500B");
         assert_equivalent("1073741824", "1GB");
+        assert_equivalent("1073741824.0", "1GB");
+        assert_equivalent("1073741824.1", "1GB");
+        assert_equivalent("1073741824.9", "1073741825B");
+        assert_equivalent("1024.1", "1kB");
+        assert_equivalent("1024.9", "1025B");
+        assert_equivalent("1024.1MB", "1048678kB");
+        assert_equivalent("1024.9MB", "1049498kB");
         assert_equivalent("1.01B", "1B");
+        assert_equivalent("1.01kB", "1034B");
+        assert_equivalent("1.0kB", "1kB");
         assert_equivalent("10240B", "10kB");
         assert_equivalent("1.5kB", "1536B");
         assert_equivalent("30.1GB", "30822MB");
@@ -312,24 +285,6 @@ mod tests {
         assert_equivalent("30.1TB", "30822GB");
         assert_equivalent("39.9TB", "40858GB");
         assert_equivalent("30.9B", "31B");
-    }
-
-    #[mz_ore::test]
-    fn test_bytes_equivalent() {
-        assert_eq!(
-            ByteSize::new(10240, BytesUnit::B).as_bytes(),
-            ByteSize::new(10, BytesUnit::Kb).as_bytes()
-        );
-
-        assert_eq!(
-            ByteSize::new(1024 * 1024, BytesUnit::B).as_bytes(),
-            ByteSize::new(1, BytesUnit::Mb).as_bytes()
-        );
-
-        assert_eq!(
-            ByteSize::new(1024 * 1024, BytesUnit::Kb).as_bytes(),
-            ByteSize::new(1, BytesUnit::Gb).as_bytes()
-        );
     }
 
     proptest! {
