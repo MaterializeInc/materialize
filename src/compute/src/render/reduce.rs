@@ -17,7 +17,6 @@ use dec::OrderedDecimal;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::cursor::MyTrait;
 use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
@@ -38,8 +37,6 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use timely::container::columnation::{Columnation, CopyRegion};
 use timely::dataflow::Scope;
-use timely::progress::timestamp::Refines;
-use timely::progress::Timestamp;
 use tracing::warn;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
@@ -52,22 +49,16 @@ use crate::typedefs::{
     KeySpine, KeyValSpine, RowErrSpine, RowRowArrangement, RowRowSpine, RowSpine, RowValSpine,
 };
 
-impl<G, T> Context<G, T>
-where
-    G: Scope,
-    G::Timestamp: Lattice + Refines<T> + Columnation,
-    T: Timestamp + Lattice + Columnation,
-{
 /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
 /// minimize worst-case incremental update times and memory footprint.
-pub fn render_reduce(
-    &mut self,
-    input: CollectionBundle<G, T>,
+pub fn render_reduce<C: Context>(
+    ctx: &C,
+    input: CollectionBundle<C::Scope>,
     key_val_plan: KeyValPlan,
     reduce_plan: ReducePlan,
     input_key: Option<Vec<MirScalarExpr>>,
     mfp_after: Option<MapFilterProject>,
-) -> CollectionBundle<G, T> {
+) -> CollectionBundle<C::Scope> {
     // Convert `mfp_after` to an actionable plan.
     let mfp_after = mfp_after.map(|m| {
         m.into_plan()
@@ -151,8 +142,7 @@ pub fn render_reduce(
         err = err.concat(&err_input);
 
         // Render the reduce plan
-        self.render_reduce_plan(reduce_plan, ok, err, key_arity, mfp_after)
-            .leave_region()
+        render_reduce_plan(ctx, reduce_plan, ok, err, key_arity, mfp_after).leave_region()
     })
 }
 
@@ -161,20 +151,20 @@ pub fn render_reduce(
 /// The output will be an arrangements that looks the same as if
 /// we just had a single reduce operator computing everything together, and
 /// this arrangement can also be re-used.
-fn render_reduce_plan<S>(
-    &self,
+fn render_reduce_plan<C: Context, S>(
+    ctx: &C,
     plan: ReducePlan,
     collection: Collection<S, (Row, Row), Diff>,
     err_input: Collection<S, DataflowError, Diff>,
     key_arity: usize,
     mfp_after: Option<SafeMfpPlan>,
-) -> CollectionBundle<S, T>
+) -> CollectionBundle<S>
 where
-    S: Scope<Timestamp = G::Timestamp>,
+    S: Scope<Timestamp = C::Timestamp>,
 {
     let mut errors = Default::default();
     let arrangement =
-        self.render_reduce_plan_inner(plan, collection, &mut errors, key_arity, mfp_after);
+        render_reduce_plan_inner(ctx, plan, collection, &mut errors, key_arity, mfp_after);
     let errs: KeyCollection<_, _, _> = err_input.concatenate(errors).into();
     CollectionBundle::from_columns(
         0..key_arity,
@@ -182,8 +172,8 @@ where
     )
 }
 
-fn render_reduce_plan_inner<S>(
-    &self,
+fn render_reduce_plan_inner<C: Context, S>(
+    ctx: &C,
     plan: ReducePlan,
     collection: Collection<S, (Row, Row), Diff>,
     errors: &mut Vec<Collection<S, DataflowError, Diff>>,
@@ -191,7 +181,7 @@ fn render_reduce_plan_inner<S>(
     mfp_after: Option<SafeMfpPlan>,
 ) -> SpecializedArrangement<S>
 where
-    S: Scope<Timestamp = G::Timestamp>,
+    S: Scope<Timestamp = C::Timestamp>,
 {
     // TODO(vmarcos): Arrangement specialization here could eventually be extended to keys,
     // not only values (#22103).
@@ -199,33 +189,33 @@ where
         // If we have no aggregations or just a single type of reduction, we
         // can go ahead and render them directly.
         ReducePlan::Distinct => {
-            let (arranged_output, errs) = self.dispatch_build_distinct(collection, mfp_after);
+            let (arranged_output, errs) = dispatch_build_distinct(ctx, collection, mfp_after);
             errors.push(errs);
             arranged_output
         }
         ReducePlan::Accumulable(expr) => {
-            let (arranged_output, errs) = self.build_accumulable(collection, expr, mfp_after);
+            let (arranged_output, errs) = build_accumulable(ctx, collection, expr, mfp_after);
             errors.push(errs);
             SpecializedArrangement::RowRow(arranged_output)
         }
         ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(expr)) => {
-            let (output, errs) = self.build_monotonic(collection, expr, mfp_after);
+            let (output, errs) = build_monotonic(ctx, collection, expr, mfp_after);
             errors.push(errs);
             SpecializedArrangement::RowRow(output)
         }
         ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(expr)) => {
-            let (output, errs) = self.build_bucketed(collection, expr, mfp_after);
+            let (output, errs) = build_bucketed(ctx, collection, expr, mfp_after);
             errors.push(errs);
             SpecializedArrangement::RowRow(output)
         }
         ReducePlan::Basic(BasicPlan::Single(index, aggr)) => {
             let (output, errs) =
-                self.build_basic_aggregate(collection, index, &aggr, true, mfp_after);
+                build_basic_aggregate(ctx, collection, index, &aggr, true, mfp_after);
             errors.push(errs.expect("validation should have occurred as it was requested"));
             SpecializedArrangement::RowRow(output)
         }
         ReducePlan::Basic(BasicPlan::Multiple(aggrs)) => {
-            let (output, errs) = self.build_basic_aggregates(collection, aggrs, mfp_after);
+            let (output, errs) = build_basic_aggregates(ctx, collection, aggrs, mfp_after);
             errors.push(errs);
             SpecializedArrangement::RowRow(output)
         }
@@ -246,7 +236,8 @@ where
                 let r#type = ReductionType::try_from(&plan)
                     .expect("only representable reduction types were used above");
 
-                let arrangement = match self.render_reduce_plan_inner(
+                let arrangement = match render_reduce_plan_inner(
+                    ctx,
                     plan,
                     collection.clone(),
                     errors,
@@ -262,7 +253,8 @@ where
             }
 
             // Now we need to collate them together.
-            let (oks, errs) = self.build_collation(
+            let (oks, errs) = build_collation(
+                ctx,
                 to_collate,
                 expr.aggregate_types,
                 &mut collection.scope(),
@@ -282,17 +274,17 @@ where
 /// the values into the correct order. This implementation assumes that all input
 /// arrangements present values in a way that respects the desired output order,
 /// so we can do a linear merge to form the output.
-fn build_collation<S>(
-    &self,
+fn build_collation<C: Context, S>(
+    ctx: &C,
     arrangements: Vec<(ReductionType, RowRowArrangement<S>)>,
     aggregate_types: Vec<ReductionType>,
     scope: &mut S,
     mfp_after: Option<SafeMfpPlan>,
 ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
 where
-    S: Scope<Timestamp = G::Timestamp>,
+    S: Scope<Timestamp = C::Timestamp>,
 {
-    let error_logger = self.error_logger();
+    let error_logger = ctx.error_logger();
 
     // We must have more than one arrangement to collate.
     if arrangements.len() <= 1 {
@@ -472,8 +464,8 @@ where
     (oks, errs.as_collection(|_, v| v.into_owned()))
 }
 
-fn dispatch_build_distinct<S>(
-    &self,
+fn dispatch_build_distinct<C: Context, S>(
+    ctx: &C,
     collection: Collection<S, (Row, Row), Diff>,
     mfp_after: Option<SafeMfpPlan>,
 ) -> (
@@ -481,14 +473,15 @@ fn dispatch_build_distinct<S>(
     Collection<S, DataflowError, Diff>,
 )
 where
-    S: Scope<Timestamp = G::Timestamp>,
+    S: Scope<Timestamp = C::Timestamp>,
 {
-    if self.enable_specialized_arrangements {
+    if ctx.enable_specialized_arrangements() {
         let collection = collection.map(|(k, v)| {
             assert!(v.is_empty());
             (k, ())
         });
-        let (arrangement, errs) = self.build_distinct::<RowSpine<_, _>, RowValSpine<_, _, _>, _>(
+        let (arrangement, errs) = build_distinct::<_, RowSpine<_, _>, RowValSpine<_, _, _>, _>(
+            ctx,
             collection,
             " [val: empty]",
             mfp_after,
@@ -496,17 +489,16 @@ where
         (SpecializedArrangement::RowUnit(arrangement), errs)
     } else {
         let collection = collection.inspect(|((_, v), _, _)| assert!(v.is_empty()));
-        let (arrangement, errs) = self
-            .build_distinct::<RowRowSpine<_, _>, RowValSpine<_, _, _>, _>(
-                collection, "", mfp_after,
-            );
+        let (arrangement, errs) = build_distinct::<_, RowRowSpine<_, _>, RowValSpine<_, _, _>, _>(
+            ctx, collection, "", mfp_after,
+        );
         (SpecializedArrangement::RowRow(arrangement), errs)
     }
 }
 
 /// Build the dataflow to compute the set of distinct keys.
-fn build_distinct<T1, T2, S>(
-    &self,
+fn build_distinct<C, T1, T2, S>(
+    ctx: &C,
     collection: Collection<S, (Row, T1::ValOwned), Diff>,
     tag: &str,
     mfp_after: Option<SafeMfpPlan>,
@@ -515,10 +507,11 @@ fn build_distinct<T1, T2, S>(
     Collection<S, DataflowError, Diff>,
 )
 where
-    S: Scope<Timestamp = G::Timestamp>,
-    T1: Trace<KeyOwned = Row, Time = G::Timestamp, Diff = Diff> + 'static,
+    C: Context,
+    S: Scope<Timestamp = C::Timestamp>,
+    T1: Trace<KeyOwned = Row, Time = C::Timestamp, Diff = Diff> + 'static,
     T1::Batch: Batch,
-    T1::Batcher: Batcher<Item = ((Row, T1::ValOwned), G::Timestamp, Diff)>,
+    T1::Batcher: Batcher<Item = ((Row, T1::ValOwned), C::Timestamp, Diff)>,
     for<'a> T1::Key<'a>: std::fmt::Debug + IntoRowByTypes,
     T1::ValOwned: Columnation + ExchangeData + Default,
     Arranged<S, TraceAgent<T1>>: ArrangementSize,
@@ -526,14 +519,14 @@ where
             Key<'a> = T1::Key<'a>,
             KeyOwned = Row,
             ValOwned = DataflowError,
-            Time = G::Timestamp,
+            Time = C::Timestamp,
             Diff = Diff,
         > + 'static,
     T2::Batch: Batch,
-    T2::Batcher: Batcher<Item = ((Row, T2::ValOwned), G::Timestamp, Diff)>,
+    T2::Batcher: Batcher<Item = ((Row, T2::ValOwned), C::Timestamp, Diff)>,
     Arranged<S, TraceAgent<T2>>: ArrangementSize,
 {
-    let error_logger = self.error_logger();
+    let error_logger = ctx.error_logger();
 
     let (input_name, output_name) = (
         format!("Arranged DistinctBy{}", tag),
@@ -603,19 +596,19 @@ where
 /// For each aggregate, we render a different reduce operator, and then fuse
 /// results together into a final arrangement that presents all the results
 /// in the order specified by `aggrs`.
-fn build_basic_aggregates<S>(
-    &self,
+fn build_basic_aggregates<C: Context, S>(
+    ctx: &C,
     input: Collection<S, (Row, Row), Diff>,
     aggrs: Vec<(usize, AggregateExpr)>,
     mfp_after: Option<SafeMfpPlan>,
 ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
 where
-    S: Scope<Timestamp = G::Timestamp>,
+    S: Scope<Timestamp = C::Timestamp>,
 {
     // We are only using this function to render multiple basic aggregates and
     // stitch them together. If that's not true we should complain.
     if aggrs.len() <= 1 {
-        self.error_logger().soft_panic_or_log(
+        ctx.error_logger().soft_panic_or_log(
             "Too few aggregations when building basic aggregates",
             &format!("len={}", aggrs.len()),
         )
@@ -624,7 +617,7 @@ where
     let mut to_collect = Vec::new();
     for (index, aggr) in aggrs {
         let (result, errs) =
-            self.build_basic_aggregate(input.clone(), index, &aggr, err_output.is_none(), None);
+            build_basic_aggregate(ctx, input.clone(), index, &aggr, err_output.is_none(), None);
         if errs.is_some() {
             err_output = errs
         }
@@ -697,8 +690,8 @@ where
 /// Build the dataflow to compute a single basic aggregation.
 ///
 /// This method also applies distinctness if required.
-fn build_basic_aggregate<S>(
-    &self,
+fn build_basic_aggregate<C: Context, S>(
+    ctx: &C,
     input: Collection<S, (Row, Row), Diff>,
     index: usize,
     aggr: &AggregateExpr,
@@ -709,7 +702,7 @@ fn build_basic_aggregate<S>(
     Option<Collection<S, DataflowError, Diff>>,
 )
 where
-    S: Scope<Timestamp = G::Timestamp>,
+    S: Scope<Timestamp = C::Timestamp>,
 {
     let AggregateExpr {
         func,
@@ -731,24 +724,25 @@ where
     // If `distinct` is set, we restrict ourselves to the distinct `(key, val)`.
     if distinct {
         if validating {
-            let (oks, errs) = self
-                .build_reduce_inaccumulable_distinct::<_, KeyValSpine<_, Result<(), String>, _, _>>(
-                    partial, None,
-                )
-                .as_collection(|k, v| (k.into_owned(), v.into_owned()))
-                .map_fallible("Demux Errors", move |(key, result)| match result {
-                    Ok(()) => Ok(key),
-                    Err(m) => Err(EvalError::Internal(m).into()),
-                });
+            let (oks, errs) = build_reduce_inaccumulable_distinct::<
+                _,
+                _,
+                KeyValSpine<_, Result<(), String>, _, _>,
+            >(ctx, partial, None)
+            .as_collection(|k, v| (k.into_owned(), v.into_owned()))
+            .map_fallible("Demux Errors", move |(key, result)| match result {
+                Ok(()) => Ok(key),
+                Err(m) => Err(EvalError::Internal(m).into()),
+            });
             err_output = Some(errs);
             partial = oks;
         } else {
-            partial = self
-                .build_reduce_inaccumulable_distinct::<_, KeySpine<_, _, _>>(
-                    partial,
-                    Some(" [val: empty]"),
-                )
-                .as_collection(|k, _| k.into_owned());
+            partial = build_reduce_inaccumulable_distinct::<_, _, KeySpine<_, _, _>>(
+                ctx,
+                partial,
+                Some(" [val: empty]"),
+            )
+            .as_collection(|k, _| k.into_owned());
         }
     }
 
@@ -799,7 +793,7 @@ where
     // rationale around using a second reduction here.
     let must_validate = validating && err_output.is_none();
     if must_validate || mfp_after2.is_some() {
-        let error_logger = self.error_logger();
+        let error_logger = ctx.error_logger();
 
         let errs = arranged
             .mz_reduce_abelian::<_, RowErrSpine<_, _>>(
@@ -855,26 +849,27 @@ where
     (oks, err_output)
 }
 
-fn build_reduce_inaccumulable_distinct<S, Tr>(
-    &self,
+fn build_reduce_inaccumulable_distinct<C, S, Tr>(
+    ctx: &C,
     input: Collection<S, (Row, Row), Diff>,
     name_tag: Option<&str>,
 ) -> Arranged<S, TraceAgent<Tr>>
 where
-    S: Scope<Timestamp = G::Timestamp>,
+    C: Context,
+    S: Scope<Timestamp = C::Timestamp>,
     Tr::ValOwned: MaybeValidatingRow<(), String>,
     Tr: Trace
         + for<'a> TraceReader<
             Key<'a> = &'a (Row, Row),
             KeyOwned = (Row, Row),
-            Time = G::Timestamp,
+            Time = C::Timestamp,
             Diff = Diff,
         > + 'static,
     Tr::Batch: Batch,
-    Tr::Batcher: Batcher<Item = (((Row, Row), Tr::ValOwned), G::Timestamp, Diff)>,
+    Tr::Batcher: Batcher<Item = (((Row, Row), Tr::ValOwned), C::Timestamp, Diff)>,
     Arranged<S, TraceAgent<Tr>>: ArrangementSize,
 {
-    let error_logger = self.error_logger();
+    let error_logger = ctx.error_logger();
 
     let output_name = format!(
         "ReduceInaccumulable Distinct{}",
@@ -914,8 +909,8 @@ where
 /// Note that this implementation currently ignores the distinct bit because we
 /// currently only perform min / max hierarchically and the reduction tree
 /// efficiently suppresses non-distinct updates.
-fn build_bucketed<S>(
-    &self,
+fn build_bucketed<C: Context, S>(
+    ctx: &C,
     input: Collection<S, (Row, Row), Diff>,
     BucketedPlan {
         aggr_funcs,
@@ -925,7 +920,7 @@ fn build_bucketed<S>(
     mfp_after: Option<SafeMfpPlan>,
 ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
 where
-    S: Scope<Timestamp = G::Timestamp>,
+    S: Scope<Timestamp = C::Timestamp>,
 {
     let mut err_output: Option<Collection<S, _, _>> = None;
     let arranged_output = input.scope().region_named("ReduceHierarchical", |inner| {
@@ -954,8 +949,9 @@ where
             // were observed in the input. Subsequently, we will either produce an error in the error
             // stream or produce correct data in the output stream.
             let negated_output = if err_output.is_none() {
-                let (oks, errs) = self
-                    .build_bucketed_negated_output::<_, Result<Vec<Row>, (Row, u64)>>(
+                let (oks, errs) =
+                    build_bucketed_negated_output::<_, _, Result<Vec<Row>, (Row, u64)>>(
+                        ctx,
                         &input,
                         aggr_funcs.clone(),
                     )
@@ -975,7 +971,7 @@ where
                 err_output = Some(errs.leave_region());
                 oks
             } else {
-                self.build_bucketed_negated_output::<_, Vec<Row>>(&input, aggr_funcs.clone())
+                build_bucketed_negated_output::<_, _, Vec<Row>>(ctx, &input, aggr_funcs.clone())
             };
 
             stage = negated_output
@@ -996,7 +992,7 @@ where
 
         // Build a series of stages for the reduction
         // Arrange the final result into (key, Row)
-        let error_logger = self.error_logger();
+        let error_logger = ctx.error_logger();
         // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
         // view mz_internal.mz_expected_group_size_advice.
         let arranged = partial.mz_arrange::<RowValSpine<Vec<Row>, _, _>>("Arrange ReduceMinsMaxes");
@@ -1092,16 +1088,17 @@ where
 /// `validating` indicates whether we want this stage to perform error detection
 /// for invalid accumulations. Once a stage is clean of such errors, subsequent
 /// stages can skip validation.
-fn build_bucketed_negated_output<S, R>(
-    &self,
+fn build_bucketed_negated_output<C, S, R>(
+    ctx: &C,
     input: &Collection<S, ((Row, u64), Vec<Row>), Diff>,
     aggrs: Vec<AggregateFunc>,
 ) -> Collection<S, ((Row, u64), R), Diff>
 where
-    S: Scope<Timestamp = G::Timestamp>,
+    C: Context,
+    S: Scope<Timestamp = C::Timestamp>,
     R: MaybeValidatingRow<Vec<Row>, (Row, u64)>,
 {
-    let error_logger = self.error_logger();
+    let error_logger = ctx.error_logger();
     // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
     // view mz_internal.mz_expected_group_size_advice.
     let arranged_input =
@@ -1155,8 +1152,8 @@ where
 
 /// Build the dataflow to compute and arrange multiple hierarchical aggregations
 /// on monotonic inputs.
-fn build_monotonic<S>(
-    &self,
+fn build_monotonic<C: Context, S>(
+    ctx: &C,
     collection: Collection<S, (Row, Row), Diff>,
     MonotonicPlan {
         aggr_funcs,
@@ -1166,7 +1163,7 @@ fn build_monotonic<S>(
     mfp_after: Option<SafeMfpPlan>,
 ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
 where
-    S: Scope<Timestamp = G::Timestamp>,
+    S: Scope<Timestamp = C::Timestamp>,
 {
     // Gather the relevant values into a vec of rows ordered by aggregation_index
     let collection = collection
@@ -1188,7 +1185,7 @@ where
         );
 
     // It should be now possible to ensure that we have a monotonic collection.
-    let error_logger = self.error_logger();
+    let error_logger = ctx.error_logger();
     let (partial, validation_errs) = collection.ensure_monotonic(move |data, diff| {
         error_logger.log(
             "Non-monotonic input to ReduceMonotonic",
@@ -1274,8 +1271,8 @@ where
 /// they can be accumulated in place. The `count` operator promotes the accumulated
 /// values to data, at which point a final map applies operator-specific logic to
 /// yield the final aggregate.
-fn build_accumulable<S>(
-    &self,
+fn build_accumulable<C: Context, S>(
+    ctx: &C,
     collection: Collection<S, (Row, Row), Diff>,
     AccumulablePlan {
         full_aggrs,
@@ -1285,11 +1282,11 @@ fn build_accumulable<S>(
     mfp_after: Option<SafeMfpPlan>,
 ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
 where
-    S: Scope<Timestamp = G::Timestamp>,
+    S: Scope<Timestamp = C::Timestamp>,
 {
     // we must have called this function with something to reduce
     if full_aggrs.len() == 0 || simple_aggrs.len() + distinct_aggrs.len() != full_aggrs.len() {
-        self.error_logger().soft_panic_or_log(
+        ctx.error_logger().soft_panic_or_log(
             "Incorrect numbers of aggregates in accummulable reduction rendering",
             &format!(
                 "full_aggrs={}, simple_aggrs={}, distinct_aggrs={}",
@@ -1391,7 +1388,7 @@ where
     let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
     let full_aggrs2 = full_aggrs.clone();
 
-    let error_logger = self.error_logger();
+    let error_logger = ctx.error_logger();
     let err_full_aggrs = full_aggrs.clone();
     let (arranged_output, arranged_errs) = collection
         .mz_arrange::<RowSpine<_, (Vec<Accum>, Diff)>>("ArrangeAccumulable [val: empty]")
@@ -1475,7 +1472,6 @@ where
         arranged_output,
         arranged_errs.as_collection(|_key, error| error.into_owned()),
     )
-}
 }
 
 /// Evaluates the fused MFP, if one exists, on a reconstructed `DatumVecBorrow`

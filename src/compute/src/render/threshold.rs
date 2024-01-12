@@ -26,9 +26,9 @@ use timely::progress::Timestamp;
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::render::context::{
-    ArrangementFlavor, CollectionBundle, Context, SpecializedArrangement,
-    SpecializedArrangementImport,
+    ArrangementFlavor, CollectionBundle, SpecializedArrangement, SpecializedArrangementImport,
 };
+use crate::render::RenderTimestamp;
 
 /// Shared function to compute an arrangement of values matching `logic`.
 fn threshold_arrangement<G, T1, T2, L>(
@@ -145,17 +145,14 @@ where
     }
 }
 
-impl<G, T> Context<G, T>
-where
-    G: Scope,
-    G::Timestamp: Lattice + Refines<T> + Columnation,
-    T: Timestamp + Lattice + Columnation,
-{
-pub(crate) fn render_threshold(
-    &self,
-    input: CollectionBundle<G, T>,
+pub(crate) fn render_threshold<S>(
+    input: CollectionBundle<S>,
     threshold_plan: ThresholdPlan,
-) -> CollectionBundle<G, T> {
+) -> CollectionBundle<S>
+where
+    S: Scope,
+    S::Timestamp: RenderTimestamp,
+{
     match threshold_plan {
         ThresholdPlan::Basic(BasicThresholdPlan {
             ensure_arrangement: (key, _, _),
@@ -166,5 +163,4 @@ pub(crate) fn render_threshold(
             build_threshold_basic(input, key)
         }
     }
-}
 }

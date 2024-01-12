@@ -10,25 +10,19 @@
 use mz_expr::{MapFilterProject, MirScalarExpr, TableFunc};
 use mz_repr::{DatumVec, RowArena, SharedRow};
 use mz_timely_util::operator::StreamExt;
-use timely::dataflow::Scope;
 
 use crate::render::context::{CollectionBundle, Context};
 
-impl<G> Context<G>
-where
-    G: Scope,
-    G::Timestamp: crate::render::RenderTimestamp,
-{
 /// Renders `relation_expr` followed by `map_filter_project` if provided.
-pub fn render_flat_map(
-    &mut self,
-    input: CollectionBundle<G>,
+pub fn render_flat_map<C: Context>(
+    ctx: &C,
+    input: CollectionBundle<C::Scope>,
     func: TableFunc,
     exprs: Vec<MirScalarExpr>,
     mfp: MapFilterProject,
     input_key: Option<Vec<MirScalarExpr>>,
-) -> CollectionBundle<G> {
-    let until = self.until.clone();
+) -> CollectionBundle<C::Scope> {
+    let until = ctx.until().clone();
     let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
     let (ok_collection, err_collection) = input.as_specific_collection(input_key.as_deref());
     let (oks, errs) = ok_collection.inner.flat_map_fallible("FlatMapStage", {
@@ -104,5 +98,4 @@ pub fn render_flat_map(
     let new_err_collection = errs.as_collection();
     let err_collection = err_collection.concat(&new_err_collection);
     CollectionBundle::from_collections(ok_collection, err_collection)
-}
 }
