@@ -89,6 +89,13 @@ WORKLOADS = [
         validator="ResultsetComparatorSimplify",
     ),
     Workload(
+        name="subqueries",
+        dataset=Dataset.SIMPLE,
+        grammar="conf/mz/subqueries.yy",
+        reference_implementation=ReferenceImplementation.POSTGRES,
+        validator="ResultsetComparatorSimplify",
+    ),
+    Workload(
         # A workload that performs DML that preserve the dataset's invariants
         # and also checks that those invariants are not violated
         name="banking",
