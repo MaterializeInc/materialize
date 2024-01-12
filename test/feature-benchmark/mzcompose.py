@@ -146,7 +146,7 @@ def run_one_scenario(
 
         c.up("testdrive", persistent=True)
 
-        additional_system_parameter_defaults = {}
+        additional_system_parameter_defaults = {"max_clusters": "15"}
 
         if params is not None:
             for param in params.split(";"):
