@@ -151,20 +151,20 @@ where
     G::Timestamp: Lattice + Refines<T> + Columnation,
     T: Timestamp + Lattice + Columnation,
 {
-    pub(crate) fn render_threshold(
-        &self,
-        input: CollectionBundle<G, T>,
-        threshold_plan: ThresholdPlan,
-    ) -> CollectionBundle<G, T> {
-        match threshold_plan {
-            ThresholdPlan::Basic(BasicThresholdPlan {
-                ensure_arrangement: (key, _, _),
-            }) => {
-                // We do not need to apply the permutation here,
-                // since threshold doesn't inspect the values, but only
-                // their counts.
-                build_threshold_basic(input, key)
-            }
+pub(crate) fn render_threshold(
+    &self,
+    input: CollectionBundle<G, T>,
+    threshold_plan: ThresholdPlan,
+) -> CollectionBundle<G, T> {
+    match threshold_plan {
+        ThresholdPlan::Basic(BasicThresholdPlan {
+            ensure_arrangement: (key, _, _),
+        }) => {
+            // We do not need to apply the permutation here,
+            // since threshold doesn't inspect the values, but only
+            // their counts.
+            build_threshold_basic(input, key)
         }
     }
+}
 }

@@ -45,266 +45,264 @@ where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
 {
-    /// Renders `MirRelationExpr:Join` using dogs^3 delta query dataflows.
-    ///
-    /// The join is followed by the application of `map_filter_project`, whose
-    /// implementation will be pushed in to the join pipeline if at all possible.
-    pub fn render_delta_join(
-        &mut self,
-        inputs: Vec<CollectionBundle<G>>,
-        join_plan: DeltaJoinPlan,
-    ) -> CollectionBundle<G> {
-        // We create a new region to contain the dataflow paths for the delta join.
-        let (oks, errs) = self.scope.clone().region_named("Join(Delta)", |inner| {
-            // Collects error streams for the ambient scope.
-            let mut inner_errs = Vec::new();
+/// Renders `MirRelationExpr:Join` using dogs^3 delta query dataflows.
+///
+/// The join is followed by the application of `map_filter_project`, whose
+/// implementation will be pushed in to the join pipeline if at all possible.
+pub fn render_delta_join(
+    &mut self,
+    inputs: Vec<CollectionBundle<G>>,
+    join_plan: DeltaJoinPlan,
+) -> CollectionBundle<G> {
+    // We create a new region to contain the dataflow paths for the delta join.
+    let (oks, errs) = self.scope.clone().region_named("Join(Delta)", |inner| {
+        // Collects error streams for the ambient scope.
+        let mut inner_errs = Vec::new();
 
-            // Deduplicate the error streams of multiply used arrangements.
-            let mut err_dedup = BTreeSet::new();
+        // Deduplicate the error streams of multiply used arrangements.
+        let mut err_dedup = BTreeSet::new();
 
-            // Our plan is to iterate through each input relation, and attempt
-            // to find a plan that maximally uses existing keys (better: uses
-            // existing arrangements, to which we have access).
-            let mut join_results = Vec::new();
+        // Our plan is to iterate through each input relation, and attempt
+        // to find a plan that maximally uses existing keys (better: uses
+        // existing arrangements, to which we have access).
+        let mut join_results = Vec::new();
 
-            // First let's prepare the input arrangements we will need.
-            // This reduces redundant imports, and simplifies the dataflow structure.
-            // As the arrangements are all shared, it should not dramatically improve
-            // the efficiency, but the dataflow simplification is worth doing.
-            let mut arrangements = BTreeMap::new();
-            for path_plan in join_plan.path_plans.iter() {
-                for stage_plan in path_plan.stage_plans.iter() {
-                    let lookup_idx = stage_plan.lookup_relation;
-                    let lookup_key = stage_plan.lookup_key.clone();
-                    arrangements
-                        .entry((lookup_idx, lookup_key.clone()))
-                        .or_insert_with(|| {
-                            match inputs[lookup_idx]
-                                .arrangement(&lookup_key)
-                                .unwrap_or_else(|| {
-                                    panic!(
-                                        "Arrangement alarmingly absent!: {}, {:?}",
-                                        lookup_idx, lookup_key,
-                                    )
-                                }) {
-                                ArrangementFlavor::Local(oks, errs) => {
-                                    if err_dedup.insert((lookup_idx, lookup_key)) {
-                                        inner_errs.push(
-                                            errs.enter_region(inner)
-                                                .as_collection(|k, _v| k.clone()),
-                                        );
-                                    }
-                                    Ok(oks.enter_region(inner))
+        // First let's prepare the input arrangements we will need.
+        // This reduces redundant imports, and simplifies the dataflow structure.
+        // As the arrangements are all shared, it should not dramatically improve
+        // the efficiency, but the dataflow simplification is worth doing.
+        let mut arrangements = BTreeMap::new();
+        for path_plan in join_plan.path_plans.iter() {
+            for stage_plan in path_plan.stage_plans.iter() {
+                let lookup_idx = stage_plan.lookup_relation;
+                let lookup_key = stage_plan.lookup_key.clone();
+                arrangements
+                    .entry((lookup_idx, lookup_key.clone()))
+                    .or_insert_with(|| {
+                        match inputs[lookup_idx]
+                            .arrangement(&lookup_key)
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "Arrangement alarmingly absent!: {}, {:?}",
+                                    lookup_idx, lookup_key,
+                                )
+                            }) {
+                            ArrangementFlavor::Local(oks, errs) => {
+                                if err_dedup.insert((lookup_idx, lookup_key)) {
+                                    inner_errs.push(
+                                        errs.enter_region(inner).as_collection(|k, _v| k.clone()),
+                                    );
                                 }
-                                ArrangementFlavor::Trace(_gid, oks, errs) => {
-                                    if err_dedup.insert((lookup_idx, lookup_key)) {
-                                        inner_errs.push(
-                                            errs.enter_region(inner)
-                                                .as_collection(|k, _v| k.clone()),
-                                        );
-                                    }
-                                    Err(oks.enter_region(inner))
+                                Ok(oks.enter_region(inner))
+                            }
+                            ArrangementFlavor::Trace(_gid, oks, errs) => {
+                                if err_dedup.insert((lookup_idx, lookup_key)) {
+                                    inner_errs.push(
+                                        errs.enter_region(inner).as_collection(|k, _v| k.clone()),
+                                    );
+                                }
+                                Err(oks.enter_region(inner))
+                            }
+                        }
+                    });
+            }
+        }
+
+        for path_plan in join_plan.path_plans {
+            // Deconstruct the stages of the path plan.
+            let DeltaPathPlan {
+                source_relation,
+                initial_closure,
+                stage_plans,
+                final_closure,
+                source_key,
+            } = path_plan;
+
+            // This collection determines changes that result from updates inbound
+            // from `inputs[relation]` and reflects all strictly prior updates and
+            // concurrent updates from relations prior to `relation`.
+            let name = format!("delta path {}", source_relation);
+            let path_results = inner.clone().region_named(&name, |region| {
+                // The plan is to move through each relation, starting from `relation` and in the order
+                // indicated in `orders[relation]`. At each moment, we will have the columns from the
+                // subset of relations encountered so far, and we will have applied as much as we can
+                // of the filters in `equivalences` and the logic in `map_filter_project`, based on the
+                // available columns.
+                //
+                // As we go, we will track the physical locations of each intended output column, as well
+                // as the locations of intermediate results from partial application of `map_filter_project`.
+                //
+                // Just before we apply the `lookup` function to perform a join, we will first use our
+                // available information to determine the filtering and logic that we can apply, and
+                // introduce that in to the `lookup` logic to cause it to happen in that operator.
+
+                // Collects error streams for the region scope. Concats before leaving.
+                let mut region_errs = Vec::with_capacity(inputs.len());
+
+                // Ensure this input is rendered, and extract its update stream.
+                let val = arrangements
+                    .get(&(source_relation, source_key))
+                    .expect("Arrangement promised by the planner is absent!");
+                let as_of = self.as_of_frontier.clone();
+                let update_stream = match val {
+                    Ok(local) => {
+                        let arranged = local.enter_region(region);
+                        let (update_stream, err_stream) = dispatch_build_update_stream_local(
+                            arranged,
+                            as_of,
+                            source_relation,
+                            initial_closure,
+                        );
+                        region_errs.push(err_stream);
+                        update_stream
+                    }
+                    Err(trace) => {
+                        let arranged = trace.enter_region(region);
+                        let (update_stream, err_stream) = dispatch_build_update_stream_trace(
+                            arranged,
+                            as_of,
+                            source_relation,
+                            initial_closure,
+                        );
+                        region_errs.push(err_stream);
+                        update_stream
+                    }
+                };
+                // Promote `time` to a datum element.
+                //
+                // The `half_join` operator manipulates as "data" a pair `(data, time)`,
+                // while tracking the initial time `init_time` separately and without
+                // modification. The initial value for both times is the initial time.
+                let mut update_stream = update_stream
+                    .inner
+                    .map(|(v, t, d)| ((v, t.clone()), t, d))
+                    .as_collection();
+
+                // Repeatedly update `update_stream` to reflect joins with more and more
+                // other relations, in the specified order.
+                for stage_plan in stage_plans {
+                    let DeltaStagePlan {
+                        lookup_relation,
+                        stream_key,
+                        stream_thinning,
+                        lookup_key,
+                        closure,
+                    } = stage_plan;
+
+                    // We require different logic based on the relative order of the two inputs.
+                    // If the `source` relation precedes the `lookup` relation, we present all
+                    // updates with less or equal `time`, and otherwise we present only updates
+                    // with strictly less `time`.
+                    //
+                    // We need to write the logic twice, as there are two types of arrangement
+                    // we might have: either dataflow-local or an imported trace.
+                    let (oks, errs) =
+                        match arrangements.get(&(lookup_relation, lookup_key)).unwrap() {
+                            Ok(local) => {
+                                if source_relation < lookup_relation {
+                                    dispatch_build_halfjoin_local(
+                                        update_stream,
+                                        local.enter_region(region),
+                                        stream_key,
+                                        stream_thinning,
+                                        |t1, t2| t1.le(t2),
+                                        closure,
+                                        self.shutdown_token.clone(),
+                                    )
+                                } else {
+                                    dispatch_build_halfjoin_local(
+                                        update_stream,
+                                        local.enter_region(region),
+                                        stream_key,
+                                        stream_thinning,
+                                        |t1, t2| t1.lt(t2),
+                                        closure,
+                                        self.shutdown_token.clone(),
+                                    )
                                 }
                             }
-                        });
+                            Err(trace) => {
+                                if source_relation < lookup_relation {
+                                    dispatch_build_halfjoin_trace(
+                                        update_stream,
+                                        trace.enter_region(region),
+                                        stream_key,
+                                        stream_thinning,
+                                        |t1, t2| t1.le(t2),
+                                        closure,
+                                        self.shutdown_token.clone(),
+                                    )
+                                } else {
+                                    dispatch_build_halfjoin_trace(
+                                        update_stream,
+                                        trace.enter_region(region),
+                                        stream_key,
+                                        stream_thinning,
+                                        |t1, t2| t1.lt(t2),
+                                        closure,
+                                        self.shutdown_token.clone(),
+                                    )
+                                }
+                            }
+                        };
+                    update_stream = oks;
+                    region_errs.push(errs);
                 }
-            }
 
-            for path_plan in join_plan.path_plans {
-                // Deconstruct the stages of the path plan.
-                let DeltaPathPlan {
-                    source_relation,
-                    initial_closure,
-                    stage_plans,
-                    final_closure,
-                    source_key,
-                } = path_plan;
+                // Delay updates as appropriate.
+                //
+                // The `half_join` operator maintains a time that we now discard (the `_`),
+                // and replace with the `time` that is maintained with the data. The former
+                // exists to pin a consistent total order on updates throughout the process,
+                // while allowing `time` to vary upwards as a result of actions on time.
+                let mut update_stream = update_stream
+                    .inner
+                    .map(|((row, time), _, diff)| (row, time, diff))
+                    .as_collection();
 
-                // This collection determines changes that result from updates inbound
-                // from `inputs[relation]` and reflects all strictly prior updates and
-                // concurrent updates from relations prior to `relation`.
-                let name = format!("delta path {}", source_relation);
-                let path_results = inner.clone().region_named(&name, |region| {
-                    // The plan is to move through each relation, starting from `relation` and in the order
-                    // indicated in `orders[relation]`. At each moment, we will have the columns from the
-                    // subset of relations encountered so far, and we will have applied as much as we can
-                    // of the filters in `equivalences` and the logic in `map_filter_project`, based on the
-                    // available columns.
-                    //
-                    // As we go, we will track the physical locations of each intended output column, as well
-                    // as the locations of intermediate results from partial application of `map_filter_project`.
-                    //
-                    // Just before we apply the `lookup` function to perform a join, we will first use our
-                    // available information to determine the filtering and logic that we can apply, and
-                    // introduce that in to the `lookup` logic to cause it to happen in that operator.
+                // We have completed the join building, but may have work remaining.
+                // For example, we may have expressions not pushed down (e.g. literals)
+                // and projections that could not be applied (e.g. column repetition).
+                if let Some(final_closure) = final_closure {
+                    let (updates, errors) =
+                        update_stream.flat_map_fallible("DeltaJoinFinalization", {
+                            // Reuseable allocation for unpacking.
+                            let mut datums = DatumVec::new();
+                            move |row| {
+                                let binding = SharedRow::get();
+                                let mut row_builder = binding.borrow_mut();
+                                let temp_storage = RowArena::new();
+                                let mut datums_local = datums.borrow_with(&row);
+                                // TODO(mcsherry): re-use `row` allocation.
+                                final_closure
+                                    .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                                    .map_err(DataflowError::from)
+                                    .transpose()
+                            }
+                        });
 
-                    // Collects error streams for the region scope. Concats before leaving.
-                    let mut region_errs = Vec::with_capacity(inputs.len());
+                    update_stream = updates;
+                    region_errs.push(errors);
+                }
 
-                    // Ensure this input is rendered, and extract its update stream.
-                    let val = arrangements
-                        .get(&(source_relation, source_key))
-                        .expect("Arrangement promised by the planner is absent!");
-                    let as_of = self.as_of_frontier.clone();
-                    let update_stream = match val {
-                        Ok(local) => {
-                            let arranged = local.enter_region(region);
-                            let (update_stream, err_stream) = dispatch_build_update_stream_local(
-                                arranged,
-                                as_of,
-                                source_relation,
-                                initial_closure,
-                            );
-                            region_errs.push(err_stream);
-                            update_stream
-                        }
-                        Err(trace) => {
-                            let arranged = trace.enter_region(region);
-                            let (update_stream, err_stream) = dispatch_build_update_stream_trace(
-                                arranged,
-                                as_of,
-                                source_relation,
-                                initial_closure,
-                            );
-                            region_errs.push(err_stream);
-                            update_stream
-                        }
-                    };
-                    // Promote `time` to a datum element.
-                    //
-                    // The `half_join` operator manipulates as "data" a pair `(data, time)`,
-                    // while tracking the initial time `init_time` separately and without
-                    // modification. The initial value for both times is the initial time.
-                    let mut update_stream = update_stream
-                        .inner
-                        .map(|(v, t, d)| ((v, t.clone()), t, d))
-                        .as_collection();
+                inner_errs.push(
+                    differential_dataflow::collection::concatenate(region, region_errs)
+                        .leave_region(),
+                );
+                update_stream.leave_region()
+            });
 
-                    // Repeatedly update `update_stream` to reflect joins with more and more
-                    // other relations, in the specified order.
-                    for stage_plan in stage_plans {
-                        let DeltaStagePlan {
-                            lookup_relation,
-                            stream_key,
-                            stream_thinning,
-                            lookup_key,
-                            closure,
-                        } = stage_plan;
+            join_results.push(path_results);
+        }
 
-                        // We require different logic based on the relative order of the two inputs.
-                        // If the `source` relation precedes the `lookup` relation, we present all
-                        // updates with less or equal `time`, and otherwise we present only updates
-                        // with strictly less `time`.
-                        //
-                        // We need to write the logic twice, as there are two types of arrangement
-                        // we might have: either dataflow-local or an imported trace.
-                        let (oks, errs) =
-                            match arrangements.get(&(lookup_relation, lookup_key)).unwrap() {
-                                Ok(local) => {
-                                    if source_relation < lookup_relation {
-                                        dispatch_build_halfjoin_local(
-                                            update_stream,
-                                            local.enter_region(region),
-                                            stream_key,
-                                            stream_thinning,
-                                            |t1, t2| t1.le(t2),
-                                            closure,
-                                            self.shutdown_token.clone(),
-                                        )
-                                    } else {
-                                        dispatch_build_halfjoin_local(
-                                            update_stream,
-                                            local.enter_region(region),
-                                            stream_key,
-                                            stream_thinning,
-                                            |t1, t2| t1.lt(t2),
-                                            closure,
-                                            self.shutdown_token.clone(),
-                                        )
-                                    }
-                                }
-                                Err(trace) => {
-                                    if source_relation < lookup_relation {
-                                        dispatch_build_halfjoin_trace(
-                                            update_stream,
-                                            trace.enter_region(region),
-                                            stream_key,
-                                            stream_thinning,
-                                            |t1, t2| t1.le(t2),
-                                            closure,
-                                            self.shutdown_token.clone(),
-                                        )
-                                    } else {
-                                        dispatch_build_halfjoin_trace(
-                                            update_stream,
-                                            trace.enter_region(region),
-                                            stream_key,
-                                            stream_thinning,
-                                            |t1, t2| t1.lt(t2),
-                                            closure,
-                                            self.shutdown_token.clone(),
-                                        )
-                                    }
-                                }
-                            };
-                        update_stream = oks;
-                        region_errs.push(errs);
-                    }
-
-                    // Delay updates as appropriate.
-                    //
-                    // The `half_join` operator maintains a time that we now discard (the `_`),
-                    // and replace with the `time` that is maintained with the data. The former
-                    // exists to pin a consistent total order on updates throughout the process,
-                    // while allowing `time` to vary upwards as a result of actions on time.
-                    let mut update_stream = update_stream
-                        .inner
-                        .map(|((row, time), _, diff)| (row, time, diff))
-                        .as_collection();
-
-                    // We have completed the join building, but may have work remaining.
-                    // For example, we may have expressions not pushed down (e.g. literals)
-                    // and projections that could not be applied (e.g. column repetition).
-                    if let Some(final_closure) = final_closure {
-                        let (updates, errors) =
-                            update_stream.flat_map_fallible("DeltaJoinFinalization", {
-                                // Reuseable allocation for unpacking.
-                                let mut datums = DatumVec::new();
-                                move |row| {
-                                    let binding = SharedRow::get();
-                                    let mut row_builder = binding.borrow_mut();
-                                    let temp_storage = RowArena::new();
-                                    let mut datums_local = datums.borrow_with(&row);
-                                    // TODO(mcsherry): re-use `row` allocation.
-                                    final_closure
-                                        .apply(&mut datums_local, &temp_storage, &mut row_builder)
-                                        .map_err(DataflowError::from)
-                                        .transpose()
-                                }
-                            });
-
-                        update_stream = updates;
-                        region_errs.push(errors);
-                    }
-
-                    inner_errs.push(
-                        differential_dataflow::collection::concatenate(region, region_errs)
-                            .leave_region(),
-                    );
-                    update_stream.leave_region()
-                });
-
-                join_results.push(path_results);
-            }
-
-            // Concatenate the results of each delta query as the accumulated results.
-            (
-                differential_dataflow::collection::concatenate(inner, join_results).leave_region(),
-                differential_dataflow::collection::concatenate(inner, inner_errs).leave_region(),
-            )
-        });
-        CollectionBundle::from_collections(oks, errs)
-    }
+        // Concatenate the results of each delta query as the accumulated results.
+        (
+            differential_dataflow::collection::concatenate(inner, join_results).leave_region(),
+            differential_dataflow::collection::concatenate(inner, inner_errs).leave_region(),
+        )
+    });
+    CollectionBundle::from_collections(oks, errs)
+}
 }
 
 /// Dispatches half-join construction according to arrangement type specialization.
