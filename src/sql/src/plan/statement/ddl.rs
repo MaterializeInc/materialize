@@ -1696,6 +1696,9 @@ fn source_sink_cluster_config(
     if cluster.replica_ids().len() > 1 {
         sql_bail!("cannot create {ty} in cluster with more than one replica")
     }
+    // Don't allow more objects to be added to a cluster that is already
+    // linked to another object.
+    ensure_cluster_is_not_linked(scx, cluster.id())?;
 
     Ok(SourceSinkClusterConfig::Existing { id: cluster.id() })
 }
@@ -2122,7 +2125,7 @@ pub fn plan_create_materialized_view(
         .catalog
         .is_system_schema_specifier(&name.qualifiers.schema_spec)
     {
-        ensure_cluster_is_not_linked(scx, cluster_id);
+        ensure_cluster_is_not_linked(scx, cluster_id)?;
     }
 
     let query::PlannedRootQuery {
@@ -2969,7 +2972,7 @@ pub fn plan_create_index(
         .catalog
         .is_system_schema_specifier(&index_name.qualifiers.schema_spec)
     {
-        ensure_cluster_is_not_linked(scx, cluster_id);
+        ensure_cluster_is_not_linked(scx, cluster_id)?;
     }
     *in_cluster = Some(ResolvedClusterName {
         id: cluster_id,
@@ -3546,7 +3549,7 @@ pub fn plan_create_cluster_replica(
             hypothetical_replica_count: current_replica_count + 1,
         });
     }
-    ensure_cluster_is_not_linked(scx, cluster.id());
+    ensure_cluster_is_not_linked(scx, cluster.id())?;
 
     let config = plan_replica_config(scx, options)?;
 
@@ -3825,7 +3828,7 @@ fn plan_drop_cluster(
                     dependents: Vec::new(),
                 });
             }
-            ensure_cluster_is_not_linked(scx, cluster.id());
+            ensure_cluster_is_not_linked(scx, cluster.id())?;
             Some(cluster.id())
         }
         None => None,
@@ -3850,7 +3853,7 @@ fn plan_drop_cluster_replica(
 ) -> Result<Option<(ClusterId, ReplicaId)>, PlanError> {
     let cluster = resolve_cluster_replica(scx, name, if_exists)?;
     if let Some((cluster, _)) = &cluster {
-        ensure_cluster_is_not_linked(scx, cluster.id());
+        ensure_cluster_is_not_linked(scx, cluster.id())?;
     }
     Ok(cluster.map(|(cluster, replica_id)| (cluster.id(), replica_id)))
 }
@@ -4371,7 +4374,7 @@ pub fn plan_alter_cluster(
     };
 
     // Prevent changes to linked clusters.
-    ensure_cluster_is_not_linked(scx, cluster.id());
+    ensure_cluster_is_not_linked(scx, cluster.id())?;
 
     let mut options: PlanClusterOption = Default::default();
 
@@ -4559,7 +4562,7 @@ pub fn plan_alter_item_set_cluster(
                 .catalog
                 .is_system_schema_specifier(&entry.name().qualifiers.schema_spec)
             {
-                ensure_cluster_is_not_linked(scx, in_cluster.id());
+                ensure_cluster_is_not_linked(scx, in_cluster.id())?;
             }
 
             if current_cluster == in_cluster.id() {
@@ -5683,21 +5686,24 @@ pub(crate) fn resolve_item_or_type<'a>(
     }
 }
 
-/// Panics if the given cluster is a linked cluster
-///
-/// TODO: deprecate in subsequent versions when we no longer track the linked
-/// relationships of clusters on boot.
-pub(crate) fn ensure_cluster_is_not_linked(scx: &StatementContext, cluster_id: ClusterId) {
+/// Returns an error if the given cluster is a linked cluster
+pub(crate) fn ensure_cluster_is_not_linked(
+    scx: &StatementContext,
+    cluster_id: ClusterId,
+) -> Result<(), PlanError> {
     let cluster = scx.catalog.get_cluster(cluster_id);
-    // linked_object_id will panic when called with a value that would return
-    // Some, but panicking here just to ensure that those semantics are
-    // abundantly clear.
     if let Some(linked_id) = cluster.linked_object_id() {
-        panic!(
-            "can no longer create new linked clusters, but cluster {} linked to {}",
-            cluster.id(),
-            linked_id
-        );
+        let cluster_name = scx.catalog.get_cluster(cluster_id).name().to_string();
+        let linked_object_name = scx
+            .catalog
+            .resolve_full_name(scx.catalog.get_item(&linked_id).name())
+            .to_string();
+        Err(PlanError::ModifyLinkedCluster {
+            cluster_name,
+            linked_object_name,
+        })
+    } else {
+        Ok(())
     }
 }
 
