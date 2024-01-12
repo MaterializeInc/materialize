@@ -94,7 +94,11 @@ def workflow_default(c: Composition) -> None:
                 $ kafka-ingest format=avro key-format=avro topic=pubsub-disruption schema=${schema} key-schema=${keyschema} start-iteration=1 repeat=1000000
                 {"f1": ${kafka-ingest.iteration}} {"f2": 1}
 
+                > DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+                > CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
                 > CREATE SOURCE s1
+                  IN CLUSTER source_sink_cluster
                   FROM KAFKA CONNECTION kafka_conn
                   (TOPIC 'testdrive-pubsub-disruption-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

@@ -37,7 +37,11 @@ INSERT INTO table_a VALUES (2, 'two');
 
 # Check empty publication on ALTER
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE "mz_source"
+  IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (
     PUBLICATION 'mz_source'
   )
@@ -113,6 +117,7 @@ ALTER TABLE table_g REPLICA IDENTITY FULL;
 INSERT INTO table_g VALUES (2, 'two');
 
 > CREATE SOURCE "mz_source"
+  IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (
     PUBLICATION 'mz_source',
     TEXT COLUMNS [table_f.f2]
@@ -160,6 +165,7 @@ contains:"materialize.public.mz_table" is a table not a source
 > DROP TABLE mz_table;
 
 > CREATE SOURCE "mz_source_too"
+  IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (public.table_a AS t_a);
 
@@ -427,6 +433,7 @@ detail:the following tables are referenced but not added: public.table_f
 # Test adding text cols w/o original text columns
 
 > CREATE SOURCE "mz_source_wo_init_text_cols"
+  IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (
     PUBLICATION 'mz_source'
   )

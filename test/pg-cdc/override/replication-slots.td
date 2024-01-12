@@ -31,7 +31,11 @@ INSERT INTO pk_table VALUES (1, 'one');
 ALTER TABLE pk_table REPLICA IDENTITY FULL;
 INSERT INTO pk_table VALUES (2, 'two');
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE pg_source
+  IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES ("pk_table");
 

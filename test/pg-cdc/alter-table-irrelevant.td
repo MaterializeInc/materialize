@@ -32,7 +32,11 @@ INSERT INTO base_table VALUES (1);
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE mz_source
+  IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR ALL TABLES;
 
@@ -65,6 +69,7 @@ INSERT INTO irrelevant_table VALUES ('ab');
 # Recreate the source and views to verify the irrelevant_table is part of the publication
 > DROP SOURCE mz_source;
 > CREATE SOURCE mz_source
+  IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR ALL TABLES;
 

@@ -16,6 +16,9 @@ $ kafka-create-topic topic=data
 $ kafka-ingest topic=data format=bytes
 banana
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SECRET kafka_password AS 'sekurity'
 
 > CREATE CONNECTION kafka_bad_progress_topic TO KAFKA (
@@ -45,6 +48,7 @@ banana
 # user.
 
 > CREATE SOURCE broken
+  IN CLUSTER source_sink_cluster
   FROM KAFKA CONNECTION kafka_good_progress_topic (
     TOPIC 'testdrive-data-${testdrive.seed}'
   )
@@ -65,6 +69,7 @@ true
 # Ensure that offsets are committed.
 
 > CREATE SOURCE working_source
+  IN CLUSTER source_sink_cluster
   FROM KAFKA CONNECTION kafka_good_progress_topic (
     TOPIC 'testdrive-data-${testdrive.seed}',
     GROUP ID PREFIX 'lockdown-'
@@ -84,7 +89,9 @@ $ kafka-verify-commit topic=data partition=0 consumer-group-id=lockdown-material
 1
 
 # A sink which uses a bad transactional ID should fail.
-> CREATE SINK broken1 FROM mv
+> CREATE SINK broken1
+  IN CLUSTER source_sink_cluster
+  FROM mv
   INTO KAFKA CONNECTION kafka_bad_progress_topic (
     TOPIC 'testdrive-broken-${testdrive.seed}'
   )
@@ -101,7 +108,9 @@ true
 
 # A sink which uses a good transactional ID but a bad progress topic should
 # fail.
-> CREATE SINK broken2 FROM mv
+> CREATE SINK broken2
+  IN CLUSTER source_sink_cluster
+  FROM mv
   INTO KAFKA CONNECTION kafka_bad_progress_topic (
     TOPIC 'testdrive-broken-${testdrive.seed}',
     TRANSACTIONAL ID PREFIX 'lockdown'
@@ -119,7 +128,9 @@ true
 
 # A sink which uses a good transactional ID and progress topic but a bad data
 # topic should fail.
-> CREATE SINK broken3 FROM mv
+> CREATE SINK broken3
+  IN CLUSTER source_sink_cluster
+  FROM mv
   INTO KAFKA CONNECTION kafka_good_progress_topic (
     TOPIC 'testdrive-broken-${testdrive.seed}',
     TRANSACTIONAL ID PREFIX 'lockdown'
@@ -139,9 +150,9 @@ true
 # but a bad group ID prefix will fail, but only after restart when the progress
 # topic contains entries.
 
-> CREATE CLUSTER c (SIZE = '1')
-
-> CREATE SINK broken4 IN CLUSTER c FROM mv
+> CREATE SINK broken4
+  IN CLUSTER source_sink_cluster
+  FROM mv
   INTO KAFKA CONNECTION kafka_good_progress_topic (
     TOPIC 'lockdown-data1',
     TRANSACTIONAL ID PREFIX 'lockdown'
@@ -153,7 +164,7 @@ $ kafka-verify-data format=json key=false sink=materialize.public.broken4 sort-m
 {"column1": 2}
 
 # Resize the cluster on which the sink is running to force the sink to restart.
-> ALTER CLUSTER c SET (SIZE = '2')
+> ALTER CLUSTER source_sink_cluster SET (SIZE = '2')
 
 > SELECT EXISTS (
     SELECT 1
@@ -169,7 +180,9 @@ true
 # A sink which uses a good transactional ID, progress topic, data topic, and
 # group ID prefix should work.
 
-> CREATE SINK working IN CLUSTER c FROM mv
+> CREATE SINK working
+  IN CLUSTER source_sink_cluster
+  FROM mv
   INTO KAFKA CONNECTION kafka_good_progress_topic (
     TOPIC 'lockdown-data2',
     TRANSACTIONAL ID PREFIX 'lockdown',
@@ -184,7 +197,7 @@ $ kafka-verify-data format=json key=false sink=materialize.public.working sort-m
 {"column1": 2}
 
 # Resize the cluster on which the sink is running to force the sink to restart.
-> ALTER CLUSTER c SET (SIZE = '1')
+> ALTER CLUSTER source_sink_cluster SET (SIZE = '1')
 
 # Ensure that the sink is emitting new messages.
 > INSERT INTO t VALUES (3)

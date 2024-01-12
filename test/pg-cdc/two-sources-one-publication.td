@@ -40,11 +40,16 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SCHEMA schema1
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE mz_source1
+   IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (t1 AS t1_1, t2 AS t2_1);
 
 > CREATE SOURCE mz_source2
+  IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (t1 AS t1_2, t2 AS t2_2);
 

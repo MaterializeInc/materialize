@@ -54,7 +54,11 @@ contains:multiple subsources would be named t1
   FOR TABLES (t1);
 contains:table t1 is ambiguous, consider specifying the schema
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE mz_source
+   IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (schema1.t1);
 
@@ -65,6 +69,7 @@ contains:table t1 is ambiguous, consider specifying the schema
 > DROP SOURCE mz_source;
 
 > CREATE SOURCE mz_source
+  IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (schema1.t1 AS t1_1, schema2.t1 AS t1_2);
 

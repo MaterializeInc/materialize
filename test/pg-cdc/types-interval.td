@@ -34,7 +34,11 @@ INSERT INTO t1 VALUES (interval '1 year 2 month 3 day 4 hour 5 minute 6.789123 s
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE mz_source
+   IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR ALL TABLES;
 

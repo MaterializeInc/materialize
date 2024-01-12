@@ -39,7 +39,11 @@ CREATE TABLE unique_nullable (f1 INT, f2 INT, f3 INT, UNIQUE (f1, f2));
 INSERT INTO unique_nullable VALUES (1,1,null), (null,null,null), (null,null,null);
 ALTER TABLE unique_nullable REPLICA IDENTITY FULL;
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE mz_source
+  IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR ALL TABLES;
 

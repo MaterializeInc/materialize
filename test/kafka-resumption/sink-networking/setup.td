@@ -20,9 +20,12 @@ Rochester,NY,14618
 New York,NY,10004
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
 
 # The source intentionally does not go through toxiproxy.
 > CREATE SOURCE input (city, state, zip)
+  IN CLUSTER source_sink_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-${testdrive.seed}')
   FORMAT CSV WITH 3 COLUMNS
   INCLUDE OFFSET
@@ -31,7 +34,9 @@ New York,NY,10004
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE SINK output FROM input
+> CREATE SINK output
+  IN CLUSTER source_sink_cluster
+  FROM input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-byo-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM

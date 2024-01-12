@@ -26,7 +26,11 @@ $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=3
 
 > CREATE CONNECTION kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE kafka_multi_broker
+  IN CLUSTER source_sink_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-multi-broker-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE NONE
@@ -45,6 +49,7 @@ $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=6
   );
 
 > CREATE SINK multi_broker_sink
+  IN CLUSTER source_sink_cluster
   FROM kafka_multi_broker
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-multi-broker-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn

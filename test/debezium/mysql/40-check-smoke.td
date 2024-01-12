@@ -24,7 +24,11 @@ $ schema-registry-wait subject=mysql.transaction-value
     URL '${testdrive.schema-registry-url}'
   );
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE t1
+  IN CLUSTER source_sink_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'mysql.test.t1')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;

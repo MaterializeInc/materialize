@@ -24,7 +24,11 @@ $ schema-registry-wait subject=postgres.public.alter_allow_nullability-value
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE alter_allow_nullability
+  IN CLUSTER source_sink_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_allow_nullability')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;

@@ -39,7 +39,11 @@ detail:referenced items: tbl_a
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE tbl_a REPLICA IDENTITY FULL
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE mz_source
+   IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES(tbl_a);
 

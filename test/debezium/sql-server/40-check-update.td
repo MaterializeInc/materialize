@@ -11,7 +11,11 @@ $ schema-registry-wait subject=sql-server.test.dbo.update_table_pk-value
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE update_table_pk
+  IN CLUSTER source_sink_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.test.dbo.update_table_pk')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
@@ -23,6 +27,7 @@ $ schema-registry-wait subject=sql-server.test.dbo.update_table_pk-value
 #   URL '${testdrive.schema-registry-url}';
 
 # > CREATE SOURCE update_table_nopk
+#   IN CLUSTER source_sink_cluster
 #   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.dbo.update_table_nopk')
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 #   ENVELOPE DEBEZIUM;

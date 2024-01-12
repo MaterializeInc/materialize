@@ -249,7 +249,7 @@ $ kafka-create-topic topic=snk9 partitions=4
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
-> SET cluster TO default
+> SET cluster TO quickstart
 
 # create sink with vestigial size specified
 ! CREATE SINK sink_with_size FROM src

@@ -65,7 +65,11 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 
 # With this first source, we verify that we can retract key/value decoding errors.
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE upsert
+  IN CLUSTER source_sink_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -94,6 +98,7 @@ bird1:goose
 :geese
 
 > CREATE SOURCE upsert_nullkey
+  IN CLUSTER source_sink_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-nullkey-${testdrive.seed}')
   KEY FORMAT TEXT
   VALUE FORMAT TEXT

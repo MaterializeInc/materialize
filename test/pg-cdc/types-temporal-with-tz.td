@@ -41,7 +41,11 @@ CREATE PUBLICATION mz_source_time FOR TABLE time_table;
 
 CREATE PUBLICATION mz_source_timestamp FOR TABLE timestamp_table;
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE mz_source_timestamp
+   IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_timestamp')
   FOR ALL TABLES;
 

@@ -45,7 +45,11 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > DROP SOURCE IF EXISTS mz_source;
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE mz_source
+   IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (t1 AS schema1.t1, t2 AS schema2.t1);
 

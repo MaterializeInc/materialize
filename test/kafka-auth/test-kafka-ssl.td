@@ -20,6 +20,9 @@ $ kafka-create-topic topic=text-data
 $ kafka-ingest topic=text-data format=bytes
 banana
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 # ==> Test invalid configurations. <==
 
 ! CREATE CONNECTION kafka_invalid TO KAFKA (
@@ -53,7 +56,9 @@ contains:ssl.ca.pem failed: not in PEM format?
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
 
-> CREATE SOURCE text_data (a) FROM KAFKA CONNECTION kafka (
+> CREATE SOURCE text_data (a)
+  IN CLUSTER source_sink_cluster
+  FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
   ) FORMAT TEXT
 
@@ -67,7 +72,9 @@ banana
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
 
-> CREATE SOURCE text_data_ssh FROM KAFKA CONNECTION kafka_ssh (
+> CREATE SOURCE text_data_ssh
+  IN CLUSTER source_sink_cluster
+  FROM KAFKA CONNECTION kafka_ssh (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
   ) FORMAT TEXT
 

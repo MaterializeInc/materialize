@@ -34,15 +34,21 @@ CREATE PUBLICATION mz_source_insert FOR TABLE t1 WITH ( publish = 'insert') ;
 CREATE PUBLICATION mz_source_update FOR TABLE t1 WITH ( publish = 'update') ;
 CREATE PUBLICATION mz_source_delete FOR TABLE t1 WITH ( publish = 'delete') ;
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE mz_source_insert
+  IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_insert')
   FOR TABLES (t1 AS t1_insert);
 
 > CREATE SOURCE mz_source_update
+  IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_update')
   FOR TABLES (t1 AS t1_update);
 
 > CREATE SOURCE mz_source_delete
+  IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source_delete')
   FOR TABLES (t1 AS t1_delete);
 

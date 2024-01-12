@@ -19,6 +19,9 @@ $ kafka-create-topic topic=text-data
 $ kafka-ingest topic=text-data format=bytes
 banana
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 # ==> Test invalid configurations. <==
 
 ! CREATE CONNECTION kafka_invalid TO KAFKA (
@@ -113,7 +116,9 @@ contains:Invalid CA certificate
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
 
-> CREATE SOURCE text_data_plain FROM KAFKA CONNECTION kafka_plain (
+> CREATE SOURCE text_data_plain
+  IN CLUSTER source_sink_cluster
+  FROM KAFKA CONNECTION kafka_plain (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
   ) FORMAT TEXT
 
@@ -128,7 +133,9 @@ banana
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
 
-> CREATE SOURCE text_data_scram_sha_256 FROM KAFKA CONNECTION kafka_scram_sha_256 (
+> CREATE SOURCE text_data_scram_sha_256
+  IN CLUSTER source_sink_cluster
+  FROM KAFKA CONNECTION kafka_scram_sha_256 (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
   ) FORMAT TEXT
 
@@ -143,7 +150,9 @@ banana
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
 
-> CREATE SOURCE text_data_scram_sha_512 FROM KAFKA CONNECTION kafka_scram_sha_512 (
+> CREATE SOURCE text_data_scram_sha_512
+  IN CLUSTER source_sink_cluster
+  FROM KAFKA CONNECTION kafka_scram_sha_512 (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
   ) FORMAT TEXT
 
@@ -160,7 +169,9 @@ banana
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
 
-> CREATE SOURCE text_data_ssh_plain FROM KAFKA CONNECTION kafka_ssh_plain (
+> CREATE SOURCE text_data_ssh_plain
+  IN CLUSTER source_sink_cluster
+  FROM KAFKA CONNECTION kafka_ssh_plain (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
   ) FORMAT TEXT
 
@@ -175,7 +186,9 @@ banana
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
 
-> CREATE SOURCE text_data_ssh_scram_sha_256 FROM KAFKA CONNECTION kafka_ssh_scram_sha_256 (
+> CREATE SOURCE text_data_ssh_scram_sha_256
+  IN CLUSTER source_sink_cluster
+  FROM KAFKA CONNECTION kafka_ssh_scram_sha_256 (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
   ) FORMAT TEXT
 
@@ -190,7 +203,9 @@ banana
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
 
-> CREATE SOURCE text_data_ssh_scram_sha_512 FROM KAFKA CONNECTION kafka_ssh_scram_sha_512 (
+> CREATE SOURCE text_data_ssh_scram_sha_512
+  IN CLUSTER source_sink_cluster
+  FROM KAFKA CONNECTION kafka_ssh_scram_sha_512 (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
   ) FORMAT TEXT
 

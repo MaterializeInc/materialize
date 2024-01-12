@@ -27,12 +27,18 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
 > DROP SCHEMA IF EXISTS prod CASCADE
 > DROP SCHEMA IF EXISTS prod_deploy CASCADE
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 # For now sources are not considered in blue-green deployments, so create them separately
 > DROP SOURCE IF EXISTS counter
-> CREATE SOURCE counter FROM LOAD GENERATOR counter (TICK INTERVAL '1s')
+> CREATE SOURCE counter
+  IN CLUSTER source_sink_cluster
+  FROM LOAD GENERATOR counter (TICK INTERVAL '1s')
 
 > DROP SOURCE IF EXISTS tpch
 > CREATE SOURCE tpch
+  IN CLUSTER source_sink_cluster
   FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1)
   FOR ALL TABLES
 

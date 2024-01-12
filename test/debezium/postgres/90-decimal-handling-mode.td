@@ -23,7 +23,11 @@ $ schema-registry-wait subject=postgres.public.decimal_handling_mode_precise-val
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE decimal_handling_mode_precise
+  IN CLUSTER source_sink_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.decimal_handling_mode_precise')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
@@ -65,6 +69,7 @@ INSERT INTO decimal_handling_mode_double VALUES (2234567.890);
 $ schema-registry-wait subject=postgres.public.decimal_handling_mode_double-value
 
 > CREATE SOURCE decimal_handling_mode_double
+  IN CLUSTER source_sink_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.decimal_handling_mode_double')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
@@ -105,6 +110,7 @@ INSERT INTO decimal_handling_mode_string VALUES (3234567.890);
 $ schema-registry-wait subject=postgres.public.decimal_handling_mode_string-value
 
 > CREATE SOURCE decimal_handling_mode_string
+  IN CLUSTER source_sink_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.decimal_handling_mode_string')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;

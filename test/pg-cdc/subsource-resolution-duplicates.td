@@ -49,12 +49,16 @@ detail:referenced tables with duplicate name: postgres.other.t, postgres.public.
 contains:multiple subsources refer to table postgres.public.t
 detail: subsources referencing table: x, y
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE mz_source
+  IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR SCHEMAS (other);
 
 > SHOW sources
- mz_source          postgres  ${arg.default-replica-size} quickstart
+ mz_source postgres 4-1 source_sink_cluster
  mz_source_progress progress  <null> <null>
  t                  subsource <null> <null>
 

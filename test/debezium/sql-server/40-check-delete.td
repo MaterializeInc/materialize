@@ -15,15 +15,19 @@ $ schema-registry-wait subject=sql-server.test.dbo.delete_table_pk-value
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE delete_table_pk
+  IN CLUSTER source_sink_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.test.dbo.delete_table_pk')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
 
 # [btv] uncomment if we bring back classic debezium mode
 # $ schema-registry-wait subject=sql-server.dbo.delete_table_nopk-value
-
 # > CREATE SOURCE delete_table_nopk
+#   IN CLUSTER source_sink_cluster
 #   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.dbo.delete_table_nopk')
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
 #   ENVELOPE DEBEZIUM;

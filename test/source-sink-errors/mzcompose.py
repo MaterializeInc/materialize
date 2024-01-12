@@ -103,7 +103,8 @@ class KafkaTransactionLogGreaterThan1:
 
                 > INSERT INTO sink_table VALUES (2);
 
-                > CREATE SINK kafka_sink FROM sink_table
+                > CREATE SINK kafka_sink
+                  FROM sink_table
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
@@ -191,7 +192,8 @@ class KafkaDisruption:
                 > SELECT count(*) from source1
                 1
 
-                > CREATE SINK sink1 FROM source1
+                > CREATE SINK sink1
+                  FROM source1
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-topic-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
@@ -294,7 +296,8 @@ class KafkaSinkDisruption:
                   ENVELOPE NONE
                 # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/materialize/issues/16582
 
-                > CREATE SINK sink1 FROM source1
+                > CREATE SINK sink1
+                  FROM source1
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-topic-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM

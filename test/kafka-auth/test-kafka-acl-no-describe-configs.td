@@ -12,6 +12,9 @@
 
 # ==> Set up. <==
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SECRET kafka_password AS 'sekurity'
 
 > CREATE CONNECTION kafka TO KAFKA (
@@ -31,7 +34,9 @@
 # Creating the sink when the topic does not yet exist should work, because
 # Materialize will gracefully continue even if it cannot discover the default
 # number of partitions and replication factor to use.
-> CREATE SINK nonexisting FROM mv
+> CREATE SINK nonexisting
+  IN CLUSTER source_sink_cluster
+  FROM mv
   INTO KAFKA CONNECTION kafka (TOPIC 'testdrive-nonexisting-${testdrive.seed}')
   KEY (column1) FORMAT JSON ENVELOPE UPSERT
 
@@ -55,7 +60,9 @@ running
 # determine the replication factor/number of partitions to use.
 $ kafka-create-topic topic=no-describe-configs
 
-> CREATE SINK preexisting FROM mv
+> CREATE SINK preexisting
+  IN CLUSTER source_sink_cluster
+  FROM mv
   INTO KAFKA CONNECTION kafka (TOPIC 'testdrive-preexisting-${testdrive.seed}')
   KEY (column1) FORMAT JSON ENVELOPE UPSERT
 

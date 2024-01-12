@@ -37,6 +37,9 @@ $ kafka-create-topic topic=avro-data
 $ kafka-ingest topic=avro-data format=avro schema=${schema}
 {"a": 1}
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 # ==> Test invalid configurations. <==
 
 # This is a bad error message to indicate "disallowed client certificate" but
@@ -78,7 +81,9 @@ contains:server error 401: Unauthorized
     SSL CERTIFICATE AUTHORITY = '${ca-crt}'
   )
 
-> CREATE SOURCE avro_data FROM KAFKA CONNECTION kafka (
+> CREATE SOURCE avro_data
+  IN CLUSTER source_sink_cluster
+  FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-avro-data-${testdrive.seed}'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
@@ -100,7 +105,9 @@ a
     SSH TUNNEL testdrive_no_reset_connections.public.ssh
   )
 
-> CREATE SOURCE avro_data_ssh FROM KAFKA CONNECTION kafka (
+> CREATE SOURCE avro_data_ssh
+  IN CLUSTER source_sink_cluster
+  FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-avro-data-${testdrive.seed}'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry

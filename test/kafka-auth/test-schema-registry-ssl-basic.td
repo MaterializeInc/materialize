@@ -34,6 +34,9 @@ $ kafka-create-topic topic=avro-data
 $ kafka-ingest topic=avro-data format=avro schema=${schema} timestamp=1
 {"a": 1}
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 # ==> Test invalid configurations. <==
 
 ! CREATE CONNECTION schema_registry_invalid TO CONFLUENT SCHEMA REGISTRY (
@@ -64,7 +67,9 @@ contains:server error 401: Unauthorized
     SSL CERTIFICATE AUTHORITY = '${ca-crt}'
   )
 
-> CREATE SOURCE avro_data FROM KAFKA CONNECTION kafka (
+> CREATE SOURCE avro_data
+  IN CLUSTER source_sink_cluster
+  FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-avro-data-${testdrive.seed}'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
@@ -84,7 +89,9 @@ a
     SSH TUNNEL testdrive_no_reset_connections.public.ssh
   )
 
-> CREATE SOURCE avro_data_ssh FROM KAFKA CONNECTION kafka (
+> CREATE SOURCE avro_data_ssh
+  IN CLUSTER source_sink_cluster
+  FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-avro-data-${testdrive.seed}'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
@@ -107,7 +114,9 @@ a
 
 #### Create a backup sink
 
-> CREATE SINK snk_backup FROM avro_data
+> CREATE SINK snk_backup
+  IN CLUSTER source_sink_cluster
+  FROM avro_data
   INTO KAFKA CONNECTION kafka_backup (TOPIC 'snk_backup')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
   ENVELOPE DEBEZIUM
@@ -194,7 +203,9 @@ contains:failed to fetch schema subject
 
 > ALTER CONNECTION schema_registry SET (SSL CERTIFICATE AUTHORITY = '${ca-crt}') WITH (VALIDATE = true);
 
-> CREATE SOURCE kafka_broken_csr_connector_source_fixed FROM KAFKA CONNECTION kafka (
+> CREATE SOURCE kafka_broken_csr_connector_source_fixed
+  IN CLUSTER source_sink_cluster
+  FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-avro-data-${testdrive.seed}'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry

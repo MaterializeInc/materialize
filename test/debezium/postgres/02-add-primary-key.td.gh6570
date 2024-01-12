@@ -21,7 +21,11 @@ INSERT INTO alter_add_primary_key VALUES (123), (234);
     URL '${testdrive.schema-registry-url}'
   );
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE alter_add_primary_key
+  IN CLUSTER source_sink_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_add_primary_key')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;

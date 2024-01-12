@@ -40,7 +40,11 @@ INSERT INTO t2(t1_id, name) VALUES (1, 'example');
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE mz_source
+   IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR ALL TABLES;
 
@@ -61,6 +65,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 # verify that dropping things allows recreation
 
 > CREATE SOURCE mz_source
+  IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR ALL TABLES;
 

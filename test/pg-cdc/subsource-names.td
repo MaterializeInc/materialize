@@ -37,7 +37,11 @@ INSERT INTO t2 VALUES (5);
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SCHEMA a;
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE a.mz_source
+   IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (t1);
 
@@ -46,6 +50,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SCHEMA another;
 > CREATE SOURCE another.mz_source
+  IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (t1, t2);
 
@@ -58,6 +63,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 > CREATE SCHEMA foo;
 > CREATE SCHEMA bar;
 > CREATE SOURCE foo.mz_source
+  IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (t1 as table1, t2 as bar.table2);
 
@@ -77,6 +83,7 @@ contains: unknown
 
 > CREATE SCHEMA baz;
 > CREATE SOURCE baz.mz_source
+  IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR SCHEMAS (public);
 

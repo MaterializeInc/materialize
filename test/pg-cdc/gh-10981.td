@@ -32,7 +32,11 @@ INSERT INTO t1 VALUES (1, NULL, 1);
 CREATE PUBLICATION mz_source FOR TABLE t1;
 
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE mz_source
+  IN CLUSTER source_sink_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES (t1);
 

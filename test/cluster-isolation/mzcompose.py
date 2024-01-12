@@ -195,7 +195,11 @@ $ kafka-create-topic topic=source1 partitions=1
 $ kafka-ingest format=bytes topic=source1
 A
 
+> DROP CLUSTER IF EXISTS source_sink_cluster CASCADE;
+> CREATE CLUSTER source_sink_cluster SIZE '4-1';
+
 > CREATE SOURCE source1
+  IN CLUSTER source_sink_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-source1-${testdrive.seed}')
   FORMAT BYTES
 
@@ -203,7 +207,9 @@ A
 A
 
 # Sinks
-> CREATE SINK sink1 FROM v1mat
+> CREATE SINK sink1
+  IN CLUSTER source_sink_cluster
+  FROM v1mat
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink1')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
