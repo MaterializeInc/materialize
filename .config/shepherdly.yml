@@ -10,6 +10,4 @@ mitigations:
     score_threshold: 75
   - name: integration_test
     score_threshold: 80
-  - name: observability
-    score_threshold: 75
 default_system_mitigations: false
