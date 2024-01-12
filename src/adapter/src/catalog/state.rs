@@ -845,9 +845,7 @@ impl CatalogState {
     ) -> Result<CatalogItem, AdapterError> {
         // TODO - The `None` needs to be changed if we ever allow custom
         // logical compaction windows in user-defined objects.
-        let mut pcx = PlanContext::zero();
-        pcx.set_planning_id(id);
-        self.parse_item(id, create_sql, Some(&pcx), false, None)
+        self.parse_item(id, create_sql, Some(&PlanContext::zero()), false, None)
     }
 
     /// Parses the given SQL string into a `CatalogItem`.

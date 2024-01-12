@@ -1553,15 +1553,11 @@ impl Params {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Copy)]
 pub struct PlanContext {
     pub wall_time: DateTime<Utc>,
-    pub planning_id: Option<GlobalId>,
 }
 
 impl PlanContext {
     pub fn new(wall_time: DateTime<Utc>) -> Self {
-        Self {
-            wall_time,
-            planning_id: None,
-        }
+        Self { wall_time }
     }
 
     /// Return a PlanContext with zero values. This should only be used when
@@ -1570,11 +1566,6 @@ impl PlanContext {
     pub fn zero() -> Self {
         PlanContext {
             wall_time: now::to_datetime(NOW_ZERO()),
-            planning_id: None,
         }
-    }
-
-    pub fn set_planning_id(&mut self, id: GlobalId) {
-        self.planning_id = Some(id);
     }
 }
