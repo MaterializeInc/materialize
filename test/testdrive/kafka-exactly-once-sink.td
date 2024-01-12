@@ -332,6 +332,7 @@ $ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.p
 1	{"before": null, "after": {"row": {"a": 2, "b": 2}}}
 
 > CREATE SOURCE compaction_test_sink_check
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_fixed (TOPIC 'testdrive-progress-fixed-${testdrive.seed}')
   FORMAT JSON ENVELOPE NONE
 
