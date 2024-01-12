@@ -75,9 +75,9 @@ use mz_sql::plan::{
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
     Plan, PlanContext,
 };
-use mz_sql::rbac;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::{SystemVars, Var, VarInput, DEFAULT_DATABASE_NAME};
+use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_types::connections::inline::{
     ConnectionResolver, InlinedConnection, IntoInlineConnection,
@@ -888,7 +888,7 @@ impl CatalogState {
             Plan::CreateSource(CreateSourcePlan {
                 source,
                 timeline,
-                in_cluster,
+                cluster_config,
                 ..
             }) => CatalogItem::Source(Source {
                 create_sql: Some(source.create_sql),
@@ -897,12 +897,11 @@ impl CatalogState {
                         DataSourceDesc::ingestion(
                             id,
                             ingestion,
-                            match in_cluster {
-                                Some(id) => id,
-                                None => {
-                                    return Err(AdapterError::Unstructured(anyhow::anyhow!(
-                                        "ingestion-based sources must have cluster specified"
-                                    )))
+                            match cluster_config {
+                                plan::SourceSinkClusterConfig::Existing { id } => id,
+                                plan::SourceSinkClusterConfig::Linked { .. }
+                                | plan::SourceSinkClusterConfig::Undefined => {
+                                    self.clusters_by_linked_object_id[&id]
                                 }
                             },
                         )
@@ -912,12 +911,16 @@ impl CatalogState {
                     mz_sql::plan::DataSourceDesc::Webhook {
                         validate_using,
                         headers,
-                    } => DataSourceDesc::Webhook {
-                        validate_using,
-                        headers,
-                        cluster_id: in_cluster
-                            .expect("webhook sources must use an existing cluster"),
-                    },
+                    } => {
+                        let plan::SourceSinkClusterConfig::Existing { id } = cluster_config else {
+                            unreachable!("webhook sources must use an existing cluster");
+                        };
+                        DataSourceDesc::Webhook {
+                            validate_using,
+                            headers,
+                            cluster_id: id,
+                        }
+                    }
                 },
                 desc: source.desc,
                 timeline,
@@ -990,7 +993,7 @@ impl CatalogState {
             Plan::CreateSink(CreateSinkPlan {
                 sink,
                 with_snapshot,
-                in_cluster,
+                cluster_config,
                 ..
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
@@ -999,7 +1002,13 @@ impl CatalogState {
                 envelope: sink.envelope,
                 with_snapshot,
                 resolved_ids,
-                cluster_id: in_cluster,
+                cluster_id: match cluster_config {
+                    plan::SourceSinkClusterConfig::Existing { id } => id,
+                    plan::SourceSinkClusterConfig::Linked { .. }
+                    | plan::SourceSinkClusterConfig::Undefined => {
+                        self.clusters_by_linked_object_id[&id]
+                    }
+                },
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
                 create_sql: Some(typ.create_sql),

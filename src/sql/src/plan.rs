@@ -552,8 +552,7 @@ pub struct CreateSourcePlan {
     pub source: Source,
     pub if_not_exists: bool,
     pub timeline: Timeline,
-    // None for subsources, which run on the parent cluster.
-    pub in_cluster: Option<ClusterId>,
+    pub cluster_config: SourceSinkClusterConfig,
 }
 
 #[derive(Debug)]
@@ -561,6 +560,50 @@ pub struct CreateSourcePlans {
     pub source_id: GlobalId,
     pub plan: CreateSourcePlan,
     pub resolved_ids: ResolvedIds,
+}
+
+/// Specifies the cluster for a source or a sink.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum SourceSinkClusterConfig {
+    /// Use an existing cluster.
+    Existing {
+        /// The ID of the cluster to use.
+        id: ClusterId,
+    },
+    /// Create a new linked storage cluster of the specified size.
+    ///
+    /// NOTE(benesch): in the future, we hope to remove the concept of a linked
+    /// cluster, and always associate sources and sinks with an existing
+    /// cluster.
+    Linked {
+        /// The size of the replica to create in the linked cluster.
+        size: String,
+    },
+    /// The user did not specify a cluster behavior, so the actual behavior depends on
+    /// the context. For sources the behavior depends on the data source:
+    ///
+    ///   - Ingestion: Use the default behavior.
+    ///   - Source: Use the same cluster as the data source source.
+    ///   - Progress: Use the same cluster as the non-progress source.
+    ///   - Webhook: Does not allow undefined configs.
+    ///
+    /// For sinks, always use the default behavior.
+    ///
+    /// NOTE(benesch): we plan to remove this variant in the future by having
+    /// the planner bind a source or sink with no `SIZE` or `IN CLUSTER` option
+    /// to the active cluster. This behavior won't be ergonomic until we have
+    /// multipurpose clusters though.
+    Undefined,
+}
+
+impl SourceSinkClusterConfig {
+    /// Returns the ID of the cluster that this source/sink will be created on, if one exists.
+    pub fn cluster_id(&self) -> Option<&ClusterId> {
+        match self {
+            SourceSinkClusterConfig::Existing { id } => Some(id),
+            SourceSinkClusterConfig::Linked { .. } | SourceSinkClusterConfig::Undefined => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -591,7 +634,7 @@ pub struct CreateSinkPlan {
     pub sink: Sink,
     pub with_snapshot: bool,
     pub if_not_exists: bool,
-    pub in_cluster: ClusterId,
+    pub cluster_config: SourceSinkClusterConfig,
 }
 
 #[derive(Debug)]

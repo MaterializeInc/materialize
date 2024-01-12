@@ -465,6 +465,7 @@ impl Source {
     pub fn new(
         id: GlobalId,
         plan: CreateSourcePlan,
+        cluster_id: Option<ClusterId>,
         resolved_ids: ResolvedIds,
         custom_logical_compaction_window: Option<CompactionWindow>,
         is_retained_metrics_object: bool,
@@ -475,19 +476,24 @@ impl Source {
                 mz_sql::plan::DataSourceDesc::Ingestion(ingestion) => DataSourceDesc::ingestion(
                     id,
                     ingestion,
-                    plan.in_cluster
-                        .expect("ingestion-based sources must be given a cluster ID"),
+                    cluster_id.expect("ingestion-based sources must be given a cluster ID"),
                 ),
                 mz_sql::plan::DataSourceDesc::Progress => {
                     assert!(
-                        plan.in_cluster.is_none(),
+                        matches!(
+                            plan.cluster_config,
+                            mz_sql::plan::SourceSinkClusterConfig::Undefined
+                        ) && cluster_id.is_none(),
                         "subsources must not have a host config or cluster_id defined"
                     );
                     DataSourceDesc::Progress
                 }
                 mz_sql::plan::DataSourceDesc::Source => {
                     assert!(
-                        plan.in_cluster.is_none(),
+                        matches!(
+                            plan.cluster_config,
+                            mz_sql::plan::SourceSinkClusterConfig::Undefined
+                        ) && cluster_id.is_none(),
                         "subsources must not have a host config or cluster_id defined"
                     );
                     DataSourceDesc::Source
@@ -495,13 +501,20 @@ impl Source {
                 mz_sql::plan::DataSourceDesc::Webhook {
                     validate_using,
                     headers,
-                } => DataSourceDesc::Webhook {
-                    validate_using,
-                    headers,
-                    cluster_id: plan
-                        .in_cluster
-                        .expect("webhook sources must be given a cluster ID"),
-                },
+                } => {
+                    assert!(
+                        matches!(
+                            plan.cluster_config,
+                            mz_sql::plan::SourceSinkClusterConfig::Existing { .. }
+                        ) && cluster_id.is_some(),
+                        "webhook sources must be created on an existing cluster"
+                    );
+                    DataSourceDesc::Webhook {
+                        validate_using,
+                        headers,
+                        cluster_id: cluster_id.expect("checked above"),
+                    }
+                }
             },
             desc: plan.source.desc,
             timeline: plan.timeline,

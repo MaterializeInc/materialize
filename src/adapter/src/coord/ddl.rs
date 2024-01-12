@@ -342,7 +342,7 @@ impl Coordinator {
                     update_default_arrangement_merge_options = true;
                     update_http_config = true;
                 }
-                catalog::Op::RenameItem { id, .. } => {
+                catalog::Op::AlterSource { id, .. } | catalog::Op::RenameItem { id, .. } => {
                     let item = self.catalog().get_entry(id);
                     let is_webhook_source = item
                         .source()
@@ -1222,7 +1222,9 @@ impl Coordinator {
                     | CatalogItem::Func(_) => {}
                 },
                 Op::AlterRole { .. }
+                | Op::AlterSink { .. }
                 | Op::AlterSetCluster { .. }
+                | Op::AlterSource { .. }
                 | Op::UpdatePrivilege { .. }
                 | Op::UpdateDefaultPrivilege { .. }
                 | Op::GrantRole { .. }

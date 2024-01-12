@@ -54,7 +54,7 @@ use mz_catalog::memory::objects::{
 use mz_sql::plan::{
     AlterConnectionAction, AlterConnectionPlan, ExplainSinkSchemaPlan, Explainee, Index,
     IndexOption, MutationKind, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable,
-    QueryWhen, SideEffectingFunc, UpdatePrivilege, VariableValue,
+    QueryWhen, SideEffectingFunc, SourceSinkClusterConfig, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::user::UserKind;
 use mz_sql::session::vars::{
@@ -172,19 +172,19 @@ impl Coordinator {
         {
             let name = plan.name.clone();
             let source_oid = self.catalog_mut().allocate_oid()?;
-            if matches!(
-                plan.source.data_source,
+            let cluster_id = match plan.source.data_source {
                 mz_sql::plan::DataSourceDesc::Ingestion(_)
-                    | mz_sql::plan::DataSourceDesc::Webhook { .. }
-            ) {
-                if let Some(cluster) = self.catalog().try_get_cluster(
-                    plan.in_cluster
-                        .expect("ingestion, webhook sources must specify cluster"),
-                ) {
+                | mz_sql::plan::DataSourceDesc::Webhook { .. } => {
+                    plan.cluster_config.cluster_id().cloned()
+                }
+                _ => None,
+            };
+
+            if let Some(cluster_id) = cluster_id {
+                if let Some(cluster) = self.catalog().try_get_cluster(cluster_id) {
                     mz_ore::soft_assert_or_log!(
                         cluster.replica_ids().len() <= 1,
-                        "cannot create source in cluster {}; has >1 replicas",
-                        cluster.id()
+                        "cannot create source in cluster {cluster_id}; has >1 replicas"
                     );
                 }
             }
@@ -206,7 +206,7 @@ impl Coordinator {
                 }
             }
 
-            let source = Source::new(source_id, plan, resolved_ids, None, false);
+            let source = Source::new(source_id, plan, cluster_id, resolved_ids, None, false);
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
                 oid: source_oid,
@@ -718,18 +718,23 @@ impl Coordinator {
             sink,
             with_snapshot,
             if_not_exists,
-            in_cluster,
+            cluster_config: plan_cluster_config,
         } = plan;
 
         // First try to allocate an ID and an OID. If either fails, we're done.
         let id = return_if_err!(self.catalog_mut().allocate_user_id().await, ctx);
         let oid = return_if_err!(self.catalog_mut().allocate_oid(), ctx);
 
-        if let Some(cluster) = self.catalog().try_get_cluster(in_cluster) {
+        let mut ops = vec![];
+        let cluster_id = match plan_cluster_config {
+            SourceSinkClusterConfig::Existing { id } => id,
+            _ => unreachable!("can only place sinks on existing clusters"),
+        };
+
+        if let Some(cluster) = self.catalog().try_get_cluster(cluster_id) {
             mz_ore::soft_assert_or_log!(
                 cluster.replica_ids().len() <= 1,
-                "cannot create sink in cluster {}; has >1 replicas",
-                cluster.id()
+                "cannot create sink in cluster {cluster_id}; has >1 replicas"
             );
         }
 
@@ -740,16 +745,16 @@ impl Coordinator {
             envelope: sink.envelope,
             with_snapshot,
             resolved_ids,
-            cluster_id: in_cluster,
+            cluster_id,
         };
 
-        let ops = vec![catalog::Op::CreateItem {
+        ops.push(catalog::Op::CreateItem {
             id,
             oid,
             name: name.clone(),
             item: CatalogItem::Sink(catalog_sink.clone()),
             owner_id: *ctx.session().current_role_id(),
-        }];
+        });
 
         let from = self.catalog().get_entry(&catalog_sink.from);
         let from_name = from.name().item.clone();
@@ -3773,6 +3778,16 @@ impl Coordinator {
         let cur_entry = self.catalog().get_entry(&id);
         let cur_source = cur_entry.source().expect("known to be source");
 
+        let cur_ingestion = match &cur_source.data_source {
+            DataSourceDesc::Ingestion(ingestion) => ingestion,
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Webhook { .. }
+            | DataSourceDesc::Source => {
+                coord_bail!("cannot ALTER this type of source");
+            }
+        };
+
         let create_sql_to_stmt_deps = |coord: &Coordinator, err_cx, create_source_sql| {
             // Parse statement.
             let create_source_stmt = match mz_sql::parse::parse(create_source_sql)
@@ -3946,6 +3961,8 @@ impl Coordinator {
                 let source = Source::new(
                     id,
                     plan,
+                    // Use the same cluster ID.
+                    Some(cur_ingestion.instance_id),
                     resolved_ids,
                     cur_source.custom_logical_compaction_window,
                     cur_source.is_retained_metrics_object,
@@ -4151,6 +4168,8 @@ impl Coordinator {
                 let source = Source::new(
                     id,
                     plan,
+                    // Use the same cluster ID.
+                    Some(cur_ingestion.instance_id),
                     ResolvedIds(
                         resolved_ids
                             .0
