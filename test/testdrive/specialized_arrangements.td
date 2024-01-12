@@ -374,5 +374,7 @@ Used Indexes:
 
 > RESET cluster_replica;
 
+> DROP CLUSTER test CASCADE;
+
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_specialized_arrangements = false

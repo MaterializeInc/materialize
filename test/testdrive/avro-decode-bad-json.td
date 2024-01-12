@@ -23,7 +23,6 @@ $ kafka-ingest format=avro topic=avro-bad-json schema=${writer} timestamp=1
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE avro_bad_json
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-bad-json-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${reader}'
   ENVELOPE NONE

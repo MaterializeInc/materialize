@@ -31,3 +31,7 @@ foo size_2_2 0 true true <null>
 foo size_2_2 1 true true <null>
 foo size_32 0 true true <null>
 xyzzy size_4 0 true true <null>
+
+> DROP CLUSTER foo
+> DROP CLUSTER bar
+> DROP CLUSTER xyzzy

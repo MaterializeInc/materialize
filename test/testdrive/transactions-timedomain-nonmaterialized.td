@@ -19,7 +19,6 @@ $ kafka-ingest topic=static format=bytes
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE indexed (c)
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-static-${testdrive.seed}')
   FORMAT TEXT
@@ -27,7 +26,6 @@ $ kafka-ingest topic=static format=bytes
 > CREATE DEFAULT INDEX ON indexed
 
 > CREATE SOURCE unindexed (c)
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-static-${testdrive.seed}')
   FORMAT TEXT

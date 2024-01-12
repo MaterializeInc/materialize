@@ -21,7 +21,6 @@ $ kafka-create-topic topic=upsert
   )
   KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
-  WITH (SIZE '1')
 
 > CREATE SOURCE dropped_upsert
   IN CLUSTER dropped_cluster
@@ -30,7 +29,6 @@ $ kafka-create-topic topic=upsert
   )
   KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
-  WITH (SIZE '1')
 
 $ kafka-ingest format=bytes topic=upsert key-format=bytes key-terminator=:
 fish:fish

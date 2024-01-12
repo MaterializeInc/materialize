@@ -30,14 +30,7 @@ ITERATIONS = 128
 SERVICES = [
     Cockroach(setup_materialize=True),
     Materialized(external_cockroach=True),
-    Testdrive(
-        no_reset=True,
-        seed=1,
-        default_timeout="3600s",
-        entrypoint_extra=[
-            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
-        ],
-    ),
+    Testdrive(no_reset=True, seed=1, default_timeout="3600s"),
     Redpanda(),
     Postgres(),
     Clusterd(),
@@ -75,10 +68,8 @@ class PgCdcScenario(Scenario):
     )
     MZ_SETUP = dedent(
         """
-        > DROP CLUSTER IF EXISTS single_replica_cluster;
-        > CREATE CLUSTER single_replica_cluster SIZE '${arg.default-storage-size}';
         > CREATE SOURCE mz_source
-          IN CLUSTER single_replica_cluster
+          IN CLUSTER clusterd
           FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
           FOR ALL TABLES;
 
@@ -122,10 +113,8 @@ class KafkaScenario(Scenario):
 
     SOURCE = dedent(
         """
-        > DROP CLUSTER IF EXISTS single_replica_cluster;
-        > CREATE CLUSTER single_replica_cluster SIZE '${arg.default-storage-size}';
         > CREATE SOURCE s1
-          IN CLUSTER single_replica_cluster
+          IN CLUSTER clusterd
           FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}')
           FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
           ENVELOPE UPSERT;
@@ -456,10 +445,7 @@ SCENARIOS = [
         + KafkaScenario.END_MARKER
         + dedent(
             """
-            > DROP CLUSTER IF EXISTS single_replica_cluster;
-            > CREATE CLUSTER single_replica_cluster SIZE '${arg.default-storage-size}';
             > CREATE SOURCE s1
-              IN CLUSTER single_replica_cluster
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE UPSERT;

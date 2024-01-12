@@ -31,7 +31,6 @@ conn   kafka
   )
 
 > CREATE SOURCE mz_source (first, second)
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION conn (TOPIC 'testdrive-connection_test-${testdrive.seed}')
   FORMAT CSV WITH 2 COLUMNS
 

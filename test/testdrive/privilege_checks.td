@@ -31,8 +31,7 @@ REVOKE ALL PRIVILEGES ON SYSTEM FROM materialize;
 
 ## WITH SIZE
 
-! CREATE SINK s
-  FROM t
+! CREATE SINK s FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -42,8 +41,7 @@ contains:permission denied for SCHEMA "materialize.public"
 $ postgres-execute connection=mz_system
 GRANT USAGE ON SCHEMA materialize.public TO materialize;
 
-! CREATE SINK s
-  FROM t
+! CREATE SINK s FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -53,8 +51,7 @@ contains:permission denied for CONNECTION "materialize.public.kafka_conn"
 $ postgres-execute connection=mz_system
 GRANT USAGE ON CONNECTION kafka_conn TO materialize;
 
-! CREATE SINK s
-  FROM t
+! CREATE SINK s FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -64,8 +61,7 @@ contains:permission denied for CONNECTION "materialize.public.csr_conn"
 $ postgres-execute connection=mz_system
 GRANT USAGE ON CONNECTION csr_conn TO materialize;
 
-! CREATE SINK s
-  FROM t
+! CREATE SINK s FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -75,8 +71,7 @@ contains:permission denied for SCHEMA "materialize.public"
 $ postgres-execute connection=mz_system
 GRANT CREATE ON SCHEMA materialize.public TO materialize;
 
-! CREATE SINK s
-  FROM t
+! CREATE SINK s FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -86,8 +81,7 @@ contains:permission denied for TABLE "materialize.public.t"
 $ postgres-execute connection=mz_system
 GRANT SELECT ON TABLE t TO materialize;
 
-! CREATE SINK s
-  FROM t
+! CREATE SINK s FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -97,8 +91,7 @@ contains:permission denied for SYSTEM
 $ postgres-execute connection=mz_system
 GRANT CREATECLUSTER ON SYSTEM TO materialize;
 
-> CREATE SINK s
-  FROM t
+> CREATE SINK s FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -107,8 +100,7 @@ GRANT CREATECLUSTER ON SYSTEM TO materialize;
 $ postgres-execute connection=mz_system
 REVOKE CREATE ON SCHEMA materialize.public FROM materialize;
 
-! CREATE SINK s1
-  FROM t
+! CREATE SINK s1 FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -123,9 +115,7 @@ GRANT CREATE ON SCHEMA materialize.public TO materialize;
 $ postgres-execute connection=mz_system
 CREATE CLUSTER sink_cluster REPLICAS (r1 (SIZE '1'));
 
-! CREATE SINK s1
-  IN CLUSTER sink_cluster
-  FROM t
+! CREATE SINK s1 IN CLUSTER sink_cluster FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -134,9 +124,7 @@ contains:permission denied for CLUSTER "sink_cluster"
 $ postgres-execute connection=mz_system
 GRANT CREATE ON CLUSTER sink_cluster TO materialize;
 
-> CREATE SINK s1
-  IN CLUSTER sink_cluster
-  FROM t
+> CREATE SINK s1 IN CLUSTER sink_cluster FROM t
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -288,8 +276,7 @@ GRANT CREATECLUSTER ON SYSTEM TO materialize;
 $ postgres-execute connection=mz_system
 CREATE CLUSTER source_cluster REPLICAS (r1 (SIZE '1'));
 
-! CREATE SOURCE s1
-  IN CLUSTER source_cluster
+! CREATE SOURCE s1 IN CLUSTER source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rbac-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
@@ -298,8 +285,7 @@ contains:permission denied for CLUSTER "source_cluster"
 $ postgres-execute connection=mz_system
 GRANT CREATE ON CLUSTER source_cluster TO materialize;
 
-> CREATE SOURCE s1
-  IN CLUSTER source_cluster
+> CREATE SOURCE s1 IN CLUSTER source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rbac-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE

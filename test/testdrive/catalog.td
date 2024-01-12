@@ -7,12 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Testdrive accounts for multi-replica runs by creating additional clusters,
-# which affect the output of this test––instead just don't run this test.
-
-$ skip-if
-SELECT ${arg.replicas} > 1;
-
 $ set-sql-timeout duration=1s
 
 # Test \d <object> command
@@ -303,12 +297,9 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE source_data
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
-> CREATE SINK snk
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM source_data
+> CREATE SINK snk FROM source_data
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-catalog-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;

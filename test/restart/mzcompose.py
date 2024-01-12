@@ -26,11 +26,7 @@ SERVICES = [
     Kafka(auto_create_topics=True),
     SchemaRegistry(),
     Materialized(),
-    Testdrive(
-        entrypoint_extra=[
-            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
-        ],
-    ),
+    Testdrive(),
     testdrive_no_reset,
     Cockroach(setup_materialize=True),
 ]
@@ -382,14 +378,11 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
             > CREATE SOURCE kafka_source
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-status-history-${testdrive.seed}')
               FORMAT TEXT
-              WITH (SIZE = '1')
 
-            > CREATE SINK kafka_sink
-              FROM kafka_source
+            > CREATE SINK kafka_sink FROM kafka_source
               INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${testdrive.seed}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE DEBEZIUM
-              WITH (SIZE = '1')
 
             $ kafka-verify-topic sink=materialize.public.kafka_sink
             """

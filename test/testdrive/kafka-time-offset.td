@@ -27,14 +27,12 @@ $ kafka-create-topic topic=t0
   );
 
 ! CREATE SOURCE missing_topic
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=1, TOPIC 'missing_topic')
   FORMAT TEXT
   INCLUDE OFFSET
 contains:Topic does not exist
 
 ! CREATE SOURCE pick_one
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=1, START OFFSET=[1], TOPIC 'testdrive-t0-${testdrive.seed}')
   FORMAT TEXT
   INCLUDE OFFSET
@@ -42,7 +40,6 @@ contains:cannot specify START TIMESTAMP and START OFFSET at same time
 
 
 ! CREATE SOURCE not_a_number
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP="not_a_number", TOPIC 'testdrive-t0-${testdrive.seed}')
   FORMAT TEXT
   INCLUDE OFFSET
@@ -70,13 +67,11 @@ $ kafka-ingest format=bytes topic=t1 key-format=bytes key-terminator=: timestamp
 grape:grape
 
 > CREATE SOURCE append_time_offset_0
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=0, TOPIC 'testdrive-t1-${testdrive.seed}')
   FORMAT TEXT
   INCLUDE OFFSET
 
 > CREATE SOURCE append_time_offset_1
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (
       TOPIC METADATA REFRESH INTERVAL = '10ms',
       START TIMESTAMP=1,
@@ -86,7 +81,6 @@ grape:grape
   INCLUDE OFFSET
 
 > CREATE SOURCE append_time_offset_2
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (
       TOPIC METADATA REFRESH INTERVAL = '10ms',
       START TIMESTAMP=2,
@@ -96,7 +90,6 @@ grape:grape
   INCLUDE OFFSET
 
 > CREATE SOURCE append_time_offset_3
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (
       TOPIC METADATA REFRESH INTERVAL = '10ms',
       START TIMESTAMP=3,
@@ -106,7 +99,6 @@ grape:grape
   INCLUDE OFFSET
 
 > CREATE SOURCE append_time_offset_4
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (
       TOPIC METADATA REFRESH INTERVAL = '10ms',
       START TIMESTAMP=4,
@@ -116,7 +108,6 @@ grape:grape
   INCLUDE OFFSET
 
 > CREATE SOURCE append_time_offset_5
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (
       TOPIC METADATA REFRESH INTERVAL = '10ms',
       START TIMESTAMP=5,
@@ -209,7 +200,6 @@ $ kafka-ingest format=bytes topic=t2 key-format=bytes key-terminator=: timestamp
 grape:grape
 
 > CREATE SOURCE upsert_time_offset_0
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP=0,
       TOPIC 'testdrive-t2-${testdrive.seed}',
@@ -220,7 +210,6 @@ grape:grape
   ENVELOPE UPSERT
 
 > CREATE SOURCE upsert_time_offset_1
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP 1,
       TOPIC 'testdrive-t2-${testdrive.seed}',
@@ -231,7 +220,6 @@ grape:grape
   ENVELOPE UPSERT
 
 > CREATE SOURCE upsert_time_offset_2
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP 2,
       TOPIC 'testdrive-t2-${testdrive.seed}',
@@ -242,7 +230,6 @@ grape:grape
   ENVELOPE UPSERT
 
 > CREATE SOURCE upsert_time_offset_3
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP 3,
       TOPIC 'testdrive-t2-${testdrive.seed}',
@@ -253,7 +240,6 @@ grape:grape
   ENVELOPE UPSERT
 
 > CREATE SOURCE upsert_time_offset_4
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP 4,
       TOPIC 'testdrive-t2-${testdrive.seed}',
@@ -264,7 +250,6 @@ grape:grape
   ENVELOPE UPSERT
 
 > CREATE SOURCE upsert_time_offset_5
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (
       START TIMESTAMP 5,
       TOPIC 'testdrive-t2-${testdrive.seed}',
@@ -349,13 +334,11 @@ $ kafka-ingest format=bytes topic=t3 timestamp=4084108700000
 cherry
 
 > CREATE SOURCE relative_time_offset_30_years_ago
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=-946100000000, TOPIC 'testdrive-t3-${testdrive.seed}')
   FORMAT TEXT
   INCLUDE OFFSET
 
 > CREATE SOURCE relative_time_offset_today
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=-1, TOPIC 'testdrive-t3-${testdrive.seed}')
   FORMAT TEXT
   INCLUDE OFFSET
@@ -382,7 +365,6 @@ pie
 # A time offset of -1 specifies that we want to start from the end of the topic
 # (negative offsets are relative from the end).
 > CREATE SOURCE verify_no_fetch
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=-1, TOPIC 'testdrive-t4-${testdrive.seed}')
   FORMAT TEXT
   INCLUDE OFFSET
@@ -460,7 +442,6 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 {"id": 4} {"before": {"row": {"id": 4, "creature": "trex"}}, "after": {"row": {"id": 4, "creature": "chicken"}}}
 
 > CREATE SOURCE upsert_time_skip
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=6, TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM

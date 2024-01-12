@@ -57,3 +57,5 @@ CREATE CLUSTER REPLICA storage.r1 SIZE = '1';
 1 ${count}
 
 > COMMIT
+
+> DROP CLUSTER storage CASCADE;

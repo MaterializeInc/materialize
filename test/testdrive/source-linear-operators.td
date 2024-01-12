@@ -33,7 +33,6 @@ $ kafka-ingest format=avro topic=data schema=${schema}
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE data
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
@@ -237,7 +236,6 @@ $ kafka-ingest format=avro topic=data2 schema=${schema}
 {"a": {"long": 2}, "b": {"long": 1}, "c": {"long": 5}, "d": null}
 
 > CREATE SOURCE data2
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data2-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 

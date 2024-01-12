@@ -8,9 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # Create a load generator source that has several subsources.
-> CREATE SOURCE lga
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR AUCTION FOR ALL TABLES
+> CREATE SOURCE lga FROM LOAD GENERATOR AUCTION FOR ALL TABLES
 
 # By default, `SHOW SUBSOURCES` should show all sources in the schema.
 > SHOW SUBSOURCES
@@ -27,12 +25,8 @@ users          subsource
 # schema and one in another schema. Verify that `SHOW SUBSOURCES` shows the
 # subsources only in the current schema.
 > CREATE SCHEMA other
-> CREATE SOURCE lgc
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR COUNTER
-> CREATE SOURCE other.lgo
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR COUNTER
+> CREATE SOURCE lgc FROM LOAD GENERATOR COUNTER
+> CREATE SOURCE other.lgo FROM LOAD GENERATOR COUNTER
 
 > SHOW SUBSOURCES
 name           type

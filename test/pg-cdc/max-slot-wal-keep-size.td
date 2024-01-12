@@ -55,3 +55,5 @@ UPDATE t1 SET f2 = CONCAT(f2, pk);
 
 ! SELECT * FROM t1;
 contains:replication slot has been invalidated because it exceeded the maximum reserved size
+
+> DROP CLUSTER storage CASCADE;

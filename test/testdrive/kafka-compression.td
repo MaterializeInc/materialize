@@ -19,7 +19,6 @@ world
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE gzip
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-gzip-${testdrive.seed}')
   FORMAT TEXT
 > SELECT text FROM gzip
@@ -33,7 +32,6 @@ hello
 world
 
 > CREATE SOURCE snappy
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snappy-${testdrive.seed}')
   FORMAT TEXT
 > SELECT text FROM snappy
@@ -47,7 +45,6 @@ hello
 world
 
 > CREATE SOURCE lz4
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-lz4-${testdrive.seed}')
   FORMAT TEXT
 > SELECT text FROM lz4
@@ -61,7 +58,6 @@ hello
 world
 
 > CREATE SOURCE zstd
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-zstd-${testdrive.seed}')
   FORMAT TEXT
 > SELECT text FROM zstd
@@ -69,7 +65,6 @@ hello
 world
 
 > CREATE SOURCE zstd_fast_forwarded
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-zstd-${testdrive.seed}')
   FORMAT TEXT
 > SELECT text FROM zstd_fast_forwarded
@@ -81,62 +76,43 @@ world
 > INSERT INTO feed VALUES ('hello'), ('world')
 
 ! CREATE SINK invalid_sink
-  IN CLUSTER ${arg.single-replica-cluster}
   FROM feed
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-compression', COMPRESSION TYPE 'pied-piper')
   KEY (a) NOT ENFORCED
   FORMAT JSON ENVELOPE UPSERT
 contains:invalid COMPRESSION TYPE: pied-piper
 
-> CREATE CLUSTER none_sink_implicit_cluster SIZE '${arg.default-storage-size}';
-
 > CREATE SINK none_sink_implicit
-  IN CLUSTER none_sink_implicit_cluster
   FROM feed
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-compression', COMPRESSION TYPE 'none')
   KEY (a) NOT ENFORCED
   FORMAT JSON ENVELOPE UPSERT
 
-> CREATE CLUSTER none_sink_explicit_cluster SIZE '${arg.default-storage-size}';
-
 > CREATE SINK none_sink_explicit
-  IN CLUSTER none_sink_explicit_cluster
   FROM feed
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-compression')
   KEY (a) NOT ENFORCED
   FORMAT JSON ENVELOPE UPSERT
 
-> CREATE CLUSTER gzip_sink_cluster SIZE '${arg.default-storage-size}';
-
 > CREATE SINK gzip_sink
-  IN CLUSTER gzip_sink_cluster
   FROM feed
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-compression', COMPRESSION TYPE 'gzip')
   KEY (a) NOT ENFORCED
   FORMAT JSON ENVELOPE UPSERT
 
-> CREATE CLUSTER gzip_sink_spongebob_case_cluster SIZE '${arg.default-storage-size}';
-
 > CREATE SINK gzip_sink_spongebob_case
-  IN CLUSTER gzip_sink_spongebob_case_cluster
   FROM feed
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-compression', COMPRESSION TYPE 'gZiP')
   KEY (a) NOT ENFORCED
   FORMAT JSON ENVELOPE UPSERT
 
-> CREATE CLUSTER lz4_sink_cluster SIZE '${arg.default-storage-size}';
-
 > CREATE SINK lz4_sink
-  IN CLUSTER lz4_sink_cluster
   FROM feed
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-compression', COMPRESSION TYPE 'lz4')
   KEY (a) NOT ENFORCED
   FORMAT JSON ENVELOPE UPSERT
 
-> CREATE CLUSTER zstd_sink_cluster SIZE '${arg.default-storage-size}';
-
 > CREATE SINK zstd_sink
-  IN CLUSTER zstd_sink_cluster
   FROM feed
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-compression', COMPRESSION TYPE 'zstd')
   KEY (a) NOT ENFORCED

@@ -193,7 +193,6 @@ class KafkaTopics(Generator):
 
             print(
                 f"""> CREATE SOURCE s{i}
-                  IN CLUSTER single_replica_cluster
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-{topic}-${{testdrive.seed}}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE;
@@ -241,7 +240,6 @@ class KafkaSourcesSameTopic(Generator):
         for i in cls.all():
             print(
                 f"""> CREATE SOURCE s{i}
-              IN CLUSTER single_replica_cluster
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic-${{testdrive.seed}}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE NONE;
@@ -293,7 +291,6 @@ class KafkaPartitions(Generator):
 
         print(
             """> CREATE SOURCE s1
-            IN CLUSTER single_replica_cluster
             FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-partitions-${testdrive.seed}')
             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
             ENVELOPE NONE;
@@ -350,7 +347,6 @@ class KafkaRecordsEnvelopeNone(Generator):
 
         print(
             """> CREATE SOURCE kafka_records_envelope_none
-              IN CLUSTER single_replica_cluster
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-records-envelope-none-${testdrive.seed}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE NONE;
@@ -400,7 +396,6 @@ class KafkaRecordsEnvelopeUpsertSameValue(Generator):
 
         print(
             """> CREATE SOURCE kafka_records_envelope_upsert_same
-              IN CLUSTER single_replica_cluster
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-records-envelope-upsert-same-${testdrive.seed}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE UPSERT;
@@ -453,7 +448,6 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
 
         print(
             """> CREATE SOURCE kafka_records_envelope_upsert_distinct
-              IN CLUSTER single_replica_cluster
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-records-envelope-upsert-distinct-${testdrive.seed}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE UPSERT;
@@ -502,9 +496,7 @@ class KafkaSinks(Generator):
                     f"""
                      > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
                      > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
-                     > CREATE SINK s{i}
-                       IN CLUSTER single_replica_cluster
-                       FROM v{i}
+                     > CREATE SINK s{i} FROM v{i}
                        INTO KAFKA CONNECTION kafka_conn (TOPIC 'kafka-sink-{i}')
                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                        ENVELOPE DEBEZIUM;
@@ -550,9 +542,7 @@ class KafkaSinksSameSource(Generator):
                     f"""
                      > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
                      > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
-                     > CREATE SINK s{i}
-                       IN CLUSTER single_replica_cluster
-                       FROM v1
+                     > CREATE SINK s{i} FROM v1
                        INTO KAFKA CONNECTION kafka_conn (TOPIC 'kafka-sink-same-source-{i}')
                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                        ENVELOPE DEBEZIUM
@@ -1452,8 +1442,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         Clusterd(name="clusterd_1_2"),
         Clusterd(name="clusterd_2_1"),
         Clusterd(name="clusterd_2_2"),
-        Clusterd(name="clusterd_3_1"),
-        Clusterd(name="clusterd_3_2"),
     ]
     with c.override(*nodes):
         c.up(*[n.name for n in nodes])
@@ -1482,18 +1470,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102'],
                     WORKERS {args.workers}
                 )
-            );
-            DROP CLUSTER IF EXISTS single_replica_cluster CASCADE;
-            CREATE CLUSTER single_replica_cluster REPLICAS (
-                replica1 (
-                    STORAGECTL ADDRESSES ['clusterd_3_1:2100', 'clusterd_3_2:2100'],
-                    STORAGE ADDRESSES ['clusterd_3_1:2103', 'clusterd_3_2:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_3_1:2101', 'clusterd_3_2:2101'],
-                    COMPUTE ADDRESSES ['clusterd_3_1:2102', 'clusterd_3_2:2102'],
-                    WORKERS {args.workers}
-                )
-            );
-            GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO materialize;
+            )
         """,
             port=6877,
             user="mz_system",
@@ -1582,9 +1559,6 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                     $ postgres-execute connection=mz_system
                     ALTER SYSTEM SET max_clusters = {args.clusters * 10}
                     ALTER SYSTEM SET max_replicas_per_cluster = {args.replicas * 10}
-
-                    CREATE CLUSTER single_replica_cluster SIZE = '4';
-                    GRANT ALL ON CLUSTER single_replica_cluster TO materialize;
                     """
                 )
             )
@@ -1667,7 +1641,6 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                            URL '${{testdrive.schema-registry-url}}';
 
                          > CREATE SOURCE s_{cluster_name}
-                           IN CLUSTER single_replica_cluster
                            FROM KAFKA CONNECTION kafka_conn (TOPIC
                            'testdrive-instance-size-${{testdrive.seed}}')
                            FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
