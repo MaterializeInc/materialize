@@ -1003,6 +1003,17 @@ steps:
             composition: rqg
             args: ["lateral-joins", "--seed=$BUILDKITE_JOB_ID"]
 
+    - id: rqg-subqueries
+      label: "RQG subqueries workload"
+      artifact_paths: junit_*.xml
+      timeout_in_minutes: 45
+      agents:
+        queue: linux-x86_64
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: rqg
+            args: ["subqueries", "--seed=$BUILDKITE_JOB_ID"]
+
     - id: rqg-banking
       label: "RQG banking workload"
       artifact_paths: junit_*.xml
