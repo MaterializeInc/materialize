@@ -20,6 +20,11 @@ who = "Matt Arthur <matthewleearthur@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.26.0"
 
+[[audits.bitvec]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.0.1"
+
 [[audits.core_affinity]]
 who = "Jan Teske <jteske@posteo.net>"
 criteria = "safe-to-deploy"
@@ -34,6 +39,11 @@ version = "1.2.6"
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.12.0@git:c5b9baca0283f4d96f7e6f914de8578fb5c521de"
+
+[[audits.funty]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "2.0.0"
 
 [[audits.futures-timer]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
@@ -104,6 +114,11 @@ version = "4.2.0"
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.11.1"
+
+[[audits.radium]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.7.0"
 
 [[audits.raw-cpuid]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
@@ -194,6 +209,11 @@ delta = "0.7.1 -> 0.9.0"
 who = "Gus Wynn <gus@materialize.com>"
 criteria = "maintained-and-necessary"
 version = "0.2.4"
+
+[[audits.wyz]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "0.5.1"
 
 [[audits.zstd]]
 who = "Parker Timmerman <parker.timmerman@materialize.com>"

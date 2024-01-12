@@ -26,7 +26,7 @@ use timely::progress::Antichain;
 
 use mz_mysql_util::{GtidSet, MySqlError};
 use mz_ore::error::ErrorExt;
-use mz_repr::{Diff, Row, ScalarType, Datum};
+use mz_repr::{Datum, Diff, Row, ScalarType};
 use mz_sql_parser::ast::{Ident, UnresolvedItemName};
 use mz_storage_types::errors::SourceErrorDetails;
 use mz_storage_types::sources::MySqlSourceConnection;
@@ -213,7 +213,7 @@ pub(crate) fn table_name(
 fn datum_from_scalar<'a, T>(row: &'a mut MySqlRow, col_index: usize, nullable: bool) -> Datum
 where
     T: FromValue,
-    Datum<'a>: std::convert::From<T> + std::convert::From<Option<T>>
+    Datum<'a>: std::convert::From<T> + std::convert::From<Option<T>>,
 {
     if nullable {
         Datum::from(row.take::<Option<T>, _>(col_index).unwrap())
@@ -222,8 +222,12 @@ where
     }
 }
 
-fn datum_from_string<'a>(temp: &'a mut Vec<String>, row: &mut MySqlRow, col_index: usize, nullable: bool) -> Datum<'a>
-{
+fn datum_from_string<'a>(
+    temp: &'a mut Vec<String>,
+    row: &mut MySqlRow,
+    col_index: usize,
+    nullable: bool,
+) -> Datum<'a> {
     if nullable {
         if let Some(data) = row.take::<Option<String>, _>(col_index).unwrap() {
             temp.push(data);
@@ -238,8 +242,12 @@ fn datum_from_string<'a>(temp: &'a mut Vec<String>, row: &mut MySqlRow, col_inde
     }
 }
 
-fn datum_from_bytes<'a>(temp: &'a mut Vec<Vec<u8>>, row: &mut MySqlRow, col_index: usize, nullable: bool) -> Datum<'a>
-{
+fn datum_from_bytes<'a>(
+    temp: &'a mut Vec<Vec<u8>>,
+    row: &mut MySqlRow,
+    col_index: usize,
+    nullable: bool,
+) -> Datum<'a> {
     if nullable {
         if let Some(data) = row.take::<Option<Vec<u8>>, _>(col_index).unwrap() {
             temp.push(data);
@@ -254,8 +262,11 @@ fn datum_from_bytes<'a>(temp: &'a mut Vec<Vec<u8>>, row: &mut MySqlRow, col_inde
     }
 }
 
-
-pub(crate) fn pack_mysql_row(row_container: &mut Row, row: &mut MySqlRow, table_desc: &MySqlTableDesc) -> Result<Row, TransientError> {
+pub(crate) fn pack_mysql_row(
+    row_container: &mut Row,
+    row: &mut MySqlRow,
+    table_desc: &MySqlTableDesc,
+) -> Result<Row, TransientError> {
     let mut packer = row_container.packer();
     let mut temp_bytes = vec![];
     let mut temp_strs = vec![];
@@ -266,19 +277,24 @@ pub(crate) fn pack_mysql_row(row_container: &mut Row, row: &mut MySqlRow, table_
             ScalarType::UInt16 => datum_from_scalar::<u16>(row, col_index, nullable),
             ScalarType::Int16 => datum_from_scalar::<i16>(row, col_index, nullable),
             ScalarType::UInt32 => datum_from_scalar::<u32>(row, col_index, nullable),
-            ScalarType::Int32 =>  datum_from_scalar::<i32>(row, col_index, nullable),
+            ScalarType::Int32 => datum_from_scalar::<i32>(row, col_index, nullable),
             ScalarType::UInt64 => datum_from_scalar::<u64>(row, col_index, nullable),
             ScalarType::Int64 => datum_from_scalar::<i64>(row, col_index, nullable),
             ScalarType::Float32 => datum_from_scalar::<f32>(row, col_index, nullable),
             ScalarType::Float64 => datum_from_scalar::<f64>(row, col_index, nullable),
-            ScalarType::Char { length: _ } => datum_from_string(&mut temp_strs, row, col_index, nullable),
-            ScalarType::VarChar { max_length: _ } => datum_from_string(&mut temp_strs, row, col_index, nullable),
+            ScalarType::Char { length: _ } => {
+                datum_from_string(&mut temp_strs, row, col_index, nullable)
+            }
+            ScalarType::VarChar { max_length: _ } => {
+                datum_from_string(&mut temp_strs, row, col_index, nullable)
+            }
             ScalarType::String => datum_from_string(&mut temp_strs, row, col_index, nullable),
             ScalarType::Bytes => datum_from_bytes(&mut temp_bytes, row, col_index, nullable),
             // TODO(roshan): IMPLEMENT OTHER TYPES
-            ref data_type => {
-                Err(TransientError::UnsupportedDataType(format!("{:?}", data_type)))?
-            }
+            ref data_type => Err(TransientError::UnsupportedDataType(format!(
+                "{:?}",
+                data_type
+            )))?,
         };
         packer.push(datum);
     }

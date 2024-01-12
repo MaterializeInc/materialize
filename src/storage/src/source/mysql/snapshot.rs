@@ -36,7 +36,7 @@ use mz_timely_util::builder_async::{
 
 use crate::source::{RawSourceCreationConfig, SourceReaderError};
 
-use super::{ReplicationError, RewindRequest, TransactionId, TransientError, pack_mysql_row};
+use super::{pack_mysql_row, ReplicationError, RewindRequest, TransactionId, TransientError};
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
 pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(

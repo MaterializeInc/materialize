@@ -46,7 +46,8 @@ use crate::source::types::SourceReaderError;
 use crate::source::RawSourceCreationConfig;
 
 use super::{
-    table_name, pack_mysql_row, DefiniteError, ReplicationError, RewindRequest, TransactionId, TransientError,
+    pack_mysql_row, table_name, DefiniteError, ReplicationError, RewindRequest, TransactionId,
+    TransientError,
 };
 
 // Used as a partition id to determine if the worker is responsible for reading from the

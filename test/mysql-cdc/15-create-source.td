@@ -28,8 +28,6 @@ DROP DATABASE IF EXISTS dummyschema;
 CREATE DATABASE dummyschema;
 USE dummyschema;
 CREATE TABLE dummy (f1 INTEGER PRIMARY KEY, id VARCHAR(128));
-INSERT INTO dummy VALUES (123, "dummy data");
-INSERT INTO dummy VALUES (234, "moar dummy");
 COMMIT;
 
 #
@@ -65,14 +63,17 @@ COMMIT;
   FOR TABLES (public.t1);
 
 > SELECT * FROM a.t1;
+1
 
 > CREATE SCHEMA another;
 > CREATE SOURCE another.mz_source FROM MYSQL CONNECTION mysqc
   FOR TABLES (public.t1, public.t2);
 
 > SELECT * FROM another.t1;
+1
 
 > SELECT * FROM another.t2;
+5
 
 > CREATE SCHEMA foo;
 > CREATE SCHEMA bar;
@@ -84,17 +85,21 @@ contains: unknown
 
 # table1 gets created in source schema foo because it doesn't have any prefix
 > SELECT * FROM foo.table1;
+1
 
 ! SELECT * FROM foo.table2;
 contains: unknown
 
 # table2 gets created in mentioned bar because it does have a prefix
 > SELECT * FROM bar.table2;
+5
 
 > CREATE SCHEMA baz;
 > CREATE SOURCE baz.mz_source FROM MYSQL CONNECTION mysqc
   FOR SCHEMAS (public);
 
 > SELECT * FROM baz.t1;
+1
 
 > SELECT * FROM baz.t2;
+5
