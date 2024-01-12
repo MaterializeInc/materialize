@@ -22,11 +22,6 @@ slow-timeout = { period = "120s", terminate-after = 2 }
 filter = "package(mz-stash) and test(proptest_stash_migrate_json_to_proto)"
 slow-timeout = { period = "120s", terminate-after = 2 }
 
-# TODO(def-) Remove after #24381 is fixed
-[[profile.default.overrides]]
-filter = "package(mz-storage-client) and test(storage_command_protobuf_roundtrip)"
-slow-timeout = { period = "120s", terminate-after = 2 }
-
 [profile.ci]
 junit = { path = "junit_cargo-test.xml" }
 fail-fast = false
