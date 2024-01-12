@@ -468,14 +468,12 @@ class DockerComposeCommand(Command):
         if mem < RECOMMENDED_MIN_MEM:
             ui.warn(
                 f"Docker only has {naturalsize(mem, binary=True)} of memory available. "
-                f"We recommend at least {naturalsize(RECOMMENDED_MIN_MEM, binary=True)} of memory. "
-                "See https://materialize.com/docs/third-party/docker/."
+                f"We recommend at least {naturalsize(RECOMMENDED_MIN_MEM, binary=True)} of memory."
             )
         if ncpus < RECOMMENDED_MIN_CPUS:
             ui.warn(
                 f"Docker only has {ncpus} CPU available. "
-                f"We recommend at least {RECOMMENDED_MIN_CPUS} CPUs. "
-                "See https://materialize.com/docs/third-party/docker/."
+                f"We recommend at least {RECOMMENDED_MIN_CPUS} CPUs."
             )
 
     def capture(self, args: list[str], stderr: None | int | IO[bytes] = None) -> str:
