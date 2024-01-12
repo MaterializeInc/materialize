@@ -15,4 +15,6 @@ mod delta_join;
 mod linear_join;
 mod mz_join_core;
 
+pub(super) use delta_join::render_delta_join;
+pub(super) use linear_join::render_join;
 pub use linear_join::{LinearJoinImpl, LinearJoinSpec};

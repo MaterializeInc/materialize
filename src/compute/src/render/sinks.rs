@@ -32,20 +32,19 @@ use crate::logging::compute::LogDataflowErrors;
 use crate::render::context::Context;
 use crate::render::RenderTimestamp;
 
-impl<'g, G, T> Context<Child<'g, G, T>>
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-    T: RenderTimestamp,
-{
 /// Export the sink described by `sink` from the rendering context.
-pub(crate) fn export_sink(
-    &mut self,
+pub(super) fn export_sink<'g, C, G, T>(
+    ctx: &C,
     compute_state: &mut crate::compute_state::ComputeState,
     tokens: &BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
     dependency_ids: BTreeSet<GlobalId>,
     sink_id: GlobalId,
     sink: &ComputeSinkDesc<CollectionMetadata>,
-) {
+) where
+    C: Context<Scope = Child<'g, G, T>>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
+    T: RenderTimestamp,
+{
     soft_assert_or_log!(
         sink.non_null_assertions.is_strictly_sorted(),
         "non-null assertions not sorted"
@@ -63,7 +62,7 @@ pub(crate) fn export_sink(
     // rather than at runtime.
     //
     // This is basically an inlined version of the old `as_collection`.
-    let bundle = self
+    let bundle = ctx
         .lookup_id(mz_expr::Id::Global(sink.from))
         .expect("Sink source collection not loaded");
     let (ok_collection, mut err_collection) = if let Some(collection) = &bundle.collection {
@@ -78,7 +77,7 @@ pub(crate) fn export_sink(
         let (permutation, thinning) = permutation_for_arrangement(key, unthinned_arity);
         let mut mfp = MapFilterProject::new(unthinned_arity);
         mfp.permute(permutation, thinning.len() + key.len());
-        bundle.as_collection_core(mfp, Some((key.clone(), None)), self.until.clone())
+        bundle.as_collection_core(mfp, Some((key.clone(), None)), ctx.until().clone())
     };
 
     // Attach logging of dataflow errors.
@@ -119,7 +118,7 @@ pub(crate) fn export_sink(
         ComputeSinkConnection::Subscribe(_) => format!("SubscribeSink({:?})", sink_id),
         ComputeSinkConnection::Persist(_) => format!("PersistSink({:?})", sink_id),
     };
-    self.scope
+    ctx.scope()
         .parent
         .clone()
         .region_named(&region_name, |inner| {
@@ -129,7 +128,7 @@ pub(crate) fn export_sink(
                 compute_state,
                 sink,
                 sink_id,
-                self.as_of_frontier.clone(),
+                ctx.as_of().clone(),
                 ok_collection.enter_region(inner),
                 err_collection.enter_region(inner),
             );
@@ -141,7 +140,6 @@ pub(crate) fn export_sink(
             let collection = compute_state.expect_collection_mut(sink_id);
             collection.sink_token = Some(SinkToken::new(Box::new(needed_tokens)));
         });
-}
 }
 
 /// A type that can be rendered as a dataflow sink.

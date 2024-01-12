@@ -40,16 +40,12 @@ use crate::render::errors::MaybeValidatingRow;
 use crate::typedefs::{KeySpine, KeyValSpine, RowRowSpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
-impl<G> Context<G>
-where
-    G: Scope,
-    G::Timestamp: crate::render::RenderTimestamp,
-{
-pub(crate) fn render_topk(
-    &mut self,
-    input: CollectionBundle<G>,
+
+pub(crate) fn render_topk<C: Context>(
+    ctx: &C,
+    input: CollectionBundle<C::Scope>,
     top_k_plan: TopKPlan,
-) -> CollectionBundle<G> {
+) -> CollectionBundle<C::Scope> {
     let (ok_input, err_input) = input.as_specific_collection(None);
 
     // We create a new region to compartmentalize the topk logic.
@@ -98,7 +94,7 @@ pub(crate) fn render_topk(
                 must_consolidate,
             }) => {
                 let (oks, errs) =
-                    self.render_top1_monotonic(ok_input, group_key, order_key, must_consolidate);
+                    render_top1_monotonic(ctx, ok_input, group_key, order_key, must_consolidate);
                 err_collection = err_collection.concat(&errs);
                 oks
             }
@@ -138,7 +134,7 @@ pub(crate) fn render_topk(
                     );
 
                 // It should be now possible to ensure that we have a monotonic collection.
-                let error_logger = self.error_logger();
+                let error_logger = ctx.error_logger();
                 let (collection, errs) = collection.ensure_monotonic(move |data, diff| {
                     error_logger.log(
                         "Non-monotonic input to MonotonicTopK",
@@ -175,7 +171,7 @@ pub(crate) fn render_topk(
                 let delay = std::time::Duration::from_secs(10);
                 let retractions = Variable::new(
                     &mut ok_input.scope(),
-                    <G::Timestamp as crate::render::RenderTimestamp>::system_delay(
+                    <C::Timestamp as crate::render::RenderTimestamp>::system_delay(
                         delay.try_into().expect("must fit"),
                     ),
                 );
@@ -187,7 +183,7 @@ pub(crate) fn render_topk(
                 // (num_workers * limit), which we expect to be a small number and so we render
                 // a single topk stage.
                 let (result, errs) =
-                    self.build_topk_stage(thinned, order_key, 1u64, 0, limit, arity, false);
+                    build_topk_stage(ctx, thinned, order_key, 1u64, 0, limit, arity, false);
                 retractions.set(&collection.concat(&result.negate()));
                 soft_assert_or_log!(
                     errs.is_none(),
@@ -213,8 +209,8 @@ pub(crate) fn render_topk(
                     expr.permute_map(&map);
                 }
 
-                let (oks, errs) = self.build_topk(
-                    ok_input, group_key, order_key, offset, limit, arity, buckets,
+                let (oks, errs) = build_topk(
+                    ctx, ok_input, group_key, order_key, offset, limit, arity, buckets,
                 );
                 err_collection = err_collection.concat(&errs);
                 oks
@@ -229,8 +225,8 @@ pub(crate) fn render_topk(
 }
 
 /// Constructs a TopK dataflow subgraph.
-fn build_topk<S>(
-    &self,
+fn build_topk<C: Context, S>(
+    ctx: &C,
     collection: Collection<S, Row, Diff>,
     group_key: Vec<usize>,
     order_key: Vec<mz_expr::ColumnOrder>,
@@ -240,7 +236,7 @@ fn build_topk<S>(
     buckets: Vec<u64>,
 ) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>)
 where
-    S: Scope<Timestamp = G::Timestamp>,
+    S: Scope<Timestamp = C::Timestamp>,
 {
     let mut datum_vec = mz_repr::DatumVec::new();
     let mut collection = collection.map({
@@ -292,7 +288,8 @@ where
             // here we do not apply `offset`, but instead restrict ourself with a limit
             // that includes the offset. We cannot apply `offset` until we perform the
             // final, complete reduction.
-            let (oks, errs) = self.build_topk_stage(
+            let (oks, errs) = build_topk_stage(
+                ctx,
                 collection,
                 order_key.clone(),
                 bucket,
@@ -312,8 +309,8 @@ where
     // We do a final step, both to make sure that we complete the reduction, and to correctly
     // apply `offset` to the final group, as we have not yet been applying it to the partially
     // formed groups.
-    let (oks, errs) = self.build_topk_stage(
-        collection, order_key, 1u64, offset, limit, arity, validating,
+    let (oks, errs) = build_topk_stage(
+        ctx, collection, order_key, 1u64, offset, limit, arity, validating,
     );
     collection = oks;
     if validating {
@@ -333,8 +330,8 @@ where
 // Builds a "stage", which uses a finer grouping than is required to reduce the volume of
 // updates, and to reduce the amount of work on the critical path for updates. The cost is
 // a larger number of arrangements when this optimization does nothing beneficial.
-fn build_topk_stage<S>(
-    &self,
+fn build_topk_stage<C: Context, S>(
+    ctx: &C,
     collection: Collection<S, ((Row, u64), Row), Diff>,
     order_key: Vec<mz_expr::ColumnOrder>,
     modulus: u64,
@@ -347,7 +344,7 @@ fn build_topk_stage<S>(
     Option<Collection<S, DataflowError, Diff>>,
 )
 where
-    S: Scope<Timestamp = G::Timestamp>,
+    S: Scope<Timestamp = C::Timestamp>,
 {
     let input = collection.map(move |((key, hash), row)| ((key, hash % modulus), row));
     let (oks, errs) = if validating {
@@ -355,7 +352,7 @@ where
             &input, order_key, offset, limit, arity,
         );
 
-        let error_logger = self.error_logger();
+        let error_logger = ctx.error_logger();
         let (oks, errs) =
             stage.map_fallible("Demuxing Errors", move |((k, h), result)| match result {
                 Err(v) => {
@@ -380,15 +377,15 @@ where
     )
 }
 
-fn render_top1_monotonic<S>(
-    &self,
+fn render_top1_monotonic<C: Context, S>(
+    ctx: &C,
     collection: Collection<S, Row, Diff>,
     group_key: Vec<usize>,
     order_key: Vec<mz_expr::ColumnOrder>,
     must_consolidate: bool,
 ) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>)
 where
-    S: Scope<Timestamp = G::Timestamp>,
+    S: Scope<Timestamp = C::Timestamp>,
 {
     // We can place our rows directly into the diff field, and only keep the relevant one
     // corresponding to evaluating our aggregate, instead of having to do a hierarchical
@@ -415,7 +412,7 @@ where
         );
 
     // It should be now possible to ensure that we have a monotonic collection and process it.
-    let error_logger = self.error_logger();
+    let error_logger = ctx.error_logger();
     let (partial, errs) = collection.ensure_monotonic(move |data, diff| {
         error_logger.log(
             "Non-monotonic input to MonotonicTop1",
@@ -446,7 +443,6 @@ where
     // TODO(#7331): Here we discard the arranged output.
     use differential_dataflow::trace::cursor::MyTrait;
     (result.as_collection(|_k, v| v.into_owned()), errs)
-}
 }
 
 fn build_topk_negated_stage<G, R>(

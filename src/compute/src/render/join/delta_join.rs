@@ -40,22 +40,17 @@ use crate::render::context::{
 use crate::render::RenderTimestamp;
 use crate::typedefs::{RowAgent, RowEnter, RowRowAgent, RowRowEnter};
 
-impl<G> Context<G>
-where
-    G: Scope,
-    G::Timestamp: crate::render::RenderTimestamp,
-{
 /// Renders `MirRelationExpr:Join` using dogs^3 delta query dataflows.
 ///
 /// The join is followed by the application of `map_filter_project`, whose
 /// implementation will be pushed in to the join pipeline if at all possible.
-pub fn render_delta_join(
-    &mut self,
-    inputs: Vec<CollectionBundle<G>>,
+pub fn render_delta_join<C: Context>(
+    ctx: &C,
+    inputs: Vec<CollectionBundle<C::Scope>>,
     join_plan: DeltaJoinPlan,
-) -> CollectionBundle<G> {
+) -> CollectionBundle<C::Scope> {
     // We create a new region to contain the dataflow paths for the delta join.
-    let (oks, errs) = self.scope.clone().region_named("Join(Delta)", |inner| {
+    let (oks, errs) = ctx.scope().clone().region_named("Join(Delta)", |inner| {
         // Collects error streams for the ambient scope.
         let mut inner_errs = Vec::new();
 
@@ -143,7 +138,7 @@ pub fn render_delta_join(
                 let val = arrangements
                     .get(&(source_relation, source_key))
                     .expect("Arrangement promised by the planner is absent!");
-                let as_of = self.as_of_frontier.clone();
+                let as_of = ctx.as_of().clone();
                 let update_stream = match val {
                     Ok(local) => {
                         let arranged = local.enter_region(region);
@@ -207,7 +202,7 @@ pub fn render_delta_join(
                                         stream_thinning,
                                         |t1, t2| t1.le(t2),
                                         closure,
-                                        self.shutdown_token.clone(),
+                                        ctx.shutdown_token().clone(),
                                     )
                                 } else {
                                     dispatch_build_halfjoin_local(
@@ -217,7 +212,7 @@ pub fn render_delta_join(
                                         stream_thinning,
                                         |t1, t2| t1.lt(t2),
                                         closure,
-                                        self.shutdown_token.clone(),
+                                        ctx.shutdown_token().clone(),
                                     )
                                 }
                             }
@@ -230,7 +225,7 @@ pub fn render_delta_join(
                                         stream_thinning,
                                         |t1, t2| t1.le(t2),
                                         closure,
-                                        self.shutdown_token.clone(),
+                                        ctx.shutdown_token().clone(),
                                     )
                                 } else {
                                     dispatch_build_halfjoin_trace(
@@ -240,7 +235,7 @@ pub fn render_delta_join(
                                         stream_thinning,
                                         |t1, t2| t1.lt(t2),
                                         closure,
-                                        self.shutdown_token.clone(),
+                                        ctx.shutdown_token().clone(),
                                     )
                                 }
                             }
@@ -302,7 +297,6 @@ pub fn render_delta_join(
         )
     });
     CollectionBundle::from_collections(oks, errs)
-}
 }
 
 /// Dispatches half-join construction according to arrangement type specialization.

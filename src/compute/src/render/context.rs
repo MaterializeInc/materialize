@@ -10,8 +10,9 @@
 //! Management of dataflow-local state, like arrangements, while building a
 //! dataflow.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::rc::Weak;
+use std::rc::{Rc, Weak};
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
@@ -44,107 +45,190 @@ use crate::typedefs::{
     RowSpine,
 };
 
-/// Dataflow-local collections and arrangements.
+/// The context within which rendering occurs.
 ///
-/// A context means to wrap available data assets and present them in an easy-to-use manner.
-/// These assets include dataflow-local collections and arrangements, as well as imported
-/// arrangements from outside the dataflow.
-///
-/// Context has two timestamp types, one from `S::Timestamp` and one from `T`, where the
-/// former must refine the latter. The former is the timestamp used by the scope in question,
-/// and the latter is the timestamp of imported traces. The two may be different in the case
-/// of regions or iteration.
-pub struct Context<S: Scope, T = mz_repr::Timestamp>
-where
-    T: Timestamp + Lattice + Columnation,
-    S::Timestamp: Lattice + Refines<T> + Columnation,
-{
-    /// The scope within which all managed collections exist.
+/// Rendering functions usually receive a `Context` object as their first argument that determines
+/// the scope within which collections are to be rendered and stores global information about the
+/// dataflow.
+pub(super) trait Context: Clone + Sized {
+    type Timestamp: RenderTimestamp;
+    type Scope: Scope<Timestamp = Self::Timestamp>;
+
+    /// Returns a reference to the scope within which collections are to be rendered.
+    fn scope(&self) -> &Self::Scope;
+
+    /// Returns a mutable reference to the scope within which collections are to be rendered.
+    fn scope_mut(&mut self) -> &mut Self::Scope;
+
+    /// Returns static context information about the dataflow.
+    fn static_(&self) -> &StaticContext;
+
+    /// Returns token that operators can probe to know whether the dataflow is shutting down.
+    fn shutdown_token(&self) -> &ShutdownToken;
+
+    /// Sets the shutdown token.
+    fn set_shutdown_token(&mut self, token: ShutdownToken);
+
+    /// Inserts a collection bundle by an identifier.
     ///
-    /// It is an error to add any collections not contained in this scope.
-    pub(crate) scope: S,
-    /// The debug name of the dataflow associated with this context.
-    pub debug_name: String,
-    /// The Timely ID of the dataflow associated with this context.
-    pub dataflow_id: usize,
-    /// Frontier before which updates should not be emitted.
+    /// This is expected to be used to install external collections (sources, indexes, other
+    /// views), as well as for `Let` bindings of local collections.
+    fn insert_id(
+        &mut self,
+        id: Id,
+        collection: CollectionBundle<Self::Scope>,
+    ) -> Option<CollectionBundle<Self::Scope>>;
+
+    /// Removes a collection bundle by an identifier.
+    ///
+    /// The primary use of this method is uninstalling `Let` bindings.
+    fn remove_id(&mut self, id: Id) -> Option<CollectionBundle<Self::Scope>>;
+
+    /// Melds a collection bundle to whatever exists.
+    fn update_id(&mut self, id: Id, collection: CollectionBundle<Self::Scope>);
+
+    /// Melds a collection bundle to whatever exists.
+    fn lookup_id(&self, id: Id) -> Option<CollectionBundle<Self::Scope>>;
+
+    /// Returns the debug name of the dataflow associated with this context.
+    fn debug_name(&self) -> &str {
+        &self.static_().debug_name
+    }
+
+    /// Returns the Timely ID of the dataflow associated with this context.
+    fn dataflow_id(&self) -> usize {
+        self.static_().dataflow_id
+    }
+
+    /// Returns the frontier before which updates should not be emitted.
     ///
     /// We *must* apply it to sinks, to ensure correct outputs.
     /// We *should* apply it to sources and imported traces, because it improves performance.
-    pub as_of_frontier: Antichain<T>,
-    /// Frontier after which updates should not be emitted.
+    fn as_of(&self) -> &Antichain<mz_repr::Timestamp> {
+        &self.static_().as_of
+    }
+
+    /// Returns the frontier after which updates should not be emitted.
+    ///
     /// Used to limit the amount of work done when appropriate.
-    pub until: Antichain<T>,
-    /// Bindings of identifiers to collections.
-    pub bindings: BTreeMap<Id, CollectionBundle<S, T>>,
-    /// A token that operators can probe to know whether the dataflow is shutting down.
-    pub(super) shutdown_token: ShutdownToken,
-    /// Specification for rendering linear joins.
-    pub(super) linear_join_spec: LinearJoinSpec,
-    pub(super) enable_specialized_arrangements: bool,
+    fn until(&self) -> &Antichain<mz_repr::Timestamp> {
+        &self.static_().until
+    }
+
+    /// Returns the specification for rendering linear joins.
+    fn linear_join_spec(&self) -> LinearJoinSpec {
+        self.static_().linear_join_spec
+    }
+
+    /// Returns whether arrangement specialization is enabled.
+    fn enable_specialized_arrangements(&self) -> bool {
+        self.static_().enable_specialized_arrangements
+    }
+
+    /// Returns a shutdown-aware error logger to be used by rendered operators.
+    fn error_logger(&self) -> ErrorLogger {
+        ErrorLogger::new(self.shutdown_token().clone(), self.debug_name().into())
+    }
 }
 
-impl<S: Scope> Context<S>
-where
-    S::Timestamp: Lattice + Refines<mz_repr::Timestamp> + Columnation,
-{
-    /// Creates a new empty Context.
-    pub fn for_dataflow_in<Plan>(
-        dataflow: &DataflowDescription<Plan, CollectionMetadata>,
-        scope: S,
-    ) -> Self {
-        use mz_ore::collections::CollectionExt as IteratorExt;
-        let dataflow_id = scope.addr().into_first();
-        let as_of_frontier = dataflow
-            .as_of
-            .clone()
-            .unwrap_or_else(|| Antichain::from_elem(Timestamp::minimum()));
+/// Static context information about a dataflow.
+pub(super) struct StaticContext {
+    debug_name: String,
+    dataflow_id: usize,
+    as_of: Antichain<mz_repr::Timestamp>,
+    until: Antichain<mz_repr::Timestamp>,
+    linear_join_spec: LinearJoinSpec,
+    enable_specialized_arrangements: bool,
+}
 
+/// The root context within which a dataflow is rendered.
+#[derive(Clone)]
+pub(super) struct RootContext<S>
+where
+    S: Scope,
+    S::Timestamp: RenderTimestamp,
+{
+    scope: S,
+    bindings: Rc<RefCell<BTreeMap<Id, CollectionBundle<S>>>>,
+    static_: Rc<StaticContext>,
+    shutdown_token: ShutdownToken,
+}
+
+impl<S> RootContext<S>
+where
+    S: Scope,
+    S::Timestamp: RenderTimestamp,
+{
+    /// Creates a new `RootContext` for the given dataflow.
+    pub fn new<P>(
+        dataflow: &DataflowDescription<P, CollectionMetadata>,
+        scope: S,
+        linear_join_spec: LinearJoinSpec,
+        enable_specialized_arrangements: bool,
+    ) -> Self {
+        let static_ = StaticContext {
+            debug_name: dataflow.debug_name.clone(),
+            dataflow_id: scope.addr()[0],
+            as_of: dataflow.as_of.clone().expect("missing as_of"),
+            until: dataflow.until.clone(),
+            linear_join_spec,
+            enable_specialized_arrangements,
+        };
         Self {
             scope,
-            debug_name: dataflow.debug_name.clone(),
-            dataflow_id,
-            as_of_frontier,
-            until: dataflow.until.clone(),
-            bindings: BTreeMap::new(),
+            bindings: Default::default(),
+            static_: Rc::new(static_),
             shutdown_token: Default::default(),
-            linear_join_spec: Default::default(),
-            enable_specialized_arrangements: Default::default(),
         }
     }
 }
 
-impl<S: Scope, T> Context<S, T>
+impl<S> Context for RootContext<S>
 where
-    T: Timestamp + Lattice + Columnation,
-    S::Timestamp: Lattice + Refines<T> + Columnation,
+    S: Scope,
+    S::Timestamp: RenderTimestamp,
 {
-    /// Insert a collection bundle by an identifier.
-    ///
-    /// This is expected to be used to install external collections (sources, indexes, other views),
-    /// as well as for `Let` bindings of local collections.
-    pub fn insert_id(
+    type Timestamp = S::Timestamp;
+    type Scope = S;
+
+    fn scope(&self) -> &Self::Scope {
+        &self.scope
+    }
+
+    fn scope_mut(&mut self) -> &mut Self::Scope {
+        &mut self.scope
+    }
+
+    fn static_(&self) -> &StaticContext {
+        &self.static_
+    }
+
+    fn shutdown_token(&self) -> &ShutdownToken {
+        &self.shutdown_token
+    }
+
+    fn set_shutdown_token(&mut self, token: ShutdownToken) {
+        self.shutdown_token = token;
+    }
+
+    fn insert_id(
         &mut self,
         id: Id,
-        collection: CollectionBundle<S, T>,
-    ) -> Option<CollectionBundle<S, T>> {
-        self.bindings.insert(id, collection)
+        collection: CollectionBundle<Self::Scope>,
+    ) -> Option<CollectionBundle<Self::Scope>> {
+        self.bindings.borrow_mut().insert(id, collection)
     }
-    /// Remove a collection bundle by an identifier.
-    ///
-    /// The primary use of this method is uninstalling `Let` bindings.
-    pub fn remove_id(&mut self, id: Id) -> Option<CollectionBundle<S, T>> {
-        self.bindings.remove(&id)
+
+    fn remove_id(&mut self, id: Id) -> Option<CollectionBundle<Self::Scope>> {
+        self.bindings.borrow_mut().remove(&id)
     }
-    /// Melds a collection bundle to whatever exists.
-    pub fn update_id(&mut self, id: Id, collection: CollectionBundle<S, T>) {
-        if !self.bindings.contains_key(&id) {
-            self.bindings.insert(id, collection);
+
+    fn update_id(&mut self, id: Id, collection: CollectionBundle<Self::Scope>) {
+        let mut bindings = self.bindings.borrow_mut();
+        if !bindings.contains_key(&id) {
+            bindings.insert(id, collection);
         } else {
-            let binding = self
-                .bindings
-                .get_mut(&id)
-                .expect("Binding verified to exist");
+            let binding = bindings.get_mut(&id).expect("Binding verified to exist");
             if collection.collection.is_some() {
                 binding.collection = collection.collection;
             }
@@ -153,13 +237,9 @@ where
             }
         }
     }
-    /// Look up a collection bundle by an identifier.
-    pub fn lookup_id(&self, id: Id) -> Option<CollectionBundle<S, T>> {
-        self.bindings.get(&id).cloned()
-    }
 
-    pub(super) fn error_logger(&self) -> ErrorLogger {
-        ErrorLogger::new(self.shutdown_token.clone(), self.debug_name.clone())
+    fn lookup_id(&self, id: Id) -> Option<CollectionBundle<Self::Scope>> {
+        self.bindings.borrow().get(&id).cloned()
     }
 }
 

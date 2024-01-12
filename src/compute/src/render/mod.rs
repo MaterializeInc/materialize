@@ -138,7 +138,15 @@ use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::{LogDataflowErrors, LogImportFrontiers};
-use crate::render::context::{ArrangementFlavor, Context, ShutdownToken, SpecializedArrangement};
+use crate::render::context::{
+    ArrangementFlavor, Context, RootContext, ShutdownToken, SpecializedArrangement,
+};
+use crate::render::flat_map::render_flat_map;
+use crate::render::join::{render_delta_join, render_join};
+use crate::render::reduce::render_reduce;
+use crate::render::sinks::export_sink;
+use crate::render::threshold::render_threshold;
+use crate::render::top_k::render_topk;
 use crate::typedefs::{ErrSpine, KeySpine};
 
 pub mod context;
@@ -260,10 +268,12 @@ pub fn build_compute_dataflow<A: Allocate>(
         // in order to support additional timestamp coordinates for iteration.
         if recursive {
             scope.clone().iterative::<PointStamp<u64>, _, _>(|region| {
-                let mut context = Context::for_dataflow_in(&dataflow, region.clone());
-                context.linear_join_spec = compute_state.linear_join_spec;
-                context.enable_specialized_arrangements =
-                    compute_state.enable_specialized_arrangements;
+                let mut context = RootContext::new(
+                    &dataflow,
+                    region.clone(),
+                    compute_state.linear_join_spec,
+                    compute_state.enable_specialized_arrangements,
+                );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let bundle = crate::render::CollectionBundle::from_collections(
@@ -277,7 +287,8 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // Import declared indexes into the rendering context.
                 for (idx_id, idx) in &dataflow.index_imports {
                     let export_ids = dataflow.export_ids().collect();
-                    context.import_index(
+                    import_index(
+                        &mut context,
                         compute_state,
                         &mut tokens,
                         export_ids,
@@ -289,16 +300,17 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // Build declared objects.
                 for object in dataflow.objects_to_build {
                     let object_token = Rc::new(());
-                    context.shutdown_token = ShutdownToken::new(Rc::downgrade(&object_token));
+                    context.set_shutdown_token(ShutdownToken::new(Rc::downgrade(&object_token)));
                     tokens.insert(object.id, object_token);
 
-                    let bundle = context.render_recursive_plan(0, object.plan);
+                    let bundle = render_recursive_plan(&mut context, 0, object.plan);
                     context.insert_id(Id::Global(object.id), bundle);
                 }
 
                 // Export declared indexes.
                 for (idx_id, dependencies, idx) in indexes {
-                    context.export_index_iterative(
+                    export_index_iterative(
+                        &context,
                         compute_state,
                         &tokens,
                         dependencies,
@@ -309,15 +321,17 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Export declared sinks.
                 for (sink_id, dependencies, sink) in sinks {
-                    context.export_sink(compute_state, &tokens, dependencies, sink_id, &sink);
+                    export_sink(&context, compute_state, &tokens, dependencies, sink_id, &sink);
                 }
             });
         } else {
             scope.clone().region_named(&build_name, |region| {
-                let mut context = Context::for_dataflow_in(&dataflow, region.clone());
-                context.linear_join_spec = compute_state.linear_join_spec;
-                context.enable_specialized_arrangements =
-                    compute_state.enable_specialized_arrangements;
+                let mut context = RootContext::new(
+                    &dataflow,
+                    region.clone(),
+                    compute_state.linear_join_spec,
+                    compute_state.enable_specialized_arrangements,
+                );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let bundle = crate::render::CollectionBundle::from_collections(
@@ -331,7 +345,8 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // Import declared indexes into the rendering context.
                 for (idx_id, idx) in &dataflow.index_imports {
                     let export_ids = dataflow.export_ids().collect();
-                    context.import_index(
+                    import_index(
+                        &mut context,
                         compute_state,
                         &mut tokens,
                         export_ids,
@@ -343,44 +358,41 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // Build declared objects.
                 for object in dataflow.objects_to_build {
                     let object_token = Rc::new(());
-                    context.shutdown_token = ShutdownToken::new(Rc::downgrade(&object_token));
+                    context.set_shutdown_token(ShutdownToken::new(Rc::downgrade(&object_token)));
                     tokens.insert(object.id, object_token);
 
-                    context.build_object(object);
+                    build_object(&mut context, object);
                 }
 
                 // Export declared indexes.
                 for (idx_id, dependencies, idx) in indexes {
-                    context.export_index(compute_state, &tokens, dependencies, idx_id, &idx);
+                    export_index(&context, compute_state, &tokens, dependencies, idx_id, &idx);
                 }
 
                 // Export declared sinks.
                 for (sink_id, dependencies, sink) in sinks {
-                    context.export_sink(compute_state, &tokens, dependencies, sink_id, &sink);
+                    export_sink(&context, compute_state, &tokens, dependencies, sink_id, &sink);
                 }
             });
         }
     })
 }
 
-// This implementation block allows child timestamps to vary from parent timestamps,
-// but requires the parent timestamp to be `repr::Timestamp`.
-impl<'g, G, T> Context<Child<'g, G, T>>
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-    T: Refines<G::Timestamp> + RenderTimestamp,
-{
-pub(crate) fn import_index(
-    &mut self,
+pub(crate) fn import_index<'g, C, G, T>(
+    ctx: &mut C,
     compute_state: &mut ComputeState,
     tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
     export_ids: Vec<GlobalId>,
     idx_id: GlobalId,
     idx: &IndexDesc,
-) {
+) where
+    C: Context<Scope = Child<'g, G, T>>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
+    T: RenderTimestamp,
+{
     if let Some(traces) = compute_state.traces.get_mut(&idx_id) {
         assert!(
-            PartialOrder::less_equal(&traces.compaction_frontier(), &self.as_of_frontier),
+            PartialOrder::less_equal(&traces.compaction_frontier(), ctx.as_of()),
             "Index {idx_id} has been allowed to compact beyond the dataflow as_of"
         );
 
@@ -393,23 +405,23 @@ pub(crate) fn import_index(
         // wall-clock time of the frontier advancement for each dataflow as early as
         // possible.
         let (ok_arranged, ok_button) = traces.oks_mut().import_frontier_logged(
-            &self.scope,
+            ctx.scope(),
             &format!("Index({}, {:?})", idx.on_id, idx.key),
-            self.as_of_frontier.clone(),
-            self.until.clone(),
+            ctx.as_of().clone(),
+            ctx.until().clone(),
             compute_state.compute_logger.clone(),
             idx_id,
             export_ids,
         );
         let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
-            &self.scope.parent,
+            &ctx.scope().parent,
             &format!("ErrIndex({}, {:?})", idx.on_id, idx.key),
-            self.as_of_frontier.clone(),
-            self.until.clone(),
+            ctx.as_of().clone(),
+            ctx.until().clone(),
         );
-        let err_arranged = err_arranged.enter(&self.scope);
+        let err_arranged = err_arranged.enter(ctx.scope());
 
-        self.update_id(
+        ctx.update_id(
             Id::Global(idx.on_id),
             CollectionBundle::from_expressions(
                 idx.key.clone(),
@@ -423,39 +435,29 @@ pub(crate) fn import_index(
     } else {
         panic!(
             "import of index {} failed while building dataflow {}",
-            idx_id, self.dataflow_id
+            idx_id,
+            ctx.dataflow_id()
         );
     }
 }
-}
 
-// This implementation block allows child timestamps to vary from parent timestamps.
-impl<G> Context<G>
-where
-    G: Scope,
-    G::Timestamp: RenderTimestamp,
-{
-pub(crate) fn build_object(&mut self, object: BuildDesc<Plan>) {
+pub(crate) fn build_object<C: Context>(ctx: &mut C, object: BuildDesc<Plan>) {
     // First, transform the relation expression into a render plan.
-    let bundle = self.render_plan(object.plan);
-    self.insert_id(Id::Global(object.id), bundle);
-}
+    let bundle = render_plan(ctx, object.plan);
+    ctx.insert_id(Id::Global(object.id), bundle);
 }
 
-// This implementation block requires the scopes have the same timestamp as the trace manager.
-// That makes some sense, because we are hoping to deposit an arrangement in the trace manager.
-impl<'g, G> Context<Child<'g, G, G::Timestamp>, G::Timestamp>
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-{
-pub(crate) fn export_index(
-    &mut self,
+pub(crate) fn export_index<'g, C, G>(
+    ctx: &C,
     compute_state: &mut ComputeState,
     tokens: &BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
     dependency_ids: BTreeSet<GlobalId>,
     idx_id: GlobalId,
     idx: &IndexDesc,
-) {
+) where
+    C: Context<Scope = Child<'g, G, G::Timestamp>>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
+{
     // put together tokens that belong to the export
     let mut needed_tokens = Vec::new();
     for dep_id in dependency_ids {
@@ -463,7 +465,7 @@ pub(crate) fn export_index(
             needed_tokens.push(Rc::clone(token));
         }
     }
-    let bundle = self.lookup_id(Id::Global(idx_id)).unwrap_or_else(|| {
+    let bundle = ctx.lookup_id(Id::Global(idx_id)).unwrap_or_else(|| {
         panic!(
             "Arrangement alarmingly absent! id: {:?}",
             Id::Global(idx_id)
@@ -505,23 +507,19 @@ pub(crate) fn export_index(
         }
     };
 }
-}
 
-// This implementation block requires the scopes have the same timestamp as the trace manager.
-// That makes some sense, because we are hoping to deposit an arrangement in the trace manager.
-impl<'g, G, T> Context<Child<'g, G, T>>
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-    T: RenderTimestamp,
-{
-pub(crate) fn export_index_iterative(
-    &mut self,
+pub(crate) fn export_index_iterative<'g, C, G, T>(
+    ctx: &C,
     compute_state: &mut ComputeState,
     tokens: &BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
     dependency_ids: BTreeSet<GlobalId>,
     idx_id: GlobalId,
     idx: &IndexDesc,
-) {
+) where
+    C: Context<Scope = Child<'g, G, T>>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
+    T: RenderTimestamp,
+{
     // put together tokens that belong to the export
     let mut needed_tokens = Vec::new();
     for dep_id in dependency_ids {
@@ -529,7 +527,7 @@ pub(crate) fn export_index_iterative(
             needed_tokens.push(Rc::clone(token));
         }
     }
-    let bundle = self.lookup_id(Id::Global(idx_id)).unwrap_or_else(|| {
+    let bundle = ctx.lookup_id(Id::Global(idx_id)).unwrap_or_else(|| {
         panic!(
             "Arrangement alarmingly absent! id: {:?}",
             Id::Global(idx_id)
@@ -538,7 +536,7 @@ pub(crate) fn export_index_iterative(
 
     match bundle.arrangement(&idx.key) {
         Some(ArrangementFlavor::Local(oks, errs)) => {
-            let oks = self.dispatch_rearrange_iterative(oks, "Arrange export iterative");
+            let oks = dispatch_rearrange_iterative(oks, "Arrange export iterative");
             let oks_trace = oks.trace_handle();
 
             let errs = errs
@@ -579,19 +577,22 @@ pub(crate) fn export_index_iterative(
 
 /// Dispatches the rearranging of an arrangement coming from an iterative scope
 /// according to specialized key-value arrangement types.
-fn dispatch_rearrange_iterative(
-    &self,
+fn dispatch_rearrange_iterative<'g, G, T>(
     oks: SpecializedArrangement<Child<'g, G, T>>,
     name: &str,
-) -> SpecializedArrangement<G> {
+) -> SpecializedArrangement<G>
+where
+    G: Scope<Timestamp = mz_repr::Timestamp>,
+    T: RenderTimestamp,
+{
     match oks {
         SpecializedArrangement::RowUnit(inner) => {
             let name = format!("{} [val: empty]", name);
-            let oks = self.rearrange_iterative(inner, &name);
+            let oks = rearrange_iterative(inner, &name);
             SpecializedArrangement::RowUnit(oks)
         }
         SpecializedArrangement::RowRow(inner) => {
-            let oks = self.rearrange_iterative(inner, name);
+            let oks = rearrange_iterative(inner, name);
             SpecializedArrangement::RowRow(oks)
         }
     }
@@ -599,12 +600,13 @@ fn dispatch_rearrange_iterative(
 
 /// Rearranges an arrangement coming from an iterative scope into an arrangement
 /// in the outer timestamp scope.
-fn rearrange_iterative<Tr1, Tr2>(
-    &self,
+fn rearrange_iterative<'g, G, T, Tr1, Tr2>(
     oks: Arranged<Child<'g, G, T>, TraceAgent<Tr1>>,
     name: &str,
 ) -> Arranged<G, TraceAgent<Tr2>>
 where
+    G: Scope<Timestamp = mz_repr::Timestamp>,
+    T: RenderTimestamp,
     Tr1: TraceReader<Time = T, Diff = Diff>,
     Tr1::KeyOwned: Columnation + ExchangeData + Hashable,
     Tr1::ValOwned: Columnation + ExchangeData,
@@ -618,12 +620,7 @@ where
         .leave()
         .mz_arrange(name)
 }
-}
 
-impl<G> Context<G>
-where
-    G: Scope<Timestamp = Product<mz_repr::Timestamp, PointStamp<u64>>>,
-{
 /// Renders a plan to a differential dataflow, producing the collection of results.
 ///
 /// This method allows for `plan` to contain a `LetRec` variant at its root, and is planned
@@ -636,7 +633,14 @@ where
 ///
 /// The method requires that all variables conclude with a physical representation that
 /// contains a collection (i.e. a non-arrangement), and it will panic otherwise.
-pub fn render_recursive_plan(&mut self, level: usize, plan: Plan) -> CollectionBundle<G> {
+pub fn render_recursive_plan<C: Context>(
+    ctx: &mut C,
+    level: usize,
+    plan: Plan,
+) -> CollectionBundle<C::Scope>
+where
+    C: Context<Timestamp = Product<mz_repr::Timestamp, PointStamp<u64>>>,
+{
     if let Plan::LetRec {
         ids,
         values,
@@ -654,12 +658,12 @@ pub fn render_recursive_plan(&mut self, level: usize, plan: Plan) -> CollectionB
             use differential_dataflow::operators::iterate::Variable;
             let inner = feedback_summary::<u64>(level + 1, 1);
             let oks_v = Variable::new(
-                &mut self.scope,
+                ctx.scope_mut(),
                 Product::new(Default::default(), inner.clone()),
             );
-            let err_v = Variable::new(&mut self.scope, Product::new(Default::default(), inner));
+            let err_v = Variable::new(ctx.scope_mut(), Product::new(Default::default(), inner));
 
-            self.insert_id(
+            ctx.insert_id(
                 Id::Local(*id),
                 CollectionBundle::from_collections(oks_v.clone(), err_v.clone()),
             );
@@ -667,16 +671,16 @@ pub fn render_recursive_plan(&mut self, level: usize, plan: Plan) -> CollectionB
         }
         // Now render each of the bindings.
         for (id, value, limit) in izip!(ids.iter(), values.into_iter(), limits.into_iter()) {
-            let bundle = self.render_recursive_plan(level + 1, value);
+            let bundle = render_recursive_plan(ctx, level + 1, value);
             // We need to ensure that the raw collection exists, but do not have enough information
             // here to cause that to happen.
             let (oks, mut err) = bundle.collection.clone().unwrap();
-            self.insert_id(Id::Local(*id), bundle);
+            ctx.insert_id(Id::Local(*id), bundle);
             let (oks_v, err_v) = variables.remove(&Id::Local(*id)).unwrap();
 
             // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
             let mut oks = oks.consolidate_named::<KeySpine<_, _, _>>("LetRecConsolidation");
-            if let Some(token) = &self.shutdown_token.get_inner() {
+            if let Some(token) = ctx.shutdown_token().get_inner() {
                 oks = oks.with_token(Weak::clone(token));
             }
 
@@ -718,16 +722,16 @@ pub fn render_recursive_plan(&mut self, level: usize, plan: Plan) -> CollectionB
                     move |_k, _s, t| t.push(((), 1)),
                 )
                 .as_collection(|k, _| k.clone());
-            if let Some(token) = &self.shutdown_token.get_inner() {
+            if let Some(token) = &ctx.shutdown_token().get_inner() {
                 errs = errs.with_token(Weak::clone(token));
             }
             err_v.set(&errs);
         }
         // Now extract each of the bindings into the outer scope.
         for id in ids.into_iter() {
-            let bundle = self.remove_id(Id::Local(id)).unwrap();
+            let bundle = ctx.remove_id(Id::Local(id)).unwrap();
             let (oks, err) = bundle.collection.unwrap();
-            self.insert_id(
+            ctx.insert_id(
                 Id::Local(id),
                 CollectionBundle::from_collections(
                     oks.leave_dynamic(level + 1),
@@ -736,23 +740,17 @@ pub fn render_recursive_plan(&mut self, level: usize, plan: Plan) -> CollectionB
             );
         }
 
-        self.render_recursive_plan(level, *body)
+        render_recursive_plan(ctx, level, *body)
     } else {
-        self.render_plan(plan)
+        render_plan(ctx, plan)
     }
 }
-}
 
-impl<G> Context<G>
-where
-    G: Scope,
-    G::Timestamp: RenderTimestamp,
-{
 /// Renders a plan to a differential dataflow, producing the collection of results.
 ///
 /// The return type reflects the uncertainty about the data representation, perhaps
 /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
-pub fn render_plan(&mut self, plan: Plan) -> CollectionBundle<G> {
+pub fn render_plan<C: Context>(ctx: &mut C, plan: Plan) -> CollectionBundle<C::Scope> {
     match plan {
         Plan::Constant { rows } => {
             // Produce both rows and errs to avoid conditional dataflow construction.
@@ -762,37 +760,33 @@ pub fn render_plan(&mut self, plan: Plan) -> CollectionBundle<G> {
             };
 
             // We should advance times in constant collections to start from `as_of`.
-            let as_of_frontier = self.as_of_frontier.clone();
-            let until = self.until.clone();
+            let as_of_frontier = ctx.as_of().clone();
+            let until = ctx.until().clone();
             let ok_collection = rows
                 .into_iter()
                 .filter_map(move |(row, mut time, diff)| {
                     time.advance_by(as_of_frontier.borrow());
                     if !until.less_equal(&time) {
-                        Some((
-                            row,
-                            <G::Timestamp as Refines<mz_repr::Timestamp>>::to_inner(time),
-                            diff,
-                        ))
+                        Some((row, C::Timestamp::to_inner(time), diff))
                     } else {
                         None
                     }
                 })
-                .to_stream(&mut self.scope)
+                .to_stream(ctx.scope_mut())
                 .as_collection();
 
             let mut error_time: mz_repr::Timestamp = Timestamp::minimum();
-            error_time.advance_by(self.as_of_frontier.borrow());
+            error_time.advance_by(ctx.as_of().borrow());
             let err_collection = errs
                 .into_iter()
                 .map(move |e| {
                     (
                         DataflowError::from(e),
-                        <G::Timestamp as Refines<mz_repr::Timestamp>>::to_inner(error_time),
+                        C::Timestamp::to_inner(error_time),
                         1,
                     )
                 })
-                .to_stream(&mut self.scope)
+                .to_stream(ctx.scope_mut())
                 .as_collection();
 
             CollectionBundle::from_collections(ok_collection, err_collection)
@@ -800,7 +794,7 @@ pub fn render_plan(&mut self, plan: Plan) -> CollectionBundle<G> {
         Plan::Get { id, keys, plan } => {
             // Recover the collection from `self` and then apply `mfp` to it.
             // If `mfp` happens to be trivial, we can just return the collection.
-            let mut collection = self
+            let mut collection = ctx
                 .lookup_id(id)
                 .unwrap_or_else(|| panic!("Get({:?}) not found at render time", id));
             match plan {
@@ -819,23 +813,23 @@ pub fn render_plan(&mut self, plan: Plan) -> CollectionBundle<G> {
                 }
                 mz_compute_types::plan::GetPlan::Arrangement(key, row, mfp) => {
                     let (oks, errs) =
-                        collection.as_collection_core(mfp, Some((key, row)), self.until.clone());
+                        collection.as_collection_core(mfp, Some((key, row)), ctx.until().clone());
                     CollectionBundle::from_collections(oks, errs)
                 }
                 mz_compute_types::plan::GetPlan::Collection(mfp) => {
-                    let (oks, errs) = collection.as_collection_core(mfp, None, self.until.clone());
+                    let (oks, errs) = collection.as_collection_core(mfp, None, ctx.until().clone());
                     CollectionBundle::from_collections(oks, errs)
                 }
             }
         }
         Plan::Let { id, value, body } => {
             // Render `value` and bind it to `id`. Complain if this shadows an id.
-            let value = self.render_plan(*value);
-            let prebound = self.insert_id(Id::Local(id), value);
+            let value = render_plan(ctx, *value);
+            let prebound = ctx.insert_id(Id::Local(id), value);
             assert!(prebound.is_none());
 
-            let body = self.render_plan(*body);
-            self.remove_id(Id::Local(id));
+            let body = render_plan(ctx, *body);
+            ctx.remove_id(Id::Local(id));
             body
         }
         Plan::LetRec { .. } => {
@@ -846,12 +840,12 @@ pub fn render_plan(&mut self, plan: Plan) -> CollectionBundle<G> {
             mfp,
             input_key_val,
         } => {
-            let input = self.render_plan(*input);
+            let input = render_plan(ctx, *input);
             // If `mfp` is non-trivial, we should apply it and produce a collection.
             if mfp.is_identity() {
                 input
             } else {
-                let (oks, errs) = input.as_collection_core(mfp, input_key_val, self.until.clone());
+                let (oks, errs) = input.as_collection_core(mfp, input_key_val, ctx.until().clone());
                 CollectionBundle::from_collections(oks, errs)
             }
         }
@@ -862,20 +856,20 @@ pub fn render_plan(&mut self, plan: Plan) -> CollectionBundle<G> {
             mfp_after: mfp,
             input_key,
         } => {
-            let input = self.render_plan(*input);
-            self.render_flat_map(input, func, exprs, mfp, input_key)
+            let input = render_plan(ctx, *input);
+            render_flat_map(ctx, input, func, exprs, mfp, input_key)
         }
         Plan::Join { inputs, plan } => {
             let inputs = inputs
                 .into_iter()
-                .map(|input| self.render_plan(input))
+                .map(|input| render_plan(ctx, input))
                 .collect();
             match plan {
                 mz_compute_types::plan::join::JoinPlan::Linear(linear_plan) => {
-                    self.render_join(inputs, linear_plan)
+                    render_join(ctx, inputs, linear_plan)
                 }
                 mz_compute_types::plan::join::JoinPlan::Delta(delta_plan) => {
-                    self.render_delta_join(inputs, delta_plan)
+                    render_delta_join(ctx, inputs, delta_plan)
                 }
             }
         }
@@ -886,16 +880,16 @@ pub fn render_plan(&mut self, plan: Plan) -> CollectionBundle<G> {
             input_key,
             mfp_after,
         } => {
-            let input = self.render_plan(*input);
+            let input = render_plan(ctx, *input);
             let mfp_option = (!mfp_after.is_identity()).then_some(mfp_after);
-            self.render_reduce(input, key_val_plan, plan, input_key, mfp_option)
+            render_reduce(ctx, input, key_val_plan, plan, input_key, mfp_option)
         }
         Plan::TopK { input, top_k_plan } => {
-            let input = self.render_plan(*input);
-            self.render_topk(input, top_k_plan)
+            let input = render_plan(ctx, *input);
+            render_topk(ctx, input, top_k_plan)
         }
         Plan::Negate { input } => {
-            let input = self.render_plan(*input);
+            let input = render_plan(ctx, *input);
             let (oks, errs) = input.as_specific_collection(None);
             CollectionBundle::from_collections(oks.negate(), errs)
         }
@@ -903,8 +897,8 @@ pub fn render_plan(&mut self, plan: Plan) -> CollectionBundle<G> {
             input,
             threshold_plan,
         } => {
-            let input = self.render_plan(*input);
-            self.render_threshold(input, threshold_plan)
+            let input = render_plan(ctx, *input);
+            render_threshold(input, threshold_plan)
         }
         Plan::Union {
             inputs,
@@ -913,15 +907,15 @@ pub fn render_plan(&mut self, plan: Plan) -> CollectionBundle<G> {
             let mut oks = Vec::new();
             let mut errs = Vec::new();
             for input in inputs.into_iter() {
-                let (os, es) = self.render_plan(input).as_specific_collection(None);
+                let (os, es) = render_plan(ctx, input).as_specific_collection(None);
                 oks.push(os);
                 errs.push(es);
             }
-            let mut oks = differential_dataflow::collection::concatenate(&mut self.scope, oks);
+            let mut oks = differential_dataflow::collection::concatenate(ctx.scope_mut(), oks);
             if consolidate_output {
                 oks = oks.consolidate_named::<KeySpine<_, _, _>>("UnionConsolidation")
             }
-            let errs = differential_dataflow::collection::concatenate(&mut self.scope, errs);
+            let errs = differential_dataflow::collection::concatenate(ctx.scope_mut(), errs);
             CollectionBundle::from_collections(oks, errs)
         }
         Plan::ArrangeBy {
@@ -930,17 +924,16 @@ pub fn render_plan(&mut self, plan: Plan) -> CollectionBundle<G> {
             input_key,
             input_mfp,
         } => {
-            let input = self.render_plan(*input);
+            let input = render_plan(ctx, *input);
             input.ensure_collections(
                 keys,
                 input_key,
                 input_mfp,
-                self.until.clone(),
-                self.enable_specialized_arrangements,
+                ctx.until().clone(),
+                ctx.enable_specialized_arrangements(),
             )
         }
     }
-}
 }
 
 /// A timestamp type that can be used for operations within MZ's dataflow layer.
