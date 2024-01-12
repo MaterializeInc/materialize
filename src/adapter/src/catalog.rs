@@ -4265,10 +4265,6 @@ impl SessionCatalog for ConnCatalog<'_> {
         let comment_id = self.state.get_comment_id(ObjectId::Item(*id));
         self.state.comments.get_object_comments(comment_id)
     }
-
-    fn get_linked_cluster(&self, id: GlobalId) -> Option<ClusterId> {
-        self.state.get_linked_cluster(id).map(|cluster| cluster.id)
-    }
 }
 
 #[cfg(test)]

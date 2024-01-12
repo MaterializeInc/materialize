@@ -355,9 +355,6 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
 
     /// Returns the associated comments for the given `id`
     fn get_item_comments(&self, id: &GlobalId) -> Option<&BTreeMap<Option<usize>, String>>;
-
-    /// Returns the ID of a cluster linked to this object ID if one exists.
-    fn get_linked_cluster(&self, id: GlobalId) -> Option<ClusterId>;
 }
 
 /// Configuration associated with a catalog.

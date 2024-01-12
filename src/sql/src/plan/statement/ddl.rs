@@ -125,8 +125,8 @@ use crate::plan::{
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
     DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
-    PlanClusterOption, PlanContext, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source,
-    Table, Type, VariableValue, View, WebhookHeaderFilters, WebhookHeaders, WebhookValidation,
+    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, Type,
+    VariableValue, View, WebhookHeaderFilters, WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars;
 use crate::session::vars::ENABLE_REFRESH_EVERY_MVS;
@@ -1685,32 +1685,6 @@ fn source_sink_cluster_config(
     in_cluster: &mut Option<ResolvedClusterName>,
     size: Option<String>,
 ) -> Result<ClusterId, PlanError> {
-    // If we're replanning an item that has a linked cluster, always return it
-    // as such. This can be removed after the migration that deprecates cluster
-    // links.
-    if let Some(PlanContext {
-        planning_id: Some(planning_id),
-        ..
-    }) = scx.pcx
-    {
-        if let Some(cluster_id) = scx.catalog.get_linked_cluster(*planning_id) {
-            mz_ore::soft_assert_or_log!(
-                in_cluster.is_none(),
-                "linked clusters never explicitly named, but re-planning {} had cluster \
-                specified as {:?}",
-                planning_id,
-                in_cluster
-            );
-
-            *in_cluster = Some(ResolvedClusterName {
-                id: cluster_id,
-                print_name: None,
-            });
-
-            return Ok(cluster_id);
-        }
-    }
-
     if size.is_some() {
         sql_bail!("specifying {ty} SIZE deprecated; use IN CLUSTER")
     }
