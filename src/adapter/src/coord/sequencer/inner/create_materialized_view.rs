@@ -351,11 +351,19 @@ impl Coordinator {
                             })
                         }
                     }
-                    // Pipeline errors are handled fifferently depending on the caller.
+                    // Internal optimizer errors errors are handled differently
+                    // depending on the caller.
                     Err(err) => {
-                        if let Some(explain_ctx) = explain_ctx {
-                            // In `explain_~` contexts, just move to the next
-                            // stage with default parameters.
+                        let Some(explain_ctx) = explain_ctx else {
+                            // In `sequence_~` contexts, immediately retire the
+                            // execution with the error.
+                            return ctx.retire(Err(err.into()));
+                        };
+
+                        if explain_ctx.broken {
+                            // In `EXPLAIN BROKEN` contexts, just log the error
+                            // and move to the next stage with default
+                            // parameters.
                             tracing::error!("error while handling EXPLAIN statement: {}", err);
                             CreateMaterializedViewStage::Explain(CreateMaterializedViewExplain {
                                 validity,
@@ -366,9 +374,9 @@ impl Coordinator {
                                 explain_ctx,
                             })
                         } else {
-                            // In `sequence_~` contexts, immediately retire the
-                            // execution with the error.
-                            return ctx.retire(Err(err));
+                            // In regular `EXPLAIN` contexts, immediately retire
+                            // the execution with the error.
+                            return ctx.retire(Err(err.into()));
                         }
                     }
                 };
