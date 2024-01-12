@@ -81,7 +81,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "default",
             "test-incident-70",
             "test-concurrent-connections",
-            "test-blue-green-deployment",
+            "blue-green-deployment",
         ):
             continue
         if shard is None or shard_count is None or i % int(shard_count) == shard:
