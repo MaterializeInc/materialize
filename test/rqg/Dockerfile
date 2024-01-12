@@ -26,7 +26,7 @@ RUN perl -MCPAN -e 'install DBIx::MyParsePP'
 # Rebuild if the RQG repo has changed
 ADD https://api.github.com/repos/MaterializeInc/RQG/git/refs/heads/main version.json
 
-RUN git clone --depth=1 --single-branch https://github.com/MaterializeInc/RQG.git \
+RUN git clone --single-branch https://github.com/MaterializeInc/RQG.git \
     && cd RQG \
     && git checkout 56fd3f59055571b65c0698d0a43270bab2cc64db
 
