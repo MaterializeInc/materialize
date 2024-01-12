@@ -804,30 +804,6 @@ impl Catalog {
                             cause: e.to_string(),
                         })
                     })?;
-
-                // Ensure linked clusters do not exist in memory.
-                //
-                // There's no great place to do this because we want to use the
-                // previous connection between a linked object an its cluster to
-                // simplify an AST migration.
-                //
-                // We also don't want to blithely update the catalog state by
-                // re-loading the new cluster definitions because the subprocess
-                // for that allocates new GlobalIds.
-                //
-                // However, this change is idempotent so is fine to re-run here.
-                //
-                // We can remove this in a subsequent version of Materialize
-                // where we remove the `clusters_by_linked_object_id` attribute
-                // from catalog state.
-                for mut cluster in txn.get_clusters() {
-                    cluster.linked_object_id = None;
-                    txn.update_cluster(cluster.id, cluster)?;
-                }
-                state.clusters_by_linked_object_id.clear();
-                for (_, cluster) in state.clusters_by_id.iter_mut() {
-                    cluster.linked_object_id = None;
-                }
                 txn.set_catalog_content_version(config.build_info.version.to_string())?;
             }
 
