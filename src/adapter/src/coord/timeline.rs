@@ -17,9 +17,9 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
-use mz_catalog::memory::objects::CatalogItem;
+use mz_catalog::memory::objects::{CatalogItem, MaterializedView, View};
 use mz_compute_types::ComputeInstanceId;
-use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
+use mz_expr::CollectionPlan;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::vec::VecExt;
@@ -495,21 +495,6 @@ impl Coordinator {
         // Recurse through IDs to find all sources and tables, adding new ones to
         // the set until we reach the bottom.
         let mut ids: Vec<_> = ids.into_iter().collect();
-        // Helper function for both materialized views and views.
-        fn visit_view_expr(
-            optimized_expr: &OptimizedMirRelationExpr,
-            ids: &mut Vec<GlobalId>,
-            timelines: &mut BTreeSet<TimelineContext>,
-        ) {
-            // If the definition contains a temporal function, the timeline must
-            // be timestamp dependent.
-            if optimized_expr.contains_temporal() {
-                timelines.insert(TimelineContext::TimestampDependent);
-            } else {
-                timelines.insert(TimelineContext::TimestampIndependent);
-            }
-            ids.extend(optimized_expr.depends_on());
-        }
         while let Some(id) = ids.pop() {
             // Protect against possible infinite recursion. Not sure if it's possible, but
             // a cheap prevention for the future.
@@ -525,11 +510,16 @@ impl Coordinator {
                     CatalogItem::Index(index) => {
                         ids.push(index.on);
                     }
-                    CatalogItem::View(view) => {
-                        visit_view_expr(&view.optimized_expr, &mut ids, &mut timelines);
-                    }
-                    CatalogItem::MaterializedView(mview) => {
-                        visit_view_expr(&mview.optimized_expr, &mut ids, &mut timelines);
+                    CatalogItem::View(View { optimized_expr, .. })
+                    | CatalogItem::MaterializedView(MaterializedView { optimized_expr, .. }) => {
+                        // If the definition contains a temporal function, the timeline must
+                        // be timestamp dependent.
+                        if optimized_expr.contains_temporal() {
+                            timelines.insert(TimelineContext::TimestampDependent);
+                        } else {
+                            timelines.insert(TimelineContext::TimestampIndependent);
+                        }
+                        ids.extend(optimized_expr.depends_on());
                     }
                     CatalogItem::Table(table) => {
                         timelines.insert(TimelineContext::TimelineDependent(table.timeline()));
