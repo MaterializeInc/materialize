@@ -231,10 +231,17 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let id = config.id;
             let worker_id = config.worker_id;
 
-            let [data_cap_set, rewind_cap_set, snapshot_cap_set, definite_error_cap_set]: &mut [_; 4] = caps.try_into().unwrap();
+            let [
+                data_cap_set,
+                rewind_cap_set,
+                snapshot_cap_set,
+                definite_error_cap_set
+            ]: &mut [_; 4] = caps.try_into().unwrap();
+
             trace!(
                 %id,
-                "timely-{worker_id} initializing table reader with {} tables to snapshot",
+                "timely-{worker_id} initializing table reader \
+                    with {} tables to snapshot",
                 reader_snapshot_table_info.len()
             );
 
@@ -246,30 +253,40 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
             let connection_config = connection
                 .connection
-                .config(&*config.config.connection_context.secrets_reader, &config.config)
+                .config(
+                    &*config.config.connection_context.secrets_reader,
+                    &config.config,
+                )
                 .await?;
             let task_name = format!("timely-{worker_id} PG snapshotter");
 
             let client = if is_snapshot_leader {
-                let client = connection_config.connect_replication(
-                    &config.config.connection_context.ssh_tunnel_manager,
-                ).await?;
+                let client = connection_config
+                    .connect_replication(&config.config.connection_context.ssh_tunnel_manager)
+                    .await?;
                 // The main slot must be created *before* we start snapshotting so that we can be
                 // certain that the temporarly slot created for the snapshot start at an LSN that
                 // is greater than or equal to that of the main slot.
-                super::ensure_replication_slot(&client, &connection.publication_details.slot).await?;
+                super::ensure_replication_slot(&client, &connection.publication_details.slot)
+                    .await?;
 
                 let snapshot_info = export_snapshot(&client).await?;
-                trace!(%id, "timely-{worker_id} exporting snapshot info {snapshot_info:?}");
-                snapshot_handle.give(&snapshot_cap_set[0], snapshot_info).await;
+                trace!(
+                    %id,
+                    "timely-{worker_id} exporting snapshot info {snapshot_info:?}");
+                snapshot_handle
+                    .give(&snapshot_cap_set[0], snapshot_info)
+                    .await;
 
                 client
             } else {
                 // Only the snapshot leader needs a replication connection.
-                connection_config.connect(
-                    &task_name,
-                    &config.config.connection_context.ssh_tunnel_manager,
-                ).await?
+                connection_config
+                    .connect(
+                        &task_name,
+                        &config.config.connection_context.ssh_tunnel_manager,
+                    )
+                    .await?
             };
 
             // Configure statement_timeout based on param. We want to be able to
@@ -278,15 +295,23 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             //
             // Value is known to accept milliseconds w/o units.
             // https://www.postgresql.org/docs/current/runtime-config-client.html
-            client.simple_query(
-                &format!("SET statement_timeout = {}", config.config.parameters.pg_source_snapshot_statement_timeout.as_millis())
-            ).await?;
+            client
+                .simple_query(&format!(
+                    "SET statement_timeout = {}",
+                    config
+                        .config
+                        .parameters
+                        .pg_source_snapshot_statement_timeout
+                        .as_millis()
+                ))
+                .await?;
 
-            mz_ore::soft_assert_no_log!{{
+            mz_ore::soft_assert_no_log! {{
                 let row = simple_query_opt(&client, "SHOW statement_timeout;")
                     .await?
                     .unwrap();
-                let timeout = row.get("statement_timeout").unwrap().to_owned();
+                let timeout = row.get("statement_timeout").unwrap().to_owned(
+                );
 
                 // This only needs to be compatible for values we test; doesn't
                 // need to generalize all possible interval/duration mappings.
@@ -299,9 +324,14 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
             let (snapshot, snapshot_lsn) = loop {
                 match snapshot_input.next().await {
-                    Some(AsyncEvent::Data(_, mut data)) => break data.pop().expect("snapshot sent above"),
+                    Some(AsyncEvent::Data(_, mut data)) => {
+                        break data.pop().expect("snapshot sent above")
+                    }
                     Some(AsyncEvent::Progress(_)) => continue,
-                    None => panic!("feedback closed before sending snapshot info"),
+                    None => panic!(
+                        "feedback closed \
+                    before sending snapshot info"
+                    ),
                 }
             };
             // Snapshot leader is already in identified transaction but all other workers need to enter it.
@@ -328,8 +358,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             {
                 // If the replication stream cannot be obtained in a definite way there is
                 // nothing else to do. These errors are not retractable.
-                Err(PublicationInfoError::PublicationMissing(publication)) =>
-                {
+                Err(PublicationInfoError::PublicationMissing(publication)) => {
                     let err = DefiniteError::PublicationDropped(publication);
                     for oid in reader_snapshot_table_info.keys() {
                         // Produce a definite error here and then exit to ensure
@@ -343,7 +372,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                         raw_handle.give(&data_cap_set[0], update).await;
                     }
 
-                    definite_error_handle.give(&definite_error_cap_set[0], ReplicationError::Definite(Rc::new(err))).await;
+                    definite_error_handle
+                        .give(
+                            &definite_error_cap_set[0],
+                            ReplicationError::Definite(Rc::new(err)),
+                        )
+                        .await;
                     return Ok(());
                 }
                 Err(PublicationInfoError::PostgresError(e)) => Err(e)?,
@@ -356,12 +390,18 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 let desc = match verify_schema(oid, expected_desc, &upstream_info) {
                     Ok(()) => expected_desc,
                     Err(err) => {
-                        raw_handle.give(&data_cap_set[0], ((oid, Err(err)), MzOffset::minimum(), 1)).await;
+                        raw_handle
+                            .give(&data_cap_set[0], ((oid, Err(err)), MzOffset::minimum(), 1))
+                            .await;
                         continue;
                     }
                 };
 
-                trace!(%id, "timely-{worker_id} snapshotting table {:?}({oid}) @ {snapshot_lsn}", desc.name);
+                trace!(
+                    %id,
+                    "timely-{worker_id} snapshotting table {:?}({oid}) @ {snapshot_lsn}",
+                    desc.name
+                );
                 // To handle quoted/keyword names, we can use `Ident`'s AST printing, which
                 // emulate's PG's rules for name formatting.
                 let query = format!(
@@ -372,11 +412,15 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 let mut stream = pin!(client.copy_out_simple(&query).await?);
 
                 while let Some(bytes) = stream.try_next().await? {
-                    raw_handle.give(&data_cap_set[0], ((oid, Ok(bytes)), MzOffset::minimum(), 1)).await;
+                    raw_handle
+                        .give(&data_cap_set[0], ((oid, Ok(bytes)), MzOffset::minimum(), 1))
+                        .await;
                 }
             }
             // Failure scenario after we have produced the snapshot, but before a successful COMMIT
-            fail::fail_point!("pg_snapshot_failure", |_| Err(TransientError::SyntheticError));
+            fail::fail_point!("pg_snapshot_failure", |_| Err(
+                TransientError::SyntheticError
+            ));
 
             // The exporting worker should wait for all the other workers to commit before dropping
             // its client since this is what holds the exported transaction alive.
