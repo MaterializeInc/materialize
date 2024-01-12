@@ -118,6 +118,7 @@ where
         let region_name = match sink.connection {
             ComputeSinkConnection::Subscribe(_) => format!("SubscribeSink({:?})", sink_id),
             ComputeSinkConnection::Persist(_) => format!("PersistSink({:?})", sink_id),
+            ComputeSinkConnection::CopyTo(_) => format!("CopyToSink({:?})", sink_id),
         };
         self.scope
             .parent
@@ -171,5 +172,6 @@ where
     match connection {
         ComputeSinkConnection::Subscribe(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::Persist(connection) => Box::new(connection.clone()),
+        ComputeSinkConnection::CopyTo(connection) => Box::new(connection.clone()),
     }
 }

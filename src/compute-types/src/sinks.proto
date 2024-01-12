@@ -32,6 +32,7 @@ message ProtoComputeSinkConnection {
     oneof kind {
         google.protobuf.Empty subscribe = 1;
         ProtoPersistSinkConnection persist = 2;
+        google.protobuf.Empty copy_to = 3;
     }
 }
 
