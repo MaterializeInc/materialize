@@ -534,9 +534,7 @@ pub fn plan_create_webhook_source(
     let typ = RelationType::new(column_ty);
     let desc = RelationDesc::new(typ, column_names);
 
-    // Webhook sources must currently specify the cluster on which they run, so
-    // we don't need to wait to normalize the statement.
-    let cluster_config = source_sink_cluster_config(scx, "source", &mut Some(in_cluster), None)?;
+    let cluster_config = source_sink_cluster_config(scx, "source", Some(&in_cluster), None)?;
 
     // Check for an object in the catalog with this same name
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
@@ -576,7 +574,7 @@ pub fn plan_create_source(
 ) -> Result<Plan, PlanError> {
     let CreateSourceStatement {
         name,
-        in_cluster: _,
+        in_cluster,
         col_names,
         connection,
         envelope,
@@ -1311,10 +1309,17 @@ pub fn plan_create_source(
         });
     }
 
-    // We will rewrite the cluster if one is not provided, so we must use the
-    // `in_cluster` value we plan to normalize when we canonicalize the create
-    // statement.
-    let cluster_config = source_sink_cluster_config(scx, "source", &mut stmt.in_cluster, size)?;
+    let cluster_config = source_sink_cluster_config(scx, "source", in_cluster.as_ref(), size)?;
+    // If using the default cluster, ensure we record which cluster that is.
+    match &cluster_config {
+        SourceSinkClusterConfig::Existing { id } if stmt.in_cluster.is_none() => {
+            stmt.in_cluster = Some(ResolvedClusterName {
+                id: *id,
+                print_name: None,
+            })
+        }
+        _ => {}
+    }
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSource(stmt))?;
 
@@ -1675,31 +1680,17 @@ fn get_encoding(
     Ok(encoding)
 }
 
-/// Determine the cluster ID to use for this item.
-///
-/// If `in_cluster` is `None` we will update it to refer to the default cluster.
-/// Because of this, do not normalize/canonicalize the create SQL statement
-/// until after calling this function.
 fn source_sink_cluster_config(
     scx: &StatementContext,
     ty: &'static str,
-    in_cluster: &mut Option<ResolvedClusterName>,
+    in_cluster: Option<&ResolvedClusterName>,
     size: Option<String>,
 ) -> Result<SourceSinkClusterConfig, PlanError> {
-    if size.is_some() {
-        sql_bail!("specifying {ty} SIZE deprecated; use IN CLUSTER")
-    }
-
-    let cluster = match in_cluster {
-        None => {
-            let cluster = scx.catalog.resolve_cluster(None)?;
-            *in_cluster = Some(ResolvedClusterName {
-                id: cluster.id(),
-                print_name: None,
-            });
-            cluster
-        }
-        Some(in_cluster) => scx.catalog.get_cluster(in_cluster.id),
+    let cluster = match (in_cluster, size) {
+        (None, None) => scx.catalog.resolve_cluster(None)?,
+        (Some(in_cluster), None) => scx.catalog.get_cluster(in_cluster.id),
+        (None, Some(size)) => return Ok(SourceSinkClusterConfig::Linked { size }),
+        _ => sql_bail!("only one of IN CLUSTER or SIZE can be set"),
     };
 
     if cluster.replica_ids().len() > 1 {
@@ -2403,7 +2394,7 @@ pub fn plan_create_sink(
 ) -> Result<Plan, PlanError> {
     let CreateSinkStatement {
         name,
-        in_cluster: _,
+        in_cluster,
         from,
         connection,
         format,
@@ -2562,10 +2553,18 @@ pub fn plan_create_sink(
     // WITH SNAPSHOT defaults to true
     let with_snapshot = snapshot.unwrap_or(true);
 
-    // We will rewrite the cluster if one is not provided, so we must use the
-    // `in_cluster` value we plan to normalize when we canonicalize the create
-    // statement.
-    let cluster_config = source_sink_cluster_config(scx, "sink", &mut stmt.in_cluster, size)?;
+    let cluster_config = source_sink_cluster_config(scx, "sink", in_cluster.as_ref(), size)?;
+    // If using the default cluster, ensure we record which cluster that is.
+    match &cluster_config {
+        SourceSinkClusterConfig::Existing { id } if stmt.in_cluster.is_none() => {
+            stmt.in_cluster = Some(ResolvedClusterName {
+                id: *id,
+                print_name: None,
+            })
+        }
+        _ => {}
+    }
+
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt))?;
 
     Ok(Plan::CreateSink(CreateSinkPlan {
