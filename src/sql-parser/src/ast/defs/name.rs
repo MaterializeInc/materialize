@@ -18,6 +18,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use serde::{Deserialize, Serialize};
+
 use mz_ore::str::{MaxLenString, StrExt};
 use mz_sql_lexer::keywords::Keyword;
 use std::fmt;
@@ -26,7 +28,7 @@ use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{AstInfo, QualifiedReplica};
 
 /// An identifier.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Ident(pub(crate) String);
 
 impl Ident {
@@ -336,7 +338,7 @@ pub enum IdentError {
 }
 
 /// A name of a table, view, custom type, etc. that lives in a schema, possibly multi-part, i.e. db.schema.obj
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct UnresolvedItemName(pub Vec<Ident>);
 
 pub enum CatalogName {

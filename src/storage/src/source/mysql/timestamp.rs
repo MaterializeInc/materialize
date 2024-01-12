@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use core::ops::Add;
 use std::fmt;
 
 use mz_expr::PartitionId;
@@ -16,9 +17,12 @@ use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
 
+// TODO: Implement GTID set parsing -> Partitioned timestamp
+// like vitess: https://github.com/vitessio/vitess/blob/main/go/mysql/replication/mysql56_gtid_set.go
+
 /// Represents a MySQL transaction id. Its maximum value
 #[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct TransactionId(i64);
+pub struct TransactionId(u64);
 
 impl fmt::Display for TransactionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -26,10 +30,23 @@ impl fmt::Display for TransactionId {
     }
 }
 
+impl From<TransactionId> for u64 {
+    fn from(id: TransactionId) -> Self {
+        id.0
+    }
+}
+
 impl TransactionId {
-    pub fn new(id: i64) -> Self {
-        assert!(id >= 0, "invalid negative transaction id: {id}");
+    pub fn new(id: u64) -> Self {
         Self(id)
+    }
+}
+
+impl Add for TransactionId {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self::new(self.0 + other.0)
     }
 }
 
@@ -77,23 +94,23 @@ impl SourceTimestamp for TransactionId {
             PartitionId::None,
             "invalid non-partitioned partition {pid}"
         );
-        let id: i64 = offset.offset.try_into().expect("invalid transaction id");
+        let id: u64 = offset.offset;
         Self::new(id)
     }
 
     fn try_into_compat_ts(&self) -> Option<(PartitionId, MzOffset)> {
-        let id: u64 = self.0.try_into().expect("verified non-negative");
+        let id: u64 = self.0;
         Some((PartitionId::None, MzOffset::from(id)))
     }
 
     fn encode_row(&self) -> Row {
-        Row::pack([Datum::Int64(self.0)])
+        Row::pack([Datum::UInt64(self.0)])
     }
 
     fn decode_row(row: &Row) -> Self {
         let mut datums = row.iter();
         match (datums.next(), datums.next()) {
-            (Some(Datum::Int64(id)), None) => Self::new(id),
+            (Some(Datum::UInt64(id)), None) => Self::new(id),
             _ => panic!("invalid row {row:?}"),
         }
     }

@@ -21,7 +21,7 @@ pub use desc::{
 mod replication;
 pub use replication::{
     ensure_full_row_binlog_format, ensure_gtid_consistency, ensure_replication_commit_order,
-    query_sys_var,
+    query_sys_var, GtidSet,
 };
 
 pub mod schemas;
