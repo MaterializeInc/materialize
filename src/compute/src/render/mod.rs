@@ -378,7 +378,7 @@ pub fn build_compute_dataflow<A: Allocate>(
     })
 }
 
-pub(crate) fn import_index<'g, C, G, T>(
+fn import_index<'g, C, G, T>(
     ctx: &mut C,
     compute_state: &mut ComputeState,
     tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
@@ -441,13 +441,13 @@ pub(crate) fn import_index<'g, C, G, T>(
     }
 }
 
-pub(crate) fn build_object<C: Context>(ctx: &mut C, object: BuildDesc<Plan>) {
+fn build_object<C: Context>(ctx: &mut C, object: BuildDesc<Plan>) {
     // First, transform the relation expression into a render plan.
     let bundle = render_plan(ctx, object.plan);
     ctx.insert_id(Id::Global(object.id), bundle);
 }
 
-pub(crate) fn export_index<'g, C, G>(
+fn export_index<'g, C, G>(
     ctx: &C,
     compute_state: &mut ComputeState,
     tokens: &BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
@@ -508,7 +508,7 @@ pub(crate) fn export_index<'g, C, G>(
     };
 }
 
-pub(crate) fn export_index_iterative<'g, C, G, T>(
+fn export_index_iterative<'g, C, G, T>(
     ctx: &C,
     compute_state: &mut ComputeState,
     tokens: &BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
@@ -633,7 +633,7 @@ where
 ///
 /// The method requires that all variables conclude with a physical representation that
 /// contains a collection (i.e. a non-arrangement), and it will panic otherwise.
-pub fn render_recursive_plan<C: Context>(
+fn render_recursive_plan<C: Context>(
     ctx: &mut C,
     level: usize,
     plan: Plan,
@@ -750,7 +750,7 @@ where
 ///
 /// The return type reflects the uncertainty about the data representation, perhaps
 /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
-pub fn render_plan<C: Context>(ctx: &mut C, plan: Plan) -> CollectionBundle<C::Scope> {
+fn render_plan<C: Context>(ctx: &mut C, plan: Plan) -> CollectionBundle<C::Scope> {
     match plan {
         Plan::Constant { rows } => {
             // Produce both rows and errs to avoid conditional dataflow construction.
