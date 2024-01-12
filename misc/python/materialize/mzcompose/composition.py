@@ -710,7 +710,7 @@ class Composition:
             *(["--detach"] if detach else []),
             *(["--wait"] if wait else []),
             *services,
-            max_tries=2,
+            max_tries=max_tries,
         )
 
         if persistent:
