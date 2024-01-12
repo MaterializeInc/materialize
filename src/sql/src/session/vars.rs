@@ -2820,7 +2820,7 @@ impl SessionVars {
 
     /// Returns the value of the `max_query_result_size` configuration parameter.
     pub fn max_query_result_size(&self) -> u64 {
-        self.expect_value(&MAX_QUERY_RESULT_SIZE).0
+        self.expect_value(&MAX_QUERY_RESULT_SIZE).as_bytes()
     }
 
     /// Sets the external metadata associated with the user.
@@ -3459,7 +3459,7 @@ impl SystemVars {
 
     /// Returns the value of the `max_result_size` configuration parameter.
     pub fn max_result_size(&self) -> u64 {
-        self.expect_value(&MAX_RESULT_SIZE).0
+        self.expect_value(&MAX_RESULT_SIZE).as_bytes()
     }
 
     /// Returns the value of the `max_copy_from_size` configuration parameter.
