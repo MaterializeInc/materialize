@@ -428,11 +428,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 def _are_regressions_justified(
     this_tag: str | None, baseline_tag: str | None
 ) -> tuple[bool, str]:
-    if (
-        this_tag is None
-        or not _tag_references_release_version(this_tag)
-        or not _tag_references_release_version(baseline_tag)
-    ):
+    if not _tag_references_release_version(
+        this_tag
+    ) or not _tag_references_release_version(baseline_tag):
         return False, ""
 
     # Checked in _tag_references_release_version
