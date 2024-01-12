@@ -54,6 +54,9 @@ class ReferenceImplementation(Enum):
 @dataclass
 class Workload:
     name: str
+    # All paths are relative to the CWD of the rqg container, which is /RQG and contains
+    # a checked-out copy of the MaterializeInc/RQG repository
+    # Use /workdir/file-name-goes-here.yy for files located in test/rqg
     grammar: str
     reference_implementation: ReferenceImplementation | None
     dataset: Dataset | None = None
@@ -68,6 +71,13 @@ WORKLOADS = [
         name="simple-aggregates",
         dataset=Dataset.SIMPLE,
         grammar="conf/mz/simple-aggregates.yy",
+        reference_implementation=ReferenceImplementation.POSTGRES,
+        validator="ResultsetComparatorSimplify",
+    ),
+    Workload(
+        name="lateral-joins",
+        dataset=Dataset.SIMPLE,
+        grammar="conf/mz/lateral-joins.yy",
         reference_implementation=ReferenceImplementation.POSTGRES,
         validator="ResultsetComparatorSimplify",
     ),
