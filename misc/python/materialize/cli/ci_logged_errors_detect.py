@@ -141,6 +141,7 @@ def annotate_errors(errors: list[str], title: str, style: str) -> None:
     if not errors:
         return
 
+    errors = group_identical_errors(errors)
     suite_name = os.getenv("BUILDKITE_LABEL") or "Logged Errors"
 
     error_str = "\n".join(f"* {error}" for error in errors)
@@ -167,6 +168,22 @@ def annotate_errors(errors: list[str], title: str, style: str) -> None:
         ],
         stdin=markdown.encode(),
     )
+
+
+def group_identical_errors(errors: list[str]) -> list[str]:
+    errors_with_counts: dict[str, int] = {}
+
+    for error in errors:
+        errors_with_counts[error] = 1 + errors_with_counts.get(error, 0)
+
+    consolidated_errors = []
+
+    for error, count in errors_with_counts.items():
+        consolidated_errors.append(
+            error if count == 1 else f"{error}\n({count} occurrences)"
+        )
+
+    return consolidated_errors
 
 
 def annotate_logged_errors(log_files: list[str]) -> int:
