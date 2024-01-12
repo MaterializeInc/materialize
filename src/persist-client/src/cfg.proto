@@ -10,6 +10,7 @@
 syntax = "proto3";
 
 import "proto/src/proto.proto";
+import "persist-client/src/dyn_cfg.proto";
 
 package mz_persist_client.cfg;
 
@@ -35,7 +36,10 @@ message ProtoPersistParameters {
     mz_proto.ProtoDuration reader_lease_duration = 20;
     optional uint64 stats_budget_bytes = 17;
     optional ProtoUntrimmableColumns stats_untrimmable_columns = 18;
-    map<string, bool> feature_flags = 19;
+    // TODO(cfg): Replace ProtoPersistParameters entirely with this.
+    dyn_cfg.ConfigUpdates config_updates = 23;
+
+    reserved 19;
 }
 
 message ProtoRetryParameters {

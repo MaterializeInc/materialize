@@ -11,56 +11,27 @@
 
 //! The tunable knobs for persist.
 
-use once_cell::sync::Lazy;
-use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::batch::UntrimmableColumns;
 use mz_build_info::BuildInfo;
 use mz_ore::now::NowFn;
 use mz_persist::cfg::BlobKnobs;
 use mz_persist::retry::Retry;
 use mz_postgres_client::PostgresClientKnobs;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
+use crate::batch::UntrimmableColumns;
+use crate::dyn_cfg::{Config, ConfigSet, ConfigType, ConfigUpdates};
+use crate::internal::compact::STREAMING_COMPACTION_ENABLED;
+use crate::read::STREAMING_SNAPSHOT_AND_FETCH_ENABLED;
+
 include!(concat!(env!("OUT_DIR"), "/mz_persist_client.cfg.rs"));
-
-#[derive(Copy, Clone, PartialOrd, PartialEq, Ord, Eq, Debug)]
-pub struct PersistFeatureFlag {
-    pub name: &'static str,
-    pub default: bool,
-    pub description: &'static str,
-}
-
-impl PersistFeatureFlag {
-    pub(crate) const STREAMING_COMPACTION: PersistFeatureFlag = PersistFeatureFlag {
-        name: "persist_streaming_compaction_enabled",
-        default: false,
-        description: "use the new streaming consolidate during compaction",
-    };
-    pub(crate) const STREAMING_SNAPSHOT_AND_FETCH: PersistFeatureFlag = PersistFeatureFlag {
-        name: "persist_streaming_snapshot_and_fetch_enabled",
-        default: false,
-        description: "use the new streaming consolidate during snapshot_and_fetch",
-    };
-    // TODO: Remove this once we're comfortable that there aren't any bugs.
-    pub(crate) const BATCH_DELETE_ENABLED: PersistFeatureFlag = PersistFeatureFlag {
-        name: "persist_batch_delete_enabled",
-        default: false,
-        description: "Whether to actually delete blobs when batch delete is called (Materialize).",
-    };
-
-    pub const ALL: &'static [PersistFeatureFlag] = &[
-        Self::STREAMING_COMPACTION,
-        Self::STREAMING_SNAPSHOT_AND_FETCH,
-        Self::BATCH_DELETE_ENABLED,
-    ];
-}
 
 /// The tunable knobs for persist.
 ///
@@ -121,6 +92,11 @@ pub struct PersistConfig {
     pub hostname: String,
     /// A clock to use for all leasing and other non-debugging use.
     pub now: NowFn,
+    /// Persist [Config]s that can change value dynamically within the lifetime
+    /// of a process.
+    ///
+    /// TODO(cfg): Entirely replace dynamic with this.
+    pub configs: ConfigSet,
     /// Configurations that can be dynamically updated.
     pub dynamic: Arc<DynamicConfig>,
     /// Whether to physically and logically compact batches in blob storage.
@@ -165,11 +141,18 @@ pub struct PersistConfig {
 impl PersistConfig {
     /// Returns a new instance of [PersistConfig] with default tuning.
     pub fn new(build_info: &BuildInfo, now: NowFn) -> Self {
+        Self::new_with_configs(build_info, now, all_dyn_configs(ConfigSet::default()))
+    }
+
+    /// Returns a new instance of [PersistConfig] with default tuning and the
+    /// specified ConfigSet.
+    pub fn new_with_configs(build_info: &BuildInfo, now: NowFn, configs: ConfigSet) -> Self {
         // Escape hatch in case we need to disable compaction.
         let compaction_disabled = mz_ore::env::is_var_truthy("MZ_PERSIST_COMPACTION_DISABLED");
         Self {
             build_version: build_info.semver_version(),
             now,
+            configs,
             dynamic: Arc::new(DynamicConfig {
                 batch_builder_max_outstanding_parts: AtomicUsize::new(2),
                 blob_target_size: AtomicUsize::new(Self::DEFAULT_BLOB_TARGET_SIZE),
@@ -214,13 +197,6 @@ impl PersistConfig {
                 pubsub_push_diff_enabled: AtomicBool::new(Self::DEFAULT_PUBSUB_PUSH_DIFF_ENABLED),
                 rollup_threshold: AtomicUsize::new(Self::DEFAULT_ROLLUP_THRESHOLD),
                 txns_data_shard_retryer: RwLock::new(Self::DEFAULT_TXNS_DATA_SHARD_RETRYER),
-                feature_flags: {
-                    // NB: initialized with the full set of feature flags, so the map never needs updating.
-                    PersistFeatureFlag::ALL
-                        .iter()
-                        .map(|f| (f.name, AtomicBool::new(f.default)))
-                        .collect()
-                },
             }),
             compaction_enabled: !compaction_disabled,
             compaction_concurrency_limit: 5,
@@ -244,6 +220,11 @@ impl PersistConfig {
             // conditionally enabled by the process orchestrator.
             hostname: std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_owned()),
         }
+    }
+
+    pub(crate) fn set_config<T: ConfigType>(&self, cfg: &Config<T>, val: T) {
+        let shared = cfg.shared(&self.configs);
+        T::set(&shared, val)
     }
 
     /// The minimum number of updates that justify writing out a batch in `persist_sink`'s
@@ -278,16 +259,26 @@ impl PersistConfig {
 
         let mut cfg = Self::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         cfg.hostname = "tests".into();
-        cfg.dynamic
-            .set_feature_flag(PersistFeatureFlag::STREAMING_COMPACTION, true);
-        cfg.dynamic
-            .set_feature_flag(PersistFeatureFlag::STREAMING_SNAPSHOT_AND_FETCH, true);
+        cfg.set_config(&STREAMING_COMPACTION_ENABLED, true);
+        cfg.set_config(&STREAMING_SNAPSHOT_AND_FETCH_ENABLED, true);
         cfg
     }
 }
 
 #[allow(non_upper_case_globals)]
 pub(crate) const MiB: usize = 1024 * 1024;
+
+/// Adds the full set of all persist [Config]s.
+///
+/// TODO(cfg): Consider replacing this with a static global registry powered by
+/// something like the `ctor` or `inventory` crate. This would involve managing
+/// the footgun of a Config being linked into one binary but not the other.
+pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
+    configs
+        .add(&crate::batch::BATCH_DELETE_ENABLED)
+        .add(&crate::internal::compact::STREAMING_COMPACTION_ENABLED)
+        .add(&crate::read::STREAMING_SNAPSHOT_AND_FETCH_ENABLED)
+}
 
 impl PersistConfig {
     /// Default value for [`DynamicConfig::blob_target_size`].
@@ -470,8 +461,6 @@ pub struct DynamicConfig {
     pubsub_push_diff_enabled: AtomicBool,
     rollup_threshold: AtomicUsize,
 
-    feature_flags: BTreeMap<&'static str, AtomicBool>,
-
     // NB: These parameters are not atomically updated together in LD.
     // We put them under a single RwLock to reduce the cost of reads
     // and to logically group them together.
@@ -526,14 +515,6 @@ impl DynamicConfig {
     // TODO: Decide if we can relax these.
     const LOAD_ORDERING: Ordering = Ordering::SeqCst;
     const STORE_ORDERING: Ordering = Ordering::SeqCst;
-
-    pub fn enabled(&self, flag: PersistFeatureFlag) -> bool {
-        self.feature_flags[flag.name].load(DynamicConfig::LOAD_ORDERING)
-    }
-
-    pub fn set_feature_flag(&self, flag: PersistFeatureFlag, to: bool) {
-        self.feature_flags[flag.name].store(to, DynamicConfig::STORE_ORDERING);
-    }
 
     /// The maximum number of parts (s3 blobs) that [crate::batch::BatchBuilder]
     /// will pipeline before back-pressuring [crate::batch::BatchBuilder::add]
@@ -843,8 +824,8 @@ pub struct PersistParameters {
     pub pubsub_push_diff_enabled: Option<bool>,
     /// Configures [`DynamicConfig::rollup_threshold`]
     pub rollup_threshold: Option<usize>,
-    /// Updates to various feature flags.
-    pub feature_flags: BTreeMap<String, bool>,
+    /// Updates to various dynamic config values.
+    pub config_updates: ConfigUpdates,
 }
 
 impl PersistParameters {
@@ -874,7 +855,7 @@ impl PersistParameters {
             pubsub_client_enabled: self_pubsub_client_enabled,
             pubsub_push_diff_enabled: self_pubsub_push_diff_enabled,
             rollup_threshold: self_rollup_threshold,
-            feature_flags: self_feature_flags,
+            config_updates: self_config_updates,
         } = self;
         let Self {
             blob_target_size: other_blob_target_size,
@@ -898,7 +879,7 @@ impl PersistParameters {
             pubsub_client_enabled: other_pubsub_client_enabled,
             pubsub_push_diff_enabled: other_pubsub_push_diff_enabled,
             rollup_threshold: other_rollup_threshold,
-            feature_flags: other_feature_flags,
+            config_updates: other_config_updates,
         } = other;
         if let Some(v) = other_blob_target_size {
             *self_blob_target_size = Some(v);
@@ -963,7 +944,7 @@ impl PersistParameters {
         if let Some(v) = other_rollup_threshold {
             *self_rollup_threshold = Some(v)
         }
-        self_feature_flags.extend(other_feature_flags);
+        self_config_updates.extend(other_config_updates);
     }
 
     /// Return whether all parameters are unset.
@@ -994,7 +975,7 @@ impl PersistParameters {
             pubsub_client_enabled,
             pubsub_push_diff_enabled,
             rollup_threshold,
-            feature_flags,
+            config_updates,
         } = self;
         blob_target_size.is_none()
             && blob_cache_mem_limit_bytes.is_none()
@@ -1017,7 +998,7 @@ impl PersistParameters {
             && pubsub_client_enabled.is_none()
             && pubsub_push_diff_enabled.is_none()
             && rollup_threshold.is_none()
-            && feature_flags.is_empty()
+            && config_updates.updates.is_empty()
     }
 
     /// Applies the parameter values to persist's in-memory config object.
@@ -1049,7 +1030,7 @@ impl PersistParameters {
             pubsub_client_enabled,
             pubsub_push_diff_enabled,
             rollup_threshold,
-            feature_flags,
+            config_updates,
         } = self;
         if let Some(blob_target_size) = blob_target_size {
             cfg.dynamic
@@ -1180,11 +1161,7 @@ impl PersistParameters {
                 .rollup_threshold
                 .store(*rollup_threshold, DynamicConfig::STORE_ORDERING);
         }
-        for flag in PersistFeatureFlag::ALL {
-            if let Some(value) = feature_flags.get(flag.name) {
-                cfg.dynamic.set_feature_flag(*flag, *value);
-            }
-        }
+        config_updates.apply(&cfg.configs);
     }
 }
 
@@ -1216,7 +1193,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             pubsub_client_enabled: self.pubsub_client_enabled.into_proto(),
             pubsub_push_diff_enabled: self.pubsub_push_diff_enabled.into_proto(),
             rollup_threshold: self.rollup_threshold.into_proto(),
-            feature_flags: self.feature_flags.clone(),
+            config_updates: Some(self.config_updates.clone()),
         }
     }
 
@@ -1248,7 +1225,7 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             pubsub_client_enabled: proto.pubsub_client_enabled.into_rust()?,
             pubsub_push_diff_enabled: proto.pubsub_push_diff_enabled.into_rust()?,
             rollup_threshold: proto.rollup_threshold.into_rust()?,
-            feature_flags: proto.feature_flags,
+            config_updates: proto.config_updates.unwrap_or_else(ConfigUpdates::default),
         })
     }
 }

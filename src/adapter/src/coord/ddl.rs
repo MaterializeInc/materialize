@@ -313,8 +313,16 @@ impl Coordinator {
                 catalog::Op::ResetSystemConfiguration { name }
                 | catalog::Op::UpdateSystemConfiguration { name, .. } => {
                     update_tracing_config |= vars::is_tracing_var(name);
-                    update_compute_config |= vars::is_compute_config_var(name);
-                    update_storage_config |= vars::is_storage_config_var(name);
+                    update_compute_config |= self
+                        .catalog
+                        .state()
+                        .system_config()
+                        .is_compute_config_var(name);
+                    update_storage_config |= self
+                        .catalog
+                        .state()
+                        .system_config()
+                        .is_storage_config_var(name);
                     update_pg_timestamp_oracle_config |=
                         vars::is_pg_timestamp_oracle_config_var(name);
                     update_metrics_retention |= name == vars::METRICS_RETENTION.name();
