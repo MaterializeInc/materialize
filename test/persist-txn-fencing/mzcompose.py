@@ -49,12 +49,34 @@ WORKLOADS = [
         name="off_to_eager_simple",
     ),
     Workload(
+        name="off_to_lazy_simple",
+        persist_txn_first="off",
+        persist_txn_second="lazy",
+    ),
+    Workload(
+        name="eager_to_lazy_simple",
+        persist_txn_first="eager",
+        persist_txn_second="lazy",
+    ),
+    Workload(
         name="eager_to_off_simple",
         persist_txn_first="eager",
         persist_txn_second="off",
     ),
     Workload(name="off_to_eager_many_tables", tables=100),
     Workload(name="off_to_eager_many_connections", concurrency=512),
+    Workload(
+        name="eager_to_lazy_many_tables",
+        tables=100,
+        persist_txn_first="eager",
+        persist_txn_second="lazy",
+    ),
+    Workload(
+        name="eager_to_lazy_many_connections",
+        concurrency=512,
+        persist_txn_first="eager",
+        persist_txn_second="lazy",
+    ),
 ]
 
 CATALOG_STORES = ["stash", "persist"]
