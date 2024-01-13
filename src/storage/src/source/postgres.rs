@@ -103,7 +103,7 @@ use tokio_postgres::types::PgLsn;
 use tokio_postgres::Client;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::SourceRender;
+use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 mod replication;
@@ -126,6 +126,7 @@ impl SourceRender for PostgresSourceConnection {
         Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
+        Stream<G, ProgressStatisticsUpdate>,
         Vec<PressOnDropButton>,
     ) {
         // Determined which collections need to be snapshot and which already have been.
@@ -231,6 +232,7 @@ impl SourceRender for PostgresSourceConnection {
             updates,
             Some(uppers),
             health,
+            timely::dataflow::operators::generic::operator::empty(scope),
             vec![snapshot_token, repl_token],
         )
     }

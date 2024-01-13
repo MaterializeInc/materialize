@@ -49,7 +49,7 @@ use tracing::{error, info, trace, warn};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::kafka::KafkaPartitionMetrics;
-use crate::source::types::SourceRender;
+use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 #[derive(Default)]
@@ -143,6 +143,7 @@ impl SourceRender for KafkaSourceConnection {
         Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
+        Stream<G, ProgressStatisticsUpdate>,
         Vec<PressOnDropButton>,
     ) {
         let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
@@ -702,6 +703,7 @@ impl SourceRender for KafkaSourceConnection {
             stream.as_collection(),
             Some(progress_stream),
             health_stream,
+            timely::dataflow::operators::generic::operator::empty(scope),
             vec![button.press_on_drop()],
         )
     }

@@ -266,10 +266,18 @@ where
         trace!(%upper, "timely-{worker_id} source({source_id}) received resume upper");
     });
 
-    let (input_data, progress, health, tokens) =
+    let (input_data, progress, health, stats, tokens) =
         source_connection.render(scope, config, resume_uppers, start_signal);
 
-    let name = format!("SourceStats({})", source_id);
+    crate::source::statistics::process_statistics(
+        scope.clone(),
+        source_id,
+        worker_id,
+        stats,
+        source_statistics.clone(),
+    );
+
+    let name = format!("SourceGenericStats({})", source_id);
     let mut builder = AsyncOperatorBuilder::new(name, scope.clone());
 
     let (mut data_output, data) = builder.new_output();

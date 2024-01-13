@@ -27,6 +27,18 @@ use timely::progress::Antichain;
 use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
 use crate::source::RawSourceCreationConfig;
 
+/// An update produced by implementors of `SourceRender` that presents an _aggregated_
+/// description of the number of _committed_values_ and _upstream_values_ for the given
+/// source.
+///
+/// The aggregate is required to be a 64 bit unsigned integer, whose units are
+/// implementation-defined.
+#[derive(Clone, Debug)]
+pub struct ProgressStatisticsUpdate {
+    pub upstream_values: u64,
+    pub committed_values: u64,
+}
+
 /// Describes a source that can render itself in a timely scope.
 pub trait SourceRender {
     type Time: SourceTimestamp;
@@ -67,6 +79,7 @@ pub trait SourceRender {
         Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
+        Stream<G, ProgressStatisticsUpdate>,
         Vec<PressOnDropButton>,
     );
 }
