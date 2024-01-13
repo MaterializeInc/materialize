@@ -16,7 +16,6 @@
 //! ID generation utilities.
 
 use hibitset::BitSet;
-use roaring::RoaringBitmap;
 use std::borrow::Borrow;
 use std::fmt;
 use std::hash::Hash;
@@ -28,7 +27,6 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 use crate::cast::CastFrom;
-use crate::collections::HashSet;
 
 /// Manages the allocation of unique IDs.
 #[derive(Debug, Default, Clone)]
@@ -59,7 +57,7 @@ pub trait IdGenerator:
     + Eq
     + Hash
     + Ord
-    + rand::distributions::uniform::SampleUniform
+   // + rand::distributions::uniform::SampleUniform
     + serde::Serialize
     + fmt::Display
 {
@@ -74,7 +72,7 @@ impl<T> IdGenerator for T where
         + Eq
         + Hash
         + Ord
-        + rand::distributions::uniform::SampleUniform
+        //  + rand::distributions::uniform::SampleUniform
         + serde::Serialize
         + fmt::Display
 {
@@ -82,70 +80,18 @@ impl<T> IdGenerator for T where
 
 /// Manages allocation of numeric IDs.
 #[derive(Debug, Clone)]
-pub struct IdAllocator<A: IdAllocatorInner>(Arc<Mutex<A>>);
+pub struct IdAllocator<A: IdAllocatorInner>(pub Arc<Mutex<A>>);
 
 /// Common trait for id allocators.
 pub trait IdAllocatorInner: std::fmt::Debug + Send {
     /// Name of the allocator.
     const NAME: &'static str;
-    /// Constructor.
+    /// Construct an allocator with the given range.
     fn new(min: u32, max: u32) -> Self;
     /// Allocate a new id.
     fn alloc(&mut self) -> Option<u32>;
     /// Deallocate a used id, making it available for reuse.
     fn remove(&mut self, id: u32);
-}
-
-/// IdAllocator using a sparse hibitset.
-#[derive(Debug)]
-pub struct IdAllocatorInnerSparseBitSet {
-    next: StdRng,
-    min: u32,
-    max: u32,
-    used: hi_sparse_bitset::BitSet<hi_sparse_bitset::config::_256bit>,
-}
-
-impl IdAllocatorInner for IdAllocatorInnerSparseBitSet {
-    const NAME: &'static str = "sparse_bit_set";
-
-    fn alloc(&mut self) -> Option<u32> {
-        let range = self.min..=self.max;
-        let init = self.next.gen_range(range);
-        let mut next = init;
-        loop {
-            // Because bitset has a hard maximum of 64**4 (~16 million), subtract the min in case
-            // max is above that. This is safe because we already asserted above that `max - min <
-            // 64**4`.
-            let stored = usize::cast_from(next - self.min);
-            if !self.used.contains(stored) {
-                self.used.insert(stored);
-                return Some(next);
-            }
-            // Existing value, increment and try again. Wrap once we hit max back to min.
-            next = if next == self.max { self.min } else { next + 1 };
-            // We fully wrapped around. BitSet doesn't have a rank or count method, so we can't
-            // compute this early.
-            if next == init {
-                return None;
-            }
-        }
-    }
-
-    fn remove(&mut self, id: u32) {
-        let stored = id - self.min;
-        self.used.remove(usize::cast_from(stored));
-    }
-
-    fn new(min: u32, max: u32) -> Self {
-        let total = usize::cast_from(max - min);
-        assert!(total < BitSet::BITS_PER_USIZE.pow(4));
-        IdAllocatorInnerSparseBitSet {
-            next: StdRng::from_entropy(),
-            min,
-            max,
-            used: hi_sparse_bitset::BitSet::new(),
-        }
-    }
 }
 
 /// IdAllocator using a HiBitSet.
@@ -196,138 +142,6 @@ impl IdAllocatorInner for IdAllocatorInnerBitSet {
     fn remove(&mut self, id: u32) {
         let stored = id - self.min;
         self.used.remove(stored);
-    }
-}
-
-/// IdAllocator using a RoaringBitmap.
-#[derive(Debug)]
-pub struct IdAllocatorInnerRoaring {
-    next: StdRng,
-    min: u32,
-    max: u32,
-    len: u32,
-    used: RoaringBitmap,
-}
-
-impl IdAllocatorInner for IdAllocatorInnerRoaring {
-    const NAME: &'static str = "roaring_bitmap";
-
-    fn new(min: u32, max: u32) -> Self {
-        let mut used = RoaringBitmap::new();
-        used.insert_range(min..=max);
-        IdAllocatorInnerRoaring {
-            next: StdRng::from_entropy(),
-            min,
-            max,
-            len: 0,
-            used,
-        }
-    }
-
-    fn alloc(&mut self) -> Option<u32> {
-        let range = self.min..=(self.max - self.len);
-        if range.is_empty() {
-            return None;
-        }
-        let init = self.next.gen_range(range);
-        let select = init - self.min;
-        let chosen = self
-            .used
-            .select(select)
-            .expect("must exist; verified above");
-        assert!(self.used.remove(chosen));
-        self.len += 1;
-        Some(chosen)
-    }
-
-    fn remove(&mut self, id: u32) {
-        assert!(self.used.insert(id));
-        self.len -= 1;
-    }
-}
-
-/// IdAllocator using a RoaringBitmap.
-#[derive(Debug)]
-pub struct IdAllocatorInnerRoaringLoop {
-    next: StdRng,
-    min: u32,
-    max: u32,
-    used: RoaringBitmap,
-}
-
-impl IdAllocatorInner for IdAllocatorInnerRoaringLoop {
-    const NAME: &'static str = "roaring_bitmap_loop";
-
-    fn new(min: u32, max: u32) -> Self {
-        let used = RoaringBitmap::new();
-        IdAllocatorInnerRoaringLoop {
-            next: StdRng::from_entropy(),
-            min,
-            max,
-            used,
-        }
-    }
-
-    fn alloc(&mut self) -> Option<u32> {
-        let range = self.min..=self.max;
-        let init = self.next.gen_range(range);
-        let mut next = init;
-        loop {
-            let stored = next - self.min;
-            if self.used.insert(stored) {
-                return Some(next);
-            }
-            next = if next == self.max { self.min } else { next + 1 };
-            if next == init {
-                return None;
-            }
-        }
-    }
-
-    fn remove(&mut self, id: u32) {
-        let stored = id - self.min;
-        self.used.remove(stored);
-    }
-}
-
-/// IdAllocator using a naive HashSet.
-#[derive(Debug)]
-pub struct IdAllocatorInnerHashSet {
-    next: StdRng,
-    min: u32,
-    max: u32,
-    used: HashSet<u32>,
-}
-
-impl IdAllocatorInner for IdAllocatorInnerHashSet {
-    const NAME: &'static str = "hashset";
-
-    fn new(min: u32, max: u32) -> Self {
-        IdAllocatorInnerHashSet {
-            next: StdRng::from_entropy(),
-            min,
-            max,
-            used: HashSet::new(),
-        }
-    }
-
-    fn alloc(&mut self) -> Option<u32> {
-        let range = self.min..=self.max;
-        let mut next = self.next.gen_range(range);
-        loop {
-            if self.used.insert(next) {
-                return Some(next);
-            }
-            if self.used.len() == usize::cast_from(self.max - self.min + 1) {
-                return None;
-            }
-            // Existing value, increment and try again. Wrap once we hit max back to min.
-            next = if next == self.max { self.min } else { next + 1 };
-        }
-    }
-
-    fn remove(&mut self, id: u32) {
-        self.used.remove(&id);
     }
 }
 
@@ -492,11 +306,7 @@ mod tests {
 
     #[mz_test_macro::test]
     fn test_id_gen() {
-        test_ad_allocator::<IdAllocatorInnerHashSet>();
         test_ad_allocator::<IdAllocatorInnerBitSet>();
-        test_ad_allocator::<IdAllocatorInnerRoaring>();
-        test_ad_allocator::<IdAllocatorInnerRoaringLoop>();
-        test_ad_allocator::<IdAllocatorInnerSparseBitSet>();
     }
 
     fn test_ad_allocator<A: IdAllocatorInner>() {

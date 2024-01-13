@@ -45,6 +45,11 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.6.0"
 
+[[audits.hibitset]]
+who = "Matt Jibson <matt.jibson@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.6.4"
+
 [[audits.jsonwebtoken]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
