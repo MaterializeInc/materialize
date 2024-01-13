@@ -36,6 +36,7 @@ use mz_timely_util::operator::CollectionExt;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use timely::container::columnation::{Columnation, CopyRegion};
+use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 use tracing::warn;
 
@@ -59,6 +60,28 @@ pub fn render_reduce<C: Context>(
     input_key: Option<Vec<MirScalarExpr>>,
     mfp_after: Option<MapFilterProject>,
 ) -> CollectionBundle<C::Scope> {
+    input.scope().region_named("Reduce", |inner| {
+        render_reduce_inner(
+            ctx,
+            input,
+            key_val_plan,
+            reduce_plan,
+            input_key,
+            mfp_after,
+            inner,
+        )
+    })
+}
+
+fn render_reduce_inner<C: Context>(
+    ctx: &C,
+    input: CollectionBundle<C::Scope>,
+    key_val_plan: KeyValPlan,
+    reduce_plan: ReducePlan,
+    input_key: Option<Vec<MirScalarExpr>>,
+    mfp_after: Option<MapFilterProject>,
+    inner: &Child<C::Scope, C::Timestamp>,
+) -> CollectionBundle<C::Scope> {
     // Convert `mfp_after` to an actionable plan.
     let mfp_after = mfp_after.map(|m| {
         m.into_plan()
@@ -67,83 +90,81 @@ pub fn render_reduce<C: Context>(
             .expect("Fused Reduce MFPs do not have temporal predicates")
     });
 
-    input.scope().region_named("Reduce", |inner| {
-        let KeyValPlan {
-            mut key_plan,
-            mut val_plan,
-        } = key_val_plan;
-        let key_arity = key_plan.projection.len();
-        let mut datums = DatumVec::new();
-        let (key_val_input, err_input): (
-            timely::dataflow::Stream<_, (Result<(Row, Row), DataflowError>, _, _)>,
-            _,
-        ) = input
-            .enter_region(inner)
-            .flat_map(input_key.map(|k| (k, None)), || {
-                // Determine the columns we'll need from the row.
-                let mut demand = Vec::new();
-                demand.extend(key_plan.demand());
-                demand.extend(val_plan.demand());
-                demand.sort();
-                demand.dedup();
-                // remap column references to the subset we use.
-                let mut demand_map = BTreeMap::new();
-                for column in demand.iter() {
-                    demand_map.insert(*column, demand_map.len());
-                }
-                let demand_map_len = demand_map.len();
-                key_plan.permute(demand_map.clone(), demand_map_len);
-                val_plan.permute(demand_map, demand_map_len);
-                let skips = mz_compute_types::plan::reduce::convert_indexes_to_skips(demand);
-                move |row_datums, time, diff| {
-                    let binding = SharedRow::get();
-                    let mut row_builder = binding.borrow_mut();
-                    let temp_storage = RowArena::new();
+    let KeyValPlan {
+        mut key_plan,
+        mut val_plan,
+    } = key_val_plan;
+    let key_arity = key_plan.projection.len();
+    let mut datums = DatumVec::new();
+    let (key_val_input, err_input): (
+        timely::dataflow::Stream<_, (Result<(Row, Row), DataflowError>, _, _)>,
+        _,
+    ) = input
+        .enter_region(inner)
+        .flat_map(input_key.map(|k| (k, None)), || {
+            // Determine the columns we'll need from the row.
+            let mut demand = Vec::new();
+            demand.extend(key_plan.demand());
+            demand.extend(val_plan.demand());
+            demand.sort();
+            demand.dedup();
+            // remap column references to the subset we use.
+            let mut demand_map = BTreeMap::new();
+            for column in demand.iter() {
+                demand_map.insert(*column, demand_map.len());
+            }
+            let demand_map_len = demand_map.len();
+            key_plan.permute(demand_map.clone(), demand_map_len);
+            val_plan.permute(demand_map, demand_map_len);
+            let skips = mz_compute_types::plan::reduce::convert_indexes_to_skips(demand);
+            move |row_datums, time, diff| {
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
+                let temp_storage = RowArena::new();
 
-                    let mut row_iter = row_datums.drain(..);
-                    let mut datums_local = datums.borrow();
-                    // Unpack only the demanded columns.
-                    for skip in skips.iter() {
-                        datums_local.push(row_iter.nth(*skip).unwrap());
+                let mut row_iter = row_datums.drain(..);
+                let mut datums_local = datums.borrow();
+                // Unpack only the demanded columns.
+                for skip in skips.iter() {
+                    datums_local.push(row_iter.nth(*skip).unwrap());
+                }
+
+                // Evaluate the key expressions.
+                let key = match key_plan.evaluate_into(
+                    &mut datums_local,
+                    &temp_storage,
+                    &mut row_builder,
+                ) {
+                    Err(e) => {
+                        return Some((Err(DataflowError::from(e)), time.clone(), diff.clone()))
                     }
+                    Ok(key) => key.expect("Row expected as no predicate was used"),
+                };
+                // Evaluate the value expressions.
+                // The prior evaluation may have left additional columns we should delete.
+                datums_local.truncate(skips.len());
+                let val = match val_plan.evaluate_iter(&mut datums_local, &temp_storage) {
+                    Err(e) => {
+                        return Some((Err(DataflowError::from(e)), time.clone(), diff.clone()))
+                    }
+                    Ok(val) => val.expect("Row expected as no predicate was used"),
+                };
+                row_builder.packer().extend(val);
+                let row = row_builder.clone();
+                Some((Ok((key, row)), time.clone(), diff.clone()))
+            }
+        });
 
-                    // Evaluate the key expressions.
-                    let key = match key_plan.evaluate_into(
-                        &mut datums_local,
-                        &temp_storage,
-                        &mut row_builder,
-                    ) {
-                        Err(e) => {
-                            return Some((Err(DataflowError::from(e)), time.clone(), diff.clone()))
-                        }
-                        Ok(key) => key.expect("Row expected as no predicate was used"),
-                    };
-                    // Evaluate the value expressions.
-                    // The prior evaluation may have left additional columns we should delete.
-                    datums_local.truncate(skips.len());
-                    let val = match val_plan.evaluate_iter(&mut datums_local, &temp_storage) {
-                        Err(e) => {
-                            return Some((Err(DataflowError::from(e)), time.clone(), diff.clone()))
-                        }
-                        Ok(val) => val.expect("Row expected as no predicate was used"),
-                    };
-                    row_builder.packer().extend(val);
-                    let row = row_builder.clone();
-                    Some((Ok((key, row)), time.clone(), diff.clone()))
-                }
-            });
+    // Demux out the potential errors from key and value selector evaluation.
+    let (ok, mut err) = key_val_input
+        .as_collection()
+        .consolidate_stream()
+        .flat_map_fallible("OkErrDemux", Some);
 
-        // Demux out the potential errors from key and value selector evaluation.
-        let (ok, mut err) = key_val_input
-            .as_collection()
-            .consolidate_stream()
-            .flat_map_fallible("OkErrDemux", Some);
+    err = err.concat(&err_input);
 
-        err = err.concat(&err_input);
-
-        // Render the reduce plan
-        render_reduce_plan(ctx, reduce_plan, ok, err, key_arity, mfp_after).leave_region()
-    })
+    // Render the reduce plan
+    render_reduce_plan(ctx, reduce_plan, ok, err, key_arity, mfp_after).leave_region()
 }
 
 /// Render a dataflow based on the provided plan.
@@ -912,165 +933,177 @@ where
 fn build_bucketed<C: Context, S>(
     ctx: &C,
     input: Collection<S, (Row, Row), Diff>,
+    bucketed_plan: BucketedPlan,
+    mfp_after: Option<SafeMfpPlan>,
+) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
+where
+    S: Scope<Timestamp = C::Timestamp>,
+{
+    input.scope().region_named("ReduceHierarchical", |inner| {
+        build_bucketed_inner(ctx, input, bucketed_plan, mfp_after, inner)
+    })
+}
+
+fn build_bucketed_inner<C: Context, S>(
+    ctx: &C,
+    input: Collection<S, (Row, Row), Diff>,
     BucketedPlan {
         aggr_funcs,
         skips,
         buckets,
     }: BucketedPlan,
     mfp_after: Option<SafeMfpPlan>,
+    inner: &Child<S, S::Timestamp>,
 ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
 where
     S: Scope<Timestamp = C::Timestamp>,
 {
+    let input = input.enter_region(inner);
     let mut err_output: Option<Collection<S, _, _>> = None;
-    let arranged_output = input.scope().region_named("ReduceHierarchical", |inner| {
-        let input = input.enter(inner);
 
-        // Gather the relevant values into a vec of rows ordered by aggregation_index
-        let input = input.map(move |(key, row)| {
-            let binding = SharedRow::get();
-            let mut row_builder = binding.borrow_mut();
-            let mut values = Vec::with_capacity(skips.len());
-            let mut row_iter = row.iter();
-            for skip in skips.iter() {
-                row_builder.packer().push(row_iter.nth(*skip).unwrap());
-                values.push(row_builder.clone());
-            }
+    // Gather the relevant values into a vec of rows ordered by aggregation_index
+    let input = input.map(move |(key, row)| {
+        let binding = SharedRow::get();
+        let mut row_builder = binding.borrow_mut();
+        let mut values = Vec::with_capacity(skips.len());
+        let mut row_iter = row.iter();
+        for skip in skips.iter() {
+            row_builder.packer().push(row_iter.nth(*skip).unwrap());
+            values.push(row_builder.clone());
+        }
 
-            (key, values)
-        });
+        (key, values)
+    });
 
-        // Repeatedly apply hierarchical reduction with a progressively coarser key.
-        let mut stage = input.map(move |(key, values)| ((key, values.hashed()), values));
-        for b in buckets.into_iter() {
-            let input = stage.map(move |((key, hash), values)| ((key, hash % b), values));
+    // Repeatedly apply hierarchical reduction with a progressively coarser key.
+    let mut stage = input.map(move |(key, values)| ((key, values.hashed()), values));
+    for b in buckets.into_iter() {
+        let input = stage.map(move |((key, hash), values)| ((key, hash % b), values));
 
-            // We only want the first stage to perform validation of whether invalid accumulations
-            // were observed in the input. Subsequently, we will either produce an error in the error
-            // stream or produce correct data in the output stream.
-            let negated_output = if err_output.is_none() {
-                let (oks, errs) =
-                    build_bucketed_negated_output::<_, _, Result<Vec<Row>, (Row, u64)>>(
-                        ctx,
-                        &input,
-                        aggr_funcs.clone(),
-                    )
-                    .map_fallible(
-                        "Checked Invalid Accumulations",
-                        |(key, result)| match result {
-                            Err((key, _)) => {
-                                let message = format!(
-                                    "Invalid data in source, saw non-positive accumulation \
+        // We only want the first stage to perform validation of whether invalid accumulations
+        // were observed in the input. Subsequently, we will either produce an error in the error
+        // stream or produce correct data in the output stream.
+        let negated_output = if err_output.is_none() {
+            let (oks, errs) = build_bucketed_negated_output::<_, _, Result<Vec<Row>, (Row, u64)>>(
+                ctx,
+                &input,
+                aggr_funcs.clone(),
+            )
+            .map_fallible(
+                "Checked Invalid Accumulations",
+                |(key, result)| match result {
+                    Err((key, _)) => {
+                        let message = format!(
+                            "Invalid data in source, saw non-positive accumulation \
                                          for key {key:?} in hierarchical mins-maxes aggregate"
-                                );
-                                Err(EvalError::Internal(message).into())
-                            }
-                            Ok(values) => Ok((key, values)),
-                        },
-                    );
-                err_output = Some(errs.leave_region());
-                oks
-            } else {
-                build_bucketed_negated_output::<_, _, Vec<Row>>(ctx, &input, aggr_funcs.clone())
-            };
+                        );
+                        Err(EvalError::Internal(message).into())
+                    }
+                    Ok(values) => Ok((key, values)),
+                },
+            );
+            err_output = Some(errs.leave_region());
+            oks
+        } else {
+            build_bucketed_negated_output::<_, _, Vec<Row>>(ctx, &input, aggr_funcs.clone())
+        };
 
-            stage = negated_output
-                .negate()
-                .concat(&input)
-                .consolidate_named::<KeySpine<_, _, _>>("Consolidated MinsMaxesHierarchical");
-        }
+        stage = negated_output
+            .negate()
+            .concat(&input)
+            .consolidate_named::<KeySpine<_, _, _>>("Consolidated MinsMaxesHierarchical");
+    }
 
-        // Discard the hash from the key and return to the format of the input data.
-        let partial = stage.map(|((key, _hash), values)| (key, values));
+    // Discard the hash from the key and return to the format of the input data.
+    let partial = stage.map(|((key, _hash), values)| (key, values));
 
-        // Allocations for the two closures.
-        let mut datums1 = DatumVec::new();
-        let mut datums2 = DatumVec::new();
-        let mfp_after1 = mfp_after.clone();
-        let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
-        let aggr_funcs2 = aggr_funcs.clone();
+    // Allocations for the two closures.
+    let mut datums1 = DatumVec::new();
+    let mut datums2 = DatumVec::new();
+    let mfp_after1 = mfp_after.clone();
+    let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
+    let aggr_funcs2 = aggr_funcs.clone();
 
-        // Build a series of stages for the reduction
-        // Arrange the final result into (key, Row)
-        let error_logger = ctx.error_logger();
-        // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
-        // view mz_internal.mz_expected_group_size_advice.
-        let arranged = partial.mz_arrange::<RowValSpine<Vec<Row>, _, _>>("Arrange ReduceMinsMaxes");
-        // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here,
-        // but we then wouldn't be able to do this error check conditionally.  See its documentation
-        // for the rationale around using a second reduction here.
-        let must_validate = err_output.is_none();
-        if must_validate || mfp_after2.is_some() {
-            let errs = arranged
-                .mz_reduce_abelian::<_, RowErrSpine<_, _>>(
-                    "ReduceMinsMaxes Error Check",
-                    move |key, source, target| {
-                        // Negative counts would be surprising, but until we are 100% certain we wont
-                        // see them, we should report when we do. We may want to bake even more info
-                        // in here in the future.
-                        if must_validate {
-                            for (val, count) in source.iter() {
-                                if count.is_positive() {
-                                    continue;
-                                }
-                                let val = val.into_owned();
-                                let message = "Non-positive accumulation in ReduceMinsMaxes";
-                                error_logger.log(message, &format!("val={val:?}, count={count}"));
-                                target.push((EvalError::Internal(message.to_string()).into(), 1));
-                                return;
-                            }
-                        }
-
-                        // We know that `mfp_after` can error if it exists, so try to evaluate it here.
-                        let Some(mfp) = &mfp_after2 else { return };
-                        let temp_storage = RowArena::new();
-                        let datum_iter = key.into_datum_iter(None);
-                        let mut datums_local = datums2.borrow();
-                        datums_local.extend(datum_iter);
-                        for (aggr_index, func) in aggr_funcs2.iter().enumerate() {
-                            let iter = source
-                                .iter()
-                                .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
-                            datums_local.push(func.eval(iter, &temp_storage));
-                        }
-                        if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
-                        {
-                            target.push((e.into(), 1));
-                        }
-                    },
-                )
-                .as_collection(|_, v| v.into_owned())
-                .leave_region();
-            if let Some(e) = &err_output {
-                err_output = Some(e.concat(&errs));
-            } else {
-                err_output = Some(errs);
-            }
-        }
-        arranged
-            .mz_reduce_abelian::<_, RowRowSpine<_, _>>("ReduceMinsMaxes", {
+    // Build a series of stages for the reduction
+    // Arrange the final result into (key, Row)
+    let error_logger = ctx.error_logger();
+    // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
+    // view mz_internal.mz_expected_group_size_advice.
+    let arranged = partial.mz_arrange::<RowValSpine<Vec<Row>, _, _>>("Arrange ReduceMinsMaxes");
+    // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here,
+    // but we then wouldn't be able to do this error check conditionally.  See its documentation
+    // for the rationale around using a second reduction here.
+    let must_validate = err_output.is_none();
+    if must_validate || mfp_after2.is_some() {
+        let errs = arranged
+            .mz_reduce_abelian::<_, RowErrSpine<_, _>>(
+                "ReduceMinsMaxes Error Check",
                 move |key, source, target| {
+                    // Negative counts would be surprising, but until we are 100% certain we wont
+                    // see them, we should report when we do. We may want to bake even more info
+                    // in here in the future.
+                    if must_validate {
+                        for (val, count) in source.iter() {
+                            if count.is_positive() {
+                                continue;
+                            }
+                            let val = val.into_owned();
+                            let message = "Non-positive accumulation in ReduceMinsMaxes";
+                            error_logger.log(message, &format!("val={val:?}, count={count}"));
+                            target.push((EvalError::Internal(message.to_string()).into(), 1));
+                            return;
+                        }
+                    }
+
+                    // We know that `mfp_after` can error if it exists, so try to evaluate it here.
+                    let Some(mfp) = &mfp_after2 else { return };
                     let temp_storage = RowArena::new();
                     let datum_iter = key.into_datum_iter(None);
-                    let mut datums_local = datums1.borrow();
+                    let mut datums_local = datums2.borrow();
                     datums_local.extend(datum_iter);
-                    let key_len = datums_local.len();
-                    for (aggr_index, func) in aggr_funcs.iter().enumerate() {
+                    for (aggr_index, func) in aggr_funcs2.iter().enumerate() {
                         let iter = source
                             .iter()
                             .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
                         datums_local.push(func.eval(iter, &temp_storage));
                     }
-
-                    if let Some(row) =
-                        evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
-                    {
-                        target.push((row, 1));
+                    if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
+                        target.push((e.into(), 1));
                     }
+                },
+            )
+            .as_collection(|_, v| v.into_owned())
+            .leave_region();
+        if let Some(e) = &err_output {
+            err_output = Some(e.concat(&errs));
+        } else {
+            err_output = Some(errs);
+        }
+    }
+    let arranged_output = arranged
+        .mz_reduce_abelian::<_, RowRowSpine<_, _>>("ReduceMinsMaxes", {
+            move |key, source, target| {
+                let temp_storage = RowArena::new();
+                let datum_iter = key.into_datum_iter(None);
+                let mut datums_local = datums1.borrow();
+                datums_local.extend(datum_iter);
+                let key_len = datums_local.len();
+                for (aggr_index, func) in aggr_funcs.iter().enumerate() {
+                    let iter = source
+                        .iter()
+                        .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
+                    datums_local.push(func.eval(iter, &temp_storage));
                 }
-            })
-            .leave_region()
-    });
+
+                if let Some(row) =
+                    evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
+                {
+                    target.push((row, 1));
+                }
+            }
+        })
+        .leave_region();
+
     (
         arranged_output,
         err_output.expect("expected to validate in one level of the hierarchy"),
