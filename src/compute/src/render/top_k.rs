@@ -31,7 +31,6 @@ use mz_timely_util::operator::CollectionExt;
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
-use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 
 use crate::extensions::arrange::{KeyCollection, MzArrange};
@@ -43,13 +42,14 @@ use crate::typedefs::{KeySpine, KeyValSpine, RowRowSpine, RowSpine};
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
 
 pub(crate) fn render_topk<C: Context>(
-    ctx: &C,
+    ctx: &mut C,
     input: CollectionBundle<C::Scope>,
     top_k_plan: TopKPlan,
 ) -> CollectionBundle<C::Scope> {
     // We create a new region to compartmentalize the topk logic.
-    input.scope().region_named("TopK", |inner| {
-        render_topk_inner(ctx, input, top_k_plan, inner)
+    ctx.region("TopK", |inner| {
+        let input = input.enter_region(inner.scope());
+        render_topk_inner(inner, input, top_k_plan).leave_region()
     })
 }
 
@@ -57,11 +57,8 @@ fn render_topk_inner<C: Context>(
     ctx: &C,
     input: CollectionBundle<C::Scope>,
     top_k_plan: TopKPlan,
-    inner: &Child<C::Scope, C::Timestamp>,
 ) -> CollectionBundle<C::Scope> {
-    let (ok_input, err_input) = input.as_specific_collection(None);
-    let ok_input = ok_input.enter_region(inner);
-    let mut err_collection = err_input.enter_region(inner);
+    let (ok_input, mut err_collection) = input.as_specific_collection(None);
 
     // Determine if there should be errors due to limit evaluation; update `err_collection`.
     // TODO(vmarcos): We evaluate the limit expression below for each input update. There
@@ -226,24 +223,23 @@ fn render_topk_inner<C: Context>(
         }
     };
 
-    // Extract the results from the region.
-    CollectionBundle::from_collections(ok_result.leave_region(), err_collection.leave_region())
+    CollectionBundle::from_collections(ok_result, err_collection)
 }
 
 /// Constructs a TopK dataflow subgraph.
-fn build_topk<C: Context, S>(
+fn build_topk<C: Context>(
     ctx: &C,
-    collection: Collection<S, Row, Diff>,
+    collection: Collection<C::Scope, Row, Diff>,
     group_key: Vec<usize>,
     order_key: Vec<mz_expr::ColumnOrder>,
     offset: usize,
     limit: Option<mz_expr::MirScalarExpr>,
     arity: usize,
     buckets: Vec<u64>,
-) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>)
-where
-    S: Scope<Timestamp = C::Timestamp>,
-{
+) -> (
+    Collection<C::Scope, Row, Diff>,
+    Collection<C::Scope, DataflowError, Diff>,
+) {
     let mut datum_vec = mz_repr::DatumVec::new();
     let mut collection = collection.map({
         move |row| {
@@ -261,7 +257,7 @@ where
     });
 
     let mut validating = true;
-    let mut err_collection: Option<Collection<S, _, _>> = None;
+    let mut err_collection = None;
 
     if let Some(mut limit) = limit.clone() {
         // We may need a new `limit` that reflects the addition of `offset`.
@@ -336,9 +332,9 @@ where
 // Builds a "stage", which uses a finer grouping than is required to reduce the volume of
 // updates, and to reduce the amount of work on the critical path for updates. The cost is
 // a larger number of arrangements when this optimization does nothing beneficial.
-fn build_topk_stage<C: Context, S>(
+fn build_topk_stage<C: Context>(
     ctx: &C,
-    collection: Collection<S, ((Row, u64), Row), Diff>,
+    collection: Collection<C::Scope, ((Row, u64), Row), Diff>,
     order_key: Vec<mz_expr::ColumnOrder>,
     modulus: u64,
     offset: usize,
@@ -346,17 +342,12 @@ fn build_topk_stage<C: Context, S>(
     arity: usize,
     validating: bool,
 ) -> (
-    Collection<S, ((Row, u64), Row), Diff>,
-    Option<Collection<S, DataflowError, Diff>>,
-)
-where
-    S: Scope<Timestamp = C::Timestamp>,
-{
+    Collection<C::Scope, ((Row, u64), Row), Diff>,
+    Option<Collection<C::Scope, DataflowError, Diff>>,
+) {
     let input = collection.map(move |((key, hash), row)| ((key, hash % modulus), row));
     let (oks, errs) = if validating {
-        let stage = build_topk_negated_stage::<S, Result<Row, Row>>(
-            &input, order_key, offset, limit, arity,
-        );
+        let stage = build_topk_negated_stage(&input, order_key, offset, limit, arity);
 
         let error_logger = ctx.error_logger();
         let (oks, errs) =
@@ -371,7 +362,7 @@ where
         (oks, Some(errs))
     } else {
         (
-            build_topk_negated_stage::<S, Row>(&input, order_key, offset, limit, arity),
+            build_topk_negated_stage(&input, order_key, offset, limit, arity),
             None,
         )
     };
@@ -383,16 +374,16 @@ where
     )
 }
 
-fn render_top1_monotonic<C: Context, S>(
+fn render_top1_monotonic<C: Context>(
     ctx: &C,
-    collection: Collection<S, Row, Diff>,
+    collection: Collection<C::Scope, Row, Diff>,
     group_key: Vec<usize>,
     order_key: Vec<mz_expr::ColumnOrder>,
     must_consolidate: bool,
-) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>)
-where
-    S: Scope<Timestamp = C::Timestamp>,
-{
+) -> (
+    Collection<C::Scope, Row, Diff>,
+    Collection<C::Scope, DataflowError, Diff>,
+) {
     // We can place our rows directly into the diff field, and only keep the relevant one
     // corresponding to evaluating our aggregate, instead of having to do a hierarchical
     // reduction. We start by mapping the group key along with the row and consolidating

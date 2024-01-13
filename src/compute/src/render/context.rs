@@ -128,6 +128,21 @@ pub(super) trait Context: Sized {
     fn error_logger(&self) -> ErrorLogger {
         ErrorLogger::new(self.shutdown_token().clone(), self.debug_name().into())
     }
+
+    /// Creates a new dataflow region with the same timestamp.
+    fn region<F, R>(&mut self, name: &str, func: F) -> R
+    where
+        F: FnOnce(&mut ChildContext<Self>) -> R,
+    {
+        self.scope().clone().region_named(name, |region| {
+            let mut inner = ChildContext {
+                scope: region.clone(),
+                bindings: Default::default(),
+                parent: self,
+            };
+            func(&mut inner)
+        })
+    }
 }
 
 /// Static context information about a dataflow.
@@ -243,6 +258,87 @@ where
     }
 }
 
+/// Nested context under a parent context.
+///
+/// For now we require the nested timestamp to be the same as that of the parent context for
+/// simplicity, but we might change that in the future.
+pub(super) struct ChildContext<'a, P>
+where
+    P: Context,
+{
+    scope: Child<'a, P::Scope, P::Timestamp>,
+    bindings: BTreeMap<Id, CollectionBundle<Child<'a, P::Scope, P::Timestamp>>>,
+    parent: &'a mut P,
+}
+
+impl<'a, P> Context for ChildContext<'a, P>
+where
+    P: Context,
+{
+    type Timestamp = P::Timestamp;
+    type Scope = Child<'a, P::Scope, P::Timestamp>;
+
+    fn scope(&self) -> &Self::Scope {
+        &self.scope
+    }
+
+    fn scope_mut(&mut self) -> &mut Self::Scope {
+        &mut self.scope
+    }
+
+    fn static_(&self) -> &StaticContext {
+        self.parent.static_()
+    }
+
+    fn shutdown_token(&self) -> &ShutdownToken {
+        self.parent.shutdown_token()
+    }
+
+    fn set_shutdown_token(&mut self, token: ShutdownToken) {
+        self.parent.set_shutdown_token(token);
+    }
+
+    fn insert_id(
+        &mut self,
+        id: Id,
+        collection: CollectionBundle<Self::Scope>,
+    ) -> Option<CollectionBundle<Self::Scope>> {
+        self.bindings.insert(id, collection)
+    }
+
+    fn remove_id(&mut self, id: Id) -> Option<CollectionBundle<Self::Scope>> {
+        self.bindings.remove(&id)
+    }
+
+    fn update_id(&mut self, id: Id, collection: CollectionBundle<Self::Scope>) {
+        if !self.bindings.contains_key(&id) {
+            self.bindings.insert(id, collection);
+        } else {
+            let binding = self
+                .bindings
+                .get_mut(&id)
+                .expect("Binding verified to exist");
+            if collection.collection.is_some() {
+                binding.collection = collection.collection;
+            }
+            for (key, flavor) in collection.arranged.into_iter() {
+                binding.arranged.insert(key, flavor);
+            }
+        }
+    }
+
+    fn lookup_id(&self, id: Id) -> Option<CollectionBundle<Self::Scope>> {
+        if let Some(bundle) = self.bindings.get(&id) {
+            Some(bundle.clone())
+        } else if let Some(bundle) = self.parent.lookup_id(id) {
+            let bundle = bundle.enter_region(&self.scope);
+            Some(bundle)
+        } else {
+            None
+        }
+    }
+}
+
 /// Convenient wrapper around an optional `Weak` instance that can be used to check whether a
 /// datalow is shutting down.
 ///
@@ -302,14 +398,6 @@ impl<S: Scope> SpecializedArrangement<S>
 where
     <S as ScopeParent>::Timestamp: Lattice + Columnation,
 {
-    /// The scope of the underlying arrangement's stream.
-    pub fn scope(&self) -> S {
-        match self {
-            SpecializedArrangement::RowUnit(inner) => inner.stream.scope(),
-            SpecializedArrangement::RowRow(inner) => inner.stream.scope(),
-        }
-    }
-
     /// Brings the underlying arrangement into a region.
     pub fn enter_region<'a>(
         &self,
@@ -657,14 +745,6 @@ where
     T: Timestamp + Lattice + Columnation,
     S::Timestamp: Lattice + Refines<T> + Columnation,
 {
-    /// The scope containing the collection bundle.
-    pub fn scope(&self) -> S {
-        match self {
-            ArrangementFlavor::Local(oks, _errs) => oks.scope(),
-            ArrangementFlavor::Trace(_gid, oks, _errs) => oks.scope(),
-        }
-    }
-
     /// Brings the arrangement flavor into a region.
     pub fn enter_region<'a>(
         &self,
@@ -751,19 +831,6 @@ where
             keys.push(MirScalarExpr::Column(column));
         }
         Self::from_expressions(keys, arrangements)
-    }
-
-    /// The scope containing the collection bundle.
-    pub fn scope(&self) -> S {
-        if let Some((oks, _errs)) = &self.collection {
-            oks.inner.scope()
-        } else {
-            self.arranged
-                .values()
-                .next()
-                .expect("Must contain a valid collection")
-                .scope()
-        }
     }
 
     /// Brings the collection bundle into a region.

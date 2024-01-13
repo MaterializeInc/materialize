@@ -36,8 +36,6 @@ use mz_timely_util::operator::CollectionExt;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use timely::container::columnation::{Columnation, CopyRegion};
-use timely::dataflow::scopes::Child;
-use timely::dataflow::Scope;
 use tracing::warn;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
@@ -53,34 +51,34 @@ use crate::typedefs::{
 /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
 /// minimize worst-case incremental update times and memory footprint.
 pub fn render_reduce<C: Context>(
-    ctx: &C,
+    ctx: &mut C,
     input: CollectionBundle<C::Scope>,
     key_val_plan: KeyValPlan,
     reduce_plan: ReducePlan,
     input_key: Option<Vec<MirScalarExpr>>,
     mfp_after: Option<MapFilterProject>,
 ) -> CollectionBundle<C::Scope> {
-    input.scope().region_named("Reduce", |inner| {
+    ctx.region("Reduce", |inner| {
+        let input = input.enter_region(inner.scope());
         render_reduce_inner(
-            ctx,
+            inner,
             input,
             key_val_plan,
             reduce_plan,
             input_key,
             mfp_after,
-            inner,
         )
+        .leave_region()
     })
 }
 
 fn render_reduce_inner<C: Context>(
-    ctx: &C,
+    ctx: &mut C,
     input: CollectionBundle<C::Scope>,
     key_val_plan: KeyValPlan,
     reduce_plan: ReducePlan,
     input_key: Option<Vec<MirScalarExpr>>,
     mfp_after: Option<MapFilterProject>,
-    inner: &Child<C::Scope, C::Timestamp>,
 ) -> CollectionBundle<C::Scope> {
     // Convert `mfp_after` to an actionable plan.
     let mfp_after = mfp_after.map(|m| {
@@ -99,61 +97,54 @@ fn render_reduce_inner<C: Context>(
     let (key_val_input, err_input): (
         timely::dataflow::Stream<_, (Result<(Row, Row), DataflowError>, _, _)>,
         _,
-    ) = input
-        .enter_region(inner)
-        .flat_map(input_key.map(|k| (k, None)), || {
-            // Determine the columns we'll need from the row.
-            let mut demand = Vec::new();
-            demand.extend(key_plan.demand());
-            demand.extend(val_plan.demand());
-            demand.sort();
-            demand.dedup();
-            // remap column references to the subset we use.
-            let mut demand_map = BTreeMap::new();
-            for column in demand.iter() {
-                demand_map.insert(*column, demand_map.len());
+    ) = input.flat_map(input_key.map(|k| (k, None)), || {
+        // Determine the columns we'll need from the row.
+        let mut demand = Vec::new();
+        demand.extend(key_plan.demand());
+        demand.extend(val_plan.demand());
+        demand.sort();
+        demand.dedup();
+        // remap column references to the subset we use.
+        let mut demand_map = BTreeMap::new();
+        for column in demand.iter() {
+            demand_map.insert(*column, demand_map.len());
+        }
+        let demand_map_len = demand_map.len();
+        key_plan.permute(demand_map.clone(), demand_map_len);
+        val_plan.permute(demand_map, demand_map_len);
+        let skips = mz_compute_types::plan::reduce::convert_indexes_to_skips(demand);
+        move |row_datums, time, diff| {
+            let binding = SharedRow::get();
+            let mut row_builder = binding.borrow_mut();
+            let temp_storage = RowArena::new();
+
+            let mut row_iter = row_datums.drain(..);
+            let mut datums_local = datums.borrow();
+            // Unpack only the demanded columns.
+            for skip in skips.iter() {
+                datums_local.push(row_iter.nth(*skip).unwrap());
             }
-            let demand_map_len = demand_map.len();
-            key_plan.permute(demand_map.clone(), demand_map_len);
-            val_plan.permute(demand_map, demand_map_len);
-            let skips = mz_compute_types::plan::reduce::convert_indexes_to_skips(demand);
-            move |row_datums, time, diff| {
-                let binding = SharedRow::get();
-                let mut row_builder = binding.borrow_mut();
-                let temp_storage = RowArena::new();
 
-                let mut row_iter = row_datums.drain(..);
-                let mut datums_local = datums.borrow();
-                // Unpack only the demanded columns.
-                for skip in skips.iter() {
-                    datums_local.push(row_iter.nth(*skip).unwrap());
-                }
-
-                // Evaluate the key expressions.
-                let key = match key_plan.evaluate_into(
-                    &mut datums_local,
-                    &temp_storage,
-                    &mut row_builder,
-                ) {
+            // Evaluate the key expressions.
+            let key =
+                match key_plan.evaluate_into(&mut datums_local, &temp_storage, &mut row_builder) {
                     Err(e) => {
                         return Some((Err(DataflowError::from(e)), time.clone(), diff.clone()))
                     }
                     Ok(key) => key.expect("Row expected as no predicate was used"),
                 };
-                // Evaluate the value expressions.
-                // The prior evaluation may have left additional columns we should delete.
-                datums_local.truncate(skips.len());
-                let val = match val_plan.evaluate_iter(&mut datums_local, &temp_storage) {
-                    Err(e) => {
-                        return Some((Err(DataflowError::from(e)), time.clone(), diff.clone()))
-                    }
-                    Ok(val) => val.expect("Row expected as no predicate was used"),
-                };
-                row_builder.packer().extend(val);
-                let row = row_builder.clone();
-                Some((Ok((key, row)), time.clone(), diff.clone()))
-            }
-        });
+            // Evaluate the value expressions.
+            // The prior evaluation may have left additional columns we should delete.
+            datums_local.truncate(skips.len());
+            let val = match val_plan.evaluate_iter(&mut datums_local, &temp_storage) {
+                Err(e) => return Some((Err(DataflowError::from(e)), time.clone(), diff.clone())),
+                Ok(val) => val.expect("Row expected as no predicate was used"),
+            };
+            row_builder.packer().extend(val);
+            let row = row_builder.clone();
+            Some((Ok((key, row)), time.clone(), diff.clone()))
+        }
+    });
 
     // Demux out the potential errors from key and value selector evaluation.
     let (ok, mut err) = key_val_input
@@ -164,7 +155,7 @@ fn render_reduce_inner<C: Context>(
     err = err.concat(&err_input);
 
     // Render the reduce plan
-    render_reduce_plan(ctx, reduce_plan, ok, err, key_arity, mfp_after).leave_region()
+    render_reduce_plan(ctx, reduce_plan, ok, err, key_arity, mfp_after)
 }
 
 /// Render a dataflow based on the provided plan.
@@ -172,17 +163,14 @@ fn render_reduce_inner<C: Context>(
 /// The output will be an arrangements that looks the same as if
 /// we just had a single reduce operator computing everything together, and
 /// this arrangement can also be re-used.
-fn render_reduce_plan<C: Context, S>(
-    ctx: &C,
+fn render_reduce_plan<C: Context>(
+    ctx: &mut C,
     plan: ReducePlan,
-    collection: Collection<S, (Row, Row), Diff>,
-    err_input: Collection<S, DataflowError, Diff>,
+    collection: Collection<C::Scope, (Row, Row), Diff>,
+    err_input: Collection<C::Scope, DataflowError, Diff>,
     key_arity: usize,
     mfp_after: Option<SafeMfpPlan>,
-) -> CollectionBundle<S>
-where
-    S: Scope<Timestamp = C::Timestamp>,
-{
+) -> CollectionBundle<C::Scope> {
     let mut errors = Default::default();
     let arrangement =
         render_reduce_plan_inner(ctx, plan, collection, &mut errors, key_arity, mfp_after);
@@ -193,17 +181,14 @@ where
     )
 }
 
-fn render_reduce_plan_inner<C: Context, S>(
-    ctx: &C,
+fn render_reduce_plan_inner<C: Context>(
+    ctx: &mut C,
     plan: ReducePlan,
-    collection: Collection<S, (Row, Row), Diff>,
-    errors: &mut Vec<Collection<S, DataflowError, Diff>>,
+    collection: Collection<C::Scope, (Row, Row), Diff>,
+    errors: &mut Vec<Collection<C::Scope, DataflowError, Diff>>,
     key_arity: usize,
     mfp_after: Option<SafeMfpPlan>,
-) -> SpecializedArrangement<S>
-where
-    S: Scope<Timestamp = C::Timestamp>,
-{
+) -> SpecializedArrangement<C::Scope> {
     // TODO(vmarcos): Arrangement specialization here could eventually be extended to keys,
     // not only values (#22103).
     let arrangement = match plan {
@@ -274,13 +259,7 @@ where
             }
 
             // Now we need to collate them together.
-            let (oks, errs) = build_collation(
-                ctx,
-                to_collate,
-                expr.aggregate_types,
-                &mut collection.scope(),
-                mfp_after,
-            );
+            let (oks, errs) = build_collation(ctx, to_collate, expr.aggregate_types, mfp_after);
             errors.push(errs);
             SpecializedArrangement::RowRow(oks)
         }
@@ -295,16 +274,15 @@ where
 /// the values into the correct order. This implementation assumes that all input
 /// arrangements present values in a way that respects the desired output order,
 /// so we can do a linear merge to form the output.
-fn build_collation<C: Context, S>(
-    ctx: &C,
-    arrangements: Vec<(ReductionType, RowRowArrangement<S>)>,
+fn build_collation<C: Context>(
+    ctx: &mut C,
+    arrangements: Vec<(ReductionType, RowRowArrangement<C::Scope>)>,
     aggregate_types: Vec<ReductionType>,
-    scope: &mut S,
     mfp_after: Option<SafeMfpPlan>,
-) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
-where
-    S: Scope<Timestamp = C::Timestamp>,
-{
+) -> (
+    RowRowArrangement<C::Scope>,
+    Collection<C::Scope, DataflowError, Diff>,
+) {
     let error_logger = ctx.error_logger();
 
     // We must have more than one arrangement to collate.
@@ -339,7 +317,7 @@ where
     let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
     let aggregate_types_err = aggregate_types.clone();
-    let (oks, errs) = differential_dataflow::collection::concatenate(scope, to_concat)
+    let (oks, errs) = differential_dataflow::collection::concatenate(ctx.scope_mut(), to_concat)
         .mz_arrange::<RowValSpine<_, _, _>>("Arrange ReduceCollation")
         .reduce_pair::<_, RowRowSpine<_, _>, _, RowErrSpine<_, _>>(
             "ReduceCollation",
@@ -485,23 +463,20 @@ where
     (oks, errs.as_collection(|_, v| v.into_owned()))
 }
 
-fn dispatch_build_distinct<C: Context, S>(
+fn dispatch_build_distinct<C: Context>(
     ctx: &C,
-    collection: Collection<S, (Row, Row), Diff>,
+    collection: Collection<C::Scope, (Row, Row), Diff>,
     mfp_after: Option<SafeMfpPlan>,
 ) -> (
-    SpecializedArrangement<S>,
-    Collection<S, DataflowError, Diff>,
-)
-where
-    S: Scope<Timestamp = C::Timestamp>,
-{
+    SpecializedArrangement<C::Scope>,
+    Collection<C::Scope, DataflowError, Diff>,
+) {
     if ctx.enable_specialized_arrangements() {
         let collection = collection.map(|(k, v)| {
             assert!(v.is_empty());
             (k, ())
         });
-        let (arrangement, errs) = build_distinct::<_, RowSpine<_, _>, RowValSpine<_, _, _>, _>(
+        let (arrangement, errs) = build_distinct::<_, RowSpine<_, _>, RowValSpine<_, _, _>>(
             ctx,
             collection,
             " [val: empty]",
@@ -510,7 +485,7 @@ where
         (SpecializedArrangement::RowUnit(arrangement), errs)
     } else {
         let collection = collection.inspect(|((_, v), _, _)| assert!(v.is_empty()));
-        let (arrangement, errs) = build_distinct::<_, RowRowSpine<_, _>, RowValSpine<_, _, _>, _>(
+        let (arrangement, errs) = build_distinct::<_, RowRowSpine<_, _>, RowValSpine<_, _, _>>(
             ctx, collection, "", mfp_after,
         );
         (SpecializedArrangement::RowRow(arrangement), errs)
@@ -518,24 +493,23 @@ where
 }
 
 /// Build the dataflow to compute the set of distinct keys.
-fn build_distinct<C, T1, T2, S>(
+fn build_distinct<C, T1, T2>(
     ctx: &C,
-    collection: Collection<S, (Row, T1::ValOwned), Diff>,
+    collection: Collection<C::Scope, (Row, T1::ValOwned), Diff>,
     tag: &str,
     mfp_after: Option<SafeMfpPlan>,
 ) -> (
-    Arranged<S, TraceAgent<T1>>,
-    Collection<S, DataflowError, Diff>,
+    Arranged<C::Scope, TraceAgent<T1>>,
+    Collection<C::Scope, DataflowError, Diff>,
 )
 where
     C: Context,
-    S: Scope<Timestamp = C::Timestamp>,
     T1: Trace<KeyOwned = Row, Time = C::Timestamp, Diff = Diff> + 'static,
     T1::Batch: Batch,
     T1::Batcher: Batcher<Item = ((Row, T1::ValOwned), C::Timestamp, Diff)>,
     for<'a> T1::Key<'a>: std::fmt::Debug + IntoRowByTypes,
     T1::ValOwned: Columnation + ExchangeData + Default,
-    Arranged<S, TraceAgent<T1>>: ArrangementSize,
+    Arranged<C::Scope, TraceAgent<T1>>: ArrangementSize,
     T2: for<'a> Trace<
             Key<'a> = T1::Key<'a>,
             KeyOwned = Row,
@@ -545,7 +519,7 @@ where
         > + 'static,
     T2::Batch: Batch,
     T2::Batcher: Batcher<Item = ((Row, T2::ValOwned), C::Timestamp, Diff)>,
-    Arranged<S, TraceAgent<T2>>: ArrangementSize,
+    Arranged<C::Scope, TraceAgent<T2>>: ArrangementSize,
 {
     let error_logger = ctx.error_logger();
 
@@ -617,15 +591,15 @@ where
 /// For each aggregate, we render a different reduce operator, and then fuse
 /// results together into a final arrangement that presents all the results
 /// in the order specified by `aggrs`.
-fn build_basic_aggregates<C: Context, S>(
+fn build_basic_aggregates<C: Context>(
     ctx: &C,
-    input: Collection<S, (Row, Row), Diff>,
+    input: Collection<C::Scope, (Row, Row), Diff>,
     aggrs: Vec<(usize, AggregateExpr)>,
     mfp_after: Option<SafeMfpPlan>,
-) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
-where
-    S: Scope<Timestamp = C::Timestamp>,
-{
+) -> (
+    RowRowArrangement<C::Scope>,
+    Collection<C::Scope, DataflowError, Diff>,
+) {
     // We are only using this function to render multiple basic aggregates and
     // stitch them together. If that's not true we should complain.
     if aggrs.len() <= 1 {
@@ -711,20 +685,17 @@ where
 /// Build the dataflow to compute a single basic aggregation.
 ///
 /// This method also applies distinctness if required.
-fn build_basic_aggregate<C: Context, S>(
+fn build_basic_aggregate<C: Context>(
     ctx: &C,
-    input: Collection<S, (Row, Row), Diff>,
+    input: Collection<C::Scope, (Row, Row), Diff>,
     index: usize,
     aggr: &AggregateExpr,
     validating: bool,
     mfp_after: Option<SafeMfpPlan>,
 ) -> (
-    RowRowArrangement<S>,
-    Option<Collection<S, DataflowError, Diff>>,
-)
-where
-    S: Scope<Timestamp = C::Timestamp>,
-{
+    RowRowArrangement<C::Scope>,
+    Option<Collection<C::Scope, DataflowError, Diff>>,
+) {
     let AggregateExpr {
         func,
         expr: _,
@@ -747,7 +718,6 @@ where
         if validating {
             let (oks, errs) = build_reduce_inaccumulable_distinct::<
                 _,
-                _,
                 KeyValSpine<_, Result<(), String>, _, _>,
             >(ctx, partial, None)
             .as_collection(|k, v| (k.into_owned(), v.into_owned()))
@@ -758,7 +728,7 @@ where
             err_output = Some(errs);
             partial = oks;
         } else {
-            partial = build_reduce_inaccumulable_distinct::<_, _, KeySpine<_, _, _>>(
+            partial = build_reduce_inaccumulable_distinct::<_, KeySpine<_, _, _>>(
                 ctx,
                 partial,
                 Some(" [val: empty]"),
@@ -870,14 +840,13 @@ where
     (oks, err_output)
 }
 
-fn build_reduce_inaccumulable_distinct<C, S, Tr>(
+fn build_reduce_inaccumulable_distinct<C, Tr>(
     ctx: &C,
-    input: Collection<S, (Row, Row), Diff>,
+    input: Collection<C::Scope, (Row, Row), Diff>,
     name_tag: Option<&str>,
-) -> Arranged<S, TraceAgent<Tr>>
+) -> Arranged<C::Scope, TraceAgent<Tr>>
 where
     C: Context,
-    S: Scope<Timestamp = C::Timestamp>,
     Tr::ValOwned: MaybeValidatingRow<(), String>,
     Tr: Trace
         + for<'a> TraceReader<
@@ -888,7 +857,7 @@ where
         > + 'static,
     Tr::Batch: Batch,
     Tr::Batcher: Batcher<Item = (((Row, Row), Tr::ValOwned), C::Timestamp, Diff)>,
-    Arranged<S, TraceAgent<Tr>>: ArrangementSize,
+    Arranged<C::Scope, TraceAgent<Tr>>: ArrangementSize,
 {
     let error_logger = ctx.error_logger();
 
@@ -930,36 +899,36 @@ where
 /// Note that this implementation currently ignores the distinct bit because we
 /// currently only perform min / max hierarchically and the reduction tree
 /// efficiently suppresses non-distinct updates.
-fn build_bucketed<C: Context, S>(
-    ctx: &C,
-    input: Collection<S, (Row, Row), Diff>,
+fn build_bucketed<C: Context>(
+    ctx: &mut C,
+    input: Collection<C::Scope, (Row, Row), Diff>,
     bucketed_plan: BucketedPlan,
     mfp_after: Option<SafeMfpPlan>,
-) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
-where
-    S: Scope<Timestamp = C::Timestamp>,
-{
-    input.scope().region_named("ReduceHierarchical", |inner| {
-        build_bucketed_inner(ctx, input, bucketed_plan, mfp_after, inner)
+) -> (
+    RowRowArrangement<C::Scope>,
+    Collection<C::Scope, DataflowError, Diff>,
+) {
+    ctx.region("ReduceHierarchical", |inner| {
+        let input = input.enter_region(inner.scope());
+        let (arrangement, errs) = build_bucketed_inner(inner, input, bucketed_plan, mfp_after);
+        (arrangement.leave_region(), errs.leave_region())
     })
 }
 
-fn build_bucketed_inner<C: Context, S>(
+fn build_bucketed_inner<C: Context>(
     ctx: &C,
-    input: Collection<S, (Row, Row), Diff>,
+    input: Collection<C::Scope, (Row, Row), Diff>,
     BucketedPlan {
         aggr_funcs,
         skips,
         buckets,
     }: BucketedPlan,
     mfp_after: Option<SafeMfpPlan>,
-    inner: &Child<S, S::Timestamp>,
-) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
-where
-    S: Scope<Timestamp = C::Timestamp>,
-{
-    let input = input.enter_region(inner);
-    let mut err_output: Option<Collection<S, _, _>> = None;
+) -> (
+    RowRowArrangement<C::Scope>,
+    Collection<C::Scope, DataflowError, Diff>,
+) {
+    let mut err_output = None;
 
     // Gather the relevant values into a vec of rows ordered by aggregation_index
     let input = input.map(move |(key, row)| {
@@ -984,7 +953,7 @@ where
         // were observed in the input. Subsequently, we will either produce an error in the error
         // stream or produce correct data in the output stream.
         let negated_output = if err_output.is_none() {
-            let (oks, errs) = build_bucketed_negated_output::<_, _, Result<Vec<Row>, (Row, u64)>>(
+            let (oks, errs) = build_bucketed_negated_output::<_, Result<Vec<Row>, (Row, u64)>>(
                 ctx,
                 &input,
                 aggr_funcs.clone(),
@@ -1002,10 +971,10 @@ where
                     Ok(values) => Ok((key, values)),
                 },
             );
-            err_output = Some(errs.leave_region());
+            err_output = Some(errs);
             oks
         } else {
-            build_bucketed_negated_output::<_, _, Vec<Row>>(ctx, &input, aggr_funcs.clone())
+            build_bucketed_negated_output::<_, Vec<Row>>(ctx, &input, aggr_funcs.clone())
         };
 
         stage = negated_output
@@ -1072,37 +1041,34 @@ where
                     }
                 },
             )
-            .as_collection(|_, v| v.into_owned())
-            .leave_region();
+            .as_collection(|_, v| v.into_owned());
         if let Some(e) = &err_output {
             err_output = Some(e.concat(&errs));
         } else {
             err_output = Some(errs);
         }
     }
-    let arranged_output = arranged
-        .mz_reduce_abelian::<_, RowRowSpine<_, _>>("ReduceMinsMaxes", {
-            move |key, source, target| {
-                let temp_storage = RowArena::new();
-                let datum_iter = key.into_datum_iter(None);
-                let mut datums_local = datums1.borrow();
-                datums_local.extend(datum_iter);
-                let key_len = datums_local.len();
-                for (aggr_index, func) in aggr_funcs.iter().enumerate() {
-                    let iter = source
-                        .iter()
-                        .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
-                    datums_local.push(func.eval(iter, &temp_storage));
-                }
-
-                if let Some(row) =
-                    evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
-                {
-                    target.push((row, 1));
-                }
+    let arranged_output = arranged.mz_reduce_abelian::<_, RowRowSpine<_, _>>("ReduceMinsMaxes", {
+        move |key, source, target| {
+            let temp_storage = RowArena::new();
+            let datum_iter = key.into_datum_iter(None);
+            let mut datums_local = datums1.borrow();
+            datums_local.extend(datum_iter);
+            let key_len = datums_local.len();
+            for (aggr_index, func) in aggr_funcs.iter().enumerate() {
+                let iter = source
+                    .iter()
+                    .map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
+                datums_local.push(func.eval(iter, &temp_storage));
             }
-        })
-        .leave_region();
+
+            if let Some(row) =
+                evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
+            {
+                target.push((row, 1));
+            }
+        }
+    });
 
     (
         arranged_output,
@@ -1121,14 +1087,13 @@ where
 /// `validating` indicates whether we want this stage to perform error detection
 /// for invalid accumulations. Once a stage is clean of such errors, subsequent
 /// stages can skip validation.
-fn build_bucketed_negated_output<C, S, R>(
+fn build_bucketed_negated_output<C, R>(
     ctx: &C,
-    input: &Collection<S, ((Row, u64), Vec<Row>), Diff>,
+    input: &Collection<C::Scope, ((Row, u64), Vec<Row>), Diff>,
     aggrs: Vec<AggregateFunc>,
-) -> Collection<S, ((Row, u64), R), Diff>
+) -> Collection<C::Scope, ((Row, u64), R), Diff>
 where
     C: Context,
-    S: Scope<Timestamp = C::Timestamp>,
     R: MaybeValidatingRow<Vec<Row>, (Row, u64)>,
 {
     let error_logger = ctx.error_logger();
@@ -1185,19 +1150,19 @@ where
 
 /// Build the dataflow to compute and arrange multiple hierarchical aggregations
 /// on monotonic inputs.
-fn build_monotonic<C: Context, S>(
+fn build_monotonic<C: Context>(
     ctx: &C,
-    collection: Collection<S, (Row, Row), Diff>,
+    collection: Collection<C::Scope, (Row, Row), Diff>,
     MonotonicPlan {
         aggr_funcs,
         skips,
         must_consolidate,
     }: MonotonicPlan,
     mfp_after: Option<SafeMfpPlan>,
-) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
-where
-    S: Scope<Timestamp = C::Timestamp>,
-{
+) -> (
+    RowRowArrangement<C::Scope>,
+    Collection<C::Scope, DataflowError, Diff>,
+) {
     // Gather the relevant values into a vec of rows ordered by aggregation_index
     let collection = collection
         .map(move |(key, row)| {
@@ -1304,19 +1269,19 @@ where
 /// they can be accumulated in place. The `count` operator promotes the accumulated
 /// values to data, at which point a final map applies operator-specific logic to
 /// yield the final aggregate.
-fn build_accumulable<C: Context, S>(
+fn build_accumulable<C: Context>(
     ctx: &C,
-    collection: Collection<S, (Row, Row), Diff>,
+    collection: Collection<C::Scope, (Row, Row), Diff>,
     AccumulablePlan {
         full_aggrs,
         simple_aggrs,
         distinct_aggrs,
     }: AccumulablePlan,
     mfp_after: Option<SafeMfpPlan>,
-) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
-where
-    S: Scope<Timestamp = C::Timestamp>,
-{
+) -> (
+    RowRowArrangement<C::Scope>,
+    Collection<C::Scope, DataflowError, Diff>,
+) {
     // we must have called this function with something to reduce
     if full_aggrs.len() == 0 || simple_aggrs.len() + distinct_aggrs.len() != full_aggrs.len() {
         ctx.error_logger().soft_panic_or_log(
