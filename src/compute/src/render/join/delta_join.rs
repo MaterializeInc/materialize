@@ -29,7 +29,6 @@ use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::container::columnation::Columnation;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::{Map, OkErr};
-use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
@@ -51,16 +50,19 @@ pub fn render_delta_join<C: Context>(
     join_plan: DeltaJoinPlan,
 ) -> CollectionBundle<C::Scope> {
     // We create a new region to contain the dataflow paths for the delta join.
-    ctx.scope().clone().region_named("Join(Delta)", |inner| {
-        render_delta_join_inner(ctx, inputs, join_plan, inner)
+    ctx.region("Join(Delta)", |inner| {
+        let inputs = inputs
+            .into_iter()
+            .map(|i| i.enter_region(inner.scope()))
+            .collect();
+        render_delta_join_inner(inner, inputs, join_plan).leave_region()
     })
 }
 
 fn render_delta_join_inner<C: Context>(
-    ctx: &C,
+    ctx: &mut C,
     inputs: Vec<CollectionBundle<C::Scope>>,
     join_plan: DeltaJoinPlan,
-    inner: &mut Child<C::Scope, C::Timestamp>,
 ) -> CollectionBundle<C::Scope> {
     // Collects error streams.
     let mut errors = Vec::new();
@@ -73,78 +75,67 @@ fn render_delta_join_inner<C: Context>(
     // existing arrangements, to which we have access).
     let mut join_results = Vec::new();
 
-    // First let's prepare the input arrangements we will need.
-    // This reduces redundant imports, and simplifies the dataflow structure.
-    // As the arrangements are all shared, it should not dramatically improve
-    // the efficiency, but the dataflow simplification is worth doing.
-    let mut arrangements = BTreeMap::new();
-    for path_plan in join_plan.path_plans.iter() {
-        for stage_plan in path_plan.stage_plans.iter() {
-            let lookup_idx = stage_plan.lookup_relation;
-            let lookup_key = stage_plan.lookup_key.clone();
-            arrangements
-                .entry((lookup_idx, lookup_key.clone()))
-                .or_insert_with(|| {
-                    match inputs[lookup_idx]
-                        .arrangement(&lookup_key)
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "Arrangement alarmingly absent!: {}, {:?}",
-                                lookup_idx, lookup_key,
-                            )
-                        }) {
-                        ArrangementFlavor::Local(oks, errs) => {
-                            if err_dedup.insert((lookup_idx, lookup_key)) {
-                                errors.push(
-                                    errs.enter_region(inner).as_collection(|k, _v| k.clone()),
-                                );
-                            }
-                            Ok(oks.enter_region(inner))
-                        }
-                        ArrangementFlavor::Trace(_gid, oks, errs) => {
-                            if err_dedup.insert((lookup_idx, lookup_key)) {
-                                errors.push(
-                                    errs.enter_region(inner).as_collection(|k, _v| k.clone()),
-                                );
-                            }
-                            Err(oks.enter_region(inner))
-                        }
-                    }
-                });
-        }
-    }
+    let expect_arrangement = |(relation, key): &(usize, Vec<_>)| {
+        inputs[*relation]
+            .arrangement(key)
+            .unwrap_or_else(|| panic!("Arrangement alarmingly absent!: {}, {:?}", relation, key))
+    };
 
     for path_plan in join_plan.path_plans {
         // This collection determines changes that result from updates inbound
         // from `inputs[relation]` and reflects all strictly prior updates and
         // concurrent updates from relations prior to `relation`.
         let name = format!("delta path {}", path_plan.source_relation);
-        let (oks, errs) = inner.clone().region_named(&name, |region| {
-            render_delta_path::<_, Child<C::Scope, _>>(ctx, &arrangements, path_plan, region)
-        });
+        ctx.region(&name, |region| {
+            // Collect and import the arrangements needed by this path.
+            let mut arrangements = BTreeMap::new();
+            let keys = path_plan
+                .stage_plans
+                .iter()
+                .map(|p| (p.lookup_relation, p.lookup_key.clone()))
+                .chain([(path_plan.source_relation, path_plan.source_key.clone())]);
+            for key in keys {
+                arrangements
+                    .entry(key.clone())
+                    .or_insert_with(|| match expect_arrangement(&key) {
+                        ArrangementFlavor::Local(oks, errs) => {
+                            if err_dedup.insert(key) {
+                                errors.push(errs.as_collection(|k, _v| k.clone()));
+                            }
+                            Ok(oks.enter_region(region.scope()))
+                        }
+                        ArrangementFlavor::Trace(_gid, oks, errs) => {
+                            if err_dedup.insert(key) {
+                                errors.push(errs.as_collection(|k, _v| k.clone()));
+                            }
+                            Err(oks.enter_region(region.scope()))
+                        }
+                    });
+            }
 
-        join_results.push(oks);
-        errors.push(errs);
+            let (oks, errs) = render_delta_path(region, arrangements, path_plan);
+            join_results.push(oks.leave_region());
+            errors.push(errs.leave_region());
+        });
     }
 
     // Concatenate the results of each delta query as the accumulated results.
-    let oks = differential_dataflow::collection::concatenate(inner, join_results);
-    let errs = differential_dataflow::collection::concatenate(inner, errors);
-    CollectionBundle::from_collections(oks.leave_region(), errs.leave_region())
+    let oks = differential_dataflow::collection::concatenate(ctx.scope_mut(), join_results);
+    let errs = differential_dataflow::collection::concatenate(ctx.scope_mut(), errors);
+    CollectionBundle::from_collections(oks, errs)
 }
 
-fn render_delta_path<C: Context, S>(
-    ctx: &C,
-    arrangements: &BTreeMap<
+fn render_delta_path<C: Context>(
+    ctx: &mut C,
+    arrangements: BTreeMap<
         (usize, Vec<MirScalarExpr>),
-        Result<SpecializedArrangement<S>, SpecializedArrangementImport<S>>,
+        Result<SpecializedArrangement<C::Scope>, SpecializedArrangementImport<C::Scope>>,
     >,
     path_plan: DeltaPathPlan,
-    region: &mut Child<S, C::Timestamp>,
-) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>)
-where
-    S: Scope<Timestamp = C::Timestamp>,
-{
+) -> (
+    Collection<C::Scope, Row, Diff>,
+    Collection<C::Scope, DataflowError, Diff>,
+) {
     // The plan is to move through each relation, starting from `relation` and in the order
     // indicated in `orders[relation]`. At each moment, we will have the columns from the
     // subset of relations encountered so far, and we will have applied as much as we can
@@ -172,28 +163,19 @@ where
     // Ensure this input is rendered, and extract its update stream.
     let val = arrangements
         .get(&(source_relation, source_key))
-        .expect("Arrangement promised by the planner is absent!");
+        .expect("Arrangement promised by the planner is absent!")
+        .clone();
     let as_of = ctx.as_of().clone();
     let update_stream = match val {
         Ok(local) => {
-            let arranged = local.enter_region(region);
-            let (update_stream, err_stream) = dispatch_build_update_stream_local(
-                arranged,
-                as_of,
-                source_relation,
-                initial_closure,
-            );
+            let (update_stream, err_stream) =
+                dispatch_build_update_stream_local(local, as_of, source_relation, initial_closure);
             errors.push(err_stream);
             update_stream
         }
         Err(trace) => {
-            let arranged = trace.enter_region(region);
-            let (update_stream, err_stream) = dispatch_build_update_stream_trace(
-                arranged,
-                as_of,
-                source_relation,
-                initial_closure,
-            );
+            let (update_stream, err_stream) =
+                dispatch_build_update_stream_trace(trace, as_of, source_relation, initial_closure);
             errors.push(err_stream);
             update_stream
         }
@@ -226,12 +208,16 @@ where
         //
         // We need to write the logic twice, as there are two types of arrangement
         // we might have: either dataflow-local or an imported trace.
-        let (oks, errs) = match arrangements.get(&(lookup_relation, lookup_key)).unwrap() {
+        let val = arrangements
+            .get(&(lookup_relation, lookup_key))
+            .expect("Arrangement promised by the planner is absent!")
+            .clone();
+        let (oks, errs) = match val {
             Ok(local) => {
                 if source_relation < lookup_relation {
                     dispatch_build_halfjoin_local(
                         update_stream,
-                        local.enter_region(region),
+                        local,
                         stream_key,
                         stream_thinning,
                         |t1, t2| t1.le(t2),
@@ -241,7 +227,7 @@ where
                 } else {
                     dispatch_build_halfjoin_local(
                         update_stream,
-                        local.enter_region(region),
+                        local,
                         stream_key,
                         stream_thinning,
                         |t1, t2| t1.lt(t2),
@@ -254,7 +240,7 @@ where
                 if source_relation < lookup_relation {
                     dispatch_build_halfjoin_trace(
                         update_stream,
-                        trace.enter_region(region),
+                        trace,
                         stream_key,
                         stream_thinning,
                         |t1, t2| t1.le(t2),
@@ -264,7 +250,7 @@ where
                 } else {
                     dispatch_build_halfjoin_trace(
                         update_stream,
-                        trace.enter_region(region),
+                        trace,
                         stream_key,
                         stream_thinning,
                         |t1, t2| t1.lt(t2),
@@ -314,8 +300,8 @@ where
     }
 
     (
-        update_stream.leave_region(),
-        differential_dataflow::collection::concatenate(region, errors).leave_region(),
+        update_stream,
+        differential_dataflow::collection::concatenate(ctx.scope_mut(), errors),
     )
 }
 
