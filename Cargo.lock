@@ -2523,6 +2523,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ebdb29d2ea9ed0083cd8cece49bbd968021bd99b0849edb4a9a7ee0fdf6a4e0"
 
 [[package]]
+name = "hibitset"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3ede5cfa60c958e60330d65163adbc4211e15a2653ad80eb0cce878de120121"
+dependencies = [
+ "rayon",
+]
+
+[[package]]
 name = "hmac"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4746,13 +4755,16 @@ dependencies = [
  "clap",
  "compact_bytes",
  "console-subscriber",
+ "criterion",
  "ctor",
  "either",
  "futures",
+ "hibitset",
  "http",
  "hyper",
  "hyper-tls",
  "lgalloc",
+ "mz-ore",
  "mz-test-macro",
  "native-tls",
  "num",
@@ -4765,6 +4777,7 @@ dependencies = [
  "pin-project",
  "prometheus",
  "proptest",
+ "rand",
  "scopeguard",
  "sentry",
  "sentry-tracing",

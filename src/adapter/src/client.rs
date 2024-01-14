@@ -22,7 +22,7 @@ use itertools::Itertools;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_build_info::BuildInfo;
 use mz_ore::collections::CollectionExt;
-use mz_ore::id_gen::IdAllocator;
+use mz_ore::id_gen::{IdAllocator, IdAllocatorInnerBitSet};
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
@@ -95,7 +95,7 @@ impl Handle {
 pub struct Client {
     build_info: &'static BuildInfo,
     inner_cmd_tx: mpsc::UnboundedSender<(OpenTelemetryContext, Command)>,
-    id_alloc: IdAllocator<ConnectionIdType>,
+    id_alloc: IdAllocator<IdAllocatorInnerBitSet>,
     now: NowFn,
     metrics: Metrics,
     environment_id: EnvironmentId,
@@ -114,7 +114,10 @@ impl Client {
         Client {
             build_info,
             inner_cmd_tx: cmd_tx,
-            id_alloc: IdAllocator::new(1, 1 << 16),
+            // Although there are 32 bits of space in the connection ID, 12 of those are used by the
+            // environmentd ID. Furthermore, the datastructure in IdAllocator only supports 1 << 24
+            // slots.
+            id_alloc: IdAllocator::new(1, 1 << 20),
             now,
             metrics,
             environment_id,
