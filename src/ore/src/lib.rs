@@ -47,6 +47,7 @@ pub mod future;
 pub mod graph;
 pub mod hash;
 pub mod hint;
+#[cfg(feature = "id_gen")]
 pub mod id_gen;
 pub mod iter;
 pub mod lex;
