@@ -113,7 +113,7 @@ use differential_dataflow::{AsCollection, Collection, Data, ExchangeData, Hashab
 use itertools::izip;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_compute_types::plan::Plan;
-use mz_expr::{EvalError, Id};
+use mz_expr::{EvalError, Id, LetRecLimit, LocalId};
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Diff, GlobalId};
 use mz_storage_operators::persist_source;
@@ -303,7 +303,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     context.set_shutdown_token(ShutdownToken::new(Rc::downgrade(&object_token)));
                     tokens.insert(object.id, object_token);
 
-                    let bundle = render_recursive_plan(&mut context, 0, object.plan);
+                    let bundle = render_recursive_plan(&mut context, object.plan);
                     context.insert_id(Id::Global(object.id), bundle);
                 }
 
@@ -321,7 +321,14 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Export declared sinks.
                 for (sink_id, dependencies, sink) in sinks {
-                    export_sink(&context, compute_state, &tokens, dependencies, sink_id, &sink);
+                    export_sink(
+                        &context,
+                        compute_state,
+                        &tokens,
+                        dependencies,
+                        sink_id,
+                        &sink,
+                    );
                 }
             });
         } else {
@@ -371,7 +378,14 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Export declared sinks.
                 for (sink_id, dependencies, sink) in sinks {
-                    export_sink(&context, compute_state, &tokens, dependencies, sink_id, &sink);
+                    export_sink(
+                        &context,
+                        compute_state,
+                        &tokens,
+                        dependencies,
+                        sink_id,
+                        &sink,
+                    );
                 }
             });
         }
@@ -633,7 +647,39 @@ where
 ///
 /// The method requires that all variables conclude with a physical representation that
 /// contains a collection (i.e. a non-arrangement), and it will panic otherwise.
-fn render_recursive_plan<C: Context>(
+fn render_recursive_plan<C>(ctx: &mut C, plan: Plan) -> CollectionBundle<C::Scope>
+where
+    C: Context<Timestamp = Product<mz_repr::Timestamp, PointStamp<u64>>>,
+{
+    if let Plan::LetRec {
+        ids,
+        values,
+        limits,
+        body,
+    } = plan
+    {
+        let bindings: BTreeMap<_, _> = ctx.region("LIR: WMR", |ctx| {
+            let bindings = render_recursive_region(ctx, 0, ids, values, limits);
+            bindings
+                .into_iter()
+                .map(|(id, bundle)| (id, bundle.leave_region()))
+                .collect()
+        });
+
+        for (id, bundle) in bindings {
+            ctx.insert_id(id, bundle);
+        }
+
+        render_recursive_plan(ctx, *body)
+    } else {
+        render_plan(ctx, plan)
+    }
+}
+
+/// Same as `render_recursive_plan` but without creating a dataflow region for the recursive part
+/// of the dataflow. We cannot create nested regions because each level of nesting would produce a
+/// different function type and the compiler would have to generate infinite functions.
+fn render_recursive_plan_inner<C>(
     ctx: &mut C,
     level: usize,
     plan: Plan,
@@ -648,102 +694,118 @@ where
         body,
     } = plan
     {
-        assert_eq!(ids.len(), values.len());
-        assert_eq!(ids.len(), limits.len());
-        // It is important that we only use the `Variable` until the object is bound.
-        // At that point, all subsequent uses should have access to the object itself.
-        let mut variables = BTreeMap::new();
-        for id in ids.iter() {
-            use differential_dataflow::dynamic::feedback_summary;
-            use differential_dataflow::operators::iterate::Variable;
-            let inner = feedback_summary::<u64>(level + 1, 1);
-            let oks_v = Variable::new(
-                ctx.scope_mut(),
-                Product::new(Default::default(), inner.clone()),
-            );
-            let err_v = Variable::new(ctx.scope_mut(), Product::new(Default::default(), inner));
+        let bindings = render_recursive_region(ctx, level, ids, values, limits);
 
-            ctx.insert_id(
-                Id::Local(*id),
-                CollectionBundle::from_collections(oks_v.clone(), err_v.clone()),
-            );
-            variables.insert(Id::Local(*id), (oks_v, err_v));
-        }
-        // Now render each of the bindings.
-        for (id, value, limit) in izip!(ids.iter(), values.into_iter(), limits.into_iter()) {
-            let bundle = render_recursive_plan(ctx, level + 1, value);
-            // We need to ensure that the raw collection exists, but do not have enough information
-            // here to cause that to happen.
-            let (oks, mut err) = bundle.collection.clone().unwrap();
-            ctx.insert_id(Id::Local(*id), bundle);
-            let (oks_v, err_v) = variables.remove(&Id::Local(*id)).unwrap();
-
-            // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
-            let mut oks = oks.consolidate_named::<KeySpine<_, _, _>>("LetRecConsolidation");
-            if let Some(token) = ctx.shutdown_token().get_inner() {
-                oks = oks.with_token(Weak::clone(token));
-            }
-
-            if let Some(limit) = limit {
-                // We swallow the results of the `max_iter`th iteration, because
-                // these results would go into the `max_iter + 1`th iteration.
-                let (in_limit, over_limit) =
-                    oks.inner.branch_when(move |Product { inner: ps, .. }| {
-                        // We get None in the first iteration, because the `PointStamp` doesn't yet have
-                        // the `level`th element. It will get created when applying the summary for the
-                        // first time.
-                        let iteration_index = *ps.vector.get(level).unwrap_or(&0);
-                        // The pointstamp starts counting from 0, so we need to add 1.
-                        iteration_index + 1 >= limit.max_iters.into()
-                    });
-                oks = Collection::new(in_limit);
-                if !limit.return_at_limit {
-                    err = err.concat(&Collection::new(over_limit).map(move |_data| {
-                        DataflowError::EvalError(Box::new(EvalError::LetRecLimitExceeded(format!(
-                            "{}",
-                            limit.max_iters.get()
-                        ))))
-                    }));
-                }
-            }
-
-            oks_v.set(&oks);
-
-            // Set err variable to the distinct elements of `err`.
-            // Distinctness is important, as we otherwise might add the same error each iteration,
-            // say if the limit of `oks` has an error. This would result in non-terminating rather
-            // than a clean report of the error. The trade-off is that we lose information about
-            // multiplicities of errors, but .. this seems to be the better call.
-            let err: KeyCollection<_, _, _> = err.into();
-            let mut errs = err
-                .mz_arrange::<ErrSpine<_, _>>("Arrange recursive err")
-                .mz_reduce_abelian::<_, ErrSpine<_, _>>(
-                    "Distinct recursive err",
-                    move |_k, _s, t| t.push(((), 1)),
-                )
-                .as_collection(|k, _| k.clone());
-            if let Some(token) = &ctx.shutdown_token().get_inner() {
-                errs = errs.with_token(Weak::clone(token));
-            }
-            err_v.set(&errs);
-        }
-        // Now extract each of the bindings into the outer scope.
-        for id in ids.into_iter() {
-            let bundle = ctx.remove_id(Id::Local(id)).unwrap();
-            let (oks, err) = bundle.collection.unwrap();
-            ctx.insert_id(
-                Id::Local(id),
-                CollectionBundle::from_collections(
-                    oks.leave_dynamic(level + 1),
-                    err.leave_dynamic(level + 1),
-                ),
-            );
+        for (id, bundle) in bindings {
+            ctx.insert_id(id, bundle);
         }
 
-        render_recursive_plan(ctx, level, *body)
+        render_recursive_plan_inner(ctx, level, *body)
     } else {
         render_plan(ctx, plan)
     }
+}
+
+fn render_recursive_region<C>(
+    ctx: &mut C,
+    level: usize,
+    ids: Vec<LocalId>,
+    values: Vec<Plan>,
+    limits: Vec<Option<LetRecLimit>>,
+) -> BTreeMap<Id, CollectionBundle<C::Scope>>
+where
+    C: Context<Timestamp = Product<mz_repr::Timestamp, PointStamp<u64>>>,
+{
+    assert_eq!(ids.len(), values.len());
+    assert_eq!(ids.len(), limits.len());
+    // It is important that we only use the `Variable` until the object is bound.
+    // At that point, all subsequent uses should have access to the object itself.
+    let mut variables = BTreeMap::new();
+    for id in ids.iter() {
+        use differential_dataflow::dynamic::feedback_summary;
+        use differential_dataflow::operators::iterate::Variable;
+        let inner = feedback_summary::<u64>(level + 1, 1);
+        let oks_v = Variable::new(
+            ctx.scope_mut(),
+            Product::new(Default::default(), inner.clone()),
+        );
+        let err_v = Variable::new(ctx.scope_mut(), Product::new(Default::default(), inner));
+
+        ctx.insert_id(
+            Id::Local(*id),
+            CollectionBundle::from_collections(oks_v.clone(), err_v.clone()),
+        );
+        variables.insert(Id::Local(*id), (oks_v, err_v));
+    }
+    // Now render each of the bindings.
+    for (id, value, limit) in izip!(ids.iter(), values.into_iter(), limits.into_iter()) {
+        let bundle = render_recursive_plan_inner(ctx, level + 1, value);
+        // We need to ensure that the raw collection exists, but do not have enough information
+        // here to cause that to happen.
+        let (oks, mut err) = bundle.collection.clone().unwrap();
+        ctx.insert_id(Id::Local(*id), bundle);
+        let (oks_v, err_v) = variables.remove(&Id::Local(*id)).unwrap();
+
+        // Set oks variable to `oks` but consolidated to ensure iteration ceases at fixed point.
+        let mut oks = oks.consolidate_named::<KeySpine<_, _, _>>("LetRecConsolidation");
+        if let Some(token) = ctx.shutdown_token().get_inner() {
+            oks = oks.with_token(Weak::clone(token));
+        }
+
+        if let Some(limit) = limit {
+            // We swallow the results of the `max_iter`th iteration, because
+            // these results would go into the `max_iter + 1`th iteration.
+            let (in_limit, over_limit) =
+                oks.inner.branch_when(move |Product { inner: ps, .. }| {
+                    // We get None in the first iteration, because the `PointStamp` doesn't yet have
+                    // the `level`th element. It will get created when applying the summary for the
+                    // first time.
+                    let iteration_index = *ps.vector.get(level).unwrap_or(&0);
+                    // The pointstamp starts counting from 0, so we need to add 1.
+                    iteration_index + 1 >= limit.max_iters.into()
+                });
+            oks = Collection::new(in_limit);
+            if !limit.return_at_limit {
+                err = err.concat(&Collection::new(over_limit).map(move |_data| {
+                    DataflowError::EvalError(Box::new(EvalError::LetRecLimitExceeded(format!(
+                        "{}",
+                        limit.max_iters.get()
+                    ))))
+                }));
+            }
+        }
+
+        oks_v.set(&oks);
+
+        // Set err variable to the distinct elements of `err`.
+        // Distinctness is important, as we otherwise might add the same error each iteration,
+        // say if the limit of `oks` has an error. This would result in non-terminating rather
+        // than a clean report of the error. The trade-off is that we lose information about
+        // multiplicities of errors, but .. this seems to be the better call.
+        let err: KeyCollection<_, _, _> = err.into();
+        let mut errs = err
+            .mz_arrange::<ErrSpine<_, _>>("Arrange recursive err")
+            .mz_reduce_abelian::<_, ErrSpine<_, _>>("Distinct recursive err", move |_k, _s, t| {
+                t.push(((), 1))
+            })
+            .as_collection(|k, _| k.clone());
+        if let Some(token) = &ctx.shutdown_token().get_inner() {
+            errs = errs.with_token(Weak::clone(token));
+        }
+        err_v.set(&errs);
+    }
+    // Now extract each of the bindings into the outer scope.
+    let mut bindings = BTreeMap::new();
+    for id in ids {
+        let id = Id::Local(id);
+        let bundle = ctx.remove_id(id).unwrap();
+        let (oks, errs) = bundle.collection.unwrap();
+        let oks = oks.leave_dynamic(level + 1);
+        let errs = errs.leave_dynamic(level + 1);
+        let bundle = CollectionBundle::from_collections(oks, errs);
+        bindings.insert(id, bundle);
+    }
+    bindings
 }
 
 /// Renders a plan to a differential dataflow, producing the collection of results.
@@ -753,74 +815,83 @@ where
 fn render_plan<C: Context>(ctx: &mut C, plan: Plan) -> CollectionBundle<C::Scope> {
     match plan {
         Plan::Constant { rows } => {
-            // Produce both rows and errs to avoid conditional dataflow construction.
-            let (rows, errs) = match rows {
-                Ok(rows) => (rows, Vec::new()),
-                Err(e) => (Vec::new(), vec![e]),
-            };
+            ctx.region("LIR: Constant", |ctx| {
+                // Produce both rows and errs to avoid conditional dataflow construction.
+                let (rows, errs) = match rows {
+                    Ok(rows) => (rows, Vec::new()),
+                    Err(e) => (Vec::new(), vec![e]),
+                };
 
-            // We should advance times in constant collections to start from `as_of`.
-            let as_of_frontier = ctx.as_of().clone();
-            let until = ctx.until().clone();
-            let ok_collection = rows
-                .into_iter()
-                .filter_map(move |(row, mut time, diff)| {
-                    time.advance_by(as_of_frontier.borrow());
-                    if !until.less_equal(&time) {
-                        Some((row, C::Timestamp::to_inner(time), diff))
-                    } else {
-                        None
-                    }
-                })
-                .to_stream(ctx.scope_mut())
-                .as_collection();
+                // We should advance times in constant collections to start from `as_of`.
+                let as_of_frontier = ctx.as_of().clone();
+                let until = ctx.until().clone();
+                let ok_collection = rows
+                    .into_iter()
+                    .filter_map(move |(row, mut time, diff)| {
+                        time.advance_by(as_of_frontier.borrow());
+                        if !until.less_equal(&time) {
+                            Some((row, C::Timestamp::to_inner(time), diff))
+                        } else {
+                            None
+                        }
+                    })
+                    .to_stream(ctx.scope_mut())
+                    .as_collection();
 
-            let mut error_time: mz_repr::Timestamp = Timestamp::minimum();
-            error_time.advance_by(ctx.as_of().borrow());
-            let err_collection = errs
-                .into_iter()
-                .map(move |e| {
-                    (
-                        DataflowError::from(e),
-                        C::Timestamp::to_inner(error_time),
-                        1,
-                    )
-                })
-                .to_stream(ctx.scope_mut())
-                .as_collection();
+                let mut error_time: mz_repr::Timestamp = Timestamp::minimum();
+                error_time.advance_by(ctx.as_of().borrow());
+                let err_collection = errs
+                    .into_iter()
+                    .map(move |e| {
+                        (
+                            DataflowError::from(e),
+                            C::Timestamp::to_inner(error_time),
+                            1,
+                        )
+                    })
+                    .to_stream(ctx.scope_mut())
+                    .as_collection();
 
-            CollectionBundle::from_collections(ok_collection, err_collection)
+                CollectionBundle::from_collections(ok_collection, err_collection).leave_region()
+            })
         }
         Plan::Get { id, keys, plan } => {
-            // Recover the collection from `self` and then apply `mfp` to it.
-            // If `mfp` happens to be trivial, we can just return the collection.
-            let mut collection = ctx
-                .lookup_id(id)
-                .unwrap_or_else(|| panic!("Get({:?}) not found at render time", id));
-            match plan {
-                mz_compute_types::plan::GetPlan::PassArrangements => {
-                    // Assert that each of `keys` are present in `collection`.
-                    assert!(keys
-                        .arranged
-                        .iter()
-                        .all(|(key, _, _)| collection.arranged.contains_key(key)));
-                    assert!(keys.raw <= collection.collection.is_some());
-                    // Retain only those keys we want to import.
-                    collection
-                        .arranged
-                        .retain(|key, _value| keys.arranged.iter().any(|(key2, _, _)| key2 == key));
-                    collection
-                }
-                mz_compute_types::plan::GetPlan::Arrangement(key, row, mfp) => {
-                    let (oks, errs) =
-                        collection.as_collection_core(mfp, Some((key, row)), ctx.until().clone());
-                    CollectionBundle::from_collections(oks, errs)
-                }
-                mz_compute_types::plan::GetPlan::Collection(mfp) => {
-                    let (oks, errs) = collection.as_collection_core(mfp, None, ctx.until().clone());
-                    CollectionBundle::from_collections(oks, errs)
-                }
-            }
+            ctx.region("LIR: Get", |ctx| {
+                // Recover the collection from `self` and then apply `mfp` to it.
+                // If `mfp` happens to be trivial, we can just return the collection.
+                let mut collection = ctx
+                    .lookup_id(id)
+                    .unwrap_or_else(|| panic!("Get({:?}) not found at render time", id));
+                let bundle = match plan {
+                    mz_compute_types::plan::GetPlan::PassArrangements => {
+                        // Assert that each of `keys` are present in `collection`.
+                        assert!(keys
+                            .arranged
+                            .iter()
+                            .all(|(key, _, _)| collection.arranged.contains_key(key)));
+                        assert!(keys.raw <= collection.collection.is_some());
+                        // Retain only those keys we want to import.
+                        collection.arranged.retain(|key, _value| {
+                            keys.arranged.iter().any(|(key2, _, _)| key2 == key)
+                        });
+                        collection
+                    }
+                    mz_compute_types::plan::GetPlan::Arrangement(key, row, mfp) => {
+                        let (oks, errs) = collection.as_collection_core(
+                            mfp,
+                            Some((key, row)),
+                            ctx.until().clone(),
+                        );
+                        CollectionBundle::from_collections(oks, errs)
+                    }
+                    mz_compute_types::plan::GetPlan::Collection(mfp) => {
+                        let (oks, errs) =
+                            collection.as_collection_core(mfp, None, ctx.until().clone());
+                        CollectionBundle::from_collections(oks, errs)
+                    }
+                };
+                bundle.leave_region()
+            })
         }
         Plan::Let { id, value, body } => {
             // Render `value` and bind it to `id`. Complain if this shadows an id.
@@ -841,13 +912,18 @@ fn render_plan<C: Context>(ctx: &mut C, plan: Plan) -> CollectionBundle<C::Scope
             input_key_val,
         } => {
             let input = render_plan(ctx, *input);
-            // If `mfp` is non-trivial, we should apply it and produce a collection.
-            if mfp.is_identity() {
-                input
-            } else {
-                let (oks, errs) = input.as_collection_core(mfp, input_key_val, ctx.until().clone());
-                CollectionBundle::from_collections(oks, errs)
-            }
+
+            ctx.region("LIR: Mfp", |ctx| {
+                // If `mfp` is non-trivial, we should apply it and produce a collection.
+                if mfp.is_identity() {
+                    input
+                } else {
+                    let input = input.enter_region(ctx.scope());
+                    let (oks, errs) =
+                        input.as_collection_core(mfp, input_key_val, ctx.until().clone());
+                    CollectionBundle::from_collections(oks, errs).leave_region()
+                }
+            })
         }
         Plan::FlatMap {
             input,
@@ -857,21 +933,33 @@ fn render_plan<C: Context>(ctx: &mut C, plan: Plan) -> CollectionBundle<C::Scope
             input_key,
         } => {
             let input = render_plan(ctx, *input);
-            render_flat_map(ctx, input, func, exprs, mfp, input_key)
+
+            ctx.region("LIR: FlatMap", |ctx| {
+                let input = input.enter_region(ctx.scope());
+                render_flat_map(ctx, input, func, exprs, mfp, input_key).leave_region()
+            })
         }
         Plan::Join { inputs, plan } => {
-            let inputs = inputs
+            let inputs: Vec<_> = inputs
                 .into_iter()
                 .map(|input| render_plan(ctx, input))
                 .collect();
-            match plan {
-                mz_compute_types::plan::join::JoinPlan::Linear(linear_plan) => {
-                    render_join(ctx, inputs, linear_plan)
-                }
-                mz_compute_types::plan::join::JoinPlan::Delta(delta_plan) => {
-                    render_delta_join(ctx, inputs, delta_plan)
-                }
-            }
+
+            ctx.region("LIR: Join", |ctx| {
+                let inputs = inputs
+                    .into_iter()
+                    .map(|i| i.enter_region(ctx.scope()))
+                    .collect();
+                let bundle = match plan {
+                    mz_compute_types::plan::join::JoinPlan::Linear(linear_plan) => {
+                        render_join(ctx, inputs, linear_plan)
+                    }
+                    mz_compute_types::plan::join::JoinPlan::Delta(delta_plan) => {
+                        render_delta_join(ctx, inputs, delta_plan)
+                    }
+                };
+                bundle.leave_region()
+            })
         }
         Plan::Reduce {
             input,
@@ -881,42 +969,66 @@ fn render_plan<C: Context>(ctx: &mut C, plan: Plan) -> CollectionBundle<C::Scope
             mfp_after,
         } => {
             let input = render_plan(ctx, *input);
-            let mfp_option = (!mfp_after.is_identity()).then_some(mfp_after);
-            render_reduce(ctx, input, key_val_plan, plan, input_key, mfp_option)
+
+            ctx.region("LIR: Reduce", |ctx| {
+                let input = input.enter_region(ctx.scope());
+                let mfp_option = (!mfp_after.is_identity()).then_some(mfp_after);
+                render_reduce(ctx, input, key_val_plan, plan, input_key, mfp_option).leave_region()
+            })
         }
         Plan::TopK { input, top_k_plan } => {
             let input = render_plan(ctx, *input);
-            render_topk(ctx, input, top_k_plan)
+
+            ctx.region("LIR: TopK", |ctx| {
+                let input = input.enter_region(ctx.scope());
+                render_topk(ctx, input, top_k_plan).leave_region()
+            })
         }
         Plan::Negate { input } => {
             let input = render_plan(ctx, *input);
-            let (oks, errs) = input.as_specific_collection(None);
-            CollectionBundle::from_collections(oks.negate(), errs)
+
+            ctx.region("LIR: Negate", |ctx| {
+                let input = input.enter_region(ctx.scope());
+                let (oks, errs) = input.as_specific_collection(None);
+                CollectionBundle::from_collections(oks.negate(), errs).leave_region()
+            })
         }
         Plan::Threshold {
             input,
             threshold_plan,
         } => {
             let input = render_plan(ctx, *input);
-            render_threshold(input, threshold_plan)
+
+            ctx.region("LIR: Threshold", |ctx| {
+                let input = input.enter_region(ctx.scope());
+                render_threshold(input, threshold_plan).leave_region()
+            })
         }
         Plan::Union {
             inputs,
             consolidate_output,
         } => {
-            let mut oks = Vec::new();
-            let mut errs = Vec::new();
-            for input in inputs.into_iter() {
-                let (os, es) = render_plan(ctx, input).as_specific_collection(None);
-                oks.push(os);
-                errs.push(es);
-            }
-            let mut oks = differential_dataflow::collection::concatenate(ctx.scope_mut(), oks);
-            if consolidate_output {
-                oks = oks.consolidate_named::<KeySpine<_, _, _>>("UnionConsolidation")
-            }
-            let errs = differential_dataflow::collection::concatenate(ctx.scope_mut(), errs);
-            CollectionBundle::from_collections(oks, errs)
+            let inputs: Vec<_> = inputs
+                .into_iter()
+                .map(|input| render_plan(ctx, input))
+                .collect();
+
+            ctx.region("LIR: Union", |ctx| {
+                let mut oks = Vec::new();
+                let mut errs = Vec::new();
+                for input in inputs.into_iter() {
+                    let input = input.enter_region(ctx.scope());
+                    let (os, es) = input.as_specific_collection(None);
+                    oks.push(os);
+                    errs.push(es);
+                }
+                let mut oks = differential_dataflow::collection::concatenate(ctx.scope_mut(), oks);
+                if consolidate_output {
+                    oks = oks.consolidate_named::<KeySpine<_, _, _>>("UnionConsolidation")
+                }
+                let errs = differential_dataflow::collection::concatenate(ctx.scope_mut(), errs);
+                CollectionBundle::from_collections(oks, errs).leave_region()
+            })
         }
         Plan::ArrangeBy {
             input,
@@ -925,13 +1037,19 @@ fn render_plan<C: Context>(ctx: &mut C, plan: Plan) -> CollectionBundle<C::Scope
             input_mfp,
         } => {
             let input = render_plan(ctx, *input);
-            input.ensure_collections(
-                keys,
-                input_key,
-                input_mfp,
-                ctx.until().clone(),
-                ctx.enable_specialized_arrangements(),
-            )
+
+            ctx.region("LIR: ArrangeBy", |ctx| {
+                let input = input.enter_region(ctx.scope());
+                input
+                    .ensure_collections(
+                        keys,
+                        input_key,
+                        input_mfp,
+                        ctx.until().clone(),
+                        ctx.enable_specialized_arrangements(),
+                    )
+                    .leave_region()
+            })
         }
     }
 }
