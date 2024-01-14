@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow = "1.0.66"
 async-compression = { version = "0.4.5", features = ["gzip", "tokio", "zstd"] }
-clap = { version = "3.2.24", features = ["derive", "env"] }
+clap = { version = "4.4.16", features = ["derive", "env"] }
 csv-async = { version = "1.2.6", default-features = false, features = ["tokio"] }
 futures = "0.3.25"
 itertools = "0.10.5"

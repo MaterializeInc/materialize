@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.66"
-clap = { version = "3.2.24", features = ["derive", "env"] }
+clap = { version = "4.4.16", features = ["derive", "env"] }
 openssl = { version = "0.10.48", features = ["vendored"] }
 socket2 = "0.5.3"
 tokio-stream = "0.1.11"
