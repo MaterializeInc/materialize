@@ -221,25 +221,24 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
                     print(f"--- Populating {psql_url} with {file} ...")
                     c.exec("rqg", "bash", "-c", f"psql -f conf/mz/{file} {psql_url}")
 
-            if duration > 0:
-                c.exec(
-                    "rqg",
-                    "perl",
-                    "gentest.pl",
-                    "--dsn1=dbi:Pg:dbname=materialize;host=mz_this;user=materialize;port=6875",
-                    *dsn2,
-                    f"--grammar={grammar}",
-                    f"--validator={workload.validator}"
-                    if workload.validator is not None
-                    else "",
-                    f"--starting-rule={args.starting_rule}"
-                    if args.starting_rule is not None
-                    else "",
-                    "--queries=100000000",
-                    f"--threads={threads}",
-                    f"--duration={duration}",
-                    f"--seed={args.seed}",
-                    env_extra=env_extra,
-                )
+            c.exec(
+                "rqg",
+                "perl",
+                "gentest.pl",
+                "--dsn1=dbi:Pg:dbname=materialize;host=mz_this;user=materialize;port=6875",
+                *dsn2,
+                f"--grammar={grammar}",
+                f"--validator={workload.validator}"
+                if workload.validator is not None
+                else "",
+                f"--starting-rule={args.starting_rule}"
+                if args.starting_rule is not None
+                else "",
+                "--queries=100000000",
+                f"--threads={threads}",
+                f"--duration={duration}",
+                f"--seed={args.seed}",
+                env_extra=env_extra,
+            )
         finally:
             c.capture_logs()
