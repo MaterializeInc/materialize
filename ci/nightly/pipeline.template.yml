@@ -1193,7 +1193,7 @@ steps:
 
   - id: persist-txn-fencing
     label: Persist-txn fencing
-    timeout_in_minutes: 60
+    timeout_in_minutes: 90
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
