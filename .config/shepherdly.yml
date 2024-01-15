@@ -42,3 +42,4 @@ mitigations:
     label: Run Nightly Tests
     label_url: https://trigger-ci.dev.materialize.com/?pr={{pr_number}}
 default_system_mitigations: false
+
