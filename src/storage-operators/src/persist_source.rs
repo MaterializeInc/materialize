@@ -150,7 +150,7 @@ where
     let mut tokens = vec![];
 
     let stream = scope.scoped(&format!("granular_backpressure({})", source_id), |scope| {
-        let (flow_control, feedback_handle) = match max_inflight_bytes {
+        let (flow_control, flow_control_probe) = match max_inflight_bytes {
             Some(max_inflight_bytes) => {
                 let backpressure_metrics = BackpressureMetrics {
                     emitted_bytes: Arc::clone(&shard_metrics.backpressure_emitted_bytes),
@@ -160,14 +160,19 @@ where
                     retired_bytes: Arc::clone(&shard_metrics.backpressure_retired_bytes),
                 };
 
-                let (feedback_handle, feedback_data) = scope.feedback(Default::default());
+                let probe = mz_timely_util::probe::Handle::default();
+                let progress_stream = mz_timely_util::probe::source(
+                    scope.clone(),
+                    format!("decode_backpressure_probe({source_id})"),
+                    probe.clone(),
+                );
                 let flow_control = FlowControl {
-                    progress_stream: feedback_data,
+                    progress_stream,
                     max_inflight_bytes,
                     summary: (Default::default(), Subtime::least_summary()),
                     metrics: Some(backpressure_metrics),
                 };
-                (Some(flow_control), Some(feedback_handle))
+                (Some(flow_control), Some(probe))
             }
             None => (None, None),
         };
@@ -197,17 +202,8 @@ where
         );
         tokens.extend(source_tokens);
 
-        let stream = match feedback_handle {
-            Some(feedback_handle) => {
-                let handle = mz_timely_util::probe::Handle::default();
-                let probe = mz_timely_util::probe::source(
-                    scope.clone(),
-                    format!("decode_backpressure_probe({source_id})"),
-                    handle.clone(),
-                );
-                probe.connect_loop(feedback_handle);
-                stream.probe_notify_with(vec![handle])
-            }
+        let stream = match flow_control_probe {
+            Some(probe) => stream.probe_notify_with(vec![probe]),
             None => stream,
         };
 
