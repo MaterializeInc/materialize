@@ -37,7 +37,9 @@ use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
-use crate::typedefs::{KeyBatcher, KeyValSpine, RowRowSpine, RowSpine};
+use crate::render::Pairer;
+use crate::row_spine::RowValSpine;
+use crate::typedefs::{KeyBatcher, RowRowSpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
 impl<G> Context<G>
@@ -164,8 +166,12 @@ where
                         collection
                     };
 
-                    let collection =
-                        collection.map(|(group_row, row)| ((group_row, row.hashed()), row));
+                    let pairer = Pairer::new(1);
+                    let collection = collection.map(move |(group_row, row)| {
+                        let hash = row.hashed();
+                        let hash_key = pairer.merge(std::iter::once(Datum::from(hash)), &group_row);
+                        (hash_key, row)
+                    });
 
                     // For monotonic inputs, we are able to retract inputs that can no longer be produced
                     // as outputs. Any inputs beyond `offset + limit` will never again be produced as
@@ -198,7 +204,7 @@ where
                         "requested no validation, but received error collection"
                     );
 
-                    result.map(|((_key, _hash), row)| row)
+                    result.map(|(_key_hash, row)| row)
                 }
                 TopKPlan::Basic(BasicTopKPlan {
                     group_key,
@@ -246,19 +252,17 @@ where
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
+        let pairer = Pairer::new(1);
         let mut datum_vec = mz_repr::DatumVec::new();
         let mut collection = collection.map({
             move |row| {
-                let binding = SharedRow::get();
-                let mut row_builder = binding.borrow_mut();
-                let row_hash = row.hashed();
                 let group_row = {
+                    let row_hash = row.hashed();
                     let datums = datum_vec.borrow_with(&row);
                     let iterator = group_key.iter().map(|i| datums[*i]);
-                    row_builder.packer().extend(iterator);
-                    row_builder.clone()
+                    pairer.merge(std::iter::once(Datum::from(row_hash)), iterator)
                 };
-                ((group_row, row_hash), row)
+                (group_row, row)
             }
         });
 
@@ -324,7 +328,7 @@ where
             err_collection = errs;
         }
         (
-            collection.map(|((_key, _hash), row)| row),
+            collection.map(|(_key_hash, row)| row),
             err_collection.expect("at least one stage validated its inputs"),
         )
     }
@@ -339,7 +343,7 @@ where
     // a larger number of arrangements when this optimization does nothing beneficial.
     fn build_topk_stage<S>(
         &self,
-        collection: Collection<S, ((Row, u64), Row), Diff>,
+        collection: Collection<S, (Row, Row), Diff>,
         order_key: Vec<mz_expr::ColumnOrder>,
         modulus: u64,
         offset: usize,
@@ -347,13 +351,19 @@ where
         arity: usize,
         validating: bool,
     ) -> (
-        Collection<S, ((Row, u64), Row), Diff>,
+        Collection<S, (Row, Row), Diff>,
         Option<Collection<S, DataflowError, Diff>>,
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
-        let input = collection.map(move |((key, hash), row)| ((key, hash % modulus), row));
+        let pairer = Pairer::new(1);
+        let input = collection.map(move |(hash_key, row)| {
+            let mut hash_key_iter = hash_key.iter();
+            let hash = hash_key_iter.next().unwrap().unwrap_uint64() % modulus;
+            let hash_key = pairer.merge(std::iter::once(Datum::from(hash)), hash_key_iter);
+            (hash_key, row)
+        });
         let (oks, errs) = if validating {
             let stage = build_topk_negated_stage::<S, Result<Row, Row>>(
                 &input, order_key, offset, limit, arity,
@@ -361,13 +371,19 @@ where
 
             let error_logger = self.error_logger();
             let (oks, errs) =
-                stage.map_fallible("Demuxing Errors", move |((k, h), result)| match result {
+                stage.map_fallible("Demuxing Errors", move |(hk, result)| match result {
                     Err(v) => {
+                        let mut hk_iter = hk.iter();
+                        let h = hk_iter.next().unwrap().unwrap_uint64();
+                        let binding = SharedRow::get();
+                        let mut row_builder = binding.borrow_mut();
+                        row_builder.packer().extend(hk_iter);
+                        let k = row_builder.clone();
                         let message = "Negative multiplicities in TopK";
                         error_logger.log(message, &format!("k={k:?}, h={h}, v={v:?}"));
                         Err(EvalError::Internal(message.to_string()).into())
                     }
-                    Ok(t) => Ok(((k, h), t)),
+                    Ok(t) => Ok((hk, t)),
                 });
             (oks, Some(errs))
         } else {
@@ -454,12 +470,12 @@ where
 }
 
 fn build_topk_negated_stage<G, R>(
-    input: &Collection<G, ((Row, u64), Row), Diff>,
+    input: &Collection<G, (Row, Row), Diff>,
     order_key: Vec<mz_expr::ColumnOrder>,
     offset: usize,
     limit: Option<mz_expr::MirScalarExpr>,
     arity: usize,
-) -> Collection<G, ((Row, u64), R), Diff>
+) -> Collection<G, (Row, R), Diff>
 where
     G: Scope,
     G::Timestamp: Lattice + Columnation,
@@ -472,18 +488,20 @@ where
     // NOTE(vmarcos): The arranged input operator name below is used in the tuning advice
     // built-in view mz_internal.mz_expected_group_size_advice.
     input
-        .mz_arrange::<KeyValSpine<(Row, u64), _, _, _>>("Arranged TopK input")
-        .mz_reduce_abelian::<_, KeyValSpine<_, _, _, _>>("Reduced TopK input", {
-            move |key, source, target: &mut Vec<(R, Diff)>| {
+        .mz_arrange::<RowRowSpine<_, _>>("Arranged TopK input")
+        .mz_reduce_abelian::<_, RowValSpine<_, _, _>>("Reduced TopK input", {
+            move |mut hash_key, source, target: &mut Vec<(R, Diff)>| {
                 // Unpack the limit, either into an integer literal or an expression to evaluate.
                 let limit: Option<i64> = limit.as_ref().map(|l| {
                     if let Some(l) = l.as_literal_int64() {
                         l
                     } else {
-                        let temp_storage = mz_repr::RowArena::new();
-                        let key_datums = datum_vec.borrow_with(&key.0);
-                        // Unpack `key` and determine the limit.
+                        // Unpack `key` after skipping the hash and determine the limit.
                         // If the limit errors, use a zero limit; errors are surfaced elsewhere.
+                        let temp_storage = mz_repr::RowArena::new();
+                        let _hash = hash_key.next();
+                        let mut key_datums = datum_vec.borrow();
+                        key_datums.extend(hash_key);
                         let datum_limit = l
                             .eval(&key_datums, &temp_storage)
                             .unwrap_or(Datum::Int64(0));
@@ -495,12 +513,18 @@ where
                     }
                 });
 
+                // The `row_builder` below will be used to construct either errors or
+                // output values in the following.
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
+
                 if let Some(err) = R::into_error() {
-                    for (row, diff) in source.iter() {
+                    for (datums, diff) in source.iter() {
                         if diff.is_positive() {
                             continue;
                         }
-                        target.push((err((*row).clone()), -1));
+                        row_builder.packer().extend(*datums);
+                        target.push((err(row_builder.clone()), -1));
                         return;
                     }
                 }
@@ -514,9 +538,13 @@ where
                     return;
                 }
 
-                // First go ahead and emit all records
-                for (row, diff) in source.iter() {
-                    target.push((R::ok((*row).clone()), diff.clone()));
+                // First go ahead and emit all records. Note that we ensure target
+                // has the capacity to hold at least these records, and avoid any
+                // dependencies on the user-provided (potentially unbounded) limit.
+                target.reserve(source.len());
+                for (datums, diff) in source.iter() {
+                    row_builder.packer().extend(*datums);
+                    target.push((R::ok(row_builder.clone()), diff.clone()));
                 }
                 // local copies that may count down to zero.
                 let mut offset = offset;
@@ -527,8 +555,8 @@ where
                 // We decode the datums once, into a common buffer for efficiency.
                 // Each row should contain `arity` columns; we should check that.
                 let mut buffer = Vec::with_capacity(arity * source.len());
-                for (index, row) in source.iter().enumerate() {
-                    buffer.extend(row.0.iter());
+                for (index, (datums, _)) in source.iter().enumerate() {
+                    buffer.extend(*datums);
                     assert_eq!(buffer.len(), arity * (index + 1));
                 }
                 let width = buffer.len() / source.len();
@@ -545,7 +573,7 @@ where
                 // We now need to lay out the data in order of `buffer`, but respecting
                 // the `offset` and `limit` constraints.
                 for index in indexes.into_iter() {
-                    let (row, mut diff) = source[index];
+                    let (datums, mut diff) = source[index];
                     if !diff.is_positive() {
                         continue;
                     }
@@ -566,12 +594,19 @@ where
                     if diff > 0 {
                         // Emit retractions for the elements actually part of
                         // the set of TopK elements.
-                        target.push((R::ok(row.clone()), -diff));
+                        row_builder.packer().extend(datums);
+                        target.push((R::ok(row_builder.clone()), -diff));
                     }
                 }
             }
         })
-        .as_collection(|k, v| (k.clone(), v.clone()))
+        .as_collection(|k, v| {
+            let binding = SharedRow::get();
+            let mut row_builder = binding.borrow_mut();
+            let mut row_packer = row_builder.packer();
+            row_packer.extend(k);
+            (row_builder.clone(), v.clone())
+        })
 }
 
 fn render_intra_ts_thinning<S>(
