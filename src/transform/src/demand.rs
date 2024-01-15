@@ -340,9 +340,10 @@ impl Demand {
                     self.action(input, (0..arity).collect(), gets)
                 }
                 MirRelationExpr::Union { base, inputs } => {
-                    self.action(base, columns.clone(), gets)?;
+                    let all_columns: BTreeSet<_> = (0..base.arity()).collect();
+                    self.action(base, all_columns.clone(), gets)?;
                     for input in inputs {
-                        self.action(input, columns.clone(), gets)?;
+                        self.action(input, all_columns.clone(), gets)?;
                     }
                     Ok(())
                 }

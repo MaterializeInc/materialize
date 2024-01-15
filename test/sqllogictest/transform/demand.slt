@@ -26,6 +26,43 @@ select x from (select x, 1/a from (select 2 as x), t);
 2
 2
 
+statement ok
+CREATE TABLE t1 (f1 DOUBLE PRECISION, f2 DOUBLE PRECISION NOT NULL);
+
+query RR
+SELECT
+  COUNT (a1.f2) AS agg1,
+  MIN (a1.f2) AS agg2
+FROM
+  (
+    SELECT
+      MIN (f1) AS f1,
+      MIN (f2) AS f2
+    FROM
+      t1 AS a2
+    WHERE
+      a2.f2 IS NULL
+  ) AS a1
+  LEFT JOIN (
+    SELECT * FROM (VALUES (1, 2)) t1 (f1, f2)
+  ) AS a2 ON (TRUE)
+INTERSECT
+SELECT
+  MIN (a1.f2) AS agg1,
+  AVG (a1.f1) AS agg2
+FROM
+   (
+    SELECT
+      a1.f2 AS f1,
+      a1.f1 AS f2
+    FROM
+      t1 AS a1
+    LIMIT
+      0
+  ) AS a1;
+----
+
+
 ## -------------------- Tests for WITH MUTUALLY RECURSIVE --------------------
 
 # Demand creates the `#0 + #0` from `#0 + #2`.
