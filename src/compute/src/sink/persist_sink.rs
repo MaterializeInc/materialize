@@ -35,9 +35,7 @@ use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{Event, OperatorBuilder as AsyncOperatorBuilder};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{
-    Broadcast, Capability, CapabilitySet, ConnectLoop, Feedback, Inspect,
-};
+use timely::dataflow::operators::{Broadcast, Capability, CapabilitySet, Inspect};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use timely::PartialOrder;
@@ -183,24 +181,12 @@ where
         );
     }
 
-    let mut scope = desired_collection.inner.scope();
-
-    // The append operator keeps capabilities that it downgrades to match the
-    // current upper frontier of the persist shard. This frontier can be
-    // observed on the persist_feedback_stream. This is used by the minter
-    // operator to learn about the current persist frontier, driving it's
-    // decisions on when to mint new batches.
-    //
-    // This stream should never carry data, so we don't bother about increasing
-    // the timestamp on feeding back using the summary.
-    let (persist_feedback_handle, persist_feedback_stream) = scope.feedback(Timestamp::default());
-
-    let (batch_descriptions, passthrough_desired_stream, mint_token) = mint_batch_descriptions(
+    let (batch_descriptions, desired_stream, persist_stream, mint_token) = mint_batch_descriptions(
         sink_id,
         operator_name.clone(),
         target,
         &desired_collection.inner,
-        &persist_feedback_stream,
+        &persist_collection.inner,
         as_of,
         Arc::clone(&persist_clients),
         compute_state,
@@ -211,12 +197,12 @@ where
         operator_name.clone(),
         target,
         &batch_descriptions,
-        &passthrough_desired_stream,
-        &persist_collection.inner,
+        &desired_stream,
+        &persist_stream,
         Arc::clone(&persist_clients),
     );
 
-    let (append_frontier_stream, append_token) = append_batches(
+    let append_token = append_batches(
         sink_id.clone(),
         operator_name,
         target,
@@ -224,8 +210,6 @@ where
         &written_batches,
         persist_clients,
     );
-
-    append_frontier_stream.connect_loop(persist_feedback_handle);
 
     let token = Rc::new((mint_token, write_token, append_token));
 
@@ -248,12 +232,13 @@ fn mint_batch_descriptions<G>(
     operator_name: String,
     target: &CollectionMetadata,
     desired_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
-    persist_feedback_stream: &Stream<G, ()>,
+    persist_stream: &Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     as_of: Antichain<Timestamp>,
     persist_clients: Arc<PersistClientCache>,
     compute_state: &mut crate::compute_state::ComputeState,
 ) -> (
     Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
+    Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     Stream<G, (Result<Row, DataflowError>, Timestamp, Diff)>,
     Rc<dyn Any>,
 )
@@ -292,41 +277,56 @@ where
     let mut mint_op =
         AsyncOperatorBuilder::new(format!("{} mint_batch_descriptions", operator_name), scope);
 
-    let (mut output, output_stream) = mint_op.new_output();
-    let (mut data_output, data_output_stream) = mint_op.new_output();
+    let (mut desc_output, desc_output_stream) = mint_op.new_output();
+    let (mut desired_output, desired_output_stream) = mint_op.new_output();
+    let (mut persist_output, persist_output_stream) = mint_op.new_output();
 
-    // The description and the data-passthrough outputs are both driven by this input, so
-    // they use a standard input connection.
+    // The desired input drives both the description and the desired output.
     let mut desired_input =
-        mint_op.new_input_for_many(desired_stream, Pipeline, [&output, &data_output]);
+        mint_op.new_input_for_many(desired_stream, Pipeline, [&desc_output, &desired_output]);
 
-    // Neither output's capabilities should depend on the feedback input.
-    let mut persist_feedback_input =
-        mint_op.new_disconnected_input(persist_feedback_stream, Pipeline);
+    // The persist input only drives the persist output.
+    let mut persist_input = mint_op.new_input_for(persist_stream, Pipeline, &persist_output);
 
     let shutdown_button = mint_op.build(move |capabilities| async move {
         // Non-active workers should just pass the data through.
         if !active_worker {
             // The description output is entirely driven by the active worker, so we drop
-            // its capability here. The data-passthrough output just uses the data
+            // its capability here. The passthrough outputs just uses the data
             // capabilities.
             drop(capabilities);
-            while let Some(event) = desired_input.next().await {
-                match event {
-                    Event::Data([_output_cap, data_output_cap], mut data) => {
-                        data_output
-                            .give_container(&data_output_cap, &mut data)
-                            .await;
+
+            loop {
+                tokio::select! {
+                    Some(event) = desired_input.next() => {
+                        match event {
+                            Event::Data([_desc_output_cap, desired_output_cap], mut data) => {
+                                desired_output
+                                    .give_container(&desired_output_cap, &mut data)
+                                    .await;
+                            }
+                            Event::Progress(_) => {}
+                        }
                     }
-                    Event::Progress(_) => {}
+                    Some(event) = persist_input.next() => {
+                        match event {
+                            Event::Data(cap, mut data) => {
+                                persist_output.give_container(&cap, &mut data).await;
+                            }
+                            Event::Progress(_) => {}
+                        }
+                    }
+                    else => {
+                        // All inputs are exhausted, so we can shut down.
+                        return;
+                    }
                 }
             }
-            return;
         }
 
-        // The data-passthrough output will use the data capabilities, so we drop
-        // its capability here.
-        let [desc_cap, _]: [_; 2] = capabilities.try_into().expect("one capability per output");
+        // The passthrough outputs will use the data capabilities, so we drop
+        // their capabilities here.
+        let [desc_cap, _, _]: [_; 3] = capabilities.try_into().expect("one capability per output");
         let mut cap_set = CapabilitySet::from_elem(desc_cap);
 
         // TODO(aljoscha): We need to figure out what to do with error
@@ -405,21 +405,20 @@ where
             tokio::select! {
                 Some(event) = desired_input.next() => {
                     match event {
-                        Event::Data([_output_cap, data_output_cap], mut data) => {
+                        Event::Data([_desc_output_cap, desired_output_cap], mut data) => {
                             // Just passthrough the data.
-                            data_output.give_container(&data_output_cap, &mut data).await;
-                            continue;
+                            desired_output.give_container(&desired_output_cap, &mut data).await;
                         }
                         Event::Progress(frontier) => {
                             desired_frontier = frontier;
                         }
                     }
                 }
-                Some(event) = persist_feedback_input.next() => {
+                Some(event) = persist_input.next() => {
                     match event {
-                        Event::Data(_cap, _data) => {
-                            // This input produces no data.
-                            continue;
+                        Event::Data(cap, mut data) => {
+                            // Just passthrough the data.
+                            persist_output.give_container(&cap, &mut data).await;
                         }
                         Event::Progress(frontier) => {
                             persist_frontier = frontier;
@@ -500,7 +499,7 @@ where
                     batch_description
                 );
 
-                output.give(&cap, batch_description).await;
+                desc_output.give(&cap, batch_description).await;
 
                 // WIP: We downgrade our capability so that downstream
                 // operators (writer and appender) can know when all the
@@ -525,11 +524,16 @@ where
     });
 
     if sink_id.is_user() {
-        output_stream.inspect(|d| trace!("batch_description: {:?}", d));
+        desc_output_stream.inspect(|d| trace!("batch_description: {:?}", d));
     }
 
     let token = Rc::new(shutdown_button.press_on_drop());
-    (output_stream, data_output_stream, token)
+    (
+        desc_output_stream,
+        desired_output_stream,
+        persist_output_stream,
+        token,
+    )
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1101,7 +1105,7 @@ fn append_batches<G>(
     batch_descriptions: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
     batches: &Stream<G, BatchOrData>,
     persist_clients: Arc<PersistClientCache>,
-) -> (Stream<G, ()>, Rc<dyn Any>)
+) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -1114,19 +1118,9 @@ where
     let operator_name = format!("{} append_batches", operator_name);
     let mut append_op = AsyncOperatorBuilder::new(operator_name, scope.clone());
 
-    // We never output anything, but we update our capabilities based on the
-    // persist frontier we know about. So someone can listen on our output
-    // frontier and learn about the persist frontier advancing.
-    let (mut _output, output_stream) = append_op.new_output();
-
     let hashed_id = sink_id.hashed();
     let active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
 
-    // This operator wants to completely control the frontier on it's output
-    // because it's used to track the latest persist frontier. We update this
-    // when we either append to persist successfully or when we learn about a
-    // new current frontier because a `compare_and_append` failed. That's why
-    // input capability tracking is not connected to the output.
     let mut descriptions_input =
         append_op.new_disconnected_input(batch_descriptions, Exchange::new(move |_| hashed_id));
     let mut batches_input =
@@ -1137,12 +1131,10 @@ where
     // from our input frontiers that we have seen all batches for a given batch
     // description.
 
-    let shutdown_button = append_op.build(move |mut capabilities| async move {
+    let shutdown_button = append_op.build(move |_capabilities| async move {
         if !active_worker {
             return;
         }
-
-        let mut cap_set = CapabilitySet::from_elem(capabilities.pop().expect("missing capability"));
 
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
@@ -1354,35 +1346,28 @@ where
                     );
                 }
 
-                match result {
-                    Ok(()) => {
-                        cap_set.downgrade(batch_upper);
+                if let Err(mismatch) = result {
+                    // Clean up in case we didn't manage to append the
+                    // batches to persist.
+                    for batch in batches {
+                        batch.delete().await;
                     }
-                    Err(mismatch) => {
-                        cap_set.downgrade(mismatch.current.iter());
-
-                        // Clean up in case we didn't manage to append the
-                        // batches to persist.
-                        for batch in batches {
-                            batch.delete().await;
-                        }
-                        trace!(
-                            "persist_sink({}): invalid upper! \
-                                Tried to append batch ({:?} -> {:?}) but upper \
-                                is {:?}. This is not a problem, it just means \
-                                someone else was faster than us. We will try \
-                                again with a new batch description.",
-                            sink_id,
-                            batch_lower,
-                            batch_upper,
-                            mismatch.current,
-                        );
-                    }
+                    trace!(
+                        "persist_sink({}): invalid upper! \
+                            Tried to append batch ({:?} -> {:?}) but upper \
+                            is {:?}. This is not a problem, it just means \
+                            someone else was faster than us. We will try \
+                            again with a new batch description.",
+                        sink_id,
+                        batch_lower,
+                        batch_upper,
+                        mismatch.current,
+                    );
                 }
             }
         }
     });
 
     let token = Rc::new(shutdown_button.press_on_drop());
-    (output_stream, token)
+    token
 }
