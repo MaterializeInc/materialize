@@ -1,3 +1,4 @@
+# Docs: https://help.shepherdly.io/en/articles/8818618-shepherdly-repo-config
 configurations:
   - name: scoring_comment_enabled
     value: true
