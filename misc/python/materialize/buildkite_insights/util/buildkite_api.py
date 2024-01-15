@@ -38,9 +38,6 @@ def get(
         if not result:
             print("No further results.")
             break
-        if max_fetches is not None and fetch_count >= max_fetches:
-            print("Max fetches reached.")
-            break
 
         if isinstance(result, dict) and result.get("message"):
             raise RuntimeError(f"Something went wrong! ({result['message']})")
@@ -52,5 +49,9 @@ def get(
         print(f"Fetched {entry_count} entries, created at {created_at}.")
 
         results.extend(result)
+
+        if max_fetches is not None and fetch_count >= max_fetches:
+            print("Max fetches reached.")
+            break
 
     return results
