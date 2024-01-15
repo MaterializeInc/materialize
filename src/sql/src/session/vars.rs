@@ -5548,6 +5548,7 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == PG_SOURCE_KEEPALIVES_RETRIES.name()
         || name == PG_SOURCE_TCP_USER_TIMEOUT.name()
         || name == PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT.name()
+        || name == ENABLE_STORAGE_SHARD_FINALIZATION.name()
         || name == SSH_CHECK_INTERVAL.name()
         || name == SSH_CONNECT_TIMEOUT.name()
         || name == SSH_KEEPALIVES_IDLE.name()
