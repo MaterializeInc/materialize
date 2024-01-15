@@ -1543,7 +1543,7 @@ $ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
         )
 
         create_views = "\n".join(
-            f"> CREATE MATERIALIZED VIEW v WITH (RETAIN HISTORY FOR '30s'){i} AS SELECT * FROM source{i} AS s {join} LIMIT {i+1}"
+            f"> CREATE MATERIALIZED VIEW v{i} WITH (RETAIN HISTORY FOR '30s') AS SELECT * FROM source{i} AS s {join} LIMIT {i+1}"
             for i in range(0, self.n())
         )
 

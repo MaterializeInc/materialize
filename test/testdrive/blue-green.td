@@ -71,7 +71,7 @@ SELECT id FROM mz_schemas WHERE name = 'green';
 
 > CREATE SCHEMA blue
 
-> CREATE MATERIALIZED VIEW blue.mv1 WITH (RETAIN HISTORY FOR '30s') IN CLUSTER blue_compute AS ( SELECT SUM(x) FROM source_data );
+> CREATE MATERIALIZED VIEW blue.mv1 IN CLUSTER blue_compute WITH (RETAIN HISTORY FOR '30s')AS ( SELECT SUM(x) FROM source_data );
 > CREATE DEFAULT INDEX IN CLUSTER blue_serving ON blue.mv1;
 
 > SET cluster TO blue_serving;
@@ -91,7 +91,7 @@ SELECT id FROM mz_schemas WHERE name = 'green';
 
 > CREATE SCHEMA green
 
-> CREATE MATERIALIZED VIEW green.mv1 WITH (RETAIN HISTORY FOR '30s') IN CLUSTER green_compute AS ( SELECT AVG(x) FROM source_data );
+> CREATE MATERIALIZED VIEW green.mv1 IN CLUSTER green_compute WITH (RETAIN HISTORY FOR '30s')AS ( SELECT AVG(x) FROM source_data );
 > CREATE DEFAULT INDEX IN CLUSTER green_serving ON green.mv1;
 
 > SET cluster to green_serving;

@@ -27,7 +27,7 @@ class Privileges(Check):
             CREATE TABLE privilege_t{i} (c1 int, c2 privilege_type{i})
             CREATE INDEX privilege_i{i} ON privilege_t{i} (c2)
             CREATE VIEW privilege_v{i} AS SELECT * FROM privilege_t{i}
-            CREATE MATERIALIZED VIEW privilege_mv WITH (RETAIN HISTORY FOR '30s'){i} AS SELECT * FROM privilege_t{i}
+            CREATE MATERIALIZED VIEW privilege_mv{i} WITH (RETAIN HISTORY FOR '30s') AS SELECT * FROM privilege_t{i}
             CREATE SECRET privilege_secret{i} AS 'MY_SECRET'
             """
         )

@@ -30,7 +30,7 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
 
 > CREATE TABLE source (a int)
 > CREATE INDEX source_idx IN CLUSTER compute ON source (a)
-> CREATE MATERIALIZED VIEW mv1 WITH (RETAIN HISTORY FOR '30s') IN CLUSTER compute AS SELECT * FROM source
+> CREATE MATERIALIZED VIEW mv1 IN CLUSTER compute WITH (RETAIN HISTORY FOR '30s')AS SELECT * FROM source
 > CREATE INDEX mv1_idx IN CLUSTER serving ON mv1 (a)
 
 # Create a second MV that transitively depends on several indexes, to also test
@@ -42,7 +42,7 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
 > CREATE INDEX v2_idx IN CLUSTER compute ON v2 (c);
 > CREATE VIEW v3 AS SELECT c + 1 AS d FROM v2;
 > CREATE INDEX v3_idx IN CLUSTER compute ON v3 (d);
-> CREATE MATERIALIZED VIEW mv2 WITH (RETAIN HISTORY FOR '30s') IN CLUSTER compute AS SELECT * FROM v3
+> CREATE MATERIALIZED VIEW mv2 IN CLUSTER compute WITH (RETAIN HISTORY FOR '30s')AS SELECT * FROM v3
 > CREATE INDEX mv2_idx IN CLUSTER serving ON mv2 (d)
 
 # ... and an MV that depends on multiple indexes directly.
@@ -51,7 +51,7 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
 > CREATE INDEX v4_idx IN CLUSTER compute ON v4 (e);
 > CREATE VIEW v5 AS SELECT a + 1 AS f FROM source;
 > CREATE INDEX v5_idx IN CLUSTER compute ON v5 (f);
-> CREATE MATERIALIZED VIEW mv3 WITH (RETAIN HISTORY FOR '30s') IN CLUSTER compute AS SELECT e + f AS g FROM v4, v5
+> CREATE MATERIALIZED VIEW mv3 IN CLUSTER compute WITH (RETAIN HISTORY FOR '30s')AS SELECT e + f AS g FROM v4, v5
 > CREATE INDEX mv3_idx IN CLUSTER serving ON mv3 (g)
 
 # Let things hydrate.

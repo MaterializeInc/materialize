@@ -28,7 +28,7 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
   COMPUTE ADDRESSES ['clusterd2:2102'],
   WORKERS 1));
 > CREATE SOURCE src IN CLUSTER cluster1 FROM LOAD GENERATOR counter;
-> CREATE MATERIALIZED VIEW mv WITH (RETAIN HISTORY FOR '30s') IN CLUSTER cluster2 AS SELECT * FROM src;
+> CREATE MATERIALIZED VIEW mv IN CLUSTER cluster2 WITH (RETAIN HISTORY FOR '30s')AS SELECT * FROM src;
 > SET cluster = cluster2;
 
 # Dropping the replica will make the load generator be out of date from now on

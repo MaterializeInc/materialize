@@ -487,7 +487,7 @@ class KafkaSinks(Generator):
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_objects_per_schema = {KafkaSinks.COUNT * 10};")
         for i in cls.all():
-            print(f"> CREATE MATERIALIZED VIEW v WITH (RETAIN HISTORY FOR '30s'){i} (f1) AS VALUES ({i})")
+            print(f"> CREATE MATERIALIZED VIEW v{i} WITH (RETAIN HISTORY FOR '30s') (f1) AS VALUES ({i})")
 
         print(
             """> CREATE CONNECTION IF NOT EXISTS csr_conn
@@ -805,7 +805,7 @@ class ViewsMaterializedNested(Generator):
 
         for i in cls.all():
             print(
-                f"> CREATE MATERIALIZED VIEW v WITH (RETAIN HISTORY FOR '30s'){i} AS SELECT f1 + 1 AS f1 FROM v{i-1};"
+                f"> CREATE MATERIALIZED VIEW v{i} WITH (RETAIN HISTORY FOR '30s') AS SELECT f1 + 1 AS f1 FROM v{i-1};"
             )
 
         print(f"> SELECT * FROM v{cls.COUNT};")
@@ -1656,7 +1656,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
 
                          > CREATE DEFAULT INDEX ON ten;
 
-                         > CREATE MATERIALIZED VIEW v_ WITH (RETAIN HISTORY FOR '30s'){cluster_name} AS
+                         > CREATE MATERIALIZED VIEW v_{cluster_name} WITH (RETAIN HISTORY FOR '30s') AS
                            SELECT COUNT(*) AS c1 FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4;
 
                          > CREATE CONNECTION IF NOT EXISTS kafka_conn

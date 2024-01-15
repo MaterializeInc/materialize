@@ -2807,7 +2807,7 @@ def workflow_test_incident_70(c: Composition) -> None:
 
         for i in range(mv_count):
             mz_view_create_statements.append(
-                f"CREATE MATERIALIZED VIEW mv_lineitem_count_ WITH (RETAIN HISTORY FOR '30s'){i + 1} AS SELECT count(*) FROM lineitem;"
+                f"CREATE MATERIALIZED VIEW mv_lineitem_count_{i + 1} WITH (RETAIN HISTORY FOR '30s') AS SELECT count(*) FROM lineitem;"
             )
 
         mz_view_create_statements_sql = "\n".join(mz_view_create_statements)

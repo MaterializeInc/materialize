@@ -178,7 +178,7 @@ def run_workload(c: Composition, workload: Workload, catalog_store: str) -> None
             c.sql(
                 f"""
                     CREATE TABLE IF NOT EXISTS table{table_id}(id INTEGER, subid INTEGER, mz_service STRING);
-                    CREATE MATERIALIZED VIEW view WITH (RETAIN HISTORY FOR '30s'){table_id} AS SELECT DISTINCT id, subid, mz_service FROM table{table_id};
+                    CREATE MATERIALIZED VIEW view{table_id} WITH (RETAIN HISTORY FOR '30s') AS SELECT DISTINCT id, subid, mz_service FROM table{table_id};
                 """,
                 service="mz_first",
             )

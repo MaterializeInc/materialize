@@ -76,7 +76,7 @@ true
 
 > CREATE CLUSTER cleanup SIZE '1'
 > CREATE INDEX idx_cleanup IN CLUSTER cleanup ON t1 (a)
-> CREATE MATERIALIZED VIEW mv_cleanup WITH (RETAIN HISTORY FOR '30s') IN CLUSTER cleanup AS SELECT * FROM t2
+> CREATE MATERIALIZED VIEW mv_cleanup IN CLUSTER cleanup WITH (RETAIN HISTORY FOR '30s')AS SELECT * FROM t2
 
 > SELECT object.name, import.name
   FROM mz_internal.mz_compute_dependencies dep

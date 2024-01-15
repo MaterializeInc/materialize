@@ -15,4 +15,4 @@
 
 > CREATE TABLE json_table (a JSONB);
 
-> CREATE MATERIALIZED VIEW json_view WITH (RETAIN HISTORY FOR '30s') IN CLUSTER json_compute_cluster AS SELECT a->1 c1, a->>'b' c2, a #> '{b,1}' c3, a #>> '{b, 1}' c4, a - 'b' c5, a @> '{b, 1}' c6, a <@ '{b, 1}'::jsonb c7, a ? 'b' c8 FROM json_table;
+> CREATE MATERIALIZED VIEW json_view IN CLUSTER json_compute_cluster WITH (RETAIN HISTORY FOR '30s')AS SELECT a->1 c1, a->>'b' c2, a #> '{b,1}' c3, a #>> '{b, 1}' c4, a - 'b' c5, a @> '{b, 1}' c6, a <@ '{b, 1}'::jsonb c7, a ? 'b' c8 FROM json_table;
