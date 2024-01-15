@@ -82,6 +82,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_refresh_every_mvs": "true",
     "enable_cc_cluster_sizes": "true",
     "wait_catalog_consolidation_on_startup": "true",
+    "enable_statement_lifecycle_logging": "true",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [
