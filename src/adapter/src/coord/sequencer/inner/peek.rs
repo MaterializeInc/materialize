@@ -27,6 +27,7 @@ use tracing::{event, warn, Level};
 use crate::command::ExecuteResponse;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{self, PeekDataflowPlan, PlannedPeek};
+use crate::coord::read_policy::ReadHolds;
 use crate::coord::sequencer::inner::{check_log_reads, return_if_err};
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{
@@ -672,7 +673,7 @@ impl Coordinator {
         if in_immediate_multi_stmt_txn {
             // Either set the valid read ids for this transaction (if it's the first statement in a
             // transaction) otherwise verify the ids referenced in this query are in the timedomain.
-            if let Some(txn_reads) = self.txn_reads.get(session.conn_id()) {
+            if let Some(txn_reads) = self.txn_read_holds.get(session.conn_id()) {
                 // Find referenced ids not in the read hold. A reference could be caused by a
                 // user specifying an object in a different schema than the first query. An
                 // index could be caused by a CREATE INDEX after the transaction started.
@@ -691,7 +692,10 @@ impl Coordinator {
             } else {
                 if let Some((timestamp, bundle)) = potential_read_holds {
                     let read_holds = self.acquire_read_holds(timestamp, bundle);
-                    self.txn_reads.insert(session.conn_id().clone(), read_holds);
+                    self.txn_read_holds
+                        .entry(session.conn_id().clone())
+                        .or_insert_with(ReadHolds::new)
+                        .extend(read_holds);
                 }
             }
         }

@@ -1017,3 +1017,12 @@ NULL  -1  -2
 10  11  12
 30  30  30
 100  100  100
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/24288
+# The sleep makes _optimization_ take a few seconds, so we need to grab read holds in purification right away after
+# choosing a timestamp for mz_now.
+statement ok
+create materialized view mv4 with (refresh at creation) as
+select * from
+  (select mz_unsafe.mz_sleep(3)),
+  (select * from t2);
