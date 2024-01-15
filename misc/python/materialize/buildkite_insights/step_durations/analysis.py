@@ -39,6 +39,22 @@ BUILDKITE_BUILD_STATES = [
     "finished",
 ]
 
+MZ_PIPELINES = [
+    "cleanup",
+    "coverage",
+    "deploy",
+    "deploy-lsp",
+    "deploy-mz",
+    "deploy-website",
+    "license",
+    "nightlies",
+    "release-qualification",
+    "security",
+    "sql-logic-tests",
+    "tests",
+    "www",
+]
+
 
 @dataclass
 class StepData:
@@ -200,7 +216,7 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    parser.add_argument("--pipeline", default="tests", type=str)
+    parser.add_argument("--pipeline", choices=MZ_PIPELINES, default="tests", type=str)
     parser.add_argument("--build-step-key", default=None, type=str)
     parser.add_argument("--no-fetch", action="store_true")
     parser.add_argument("--max-fetches", default=5, type=int)
