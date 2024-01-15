@@ -81,6 +81,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_reduce_mfp_fusion": "true",
     "enable_refresh_every_mvs": "true",
     "enable_cc_cluster_sizes": "true",
+    "wait_catalog_consolidation_on_startup": "true",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [
