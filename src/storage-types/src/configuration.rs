@@ -36,7 +36,7 @@ pub struct StorageConfiguration {
 }
 
 impl StorageConfiguration {
-    /// Instantiate a new `StorageConfiguration` with default parameters and
+    /// Instantiate a new `StorageConfiguration` with default parameters and the given context.
     pub fn new(connection_context: ConnectionContext) -> StorageConfiguration {
         StorageConfiguration {
             parameters: Default::default(),
