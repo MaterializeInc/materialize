@@ -1,0 +1,33 @@
+configurations:
+  - name: scoring_comment_enabled
+    value: true
+  - name: scoring_comment_risk_score_threshold
+    value: 80
+  - name: scoring_comment_draft_mode
+    value: false
+  - name: qa_git_team_name
+    value: testing
+  - name: integration_test_path
+    value: test/,src/testdrive/,src/pgtest/
+  - name: file_path_exclusions
+    value: .github/,doc/,misc/,bin/,ci/,.devcontainer/,test/,tests/,testdrive/,sqllogictest/,pgtest/,lowertest/,lowertest-derive/
+mitigations:
+  - name: code_review
+    score_threshold: 0
+  - name: qa_review
+    score_threshold: 80
+  - name: feature_flag
+    score_threshold: 80
+  - name: integration_test
+    score_threshold: 80
+  - name: unit_test
+    # A value of 100 effectively makes this always optional
+    score_threshold: 100
+  - name: observability
+    score_threshold: 75
+  - name: run_nightly_tests
+    score_threshold: 80
+    custom: true
+    label: Run Nightly Tests
+    label_url: https://trigger-ci.dev.materialize.com/?pr={{pr_number}}
+default_system_mitigations: false
