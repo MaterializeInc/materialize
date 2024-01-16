@@ -173,7 +173,8 @@ class MaterializeContainer(MaterializeNonRemote):
             Materialized(image=self.image, sanity_restart=False)
         ):
             self.composition.up("materialized")
-            self._port = self.composition.default_port("materialized")
+            self.composition.up("balancerd")
+            self._port = self.composition.default_port("balancerd")
 
     def __str__(self) -> str:
         return (
