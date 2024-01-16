@@ -40,7 +40,7 @@ from materialize import MZ_ROOT, ci_util, mzbuild, spawn, ui
 from materialize.mzcompose.composition import Composition, UnknownCompositionError
 from materialize.ui import UIError
 
-RECOMMENDED_MIN_MEM = 8 * 1024**3  # 8GiB
+RECOMMENDED_MIN_MEM = 7 * 1024**3  # 7GiB
 RECOMMENDED_MIN_CPUS = 2
 
 

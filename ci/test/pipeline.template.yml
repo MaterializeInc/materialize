@@ -287,7 +287,7 @@ steps:
           composition: legacy-upgrade
           args: ["--versions-source=docs"]
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
 
   - group: "Debezium tests"
     key: debezium-tests
@@ -303,7 +303,7 @@ steps:
               composition: debezium
               run: postgres
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
 
       - id: debezium-sql-server
         label: Debezium SQL Server tests
@@ -316,7 +316,7 @@ steps:
               composition: debezium
               run: sql-server
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
 
       - id: debezium-mysql
         label: Debezium MySQL tests
@@ -372,7 +372,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc-resumption
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
 
   - id: ssh-connection
     label: SSH connection tests
@@ -410,7 +410,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-auth
         agents:
-          queue: linux-x86_64
+          queue: linux-x86_64-small
 
       - id: kafka-exactly-once
         label: Kafka exactly-once tests
@@ -430,7 +430,7 @@ steps:
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
@@ -444,10 +444,10 @@ steps:
         depends_on: build-x86_64
         inputs: [misc/python/materialize/checks]
         timeout_in_minutes: 45
-        parallelism: 3
+        parallelism: 5
         artifact_paths: junit_*.xml
         agents:
-          queue: builder-linux-x86_64
+          queue: linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -461,7 +461,7 @@ steps:
         parallelism: 2
         artifact_paths: junit_*.xml
         agents:
-          queue: builder-linux-x86_64
+          queue: linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -531,7 +531,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: replica-isolation
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
 
   - id: persistence
     label: Persistence tests
@@ -542,7 +542,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: persistence
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
 
   - id: cluster-isolation
     label: Cluster isolation test
@@ -566,7 +566,7 @@ steps:
           args: [--run-seconds=10, --wait]
     timeout_in_minutes: 30
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
 
   - id: metabase-demo
     label: Metabase smoke test
@@ -588,7 +588,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: dbt-materialize
     agents:
-      queue: linux-x86_64
+      queue: linux-x86_64-small
 
   - id: storage-usage
     label: "Storage Usage Table Test"
