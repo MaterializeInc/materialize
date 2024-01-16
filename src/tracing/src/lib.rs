@@ -115,11 +115,78 @@ impl<'de> Deserialize<'de> for CloneableEnvFilter {
         Self::from_str(s.as_str()).map_err(|x| de::Error::custom(x.to_string()))
     }
 }
+use tracing_subscriber::filter::Directive;
+
+/// Wraps [`Directive`] to provide a serde implementations.
+#[derive(PartialEq, Eq, Clone, Debug)]
+pub struct SerializableDirective(Directive);
+
+impl From<SerializableDirective> for Directive {
+    fn from(value: SerializableDirective) -> Self {
+        value.0
+    }
+}
+
+impl From<Directive> for SerializableDirective {
+    fn from(value: Directive) -> Self {
+        SerializableDirective(value)
+    }
+}
+
+impl FromStr for SerializableDirective {
+    type Err = tracing_subscriber::filter::ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let dir: Directive = s.parse()?;
+        Ok(SerializableDirective(dir))
+    }
+}
+
+impl std::fmt::Display for SerializableDirective {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Arbitrary for SerializableDirective {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        // there are much more complex EnvFilters we could try building if that seems
+        // worthwhile to explore
+        proptest::sample::select(vec!["info", "debug", "warn", "error", "off"])
+            .prop_map(|x| SerializableDirective::from_str(x).expect("valid Directive"))
+            .boxed()
+    }
+}
+
+impl serde::Serialize for SerializableDirective {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&format!("{}", self))
+    }
+}
+
+impl<'de> Deserialize<'de> for SerializableDirective {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Self::from_str(s.as_str()).map_err(|x| de::Error::custom(x.to_string()))
+    }
+}
 
 #[cfg(test)]
 mod test {
-    use crate::CloneableEnvFilter;
+    use crate::{CloneableEnvFilter, SerializableDirective};
     use std::str::FromStr;
+
+    // TODO(guswynn): we probably want to test round-tripping through the
+    // `RustType` impl as well
 
     #[mz_ore::test]
     fn roundtrips() {
@@ -132,6 +199,18 @@ mod test {
             format!(
                 "{}",
                 CloneableEnvFilter::from_str(&format!("{}", filter)).expect("valid")
+            )
+        );
+    }
+
+    #[mz_ore::test]
+    fn roundtrips_directive() {
+        let dir = SerializableDirective::from_str("abc=debug").expect("valid");
+        assert_eq!(
+            format!("{}", dir),
+            format!(
+                "{}",
+                SerializableDirective::from_str(&format!("{}", dir)).expect("valid")
             )
         );
     }

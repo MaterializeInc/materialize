@@ -183,6 +183,9 @@ pub fn tracing_config(config: &SystemVars) -> TracingParameters {
     TracingParameters {
         log_filter: Some(config.logging_filter()),
         opentelemetry_filter: Some(config.opentelemetry_filter()),
+        log_filter_defaults: config.logging_filter_defaults(),
+        opentelemetry_filter_defaults: config.opentelemetry_filter_defaults(),
+        sentry_filters: config.sentry_filters(),
     }
 }
 
