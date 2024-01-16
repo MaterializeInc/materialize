@@ -31,7 +31,7 @@ fn bench_id_allocator<A: IdAllocatorInner>(
 ) {
     let name = format!("id_allocator_{}_{initial_conns}_{bench_conns}", A::NAME);
     c.bench_function(&name, |b| {
-        let allocator = IdAllocator::<A>::new(1, 1 << 20);
+        let allocator = IdAllocator::<A>::new(1, 1 << 20, 0);
         let permanent = (0..initial_conns)
             .map(|_| allocator.alloc().unwrap())
             .collect::<Vec<_>>();

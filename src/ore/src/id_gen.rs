@@ -86,8 +86,9 @@ pub struct IdAllocator<A: IdAllocatorInner>(pub Arc<Mutex<A>>);
 pub trait IdAllocatorInner: std::fmt::Debug + Send {
     /// Name of the allocator.
     const NAME: &'static str;
-    /// Construct an allocator with the given range.
-    fn new(min: u32, max: u32) -> Self;
+    /// Construct an allocator with the given range. Returned ids will be OR'd with `mask`. `mask`
+    /// must not have any bits that could be set by a number <= `max`.
+    fn new(min: u32, max: u32, mask: u32) -> Self;
     /// Allocate a new id.
     fn alloc(&mut self) -> Option<u32>;
     /// Deallocate a used id, making it available for reuse.
@@ -100,19 +101,21 @@ pub struct IdAllocatorInnerBitSet {
     next: StdRng,
     min: u32,
     max: u32,
+    mask: u32,
     used: BitSet,
 }
 
 impl IdAllocatorInner for IdAllocatorInnerBitSet {
     const NAME: &'static str = "hibitset";
 
-    fn new(min: u32, max: u32) -> Self {
+    fn new(min: u32, max: u32, mask: u32) -> Self {
         let total = usize::cast_from(max - min);
         assert!(total < BitSet::BITS_PER_USIZE.pow(4));
         IdAllocatorInnerBitSet {
             next: StdRng::from_entropy(),
             min,
             max,
+            mask,
             used: BitSet::new(),
         }
     }
@@ -127,7 +130,11 @@ impl IdAllocatorInner for IdAllocatorInnerBitSet {
             // 64**4`.
             let stored = next - self.min;
             if !self.used.add(stored) {
-                return Some(next);
+                assert!(
+                    next & self.mask == 0,
+                    "chosen ID must not intersect with mask"
+                );
+                return Some(next | self.mask);
             }
             // Existing value, increment and try again. Wrap once we hit max back to min.
             next = if next == self.max { self.min } else { next + 1 };
@@ -140,6 +147,7 @@ impl IdAllocatorInner for IdAllocatorInnerBitSet {
     }
 
     fn remove(&mut self, id: u32) {
+        let id = (!self.mask) & id;
         let stored = id - self.min;
         self.used.remove(stored);
     }
@@ -148,9 +156,13 @@ impl IdAllocatorInner for IdAllocatorInnerBitSet {
 impl<A: IdAllocatorInner> IdAllocator<A> {
     /// Creates a new `IdAllocator` that will assign IDs between `min` and
     /// `max`, both inclusive.
-    pub fn new(min: u32, max: u32) -> IdAllocator<A> {
+    pub fn new(min: u32, max: u32, mask: u32) -> IdAllocator<A> {
         assert!(min <= max);
-        let inner = A::new(min, max);
+        if mask != 0 && max > 0 {
+            let mask_check = (1 << max.ilog2()) - 1;
+            assert_eq!(mask & mask_check, 0);
+        }
+        let inner = A::new(min, max, mask);
         IdAllocator(Arc::new(Mutex::new(inner)))
     }
 
@@ -316,10 +328,17 @@ mod tests {
         test_display::<A>();
         test_map_lookup::<A>();
         test_serialization::<A>();
+        test_mask::<A>();
+    }
+
+    fn test_mask<A: IdAllocatorInner>() {
+        let ida = IdAllocator::<A>::new(1, 1, 0xfff << 20);
+        let id = ida.alloc().unwrap();
+        assert_eq!(id.unhandled(), (0xfff << 20) | 1);
     }
 
     fn test_id_alloc<A: IdAllocatorInner>() {
-        let ida = IdAllocator::<A>::new(3, 5);
+        let ida = IdAllocator::<A>::new(3, 5, 0);
         let id3 = ida.alloc().unwrap();
         let id4 = ida.alloc().unwrap();
         let id5 = ida.alloc().unwrap();
@@ -342,19 +361,19 @@ mod tests {
     }
 
     fn test_static_id_sorting<A: IdAllocatorInner>() {
-        let ida = IdAllocator::<A>::new(0, 0);
+        let ida = IdAllocator::<A>::new(0, 0, 0);
         let id0 = ida.alloc().unwrap();
         let id1 = IdHandle::Static(1);
         assert!(id0 < id1);
 
-        let ida = IdAllocator::<A>::new(1, 1);
+        let ida = IdAllocator::<A>::new(1, 1, 0);
         let id0 = IdHandle::Static(0);
         let id1 = ida.alloc().unwrap();
         assert!(id0 < id1);
     }
 
     fn test_id_reuse<A: IdAllocatorInner>() {
-        let allocator = IdAllocator::<A>::new(10, 11);
+        let allocator = IdAllocator::<A>::new(10, 11, 0);
 
         let id_a = allocator.alloc().unwrap();
         let a = id_a.unhandled();
@@ -375,7 +394,7 @@ mod tests {
     }
 
     fn test_display<A: IdAllocatorInner>() {
-        let allocator = IdAllocator::<A>::new(65_000, 65_000);
+        let allocator = IdAllocator::<A>::new(65_000, 65_000, 0);
 
         let id_a = allocator.alloc().unwrap();
         assert_eq!(id_a.unhandled(), 65_000);
@@ -388,7 +407,7 @@ mod tests {
     }
 
     fn test_map_lookup<A: IdAllocatorInner>() {
-        let allocator = IdAllocator::<A>::new(99, 101);
+        let allocator = IdAllocator::<A>::new(99, 101, 0);
 
         let id_a = allocator.alloc().unwrap();
         let a = id_a.unhandled();
@@ -404,7 +423,7 @@ mod tests {
     }
 
     fn test_serialization<A: IdAllocatorInner>() {
-        let allocator = IdAllocator::<A>::new(42, 42);
+        let allocator = IdAllocator::<A>::new(42, 42, 0);
 
         let id_a = allocator.alloc().unwrap();
         assert_eq!(id_a.unhandled(), 42);

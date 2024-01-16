@@ -3338,3 +3338,24 @@ fn concurrent_cluster_drop() {
         "the transaction's active cluster has been dropped"
     );
 }
+
+// Test connection ID properties.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_connection_id() {
+    let harness = test_util::TestHarness::default();
+    let envid = harness.environment_id.organization_id().as_u128();
+    let server = harness.start().await;
+    let client = server.connect().await.unwrap();
+
+    let pid: i32 = client
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert!(pid > 0);
+    let envid_lower = u32::try_from(envid & 0xFFF).unwrap();
+    let pid = u32::from_le_bytes(pid.to_le_bytes());
+    let pid_envid = pid >> 19;
+    assert_eq!(envid_lower, pid_envid);
+}
