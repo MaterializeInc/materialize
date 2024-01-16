@@ -15,19 +15,22 @@ use differential_dataflow::{AsCollection, Collection};
 use futures::TryStreamExt;
 use mysql_async::prelude::Queryable;
 use mysql_async::{IsolationLevel, Row as MySqlRow, TxOpts};
-use mz_sql_parser::ast::display::AstDisplay;
+use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, ConnectLoop, Feedback, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp};
-use tracing::trace;
+use tracing::{trace, warn};
 
 use mz_mysql_util::{
     ensure_full_row_binlog_format, ensure_gtid_consistency, ensure_replication_commit_order,
     query_sys_var, GtidSet, SchemaRequest,
 };
 use mz_mysql_util::{schema_info, MySqlTableDesc};
+use mz_ore::cast::CastFrom;
+use mz_ore::result::ResultExt;
 use mz_repr::{Diff, GlobalId, Row};
+use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::UnresolvedItemName;
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_timely_util::builder_async::{
@@ -52,7 +55,11 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
     PressOnDropButton,
 ) {
     let mut builder =
-        AsyncOperatorBuilder::new(format!("MySqlSnapshot({})", config.id), scope.clone());
+        AsyncOperatorBuilder::new(format!("MySqlSnapshotReader({})", config.id), scope.clone());
+
+    let snapshot_leader_id = config.responsible_worker("snapshot_leader");
+    let is_snapshot_leader = config.worker_id == snapshot_leader_id;
+    let snapshot_leader_id = u64::cast_from(snapshot_leader_id);
 
     let (mut raw_handle, raw_data) = builder.new_output();
     let (mut rewinds_handle, rewinds) = builder.new_output();
@@ -68,14 +75,15 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
 
     // Broadcast a signal from the all workers that they have begun a transaction and that the
     // table lock held by the snapshot leader can be released
-    let (mut transaction_start_handle, transaction_start) = builder.new_output();
+    let (_, transaction_start) = builder.new_output();
     let (ts_feedback_handle, ts_feedback_data) = scope.feedback(Default::default());
-    let mut transaction_start_input = builder.new_disconnected_input(&ts_feedback_data, Pipeline);
+    let mut transaction_start_input = builder.new_disconnected_input(
+        &ts_feedback_data,
+        Exchange::new(move |_: &()| snapshot_leader_id),
+    );
     transaction_start
         .broadcast()
         .connect_loop(ts_feedback_handle);
-
-    let is_snapshot_leader = config.responsible_for("snapshot_leader");
 
     // A global view of all exports that need to be snapshot by all workers. Note that this affects
     // `reader_snapshot_table_info` but must be kept separate from it because each worker needs to
@@ -177,10 +185,9 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
             }
             *lock_start_cap_set = CapabilitySet::new();
 
-            // This worker has no tables to snapshot.
-            if reader_snapshot_table_info.is_empty() {
-                // Send a signal to the leader that this worker is okay with releasing the table locks
-                transaction_start_handle.give(&transaction_start_cap_set[0], ()).await;
+            // This non-leader worker has no tables to snapshot.
+            if !is_snapshot_leader && reader_snapshot_table_info.is_empty() {
+                // Drop the capability to indicate to the leader that we are okay with releasing the table locks
                 *transaction_start_cap_set = CapabilitySet::new();
                 return Ok(());
             }
@@ -213,38 +220,41 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
                 .with_consistent_snapshot(true)
                 .with_readonly(true);
             conn.start_transaction(tx_opts).await?;
+            // Set the session time zone to UTC so that we can read TIMESTAMP columns as UTC
+            // From https://dev.mysql.com/doc/refman/8.0/en/datetime.html: "MySQL converts TIMESTAMP values
+            // from the current time zone to UTC for storage, and back from UTC to the current time zone
+            // for retrieval. (This does not occur for other types such as DATETIME.)"
             conn.query_drop("set @@session.time_zone = '+00:00'")
                 .await?;
 
-            // Read the schemas of the tables we are snapshotting
-            // TODO: verify the schema matches the expected schema
-            let _ = schema_info(&mut conn, &SchemaRequest::Tables(reader_snapshot_table_info.keys().map(|f| (f.0[0].as_str(), f.0[1].as_str())).collect())).await?;
-
-            // Send a signal to the leader that we have started our transaction
-            transaction_start_handle.give(&transaction_start_cap_set[0], ()).await;
+            // Drop the capability to indicate to the leader that we have started our transaction
             *transaction_start_cap_set = CapabilitySet::new();
 
             trace!(%id, "timely-{worker_id} started transaction");
 
             if is_snapshot_leader {
                 // Wait for all workers to start their transactions so we can release the table locks
-                let mut received = 0;
-                while received < config.worker_count {
+                loop {
                     match transaction_start_input.next().await {
-                        Some(AsyncEvent::Data(_, _)) => received += 1,
-                        Some(AsyncEvent::Progress(_)) => (),
+                        Some(AsyncEvent::Data(_, _)) => (),
+                        Some(AsyncEvent::Progress(frontier)) => {
+                            if frontier.is_empty() {
+                                break;
+                            }
+                        },
                         None => panic!("transaction_start_input closed unexpectedly"),
                     }
                 }
 
+                // TODO(roshan): Figure out how to add a test-case that ensures we do release this lock
                 trace!(%id, "timely-{worker_id} releasing table locks");
-                if let Some(mut lock_conn) = lock_conn.take() {
-                    lock_conn.query_drop("UNLOCK TABLES").await?;
-                    lock_conn.disconnect().await?;
-                } else {
-                    panic!("lock_conn should have been created for the snapshot leader");
+                let mut lock_conn = lock_conn.expect("lock_conn should have been created for the snapshot leader");
+                lock_conn.query_drop("UNLOCK TABLES").await?;
+                lock_conn.disconnect().await?;
+                // This worker has nothing else to do
+                if reader_snapshot_table_info.is_empty() {
+                    return Ok(())
                 }
-                drop(lock_conn);
             }
 
             // We have established a snapshot GTID set so we can broadcast the rewind requests
@@ -255,16 +265,29 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
             }
             *rewind_cap_set = CapabilitySet::new();
 
+            // Read the schemas of the tables we are snapshotting
+            // TODO: verify the schema matches the expected schema
+            let _ = schema_info(&mut conn, &SchemaRequest::Tables(reader_snapshot_table_info.keys().map(|f| (f.0[0].as_str(), f.0[1].as_str())).collect())).await?;
+
             // Read the snapshot data from the tables
             let mut final_row = Row::default();
-            for (table, (output_index, table_desc)) in reader_snapshot_table_info {
+            'outer: for (table, (output_index, table_desc)) in reader_snapshot_table_info {
                 let query = format!("SELECT * FROM {}", table.to_ast_string());
                 trace!(%id, "timely-{worker_id} reading snapshot from table: {table}\n{table_desc:?}");
                 let mut results = conn.exec_stream(query, ()).await?;
                 while let Some(row) = results.try_next().await? {
-                    let mut row: MySqlRow = row;
-                    let packed_row = pack_mysql_row(&mut final_row, &mut row, &table_desc)?;
-                    raw_handle.give(&data_cap_set[0], ((output_index, Ok(packed_row)), TransactionId::minimum(), 1)).await;
+                    let row: MySqlRow = row;
+                    match pack_mysql_row(&mut final_row, row, &table_desc)? {
+                        Ok(packed_row) => {
+                            raw_handle.give(&data_cap_set[0], ((output_index, Ok(packed_row)), TransactionId::minimum(), 1)).await;
+                        }
+                        Err(err) => {
+                            // A definite error for this table means we should stop ingesting it
+                            raw_handle.give(&data_cap_set[0], ((output_index, Err(err.clone())), TransactionId::minimum(), 1)).await;
+                            warn!(%id, "timely-{worker_id} stopping snapshot of table {table} due to encoding error: {err:?}");
+                            continue 'outer;
+                        }
+                    }
                 }
             }
 
@@ -273,7 +296,9 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
     });
 
     // TODO: Split row decoding into a separate operator that can be distributed across all workers
-    let snapshot_updates = raw_data.as_collection();
+    let snapshot_updates = raw_data
+        .as_collection()
+        .map(move |(output_index, event)| (output_index, event.err_into()));
 
     let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
 

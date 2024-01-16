@@ -15,8 +15,10 @@ use std::io;
 use std::rc::Rc;
 
 use differential_dataflow::Collection;
+use itertools::Itertools;
 use mysql_async::Row as MySqlRow;
-use mysql_common::value::convert::FromValue;
+use mysql_common::value::convert::from_value;
+use mysql_common::Value;
 use mz_mysql_util::MySqlTableDesc;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::Concat;
@@ -65,7 +67,7 @@ impl SourceRender for MySqlSourceConnection {
         Stream<G, HealthStatusMessage>,
         Vec<PressOnDropButton>,
     ) {
-        // Determined which collections need to be snapshot and which already have been.
+        // Determine which collections need to be snapshot and which already have been.
         let subsource_resume_uppers: BTreeMap<_, _> = config
             .source_resume_uppers
             .iter()
@@ -177,8 +179,12 @@ pub enum TransientError {
 /// A definite error that always ends up in the collection of a specific table.
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
 pub enum DefiniteError {
+    #[error("received a null value in a non-null column: {0}")]
+    NullValueInNonNullColumn(String),
     #[error("mysql server does not have the binlog available at the requested gtid set")]
     BinlogNotAvailable,
+    #[error("mysql server binlogs were rotated to {0} past our resume point of {1}")]
+    BinlogCompactedPastResumePoint(String, String),
     #[error("server gtid error: {0}")]
     ServerGTIDError(String),
 }
@@ -210,94 +216,64 @@ pub(crate) fn table_name(
     ]))
 }
 
-fn datum_from_scalar<'a, T>(row: &'a mut MySqlRow, col_index: usize, nullable: bool) -> Datum
-where
-    T: FromValue,
-    Datum<'a>: std::convert::From<T> + std::convert::From<Option<T>>,
-{
-    if nullable {
-        Datum::from(row.take::<Option<T>, _>(col_index).unwrap())
-    } else {
-        Datum::from(row.take::<T, _>(col_index).unwrap())
-    }
-}
-
-fn datum_from_string<'a>(
-    temp: &'a mut Vec<String>,
-    row: &mut MySqlRow,
-    col_index: usize,
-    nullable: bool,
-) -> Datum<'a> {
-    if nullable {
-        if let Some(data) = row.take::<Option<String>, _>(col_index).unwrap() {
-            temp.push(data);
-            Datum::from(temp.last().unwrap().as_str())
-        } else {
-            Datum::Null
-        }
-    } else {
-        let data = row.take::<String, _>(col_index).unwrap();
-        temp.push(data);
-        Datum::from(temp.last().unwrap().as_str())
-    }
-}
-
-fn datum_from_bytes<'a>(
-    temp: &'a mut Vec<Vec<u8>>,
-    row: &mut MySqlRow,
-    col_index: usize,
-    nullable: bool,
-) -> Datum<'a> {
-    if nullable {
-        if let Some(data) = row.take::<Option<Vec<u8>>, _>(col_index).unwrap() {
-            temp.push(data);
-            Datum::from(temp.last().unwrap().as_slice())
-        } else {
-            Datum::Null
-        }
-    } else {
-        let data = row.take::<Vec<u8>, _>(col_index).unwrap();
-        temp.push(data);
-        Datum::from(temp.last().unwrap().as_slice())
-    }
-}
-
 pub(crate) fn pack_mysql_row(
     row_container: &mut Row,
-    row: &mut MySqlRow,
+    row: MySqlRow,
     table_desc: &MySqlTableDesc,
-) -> Result<Row, TransientError> {
+) -> Result<Result<Row, DefiniteError>, TransientError> {
     let mut packer = row_container.packer();
     let mut temp_bytes = vec![];
     let mut temp_strs = vec![];
-    for (col_index, col_desc) in table_desc.columns.iter().enumerate() {
-        let nullable = col_desc.column_type.nullable;
-        let datum = match col_desc.column_type.scalar_type {
-            ScalarType::Bool => datum_from_scalar::<bool>(row, col_index, nullable),
-            ScalarType::UInt16 => datum_from_scalar::<u16>(row, col_index, nullable),
-            ScalarType::Int16 => datum_from_scalar::<i16>(row, col_index, nullable),
-            ScalarType::UInt32 => datum_from_scalar::<u32>(row, col_index, nullable),
-            ScalarType::Int32 => datum_from_scalar::<i32>(row, col_index, nullable),
-            ScalarType::UInt64 => datum_from_scalar::<u64>(row, col_index, nullable),
-            ScalarType::Int64 => datum_from_scalar::<i64>(row, col_index, nullable),
-            ScalarType::Float32 => datum_from_scalar::<f32>(row, col_index, nullable),
-            ScalarType::Float64 => datum_from_scalar::<f64>(row, col_index, nullable),
-            ScalarType::Char { length: _ } => {
-                datum_from_string(&mut temp_strs, row, col_index, nullable)
+    let values = row.unwrap();
+
+    for (col_desc, value) in table_desc.columns.iter().zip_eq(values) {
+        let datum = match value {
+            Value::NULL => {
+                if col_desc.column_type.nullable {
+                    Datum::Null
+                } else {
+                    // produce definite error and stop ingesting this table
+                    return Ok(Err(DefiniteError::NullValueInNonNullColumn(
+                        col_desc.name.clone(),
+                    )));
+                }
             }
-            ScalarType::VarChar { max_length: _ } => {
-                datum_from_string(&mut temp_strs, row, col_index, nullable)
-            }
-            ScalarType::String => datum_from_string(&mut temp_strs, row, col_index, nullable),
-            ScalarType::Bytes => datum_from_bytes(&mut temp_bytes, row, col_index, nullable),
-            // TODO(roshan): IMPLEMENT OTHER TYPES
-            ref data_type => Err(TransientError::UnsupportedDataType(format!(
-                "{:?}",
-                data_type
-            )))?,
+            value => match &col_desc.column_type.scalar_type {
+                ScalarType::Bool => Datum::from(from_value::<bool>(value)),
+                ScalarType::UInt16 => Datum::from(from_value::<u16>(value)),
+                ScalarType::Int16 => Datum::from(from_value::<i16>(value)),
+                ScalarType::UInt32 => Datum::from(from_value::<u32>(value)),
+                ScalarType::Int32 => Datum::from(from_value::<i32>(value)),
+                ScalarType::UInt64 => Datum::from(from_value::<u64>(value)),
+                ScalarType::Int64 => Datum::from(from_value::<i64>(value)),
+                ScalarType::Float32 => Datum::from(from_value::<f32>(value)),
+                ScalarType::Float64 => Datum::from(from_value::<f64>(value)),
+                ScalarType::Char { length: _ } => {
+                    temp_strs.push(from_value::<String>(value));
+                    Datum::from(temp_strs.last().unwrap().as_str())
+                }
+                ScalarType::VarChar { max_length: _ } => {
+                    temp_strs.push(from_value::<String>(value));
+                    Datum::from(temp_strs.last().unwrap().as_str())
+                }
+                ScalarType::String => {
+                    temp_strs.push(from_value::<String>(value));
+                    Datum::from(temp_strs.last().unwrap().as_str())
+                }
+                ScalarType::Bytes => {
+                    let data = from_value::<Vec<u8>>(value);
+                    temp_bytes.push(data);
+                    Datum::from(temp_bytes.last().unwrap().as_slice())
+                }
+                // TODO(roshan): IMPLEMENT OTHER TYPES
+                data_type => Err(TransientError::UnsupportedDataType(format!(
+                    "{:?}",
+                    data_type
+                )))?,
+            },
         };
         packer.push(datum);
     }
 
-    Ok(row_container.clone())
+    Ok(Ok(row_container.clone()))
 }
