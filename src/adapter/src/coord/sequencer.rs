@@ -219,7 +219,10 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::CopyTo(plan) => {
-                    self.sequence_copy_to(ctx, plan, target_cluster).await;
+                    let result = self
+                        .sequence_copy_to(ctx.session(), plan, target_cluster)
+                        .await;
+                    ctx.retire(result);
                 }
                 Plan::DropObjects(plan) => {
                     let result = self.sequence_drop_objects(ctx.session_mut(), plan).await;

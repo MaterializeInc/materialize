@@ -1,0 +1,60 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for AWS connections.
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_aws_connection = true;
+ALTER SYSTEM SET enable_copy_to_url = true;
+
+# Prepare table data
+> CREATE TABLE t (a int);
+> INSERT INTO t VALUES (1);
+
+> CREATE CONNECTION aws_conn
+  TO AWS (ASSUME ROLE ARN 'assume-role', ASSUME ROLE SESSION NAME 'session-name');
+
+! COPY t TO 's3://path/to/dir';
+contains:AWS CONNECTION is required for COPY ... TO <url>
+
+! COPY t TO 's3://path/to/dir'
+  WITH (
+    AWS CONNECTION = aws_conn
+  );
+contains:Only CSV format is supported for COPY ... TO <url>
+
+! COPY t TO 's3://path/to/dir'
+  WITH (
+    AWS CONNECTION = aws_conn,
+    FORMAT = 'binary'
+  );
+contains:Only CSV format is supported for COPY ... TO <url>
+
+! COPY t TO '/path/'
+  WITH (
+    AWS CONNECTION = aws_conn,
+    FORMAT = 'csv'
+  );
+contains:only 's3://...' urls are supported
+
+! COPY t TO NULL
+  WITH (
+    AWS CONNECTION = aws_conn,
+    FORMAT = 'csv'
+  );
+contains:url value can not be null
+
+# This will be updated once the feature is fully implemented
+! COPY t TO 's3://path/to/' || repeat('dir/', 2)
+  WITH (
+    AWS CONNECTION = aws_conn,
+    MAX FILE SIZE = "1000",
+    FORMAT = 'csv'
+  );
+contains:internal error: COPY TO 's3://path/to/dir/dir/' is not yet implemented

@@ -3515,6 +3515,7 @@ dependencies = [
  "futures",
  "governor",
  "hex",
+ "http",
  "itertools",
  "launchdarkly-server-sdk",
  "maplit",
