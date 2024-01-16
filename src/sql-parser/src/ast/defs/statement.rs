@@ -326,7 +326,7 @@ impl_display!(CopyDirection);
 pub enum CopyTarget<T: AstInfo> {
     Stdin,
     Stdout,
-    S3(Expr<T>),
+    Url(Expr<T>),
 }
 
 impl<T: AstInfo> AstDisplay for CopyTarget<T> {
@@ -334,7 +334,7 @@ impl<T: AstInfo> AstDisplay for CopyTarget<T> {
         match self {
             CopyTarget::Stdin => f.write_str("STDIN"),
             CopyTarget::Stdout => f.write_str("STDOUT"),
-            CopyTarget::S3(url_expr) => f.write_node(url_expr),
+            CopyTarget::Url(url_expr) => f.write_node(url_expr),
         }
     }
 }

@@ -789,8 +789,10 @@ fn plan_copy_to(
         null: Cow::from(""),
         header: false,
     });
-    let mut to = to.clone();
-    transform_ast::transform(scx, &mut to)?;
+
+    // Converting the to expr to a MirScalarExpr
+    let mut to_expr = to.clone();
+    transform_ast::transform(scx, &mut to_expr)?;
     let relation_type = RelationDesc::empty();
     let ecx = &ExprContext {
         qcx: &QueryContext::root(scx, QueryLifetime::OneShot),
@@ -803,7 +805,7 @@ fn plan_copy_to(
         allow_windows: false,
     };
 
-    let to = plan_expr(ecx, &to)?
+    let to = plan_expr(ecx, &to_expr)?
         .type_as_any(ecx)?
         .lower_uncorrelated()?;
 
@@ -899,7 +901,8 @@ generate_extracted_config!(
     (Quote, String),
     (Header, bool),
     (AwsConnection, UnresolvedItemName),
-    (MaxFileSize, String) // TODO(mouli): Fix after Bytes is merged
+    // TODO(mouli): Use ByteSize https://github.com/MaterializeInc/materialize/pull/24252 is merged
+    (MaxFileSize, String)
 );
 
 pub fn plan_copy(
@@ -942,7 +945,7 @@ pub fn plan_copy(
             }
             _ => sql_bail!("COPY FROM {} not supported", target),
         },
-        (CopyDirection::To, CopyTarget::S3(url_expr)) => {
+        (CopyDirection::To, CopyTarget::Url(url_expr)) => {
             scx.require_feature_flag(&vars::ENABLE_COPY_TO_S3)?;
 
             let from = match relation {

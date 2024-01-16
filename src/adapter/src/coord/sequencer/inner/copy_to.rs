@@ -10,7 +10,7 @@
 use mz_sql::plan::{self};
 
 use crate::coord::{Coordinator, TargetCluster};
-use crate::ExecuteContext;
+use crate::{AdapterError, ExecuteContext};
 
 impl Coordinator {
     #[tracing::instrument(level = "debug", skip(self))]
@@ -20,6 +20,9 @@ impl Coordinator {
         plan: plan::CopyToPlan,
         target_cluster: TargetCluster,
     ) {
-        todo!("implement sequence_copy_to")
+        let result = Err(AdapterError::Internal(
+            "COPY TO <url> is not yet implemented".to_string(),
+        ));
+        ctx.retire(result);
     }
 }
