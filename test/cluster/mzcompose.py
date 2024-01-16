@@ -76,12 +76,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for i, name in enumerate(c.workflows):
         # incident-70 requires more memory, runs in separate CI step
         # concurrent-connections is too flaky
-        # blue-green-deployment is too flaky (again)
         if name in (
             "default",
             "test-incident-70",
             "test-concurrent-connections",
-            "blue-green-deployment",
         ):
             continue
         if shard is None or shard_count is None or i % int(shard_count) == shard:
