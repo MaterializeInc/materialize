@@ -30,7 +30,7 @@ use mz_adapter::load_remote_system_parameters;
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
 use mz_build_info::{build_info, BuildInfo};
 use mz_catalog::config::ClusterReplicaSizeMap;
-use mz_catalog::durable::{BootstrapArgs, OpenableDurableCatalogState, StashConfig};
+use mz_catalog::durable::{BootstrapArgs, CatalogError, OpenableDurableCatalogState, StashConfig};
 use mz_cloud_resources::CloudResourceController;
 use mz_controller::ControllerConfig;
 use mz_frontegg_auth::Authentication as FronteggAuthentication;
@@ -437,6 +437,23 @@ impl Listeners {
                     .await
                 {
                     Ok(adapter_storage) => Box::new(adapter_storage).expire().await,
+                    Err(CatalogError::Durable(e)) if e.can_recover_with_write_mode() => {
+                        // This is theoretically possible if catalog implementation A is
+                        // initialized, implementation B is uninitialized, and we are going to
+                        // migrate from A to B. The current code avoids this by always
+                        // initializing all implementations, regardless of the target
+                        // implementation. Still it's easy to protect against this and worth it in
+                        // case things change in the future.
+                        tracing::warn!("Unable to perform upgrade test because the target implementation is uninitialized");
+                        openable_adapter_storage = catalog_opener(
+                            &config.catalog_config,
+                            &config.controller,
+                            &config.environment_id,
+                        )
+                        .boxed()
+                        .await?;
+                        break 'leader_promotion;
+                    }
                     Err(e) => {
                         return Err(
                             anyhow!(e).context("Catalog upgrade would have failed with this error")
