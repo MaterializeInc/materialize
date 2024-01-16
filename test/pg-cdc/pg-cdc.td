@@ -148,9 +148,7 @@ CREATE PUBLICATION another_publication FOR TABLE another_schema.another_table;
 
 #
 # Test that slots created for replication sources are deleted on DROP
-#
-# TODO(def-) Reenable when #24357 is fixed
-#$ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
+$ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
 
 # Sneak in a test for pg_source_snapshot_statement_timeout
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
