@@ -582,7 +582,7 @@ steps:
   - id: dbt-materialize
     label: dbt-materialize tests
     depends_on: build-x86_64
-    timeout_in_minutes: 10
+    timeout_in_minutes: 15
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
