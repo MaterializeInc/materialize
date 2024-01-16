@@ -84,7 +84,7 @@ def workflow_default(c: Composition) -> None:
         # Assert that the default max_result_size is served when sync is disabled.
         with c.override(Materialized()):
             c.up("materialized")
-            c.testdrive("\n".join(["> SHOW max_result_size", "1073741824"]))
+            c.testdrive("\n".join(["> SHOW max_result_size", "1GB"]))
             c.stop("materialized")
 
         # Create a test feature flag unique for this test run. Based on the
@@ -120,14 +120,14 @@ def workflow_default(c: Composition) -> None:
             )
         ):
             c.up("materialized")
-            c.testdrive("\n".join(["> SHOW max_result_size", "2147483648"]))
+            c.testdrive("\n".join(["> SHOW max_result_size", "2GB"]))
             c.stop("materialized")
 
         # Assert that the last value is persisted and available upon restart,
         # even if the parameter sync loop is not running.
         with c.override(Materialized()):
             c.up("materialized")
-            c.testdrive("\n".join(["> SHOW max_result_size", "2147483648"]))
+            c.testdrive("\n".join(["> SHOW max_result_size", "2GB"]))
             c.stop("materialized")
 
         # Restart Materialized with the parameter sync loop running.
@@ -146,7 +146,7 @@ def workflow_default(c: Composition) -> None:
         )
 
         # Assert that max_result_size is 4 GiB - 1 byte.
-        c.testdrive("\n".join(["> SHOW max_result_size", "4294967295"]))
+        c.testdrive("\n".join(["> SHOW max_result_size", "4294967295B"]))
 
         # Add a rule that targets the current organization with the 3GiB
         # variant. Even though we don't delete the above rule (replicated as
@@ -169,7 +169,7 @@ def workflow_default(c: Composition) -> None:
         )
 
         # Assert that max_result_size is 3 GiB.
-        c.testdrive("\n".join(["> SHOW max_result_size", "3221225472"]))
+        c.testdrive("\n".join(["> SHOW max_result_size", "3GB"]))
 
         # Assert that we can turn off synchronization
         def sys(command: str) -> None:
@@ -196,10 +196,10 @@ def workflow_default(c: Composition) -> None:
         #     The new value should not be replaced, even after 15 seconds
         sys("ALTER SYSTEM SET max_result_size=1234")
         sleep(15)
-        c.testdrive("\n".join(["> SHOW max_result_size", "1234"]))
+        c.testdrive("\n".join(["> SHOW max_result_size", "1234B"]))
         # (5) The value should be reset after we turn the kill switch back off
         sys("ALTER SYSTEM SET enable_launchdarkly=on")
-        c.testdrive("\n".join(["> SHOW max_result_size", "3221225472"]))
+        c.testdrive("\n".join(["> SHOW max_result_size", "3GB"]))
 
         # Remove custom targeting.
         ld_client.update_targeting(
@@ -209,7 +209,7 @@ def workflow_default(c: Composition) -> None:
 
         # Assert that max_result_size is 2 GiB (the default when targeting is
         # turned on).
-        c.testdrive("\n".join(["> SHOW max_result_size", "2147483648"]))
+        c.testdrive("\n".join(["> SHOW max_result_size", "2GB"]))
 
         # Disable targeting.
         ld_client.update_targeting(
@@ -219,7 +219,7 @@ def workflow_default(c: Composition) -> None:
 
         # Assert that max_result_size is 1 GiB (the default when targeting is
         # turned off).
-        c.testdrive("\n".join(["> SHOW max_result_size", "1073741824"]))
+        c.testdrive("\n".join(["> SHOW max_result_size", "1GB"]))
         c.stop("materialized")
     except launchdarkly_api.ApiException as e:
         raise UIError(
