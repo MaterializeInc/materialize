@@ -17,6 +17,8 @@ use std::rc::Rc;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
 use differential_dataflow::{AsCollection, Collection};
 use mz_compute_types::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
@@ -33,12 +35,12 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::Scope;
 
-use crate::extensions::arrange::{KeyCollection, MzArrange};
+use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::Pairer;
-use crate::row_spine::RowValSpine;
+use crate::row_spine::{DatumSeq, RowValSpine};
 use crate::typedefs::{KeyBatcher, RowRowSpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
@@ -365,9 +367,16 @@ where
             (hash_key, row)
         });
         let (oks, errs) = if validating {
-            let stage = build_topk_negated_stage::<S, Result<Row, Row>>(
+            let stage = build_topk_negated_stage::<S, RowValSpine<Result<Row, Row>, _, _>>(
                 &input, order_key, offset, limit, arity,
-            );
+            )
+            .as_collection(|k, v| {
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
+                let mut row_packer = row_builder.packer();
+                row_packer.extend(k);
+                (row_builder.clone(), v.clone())
+            });
 
             let error_logger = self.error_logger();
             let (oks, errs) =
@@ -388,7 +397,19 @@ where
             (oks, Some(errs))
         } else {
             (
-                build_topk_negated_stage::<S, Row>(&input, order_key, offset, limit, arity),
+                build_topk_negated_stage::<S, RowRowSpine<_, _>>(
+                    &input, order_key, offset, limit, arity,
+                )
+                .as_collection(|k, v| {
+                    let binding = SharedRow::get();
+                    let mut row_builder = binding.borrow_mut();
+                    let mut row_packer = row_builder.packer();
+                    row_packer.extend(k);
+                    let key = row_builder.clone();
+                    row_packer = row_builder.packer();
+                    row_packer.extend(v);
+                    (key, row_builder.clone())
+                }),
                 None,
             )
         };
@@ -469,17 +490,23 @@ where
     }
 }
 
-fn build_topk_negated_stage<G, R>(
+fn build_topk_negated_stage<G, Tr>(
     input: &Collection<G, (Row, Row), Diff>,
     order_key: Vec<mz_expr::ColumnOrder>,
     offset: usize,
     limit: Option<mz_expr::MirScalarExpr>,
     arity: usize,
-) -> Collection<G, (Row, R), Diff>
+) -> Arranged<G, TraceAgent<Tr>>
 where
     G: Scope,
     G::Timestamp: Lattice + Columnation,
-    R: MaybeValidatingRow<Row, Row>,
+    Tr::ValOwned: MaybeValidatingRow<Row, Row>,
+    Tr: Trace
+        + for<'a> TraceReader<Key<'a> = DatumSeq<'a>, Time = G::Timestamp, Diff = Diff>
+        + 'static,
+    Tr::Batch: Batch,
+    Tr::Batcher: Batcher<Item = ((Row, Tr::ValOwned), G::Timestamp, Diff)>,
+    Arranged<G, TraceAgent<Tr>>: ArrangementSize,
 {
     let mut datum_vec = mz_repr::DatumVec::new();
 
@@ -489,8 +516,8 @@ where
     // built-in view mz_internal.mz_expected_group_size_advice.
     input
         .mz_arrange::<RowRowSpine<_, _>>("Arranged TopK input")
-        .mz_reduce_abelian::<_, RowValSpine<_, _, _>>("Reduced TopK input", {
-            move |mut hash_key, source, target: &mut Vec<(R, Diff)>| {
+        .mz_reduce_abelian::<_, Tr>("Reduced TopK input", {
+            move |mut hash_key, source, target: &mut Vec<(Tr::ValOwned, Diff)>| {
                 // Unpack the limit, either into an integer literal or an expression to evaluate.
                 let limit: Option<i64> = limit.as_ref().map(|l| {
                     if let Some(l) = l.as_literal_int64() {
@@ -518,7 +545,7 @@ where
                 let binding = SharedRow::get();
                 let mut row_builder = binding.borrow_mut();
 
-                if let Some(err) = R::into_error() {
+                if let Some(err) = Tr::ValOwned::into_error() {
                     for (datums, diff) in source.iter() {
                         if diff.is_positive() {
                             continue;
@@ -544,7 +571,7 @@ where
                 target.reserve(source.len());
                 for (datums, diff) in source.iter() {
                     row_builder.packer().extend(*datums);
-                    target.push((R::ok(row_builder.clone()), diff.clone()));
+                    target.push((Tr::ValOwned::ok(row_builder.clone()), diff.clone()));
                 }
                 // local copies that may count down to zero.
                 let mut offset = offset;
@@ -595,17 +622,10 @@ where
                         // Emit retractions for the elements actually part of
                         // the set of TopK elements.
                         row_builder.packer().extend(datums);
-                        target.push((R::ok(row_builder.clone()), -diff));
+                        target.push((Tr::ValOwned::ok(row_builder.clone()), -diff));
                     }
                 }
             }
-        })
-        .as_collection(|k, v| {
-            let binding = SharedRow::get();
-            let mut row_builder = binding.borrow_mut();
-            let mut row_packer = row_builder.packer();
-            row_packer.extend(k);
-            (row_builder.clone(), v.clone())
         })
 }
 
