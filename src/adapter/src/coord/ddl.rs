@@ -606,7 +606,7 @@ impl Coordinator {
                     for (config, slot_name) in replication_slots_to_drop {
                         // Try to drop the replication slots, but give up after a while.
                         let _ = Retry::default()
-                            .max_duration(Duration::from_secs(30))
+                            .max_duration(Duration::from_secs(60))
                             .retry_async(|_state| async {
                                 mz_postgres_util::drop_replication_slots(
                                     &ssh_tunnel_manager,
