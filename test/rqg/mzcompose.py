@@ -32,7 +32,10 @@ class Dataset(Enum):
             case Dataset.SIMPLE:
                 return ["simple.sql"]
             case Dataset.DBT3:
-                return ["dbt3-ddl.sql", "dbt3-s0.0001.dump"]
+                # With Postgres, CREATE MATERIALZIED VIEW from dbt3-ddl.sql will produce
+                # a view thats is empty unless REFRESH MATERIALIZED VIEW from dbt3-ddl-refresh-mvs.sql
+                # is also run after the data has been loaded by dbt3-s0.0001.dump
+                return ["dbt3-ddl.sql", "dbt3-s0.0001.dump", "dbt3-ddl-refresh-mvs.sql"]
             case _:
                 assert False
 
