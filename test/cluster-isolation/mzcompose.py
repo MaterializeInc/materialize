@@ -121,6 +121,10 @@ def validate(c: Composition) -> None:
     # Validate that cluster2 continues to operate
     c.testdrive(
         """
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_logical_compaction_window = true;
+
 # Dataflows
 
 $ set-regex match=\\d{13} replacement=<TIMESTAMP>
