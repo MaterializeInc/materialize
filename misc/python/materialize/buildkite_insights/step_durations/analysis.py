@@ -220,7 +220,9 @@ if __name__ == "__main__":
     parser.add_argument("--build-step-key", default=None, type=str)
     parser.add_argument("--no-fetch", action="store_true")
     parser.add_argument("--max-fetches", default=5, type=int)
-    parser.add_argument("--branch", default="main", type=str)
+    parser.add_argument(
+        "--branch", default="main", type=str, help="Use '*' for all branches"
+    )
     parser.add_argument(
         "--build-state",
         default=None,
@@ -240,7 +242,7 @@ if __name__ == "__main__":
         args.build_step_key,
         args.no_fetch,
         args.max_fetches,
-        args.branch,
+        args.branch if args.branch != "*" else None,
         args.build_state,
         args.output_type,
     )
