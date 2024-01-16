@@ -50,6 +50,13 @@ contains:only 's3://...' urls are supported
   );
 contains:url value can not be null
 
+! COPY (SELECT * FROM t ORDER BY 1) TO NULL
+  WITH (
+    AWS CONNECTION = aws_conn,
+    FORMAT = 'csv'
+  );
+contains:ORDER BY is not supported in SELECT query for COPY statements
+
 # This will be updated once the feature is fully implemented
 ! COPY t TO 's3://path/to/' || repeat('dir/', 2)
   WITH (
