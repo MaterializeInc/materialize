@@ -24,6 +24,7 @@ use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::stats::SnapshotStats;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::ShardId;
+use mz_persist_txn::txn_read::DataSnapshot;
 use mz_persist_txn::txns::{Tidy, TxnsHandle};
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, TimestampManipulation};
@@ -52,13 +53,27 @@ pub struct PersistReadWorker<T: Timestamp + Lattice + Codec64> {
     tx: UnboundedSender<(tracing::Span, PersistReadWorkerCmd<T>)>,
 }
 
+#[derive(Debug)]
+pub(crate) enum SnapshotStatsAsOf<T: Timestamp + Lattice + Codec64> {
+    /// Stats for a shard with an "eager" upper (one that continually advances
+    /// as time passes, even if no writes are coming in).
+    Direct(Antichain<T>),
+    /// Stats for a shard with a "lazy" upper (one that only physically advances
+    /// in response to writes).
+    Txns(DataSnapshot<T>),
+}
+
 /// Commands for [PersistReadWorker].
 #[derive(Debug)]
 enum PersistReadWorkerCmd<T: Timestamp + Lattice + Codec64> {
     Register(GlobalId, SinceHandle<SourceData, (), T, Diff, PersistEpoch>),
     Update(GlobalId, SinceHandle<SourceData, (), T, Diff, PersistEpoch>),
     Downgrade(BTreeMap<GlobalId, Antichain<T>>),
-    SnapshotStats(GlobalId, Antichain<T>, oneshot::Sender<SnapshotStatsRes<T>>),
+    SnapshotStats(
+        GlobalId,
+        SnapshotStatsAsOf<T>,
+        oneshot::Sender<SnapshotStatsRes<T>>,
+    ),
 }
 
 /// A newtype wrapper to hang a Debug impl off of.
@@ -70,7 +85,7 @@ impl<T: Debug> Debug for SnapshotStatsRes<T> {
     }
 }
 
-impl<T: Timestamp + Lattice + Codec64> PersistReadWorker<T> {
+impl<T: Timestamp + Lattice + TotalOrder + Codec64> PersistReadWorker<T> {
     pub(crate) fn new() -> Self {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(tracing::Span, _)>();
 
@@ -110,10 +125,22 @@ impl<T: Timestamp + Lattice + Codec64> PersistReadWorker<T> {
                             // future to the caller and await it there.
                             let res = match since_handles.get(&id) {
                                 Some(x) => {
-                                    let fut = x.snapshot_stats(as_of).map(move |x| {
-                                        x.map_err(|_| StorageError::ReadBeforeSince(id))
-                                    });
-                                    SnapshotStatsRes(Box::pin(fut))
+                                    let fut: BoxFuture<
+                                        'static,
+                                        Result<SnapshotStats<T>, StorageError>,
+                                    > = match as_of {
+                                        SnapshotStatsAsOf::Direct(as_of) => {
+                                            Box::pin(x.snapshot_stats(as_of).map(move |x| {
+                                                x.map_err(|_| StorageError::ReadBeforeSince(id))
+                                            }))
+                                        }
+                                        SnapshotStatsAsOf::Txns(data_snapshot) => Box::pin(
+                                            data_snapshot.snapshot_stats(x).map(move |x| {
+                                                x.map_err(|_| StorageError::ReadBeforeSince(id))
+                                            }),
+                                        ),
+                                    };
+                                    SnapshotStatsRes(fut)
                                 }
                                 None => SnapshotStatsRes(Box::pin(futures::future::ready(Err(
                                     StorageError::IdentifierMissing(id),
@@ -206,7 +233,7 @@ impl<T: Timestamp + Lattice + Codec64> PersistReadWorker<T> {
     pub(crate) async fn snapshot_stats(
         &self,
         id: GlobalId,
-        as_of: Antichain<T>,
+        as_of: SnapshotStatsAsOf<T>,
     ) -> Result<SnapshotStats<T>, StorageError> {
         // TODO: Pull this out of PersistReadWorker. Unlike the other methods,
         // the caller of this one drives it to completion.
@@ -1117,15 +1144,24 @@ mod tests {
 
         // No stats for unknown GlobalId.
         let stats = worker
-            .snapshot_stats(GlobalId::User(2), Antichain::from_elem(0))
+            .snapshot_stats(
+                GlobalId::User(2),
+                SnapshotStatsAsOf::Direct(Antichain::from_elem(0)),
+            )
             .await;
         assert!(stats.is_err());
 
         // Stats don't resolve for as_of past the upper.
-        let stats_fut = worker.snapshot_stats(GlobalId::User(1), Antichain::from_elem(1));
+        let stats_fut = worker.snapshot_stats(
+            GlobalId::User(1),
+            SnapshotStatsAsOf::Direct(Antichain::from_elem(1)),
+        );
         assert!(stats_fut.now_or_never().is_none());
         // Call it again because now_or_never consumed our future and it's not clone-able.
-        let stats_ts1_fut = worker.snapshot_stats(GlobalId::User(1), Antichain::from_elem(1));
+        let stats_ts1_fut = worker.snapshot_stats(
+            GlobalId::User(1),
+            SnapshotStatsAsOf::Direct(Antichain::from_elem(1)),
+        );
 
         // Write some data.
         let data = ((SourceData(Ok(Row::default())), ()), 0u64, 1i64);
@@ -1137,7 +1173,10 @@ mod tests {
 
         // Verify that we can resolve stats for ts 0 while the ts 1 stats call is outstanding.
         let stats = worker
-            .snapshot_stats(GlobalId::User(1), Antichain::from_elem(0))
+            .snapshot_stats(
+                GlobalId::User(1),
+                SnapshotStatsAsOf::Direct(Antichain::from_elem(0)),
+            )
             .await
             .unwrap();
         assert_eq!(stats.num_updates, 1);
