@@ -79,6 +79,9 @@ class MaterializeNonRemote(Endpoint):
     def host(self) -> str:
         return "localhost"
 
+    def internal_host(self) -> str:
+        return "localhost"
+
     def user(self) -> str:
         return "materialize"
 
@@ -90,7 +93,7 @@ class MaterializeNonRemote(Endpoint):
 
     def lift_limits(self) -> None:
         priv_conn = pg8000.connect(
-            host=self.host(), user="mz_system", port=self.internal_port()
+            host=self.internal_host(), user="mz_system", port=self.internal_port()
         )
         priv_conn.autocommit = True
         priv_cursor = priv_conn.cursor()
