@@ -270,6 +270,10 @@ mod tests {
         assert_equivalent("1073741824.0", "1GB");
         assert_equivalent("1073741824.1", "1GB");
         assert_equivalent("1073741824.9", "1073741825B");
+        assert_equivalent("2147483648", "2GB");
+        assert_equivalent("3221225472", "3GB");
+        assert_equivalent("4294967296", "4GB");
+        assert_equivalent("4294967295", "4294967295B");
         assert_equivalent("1024.1", "1kB");
         assert_equivalent("1024.9", "1025B");
         assert_equivalent("1024.1MB", "1048678kB");
