@@ -37,8 +37,8 @@ class UnifiedCluster(Check):
                   IN CLUSTER shared_cluster_storage_first
                   FROM LOAD GENERATOR COUNTER (SCALE FACTOR 0.01)
 
-                > CREATE MATERIALIZED VIEW shared_cluster_compute_first_mv WITH (RETAIN HISTORY FOR '30s')
-                  IN CLUSTER shared_cluster_compute_first
+                > CREATE MATERIALIZED VIEW shared_cluster_compute_first_mv
+                  IN CLUSTER shared_cluster_compute_first WITH (RETAIN HISTORY FOR '30s')
                   AS SELECT COUNT(*) AS cnt FROM shared_cluster_storage_first_source
 
                 > CREATE DEFAULT INDEX
@@ -54,8 +54,8 @@ class UnifiedCluster(Check):
                   IN CLUSTER shared_cluster_compute_first
                   FROM LOAD GENERATOR COUNTER (SCALE FACTOR 0.01)
 
-                > CREATE MATERIALIZED VIEW shared_cluster_storage_first_mv WITH (RETAIN HISTORY FOR '30s')
-                  IN CLUSTER shared_cluster_storage_first
+                > CREATE MATERIALIZED VIEW shared_cluster_storage_first_mv
+                  IN CLUSTER shared_cluster_storage_first WITH (RETAIN HISTORY FOR '30s')
                   AS SELECT COUNT(*) AS cnt FROM shared_cluster_compute_first_source
 
                 > CREATE DEFAULT INDEX

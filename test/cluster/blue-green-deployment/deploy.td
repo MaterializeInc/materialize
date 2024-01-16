@@ -11,8 +11,8 @@
 > CREATE MATERIALIZED VIEW prod_deploy.counter_mv IN CLUSTER prod_deploy WITH (RETAIN HISTORY FOR '30s')AS SELECT count(*), 'some new value' FROM counter
 > CREATE DEFAULT INDEX IN CLUSTER prod_deploy ON counter
 > CREATE DEFAULT INDEX IN CLUSTER prod_deploy ON prod_deploy.counter_mv
-> CREATE MATERIALIZED VIEW prod_deploy.tpch_mv WITH (RETAIN HISTORY FOR '30s')
-  IN CLUSTER prod_deploy AS
+> CREATE MATERIALIZED VIEW prod_deploy.tpch_mv
+  IN CLUSTER prod_deploy WITH (RETAIN HISTORY FOR '30s') AS
   SELECT
     l_returnflag,
     l_linestatus,

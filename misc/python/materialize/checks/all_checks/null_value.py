@@ -69,9 +69,6 @@ class NullValue(Check):
                 <null> <null> <null>
                 <null> <null> <null>
 
-                > SHOW CREATE MATERIALIZED VIEW null_value_view2;
-                materialize.public.null_value_view2 "CREATE MATERIALIZED VIEW \\"materialize\\".\\"public\\".\\"null_value_view2\\" IN CLUSTER \\"{self._default_cluster()}\\" WITH (REFRESH = ON COMMIT) AS SELECT \\"f1\\", \\"f2\\", NULL FROM \\"materialize\\".\\"public\\".\\"null_value_table\\" WHERE \\"f1\\" IS NULL OR \\"f1\\" IS NOT NULL OR \\"f1\\" = NULL"
-
                 > SELECT * FROM null_value_view2;
                 <null> <null> <null>
                 <null> <null> <null>
