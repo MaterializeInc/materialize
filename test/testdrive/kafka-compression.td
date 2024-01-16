@@ -9,6 +9,9 @@
 
 # Test support for compressed Kafka topics.
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET max_clusters = 20
+
 $ kafka-create-topic topic=gzip compression=gzip
 
 $ kafka-ingest format=bytes topic=gzip timestamp=1
@@ -18,8 +21,9 @@ world
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> CREATE CLUSTER gzip_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE gzip
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER gzip_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-gzip-${testdrive.seed}')
   FORMAT TEXT
 > SELECT text FROM gzip
@@ -32,8 +36,9 @@ $ kafka-ingest format=bytes topic=snappy timestamp=1
 hello
 world
 
+> CREATE CLUSTER snappy_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE snappy
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER snappy_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snappy-${testdrive.seed}')
   FORMAT TEXT
 > SELECT text FROM snappy
@@ -46,8 +51,9 @@ $ kafka-ingest format=bytes topic=lz4 timestamp=1
 hello
 world
 
+> CREATE CLUSTER lz4_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE lz4
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER lz4_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-lz4-${testdrive.seed}')
   FORMAT TEXT
 > SELECT text FROM lz4
@@ -60,16 +66,18 @@ $ kafka-ingest format=bytes topic=zstd timestamp=1
 hello
 world
 
+> CREATE CLUSTER zstd_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE zstd
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER zstd_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-zstd-${testdrive.seed}')
   FORMAT TEXT
 > SELECT text FROM zstd
 hello
 world
 
+> CREATE CLUSTER zstd_fast_forwarded_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE zstd_fast_forwarded
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER zstd_fast_forwarded_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-zstd-${testdrive.seed}')
   FORMAT TEXT
 > SELECT text FROM zstd_fast_forwarded

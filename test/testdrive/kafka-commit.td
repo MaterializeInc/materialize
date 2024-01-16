@@ -23,8 +23,9 @@ three
 # Test that the default consumer group ID is
 # `materialize-$ENVIRONMENTID-$CONNECTIONID-$SOURCEID`.
 
+> CREATE CLUSTER topic_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE topic
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER topic_cluster
   FROM KAFKA CONNECTION conn (
     TOPIC 'testdrive-topic-${testdrive.seed}'
   )
@@ -50,7 +51,7 @@ $ kafka-verify-commit consumer-group-id=${consumer-group-id} topic=topic partiti
 # Test than an arbitrary prefix can be prepended to the consumer group.
 
 > CREATE SOURCE topic
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER topic_cluster
   FROM KAFKA CONNECTION conn (
     TOPIC 'testdrive-topic-${testdrive.seed}',
     GROUP ID PREFIX 'OVERRIDE-'
