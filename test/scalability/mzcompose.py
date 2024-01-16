@@ -17,6 +17,7 @@ from matplotlib import pyplot as plt
 
 from materialize import buildkite, git
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.scalability.benchmark_config import BenchmarkConfiguration
@@ -62,6 +63,7 @@ SERVICES = [
         catalog_store="stash",
     ),
     Postgres(),
+    Balancerd(),
 ]
 
 DEFAULT_REGRESSION_THRESHOLD = 0.2
