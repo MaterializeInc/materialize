@@ -813,7 +813,6 @@ where
                     ComputeSinkConnection::Persist(conn)
                 }
                 ComputeSinkConnection::Subscribe(conn) => ComputeSinkConnection::Subscribe(conn),
-                ComputeSinkConnection::CopyTo(conn) => ComputeSinkConnection::CopyTo(conn),
             };
             let desc = ComputeSinkDesc {
                 from: se.from,

@@ -630,65 +630,6 @@ pub struct CreateMaterializedViewExplain {
 }
 
 #[derive(Debug)]
-pub enum CopyToStage {
-    Validate(CopyToValidate),
-    OptimizeMir(CopyToOptimizeMir),
-    Timestamp(CopyToTimestamp),
-    OptimizeLir(CopyToOptimizeLir),
-    Finish(CopyToFinish),
-}
-
-#[derive(Debug)]
-pub struct CopyToValidate {
-    plan: plan::CopyToPlan,
-    target_cluster: TargetCluster,
-}
-
-impl CopyToStage {
-    fn validity(&mut self) -> Option<&mut PlanValidity> {
-        match self {
-            Self::Validate(_) => None,
-            Self::OptimizeMir(stage) => Some(&mut stage.validity),
-            Self::Timestamp(stage) => Some(&mut stage.validity),
-            Self::OptimizeLir(stage) => Some(&mut stage.validity),
-            Self::Finish(stage) => Some(&mut stage.validity),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct CopyToFinish {
-    validity: PlanValidity,
-    cluster_id: ComputeInstanceId,
-    plan: plan::CopyToPlan,
-    global_lir_plan: optimize::copy_to::GlobalLirPlan,
-}
-
-#[derive(Debug)]
-pub struct CopyToOptimizeMir {
-    validity: PlanValidity,
-    plan: plan::CopyToPlan,
-    timeline: TimelineContext,
-}
-
-#[derive(Debug)]
-pub struct CopyToTimestamp {
-    validity: PlanValidity,
-    plan: plan::CopyToPlan,
-    timeline: TimelineContext,
-    optimizer: optimize::copy_to::Optimizer,
-    global_mir_plan: optimize::copy_to::GlobalMirPlan<optimize::copy_to::Unresolved>,
-}
-
-#[derive(Debug)]
-pub struct CopyToOptimizeLir {
-    validity: PlanValidity,
-    plan: plan::CopyToPlan,
-    optimizer: optimize::copy_to::Optimizer,
-    global_mir_plan: optimize::copy_to::GlobalMirPlan<optimize::copy_to::Resolved>,
-}
-
-#[derive(Debug)]
 pub enum SubscribeStage {
     Validate(SubscribeValidate),
     OptimizeMir(SubscribeOptimizeMir),

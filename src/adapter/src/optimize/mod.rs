@@ -52,7 +52,6 @@
 //! For details, see the `20230714_optimizer_interface.md` design doc in this
 //! repository.
 
-pub mod copy_to;
 pub mod dataflows;
 pub mod index;
 pub mod materialized_view;

@@ -107,7 +107,6 @@ impl RustType<ProtoComputeSinkDesc> for ComputeSinkDesc<CollectionMetadata, Time
 pub enum ComputeSinkConnection<S: 'static = ()> {
     Subscribe(SubscribeSinkConnection),
     Persist(PersistSinkConnection<S>),
-    CopyTo(CopyToConnection),
 }
 
 impl<S> ComputeSinkConnection<S> {
@@ -116,7 +115,6 @@ impl<S> ComputeSinkConnection<S> {
         match self {
             ComputeSinkConnection::Subscribe(_) => "subscribe",
             ComputeSinkConnection::Persist(_) => "persist",
-            ComputeSinkConnection::CopyTo(_) => "copy to",
         }
     }
 
@@ -137,7 +135,6 @@ impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMe
             kind: Some(match self {
                 ComputeSinkConnection::Subscribe(_) => Kind::Subscribe(()),
                 ComputeSinkConnection::Persist(persist) => Kind::Persist(persist.into_proto()),
-                ComputeSinkConnection::CopyTo(_) => Kind::CopyTo(()),
             }),
         }
     }
@@ -150,16 +147,12 @@ impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMe
         Ok(match kind {
             Kind::Subscribe(_) => ComputeSinkConnection::Subscribe(SubscribeSinkConnection {}),
             Kind::Persist(persist) => ComputeSinkConnection::Persist(persist.into_rust()?),
-            Kind::CopyTo(_) => ComputeSinkConnection::CopyTo(CopyToConnection {}),
         })
     }
 }
 
 #[derive(Arbitrary, Default, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct SubscribeSinkConnection {}
-
-#[derive(Arbitrary, Default, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct CopyToConnection {}
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PersistSinkConnection<S> {
