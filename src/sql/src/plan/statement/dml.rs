@@ -14,9 +14,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::str::FromStr;
 
-use http::Uri;
 use itertools::Itertools;
 
 use mz_expr::MirRelationExpr;
@@ -41,13 +39,13 @@ use crate::ast::{
 use crate::catalog::CatalogItemType;
 use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
-use crate::plan::query::{evaluate_string_expression, plan_up_to, ExprContext, QueryLifetime};
+use crate::plan::query::{plan_expr, plan_up_to, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::{ddl, StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
 use crate::plan::{
-    self, side_effecting_func, CopyToFrom, CopyToPlan, CreateSinkPlan, ExplainSinkSchemaPlan,
-    ExplainTimestampPlan,
+    self, side_effecting_func, transform_ast, CopyToFrom, CopyToPlan, CreateSinkPlan,
+    ExplainSinkSchemaPlan, ExplainTimestampPlan,
 };
 use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan,
@@ -768,7 +766,7 @@ pub fn describe_copy(
 fn plan_copy_to(
     scx: &StatementContext,
     from: CopyToFrom,
-    to: Uri,
+    to: &Expr<Aug>,
     format: CopyFormat,
     options: CopyOptionExtracted,
 ) -> Result<Plan, PlanError> {
@@ -791,6 +789,23 @@ fn plan_copy_to(
         null: Cow::from(""),
         header: false,
     });
+    let mut to = to.clone();
+    transform_ast::transform(scx, &mut to)?;
+    let relation_type = RelationDesc::empty();
+    let ecx = &ExprContext {
+        qcx: &QueryContext::root(scx, QueryLifetime::OneShot),
+        name: "S3 URL",
+        scope: &Scope::empty(),
+        relation_type: relation_type.typ(),
+        allow_aggregates: false,
+        allow_subqueries: false,
+        allow_parameters: false,
+        allow_windows: false,
+    };
+
+    let to = plan_expr(ecx, &to)?
+        .type_as_any(ecx)?
+        .lower_uncorrelated()?;
 
     Ok(Plan::CopyTo(CopyToPlan {
         from,
@@ -954,12 +969,7 @@ pub fn plan_copy(
                 _ => sql_bail!("COPY {} {} not supported", direction, target),
             };
 
-            let url = evaluate_string_expression(scx, "S3 url", url_expr.clone())?;
-
-            let to_url =
-                Uri::from_str(&url).map_err(|e| sql_err!("invalid s3 url {}: {}", url, e))?;
-
-            plan_copy_to(scx, from, to_url, format, options)
+            plan_copy_to(scx, from, url_expr, format, options)
         }
         _ => sql_bail!("COPY {} {} not supported", direction, target),
     }

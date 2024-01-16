@@ -115,8 +115,8 @@ COPY t TO 's3://path/' || mz_now() WITH (FORMAT = csv, MAX FILE SIZE = 10240, AW
 Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: S3(Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("s3://path/")), expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("mz_now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) }), options: [CopyOption { name: Format, value: Some(Ident(Ident("csv"))) }, CopyOption { name: MaxFileSize, value: Some(Value(Number("10240"))) }, CopyOption { name: AwsConnection, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("aws_conn")]))) }] })
 
 parse-statement
-COPY t TO 's3://path/' 
+COPY t TO 's3://path/' || repeat('1', 2)
 ----
-COPY t TO 's3://path/'
+COPY t TO 's3://path/' || repeat('1', 2)
 =>
-Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: S3(Value(String("s3://path/"))), options: [] })
+Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: S3(Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("s3://path/")), expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("repeat")])), args: Args { args: [Value(String("1")), Value(Number("2"))], order_by: [] }, filter: None, over: None, distinct: false })) }), options: [] })

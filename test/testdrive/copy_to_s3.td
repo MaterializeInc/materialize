@@ -19,9 +19,8 @@ ALTER SYSTEM SET enable_connection_validation_syntax = true;
 
 > INSERT INTO t VALUES (1);
 
-> COPY t TO 's3://hello/'
+> COPY t TO 's3://hello/' || mz_now()
   WITH (
     AWS CONNECTION = aws_conn,
     FORMAT = 'csv'
-  )
-;
+  );
