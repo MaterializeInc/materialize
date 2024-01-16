@@ -20,6 +20,7 @@ class Endpoint:
         self._specified_target = specified_target
 
     def sql_connection(self) -> psycopg.connection.Connection[tuple[Any, ...]]:
+        print(f"Connecting to URL: {self.url()}")
         conn = psycopg.connect(self.url())
         conn.autocommit = True
         return conn
