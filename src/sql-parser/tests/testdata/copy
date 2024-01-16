@@ -72,16 +72,16 @@ Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")
 parse-statement
 COPY t TO STDOUT ()
 ----
-error: Expected one of FORMAT or DELIMITER or NULL or ESCAPE or QUOTE or HEADER, found right parenthesis
+error: Expected one of FORMAT or DELIMITER or NULL or ESCAPE or QUOTE or HEADER or AWS or MAX, found right parenthesis
 COPY t TO STDOUT ()
                   ^
 
 parse-statement
 COPY t TO STDIN
 ----
-error: Expected STDOUT, found STDIN
-COPY t TO STDIN
-          ^
+COPY t TO stdin
+=>
+Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: S3(Identifier([Ident("stdin")])), options: [] })
 
 parse-statement
 COPY (select 1) FROM STDIN
@@ -97,3 +97,26 @@ COPY t TO STDOUT WITH
 error: Expected left parenthesis, found EOF
 COPY t TO STDOUT WITH
                      ^
+
+# Copy to S3
+parse-statement
+COPY t TO 's3://path/' WITH (FORMAT = csv, MAX FILE SIZE = 10240, AWS CONNECTION = aws_conn)
+----
+COPY t TO 's3://path/' WITH (FORMAT = csv, MAX FILE SIZE = 10240, AWS CONNECTION = aws_conn)
+=>
+Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: S3(Value(String("s3://path/"))), options: [CopyOption { name: Format, value: Some(Ident(Ident("csv"))) }, CopyOption { name: MaxFileSize, value: Some(Value(Number("10240"))) }, CopyOption { name: AwsConnection, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("aws_conn")]))) }] })
+
+# S3 path can be a scalar expression
+parse-statement
+COPY t TO 's3://path/' || mz_now() WITH (FORMAT = csv, MAX FILE SIZE = 10240, AWS CONNECTION = aws_conn)
+----
+COPY t TO 's3://path/' || mz_now() WITH (FORMAT = csv, MAX FILE SIZE = 10240, AWS CONNECTION = aws_conn)
+=>
+Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: S3(Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("s3://path/")), expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("mz_now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) }), options: [CopyOption { name: Format, value: Some(Ident(Ident("csv"))) }, CopyOption { name: MaxFileSize, value: Some(Value(Number("10240"))) }, CopyOption { name: AwsConnection, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("aws_conn")]))) }] })
+
+parse-statement
+COPY t TO 's3://path/' 
+----
+COPY t TO 's3://path/'
+=>
+Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: S3(Value(String("s3://path/"))), options: [] })
