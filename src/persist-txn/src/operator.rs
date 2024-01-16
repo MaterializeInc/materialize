@@ -33,7 +33,6 @@ use timely::dataflow::operators::{Broadcast, Capture, Leave, Map, Probe};
 use timely::dataflow::{ProbeHandle, Scope, Stream};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use timely::scheduling::Scheduler;
 use timely::worker::Worker;
 use timely::{Data, WorkerConfig};
 use tracing::{debug, trace};
@@ -573,18 +572,7 @@ impl DataSubscribe {
 
     /// Steps the dataflow, capturing output.
     pub fn step(&mut self) {
-        // TODO: The activations based stepping in `sub.step` should be enough,
-        // but somehow it isn't in the `data_subscribe` unit test. The dataflow
-        // gets woken up again by something (I think a semaphore) after
-        // initially going to sleep. If this doesn't happen, we end up
-        // deadlocking in the first call to register a writer.
-        for _ in 0..1000 {
-            self.worker.step();
-        }
-        // Step while any worker thinks it has work to do.
-        while self.worker.activations().borrow().empty_for().is_some() {
-            self.worker.step();
-        }
+        self.worker.step();
         self.capture_output()
     }
 
@@ -622,18 +610,116 @@ impl DataSubscribe {
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::task::JoinHandleExt;
+    use mz_persist_types::Opaque;
+
     use crate::tests::writer;
     use crate::txns::TxnsHandle;
 
     use super::*;
 
+    struct DataSubscribeTask {
+        /// Carries step requests. A `None` timestamp requests one step, a
+        /// `Some(ts)` requests stepping until we progress beyond `ts`.
+        tx: std::sync::mpsc::Sender<(Option<u64>, tokio::sync::oneshot::Sender<u64>)>,
+        task: mz_ore::task::JoinHandle<Vec<(String, u64, i64)>>,
+    }
+
+    impl DataSubscribeTask {
+        async fn new(
+            client: PersistClient,
+            txns_id: ShardId,
+            data_id: ShardId,
+            as_of: u64,
+        ) -> Self {
+            let cache = TxnsCache::open(&client, txns_id, Some(data_id)).await;
+            let (tx, rx) = std::sync::mpsc::channel();
+            let task = mz_ore::task::spawn_blocking(
+                || "data_subscribe task",
+                move || Self::task(client, cache, data_id, as_of, rx),
+            );
+            DataSubscribeTask { tx, task }
+        }
+
+        async fn step(&self) {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            self.tx.send((None, tx)).expect("task should be running");
+            rx.await.expect("task should be running");
+        }
+
+        async fn step_past(&self, ts: u64) -> u64 {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            self.tx
+                .send((Some(ts), tx))
+                .expect("task should be running");
+            rx.await.expect("task should be running")
+        }
+
+        async fn finish(self) -> Vec<(String, u64, i64)> {
+            // Closing the channel signals the task to exit.
+            drop(self.tx);
+            self.task.wait_and_assert_finished().await
+        }
+
+        fn task(
+            client: PersistClient,
+            cache: TxnsCache<u64>,
+            data_id: ShardId,
+            as_of: u64,
+            rx: std::sync::mpsc::Receiver<(Option<u64>, tokio::sync::oneshot::Sender<u64>)>,
+        ) -> Vec<(String, u64, i64)> {
+            let mut subscribe = cache.expect_subscribe(&client, data_id, as_of);
+            loop {
+                let (ts, tx) = match rx.try_recv() {
+                    Ok(x) => x,
+                    Err(TryRecvError::Empty) => {
+                        // No requests, continue stepping so nothing deadlocks.
+                        subscribe.step();
+                        continue;
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        // All done! Return our output.
+                        return subscribe.output().clone();
+                    }
+                };
+                // Always step at least once.
+                subscribe.step();
+                // If we got a ts, make sure to step past it.
+                if let Some(ts) = ts {
+                    while subscribe.progress() <= ts {
+                        subscribe.step();
+                    }
+                }
+                let _ = tx.send(subscribe.progress());
+            }
+        }
+    }
+
+    impl<K, V, T, D, O, C> TxnsHandle<K, V, T, D, O, C>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
+        O: Opaque + Debug + Codec64,
+        C: TxnsCodec,
+    {
+        async fn subscribe_task(
+            &self,
+            client: &PersistClient,
+            data_id: ShardId,
+            as_of: u64,
+        ) -> DataSubscribeTask {
+            DataSubscribeTask::new(client.clone(), self.txns_id(), data_id, as_of).await
+        }
+    }
+
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // too slow
-    #[ignore] // TODO(txn): Get this turned back on.
     async fn data_subscribe() {
-        fn step(subs: &mut Vec<DataSubscribe>) {
-            for sub in subs.iter_mut() {
-                sub.step();
+        async fn step(subs: &Vec<DataSubscribeTask>) {
+            for sub in subs.iter() {
+                sub.step().await;
             }
         }
 
@@ -644,52 +730,52 @@ mod tests {
 
         // Start a subscription before the shard gets registered.
         let mut subs = Vec::new();
-        subs.push(txns.read_cache().expect_subscribe(&client, d0, 5));
-        step(&mut subs);
+        subs.push(txns.subscribe_task(&client, d0, 5).await);
+        step(&subs).await;
 
         // Now register the shard. Also start a new subscription and step the
         // previous one (plus repeat this for ever later step).
         txns.register(1, [writer(&client, d0).await]).await.unwrap();
-        subs.push(txns.read_cache().expect_subscribe(&client, d0, 5));
-        step(&mut subs);
+        subs.push(txns.subscribe_task(&client, d0, 5).await);
+        step(&subs).await;
 
         // Now write something unrelated.
         let d1 = txns.expect_register(2).await;
         txns.expect_commit_at(3, d1, &["nope"], &log).await;
-        subs.push(txns.read_cache().expect_subscribe(&client, d0, 5));
-        step(&mut subs);
+        subs.push(txns.subscribe_task(&client, d0, 5).await);
+        step(&subs).await;
 
         // Now write to our shard before.
         txns.expect_commit_at(4, d0, &["4"], &log).await;
-        subs.push(txns.read_cache().expect_subscribe(&client, d0, 5));
-        step(&mut subs);
+        subs.push(txns.subscribe_task(&client, d0, 5).await);
+        step(&subs).await;
 
         // Now write to our shard at the as_of.
         txns.expect_commit_at(5, d0, &["5"], &log).await;
-        subs.push(txns.read_cache().expect_subscribe(&client, d0, 5));
-        step(&mut subs);
+        subs.push(txns.subscribe_task(&client, d0, 5).await);
+        step(&subs).await;
 
         // Now write to our shard past the as_of.
         txns.expect_commit_at(6, d0, &["6"], &log).await;
-        subs.push(txns.read_cache().expect_subscribe(&client, d0, 5));
-        step(&mut subs);
+        subs.push(txns.subscribe_task(&client, d0, 5).await);
+        step(&subs).await;
 
         // Now write something unrelated again.
         txns.expect_commit_at(7, d1, &["nope"], &log).await;
-        subs.push(txns.read_cache().expect_subscribe(&client, d0, 5));
-        step(&mut subs);
+        subs.push(txns.subscribe_task(&client, d0, 5).await);
+        step(&subs).await;
 
         // Verify that the dataflows can progress to the expected point.
-        for sub in subs.iter_mut() {
-            sub.step_past(7).await;
-            assert_eq!(sub.progress(), 8);
+        for sub in subs.iter() {
+            let progress = sub.step_past(7).await;
+            assert_eq!(progress, 8);
         }
 
         // Now verify that we read the right thing no matter when the dataflow
         // started.
-        for mut sub in subs {
+        for sub in subs {
             sub.step_past(7).await;
-            log.assert_eq(d0, 5, 8, sub.output().clone());
+            log.assert_eq(d0, 5, 8, sub.finish().await);
         }
     }
 
