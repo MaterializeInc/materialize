@@ -24,6 +24,7 @@ use crate::desc::{MySqlColumnDesc, MySqlKeyDesc, MySqlTableDesc};
 use crate::MySqlError;
 
 /// Helper for querying information_schema.columns
+// NOTE: The order of these names *must* match the order of fields of the [`InfoSchema`] struct.
 const INFO_SCHEMA_COLS: &[&str] = &[
     "column_name",
     "data_type",
@@ -35,6 +36,7 @@ const INFO_SCHEMA_COLS: &[&str] = &[
     "character_maximum_length",
 ];
 
+// NOTE: The order of these fields *must* match the order of names of the [`INFO_SCHEMA_COLS`] list.
 struct InfoSchema {
     column_name: String,
     data_type: String,
@@ -48,6 +50,9 @@ struct InfoSchema {
 
 impl FromRow for InfoSchema {
     fn from_row_opt(row: Row) -> Result<Self, FromRowError> {
+        let actual = row.columns_ref().iter().map(|c| c.name_ref());
+        let expected = INFO_SCHEMA_COLS.iter().map(|c| c.as_bytes());
+        itertools::assert_equal(actual, expected);
         let (a, b, c, d, e, f, g, h) = FromRow::from_row_opt(row)?;
         Ok(Self {
             column_name: a,
@@ -131,7 +136,10 @@ pub async fn schema_info<'a>(
              FROM information_schema.columns
              WHERE table_name = ? AND table_schema = ?
              ORDER BY ordinal_position ASC",
-            INFO_SCHEMA_COLS.join(", ")
+            INFO_SCHEMA_COLS
+                .iter()
+                .map(|c| format!("{c} AS {c}"))
+                .join(", ")
         );
         let column_rows = conn
             .exec::<InfoSchema, _, _>(column_q, (&table_name, &schema_name))
