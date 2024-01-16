@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use mz_controller_types::ClusterId;
-use mz_expr::{permutation_for_arrangement, CollectionPlan};
+use mz_expr::CollectionPlan;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Timestamp};
@@ -26,7 +26,7 @@ use tracing::{event, warn, Level};
 
 use crate::command::ExecuteResponse;
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::peek::{self, PeekDataflowPlan, PeekPlan, PlannedPeek};
+use crate::coord::peek::{self, PeekDataflowPlan, PlannedPeek};
 use crate::coord::sequencer::inner::{check_log_reads, return_if_err};
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{
@@ -755,34 +755,8 @@ impl Coordinator {
         let global_mir_plan = global_mir_plan.resolve(timestamp_context, session);
         let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
 
-        let key = global_lir_plan.key();
-        let arity = global_lir_plan.typ().arity();
-
-        let (peek_plan, df_meta) = match global_lir_plan {
-            optimize::peek::GlobalLirPlan::FastPath {
-                plan,
-                df_meta,
-                typ: _,
-            } => {
-                let peek_plan = PeekPlan::FastPath(plan);
-                (peek_plan, df_meta)
-            }
-            optimize::peek::GlobalLirPlan::SlowPath {
-                df_desc,
-                df_meta,
-                typ: _,
-            } => {
-                let (permutation, thinning) = permutation_for_arrangement(&key, arity);
-                let peek_plan = PeekPlan::SlowPath(PeekDataflowPlan::new(
-                    df_desc,
-                    optimizer.index_id(),
-                    key,
-                    permutation,
-                    thinning.len(),
-                ));
-                (peek_plan, df_meta)
-            }
-        };
+        let source_arity = global_lir_plan.typ().arity();
+        let (peek_plan, df_meta) = global_lir_plan.unapply();
 
         self.emit_optimizer_notices(&*session, &df_meta.optimizer_notices);
 
@@ -790,7 +764,7 @@ impl Coordinator {
             plan: peek_plan,
             determination,
             conn_id,
-            source_arity: arity,
+            source_arity,
             source_ids,
         })
     }
