@@ -326,7 +326,6 @@ Rollback
 Rotate
 Row
 Rows
-S3
 Sasl
 Scale
 Schema
