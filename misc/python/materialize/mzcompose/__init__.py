@@ -83,6 +83,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_cc_cluster_sizes": "true",
     "wait_catalog_consolidation_on_startup": "true",
     "enable_statement_lifecycle_logging": "true",
+    "cluster_always_use_disk": "true",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [
