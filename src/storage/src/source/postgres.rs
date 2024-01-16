@@ -95,7 +95,7 @@ use mz_storage_types::errors::SourceErrorDetails;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection, SourceTimestamp};
 use mz_timely_util::builder_async::PressOnDropButton;
 use serde::{Deserialize, Serialize};
-use timely::dataflow::operators::{Concat, Map};
+use timely::dataflow::operators::{Concat, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tokio_postgres::error::SqlState;
@@ -188,11 +188,17 @@ impl SourceRender for PostgresSourceConnection {
             (output, res)
         });
 
+        let init = std::iter::once(HealthStatusMessage {
+            index: 0,
+            namespace: Self::STATUS_NAMESPACE,
+            update: HealthStatusUpdate::Running,
+        })
+        .to_stream(scope);
+
         // N.B. Note that we don't check ssh tunnel statuses here. We could, but immediately on
         // restart we are going to set the status to an ssh error correctly, so we don't do this
         // extra work.
-
-        let health = snapshot_err.concat(&repl_err).map(move |err| {
+        let errs = snapshot_err.concat(&repl_err).map(move |err| {
             // This update will cause the dataflow to restart
             let err_string = err.display_with_causes().to_string();
             let update = HealthStatusUpdate::halting(err_string.clone(), None);
@@ -217,6 +223,8 @@ impl SourceRender for PostgresSourceConnection {
                 update,
             }
         });
+
+        let health = init.concat(&errs);
 
         (
             updates,
