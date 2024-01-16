@@ -96,7 +96,14 @@ where
     }
 
     fn notify_progress(&mut self, upper: Antichain<T>) {
-        self.queue.borrow_mut().push_back(Event::Progress(upper));
+        let mut queue = self.queue.borrow_mut();
+        // It's beneficial to consolidate two consecutive progress statements into one if the
+        // operator hasn't seen the previous progress yet. This also avoids accumulation of
+        // progress statements in the queue if the operator only conditionally checks this input.
+        match queue.back_mut() {
+            Some(&mut Event::Progress(ref mut prev_upper)) => *prev_upper = upper,
+            _ => queue.push_back(Event::Progress(upper)),
+        }
         if let Some(waker) = self.waker.take() {
             waker.wake();
         }
