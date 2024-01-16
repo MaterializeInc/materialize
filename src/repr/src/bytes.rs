@@ -17,10 +17,9 @@ use mz_ore::cast::CastLossy;
 
 /// Struct for postgres compatible size units which is different from
 /// `bytesize::ByteSize`. Instead of MiB or GiB and so on, it uses MB, GB for the sizes
-/// with 1024 multiplier.
-/// Valid units are B, kB, MB, GB, TB with multiples of 1024
+/// with 1024 multiplier. Valid units are B, kB, MB, GB, TB with multiples of 1024
 /// where 1MB = 1024kB.
-/// 
+///
 /// In postgres, each setting has a base unit (for eg. B, kB) and the value can either
 /// be integer or float. The base unit serves as the default unit if a number is provided
 /// without a unit and it's also the minimum unit in which values
