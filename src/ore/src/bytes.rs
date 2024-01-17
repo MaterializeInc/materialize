@@ -15,16 +15,245 @@
 
 //! One bytes type to rule them all!
 //!
-//! TODO(parkertimmerman): Ideally we don't implement this "bytes type" on our own
-//! and use something else, e.g. `SegmentedBuf` from the `bytes-utils` crate. Currently
-//! that type, nor anything else, implement std::io::Read and std::io::Seek, which
-//! we need. We have an open issue with the `bytes-utils` crate, <https://github.com/vorner/bytes-utils/issues/16>
-//! to add these trait impls.
-//!
+//! WIP The lgalloc stuff makes this pretty persist-specific. Move into persist?
+
+use std::ops::Deref;
+use std::sync::Arc;
+use std::time::Instant;
 
 use bytes::{Buf, Bytes};
 use internal::SegmentedReader;
+use prometheus::{Counter, CounterVec, Histogram, IntCounter, IntCounterVec};
 use smallvec::SmallVec;
+
+use crate::cast::{CastFrom, CastLossy};
+use crate::metric;
+use crate::metrics::MetricsRegistry;
+
+/// Like [bytes::Bytes] but it can optionally be backed by [lgalloc].
+#[derive(Clone)]
+pub enum LgallocBytes {
+    /// A [bytes::Bytes].
+    Bytes(Bytes),
+    /// A [bytes::Buf] impl on top of [lgalloc].
+    Lgalloc(LgallocBuf),
+}
+
+impl Deref for LgallocBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            LgallocBytes::Bytes(x) => x.deref(),
+            LgallocBytes::Lgalloc(x) => x.as_slice(),
+        }
+    }
+}
+
+impl std::fmt::Debug for LgallocBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Bytes")
+            .field("len", &self.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for LgallocBytes {
+    fn eq(&self, other: &Self) -> bool {
+        self.deref() == other.deref()
+    }
+}
+
+impl Eq for LgallocBytes {}
+
+impl Buf for LgallocBytes {
+    fn remaining(&self) -> usize {
+        match self {
+            LgallocBytes::Bytes(x) => x.remaining(),
+            LgallocBytes::Lgalloc(x) => x.remaining(),
+        }
+    }
+
+    fn chunk(&self) -> &[u8] {
+        match self {
+            LgallocBytes::Bytes(x) => x.chunk(),
+            LgallocBytes::Lgalloc(x) => x.chunk(),
+        }
+    }
+
+    fn advance(&mut self, o: usize) {
+        match self {
+            LgallocBytes::Bytes(x) => x.advance(o),
+            LgallocBytes::Lgalloc(x) => x.advance(o),
+        }
+    }
+}
+
+impl From<Vec<u8>> for LgallocBytes {
+    fn from(value: Vec<u8>) -> Self {
+        LgallocBytes::Bytes(value.into())
+    }
+}
+
+impl From<Bytes> for LgallocBytes {
+    fn from(value: Bytes) -> Self {
+        LgallocBytes::Bytes(value)
+    }
+}
+
+impl From<LgallocBuf> for LgallocBytes {
+    fn from(value: LgallocBuf) -> Self {
+        LgallocBytes::Lgalloc(value)
+    }
+}
+
+/// An immutable [bytes::Buf] impl on top of [lgalloc].
+#[derive(Clone)]
+#[allow(missing_debug_implementations)]
+pub struct LgallocBuf {
+    offset: usize,
+    region: Arc<RegionSyncMetrics>,
+}
+
+struct RegionSyncMetrics {
+    region: lgalloc::Region<u8>,
+    free_count: IntCounter,
+    free_bytes: IntCounter,
+}
+
+/// SAFETY: Region only exposes mutability via `&mut self` methods.
+unsafe impl Sync for RegionSyncMetrics {}
+
+impl Drop for RegionSyncMetrics {
+    fn drop(&mut self) {
+        self.free_count.inc();
+        self.free_bytes
+            .inc_by(u64::cast_from(self.region.capacity()));
+    }
+}
+
+impl LgallocBuf {
+    /// Returns a [LgallocBuf] with the given contents.
+    pub fn from_slice<T: AsRef<[u8]>>(metrics: &LgallocBufMetrics, buf: T) -> Self {
+        let start = Instant::now();
+        let buf = buf.as_ref();
+        let capacity = std::cmp::max(buf.len(), 1 << lgalloc::VALID_SIZE_CLASS.start);
+        let mut region = lgalloc::Region::new_mmap(capacity).unwrap_or_else(|err| {
+            tracing::debug!("WIP lgalloc err for {} bytes: {:?}", capacity, err);
+            lgalloc::Region::new_heap(buf.len())
+        });
+        metrics.sizes.observe(f64::cast_lossy(buf.len()));
+        let metrics = match &region {
+            lgalloc::Region::Heap(_) => &metrics.heap,
+            lgalloc::Region::MMap(_) => &metrics.mmap,
+        };
+        region.extend_from_slice(buf);
+        metrics.alloc_count.inc();
+        metrics
+            .alloc_bytes
+            .inc_by(u64::cast_from(region.capacity()));
+        metrics.alloc_seconds.inc_by(start.elapsed().as_secs_f64());
+        LgallocBuf {
+            offset: 0,
+            region: Arc::new(RegionSyncMetrics {
+                region,
+                free_count: metrics.free_count.clone(),
+                free_bytes: metrics.free_bytes.clone(),
+            }),
+        }
+    }
+
+    /// Presents this buf as a byte slice.
+    pub fn as_slice(&self) -> &[u8] {
+        let offset = std::cmp::min(self.offset, self.region.region.len());
+        &self.region.region[offset..]
+    }
+}
+
+impl Buf for LgallocBuf {
+    fn remaining(&self) -> usize {
+        self.as_slice().len()
+    }
+
+    fn chunk(&self) -> &[u8] {
+        self.as_slice()
+    }
+
+    fn advance(&mut self, o: usize) {
+        // WIP more checks, Buf has some docs on this
+        self.offset += o;
+    }
+}
+
+/// Metrics for [LgallocBuf].
+#[derive(Debug, Clone)]
+pub struct LgallocBufMetrics {
+    heap: LgallocRegionMetrics,
+    mmap: LgallocRegionMetrics,
+    sizes: Histogram,
+}
+
+#[derive(Debug, Clone)]
+struct LgallocRegionMetrics {
+    alloc_count: IntCounter,
+    alloc_bytes: IntCounter,
+    alloc_seconds: Counter,
+    free_count: IntCounter,
+    free_bytes: IntCounter,
+}
+
+impl LgallocBufMetrics {
+    /// Returns a new [LgallocBufMetrics] connected to the given metrics
+    /// registry.
+    pub fn new(registry: &MetricsRegistry) -> Self {
+        let alloc_count: IntCounterVec = registry.register(metric!(
+                name: "mz_persist_lgalloc_alloc_count",
+                help: "count of lgalloc allocations",
+                var_labels: ["region"],
+        ));
+        let alloc_bytes: IntCounterVec = registry.register(metric!(
+                name: "mz_persist_lgalloc_alloc_bytes",
+                help: "total bytes of lgalloc allocations",
+                var_labels: ["region"],
+        ));
+        let alloc_seconds: CounterVec = registry.register(metric!(
+                name: "mz_persist_lgalloc_alloc_seconds",
+                help: "seconds spent getting lgalloc allocations and copying in data",
+                var_labels: ["region"],
+        ));
+        let free_count: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_lgalloc_free_count",
+            help: "count of lgalloc frees",
+            var_labels: ["region"],
+        ));
+        let free_bytes: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_lgalloc_free_bytes",
+            help: "total bytes of lgalloc frees",
+            var_labels: ["region"],
+        ));
+        LgallocBufMetrics {
+            heap: LgallocRegionMetrics {
+                alloc_count: alloc_count.with_label_values(&["heap"]),
+                alloc_bytes: alloc_bytes.with_label_values(&["heap"]),
+                alloc_seconds: alloc_seconds.with_label_values(&["heap"]),
+                free_count: free_count.with_label_values(&["heap"]),
+                free_bytes: free_bytes.with_label_values(&["heap"]),
+            },
+            mmap: LgallocRegionMetrics {
+                alloc_count: alloc_count.with_label_values(&["mmap"]),
+                alloc_bytes: alloc_bytes.with_label_values(&["mmap"]),
+                alloc_seconds: alloc_seconds.with_label_values(&["mmap"]),
+                free_count: free_count.with_label_values(&["mmap"]),
+                free_bytes: free_bytes.with_label_values(&["mmap"]),
+            },
+            sizes: registry.register(metric!(
+                name: "mz_persist_lgalloc_alloc_sizes",
+                help: "histogram of alloc sizes",
+                buckets: crate::stats::HISTOGRAM_BYTE_BUCKETS.to_vec(),
+            )),
+        }
+    }
+}
 
 /// A cheaply clonable collection of possibly non-contiguous bytes.
 ///
@@ -41,7 +270,7 @@ use smallvec::SmallVec;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SegmentedBytes<const N: usize = 1> {
     /// Collection of non-contiguous segments.
-    segments: SmallVec<[Bytes; N]>,
+    segments: SmallVec<[LgallocBytes; N]>,
     /// Pre-computed length of all the segments.
     len: usize,
 }
@@ -68,6 +297,30 @@ impl SegmentedBytes {
 }
 
 impl<const N: usize> SegmentedBytes<N> {
+    /// WIP
+    pub fn ensure_lgalloc(self, metrics: &LgallocBufMetrics) -> Self {
+        // Special case for no-op.
+        if self.segments.iter().all(|x| match x {
+            LgallocBytes::Bytes(_) => false,
+            LgallocBytes::Lgalloc(_) => true,
+        }) {
+            return self;
+        }
+
+        let segments = self
+            .segments
+            .into_iter()
+            .map(|x| match x {
+                LgallocBytes::Lgalloc(buf) => LgallocBytes::Lgalloc(buf),
+                LgallocBytes::Bytes(buf) => LgallocBuf::from_slice(metrics, &buf).into(),
+            })
+            .collect();
+        SegmentedBytes {
+            segments,
+            len: self.len,
+        }
+    }
+
     /// Returns the number of bytes contained in this [`SegmentedBytes`].
     pub fn len(&self) -> usize {
         self.len
@@ -80,7 +333,7 @@ impl<const N: usize> SegmentedBytes<N> {
 
     /// Consumes `self` returning an [`Iterator`] over all of the non-contiguous segments
     /// that make up this buffer.
-    pub fn into_segments(self) -> impl Iterator<Item = Bytes> {
+    pub fn into_segments(self) -> impl Iterator<Item = LgallocBytes> {
         self.segments.into_iter()
     }
 
@@ -92,7 +345,7 @@ impl<const N: usize> SegmentedBytes<N> {
     /// Extends the buffer by one more segment of [`Bytes`]
     pub fn push(&mut self, b: Bytes) {
         self.len += b.len();
-        self.segments.push(b);
+        self.segments.push(b.into());
     }
 
     /// Consumes `self` returning a type that implements [`io::Read`] and [`io::Seek`].
@@ -146,7 +399,7 @@ impl From<Bytes> for SegmentedBytes {
     fn from(value: Bytes) -> Self {
         let len = value.len();
         let mut segments = SmallVec::new();
-        segments.push(value);
+        segments.push(value.into());
 
         SegmentedBytes { segments, len }
     }
@@ -159,7 +412,7 @@ impl From<Vec<Bytes>> for SegmentedBytes {
 
         for segment in value {
             len += segment.len();
-            segments.push(segment);
+            segments.push(segment.into());
         }
 
         SegmentedBytes { segments, len }
@@ -180,7 +433,7 @@ impl<const N: usize> FromIterator<Bytes> for SegmentedBytes<N> {
 
         for segment in iter {
             len += segment.len();
-            segments.push(segment);
+            segments.push(segment.into());
         }
 
         SegmentedBytes { segments, len }
@@ -189,7 +442,7 @@ impl<const N: usize> FromIterator<Bytes> for SegmentedBytes<N> {
 
 impl<const N: usize> FromIterator<Vec<u8>> for SegmentedBytes<N> {
     fn from_iter<T: IntoIterator<Item = Vec<u8>>>(iter: T) -> Self {
-        iter.into_iter().map(Bytes::from).collect()
+        Self::from_iter(iter.into_iter().map(Bytes::from))
     }
 }
 
@@ -198,20 +451,19 @@ mod internal {
     use std::io;
     use std::ops::Bound;
 
-    use bytes::Bytes;
-
+    use crate::bytes::LgallocBytes;
     use crate::cast::CastFrom;
 
     /// Provides efficient reading and seeking across a collection of segmented bytes.
     #[derive(Debug)]
     pub struct SegmentedReader {
-        segments: BTreeMap<usize, Bytes>,
+        segments: BTreeMap<usize, LgallocBytes>,
         len: usize,
         pointer: u64,
     }
 
     impl SegmentedReader {
-        pub fn new(segments: impl IntoIterator<Item = Bytes>) -> Self {
+        pub fn new(segments: impl IntoIterator<Item = LgallocBytes>) -> Self {
             let mut map = BTreeMap::new();
             let mut total_len = 0;
 

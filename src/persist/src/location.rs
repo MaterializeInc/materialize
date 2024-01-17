@@ -18,7 +18,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::Stream;
-use mz_ore::bytes::SegmentedBytes;
+use mz_ore::bytes::{LgallocBufMetrics, SegmentedBytes};
 use mz_ore::cast::u64_to_usize;
 use mz_postgres_client::error::PostgresError;
 use mz_proto::RustType;
@@ -592,6 +592,62 @@ impl<A: Blob + Sync + Send + 'static> Blob for Tasked<A> {
             async move { backing.restore(&key).await }.instrument(Span::current()),
         )
         .await?
+    }
+}
+
+/// A [Blob] implementation that ensures all returned values live in lgalloc
+/// allocations.
+pub struct EnsureLgalloc<A> {
+    /// WIP
+    pub blob: Arc<A>,
+    /// WIP
+    ///
+    // TODO: Replace this with a Config+ConfigSet once that gets refactored out
+    // of persist-client.
+    pub enable_ensure_lgalloc: Box<dyn Fn() -> bool + Sync + Send + 'static>,
+    /// WIP
+    pub metrics: LgallocBufMetrics,
+}
+
+impl<A> std::fmt::Debug for EnsureLgalloc<A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EnsureLgalloc").finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl<A: Blob + Sync + Send + 'static> Blob for EnsureLgalloc<A> {
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
+        let blob = match self.blob.get(key).await? {
+            Some(x) => x,
+            None => return Ok(None),
+        };
+        let blob = if (self.enable_ensure_lgalloc)() {
+            SegmentedBytes::ensure_lgalloc(blob, &self.metrics)
+        } else {
+            blob
+        };
+        Ok(Some(blob))
+    }
+
+    async fn list_keys_and_metadata(
+        &self,
+        key_prefix: &str,
+        f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
+    ) -> Result<(), ExternalError> {
+        self.blob.list_keys_and_metadata(key_prefix, f).await
+    }
+
+    async fn set(&self, key: &str, value: Bytes, atomic: Atomicity) -> Result<(), ExternalError> {
+        self.blob.set(key, value, atomic).await
+    }
+
+    async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
+        self.blob.delete(key).await
+    }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        self.blob.restore(key).await
     }
 }
 

@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::StreamExt;
-use mz_ore::bytes::SegmentedBytes;
+use mz_ore::bytes::{LgallocBufMetrics, SegmentedBytes};
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metric;
 use mz_ore::metrics::{
@@ -93,6 +93,8 @@ pub struct Metrics {
     pub blob_cache_mem: BlobMemCache,
     /// Metrics for tokio tasks.
     pub tasks: TasksMetrics,
+    /// Metrics for persist use of lgalloc.
+    pub lgalloc: LgallocBufMetrics,
 
     /// Metrics for the persist sink.
     pub sink: SinkMetrics,
@@ -146,6 +148,7 @@ impl Metrics {
             consolidation: ConsolidationMetrics::new(registry),
             blob_cache_mem: BlobMemCache::new(registry),
             tasks: TasksMetrics::new(registry),
+            lgalloc: LgallocBufMetrics::new(registry),
             sink: SinkMetrics::new(registry),
             s3_blob: S3BlobMetrics::new(registry),
             postgres_consensus: PostgresClientMetrics::new(registry, "mz_persist"),

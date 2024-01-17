@@ -273,6 +273,7 @@ pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&crate::batch::BATCH_DELETE_ENABLED)
         .add(&crate::batch::BLOB_TARGET_SIZE)
+        .add(&crate::cache::ENABLE_ENSURE_LGALLOC)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL)
         .add(&crate::cfg::CRDB_CONNECT_TIMEOUT)
