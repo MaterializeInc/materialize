@@ -133,13 +133,6 @@ impl Coordinator {
             target_cluster,
         }: PeekStageValidate,
     ) -> Result<PeekStageTimestamp, AdapterError> {
-        let plan::SelectPlan {
-            source,
-            when,
-            finishing,
-            copy_to,
-        } = plan;
-
         // Collect optimizer parameters.
         let catalog = self.owned_catalog();
         let cluster = catalog.resolve_target_cluster(target_cluster, session)?;
@@ -154,7 +147,7 @@ impl Coordinator {
         let optimizer = optimize::peek::Optimizer::new(
             Arc::clone(&catalog),
             compute_instance,
-            finishing.clone(),
+            plan.finishing.clone(),
             view_id,
             index_id,
             optimizer_config,
@@ -178,10 +171,10 @@ impl Coordinator {
             ));
         }
 
-        let source_ids = source.depends_on();
+        let source_ids = plan.source.depends_on();
         let mut timeline_context = self.validate_timeline_context(source_ids.clone())?;
         if matches!(timeline_context, TimelineContext::TimestampIndependent)
-            && source.contains_temporal()
+            && plan.source.contains_temporal()
         {
             // If the source IDs are timestamp independent but the query contains temporal functions,
             // then the timeline context needs to be upgraded to timestamp dependent. This is
@@ -189,7 +182,7 @@ impl Coordinator {
             timeline_context = TimelineContext::TimestampDependent;
         }
         let in_immediate_multi_stmt_txn = session.transaction().is_in_multi_statement_transaction()
-            && when == QueryWhen::Immediately;
+            && plan.when == QueryWhen::Immediately;
 
         let notices = check_log_reads(
             &catalog,
@@ -210,10 +203,8 @@ impl Coordinator {
 
         Ok(PeekStageTimestamp {
             validity,
-            source,
-            copy_to,
+            plan,
             source_ids,
-            when,
             target_replica,
             timeline_context,
             in_immediate_multi_stmt_txn,
@@ -230,10 +221,8 @@ impl Coordinator {
         root_otel_ctx: OpenTelemetryContext,
         PeekStageTimestamp {
             validity,
-            source,
-            copy_to,
             source_ids,
-            when,
+            plan,
             target_replica,
             timeline_context,
             in_immediate_multi_stmt_txn,
@@ -242,17 +231,15 @@ impl Coordinator {
     ) {
         let isolation_level = ctx.session.vars().transaction_isolation().clone();
         let linearized_timeline =
-            Coordinator::get_linearized_timeline(&isolation_level, &when, &timeline_context);
+            Coordinator::get_linearized_timeline(&isolation_level, &plan.when, &timeline_context);
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
 
         let build_optimize_stage = move |oracle_read_ts: Option<Timestamp>| -> PeekStageOptimize {
             PeekStageOptimize {
                 validity,
-                source,
-                copy_to,
+                plan,
                 source_ids,
-                when,
                 target_replica,
                 timeline_context,
                 oracle_read_ts,
@@ -336,7 +323,7 @@ impl Coordinator {
                 .determine_timestamp(
                     ctx.session(),
                     &id_bundle,
-                    &stage.when,
+                    &stage.plan.when,
                     stage.optimizer.cluster_id(),
                     &stage.timeline_context,
                     stage.oracle_read_ts.clone(),
@@ -387,10 +374,8 @@ impl Coordinator {
         id_bundle: CollectionIdBundle,
         PeekStageOptimize {
             validity,
-            source,
-            copy_to,
+            plan,
             source_ids,
-            when,
             target_replica,
             timeline_context,
             oracle_read_ts,
@@ -398,16 +383,15 @@ impl Coordinator {
             mut optimizer,
         }: PeekStageOptimize,
     ) -> Result<PeekStageRealTimeRecency, AdapterError> {
-        let local_mir_plan = optimizer.catch_unwind_optimize(source)?;
+        let local_mir_plan = optimizer.catch_unwind_optimize(plan.source.clone())?;
         let local_mir_plan = local_mir_plan.resolve(session, stats);
         let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
 
         Ok(PeekStageRealTimeRecency {
             validity,
-            copy_to,
+            plan,
             source_ids,
             id_bundle,
-            when,
             target_replica,
             timeline_context,
             oracle_read_ts,
@@ -424,10 +408,9 @@ impl Coordinator {
         root_otel_ctx: OpenTelemetryContext,
         PeekStageRealTimeRecency {
             validity,
-            copy_to,
+            plan,
             source_ids,
             id_bundle,
-            when,
             target_replica,
             timeline_context,
             oracle_read_ts,
@@ -444,9 +427,8 @@ impl Coordinator {
                     conn_id.clone(),
                     RealTimeRecencyContext::Peek {
                         ctx,
+                        plan,
                         root_otel_ctx,
-                        copy_to,
-                        when,
                         target_replica,
                         timeline_context,
                         oracle_read_ts: oracle_read_ts.clone(),
@@ -474,9 +456,8 @@ impl Coordinator {
                 ctx,
                 PeekStageFinish {
                     validity,
-                    copy_to,
+                    plan,
                     id_bundle: Some(id_bundle),
-                    when,
                     target_replica,
                     timeline_context,
                     oracle_read_ts,
@@ -495,9 +476,8 @@ impl Coordinator {
         ctx: &mut ExecuteContext,
         PeekStageFinish {
             validity: _,
-            copy_to,
+            plan,
             id_bundle,
-            when,
             target_replica,
             timeline_context,
             oracle_read_ts,
@@ -517,7 +497,7 @@ impl Coordinator {
         let determination = self
             .sequence_peek_timestamp(
                 session,
-                &when,
+                &plan.when,
                 optimizer.cluster_id(),
                 timeline_context,
                 oracle_read_ts,
@@ -534,12 +514,12 @@ impl Coordinator {
         let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
 
         let source_arity = global_lir_plan.typ().arity();
-        let (plan, df_meta) = global_lir_plan.unapply();
+        let (peek_plan, df_meta) = global_lir_plan.unapply();
 
         self.emit_optimizer_notices(&*session, &df_meta.optimizer_notices);
 
         let planned_peek = PlannedPeek {
-            plan,
+            plan: peek_plan,
             determination: determination.clone(),
             conn_id,
             source_arity,
@@ -610,7 +590,7 @@ impl Coordinator {
                 .add_notice(AdapterNotice::QueryTimestamp { explanation });
         }
 
-        match copy_to {
+        match plan.copy_to {
             None => Ok(resp),
             Some(format) => Ok(ExecuteResponse::CopyTo {
                 format,
