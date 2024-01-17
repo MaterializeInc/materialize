@@ -142,7 +142,7 @@ impl Retry {
     /// [`retry`](Retry::retry) will return the last error.
     ///
     /// Calls to `max_tries` will override any previous calls to `max_tries`.
-    ////
+    ///
     /// # Panics
     ///
     /// Panics if `max_tries` is zero.
