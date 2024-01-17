@@ -42,24 +42,17 @@ impl Coordinator {
         prep_scalar_expr(&mut to, style)?;
         let temp_storage = RowArena::new();
         let evaled = to.eval(&[], &temp_storage)?;
-
-        let to_url = match evaled {
-            Datum::Null => coord_bail!("url value can not be null"),
-            Datum::String(str) => {
-                let url = match Uri::from_str(str) {
-                    Ok(url) => {
-                        if url.scheme_str() != Some("s3") {
-                            coord_bail!(
-                                "only 's3://...' urls are supported for COPY ... TO statements"
-                            );
-                        }
-                        url
-                    }
-                    Err(e) => coord_bail!("could not parse url: {}", e),
-                };
+        if evaled == Datum::Null {
+            coord_bail!("url value can not be null");
+        }
+        let to_url = match Uri::from_str(evaled.unwrap_str()) {
+            Ok(url) => {
+                if url.scheme_str() != Some("s3") {
+                    coord_bail!("only 's3://...' urls are supported for COPY ... TO statements");
+                }
                 url
             }
-            _ => coord_bail!("url value must evaluate to a string"),
+            Err(e) => coord_bail!("could not parse url: {}", e),
         };
 
         // TODO(mouli): Implement this

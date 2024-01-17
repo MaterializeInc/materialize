@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Tests for AWS connections.
+# Tests for COPY TO filename.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_aws_connection = true;
@@ -27,14 +27,14 @@ contains:AWS CONNECTION is required for COPY ... TO <url>
   WITH (
     AWS CONNECTION = aws_conn
   );
-contains:Only CSV format is supported for COPY ... TO <url>
+contains:only CSV format is supported for COPY ... TO <url>
 
 ! COPY t TO 's3://path/to/dir'
   WITH (
     AWS CONNECTION = aws_conn,
     FORMAT = 'binary'
   );
-contains:Only CSV format is supported for COPY ... TO <url>
+contains:only CSV format is supported for COPY ... TO <url>
 
 ! COPY t TO '/path/'
   WITH (
@@ -49,6 +49,13 @@ contains:only 's3://...' urls are supported
     FORMAT = 'csv'
   );
 contains:url value can not be null
+
+! COPY t TO 1234
+  WITH (
+    AWS CONNECTION = aws_conn,
+    FORMAT = 'csv'
+  );
+contains:COPY TO URL must have type text, not type integer
 
 ! COPY (SELECT * FROM t ORDER BY 1) TO NULL
   WITH (
