@@ -1,0 +1,1686 @@
+2024-01-17T11:15:00-05:00
+INITIALIZING
+Timing is on.
+1705508100
+psql:ddl.sql:3: NOTICE:  drop cascades to 5 other objects
+DETAIL:  drop cascades to INDEX "materialize.public.organisation_id"
+drop cascades to INDEX "materialize.public.company_id"
+drop cascades to MATERIALIZED VIEW "materialize.public.company"
+drop cascades to INDEX "materialize.public.university_id"
+drop cascades to MATERIALIZED VIEW "materialize.public.university"
+DROP TABLE
+Time: 388.422 ms
+psql:ddl.sql:4: NOTICE:  drop cascades to 6 other objects
+DETAIL:  drop cascades to INDEX "materialize.public.place_id"
+drop cascades to INDEX "materialize.public.country_id"
+drop cascades to MATERIALIZED VIEW "materialize.public.country"
+drop cascades to INDEX "materialize.public.city_id"
+drop cascades to INDEX "materialize.public.city_partofcountryid"
+drop cascades to MATERIALIZED VIEW "materialize.public.city"
+DROP TABLE
+Time: 411.677 ms
+psql:ddl.sql:5: NOTICE:  drop cascades to 3 other objects
+DETAIL:  drop cascades to INDEX "materialize.public.tag_id"
+drop cascades to INDEX "materialize.public.tag_name"
+drop cascades to INDEX "materialize.public.tag_typetagclassid"
+DROP TABLE
+Time: 305.299 ms
+psql:ddl.sql:6: NOTICE:  drop cascades to 2 other objects
+DETAIL:  drop cascades to INDEX "materialize.public.tagclass_id"
+drop cascades to INDEX "materialize.public.tagclass_name"
+DROP TABLE
+Time: 514.314 ms
+psql:ddl.sql:7: NOTICE:  drop cascades to 11 other objects
+DETAIL:  drop cascades to INDEX "materialize.public.comment_id"
+drop cascades to INDEX "materialize.public.message_messageid"
+drop cascades to INDEX "materialize.public.message_containerforumid"
+drop cascades to INDEX "materialize.public.message_parentmessageid"
+drop cascades to INDEX "materialize.public.message_creatorpersonid"
+drop cascades to INDEX "materialize.public.message_rootpostlanguage"
+drop cascades to VIEW "materialize.public.comment_view"
+drop cascades to VIEW "materialize.public.post_view"
+drop cascades to INDEX "materialize.public.pathq19_src"
+drop cascades to MATERIALIZED VIEW "materialize.public.pathq19"
+drop cascades to MATERIALIZED VIEW "materialize.public.message"
+DROP TABLE
+Time: 614.085 ms
+psql:ddl.sql:8: NOTICE:  drop cascades to 2 other objects
+DETAIL:  drop cascades to INDEX "materialize.public.forum_id"
+drop cascades to INDEX "materialize.public.forum_moderatorpersonid"
+DROP TABLE
+Time: 428.955 ms
+psql:ddl.sql:9: NOTICE:  drop cascades to 1 other objects
+DETAIL:  drop cascades to INDEX "materialize.public.post_id"
+DROP TABLE
+Time: 638.190 ms
+psql:ddl.sql:10: NOTICE:  drop cascades to 2 other objects
+DETAIL:  drop cascades to INDEX "materialize.public.person_id"
+drop cascades to INDEX "materialize.public.person_locationcityid"
+DROP TABLE
+Time: 406.800 ms
+psql:ddl.sql:11: NOTICE:  drop cascades to 3 other objects
+DETAIL:  drop cascades to INDEX "materialize.public.message_hastag_tag_messageid"
+drop cascades to INDEX "materialize.public.message_hastag_tag_tagid"
+drop cascades to MATERIALIZED VIEW "materialize.public.message_hastag_tag"
+DROP TABLE
+Time: 366.565 ms
+DROP TABLE
+Time: 616.119 ms
+psql:ddl.sql:13: NOTICE:  drop cascades to 2 other objects
+DETAIL:  drop cascades to INDEX "materialize.public.forum_hasmember_person_forumid"
+drop cascades to INDEX "materialize.public.forum_hasmember_person_personid"
+DROP TABLE
+Time: 273.379 ms
+DROP TABLE
+Time: 340.664 ms
+psql:ddl.sql:15: NOTICE:  drop cascades to 1 other objects
+DETAIL:  drop cascades to INDEX "materialize.public.person_hasinterest_tag_tagid"
+DROP TABLE
+Time: 326.622 ms
+psql:ddl.sql:16: NOTICE:  drop cascades to 3 other objects
+DETAIL:  drop cascades to INDEX "materialize.public.person_likes_message_personid"
+drop cascades to INDEX "materialize.public.person_likes_message_messageid"
+drop cascades to MATERIALIZED VIEW "materialize.public.person_likes_message"
+DROP TABLE
+Time: 314.494 ms
+DROP TABLE
+Time: 379.924 ms
+psql:ddl.sql:18: NOTICE:  drop cascades to 4 other objects
+DETAIL:  drop cascades to INDEX "materialize.public.person_studyat_university_personid"
+drop cascades to INDEX "materialize.public.person_studyat_university_universityid"
+drop cascades to INDEX "materialize.public.pathq20_src"
+drop cascades to MATERIALIZED VIEW "materialize.public.pathq20"
+DROP TABLE
+Time: 412.267 ms
+psql:ddl.sql:19: NOTICE:  drop cascades to 2 other objects
+DETAIL:  drop cascades to INDEX "materialize.public.person_workat_company_personid"
+drop cascades to INDEX "materialize.public.person_workat_company_companyid"
+DROP TABLE
+Time: 410.537 ms
+psql:ddl.sql:20: NOTICE:  drop cascades to 3 other objects
+DETAIL:  drop cascades to INDEX "materialize.public.person_knows_person_person1id"
+drop cascades to INDEX "materialize.public.person_knows_person_person2id"
+drop cascades to INDEX "materialize.public.person_knows_person_person1id_person2id"
+DROP TABLE
+Time: 406.634 ms
+OLD TABLES DROPPED
+2024-01-17T11:15:08-05:00
+CREATE TABLE
+Time: 593.417 ms
+CREATE INDEX
+Time: 424.709 ms
+CREATE TABLE
+Time: 569.825 ms
+CREATE INDEX
+Time: 447.481 ms
+CREATE TABLE
+Time: 500.952 ms
+CREATE INDEX
+Time: 408.373 ms
+CREATE INDEX
+Time: 437.416 ms
+CREATE INDEX
+Time: 690.479 ms
+CREATE TABLE
+Time: 624.225 ms
+CREATE INDEX
+Time: 602.575 ms
+CREATE INDEX
+Time: 498.992 ms
+CREATE TABLE
+Time: 600.084 ms
+CREATE INDEX
+Time: 466.467 ms
+CREATE TABLE
+Time: 788.216 ms
+CREATE INDEX
+Time: 574.265 ms
+CREATE INDEX
+Time: 460.698 ms
+CREATE TABLE
+Time: 584.771 ms
+CREATE INDEX
+Time: 497.451 ms
+CREATE TABLE
+Time: 671.923 ms
+CREATE INDEX
+Time: 486.938 ms
+CREATE INDEX
+Time: 514.467 ms
+CREATE TABLE
+Time: 588.004 ms
+CREATE TABLE
+Time: 714.784 ms
+CREATE TABLE
+Time: 704.689 ms
+CREATE INDEX
+Time: 540.457 ms
+CREATE INDEX
+Time: 604.822 ms
+CREATE TABLE
+Time: 585.252 ms
+CREATE TABLE
+Time: 663.419 ms
+CREATE INDEX
+Time: 612.321 ms
+CREATE TABLE
+Time: 616.079 ms
+CREATE TABLE
+Time: 618.418 ms
+CREATE TABLE
+Time: 532.432 ms
+CREATE INDEX
+Time: 452.116 ms
+CREATE INDEX
+Time: 544.532 ms
+CREATE TABLE
+Time: 615.154 ms
+CREATE INDEX
+Time: 513.418 ms
+CREATE INDEX
+Time: 510.288 ms
+CREATE TABLE
+Time: 818.514 ms
+CREATE INDEX
+Time: 513.769 ms
+CREATE INDEX
+Time: 512.024 ms
+CREATE INDEX
+Time: 614.929 ms
+COPY 7955
+Time: 445.524 ms
+COPY 1460
+Time: 473.251 ms
+COPY 16080
+Time: 543.591 ms
+COPY 71
+Time: 386.460 ms
+COPY 0
+Time: 26.897 ms
+COPY 1647261
+Time: 42526.170 ms (00:42.526)
+COPY 92177
+Time: 2562.828 ms (00:02.563)
+COPY 0
+Time: 25.910 ms
+COPY 2060925
+Time: 15565.158 ms (00:15.565)
+COPY 115206
+Time: 1301.133 ms (00:01.301)
+COPY 95138
+Time: 6963.542 ms (00:06.964)
+COPY 5689
+Time: 1026.787 ms (00:01.027)
+COPY 0
+Time: 30.660 ms
+COPY 2757277
+Time: 21570.809 ms (00:21.571)
+COPY 152491
+Time: 1845.504 ms (00:01.846)
+COPY 309114
+Time: 3541.968 ms (00:03.542)
+COPY 19470
+Time: 758.540 ms
+COPY 9699
+Time: 816.017 ms
+COPY 596
+Time: 296.611 ms
+COPY 223675
+Time: 2107.242 ms (00:02.107)
+COPY 14377
+Time: 566.863 ms
+COPY 163388
+Time: 1840.141 ms (00:01.840)
+COPY 163388
+Time: 1948.009 ms (00:01.948)
+COPY 9626
+Time: 553.435 ms
+COPY 9626
+Time: 475.954 ms
+COPY 7821
+Time: 505.939 ms
+COPY 488
+Time: 277.774 ms
+COPY 20816
+Time: 539.666 ms
+COPY 1228
+Time: 409.109 ms
+COPY 0
+Time: 30.178 ms
+COPY 1053319
+Time: 8413.436 ms (00:08.413)
+COPY 56494
+Time: 807.132 ms
+COPY 717755
+Time: 6006.307 ms (00:06.006)
+COPY 42700
+Time: 1127.647 ms (00:01.128)
+COPY 0
+Time: 26.007 ms
+COPY 1058976
+Time: 29266.678 ms (00:29.267)
+COPY 62250
+Time: 2037.061 ms (00:02.037)
+COPY 710297
+Time: 5633.501 ms (00:05.634)
+COPY 41636
+Time: 767.316 ms
+CREATE MATERIALIZED VIEW
+Time: 458.912 ms
+CREATE INDEX
+Time: 588.937 ms
+CREATE MATERIALIZED VIEW
+Time: 659.535 ms
+CREATE INDEX
+Time: 592.521 ms
+CREATE INDEX
+Time: 482.576 ms
+CREATE MATERIALIZED VIEW
+Time: 480.159 ms
+CREATE INDEX
+Time: 482.604 ms
+CREATE MATERIALIZED VIEW
+Time: 499.613 ms
+CREATE INDEX
+Time: 396.887 ms
+CREATE MATERIALIZED VIEW
+Time: 627.187 ms
+CREATE INDEX
+Time: 478.899 ms
+CREATE INDEX
+Time: 551.662 ms
+CREATE MATERIALIZED VIEW
+Time: 611.278 ms
+CREATE INDEX
+Time: 487.162 ms
+CREATE INDEX
+Time: 416.703 ms
+CREATE MATERIALIZED VIEW
+Time: 730.374 ms
+CREATE INDEX
+Time: 523.851 ms
+CREATE INDEX
+Time: 602.796 ms
+CREATE INDEX
+Time: 443.656 ms
+CREATE INDEX
+Time: 498.414 ms
+CREATE INDEX
+Time: 491.423 ms
+CREATE VIEW
+Time: 512.038 ms
+CREATE VIEW
+Time: 511.018 ms
+1705508307
+2024-01-17T11:18:27-05:00
+RUNNING QUERIES
+
+Q10 EXPLAINED
+                                                                                  Optimized Plan                                                                                  
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Explained Query:                                                                                                                                                                +
+   Finish order_by=[#2 desc nulls_first, #1{name} asc nulls_last, #0{person2id} asc nulls_last] limit=100 output=[#0..=#2]                                                       +
+     Return // { arity: 3 }                                                                                                                                                      +
+       Reduce group_by=[#0{person2id}, #1{name}] aggregates=[count(*)] // { arity: 3 }                                                                                           +
+         Project (#0, #9) // { arity: 2 }                                                                                                                                        +
+           Join on=(#0{person2id} = #1{id} = #2{creatorpersonid} AND #3{messageid} = #4{messageid} = #6{messageid} AND #7{tagid} = #8{id}) type=delta // { arity: 12 }           +
+             implementation                                                                                                                                                      +
+               %0 » %1[#0]UKA » %2[#0]K » %3[#0]UKA » %4:message_hastag_tag[#1]KA » %5:tag[#0]KA                                                                                 +
+               %1 » %0[#0]UKA » %2[#0]K » %3[#0]UKA » %4:message_hastag_tag[#1]KA » %5:tag[#0]KA                                                                                 +
+               %2 » %0[#0]UKA » %1[#0]UKA » %3[#0]UKA » %4:message_hastag_tag[#1]KA » %5:tag[#0]KA                                                                               +
+               %3 » %4:message_hastag_tag[#1]KA » %5:tag[#0]KA » %2[#1]K » %0[#0]UKA » %1[#0]UKA                                                                                 +
+               %4:message_hastag_tag » %3[#0]UKA » %5:tag[#0]KA » %2[#1]K » %0[#0]UKA » %1[#0]UKA                                                                                +
+               %5:tag » %4:message_hastag_tag[#2]KA » %3[#0]UKA » %2[#1]K » %0[#0]UKA » %1[#0]UKA                                                                                +
+             ArrangeBy keys=[[#0{person2id}]] // { arity: 1 }                                                                                                                    +
+               Distinct project=[#0{person2id}] // { arity: 1 }                                                                                                                  +
+                 Threshold // { arity: 1 }                                                                                                                                       +
+                   Union // { arity: 1 }                                                                                                                                         +
+                     Distinct project=[#0{person2id}] // { arity: 1 }                                                                                                            +
+                       Project (#6) // { arity: 1 }                                                                                                                              +
+                         Join on=(#0{person2id} = #2{person1id} AND #3{person2id} = #5{person1id}) type=delta // { arity: 7 }                                                    +
+                           implementation                                                                                                                                        +
+                             %0:l2 » %1:person_knows_person[#1]KA » %2:l0[#1]KA                                                                                                  +
+                             %1:person_knows_person » %0:l2[#0]UKA » %2:l0[#1]KA                                                                                                 +
+                             %2:l0 » %1:person_knows_person[#2]KA » %0:l2[#0]UKA                                                                                                 +
+                           ArrangeBy keys=[[#0{person2id}]] // { arity: 1 }                                                                                                      +
+                             Get l2 // { arity: 1 }                                                                                                                              +
+                           ArrangeBy keys=[[#1{person1id}], [#2{person2id}]] // { arity: 3 }                                                                                     +
+                             ReadIndex on=person_knows_person person_knows_person_person1id=[delta join lookup] person_knows_person_person2id=[delta join lookup] // { arity: 3 }+
+                           Get l0 // { arity: 3 }                                                                                                                                +
+                     Negate // { arity: 1 }                                                                                                                                      +
+                       Get l2 // { arity: 1 }                                                                                                                                    +
+             ArrangeBy keys=[[#0{id}]] // { arity: 1 }                                                                                                                           +
+               Distinct project=[#0{id}] // { arity: 1 }                                                                                                                         +
+                 Project (#1) // { arity: 1 }                                                                                                                                    +
+                   Filter (#16{name} = "Italy") AND (#14{partofcountryid}) IS NOT NULL // { arity: 19 }                                                                          +
+                     Join on=(#8{locationcityid} = #11{id} AND #14{partofcountryid} = #15{id}) type=delta // { arity: 19 }                                                       +
+                       implementation                                                                                                                                            +
+                         %0:person » %1:city[#0]KA » %2:country[#0]KAef                                                                                                          +
+                         %1:city » %2:country[#0]KAef » %0:person[#8]KA                                                                                                          +
+                         %2:country » %1:city[#3]KA » %0:person[#8]KA                                                                                                            +
+                       ArrangeBy keys=[[#8{locationcityid}]] // { arity: 11 }                                                                                                    +
+                         ReadIndex on=person person_locationcityid=[delta join 1st input (full scan)] // { arity: 11 }                                                           +
+                       ArrangeBy keys=[[#0{id}], [#3{partofcountryid}]] // { arity: 4 }                                                                                          +
+                         ReadIndex on=city city_id=[delta join lookup] city_partofcountryid=[delta join lookup] // { arity: 4 }                                                  +
+                       ArrangeBy keys=[[#0{id}]] // { arity: 4 }                                                                                                                 +
+                         ReadIndex on=country country_id=[delta join lookup] // { arity: 4 }                                                                                     +
+             ArrangeBy keys=[[#0{creatorpersonid}], [#1{messageid}]] // { arity: 2 }                                                                                             +
+               Distinct project=[#1{creatorpersonid}, #0{messageid}] // { arity: 2 }                                                                                             +
+                 Project (#1, #9) // { arity: 2 }                                                                                                                                +
+                   ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }                                                                                   +
+             ArrangeBy keys=[[#0{messageid}]] // { arity: 1 }                                                                                                                    +
+               Distinct project=[#0{messageid}] // { arity: 1 }                                                                                                                  +
+                 Project (#1) // { arity: 1 }                                                                                                                                    +
+                   Join on=(#2{tagid} = #3{id} AND #6{typetagclassid} = #7{id}) type=delta // { arity: 12 }                                                                      +
+                     implementation                                                                                                                                              +
+                       %0:message_hastag_tag » %1:tag[#0]KA » %2:tagclass[#0]KAe                                                                                                 +
+                       %1:tag » %2:tagclass[#0]KAe » %0:message_hastag_tag[#2]KA                                                                                                 +
+                       %2:tagclass » %1:tag[#3]KA » %0:message_hastag_tag[#2]KA                                                                                                  +
+                     ArrangeBy keys=[[#2{tagid}]] // { arity: 3 }                                                                                                                +
+                       ReadIndex on=message_hastag_tag message_hastag_tag_tagid=[delta join 1st input (full scan)] // { arity: 3 }                                               +
+                     ArrangeBy keys=[[#0{id}], [#3{typetagclassid}]] // { arity: 4 }                                                                                             +
+                       ReadIndex on=tag tag_id=[delta join lookup] tag_typetagclassid=[delta join lookup] // { arity: 4 }                                                        +
+                     ArrangeBy keys=[[#0{id}]] // { arity: 5 }                                                                                                                   +
+                       ReadIndex on=materialize.public.tagclass tagclass_name=[lookup value=("Thing")] // { arity: 5 }                                                           +
+             ArrangeBy keys=[[#1{messageid}], [#2{tagid}]] // { arity: 3 }                                                                                                       +
+               ReadIndex on=message_hastag_tag message_hastag_tag_messageid=[delta join lookup] message_hastag_tag_tagid=[delta join lookup] // { arity: 3 }                     +
+             ArrangeBy keys=[[#0{id}]] // { arity: 4 }                                                                                                                           +
+               ReadIndex on=tag tag_id=[delta join lookup] // { arity: 4 }                                                                                                       +
+     With                                                                                                                                                                        +
+       cte l2 =                                                                                                                                                                  +
+         Distinct project=[#0{person2id}] // { arity: 1 }                                                                                                                        +
+           Union // { arity: 1 }                                                                                                                                                 +
+             Project (#2) // { arity: 1 }                                                                                                                                        +
+               Get l1 // { arity: 4 }                                                                                                                                            +
+             Project (#6) // { arity: 1 }                                                                                                                                        +
+               Join on=(#2{person2id} = #5{person1id}) type=differential // { arity: 7 }                                                                                         +
+                 implementation                                                                                                                                                  +
+                   %0:l1[#2]KAe » %1:l0[#1]KAe                                                                                                                                   +
+                 ArrangeBy keys=[[#2{person2id}]] // { arity: 4 }                                                                                                                +
+                   Get l1 // { arity: 4 }                                                                                                                                        +
+                 Get l0 // { arity: 3 }                                                                                                                                          +
+       cte l1 =                                                                                                                                                                  +
+         ReadIndex on=materialize.public.person_knows_person person_knows_person_person1id=[lookup value=(6597069770479)] // { arity: 4 }                                        +
+       cte l0 =                                                                                                                                                                  +
+         ArrangeBy keys=[[#1{person1id}]] // { arity: 3 }                                                                                                                        +
+           ReadIndex on=person_knows_person person_knows_person_person1id=[differential join, delta join lookup, lookup] // { arity: 3 }                                         +
+                                                                                                                                                                                 +
+ Used Indexes:                                                                                                                                                                   +
+   - materialize.public.tag_id (delta join lookup)                                                                                                                               +
+   - materialize.public.tag_typetagclassid (delta join lookup)                                                                                                                   +
+   - materialize.public.tagclass_name (lookup)                                                                                                                                   +
+   - materialize.public.person_locationcityid (delta join 1st input (full scan))                                                                                                 +
+   - materialize.public.person_knows_person_person1id (differential join, delta join lookup, lookup)                                                                             +
+   - materialize.public.person_knows_person_person2id (delta join lookup)                                                                                                        +
+   - materialize.public.country_id (delta join lookup)                                                                                                                           +
+   - materialize.public.city_id (delta join lookup)                                                                                                                              +
+   - materialize.public.city_partofcountryid (delta join lookup)                                                                                                                 +
+   - materialize.public.message_hastag_tag_messageid (delta join lookup)                                                                                                         +
+   - materialize.public.message_hastag_tag_tagid (delta join lookup, delta join 1st input (full scan))                                                                           +
+   - materialize.public.message_messageid (*** full scan ***)                                                                                                                    +
+ 
+(1 row)
+
+Time: 30.740 ms
+Q10 RUN 1
+   person.id    |             tag.name              | messagecount 
+----------------+-----------------------------------+--------------
+  2199023257601 | Ralph_Vaughan_Williams            |            3
+  2199023257601 | Aristophanes                      |            2
+ 15393162799165 | Aristophanes                      |            2
+ 19791209309107 | Aristophanes                      |            2
+           6079 | Augustine_of_Hippo                |            2
+ 30786325585300 | Bob_Hope                          |            2
+  2199023257601 | Canada                            |            2
+ 15393162799165 | Dmitry_Medvedev                   |            2
+  2199023259874 | Franklin_D._Roosevelt             |            2
+ 15393162793184 | Interpol                          |            2
+  2199023257601 | Jean-Baptiste_Lamarck             |            2
+  2199023261968 | Johannes_Brahms                   |            2
+ 19791209309107 | John_Cage                         |            2
+ 19791209309107 | Leonard_Bernstein                 |            2
+  2199023259874 | Ludwig_van_Beethoven              |            2
+  4398046512280 | Muammar_Gaddafi                   |            2
+  2199023257601 | Mughal_Empire                     |            2
+ 30786325581417 | Plácido_Domingo                   |            2
+  2199023257601 | Slavoj_Žižek                      |            2
+ 30786325581417 | Wayne_Gretzky                     |            2
+  2199023261968 | Wolfgang_Amadeus_Mozart           |            2
+           9043 | 14th_Dalai_Lama                   |            1
+  2199023257601 | 14th_Dalai_Lama                   |            1
+  4398046512280 | 14th_Dalai_Lama                   |            1
+            217 | 99_Luftballons                    |            1
+ 30786325585300 | A_Day_Without_Rain                |            1
+ 28587302322352 | A_Kind_of_Magic                   |            1
+  2199023259874 | A_Little_Bit_Me,_a_Little_Bit_You |            1
+           7684 | A_Whiter_Shade_of_Pale            |            1
+ 15393162793184 | Aaron_Copland                     |            1
+ 17592186053088 | Abbasid_Caliphate                 |            1
+ 32985348842018 | Adolf_Hitler                      |            1
+            217 | Alan_Moore                        |            1
+ 19791209309107 | Albert_Einstein                   |            1
+            217 | Alexander_Downer                  |            1
+ 19791209310154 | Alexander_Pushkin                 |            1
+  4398046517288 | Alfred,_Lord_Tennyson             |            1
+  2199023259874 | Alfred_Hitchcock                  |            1
+           9043 | Ali                               |            1
+  2199023257601 | Ali                               |            1
+  4398046512280 | Ali                               |            1
+ 21990232560354 | Ali                               |            1
+ 21990232564061 | All_the_Roadrunning               |            1
+ 32985348842085 | Ammon                             |            1
+           6079 | Andrew_Jackson                    |            1
+ 19791209309107 | Angola                            |            1
+ 30786325581056 | Another_One_Bites_the_Dust        |            1
+  2199023257601 | Anton_Chekhov                     |            1
+  4398046512280 | Are_You_Experienced               |            1
+ 21990232564061 | Arenberg                          |            1
+            217 | Aristophanes                      |            1
+  2199023259874 | Aristophanes                      |            1
+ 30786325585300 | Aristophanes                      |            1
+           6079 | Aristotle                         |            1
+ 10995116279128 | Arnold_Schwarzenegger             |            1
+ 32985348842085 | Arthur_William_Baden_Powell       |            1
+ 19791209309107 | Ashikaga_shogunate                |            1
+ 30786325585300 | At_Last                           |            1
+ 28587302322352 | At_War_with_the_Mystics           |            1
+ 30786325581417 | Augustin_Pyramus_de_Candolle      |            1
+ 10995116285979 | Augustine_of_Hippo                |            1
+ 32985348842085 | Augustine_of_Hippo                |            1
+           9043 | Austrian_Empire                   |            1
+ 19791209310154 | Banned_in_the_U.S.A.              |            1
+  2199023257601 | Barbra_Streisand                  |            1
+  2199023257601 | Barrio_Fino                       |            1
+  2199023259874 | Barry_Manilow                     |            1
+  2199023259874 | Before_You_Were_Punk              |            1
+ 30786325581417 | Benjamin_Harrison                 |            1
+ 30786325585300 | Bertolt_Brecht                    |            1
+ 19791209309107 | Bill_Clinton                      |            1
+ 30786325585300 | Bill_Clinton                      |            1
+ 32985348842018 | Blood_Sugar_Sex_Magik             |            1
+  2199023257601 | Bob_Dole                          |            1
+ 19791209309107 | Bob_Dylan                         |            1
+ 32985348842085 | Botswana                          |            1
+ 10995116279128 | Break_Like_the_Wind               |            1
+ 30786325585300 | Breathe_Again                     |            1
+ 21990232564061 | British_Ceylon                    |            1
+  2199023261968 | British_Empire                    |            1
+  2199023257601 | Burma                             |            1
+ 19791209309107 | Busta_Rhymes                      |            1
+ 30786325581417 | Busta_Rhymes                      |            1
+ 30786325585300 | Béla_Bartók                       |            1
+ 19791209309107 | C._S._Lewis                       |            1
+ 21990232564061 | Cameroon                          |            1
+ 35184372093958 | Cannot_Buy_My_Soul                |            1
+  2199023257601 | Cape_Verde                        |            1
+ 19791209310154 | Carl_Gustaf_Emil_Mannerheim       |            1
+  4398046518779 | Chaka_Khan                        |            1
+  2199023259874 | Champa                            |            1
+           7684 | Charles_Dickens                   |            1
+ 32985348842085 | Charles_II_of_England             |            1
+ 30786325585300 | Charles_I_of_England              |            1
+ 15393162793184 | Charlton_Heston                   |            1
+  4398046517288 | Che_Guevara                       |            1
+ 30786325581417 | Christopher_Columbus              |            1
+  2199023257601 | Chrome_Dreams_II                  |            1
+ 10995116279128 | Claude_Debussy                    |            1
+ 10995116285979 | Claude_Debussy                    |            1
+(100 rows)
+
+Time: 59865.664 ms (00:59.866)
+Q10 RUN 2
+   person.id    |             tag.name              | messagecount 
+----------------+-----------------------------------+--------------
+  2199023257601 | Ralph_Vaughan_Williams            |            3
+  2199023257601 | Aristophanes                      |            2
+ 15393162799165 | Aristophanes                      |            2
+ 19791209309107 | Aristophanes                      |            2
+           6079 | Augustine_of_Hippo                |            2
+ 30786325585300 | Bob_Hope                          |            2
+  2199023257601 | Canada                            |            2
+ 15393162799165 | Dmitry_Medvedev                   |            2
+  2199023259874 | Franklin_D._Roosevelt             |            2
+ 15393162793184 | Interpol                          |            2
+  2199023257601 | Jean-Baptiste_Lamarck             |            2
+  2199023261968 | Johannes_Brahms                   |            2
+ 19791209309107 | John_Cage                         |            2
+ 19791209309107 | Leonard_Bernstein                 |            2
+  2199023259874 | Ludwig_van_Beethoven              |            2
+  4398046512280 | Muammar_Gaddafi                   |            2
+  2199023257601 | Mughal_Empire                     |            2
+ 30786325581417 | Plácido_Domingo                   |            2
+  2199023257601 | Slavoj_Žižek                      |            2
+ 30786325581417 | Wayne_Gretzky                     |            2
+  2199023261968 | Wolfgang_Amadeus_Mozart           |            2
+           9043 | 14th_Dalai_Lama                   |            1
+  2199023257601 | 14th_Dalai_Lama                   |            1
+  4398046512280 | 14th_Dalai_Lama                   |            1
+            217 | 99_Luftballons                    |            1
+ 30786325585300 | A_Day_Without_Rain                |            1
+ 28587302322352 | A_Kind_of_Magic                   |            1
+  2199023259874 | A_Little_Bit_Me,_a_Little_Bit_You |            1
+           7684 | A_Whiter_Shade_of_Pale            |            1
+ 15393162793184 | Aaron_Copland                     |            1
+ 17592186053088 | Abbasid_Caliphate                 |            1
+ 32985348842018 | Adolf_Hitler                      |            1
+            217 | Alan_Moore                        |            1
+ 19791209309107 | Albert_Einstein                   |            1
+            217 | Alexander_Downer                  |            1
+ 19791209310154 | Alexander_Pushkin                 |            1
+  4398046517288 | Alfred,_Lord_Tennyson             |            1
+  2199023259874 | Alfred_Hitchcock                  |            1
+           9043 | Ali                               |            1
+  2199023257601 | Ali                               |            1
+  4398046512280 | Ali                               |            1
+ 21990232560354 | Ali                               |            1
+ 21990232564061 | All_the_Roadrunning               |            1
+ 32985348842085 | Ammon                             |            1
+           6079 | Andrew_Jackson                    |            1
+ 19791209309107 | Angola                            |            1
+ 30786325581056 | Another_One_Bites_the_Dust        |            1
+  2199023257601 | Anton_Chekhov                     |            1
+  4398046512280 | Are_You_Experienced               |            1
+ 21990232564061 | Arenberg                          |            1
+            217 | Aristophanes                      |            1
+  2199023259874 | Aristophanes                      |            1
+ 30786325585300 | Aristophanes                      |            1
+           6079 | Aristotle                         |            1
+ 10995116279128 | Arnold_Schwarzenegger             |            1
+ 32985348842085 | Arthur_William_Baden_Powell       |            1
+ 19791209309107 | Ashikaga_shogunate                |            1
+ 30786325585300 | At_Last                           |            1
+ 28587302322352 | At_War_with_the_Mystics           |            1
+ 30786325581417 | Augustin_Pyramus_de_Candolle      |            1
+ 10995116285979 | Augustine_of_Hippo                |            1
+ 32985348842085 | Augustine_of_Hippo                |            1
+           9043 | Austrian_Empire                   |            1
+ 19791209310154 | Banned_in_the_U.S.A.              |            1
+  2199023257601 | Barbra_Streisand                  |            1
+  2199023257601 | Barrio_Fino                       |            1
+  2199023259874 | Barry_Manilow                     |            1
+  2199023259874 | Before_You_Were_Punk              |            1
+ 30786325581417 | Benjamin_Harrison                 |            1
+ 30786325585300 | Bertolt_Brecht                    |            1
+ 19791209309107 | Bill_Clinton                      |            1
+ 30786325585300 | Bill_Clinton                      |            1
+ 32985348842018 | Blood_Sugar_Sex_Magik             |            1
+  2199023257601 | Bob_Dole                          |            1
+ 19791209309107 | Bob_Dylan                         |            1
+ 32985348842085 | Botswana                          |            1
+ 10995116279128 | Break_Like_the_Wind               |            1
+ 30786325585300 | Breathe_Again                     |            1
+ 21990232564061 | British_Ceylon                    |            1
+  2199023261968 | British_Empire                    |            1
+  2199023257601 | Burma                             |            1
+ 19791209309107 | Busta_Rhymes                      |            1
+ 30786325581417 | Busta_Rhymes                      |            1
+ 30786325585300 | Béla_Bartók                       |            1
+ 19791209309107 | C._S._Lewis                       |            1
+ 21990232564061 | Cameroon                          |            1
+ 35184372093958 | Cannot_Buy_My_Soul                |            1
+  2199023257601 | Cape_Verde                        |            1
+ 19791209310154 | Carl_Gustaf_Emil_Mannerheim       |            1
+  4398046518779 | Chaka_Khan                        |            1
+  2199023259874 | Champa                            |            1
+           7684 | Charles_Dickens                   |            1
+ 32985348842085 | Charles_II_of_England             |            1
+ 30786325585300 | Charles_I_of_England              |            1
+ 15393162793184 | Charlton_Heston                   |            1
+  4398046517288 | Che_Guevara                       |            1
+ 30786325581417 | Christopher_Columbus              |            1
+  2199023257601 | Chrome_Dreams_II                  |            1
+ 10995116279128 | Claude_Debussy                    |            1
+ 10995116285979 | Claude_Debussy                    |            1
+(100 rows)
+
+Time: 4899.004 ms (00:04.899)
+Q10 RUN 3
+   person.id    |             tag.name              | messagecount 
+----------------+-----------------------------------+--------------
+  2199023257601 | Ralph_Vaughan_Williams            |            3
+  2199023257601 | Aristophanes                      |            2
+ 15393162799165 | Aristophanes                      |            2
+ 19791209309107 | Aristophanes                      |            2
+           6079 | Augustine_of_Hippo                |            2
+ 30786325585300 | Bob_Hope                          |            2
+  2199023257601 | Canada                            |            2
+ 15393162799165 | Dmitry_Medvedev                   |            2
+  2199023259874 | Franklin_D._Roosevelt             |            2
+ 15393162793184 | Interpol                          |            2
+  2199023257601 | Jean-Baptiste_Lamarck             |            2
+  2199023261968 | Johannes_Brahms                   |            2
+ 19791209309107 | John_Cage                         |            2
+ 19791209309107 | Leonard_Bernstein                 |            2
+  2199023259874 | Ludwig_van_Beethoven              |            2
+  4398046512280 | Muammar_Gaddafi                   |            2
+  2199023257601 | Mughal_Empire                     |            2
+ 30786325581417 | Plácido_Domingo                   |            2
+  2199023257601 | Slavoj_Žižek                      |            2
+ 30786325581417 | Wayne_Gretzky                     |            2
+  2199023261968 | Wolfgang_Amadeus_Mozart           |            2
+           9043 | 14th_Dalai_Lama                   |            1
+  2199023257601 | 14th_Dalai_Lama                   |            1
+  4398046512280 | 14th_Dalai_Lama                   |            1
+            217 | 99_Luftballons                    |            1
+ 30786325585300 | A_Day_Without_Rain                |            1
+ 28587302322352 | A_Kind_of_Magic                   |            1
+  2199023259874 | A_Little_Bit_Me,_a_Little_Bit_You |            1
+           7684 | A_Whiter_Shade_of_Pale            |            1
+ 15393162793184 | Aaron_Copland                     |            1
+ 17592186053088 | Abbasid_Caliphate                 |            1
+ 32985348842018 | Adolf_Hitler                      |            1
+            217 | Alan_Moore                        |            1
+ 19791209309107 | Albert_Einstein                   |            1
+            217 | Alexander_Downer                  |            1
+ 19791209310154 | Alexander_Pushkin                 |            1
+  4398046517288 | Alfred,_Lord_Tennyson             |            1
+  2199023259874 | Alfred_Hitchcock                  |            1
+           9043 | Ali                               |            1
+  2199023257601 | Ali                               |            1
+  4398046512280 | Ali                               |            1
+ 21990232560354 | Ali                               |            1
+ 21990232564061 | All_the_Roadrunning               |            1
+ 32985348842085 | Ammon                             |            1
+           6079 | Andrew_Jackson                    |            1
+ 19791209309107 | Angola                            |            1
+ 30786325581056 | Another_One_Bites_the_Dust        |            1
+  2199023257601 | Anton_Chekhov                     |            1
+  4398046512280 | Are_You_Experienced               |            1
+ 21990232564061 | Arenberg                          |            1
+            217 | Aristophanes                      |            1
+  2199023259874 | Aristophanes                      |            1
+ 30786325585300 | Aristophanes                      |            1
+           6079 | Aristotle                         |            1
+ 10995116279128 | Arnold_Schwarzenegger             |            1
+ 32985348842085 | Arthur_William_Baden_Powell       |            1
+ 19791209309107 | Ashikaga_shogunate                |            1
+ 30786325585300 | At_Last                           |            1
+ 28587302322352 | At_War_with_the_Mystics           |            1
+ 30786325581417 | Augustin_Pyramus_de_Candolle      |            1
+ 10995116285979 | Augustine_of_Hippo                |            1
+ 32985348842085 | Augustine_of_Hippo                |            1
+           9043 | Austrian_Empire                   |            1
+ 19791209310154 | Banned_in_the_U.S.A.              |            1
+  2199023257601 | Barbra_Streisand                  |            1
+  2199023257601 | Barrio_Fino                       |            1
+  2199023259874 | Barry_Manilow                     |            1
+  2199023259874 | Before_You_Were_Punk              |            1
+ 30786325581417 | Benjamin_Harrison                 |            1
+ 30786325585300 | Bertolt_Brecht                    |            1
+ 19791209309107 | Bill_Clinton                      |            1
+ 30786325585300 | Bill_Clinton                      |            1
+ 32985348842018 | Blood_Sugar_Sex_Magik             |            1
+  2199023257601 | Bob_Dole                          |            1
+ 19791209309107 | Bob_Dylan                         |            1
+ 32985348842085 | Botswana                          |            1
+ 10995116279128 | Break_Like_the_Wind               |            1
+ 30786325585300 | Breathe_Again                     |            1
+ 21990232564061 | British_Ceylon                    |            1
+  2199023261968 | British_Empire                    |            1
+  2199023257601 | Burma                             |            1
+ 19791209309107 | Busta_Rhymes                      |            1
+ 30786325581417 | Busta_Rhymes                      |            1
+ 30786325585300 | Béla_Bartók                       |            1
+ 19791209309107 | C._S._Lewis                       |            1
+ 21990232564061 | Cameroon                          |            1
+ 35184372093958 | Cannot_Buy_My_Soul                |            1
+  2199023257601 | Cape_Verde                        |            1
+ 19791209310154 | Carl_Gustaf_Emil_Mannerheim       |            1
+  4398046518779 | Chaka_Khan                        |            1
+  2199023259874 | Champa                            |            1
+           7684 | Charles_Dickens                   |            1
+ 32985348842085 | Charles_II_of_England             |            1
+ 30786325585300 | Charles_I_of_England              |            1
+ 15393162793184 | Charlton_Heston                   |            1
+  4398046517288 | Che_Guevara                       |            1
+ 30786325581417 | Christopher_Columbus              |            1
+  2199023257601 | Chrome_Dreams_II                  |            1
+ 10995116279128 | Claude_Debussy                    |            1
+ 10995116285979 | Claude_Debussy                    |            1
+(100 rows)
+
+Time: 4948.516 ms (00:04.949)
+
+Q11 EXPLAINED
+                                                                                           Optimized Plan                                                                                           
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Explained Query:                                                                                                                                                                                  +
+   Return // { arity: 1 }                                                                                                                                                                          +
+     Union // { arity: 1 }                                                                                                                                                                         +
+       Get l2 // { arity: 1 }                                                                                                                                                                      +
+       Map (0) // { arity: 1 }                                                                                                                                                                     +
+         Union // { arity: 0 }                                                                                                                                                                     +
+           Negate // { arity: 0 }                                                                                                                                                                  +
+             Project () // { arity: 0 }                                                                                                                                                            +
+               Get l2 // { arity: 1 }                                                                                                                                                              +
+           Constant // { arity: 0 }                                                                                                                                                                +
+             - ()                                                                                                                                                                                  +
+   With                                                                                                                                                                                            +
+     cte l2 =                                                                                                                                                                                      +
+       Reduce aggregates=[count(*)] // { arity: 1 }                                                                                                                                                +
+         Project () // { arity: 0 }                                                                                                                                                                +
+           Join on=(#0{id} = #5{person2id} AND #1{person2id} = #2{id} AND #3{person2id} = #4{id}) type=differential // { arity: 6 }                                                                +
+             implementation                                                                                                                                                                        +
+               %0:l1[#1]Kf » %1:l1[#0]Kf » %2:l0[#0, #1]KKf                                                                                                                                        +
+             ArrangeBy keys=[[#1{person2id}]] // { arity: 2 }                                                                                                                                      +
+               Get l1 // { arity: 2 }                                                                                                                                                              +
+             ArrangeBy keys=[[#0{id}]] // { arity: 2 }                                                                                                                                             +
+               Get l1 // { arity: 2 }                                                                                                                                                              +
+             ArrangeBy keys=[[#0{id}, #1{person2id}]] // { arity: 2 }                                                                                                                              +
+               Get l0 // { arity: 2 }                                                                                                                                                              +
+     cte l1 =                                                                                                                                                                                      +
+       Filter (#0{id} < #1{person2id}) // { arity: 2 }                                                                                                                                             +
+         Get l0 // { arity: 2 }                                                                                                                                                                    +
+     cte l0 =                                                                                                                                                                                      +
+       Project (#1, #21) // { arity: 2 }                                                                                                                                                           +
+         Filter (#16{name} = "India") AND (#19{creationdate} <= 2013-01-10 00:00:00 UTC) AND (2012-09-28 00:00:00 UTC <= #19{creationdate}) AND (#14{partofcountryid}) IS NOT NULL // { arity: 22 }+
+           Join on=(#1{id} = #20{person1id} AND #8{locationcityid} = #11{id} AND #14{partofcountryid} = #15{id}) type=delta // { arity: 22 }                                                       +
+             implementation                                                                                                                                                                        +
+               %0:person » %3:person_knows_person[#1]KAiif » %1:city[#0]KA » %2:country[#0]KAef                                                                                                    +
+               %1:city » %2:country[#0]KAef » %0:person[#8]KA » %3:person_knows_person[#1]KAiif                                                                                                    +
+               %2:country » %1:city[#3]KA » %0:person[#8]KA » %3:person_knows_person[#1]KAiif                                                                                                      +
+               %3:person_knows_person » %0:person[#1]KA » %1:city[#0]KA » %2:country[#0]KAef                                                                                                       +
+             ArrangeBy keys=[[#1{id}], [#8{locationcityid}]] // { arity: 11 }                                                                                                                      +
+               ReadIndex on=person person_id=[delta join 1st input (full scan)] person_locationcityid=[delta join 1st input (full scan)] // { arity: 11 }                                          +
+             ArrangeBy keys=[[#0{id}], [#3{partofcountryid}]] // { arity: 4 }                                                                                                                      +
+               ReadIndex on=city city_id=[delta join lookup] city_partofcountryid=[delta join lookup] // { arity: 4 }                                                                              +
+             ArrangeBy keys=[[#0{id}]] // { arity: 4 }                                                                                                                                             +
+               ReadIndex on=country country_id=[delta join lookup] // { arity: 4 }                                                                                                                 +
+             ArrangeBy keys=[[#1{person1id}]] // { arity: 3 }                                                                                                                                      +
+               ReadIndex on=person_knows_person person_knows_person_person1id=[delta join lookup] // { arity: 3 }                                                                                  +
+                                                                                                                                                                                                   +
+ Used Indexes:                                                                                                                                                                                     +
+   - materialize.public.person_id (delta join 1st input (full scan))                                                                                                                               +
+   - materialize.public.person_locationcityid (delta join 1st input (full scan))                                                                                                                   +
+   - materialize.public.person_knows_person_person1id (delta join lookup)                                                                                                                          +
+   - materialize.public.country_id (delta join lookup)                                                                                                                                             +
+   - materialize.public.city_id (delta join lookup)                                                                                                                                                +
+   - materialize.public.city_partofcountryid (delta join lookup)                                                                                                                                   +
+ 
+(1 row)
+
+Time: 25.932 ms
+Q11 RUN 1
+ count 
+-------
+   840
+(1 row)
+
+Time: 166.821 ms
+Q11 RUN 2
+ count 
+-------
+   840
+(1 row)
+
+Time: 168.622 ms
+Q11 RUN 3
+ count 
+-------
+   840
+(1 row)
+
+Time: 195.679 ms
+
+Q15 EXPLAINED
+                                                                                              Optimized Plan                                                                                              
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Explained Query:                                                                                                                                                                                        +
+   Finish order_by=[#1 asc nulls_last] limit=20 output=[#2]                                                                                                                                              +
+     Return // { arity: 3 }                                                                                                                                                                              +
+       Project (#1, #2, #2) // { arity: 3 }                                                                                                                                                              +
+         Filter (#1{person2id} = 15393162796819) AND (#2 = #2) // { arity: 3 }                                                                                                                           +
+           Get l4 // { arity: 3 }                                                                                                                                                                        +
+     With Mutually Recursive                                                                                                                                                                             +
+       cte l4 =                                                                                                                                                                                          +
+         Project (#2, #0, #1) // { arity: 3 }                                                                                                                                                            +
+           Map (1450) // { arity: 3 }                                                                                                                                                                    +
+             Reduce group_by=[#0{person2id}] aggregates=[min(#1)] // { arity: 2 }                                                                                                                        +
+               Distinct project=[#0{person2id}, #1] // { arity: 2 }                                                                                                                                      +
+                 Union // { arity: 2 }                                                                                                                                                                   +
+                   Project (#3, #5) // { arity: 2 }                                                                                                                                                      +
+                     Map ((#1 + #4)) // { arity: 6 }                                                                                                                                                     +
+                       Join on=(#0 = #2{person1id}) type=differential // { arity: 5 }                                                                                                                    +
+                         implementation                                                                                                                                                                  +
+                           %0:l4[#0]K » %1[#0]K                                                                                                                                                          +
+                         ArrangeBy keys=[[#0]] // { arity: 2 }                                                                                                                                           +
+                           Project (#1, #2) // { arity: 2 }                                                                                                                                              +
+                             Get l4 // { arity: 3 }                                                                                                                                                      +
+                         ArrangeBy keys=[[#0{person1id}]] // { arity: 3 }                                                                                                                                +
+                           Project (#0, #1, #3) // { arity: 3 }                                                                                                                                          +
+                             Map ((10 / bigint_to_double((coalesce(#2, 0) + 10)))) // { arity: 4 }                                                                                                       +
+                               Union // { arity: 3 }                                                                                                                                                     +
+                                 Map (null) // { arity: 3 }                                                                                                                                              +
+                                   Union // { arity: 2 }                                                                                                                                                 +
+                                     Negate // { arity: 2 }                                                                                                                                              +
+                                       Project (#0, #1) // { arity: 2 }                                                                                                                                  +
+                                         Join on=(#2 = least(#0{person1id}, #1{person2id}) AND #3 = greatest(#0{person1id}, #1{person2id})) type=differential // { arity: 4 }                            +
+                                           implementation                                                                                                                                                +
+                                             %1[#1, #0]UKK » %0:l3[greatest(#0, #1), least(#0, #1)]KK                                                                                                    +
+                                           ArrangeBy keys=[[greatest(#0{person1id}, #1{person2id}), least(#0{person1id}, #1{person2id})]] // { arity: 2 }                                                +
+                                             Get l3 // { arity: 2 }                                                                                                                                      +
+                                           ArrangeBy keys=[[#1, #0]] // { arity: 2 }                                                                                                                     +
+                                             Distinct project=[least(#0{person1id}, #1{person2id}), greatest(#0{person1id}, #1{person2id})] // { arity: 2 }                                              +
+                                               Project (#0, #1) // { arity: 2 }                                                                                                                          +
+                                                 Get l2 // { arity: 3 }                                                                                                                                  +
+                                     Get l3 // { arity: 2 }                                                                                                                                              +
+                                 Get l2 // { arity: 3 }                                                                                                                                                  +
+                   Constant // { arity: 2 }                                                                                                                                                              +
+                     - (1450, 0)                                                                                                                                                                         +
+       cte l3 =                                                                                                                                                                                          +
+         Project (#1, #2) // { arity: 2 }                                                                                                                                                                +
+           ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }                                                                                            +
+       cte l2 =                                                                                                                                                                                          +
+         Project (#0, #1, #4) // { arity: 3 }                                                                                                                                                            +
+           Join on=(#2 = least(#0{person1id}, #1{person2id}) AND #3 = greatest(#0{person1id}, #1{person2id})) type=differential // { arity: 5 }                                                          +
+             implementation                                                                                                                                                                              +
+               %1[#1, #0]UKK » %0:person_knows_person[greatest(#0, #1), least(#0, #1)]KK                                                                                                                 +
+             ArrangeBy keys=[[greatest(#0{person1id}, #1{person2id}), least(#0{person1id}, #1{person2id})]] // { arity: 2 }                                                                              +
+               Project (#1, #2) // { arity: 2 }                                                                                                                                                          +
+                 ReadIndex on=person_knows_person person_knows_person_person1id=[*** full scan ***] // { arity: 3 }                                                                                      +
+             ArrangeBy keys=[[#1, #0]] // { arity: 3 }                                                                                                                                                   +
+               Reduce group_by=[least(#0{person1id}, #1{person2id}), greatest(#0{person1id}, #1{person2id})] aggregates=[sum(case when (#2{parentmessageid}) IS NULL then 10 else 5 end)] // { arity: 3 }+
+                 Project (#0..=#2) // { arity: 3 }                                                                                                                                                       +
+                   Join on=(#3{containerforumid} = #4{containerforumid} = #5{id}) type=delta // { arity: 6 }                                                                                             +
+                     implementation                                                                                                                                                                      +
+                       %0:l1 » %1[#0]UKA » %2[#0]UKA                                                                                                                                                     +
+                       %1 » %2[#0]UKA » %0:l1[#3]K                                                                                                                                                       +
+                       %2 » %1[#0]UKA » %0:l1[#3]K                                                                                                                                                       +
+                     ArrangeBy keys=[[#3{containerforumid}]] // { arity: 4 }                                                                                                                             +
+                       Get l1 // { arity: 4 }                                                                                                                                                            +
+                     ArrangeBy keys=[[#0{containerforumid}]] // { arity: 1 }                                                                                                                             +
+                       Distinct project=[#0{containerforumid}] // { arity: 1 }                                                                                                                           +
+                         Project (#3) // { arity: 1 }                                                                                                                                                    +
+                           Filter (#3{containerforumid}) IS NOT NULL // { arity: 4 }                                                                                                                     +
+                             Get l1 // { arity: 4 }                                                                                                                                                      +
+                     ArrangeBy keys=[[#0{id}]] // { arity: 1 }                                                                                                                                           +
+                       Distinct project=[#0{id}] // { arity: 1 }                                                                                                                                         +
+                         Project (#1) // { arity: 1 }                                                                                                                                                    +
+                           Filter (#0{creationdate} <= 2012-11-10 00:00:00 UTC) AND (#0{creationdate} >= 2012-11-06 00:00:00 UTC) // { arity: 4 }                                                        +
+                             ReadIndex on=forum forum_id=[*** full scan ***] // { arity: 4 }                                                                                                             +
+       cte l1 =                                                                                                                                                                                          +
+         Project (#0, #1, #3, #4) // { arity: 4 }                                                                                                                                                        +
+           Join on=(#2{containerforumid} = #5{containerforumid} = #6{id}) type=delta // { arity: 7 }                                                                                                     +
+             implementation                                                                                                                                                                              +
+               %0:l0 » %1[#0]UKA » %2[#0]UKA                                                                                                                                                             +
+               %1 » %2[#0]UKA » %0:l0[#2]K                                                                                                                                                               +
+               %2 » %1[#0]UKA » %0:l0[#2]K                                                                                                                                                               +
+             ArrangeBy keys=[[#2{containerforumid}]] // { arity: 5 }                                                                                                                                     +
+               Get l0 // { arity: 5 }                                                                                                                                                                    +
+             ArrangeBy keys=[[#0{containerforumid}]] // { arity: 1 }                                                                                                                                     +
+               Distinct project=[#0{containerforumid}] // { arity: 1 }                                                                                                                                   +
+                 Project (#2) // { arity: 1 }                                                                                                                                                            +
+                   Filter (#2{containerforumid}) IS NOT NULL // { arity: 5 }                                                                                                                             +
+                     Get l0 // { arity: 5 }                                                                                                                                                              +
+             ArrangeBy keys=[[#0{id}]] // { arity: 1 }                                                                                                                                                   +
+               Distinct project=[#0{id}] // { arity: 1 }                                                                                                                                                 +
+                 Project (#1) // { arity: 1 }                                                                                                                                                            +
+                   Filter (#0{creationdate} <= 2012-11-10 00:00:00 UTC) AND (#0{creationdate} >= 2012-11-06 00:00:00 UTC) // { arity: 4 }                                                                +
+                     ReadIndex on=forum forum_id=[*** full scan ***] // { arity: 4 }                                                                                                                     +
+       cte l0 =                                                                                                                                                                                          +
+         Project (#1, #2, #5, #6, #8) // { arity: 5 }                                                                                                                                                    +
+           Join on=(#1{person1id} = #4{creatorpersonid} AND #2{person2id} = #7{creatorpersonid} AND #3{messageid} = #9{parentmessageid}) type=delta // { arity: 10 }                                     +
+             implementation                                                                                                                                                                              +
+               %0:person_knows_person » %1:message[#1]KA » %2:message[#0, #2]KK                                                                                                                          +
+               %1:message » %0:person_knows_person[#1]KA » %2:message[#0, #2]KK                                                                                                                          +
+               %2:message » %0:person_knows_person[#2]KA » %1:message[#0, #1]KK                                                                                                                          +
+             ArrangeBy keys=[[#1{person1id}], [#2{person2id}]] // { arity: 3 }                                                                                                                           +
+               ReadIndex on=person_knows_person person_knows_person_person1id=[delta join 1st input (full scan)] person_knows_person_person2id=[delta join 1st input (full scan)] // { arity: 3 }        +
+             ArrangeBy keys=[[#0{messageid}, #1{creatorpersonid}], [#1{creatorpersonid}]] // { arity: 4 }                                                                                                +
+               Project (#1, #9, #10, #12) // { arity: 4 }                                                                                                                                                +
+                 ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }                                                                                                             +
+             ArrangeBy keys=[[#0{creatorpersonid}, #2{parentmessageid}]] // { arity: 3 }                                                                                                                 +
+               Project (#9, #10, #12) // { arity: 3 }                                                                                                                                                    +
+                 Filter (#12{parentmessageid}) IS NOT NULL // { arity: 13 }                                                                                                                              +
+                   ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }                                                                                                           +
+                                                                                                                                                                                                         +
+ Used Indexes:                                                                                                                                                                                           +
+   - materialize.public.forum_id (*** full scan ***)                                                                                                                                                     +
+   - materialize.public.person_knows_person_person1id (*** full scan ***, delta join 1st input (full scan))                                                                                              +
+   - materialize.public.person_knows_person_person2id (delta join 1st input (full scan))                                                                                                                 +
+   - materialize.public.message_messageid (*** full scan ***)                                                                                                                                            +
+ 
+(1 row)
+
+Time: 36.479 ms
+Time: 11.369 ms
+Q15 RUN 1
+ coalesce 
+----------
+        4
+(1 row)
+
+Time: 113731.450 ms (01:53.731)
+Time: 13.265 ms
+Q15 RUN 2
+ coalesce 
+----------
+        4
+(1 row)
+
+Time: 112991.313 ms (01:52.991)
+Time: 11.358 ms
+Q15 RUN 3
+ coalesce 
+----------
+        4
+(1 row)
+
+Time: 109338.491 ms (01:49.338)
+Time: 13.378 ms
+
+Q16 EXPLAINED
+                                                                         Optimized Plan                                                                         
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Explained Query:                                                                                                                                              +
+   Finish order_by=[#6 desc nulls_first, #0{id} asc nulls_last] limit=20 output=[#0, #1, #4]                                                                   +
+     Return // { arity: 7 }                                                                                                                                    +
+       Project (#0..=#2, #0, #4..=#6) // { arity: 7 }                                                                                                          +
+         Filter (#2 <= 5) AND (#5 <= 5) // { arity: 7 }                                                                                                        +
+           Map ((#1 + #4)) // { arity: 7 }                                                                                                                     +
+             Join on=(#0{id} = #3{id}) type=differential // { arity: 6 }                                                                                       +
+               implementation                                                                                                                                  +
+                 %0[#0]UKAif » %1[#0]UKAiif                                                                                                                    +
+               ArrangeBy keys=[[#0{id}]] // { arity: 3 }                                                                                                       +
+                 Reduce group_by=[#0{id}] aggregates=[count(distinct #1{messageid}), count(distinct #2{person2id})] // { arity: 3 }                            +
+                   Union // { arity: 3 }                                                                                                                       +
+                     Get l5 // { arity: 3 }                                                                                                                    +
+                     Map (null) // { arity: 3 }                                                                                                                +
+                       Union // { arity: 2 }                                                                                                                   +
+                         Negate // { arity: 2 }                                                                                                                +
+                           Distinct project=[#0{id}, #1{messageid}] // { arity: 2 }                                                                            +
+                             Project (#0, #1) // { arity: 2 }                                                                                                  +
+                               Get l5 // { arity: 3 }                                                                                                          +
+                         Get l3 // { arity: 2 }                                                                                                                +
+               ArrangeBy keys=[[#0{id}]] // { arity: 3 }                                                                                                       +
+                 Reduce group_by=[#0{id}] aggregates=[count(distinct #1{messageid}), count(distinct #2{person2id})] // { arity: 3 }                            +
+                   Union // { arity: 3 }                                                                                                                       +
+                     Get l7 // { arity: 3 }                                                                                                                    +
+                     Map (null) // { arity: 3 }                                                                                                                +
+                       Union // { arity: 2 }                                                                                                                   +
+                         Negate // { arity: 2 }                                                                                                                +
+                           Distinct project=[#0{id}, #1{messageid}] // { arity: 2 }                                                                            +
+                             Project (#0, #1) // { arity: 2 }                                                                                                  +
+                               Get l7 // { arity: 3 }                                                                                                          +
+                         Get l6 // { arity: 2 }                                                                                                                +
+     With                                                                                                                                                      +
+       cte l7 =                                                                                                                                                +
+         Project (#0, #1, #4) // { arity: 3 }                                                                                                                  +
+           Join on=(#0{id} = #3{person1id} AND #4{person2id} = #5{id}) type=delta // { arity: 6 }                                                              +
+             implementation                                                                                                                                    +
+               %0:l6 » %1:l4[#1]KA » %2[#0]UKA                                                                                                                 +
+               %1:l4 » %2[#0]UKA » %0:l6[#0]K                                                                                                                  +
+               %2 » %1:l4[#2]KA » %0:l6[#0]K                                                                                                                   +
+             ArrangeBy keys=[[#0{id}]] // { arity: 2 }                                                                                                         +
+               Get l6 // { arity: 2 }                                                                                                                          +
+             Get l4 // { arity: 3 }                                                                                                                            +
+             ArrangeBy keys=[[#0{id}]] // { arity: 1 }                                                                                                         +
+               Distinct project=[#0{id}] // { arity: 1 }                                                                                                       +
+                 Project (#0) // { arity: 1 }                                                                                                                  +
+                   Get l6 // { arity: 2 }                                                                                                                      +
+       cte l6 =                                                                                                                                                +
+         Project (#0, #2) // { arity: 2 }                                                                                                                      +
+           Join on=(#0{id} = #1{creatorpersonid} AND #2{messageid} = #3{messageid}) type=delta // { arity: 4 }                                                 +
+             implementation                                                                                                                                    +
+               %0:l0 » %1[#0]K » %2[#0]UKA                                                                                                                     +
+               %1 » %0:l0[#0]UKA » %2[#0]UKA                                                                                                                   +
+               %2 » %1[#1]K » %0:l0[#0]UKA                                                                                                                     +
+             Get l0 // { arity: 1 }                                                                                                                            +
+             ArrangeBy keys=[[#0{creatorpersonid}], [#1{messageid}]] // { arity: 2 }                                                                           +
+               Distinct project=[#1{creatorpersonid}, #0{messageid}] // { arity: 2 }                                                                           +
+                 Project (#1, #9) // { arity: 2 }                                                                                                              +
+                   Filter (2012-12-14 00:00:00 = date_to_timestamp(timestamp_with_time_zone_to_date(#0{creationdate}))) // { arity: 13 }                       +
+                     ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }                                                               +
+             ArrangeBy keys=[[#0{messageid}]] // { arity: 1 }                                                                                                  +
+               Distinct project=[#0{messageid}] // { arity: 1 }                                                                                                +
+                 Project (#1) // { arity: 1 }                                                                                                                  +
+                   Join on=(#2{tagid} = #3{id}) type=differential // { arity: 8 }                                                                              +
+                     implementation                                                                                                                            +
+                       %1:tag[#0]KAe » %0:l1[#2]KAe                                                                                                            +
+                     Get l1 // { arity: 3 }                                                                                                                    +
+                     ArrangeBy keys=[[#0{id}]] // { arity: 5 }                                                                                                 +
+                       ReadIndex on=materialize.public.tag tag_name=[lookup value=("Thailand_Noriega")] // { arity: 5 }                                        +
+       cte l5 =                                                                                                                                                +
+         Project (#0, #1, #4) // { arity: 3 }                                                                                                                  +
+           Join on=(#0{id} = #3{person1id} AND #4{person2id} = #5{id}) type=delta // { arity: 6 }                                                              +
+             implementation                                                                                                                                    +
+               %0:l3 » %1:l4[#1]KA » %2[#0]UKA                                                                                                                 +
+               %1:l4 » %2[#0]UKA » %0:l3[#0]K                                                                                                                  +
+               %2 » %1:l4[#2]KA » %0:l3[#0]K                                                                                                                   +
+             ArrangeBy keys=[[#0{id}]] // { arity: 2 }                                                                                                         +
+               Get l3 // { arity: 2 }                                                                                                                          +
+             Get l4 // { arity: 3 }                                                                                                                            +
+             ArrangeBy keys=[[#0{id}]] // { arity: 1 }                                                                                                         +
+               Distinct project=[#0{id}] // { arity: 1 }                                                                                                       +
+                 Project (#0) // { arity: 1 }                                                                                                                  +
+                   Get l3 // { arity: 2 }                                                                                                                      +
+       cte l4 =                                                                                                                                                +
+         ArrangeBy keys=[[#1{person1id}], [#2{person2id}]] // { arity: 3 }                                                                                     +
+           ReadIndex on=person_knows_person person_knows_person_person1id=[delta join lookup] person_knows_person_person2id=[delta join lookup] // { arity: 3 }+
+       cte l3 =                                                                                                                                                +
+         Project (#0, #2) // { arity: 2 }                                                                                                                      +
+           Join on=(#0{id} = #1{creatorpersonid} AND #2{messageid} = #3{messageid}) type=delta // { arity: 4 }                                                 +
+             implementation                                                                                                                                    +
+               %0:l0 » %1[#0]K » %2[#0]UKA                                                                                                                     +
+               %1 » %0:l0[#0]UKA » %2[#0]UKA                                                                                                                   +
+               %2 » %1[#1]K » %0:l0[#0]UKA                                                                                                                     +
+             Get l0 // { arity: 1 }                                                                                                                            +
+             ArrangeBy keys=[[#0{creatorpersonid}], [#1{messageid}]] // { arity: 2 }                                                                           +
+               Distinct project=[#1{creatorpersonid}, #0{messageid}] // { arity: 2 }                                                                           +
+                 Project (#1, #9) // { arity: 2 }                                                                                                              +
+                   Filter (2012-10-07 00:00:00 = date_to_timestamp(timestamp_with_time_zone_to_date(#0{creationdate}))) // { arity: 13 }                       +
+                     ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }                                                               +
+             ArrangeBy keys=[[#0{messageid}]] // { arity: 1 }                                                                                                  +
+               Distinct project=[#0{messageid}] // { arity: 1 }                                                                                                +
+                 Project (#1) // { arity: 1 }                                                                                                                  +
+                   Join on=(#2{tagid} = #3{id}) type=differential // { arity: 8 }                                                                              +
+                     implementation                                                                                                                            +
+                       %1:tag[#0]KAe » %0:l1[#2]KAe                                                                                                            +
+                     Get l1 // { arity: 3 }                                                                                                                    +
+                     ArrangeBy keys=[[#0{id}]] // { arity: 5 }                                                                                                 +
+                       ReadIndex on=materialize.public.tag tag_name=[lookup value=("Diosdado_Macapagal")] // { arity: 5 }                                      +
+       cte l2 =                                                                                                                                                +
+         ArrangeBy keys=[[#1{name}]] // { arity: 4 }                                                                                                           +
+           ReadIndex on=tag tag_name=[lookup] // { arity: 4 }                                                                                                  +
+       cte l1 =                                                                                                                                                +
+         ArrangeBy keys=[[#2{tagid}]] // { arity: 3 }                                                                                                          +
+           ReadIndex on=message_hastag_tag message_hastag_tag_tagid=[differential join] // { arity: 3 }                                                        +
+       cte l0 =                                                                                                                                                +
+         ArrangeBy keys=[[#0{id}]] // { arity: 1 }                                                                                                             +
+           Distinct project=[#0{id}] // { arity: 1 }                                                                                                           +
+             Project (#1) // { arity: 1 }                                                                                                                      +
+               ReadIndex on=person person_id=[*** full scan ***] // { arity: 11 }                                                                              +
+                                                                                                                                                               +
+ Used Indexes:                                                                                                                                                 +
+   - materialize.public.tag_name (lookup)                                                                                                                      +
+   - materialize.public.person_id (*** full scan ***)                                                                                                          +
+   - materialize.public.person_knows_person_person1id (delta join lookup)                                                                                      +
+   - materialize.public.person_knows_person_person2id (delta join lookup)                                                                                      +
+   - materialize.public.message_hastag_tag_tagid (differential join)                                                                                           +
+   - materialize.public.message_messageid (*** full scan ***)                                                                                                  +
+ 
+(1 row)
+
+Time: 45.648 ms
+Q16 RUN 1
+ personid | messagecounta | messagecountb 
+----------+---------------+---------------
+(0 rows)
+
+Time: 984.720 ms
+Q16 RUN 2
+ personid | messagecounta | messagecountb 
+----------+---------------+---------------
+(0 rows)
+
+Time: 969.754 ms
+Q16 RUN 3
+ personid | messagecounta | messagecountb 
+----------+---------------+---------------
+(0 rows)
+
+Time: 972.359 ms
+
+Q17 EXPLAINED
+                                                                                                        Optimized Plan                                                                                                        
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Explained Query:                                                                                                                                                                                                            +
+   Finish order_by=[#1 desc nulls_first, #0{creatorpersonid} asc nulls_last] limit=10 output=[#0, #1]                                                                                                                        +
+     Return // { arity: 2 }                                                                                                                                                                                                  +
+       Reduce group_by=[#0{creatorpersonid}] aggregates=[count(distinct #1{messageid})] // { arity: 2 }                                                                                                                      +
+         Project (#0, #1) // { arity: 2 }                                                                                                                                                                                    +
+           Join on=(#0{creatorpersonid} = #3{creatorpersonid} AND #2{containerforumid} = #4{containerforumid}) type=differential // { arity: 5 }                                                                             +
+             implementation                                                                                                                                                                                                  +
+               %0:l2[#0, #2]KK » %1[#0, #1]KK                                                                                                                                                                                +
+             ArrangeBy keys=[[#0{creatorpersonid}, #2{containerforumid}]] // { arity: 3 }                                                                                                                                    +
+               Get l2 // { arity: 3 }                                                                                                                                                                                        +
+             ArrangeBy keys=[[#0{creatorpersonid}, #1{containerforumid}]] // { arity: 2 }                                                                                                                                    +
+               Union // { arity: 2 }                                                                                                                                                                                         +
+                 Negate // { arity: 2 }                                                                                                                                                                                      +
+                   Project (#0, #1) // { arity: 2 }                                                                                                                                                                          +
+                     Join on=(#0{creatorpersonid} = #2{personid} AND #1{containerforumid} = #3{forumid}) type=differential // { arity: 4 }                                                                                   +
+                       implementation                                                                                                                                                                                        +
+                         %0:l3[#0, #1]UKKA » %1[#0, #1]UKKA                                                                                                                                                                  +
+                       ArrangeBy keys=[[#0{creatorpersonid}, #1{containerforumid}]] // { arity: 2 }                                                                                                                          +
+                         Get l3 // { arity: 2 }                                                                                                                                                                              +
+                       ArrangeBy keys=[[#0{personid}, #1{forumid}]] // { arity: 2 }                                                                                                                                          +
+                         Distinct project=[#1{personid}, #0{forumid}] // { arity: 2 }                                                                                                                                        +
+                           Project (#1, #2) // { arity: 2 }                                                                                                                                                                  +
+                             ReadIndex on=forum_hasmember_person forum_hasmember_person_forumid=[*** full scan ***] // { arity: 3 }                                                                                          +
+                 Get l3 // { arity: 2 }                                                                                                                                                                                      +
+     With                                                                                                                                                                                                                    +
+       cte l3 =                                                                                                                                                                                                              +
+         Distinct project=[#0{creatorpersonid}, #1{containerforumid}] // { arity: 2 }                                                                                                                                        +
+           Project (#0, #2) // { arity: 2 }                                                                                                                                                                                  +
+             Get l2 // { arity: 3 }                                                                                                                                                                                          +
+       cte l2 =                                                                                                                                                                                                              +
+         Project (#1, #4, #6) // { arity: 3 }                                                                                                                                                                                +
+           Filter (#2{containerforumid} != #6{containerforumid}) AND (#5{creatorpersonid} != #7{creatorpersonid}) AND ((#0{creationdate} + 12:00:00) < #3{creationdate}) // { arity: 15 }                                    +
+             Join on=(#2{containerforumid} = #10{forumid} = #13{forumid} AND #4{messageid} = #8{parentmessageid} AND #5{creatorpersonid} = #14{personid} AND #7{creatorpersonid} = #11{personid}) type=delta // { arity: 15 }+
+               implementation                                                                                                                                                                                                +
+                 %0:l0 » %3:l1[#1]KA » %4:l1[#1]KA » %1:l0[#2]K » %2:l0[#0, #1]KK                                                                                                                                            +
+                 %1:l0 » %4:l1[#2]KA » %3:l1[#1]KA » %2:l0[#0, #1]KK » %0:l0[#2]K                                                                                                                                            +
+                 %2:l0 » %3:l1[#2]KA » %4:l1[#1]KA » %1:l0[#1, #2]KK » %0:l0[#2]K                                                                                                                                            +
+                 %3:l1 » %4:l1[#1]KA » %0:l0[#2]K » %1:l0[#2]K » %2:l0[#0, #1]KK                                                                                                                                             +
+                 %4:l1 » %3:l1[#1]KA » %0:l0[#2]K » %1:l0[#2]K » %2:l0[#0, #1]KK                                                                                                                                             +
+               ArrangeBy keys=[[#2{containerforumid}]] // { arity: 3 }                                                                                                                                                       +
+                 Project (#0, #2, #3) // { arity: 3 }                                                                                                                                                                        +
+                   Filter (#3{containerforumid}) IS NOT NULL // { arity: 5 }                                                                                                                                                 +
+                     Get l0 // { arity: 5 }                                                                                                                                                                                  +
+               ArrangeBy keys=[[#1{messageid}, #2{creatorpersonid}], [#2{creatorpersonid}]] // { arity: 4 }                                                                                                                  +
+                 Project (#0..=#3) // { arity: 4 }                                                                                                                                                                           +
+                   Get l0 // { arity: 5 }                                                                                                                                                                                    +
+               ArrangeBy keys=[[#0{creatorpersonid}, #1{parentmessageid}]] // { arity: 2 }                                                                                                                                   +
+                 Project (#2, #4) // { arity: 2 }                                                                                                                                                                            +
+                   Filter (#4{parentmessageid}) IS NOT NULL // { arity: 5 }                                                                                                                                                  +
+                     Get l0 // { arity: 5 }                                                                                                                                                                                  +
+               Get l1 // { arity: 3 }                                                                                                                                                                                        +
+               Get l1 // { arity: 3 }                                                                                                                                                                                        +
+       cte l1 =                                                                                                                                                                                                              +
+         ArrangeBy keys=[[#1{forumid}], [#2{personid}]] // { arity: 3 }                                                                                                                                                      +
+           ReadIndex on=forum_hasmember_person forum_hasmember_person_forumid=[delta join lookup] forum_hasmember_person_personid=[delta join lookup] // { arity: 3 }                                                        +
+       cte l0 =                                                                                                                                                                                                              +
+         Project (#0, #1, #9, #10, #12) // { arity: 5 }                                                                                                                                                                      +
+           Join on=(#1{messageid} = #13{messageid}) type=differential // { arity: 14 }                                                                                                                                       +
+             implementation                                                                                                                                                                                                  +
+               %1[#0]UKA » %0:message[#1]KA                                                                                                                                                                                  +
+             ArrangeBy keys=[[#1{messageid}]] // { arity: 13 }                                                                                                                                                               +
+               ReadIndex on=message message_messageid=[differential join] // { arity: 13 }                                                                                                                                   +
+             ArrangeBy keys=[[#0{messageid}]] // { arity: 1 }                                                                                                                                                                +
+               Distinct project=[#0{messageid}] // { arity: 1 }                                                                                                                                                              +
+                 Project (#1) // { arity: 1 }                                                                                                                                                                                +
+                   Join on=(#2{tagid} = #3{id}) type=differential // { arity: 4 }                                                                                                                                            +
+                     implementation                                                                                                                                                                                          +
+                       %1[#0]UKA » %0:message_hastag_tag[#2]KA                                                                                                                                                               +
+                     ArrangeBy keys=[[#2{tagid}]] // { arity: 3 }                                                                                                                                                            +
+                       ReadIndex on=message_hastag_tag message_hastag_tag_tagid=[differential join] // { arity: 3 }                                                                                                          +
+                     ArrangeBy keys=[[#0{id}]] // { arity: 1 }                                                                                                                                                               +
+                       Distinct project=[#0{id}] // { arity: 1 }                                                                                                                                                             +
+                         Project (#0) // { arity: 1 }                                                                                                                                                                        +
+                           ReadIndex on=materialize.public.tag tag_name=[lookup value=("Cosmic_Egg")] // { arity: 5 }                                                                                                        +
+                                                                                                                                                                                                                             +
+ Used Indexes:                                                                                                                                                                                                               +
+   - materialize.public.tag_name (lookup)                                                                                                                                                                                    +
+   - materialize.public.forum_hasmember_person_forumid (*** full scan ***, delta join lookup)                                                                                                                                +
+   - materialize.public.forum_hasmember_person_personid (delta join lookup)                                                                                                                                                  +
+   - materialize.public.message_hastag_tag_tagid (differential join)                                                                                                                                                         +
+   - materialize.public.message_messageid (differential join)                                                                                                                                                                +
+ 
+(1 row)
+
+Time: 33.125 ms
+Q17 RUN 1
+ person1.id | messagecount 
+------------+--------------
+(0 rows)
+
+Time: 2704.625 ms (00:02.705)
+Q17 RUN 2
+ person1.id | messagecount 
+------------+--------------
+(0 rows)
+
+Time: 2855.415 ms (00:02.855)
+Q17 RUN 3
+ person1.id | messagecount 
+------------+--------------
+(0 rows)
+
+Time: 2736.070 ms (00:02.736)
+
+Q18 EXPLAINED
+                                                                                                              Optimized Plan                                                                                                              
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ materialize.public.pathq19:                                                                                                                                                                                                             +
+   Return // { arity: 3 }                                                                                                                                                                                                                +
+     Union // { arity: 3 }                                                                                                                                                                                                               +
+       Get l0 // { arity: 3 }                                                                                                                                                                                                            +
+       Project (#1, #0, #2) // { arity: 3 }                                                                                                                                                                                              +
+         Get l0 // { arity: 3 }                                                                                                                                                                                                          +
+   With                                                                                                                                                                                                                                  +
+     cte l0 =                                                                                                                                                                                                                            +
+       Project (#0, #1, #3) // { arity: 3 }                                                                                                                                                                                              +
+         Map (greatest(f64toi64(roundf64((40 - sqrtf64(bigint_to_double(#2))))), 1)) // { arity: 4 }                                                                                                                                     +
+           Reduce group_by=[#0{person1id}, #1{person2id}] aggregates=[count(*)] // { arity: 3 }                                                                                                                                          +
+             Project (#16, #17) // { arity: 2 }                                                                                                                                                                                          +
+               Filter (#0{creatorpersonid} != #11{creatorpersonid}) AND (#16{person1id} < #17{person2id}) // { arity: 18 }                                                                                                               +
+                 Join on=(#1{parentmessageid} = #3{messageid} AND #16{person1id} = least(#0{creatorpersonid}, #11{creatorpersonid}) AND #17{person2id} = greatest(#0{creatorpersonid}, #11{creatorpersonid})) type=delta // { arity: 18 }+
+                   implementation                                                                                                                                                                                                        +
+                     %0:message » %1:message[#1]KA » %2:person_knows_person[#1, #2]KKAf                                                                                                                                                  +
+                     %1:message » %0:message[#1]KA » %2:person_knows_person[#1, #2]KKAf                                                                                                                                                  +
+                     %2:person_knows_person » %0:message[×] » %1:message[#1]KA                                                                                                                                                           +
+                   ArrangeBy keys=[[], [#1{parentmessageid}]] // { arity: 2 }                                                                                                                                                            +
+                     Project (#9, #12) // { arity: 2 }                                                                                                                                                                                   +
+                       Filter (#12{parentmessageid}) IS NOT NULL // { arity: 13 }                                                                                                                                                        +
+                         ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }                                                                                                                                     +
+                   ArrangeBy keys=[[#1{messageid}]] // { arity: 13 }                                                                                                                                                                     +
+                     ReadIndex on=message message_messageid=[delta join lookup] // { arity: 13 }                                                                                                                                         +
+                   ArrangeBy keys=[[#1{person1id}, #2{person2id}]] // { arity: 3 }                                                                                                                                                       +
+                     ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[delta join lookup] // { arity: 3 }                                                                                                        +
+                                                                                                                                                                                                                                         +
+ Used Indexes:                                                                                                                                                                                                                           +
+   - materialize.public.person_knows_person_person1id_person2id (delta join lookup)                                                                                                                                                      +
+   - materialize.public.message_messageid (*** full scan ***, delta join lookup)                                                                                                                                                         +
+ 
+(1 row)
+
+Time: 18.802 ms
+CREATE MATERIALIZED VIEW
+Time: 620.462 ms
+CREATE INDEX
+Time: 582.762 ms
+                                                    Optimized Plan                                                     
+-----------------------------------------------------------------------------------------------------------------------
+ Explained Query:                                                                                                     +
+   Return // { arity: 3 }                                                                                             +
+     Return // { arity: 3 }                                                                                           +
+       Project (#0..=#2) // { arity: 3 }                                                                              +
+         Join on=(#2 = #3) type=differential // { arity: 4 }                                                          +
+           implementation                                                                                             +
+             %1[#0]UK » %0:l1[#2]K                                                                                    +
+           ArrangeBy keys=[[#2]] // { arity: 3 }                                                                      +
+             Filter (#2) IS NOT NULL // { arity: 3 }                                                                  +
+               Get l1 // { arity: 3 }                                                                                 +
+           ArrangeBy keys=[[#0]] // { arity: 1 }                                                                      +
+             Filter (#0) IS NOT NULL // { arity: 1 }                                                                  +
+               Reduce aggregates=[min(#0)] // { arity: 1 }                                                            +
+                 Project (#2) // { arity: 1 }                                                                         +
+                   Get l1 // { arity: 3 }                                                                             +
+     With                                                                                                             +
+       cte l1 =                                                                                                       +
+         Project (#0..=#2) // { arity: 3 }                                                                            +
+           Join on=(#1{id} = #3{id}) type=differential // { arity: 4 }                                                +
+             implementation                                                                                           +
+               %1[#0]UKA » %0:l0[#1]K                                                                                 +
+             ArrangeBy keys=[[#1{id}]] // { arity: 3 }                                                                +
+               Get l0 // { arity: 3 }                                                                                 +
+             ArrangeBy keys=[[#0{id}]] // { arity: 1 }                                                                +
+               Distinct project=[#0{id}] // { arity: 1 }                                                              +
+                 Project (#1) // { arity: 1 }                                                                         +
+                   ReadIndex on=materialize.public.person person_locationcityid=[lookup value=(1138)] // { arity: 12 }+
+   With Mutually Recursive                                                                                            +
+     cte l0 =                                                                                                         +
+       Reduce group_by=[#0{id}, #1{id}] aggregates=[min(#2)] // { arity: 3 }                                          +
+         Distinct project=[#0{id}..=#2] // { arity: 3 }                                                               +
+           Union // { arity: 3 }                                                                                      +
+             Project (#1, #1, #12) // { arity: 3 }                                                                    +
+               Map (0) // { arity: 13 }                                                                               +
+                 ReadIndex on=materialize.public.person person_locationcityid=[lookup value=(655)] // { arity: 12 }   +
+             Project (#0, #4, #6) // { arity: 3 }                                                                     +
+               Map ((#2 + bigint_to_double(#5{w}))) // { arity: 7 }                                                   +
+                 Join on=(#1 = #3{src}) type=differential // { arity: 6 }                                             +
+                   implementation                                                                                     +
+                     %1:pathq19[#0]KA » %0:l0[#1]K                                                                    +
+                   ArrangeBy keys=[[#1]] // { arity: 3 }                                                              +
+                     Get l0 // { arity: 3 }                                                                           +
+                   ArrangeBy keys=[[#0{src}]] // { arity: 3 }                                                         +
+                     ReadIndex on=pathq19 pathq19_src=[differential join] // { arity: 3 }                             +
+                                                                                                                      +
+ Used Indexes:                                                                                                        +
+   - materialize.public.person_locationcityid (lookup)                                                                +
+   - materialize.public.pathq19_src (differential join)                                                               +
+ 
+(1 row)
+
+Time: 30.050 ms
+Q18 RUN 1
+   person1.id   |   person2.id   | mutualfriendcount 
+----------------+----------------+-------------------
+  2199023256539 | 24189255821523 |                31
+ 24189255821523 |  2199023256539 |                31
+ 15393162796970 | 24189255820514 |                25
+ 24189255820514 | 15393162796970 |                25
+  4398046511410 | 13194139543082 |                23
+ 10995116284091 | 24189255815677 |                23
+ 13194139543082 |  4398046511410 |                23
+ 24189255815677 | 10995116284091 |                23
+ 24189255819695 | 24189255821523 |                20
+ 24189255821523 | 24189255819695 |                20
+ 24189255820514 | 24189255821523 |                18
+ 24189255821523 | 24189255820514 |                18
+  2199023256539 | 15393162796970 |                17
+  2199023256539 | 24189255819695 |                17
+ 13194139536963 | 13194139543082 |                17
+ 13194139543082 | 13194139536963 |                17
+ 15393162796970 |  2199023256539 |                17
+ 17592186050431 | 26388279069225 |                17
+ 24189255819695 |  2199023256539 |                17
+ 26388279069225 | 17592186050431 |                17
+(20 rows)
+
+Time: 2713.996 ms (00:02.714)
+Q18 RUN 2
+   person1.id   |   person2.id   | mutualfriendcount 
+----------------+----------------+-------------------
+  2199023256539 | 24189255821523 |                31
+ 24189255821523 |  2199023256539 |                31
+ 15393162796970 | 24189255820514 |                25
+ 24189255820514 | 15393162796970 |                25
+  4398046511410 | 13194139543082 |                23
+ 10995116284091 | 24189255815677 |                23
+ 13194139543082 |  4398046511410 |                23
+ 24189255815677 | 10995116284091 |                23
+ 24189255819695 | 24189255821523 |                20
+ 24189255821523 | 24189255819695 |                20
+ 24189255820514 | 24189255821523 |                18
+ 24189255821523 | 24189255820514 |                18
+  2199023256539 | 15393162796970 |                17
+  2199023256539 | 24189255819695 |                17
+ 13194139536963 | 13194139543082 |                17
+ 13194139543082 | 13194139536963 |                17
+ 15393162796970 |  2199023256539 |                17
+ 17592186050431 | 26388279069225 |                17
+ 24189255819695 |  2199023256539 |                17
+ 26388279069225 | 17592186050431 |                17
+(20 rows)
+
+Time: 571.003 ms
+Q18 RUN 3
+   person1.id   |   person2.id   | mutualfriendcount 
+----------------+----------------+-------------------
+  2199023256539 | 24189255821523 |                31
+ 24189255821523 |  2199023256539 |                31
+ 15393162796970 | 24189255820514 |                25
+ 24189255820514 | 15393162796970 |                25
+  4398046511410 | 13194139543082 |                23
+ 10995116284091 | 24189255815677 |                23
+ 13194139543082 |  4398046511410 |                23
+ 24189255815677 | 10995116284091 |                23
+ 24189255819695 | 24189255821523 |                20
+ 24189255821523 | 24189255819695 |                20
+ 24189255820514 | 24189255821523 |                18
+ 24189255821523 | 24189255820514 |                18
+  2199023256539 | 15393162796970 |                17
+  2199023256539 | 24189255819695 |                17
+ 13194139536963 | 13194139543082 |                17
+ 13194139543082 | 13194139536963 |                17
+ 15393162796970 |  2199023256539 |                17
+ 17592186050431 | 26388279069225 |                17
+ 24189255819695 |  2199023256539 |                17
+ 26388279069225 | 17592186050431 |                17
+(20 rows)
+
+Time: 737.062 ms
+
+Q19 EXPLAINED
+                                                                                                              Optimized Plan                                                                                                              
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ materialize.public.pathq19:                                                                                                                                                                                                             +
+   Return // { arity: 3 }                                                                                                                                                                                                                +
+     Union // { arity: 3 }                                                                                                                                                                                                               +
+       Get l0 // { arity: 3 }                                                                                                                                                                                                            +
+       Project (#1, #0, #2) // { arity: 3 }                                                                                                                                                                                              +
+         Get l0 // { arity: 3 }                                                                                                                                                                                                          +
+   With                                                                                                                                                                                                                                  +
+     cte l0 =                                                                                                                                                                                                                            +
+       Project (#0, #1, #3) // { arity: 3 }                                                                                                                                                                                              +
+         Map (greatest(f64toi64(roundf64((40 - sqrtf64(bigint_to_double(#2))))), 1)) // { arity: 4 }                                                                                                                                     +
+           Reduce group_by=[#0{person1id}, #1{person2id}] aggregates=[count(*)] // { arity: 3 }                                                                                                                                          +
+             Project (#16, #17) // { arity: 2 }                                                                                                                                                                                          +
+               Filter (#0{creatorpersonid} != #11{creatorpersonid}) AND (#16{person1id} < #17{person2id}) // { arity: 18 }                                                                                                               +
+                 Join on=(#1{parentmessageid} = #3{messageid} AND #16{person1id} = least(#0{creatorpersonid}, #11{creatorpersonid}) AND #17{person2id} = greatest(#0{creatorpersonid}, #11{creatorpersonid})) type=delta // { arity: 18 }+
+                   implementation                                                                                                                                                                                                        +
+                     %0:message » %1:message[#1]KA » %2:person_knows_person[#1, #2]KKAf                                                                                                                                                  +
+                     %1:message » %0:message[#1]KA » %2:person_knows_person[#1, #2]KKAf                                                                                                                                                  +
+                     %2:person_knows_person » %0:message[×] » %1:message[#1]KA                                                                                                                                                           +
+                   ArrangeBy keys=[[], [#1{parentmessageid}]] // { arity: 2 }                                                                                                                                                            +
+                     Project (#9, #12) // { arity: 2 }                                                                                                                                                                                   +
+                       Filter (#12{parentmessageid}) IS NOT NULL // { arity: 13 }                                                                                                                                                        +
+                         ReadIndex on=message message_messageid=[*** full scan ***] // { arity: 13 }                                                                                                                                     +
+                   ArrangeBy keys=[[#1{messageid}]] // { arity: 13 }                                                                                                                                                                     +
+                     ReadIndex on=message message_messageid=[delta join lookup] // { arity: 13 }                                                                                                                                         +
+                   ArrangeBy keys=[[#1{person1id}, #2{person2id}]] // { arity: 3 }                                                                                                                                                       +
+                     ReadIndex on=person_knows_person person_knows_person_person1id_person2id=[delta join lookup] // { arity: 3 }                                                                                                        +
+                                                                                                                                                                                                                                         +
+ Used Indexes:                                                                                                                                                                                                                           +
+   - materialize.public.person_knows_person_person1id_person2id (delta join lookup)                                                                                                                                                      +
+   - materialize.public.message_messageid (*** full scan ***, delta join lookup)                                                                                                                                                         +
+ 
+(1 row)
+
+Time: 17.461 ms
+CREATE MATERIALIZED VIEW
+Time: 675.026 ms
+CREATE INDEX
+Time: 613.622 ms
+                                                    Optimized Plan                                                     
+-----------------------------------------------------------------------------------------------------------------------
+ Explained Query:                                                                                                     +
+   Return // { arity: 3 }                                                                                             +
+     Return // { arity: 3 }                                                                                           +
+       Project (#0..=#2) // { arity: 3 }                                                                              +
+         Join on=(#2 = #3) type=differential // { arity: 4 }                                                          +
+           implementation                                                                                             +
+             %1[#0]UK » %0:l1[#2]K                                                                                    +
+           ArrangeBy keys=[[#2]] // { arity: 3 }                                                                      +
+             Filter (#2) IS NOT NULL // { arity: 3 }                                                                  +
+               Get l1 // { arity: 3 }                                                                                 +
+           ArrangeBy keys=[[#0]] // { arity: 1 }                                                                      +
+             Filter (#0) IS NOT NULL // { arity: 1 }                                                                  +
+               Reduce aggregates=[min(#0)] // { arity: 1 }                                                            +
+                 Project (#2) // { arity: 1 }                                                                         +
+                   Get l1 // { arity: 3 }                                                                             +
+     With                                                                                                             +
+       cte l1 =                                                                                                       +
+         Project (#0..=#2) // { arity: 3 }                                                                            +
+           Join on=(#1{id} = #3{id}) type=differential // { arity: 4 }                                                +
+             implementation                                                                                           +
+               %1[#0]UKA » %0:l0[#1]K                                                                                 +
+             ArrangeBy keys=[[#1{id}]] // { arity: 3 }                                                                +
+               Get l0 // { arity: 3 }                                                                                 +
+             ArrangeBy keys=[[#0{id}]] // { arity: 1 }                                                                +
+               Distinct project=[#0{id}] // { arity: 1 }                                                              +
+                 Project (#1) // { arity: 1 }                                                                         +
+                   ReadIndex on=materialize.public.person person_locationcityid=[lookup value=(1138)] // { arity: 12 }+
+   With Mutually Recursive                                                                                            +
+     cte l0 =                                                                                                         +
+       Reduce group_by=[#0{id}, #1{id}] aggregates=[min(#2)] // { arity: 3 }                                          +
+         Distinct project=[#0{id}..=#2] // { arity: 3 }                                                               +
+           Union // { arity: 3 }                                                                                      +
+             Project (#1, #1, #12) // { arity: 3 }                                                                    +
+               Map (0) // { arity: 13 }                                                                               +
+                 ReadIndex on=materialize.public.person person_locationcityid=[lookup value=(655)] // { arity: 12 }   +
+             Project (#0, #4, #6) // { arity: 3 }                                                                     +
+               Map ((#2 + bigint_to_double(#5{w}))) // { arity: 7 }                                                   +
+                 Join on=(#1 = #3{src}) type=differential // { arity: 6 }                                             +
+                   implementation                                                                                     +
+                     %1:pathq19[#0]KA » %0:l0[#1]K                                                                    +
+                   ArrangeBy keys=[[#1]] // { arity: 3 }                                                              +
+                     Get l0 // { arity: 3 }                                                                           +
+                   ArrangeBy keys=[[#0{src}]] // { arity: 3 }                                                         +
+                     ReadIndex on=pathq19 pathq19_src=[differential join] // { arity: 3 }                             +
+                                                                                                                      +
+ Used Indexes:                                                                                                        +
+   - materialize.public.person_locationcityid (lookup)                                                                +
+   - materialize.public.pathq19_src (differential join)                                                               +
+ 
+(1 row)
+
+Time: 35.751 ms
+Q19 RUN 1
+CREATE MATERIALIZED VIEW
+Time: 657.716 ms
+CREATE INDEX
+Time: 521.166 ms
+      src       |      dst       | w  
+----------------+----------------+----
+ 24189255818627 | 26388279072272 | 39
+(1 row)
+
+Time: 9214.520 ms (00:09.215)
+Time: 12.124 ms
+Q19 RUN 2
+CREATE MATERIALIZED VIEW
+Time: 488.763 ms
+CREATE INDEX
+Time: 543.979 ms
+      src       |      dst       | w  
+----------------+----------------+----
+ 24189255818627 | 26388279072272 | 39
+(1 row)
+
+Time: 8156.806 ms (00:08.157)
+Time: 12.425 ms
+Q19 RUN 3
+CREATE MATERIALIZED VIEW
+Time: 587.454 ms
+CREATE INDEX
+Time: 514.438 ms
+      src       |      dst       | w  
+----------------+----------------+----
+ 24189255818627 | 26388279072272 | 39
+(1 row)
+
+Time: 7779.787 ms (00:07.780)
+Time: 11.911 ms
+
+Q20 EXPLAINED
+                                                                                           Optimized Plan                                                                                           
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ materialize.public.pathq20:                                                                                                                                                                       +
+   Return // { arity: 3 }                                                                                                                                                                          +
+     Project (#0, #1, #3) // { arity: 3 }                                                                                                                                                          +
+       Map ((#2 + 1)) // { arity: 4 }                                                                                                                                                              +
+         Reduce group_by=[#0{person1id}, #1{person2id}] aggregates=[min(abs((#2{classyear} - #3{classyear})))] // { arity: 3 }                                                                     +
+           Project (#1, #2, #5, #8) // { arity: 4 }                                                                                                                                                +
+             Join on=(#1{person1id} = #3{personid} AND #2{person2id} = #6{personid} AND #4{universityid} = #7{universityid}) type=delta // { arity: 9 }                                            +
+               implementation                                                                                                                                                                      +
+                 %0:person_knows_person » %1:l0[#0]KA » %2:l0[#0, #1]KK                                                                                                                            +
+                 %1:l0 » %0:person_knows_person[#1]KA » %2:l0[#0, #1]KK                                                                                                                            +
+                 %2:l0 » %0:person_knows_person[#2]KA » %1:l0[#0, #1]KK                                                                                                                            +
+               ArrangeBy keys=[[#1{person1id}], [#2{person2id}]] // { arity: 3 }                                                                                                                   +
+                 ReadIndex on=person_knows_person person_knows_person_person1id=[delta join 1st input (full scan)] person_knows_person_person2id=[delta join 1st input (full scan)] // { arity: 3 }+
+               ArrangeBy keys=[[#0{personid}], [#0{personid}, #1{universityid}]] // { arity: 3 }                                                                                                   +
+                 Get l0 // { arity: 3 }                                                                                                                                                            +
+               ArrangeBy keys=[[#0{personid}, #1{universityid}]] // { arity: 3 }                                                                                                                   +
+                 Get l0 // { arity: 3 }                                                                                                                                                            +
+   With                                                                                                                                                                                            +
+     cte l0 =                                                                                                                                                                                      +
+       Project (#1..=#3) // { arity: 3 }                                                                                                                                                           +
+         ReadIndex on=person_studyat_university person_studyat_university_personid=[*** full scan ***] // { arity: 4 }                                                                             +
+                                                                                                                                                                                                   +
+ Used Indexes:                                                                                                                                                                                     +
+   - materialize.public.person_studyat_university_personid (*** full scan ***)                                                                                                                     +
+   - materialize.public.person_knows_person_person1id (delta join 1st input (full scan))                                                                                                           +
+   - materialize.public.person_knows_person_person2id (delta join 1st input (full scan))                                                                                                           +
+ 
+(1 row)
+
+Time: 17.098 ms
+CREATE MATERIALIZED VIEW
+Time: 664.946 ms
+CREATE INDEX
+Time: 586.926 ms
+                                                          Optimized Plan                                                          
+----------------------------------------------------------------------------------------------------------------------------------
+ Explained Query:                                                                                                                +
+   Finish order_by=[#0{dst} asc nulls_last] limit=20 output=[#0, #1]                                                             +
+     Return // { arity: 2 }                                                                                                      +
+       Return // { arity: 2 }                                                                                                    +
+         Project (#0, #1) // { arity: 2 }                                                                                        +
+           Filter (#1 = #3) // { arity: 4 }                                                                                      +
+             Join on=(#1 = #2) type=differential // { arity: 4 }                                                                 +
+               implementation                                                                                                    +
+                 %1[#0]UKAf » %0:l1[#1]Kf                                                                                        +
+               ArrangeBy keys=[[#1]] // { arity: 2 }                                                                             +
+                 Get l1 // { arity: 2 }                                                                                          +
+               ArrangeBy keys=[[#0]] // { arity: 2 }                                                                             +
+                 Reduce group_by=[#0] aggregates=[min(#1)] // { arity: 2 }                                                       +
+                   CrossJoin type=differential // { arity: 2 }                                                                   +
+                     implementation                                                                                              +
+                       %0[×] » %1:l2[×]                                                                                          +
+                     ArrangeBy keys=[[]] // { arity: 1 }                                                                         +
+                       Distinct project=[#0] // { arity: 1 }                                                                     +
+                         Get l2 // { arity: 1 }                                                                                  +
+                     ArrangeBy keys=[[]] // { arity: 1 }                                                                         +
+                       Get l2 // { arity: 1 }                                                                                    +
+       With                                                                                                                      +
+         cte l2 =                                                                                                                +
+           Project (#1) // { arity: 1 }                                                                                          +
+             Get l1 // { arity: 2 }                                                                                              +
+         cte l1 =                                                                                                                +
+           Project (#0, #1) // { arity: 2 }                                                                                      +
+             Join on=(#0{dst} = #2{personid}) type=differential // { arity: 3 }                                                  +
+               implementation                                                                                                    +
+                 %1[#0]UKA » %0:l0[#0]UK                                                                                         +
+               ArrangeBy keys=[[#0{dst}]] // { arity: 2 }                                                                        +
+                 Project (#1, #2) // { arity: 2 }                                                                                +
+                   Get l0 // { arity: 3 }                                                                                        +
+               ArrangeBy keys=[[#0{personid}]] // { arity: 1 }                                                                   +
+                 Distinct project=[#0{personid}] // { arity: 1 }                                                                 +
+                   Project (#1) // { arity: 1 }                                                                                  +
+                     Filter (#5{name} = "National_Airlines_(5M)") // { arity: 8 }                                                +
+                       Join on=(#2{companyid} = #4{id}) type=differential // { arity: 8 }                                        +
+                         implementation                                                                                          +
+                           %1:company[#0]KAef » %0:person_workat_company[#2]KAef                                                 +
+                         ArrangeBy keys=[[#2{companyid}]] // { arity: 4 }                                                        +
+                           ReadIndex on=person_workat_company person_workat_company_companyid=[differential join] // { arity: 4 }+
+                         ArrangeBy keys=[[#0{id}]] // { arity: 4 }                                                               +
+                           ReadIndex on=company company_id=[differential join] // { arity: 4 }                                   +
+     With Mutually Recursive                                                                                                     +
+       cte l0 =                                                                                                                  +
+         Project (#2, #0, #1) // { arity: 3 }                                                                                    +
+           Map (13194139540317) // { arity: 3 }                                                                                  +
+             Reduce group_by=[#0{dst}] aggregates=[min(#1)] // { arity: 2 }                                                      +
+               Distinct project=[#0{dst}, #1] // { arity: 2 }                                                                    +
+                 Union // { arity: 2 }                                                                                           +
+                   Project (#3, #5) // { arity: 2 }                                                                              +
+                     Map ((#1 + integer_to_bigint(#4{w}))) // { arity: 6 }                                                       +
+                       Join on=(#0 = #2{src}) type=differential // { arity: 5 }                                                  +
+                         implementation                                                                                          +
+                           %1:pathq20[#0]KA » %0:l0[#0]K                                                                         +
+                         ArrangeBy keys=[[#0]] // { arity: 2 }                                                                   +
+                           Project (#1, #2) // { arity: 2 }                                                                      +
+                             Get l0 // { arity: 3 }                                                                              +
+                         ArrangeBy keys=[[#0{src}]] // { arity: 3 }                                                              +
+                           ReadIndex on=pathq20 pathq20_src=[differential join] // { arity: 3 }                                  +
+                   Constant // { arity: 2 }                                                                                      +
+                     - (13194139540317, 0)                                                                                       +
+                                                                                                                                 +
+ Used Indexes:                                                                                                                   +
+   - materialize.public.person_workat_company_companyid (differential join)                                                      +
+   - materialize.public.company_id (differential join)                                                                           +
+   - materialize.public.pathq20_src (differential join)                                                                          +
+ 
+(1 row)
+
+Time: 29.847 ms
+Q20 RUN 1
+CREATE MATERIALIZED VIEW
+Time: 599.298 ms
+CREATE INDEX
+Time: 616.271 ms
+      dst       | w 
+----------------+---
+ 24189255819104 | 3
+(1 row)
+
+Time: 75.789 ms
+Time: 13.085 ms
+Q20 RUN 2
+CREATE MATERIALIZED VIEW
+Time: 607.771 ms
+CREATE INDEX
+Time: 513.857 ms
+      dst       | w 
+----------------+---
+ 24189255819104 | 3
+(1 row)
+
+Time: 76.869 ms
+Time: 13.204 ms
+Q20 RUN 3
+CREATE MATERIALIZED VIEW
+Time: 514.000 ms
+CREATE INDEX
+Time: 506.640 ms
+      dst       | w 
+----------------+---
+ 24189255819104 | 3
+(1 row)
+
+Time: 86.332 ms
+Time: 13.918 ms
+
+DONE
+2024-01-17T11:26:06-05:00
