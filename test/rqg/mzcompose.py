@@ -19,6 +19,10 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.rqg import RQG
+from materialize.version_list import (
+    ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS,
+    resolve_ancestor_image_tag,
+)
 
 SERVICES = [RQG()]
 
@@ -106,6 +110,14 @@ WORKLOADS = [
         validator="ResultsetComparatorSimplify",
     ),
     Workload(
+        name="wmr",
+        grammar="conf/mz/with-mutually-recursive.yy",
+        # Postgres does not support WMR, so our only hope for a comparison
+        # test is to use a previous Mz version via --other-tag=...
+        reference_implementation=ReferenceImplementation.MATERIALIZE,
+        validator="ResultsetComparatorSimplify",
+    ),
+    Workload(
         # A workload that performs DML that preserve the dataset's invariants
         # and also checks that those invariants are not violated
         name="banking",
@@ -186,6 +198,12 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
     ]
 
     psql_urls = ["postgresql://materialize@mz_this:6875/materialize"]
+
+    if args.other_tag == "common-ancestor":
+        args.other_tag = resolve_ancestor_image_tag(
+            ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS
+        )
+        print(f"Resolving --other-tag to {args.other_tag}")
 
     # If we have --other-tag, assume we want to run a comparison test against Materialize
     reference_implementation = (
