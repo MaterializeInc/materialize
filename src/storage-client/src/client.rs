@@ -369,6 +369,76 @@ pub struct StatusUpdate {
     pub namespaced_errors: BTreeMap<String, String>,
 }
 
+impl StatusUpdate {
+    pub fn dropped_status(id: GlobalId, timestamp: chrono::DateTime<chrono::Utc>) -> StatusUpdate {
+        StatusUpdate {
+            id,
+            timestamp,
+            status: "dropped".to_string(),
+            error: None,
+            hints: Default::default(),
+            namespaced_errors: Default::default(),
+        }
+    }
+
+    pub fn produce_new_status(prev: &str, new: &str) -> bool {
+        match (prev, new) {
+            (prev, _) if prev == "ceased" => false,
+            (_, new) if new == "ceased" => true,
+            // TODO(guswynn): Ideally only `failed` sources should not be marked as paused.
+            // Additionally, dropping a replica and then restarting environmentd will
+            // fail this check. This will all be resolved in:
+            // https://github.com/MaterializeInc/materialize/pull/23013
+            (prev, new) if prev == "stalled" && new == "paused" => false,
+            // Don't re-mark that object as paused.
+            (prev, new) if prev == "paused" && new == "paused" => false,
+            // De-duplication of other statuses is currently managed by the
+            // `health_operator`.
+            _ => true,
+        }
+    }
+}
+
+impl From<StatusUpdate> for Row {
+    fn from(update: StatusUpdate) -> Self {
+        use mz_repr::Datum;
+
+        let timestamp = Datum::TimestampTz(update.timestamp.try_into().expect("must fit"));
+        let id = update.id.to_string();
+        let id = Datum::String(&id);
+        let status = Datum::String(&update.status);
+        let error = update.error.as_deref().into();
+
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        packer.extend([timestamp, id, status, error]);
+
+        if !update.hints.is_empty() || !update.namespaced_errors.is_empty() {
+            packer.push_dict_with(|dict_packer| {
+                // `hint` and `namespaced` are ordered,
+                // as well as the BTree's they each contain.
+                if !update.hints.is_empty() {
+                    dict_packer.push(Datum::String("hints"));
+                    dict_packer.push_list(update.hints.iter().map(|s| Datum::String(s)));
+                }
+                if !update.namespaced_errors.is_empty() {
+                    dict_packer.push(Datum::String("namespaced"));
+                    dict_packer.push_dict(
+                        update
+                            .namespaced_errors
+                            .iter()
+                            .map(|(k, v)| (k.as_str(), Datum::String(v))),
+                    );
+                }
+            });
+        } else {
+            packer.push(Datum::Null);
+        }
+
+        row
+    }
+}
+
 impl RustType<proto_storage_response::ProtoStatusUpdate> for StatusUpdate {
     fn into_proto(&self) -> proto_storage_response::ProtoStatusUpdate {
         proto_storage_response::ProtoStatusUpdate {
