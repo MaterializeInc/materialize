@@ -26,7 +26,7 @@
 \set city2Id 1148
  */
 
-CREATE OR REPLACE MATERIALIZED VIEW PathQ19 AS
+CREATE OR REPLACE VIEW PathQ19 AS
 WITH
   -- asymmetrize...
   knows_asymmetric AS (
