@@ -28,6 +28,8 @@ def workflow_default(c: Composition) -> None:
     run_test_with_mv_on_table(c)
     run_test_with_mv_on_counter_source(c)
     run_test_with_counter_source(c)
+    # TODO: #24479 needs to be fixed
+    # run_test_gh_24479(c)
 
 
 def setup(c: Composition) -> None:
@@ -272,6 +274,31 @@ def _validate_count_of_counter_source(c: Composition, object_name: str) -> None:
     assert (
         count_at_mz_time2 > count_at_mz_time1
     ), f"value at time2 did not progress ({count_at_mz_time2} vs. {count_at_mz_time1}), consider increasing 'sleep_duration_between_mz_time1_and_mz_time2'"
+
+
+def run_test_gh_24479(c: Composition) -> None:
+    for (seed, sleep_enabled) in [(0, False), (1, True)]:
+        c.testdrive(
+            dedent(
+                f"""
+                > CREATE TABLE time_{seed} (time_index INT, t TIMESTAMP);
+
+                > CREATE TABLE retain_history_table_{seed} (key INT, value INT);
+                > INSERT INTO time_{seed} VALUES (1, now());
+
+                {'$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="2s"' if sleep_enabled else ''}
+
+                > CREATE MATERIALIZED VIEW retain_history_mv2_{seed} WITH (RETAIN HISTORY FOR '30s') AS
+                    SELECT * FROM retain_history_table_{seed};
+
+                $ set-from-sql var=time1_{seed}
+                SELECT t::STRING FROM time_{seed} WHERE time_index = 1
+
+                > SELECT count(*) FROM retain_history_mv2_{seed} AS OF '${{time1_{seed}}}'::TIMESTAMP; -- time1_{seed} with sleep_enabled={sleep_enabled}
+                0
+                """
+            )
+        )
 
 
 def fetch_now_from_mz(c: Composition) -> str:
