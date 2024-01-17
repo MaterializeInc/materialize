@@ -19,9 +19,9 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use collection_status::RawStatusUpdate;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::BoxStream;
-use healthcheck::RawStatusUpdate;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
@@ -76,10 +76,9 @@ use crate::command_wals::ProtoShardId;
 
 use crate::persist_handles::SnapshotStatsAsOf;
 use crate::rehydration::RehydratingStorageClient;
-
 mod collection_mgmt;
+mod collection_status;
 mod command_wals;
-mod healthcheck;
 mod persist_handles;
 mod rehydration;
 mod statistics;
@@ -172,7 +171,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
 
     /// Facility for appending status updates for sources/sinks
-    pub(crate) collection_status_manager: healthcheck::CollectionStatusManager<T>,
+    pub(crate) collection_status_manager: collection_status::CollectionStatusManager<T>,
     /// Tracks which collection is responsible for which [`IntrospectionType`].
     pub(crate) introspection_ids: Arc<Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
     /// Tokens for tasks that drive updating introspection collections. Dropping
@@ -757,7 +756,7 @@ where
                                 )
                                 .await;
 
-                            let status_col = healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC
+                            let status_col = collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
                                 .get_by_name(&ColumnName::from("status"))
                                 .expect("schema has not changed")
                                 .0;
@@ -782,7 +781,7 @@ where
                                 )
                                 .await;
 
-                            let status_col = healthcheck::MZ_SINK_STATUS_HISTORY_DESC
+                            let status_col = collection_status::MZ_SINK_STATUS_HISTORY_DESC
                                 .get_by_name(&ColumnName::from("status"))
                                 .expect("schema has not changed")
                                 .0;
@@ -2199,7 +2198,7 @@ where
 
         let introspection_ids = Arc::new(Mutex::new(BTreeMap::new()));
 
-        let collection_status_manager = crate::healthcheck::CollectionStatusManager::new(
+        let collection_status_manager = crate::collection_status::CollectionStatusManager::new(
             collection_manager.clone(),
             Arc::clone(&introspection_ids),
         );
@@ -2506,22 +2505,22 @@ where
         let (keep_n, occurred_at_col, id_col) = match collection {
             IntrospectionType::SourceStatusHistory => (
                 self.config.parameters.keep_n_source_status_history_entries,
-                healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC
+                collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("occurred_at"))
                     .expect("schema has not changed")
                     .0,
-                healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC
+                collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("source_id"))
                     .expect("schema has not changed")
                     .0,
             ),
             IntrospectionType::SinkStatusHistory => (
                 self.config.parameters.keep_n_sink_status_history_entries,
-                healthcheck::MZ_SINK_STATUS_HISTORY_DESC
+                collection_status::MZ_SINK_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("occurred_at"))
                     .expect("schema has not changed")
                     .0,
-                healthcheck::MZ_SINK_STATUS_HISTORY_DESC
+                collection_status::MZ_SINK_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("sink_id"))
                     .expect("schema has not changed")
                     .0,
@@ -2530,11 +2529,11 @@ where
                 self.config
                     .parameters
                     .keep_n_privatelink_status_history_entries,
-                healthcheck::MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
+                collection_status::MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("occurred_at"))
                     .expect("schema has not changed")
                     .0,
-                healthcheck::MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
+                collection_status::MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("connection_id"))
                     .expect("schema has not changed")
                     .0,
@@ -3259,7 +3258,7 @@ where
 
         for update in updates {
             let id = update.id;
-            let update = healthcheck::RawStatusUpdate {
+            let update = collection_status::RawStatusUpdate {
                 id,
                 ts: update.timestamp,
                 status_name: update.status,
