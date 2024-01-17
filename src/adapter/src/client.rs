@@ -111,13 +111,20 @@ impl Client {
         environment_id: EnvironmentId,
         segment_client: Option<mz_segment::Client>,
     ) -> Client {
+        // Connection ids are 32 bits and have 3 parts.
+        // 1. MSB bit is always 0 because these are interpreted as an i32, and it is possible some
+        //    driver will not handle a negative id since postgres has never produced one because it
+        //    uses process ids.
+        // 2. Next 12 bits are the lower 12 bits of the org id. This allows balancerd to route
+        //    incoming cancel messages to a subset of the environments.
+        // 3. Last 19 bits are random.
+        let env_lower = environment_id.organization_id().as_u128();
+        let env_lower = (env_lower & 0xFFF) << 19;
+        let env_lower: u32 = env_lower.try_into().expect("must fit");
         Client {
             build_info,
             inner_cmd_tx: cmd_tx,
-            // Although there are 32 bits of space in the connection ID, 12 of those are used by the
-            // environmentd ID. Furthermore, the datastructure in IdAllocator only supports 1 << 24
-            // slots.
-            id_alloc: IdAllocator::new(1, 1 << 20),
+            id_alloc: IdAllocator::new(1, 1 << 19, env_lower),
             now,
             metrics,
             environment_id,

@@ -103,7 +103,7 @@ pub struct TestHarness {
     system_parameter_defaults: BTreeMap<String, String>,
     internal_console_redirect_url: Option<String>,
     metrics_registry: Option<MetricsRegistry>,
-    environment_id: EnvironmentId,
+    pub environment_id: EnvironmentId,
 }
 
 impl Default for TestHarness {
