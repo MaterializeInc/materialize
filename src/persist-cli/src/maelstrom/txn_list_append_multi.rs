@@ -34,6 +34,7 @@ use mz_persist_txn::metrics::Metrics as TxnMetrics;
 use mz_persist_txn::operator::DataSubscribe;
 use mz_persist_txn::txns::{Tidy, TxnsHandle};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
+use timely::progress::Antichain;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 
@@ -318,7 +319,14 @@ impl Transactor {
                 // To recover them, instead of grabbing a snapshot at the read_ts,
                 // we have to start a subscription at time 0 and walk it forward
                 // until we pass read_ts.
-                let mut subscribe = DataSubscribe::new("maelstrom", client, txns_id, data_id, 0);
+                let mut subscribe = DataSubscribe::new(
+                    "maelstrom",
+                    client,
+                    txns_id,
+                    data_id,
+                    0,
+                    Antichain::from_elem(read_ts + 1),
+                );
                 while subscribe.progress() <= read_ts {
                     subscribe.step();
                 }
