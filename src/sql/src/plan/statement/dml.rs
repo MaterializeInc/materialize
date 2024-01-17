@@ -957,7 +957,7 @@ pub fn plan_copy(
                         expr,
                         finishing,
                         desc,
-                        ..
+                        scope: _,
                     } = plan_query(scx, stmt.query, &Params::empty(), QueryLifetime::OneShot)?;
                     CopyToFrom::Query {
                         expr,
