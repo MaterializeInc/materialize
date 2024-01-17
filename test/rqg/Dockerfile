@@ -13,6 +13,7 @@ MZFROM ubuntu-base
 
 # Git dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
     ca-certificates \
     git \
     libdbi-perl \
@@ -25,7 +26,9 @@ RUN perl -MCPAN -e 'install DBIx::MyParsePP'
 # Rebuild if the RQG repo has changed
 ADD https://api.github.com/repos/MaterializeInc/RQG/git/refs/heads/main version.json
 
-RUN git clone --depth=1 --single-branch https://github.com/MaterializeInc/RQG.git
+RUN git clone --single-branch https://github.com/MaterializeInc/RQG.git \
+    && cd RQG \
+    && git checkout 69a0e7b910d2d0ee22e7f25edd16648d7ea4fcb4
 
 ENTRYPOINT ["/usr/bin/perl"]
 

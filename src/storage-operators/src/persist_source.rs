@@ -150,7 +150,7 @@ where
     let mut tokens = vec![];
 
     let stream = scope.scoped(&format!("granular_backpressure({})", source_id), |scope| {
-        let (flow_control, feedback_handle) = match max_inflight_bytes {
+        let (flow_control, flow_control_probe) = match max_inflight_bytes {
             Some(max_inflight_bytes) => {
                 let backpressure_metrics = BackpressureMetrics {
                     emitted_bytes: Arc::clone(&shard_metrics.backpressure_emitted_bytes),
@@ -160,14 +160,19 @@ where
                     retired_bytes: Arc::clone(&shard_metrics.backpressure_retired_bytes),
                 };
 
-                let (feedback_handle, feedback_data) = scope.feedback(Default::default());
+                let probe = mz_timely_util::probe::Handle::default();
+                let progress_stream = mz_timely_util::probe::source(
+                    scope.clone(),
+                    format!("decode_backpressure_probe({source_id})"),
+                    probe.clone(),
+                );
                 let flow_control = FlowControl {
-                    progress_stream: feedback_data,
+                    progress_stream,
                     max_inflight_bytes,
                     summary: (Default::default(), Subtime::least_summary()),
                     metrics: Some(backpressure_metrics),
                 };
-                (Some(flow_control), Some(feedback_handle))
+                (Some(flow_control), Some(probe))
             }
             None => (None, None),
         };
@@ -197,17 +202,8 @@ where
         );
         tokens.extend(source_tokens);
 
-        let stream = match feedback_handle {
-            Some(feedback_handle) => {
-                let handle = mz_timely_util::probe::Handle::default();
-                let probe = mz_timely_util::probe::source(
-                    scope.clone(),
-                    format!("decode_backpressure_probe({source_id})"),
-                    handle.clone(),
-                );
-                probe.connect_loop(feedback_handle);
-                stream.probe_notify_with(vec![handle])
-            }
+        let stream = match flow_control_probe {
+            Some(probe) => stream.probe_notify_with(vec![probe]),
             None => stream,
         };
 
@@ -327,11 +323,20 @@ where
         Arc::new(metadata.relation_desc),
         Arc::new(UnitSchema),
         move |stats, frontier| {
-            let time_range = if let Some(lower) = frontier.as_option().copied() {
-                ResultSpec::value_between(Datum::MzTimestamp(lower), Datum::MzTimestamp(upper))
-            } else {
-                ResultSpec::nothing()
+            let Some(lower) = frontier.as_option().copied() else {
+                // If the frontier has advanced to the empty antichain,
+                // we'll never emit any rows from any part.
+                return false;
             };
+
+            if lower > upper {
+                // The frontier timestamp is larger than the until of the dataflow:
+                // anything from this part will necessarily be filtered out.
+                return false;
+            }
+
+            let time_range =
+                ResultSpec::value_between(Datum::MzTimestamp(lower), Datum::MzTimestamp(upper));
             if let Some(plan) = &filter_plan {
                 let stats = RelationPartStats::new(&filter_name, &metrics, &desc, stats);
                 filter_may_match(desc.typ(), time_range, stats, plan)
@@ -646,9 +651,8 @@ where
     );
     let (mut data_output, data_stream) = builder.new_output();
 
-    let mut data_input = builder.new_input_connection(data, Pipeline, vec![Antichain::new()]);
-    let mut flow_control_input =
-        builder.new_input_connection(&summaried_flow, Pipeline, vec![Antichain::new()]);
+    let mut data_input = builder.new_disconnected_input(data, Pipeline);
+    let mut flow_control_input = builder.new_disconnected_input(&summaried_flow, Pipeline);
 
     // Helper method used to synthesize current and next frontier for ordered times.
     fn synthesize_frontiers<T: PartialOrder + Clone>(
@@ -676,7 +680,7 @@ where
         let mut part_number = 0;
         let mut parts: Vec<((T, Subtime), O)> = Vec::new();
         loop {
-            match data_input.next_mut().await {
+            match data_input.next().await {
                 None => {
                     let empty = Antichain::new();
                     parts.sort_by_key(|val| val.0.clone());
@@ -690,9 +694,9 @@ where
                     }
                     break;
                 }
-                Some(Event::Data(cap, data)) => {
-                    for d in data.drain(..) {
-                        parts.push((cap.time().clone(), d));
+                Some(Event::Data(time, data)) => {
+                    for d in data {
+                        parts.push((time.clone(), d));
                     }
                 }
                 Some(Event::Progress(prog)) => {
@@ -1336,8 +1340,8 @@ mod tests {
     ) -> UnboundedSender<()> {
         let (tx, mut rx) = unbounded_channel::<()>();
         let mut consumer = AsyncOperatorBuilder::new("consumer".to_string(), scope);
-        let mut input = consumer.new_input(input, Pipeline);
-        let (_output_handle, output) = consumer.new_output::<Vec<std::convert::Infallible>>();
+        let (output_handle, output) = consumer.new_output::<Vec<std::convert::Infallible>>();
+        let mut input = consumer.new_input_for(input, Pipeline, &output_handle);
 
         consumer.build(|_caps| async move {
             while let Some(()) = rx.recv().await {

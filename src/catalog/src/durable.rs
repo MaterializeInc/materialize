@@ -155,6 +155,9 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// Get the deployment generation of this instance.
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError>;
 
+    /// Reports if the remote configuration was synchronized at least once.
+    async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError>;
+
     /// Get the tombstone value of this instance.
     async fn get_tombstone(&mut self) -> Result<Option<bool>, CatalogError>;
 
@@ -210,9 +213,6 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send {
     async fn get_next_system_replica_id(&mut self) -> Result<u64, CatalogError> {
         self.get_next_id(SYSTEM_REPLICA_ID_ALLOC_KEY).await
     }
-
-    /// Reports if the remote configuration was synchronized at least once.
-    async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError>;
 
     /// Get the next user replica id without allocating it.
     async fn get_next_user_replica_id(&mut self) -> Result<u64, CatalogError> {

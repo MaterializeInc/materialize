@@ -49,7 +49,7 @@ pub enum AdapterError {
     /// An error occurred in a catalog operation.
     Catalog(mz_catalog::memory::error::Error),
     /// The cached plan or descriptor changed.
-    ChangedPlan,
+    ChangedPlan(String),
     /// The cursor already exists.
     DuplicateCursor(String),
     /// An error while evaluating an expression.
@@ -90,11 +90,6 @@ pub enum AdapterError {
     },
     /// The selection value for a table mutation operation refers to an invalid object.
     InvalidTableMutationSelection,
-    /// An operation attempted to create an illegal item in a
-    /// storage-only cluster
-    BadItemInStorageCluster {
-        cluster_name: String,
-    },
     /// Expression violated a column's constraint
     ConstraintViolation(NotNullViolation),
     /// Transaction cluster was dropped in the middle of a transaction.
@@ -382,7 +377,6 @@ impl AdapterError {
             // range bounds
             AdapterError::AbsurdSubscribeBounds { .. } => SqlState::DATA_EXCEPTION,
             AdapterError::AmbiguousSystemColumnReference => SqlState::FEATURE_NOT_SUPPORTED,
-            AdapterError::BadItemInStorageCluster { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Catalog(e) => match &e.kind {
                 mz_catalog::memory::error::ErrorKind::VarError(e) => match e {
                     VarError::ConstrainedParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
@@ -396,7 +390,7 @@ impl AdapterError {
                 },
                 _ => SqlState::INTERNAL_ERROR,
             },
-            AdapterError::ChangedPlan => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::ChangedPlan(_) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::DuplicateCursor(_) => SqlState::DUPLICATE_CURSOR,
             AdapterError::Eval(EvalError::CharacterNotValidForEncoding(_)) => {
                 SqlState::PROGRAM_LIMIT_EXCEEDED
@@ -516,7 +510,7 @@ impl fmt::Display for AdapterError {
                     system objects"
                 )
             }
-            AdapterError::ChangedPlan => f.write_str("cached plan must not change result type"),
+            AdapterError::ChangedPlan(e) => write!(f, "{}", e),
             AdapterError::Catalog(e) => e.fmt(f),
             AdapterError::DuplicateCursor(name) => {
                 write!(f, "cursor {} already exists", name.quoted())
@@ -532,9 +526,6 @@ impl fmt::Display for AdapterError {
             AdapterError::InvalidLogDependency { object_type, .. } => {
                 write!(f, "{object_type} objects cannot depend on log sources")
             }
-            AdapterError::BadItemInStorageCluster { .. } => f.write_str(
-                "cannot create this kind of item in a cluster that contains sources or sinks",
-            ),
             AdapterError::InvalidClusterReplicaAz { az, expected: _ } => {
                 write!(f, "unknown cluster replica availability zone {az}",)
             }

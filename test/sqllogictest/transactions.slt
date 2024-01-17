@@ -783,7 +783,7 @@ COMMIT
 simple
 SHOW SOURCES
 ----
-s,load-generator,1,materialize_public_s
+s,load-generator,2,quickstart
 s_progress,progress,NULL,NULL
 COMPLETE 2
 
@@ -1166,9 +1166,9 @@ SELECT * FROM blue_mv1;
 query TT
 SELECT name, id FROM mz_clusters WHERE id LIKE 'u%' ORDER BY name;
 ----
-blue_compute u4
-c u3
-quickstart u1
+blue_compute  u3
+c  u2
+quickstart  u1
 
 statement ok
 BEGIN;
@@ -1222,6 +1222,34 @@ query I
 SELECT * FROM blue_t1 LIMIT 1;
 ----
 10
+
+# Make sure SHOW COLUMNS does not use a different cluster during a transaction.
+#
+# SHOW COLUMNS is planned separately from other SHOW statements, and previously it would ignore
+# the mz_introspection auto-routing. This resulted in its dependents being outside the timedomain
+# of the transaction.
+
+statement ok
+BEGIN;
+
+query T
+SELECT name FROM mz_columns WHERE name = 'foobar';
+----
+
+query TTT
+SHOW COLUMNS IN mz_columns
+----
+id  false  text
+name  false  text
+position  false  uint8
+nullable  false  boolean
+type  false  text
+default  true  text
+type_oid  false  oid
+type_mod  false  integer
+
+statement ok
+COMMIT;
 
 # Cleanup.
 

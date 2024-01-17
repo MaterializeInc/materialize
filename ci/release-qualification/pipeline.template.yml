@@ -19,7 +19,7 @@ steps:
     # because there is a new tag on a v* branch. In this case we want to make
     # sure we use the exact same version for testing here as was tagged and
     # will be released, and don't build our own version just for the tests.
-    if: build.source == "ui" || build.source == "schedule"
+    if: build.source == "ui" || build.source == "schedule" || build.source == "api"
 
   - wait: ~
 

@@ -25,15 +25,11 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true
 ! SELECT generate_series(1, 1)
 contains:CLUSTER "storage" has no replicas available to service request
 
-# Specifying `IN CLUSTER` and `SIZE` simultaneously is banned.
-! CREATE SOURCE loadgen IN CLUSTER storage FROM LOAD GENERATOR COUNTER WITH (SIZE = '1')
-contains:only one of IN CLUSTER or SIZE can be set
-
 # Creating a source in an empty, zero-replica cluster should work.
 > CREATE SOURCE loadgen IN CLUSTER storage FROM LOAD GENERATOR COUNTER
 
 ! ALTER SOURCE loadgen SET (SIZE = '1')
-contains:cannot change the size of a source or sink created with IN CLUSTER
+contains:altering size of sources and sinks no longer supported
 
 # Create indexes and materialized views in a storage cluster is allowed.
 > CREATE INDEX t_idx IN CLUSTER storage ON t (a)
@@ -108,7 +104,7 @@ bb
   FORMAT JSON ENVELOPE DEBEZIUM
 
 ! ALTER SINK sink1 SET (SIZE = '1')
-contains:cannot change the size of a source or sink created with IN CLUSTER
+contains:ALTER SINK not yet supported
 
 > CREATE SINK sink2
   IN CLUSTER storage

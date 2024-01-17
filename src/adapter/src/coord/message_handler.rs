@@ -62,8 +62,12 @@ impl Coordinator {
         async move {
             match msg {
                 Message::Command(otel_ctx, cmd) => {
-                    otel_ctx.attach_as_parent();
-                    self.message_command(cmd).await
+                    // TODO: We need a Span that is not none for the otel_ctx to attach the parent
+                    // relationship to. If we swap the otel_ctx in `Command::Message` for a Span, we
+                    // can downgrade this to a debug_span.
+                    let span = tracing::info_span!("message_command").or_current();
+                    span.in_scope(|| otel_ctx.attach_as_parent());
+                    self.message_command(cmd).instrument(span).await
                 }
                 Message::ControllerReady => {
                     if let Some(m) = self
@@ -159,7 +163,7 @@ impl Coordinator {
                     stage,
                 } => {
                     otel_ctx.attach_as_parent();
-                    self.sequence_create_index_stage(ctx, stage, otel_ctx).await;
+                    self.execute_create_index_stage(ctx, stage, otel_ctx).await;
                 }
                 Message::CreateViewStageReady {
                     ctx,
@@ -175,7 +179,7 @@ impl Coordinator {
                     stage,
                 } => {
                     otel_ctx.attach_as_parent();
-                    self.sequence_create_materialized_view_stage(ctx, stage, otel_ctx)
+                    self.execute_create_materialized_view_stage(ctx, stage, otel_ctx)
                         .await;
                 }
                 Message::SubscribeStageReady {

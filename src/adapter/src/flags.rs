@@ -172,6 +172,7 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             config.kafka_transaction_timeout(),
             config.kafka_socket_connection_setup_timeout(),
             config.kafka_fetch_metadata_timeout(),
+            config.kafka_progress_record_fetch_timeout(),
         ),
         statistics_interval: config.storage_statistics_interval(),
         statistics_collection_interval: config.storage_statistics_collection_interval(),
@@ -182,6 +183,9 @@ pub fn tracing_config(config: &SystemVars) -> TracingParameters {
     TracingParameters {
         log_filter: Some(config.logging_filter()),
         opentelemetry_filter: Some(config.opentelemetry_filter()),
+        log_filter_defaults: config.logging_filter_defaults(),
+        opentelemetry_filter_defaults: config.opentelemetry_filter_defaults(),
+        sentry_filters: config.sentry_filters(),
     }
 }
 

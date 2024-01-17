@@ -16,6 +16,7 @@ use std::{fmt, io};
 
 use itertools::Itertools;
 use mz_expr::EvalError;
+use mz_mysql_util::MySqlError;
 use mz_ore::error::ErrorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::{separated, StrExt};
@@ -38,7 +39,7 @@ use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
 use crate::pure::error::{
     CsrPurificationError, KafkaSinkPurificationError, KafkaSourcePurificationError,
-    LoadGeneratorSourcePurificationError, PgSourcePurificationError,
+    LoadGeneratorSourcePurificationError, MySqlSourcePurificationError, PgSourcePurificationError,
     TestScriptSourcePurificationError,
 };
 use crate::session::vars::VarError;
@@ -155,6 +156,21 @@ pub enum PlanError {
     PostgresConnectionErr {
         cause: Arc<mz_postgres_util::PostgresError>,
     },
+    MySqlConnectionErr {
+        cause: Arc<MySqlError>,
+    },
+    SubsourceNameConflict {
+        name: UnresolvedItemName,
+        upstream_references: Vec<UnresolvedItemName>,
+    },
+    SubsourceDuplicateReference {
+        name: UnresolvedItemName,
+        target_names: Vec<UnresolvedItemName>,
+    },
+    /// This is the ALTER SOURCE version of [`Self::SubsourceDuplicateReference`].
+    SubsourceAlreadyReferredTo {
+        name: UnresolvedItemName,
+    },
     InvalidProtobufSchema {
         cause: protobuf_native::OperationFailedError,
     },
@@ -227,6 +243,7 @@ pub enum PlanError {
     TestScriptSourcePurification(TestScriptSourcePurificationError),
     LoadGeneratorSourcePurification(LoadGeneratorSourcePurificationError),
     CsrPurification(CsrPurificationError),
+    MySqlSourcePurification(MySqlSourcePurificationError),
     MissingName(CatalogItemType),
     InvalidRefreshAt,
     InvalidRefreshEveryAlignedTo,
@@ -238,6 +255,9 @@ pub enum PlanError {
         /// The number of replicas that executing this command would have
         /// created
         hypothetical_replica_count: usize,
+    },
+    AlterSourceSinkSizeUnsupported {
+        cluster: String,
     },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
@@ -303,7 +323,21 @@ impl PlanError {
                     },
                     target
                 ))
-            }
+            },
+            Self::SubsourceNameConflict {
+                name: _,
+                upstream_references,
+            } => Some(format!(
+                "referenced tables with duplicate name: {}",
+                itertools::join(upstream_references, ", ")
+            )),
+            Self::SubsourceDuplicateReference {
+                name: _,
+                target_names,
+            } => Some(format!(
+                "subsources referencing table: {}",
+                itertools::join(target_names, ", ")
+            )),
             _ => None,
         }
     }
@@ -398,6 +432,14 @@ impl PlanError {
             Self::InvalidRefreshAt
             | Self::InvalidRefreshEveryAlignedTo => {
                 Some("Calling `mz_now()` is allowed.".into())
+            },
+            Self::AlterSourceSinkSizeUnsupported {
+                cluster,
+            } => {
+                Some(format!("Use ALTER CLUSTER {cluster} SET (SIZE ...)"))
+            },
+            Self::SubsourceNameConflict { .. } | Self::SubsourceAlreadyReferredTo { .. } => {
+                Some("Specify target table names using FOR TABLES (foo AS bar), or limit the upstream tables using FOR SCHEMAS (foo)".into())
             },
             _ => None,
         }
@@ -527,6 +569,23 @@ impl fmt::Display for PlanError {
             Self::PostgresConnectionErr { .. } => {
                 write!(f, "failed to connect to PostgreSQL database")
             }
+            Self::MySqlConnectionErr { cause } => {
+                write!(f, "failed to connect to MySQL database: {}", cause)
+            }
+            Self::SubsourceNameConflict {
+                name , upstream_references: _,
+            } => {
+                write!(f, "multiple subsources would be named {}", name)
+            },
+            Self::SubsourceDuplicateReference {
+                name,
+                target_names: _,
+            } => {
+                write!(f, "multiple subsources refer to table {}", name)
+            },
+            Self::SubsourceAlreadyReferredTo { name } => {
+                write!(f, "another subsource already refers to {}", name)
+            }
             Self::InvalidProtobufSchema { .. } => {
                 write!(f, "invalid protobuf schema")
             }
@@ -621,6 +680,7 @@ impl fmt::Display for PlanError {
             Self::LoadGeneratorSourcePurification(e) => write!(f, "LOAD GENERATOR source validation: {}", e),
             Self::KafkaSinkPurification(e) => write!(f, "KAFKA sink validation: {}", e),
             Self::CsrPurification(e) => write!(f, "CONFLUENT SCHEMA REGISTRY validation: {}", e),
+            Self::MySqlSourcePurification(e) => write!(f, "MYSQL source validation: {}", e),
             Self::MangedReplicaName(name) => {
                 write!(f, "{name} is reserved for replicas of managed clusters")
             }
@@ -637,6 +697,11 @@ impl fmt::Display for PlanError {
             }
             Self::CreateReplicaFailStorageObjects {..} => {
                 write!(f, "cannot create more than one replica of a cluster containing sources or sinks")
+            },
+            Self::AlterSourceSinkSizeUnsupported {
+                ..
+            } => {
+                f.write_str("altering size of sources and sinks no longer supported")
             }
         }
     }
@@ -729,6 +794,12 @@ impl From<PostgresError> for PlanError {
     }
 }
 
+impl From<MySqlError> for PlanError {
+    fn from(e: MySqlError) -> PlanError {
+        PlanError::MySqlConnectionErr { cause: Arc::new(e) }
+    }
+}
+
 impl From<VarError> for PlanError {
     fn from(e: VarError) -> Self {
         PlanError::VarError(e)
@@ -768,6 +839,12 @@ impl From<TestScriptSourcePurificationError> for PlanError {
 impl From<LoadGeneratorSourcePurificationError> for PlanError {
     fn from(e: LoadGeneratorSourcePurificationError) -> Self {
         PlanError::LoadGeneratorSourcePurification(e)
+    }
+}
+
+impl From<MySqlSourcePurificationError> for PlanError {
+    fn from(e: MySqlSourcePurificationError) -> Self {
+        PlanError::MySqlSourcePurification(e)
     }
 }
 

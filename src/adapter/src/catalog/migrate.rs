@@ -15,11 +15,12 @@ use mz_catalog::durable::Transaction;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_repr::namespaces::PG_CATALOG_SCHEMA;
+use mz_repr::GlobalId;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::catalog::NameReference;
 use mz_sql_parser::ast::{
     visit_mut, CreateMaterializedViewStatement, Ident, MaterializedViewOption,
-    MaterializedViewOptionName, Raw, RawDataType, RefreshOptionValue, Statement,
+    MaterializedViewOptionName, Raw, RawClusterName, RawDataType, RefreshOptionValue, Statement,
 };
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
@@ -40,6 +41,7 @@ where
     F: for<'a> FnMut(
         &'a mut Transaction<'_>,
         &'a &ConnCatalog<'_>,
+        GlobalId,
         &'a mut Statement<Raw>,
     ) -> BoxFuture<'a, Result<(), anyhow::Error>>,
 {
@@ -48,7 +50,7 @@ where
     for mut item in items {
         let mut stmt = mz_sql::parse::parse(&item.create_sql)?.into_element().ast;
 
-        f(tx, &cat, &mut stmt).await?;
+        f(tx, &cat, item.id, &mut stmt).await?;
 
         item.create_sql = stmt.to_ast_string_stable();
 
@@ -77,7 +79,7 @@ pub(crate) async fn migrate(
 
     // Perform per-item AST migrations.
     let conn_cat = state.for_system_session();
-    rewrite_items(tx, &conn_cat, |_tx, _conn_cat, stmt| {
+    rewrite_items(tx, &conn_cat, |_tx, conn_cat, id, stmt| {
         let catalog_version = catalog_version.clone();
         Box::pin(async move {
             // Add per-item AST migrations below.
@@ -97,6 +99,7 @@ pub(crate) async fn migrate(
                 ast_rewrite_create_sink_into_kafka_options_0_80_0(stmt)?;
             }
             ast_rewrite_rewrite_type_schemas_0_81_0(stmt);
+            ast_unlink_all_linked_clusters_0_83_0(conn_cat, id, stmt);
 
             if catalog_version <= Version::new(0, 81, u64::MAX) {
                 ast_rewrite_create_materialized_view_refresh_options_0_82_0(stmt)?;
@@ -384,6 +387,73 @@ fn ast_rewrite_create_materialized_view_refresh_options_0_82_0(
     Rewriter.visit_statement_mut(stmt);
 
     Ok(())
+}
+
+/// To deprecate the notion of linked clusters, convert all linked clusters into
+/// unlinked clusters.
+fn ast_unlink_all_linked_clusters_0_83_0<'a>(
+    conn_catalog: &'a &ConnCatalog<'_>,
+    id: GlobalId,
+    stmt: &'a mut Statement<Raw>,
+) {
+    use mz_sql::ast::visit_mut::VisitMut;
+
+    struct Rewriter<'a> {
+        conn_catalog: &'a ConnCatalog<'a>,
+        id: GlobalId,
+    }
+
+    impl<'ast, 'a> VisitMut<'ast, Raw> for Rewriter<'a> {
+        fn visit_create_source_statement_mut(
+            &mut self,
+            node: &'ast mut mz_sql_parser::ast::CreateSourceStatement<Raw>,
+        ) {
+            node.with_options
+                .retain(|o| o.name != mz_sql_parser::ast::CreateSourceOptionName::Size);
+
+            if let Some(cluster) = self.conn_catalog.state.get_linked_cluster(self.id) {
+                mz_ore::soft_assert_or_log!(
+                    node.in_cluster.is_none(),
+                    "linked clusters should not have cluster reference, but got {:?}",
+                    node
+                );
+                // Note that we must update the cluster definition to not
+                // include the linked cluster reference outside of the migration
+                // because of complexities of the interactions with catalog
+                // state.
+                node.in_cluster = Some(RawClusterName::Resolved(cluster.id.to_string()));
+            }
+
+            visit_mut::visit_create_source_statement_mut(self, node);
+        }
+
+        fn visit_create_sink_statement_mut(
+            &mut self,
+            node: &'ast mut mz_sql_parser::ast::CreateSinkStatement<Raw>,
+        ) {
+            node.with_options
+                .retain(|o| o.name != mz_sql_parser::ast::CreateSinkOptionName::Size);
+
+            if let Some(cluster) = self.conn_catalog.state.get_linked_cluster(self.id) {
+                mz_ore::soft_assert_or_log!(
+                    node.in_cluster.is_none(),
+                    "linked clusters should not have cluster reference, but got {:?}",
+                    node
+                );
+                // Note that we must update the cluster definition to not
+                // include the linked cluster reference outside of the migration
+                // because of complexities of the interactions with catalog
+                // state.
+                node.in_cluster = Some(RawClusterName::Resolved(cluster.id.to_string()));
+            }
+
+            visit_mut::visit_create_sink_statement_mut(self, node);
+        }
+    }
+
+    let mut rewriter = Rewriter { conn_catalog, id };
+
+    rewriter.visit_statement_mut(stmt);
 }
 
 fn _add_to_audit_log(

@@ -107,7 +107,7 @@ use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::{soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
-use mz_repr::explain::ExplainFormat;
+use mz_repr::explain::{ExplainConfig, ExplainFormat, UsedIndexes};
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
@@ -120,12 +120,14 @@ use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::{self, ConnectionCounter, OwnedVarInput, SystemVars};
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::ExplainStage;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::WriteTimestamp;
+use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
 use timely::progress::Antichain;
 use timely::PartialOrder;
@@ -147,6 +149,7 @@ use crate::coord::peek::PendingPeek;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
+use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{
     dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
@@ -159,7 +162,7 @@ use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, 
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
-use mz_catalog::durable::DurableCatalogState;
+use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
@@ -466,6 +469,7 @@ pub enum CreateIndexStage {
     Validate(CreateIndexValidate),
     Optimize(CreateIndexOptimize),
     Finish(CreateIndexFinish),
+    Explain(CreateIndexExplain),
 }
 
 impl CreateIndexStage {
@@ -474,6 +478,7 @@ impl CreateIndexStage {
             Self::Validate(_) => None,
             Self::Optimize(stage) => Some(&mut stage.validity),
             Self::Finish(stage) => Some(&mut stage.validity),
+            Self::Explain(stage) => Some(&mut stage.validity),
         }
     }
 }
@@ -482,6 +487,9 @@ impl CreateIndexStage {
 pub struct CreateIndexValidate {
     plan: plan::CreateIndexPlan,
     resolved_ids: ResolvedIds,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
@@ -489,16 +497,29 @@ pub struct CreateIndexOptimize {
     validity: PlanValidity,
     plan: plan::CreateIndexPlan,
     resolved_ids: ResolvedIds,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
 pub struct CreateIndexFinish {
     validity: PlanValidity,
-    id: GlobalId,
+    exported_index_id: GlobalId,
     plan: plan::CreateIndexPlan,
     resolved_ids: ResolvedIds,
     global_mir_plan: optimize::index::GlobalMirPlan,
     global_lir_plan: optimize::index::GlobalLirPlan,
+}
+
+#[derive(Debug)]
+pub struct CreateIndexExplain {
+    validity: PlanValidity,
+    exported_index_id: GlobalId,
+    plan: plan::CreateIndexPlan,
+    df_meta: DataflowMetainfo,
+    used_indexes: UsedIndexes,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -541,10 +562,20 @@ pub struct CreateViewFinish {
 }
 
 #[derive(Debug)]
+pub struct ExplainContext {
+    pub broken: bool,
+    pub config: ExplainConfig,
+    pub format: ExplainFormat,
+    pub stage: ExplainStage,
+    pub optimizer_trace: OptimizerTrace,
+}
+
+#[derive(Debug)]
 pub enum CreateMaterializedViewStage {
     Validate(CreateMaterializedViewValidate),
     Optimize(CreateMaterializedViewOptimize),
     Finish(CreateMaterializedViewFinish),
+    Explain(CreateMaterializedViewExplain),
 }
 
 impl CreateMaterializedViewStage {
@@ -553,6 +584,7 @@ impl CreateMaterializedViewStage {
             Self::Validate(_) => None,
             Self::Optimize(stage) => Some(&mut stage.validity),
             Self::Finish(stage) => Some(&mut stage.validity),
+            Self::Explain(stage) => Some(&mut stage.validity),
         }
     }
 }
@@ -561,6 +593,9 @@ impl CreateMaterializedViewStage {
 pub struct CreateMaterializedViewValidate {
     plan: plan::CreateMaterializedViewPlan,
     resolved_ids: ResolvedIds,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
@@ -568,17 +603,30 @@ pub struct CreateMaterializedViewOptimize {
     validity: PlanValidity,
     plan: plan::CreateMaterializedViewPlan,
     resolved_ids: ResolvedIds,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
 pub struct CreateMaterializedViewFinish {
     validity: PlanValidity,
-    id: GlobalId,
+    exported_sink_id: GlobalId,
     plan: plan::CreateMaterializedViewPlan,
     resolved_ids: ResolvedIds,
     local_mir_plan: optimize::materialized_view::LocalMirPlan,
     global_mir_plan: optimize::materialized_view::GlobalMirPlan,
     global_lir_plan: optimize::materialized_view::GlobalLirPlan,
+}
+
+#[derive(Debug)]
+pub struct CreateMaterializedViewExplain {
+    validity: PlanValidity,
+    exported_sink_id: GlobalId,
+    plan: plan::CreateMaterializedViewPlan,
+    df_meta: DataflowMetainfo,
+    used_indexes: UsedIndexes,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -677,12 +725,18 @@ impl PlanValidity {
         // so next check uses the above fast path.
         if let Some(cluster_id) = self.cluster_id {
             let Some(cluster) = catalog.try_get_cluster(cluster_id) else {
-                return Err(AdapterError::ChangedPlan);
+                return Err(AdapterError::ChangedPlan(format!(
+                    "cluster {} was removed",
+                    cluster_id
+                )));
             };
 
             if let Some(replica_id) = self.replica_id {
                 if cluster.replica(replica_id).is_none() {
-                    return Err(AdapterError::ChangedPlan);
+                    return Err(AdapterError::ChangedPlan(format!(
+                        "replica {} of cluster {} was removed",
+                        replica_id, cluster_id
+                    )));
                 }
             }
         }
@@ -692,7 +746,10 @@ impl PlanValidity {
         // - If an id was dropped, this will detect it and error.
         for id in &self.dependency_ids {
             if catalog.try_get_entry(id).is_none() {
-                return Err(AdapterError::ChangedPlan);
+                return Err(AdapterError::ChangedPlan(format!(
+                    "dependency {} was removed",
+                    id
+                )));
             }
         }
         if catalog
@@ -752,7 +809,7 @@ pub struct Config {
     pub storage_usage_retention_period: Option<Duration>,
     pub segment_client: Option<mz_segment::Client>,
     pub egress_ips: Vec<Ipv4Addr>,
-    pub system_parameter_sync_config: Option<SystemParameterSyncConfig>,
+    pub remote_system_parameters: Option<BTreeMap<String, OwnedVarInput>>,
     pub aws_account_id: Option<String>,
     pub aws_privatelink_availability_zones: Option<Vec<String>>,
     pub connection_context: ConnectionContext,
@@ -2615,7 +2672,7 @@ pub fn serve(
         controller_config,
         controller_envd_epoch,
         controller_persist_txn_tables,
-        mut storage,
+        storage,
         timestamp_oracle_url,
         unsafe_mode,
         all_features,
@@ -2638,7 +2695,7 @@ pub fn serve(
         aws_account_id,
         aws_privatelink_availability_zones,
         connection_context,
-        system_parameter_sync_config,
+        remote_system_parameters,
         active_connection_count,
         webhook_concurrency_limit,
         http_host_name,
@@ -2674,8 +2731,6 @@ pub fn serve(
             .map(|azs_vec| BTreeSet::from_iter(azs_vec.iter().cloned()));
 
         info!("coordinator init: opening catalog");
-        let remote_system_parameters =
-            load_remote_system_parameters(&mut storage, system_parameter_sync_config).await?;
         let (catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
             Catalog::open(mz_catalog::config::Config {
                 storage,
@@ -2932,10 +2987,9 @@ async fn get_initial_oracle_timestamps(
     Ok(initial_timestamps)
 }
 
-/// Potentially load system parameters from a remote frontend server.
 #[tracing::instrument(level = "info", skip_all)]
-async fn load_remote_system_parameters(
-    storage: &mut Box<dyn DurableCatalogState>,
+pub async fn load_remote_system_parameters(
+    storage: &mut Box<dyn OpenableDurableCatalogState>,
     system_parameter_sync_config: Option<SystemParameterSyncConfig>,
 ) -> Result<Option<BTreeMap<String, OwnedVarInput>>, AdapterError> {
     if let Some(system_parameter_sync_config) = system_parameter_sync_config {
@@ -2979,9 +3033,7 @@ async fn load_remote_system_parameters(
         //       LaunchDarkly configuration, for when LaunchDarkly comes
         //       back online.
         //    6. Reboot environmentd.
-        if storage.is_read_only() {
-            tracing::info!("parameter sync on boot: skipping sync as catalog is read-only");
-        } else if !storage.has_system_config_synced_once().await? {
+        if !storage.has_system_config_synced_once().await? {
             let mut params = SynchronizedParameters::new(SystemVars::default());
             let frontend = SystemParameterFrontend::from(&system_parameter_sync_config).await?;
             frontend.pull(&mut params);

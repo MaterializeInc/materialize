@@ -39,48 +39,57 @@ DEFAULT_MZ_VOLUMES = [
 ]
 
 DEFAULT_SYSTEM_PARAMETERS = {
-    "persist_sink_minimum_batch_updates": "128",
-    "enable_multi_worker_storage_persist_sink": "true",
-    "storage_persist_sink_minimum_batch_updates": "100",
-    "persist_pubsub_push_diff_enabled": "true",
-    "persist_pubsub_client_enabled": "true",
-    "persist_stats_audit_percent": "100",
-    "persist_batch_delete_enabled": "true",
-    "enable_columnation_lgalloc": "true",
-    "enable_rbac_checks": "true",
-    "enable_try_parse_monotonic_iso8601_timestamp": "true",
+    # -----
+    # Unsafe functions
     "enable_unsafe_functions": "true",
-    # Old name of `enable_unsafe_functions`.
-    "enable_dangerous_functions": "true",
-    "enable_disk_cluster_replicas": "true",
-    "disk_cluster_replicas_default": "true",
-    "statement_logging_max_sample_rate": "0.01",
-    "statement_logging_default_sample_rate": "0.01",
-    # Following values are set based on Load Test environment to
-    # reduce CRDB load as we are struggling with it in CI:
+    "enable_dangerous_functions": "true",  # former name of 'enable_unsafe_functions'
+    # -----
+    # To reduce CRDB load as we are struggling with it in CI (values based on load test environment):
     "persist_next_listen_batch_retryer_clamp": "100ms",
     "persist_next_listen_batch_retryer_initial_backoff": "1200ms",
-    # Advance coverage on some Persist internals changes
+    # -----
+    # Persist internals changes: advance coverage
     "persist_streaming_compaction_enabled": "true",
     "persist_streaming_snapshot_and_fetch_enabled": "true",
-    "storage_source_decode_fuel": "100000",
-    # 128 MiB,
-    "compute_dataflow_max_inflight_bytes": "134217728",
-    "enable_jemalloc_profiling": "true",
-    "enable_comment": "true",
-    "enable_sink_doc_on_option": "true",
-    "enable_assert_not_null": "true",
-    "enable_specialized_arrangements": "true",
-    "persist_fast_path_limit": "1000",
-    "enable_alter_swap": "true",
-    "timestamp_oracle": "postgres",
-    "default_idle_arrangement_merge_effort": "0",
+    # -----
+    # Others (ordered by name)
+    "cluster_always_use_disk": "true",
+    "compute_dataflow_max_inflight_bytes": "134217728",  # 128 MiB
     "default_arrangement_exert_proportionality": "16",
-    "persist_txn_tables": "eager",
-    "enable_expressions_in_limit_syntax": "true",
+    "default_idle_arrangement_merge_effort": "0",
+    "disk_cluster_replicas_default": "true",
+    "enable_alter_swap": "true",
+    "enable_assert_not_null": "true",
+    "enable_cc_cluster_sizes": "true",
+    "enable_columnation_lgalloc": "true",
+    "enable_comment": "true",
+    "enable_disk_cluster_replicas": "true",
     "enable_eager_delta_joins": "false",
+    "enable_expressions_in_limit_syntax": "true",
+    "enable_jemalloc_profiling": "true",
+    "enable_logical_compaction_window": "true",
+    "enable_multi_worker_storage_persist_sink": "true",
+    "enable_rbac_checks": "true",
     "enable_reduce_mfp_fusion": "true",
     "enable_refresh_every_mvs": "true",
+    "enable_sink_doc_on_option": "true",
+    "enable_specialized_arrangements": "true",
+    "enable_statement_lifecycle_logging": "true",
+    "enable_table_keys": "true",
+    "enable_try_parse_monotonic_iso8601_timestamp": "true",
+    "persist_batch_delete_enabled": "true",
+    "persist_fast_path_limit": "1000",
+    "persist_pubsub_client_enabled": "true",
+    "persist_pubsub_push_diff_enabled": "true",
+    "persist_sink_minimum_batch_updates": "128",
+    "persist_stats_audit_percent": "100",
+    "persist_txn_tables": "eager",
+    "statement_logging_default_sample_rate": "0.01",
+    "statement_logging_max_sample_rate": "0.01",
+    "storage_persist_sink_minimum_batch_updates": "100",
+    "storage_source_decode_fuel": "100000",
+    "timestamp_oracle": "postgres",
+    "wait_catalog_consolidation_on_startup": "true",
 }
 
 DEFAULT_CRDB_ENVIRONMENT = [

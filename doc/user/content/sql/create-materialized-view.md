@@ -61,7 +61,7 @@ common query patterns.
 
 It's important to keep in mind that indexes are **local** to a cluster, and
 maintained in memory. As an example, if you create a materialized view and
-build an index on it in the `default` cluster, querying the view from a
+build an index on it in the `quickstart` cluster, querying the view from a
 different cluster will _not_ use the index; you should create the appropriate
 indexes in each cluster you are referencing the materialized view in.
 

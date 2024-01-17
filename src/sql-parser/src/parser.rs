@@ -2973,7 +2973,7 @@ impl<'a> Parser<'a> {
     fn parse_create_source_connection(
         &mut self,
     ) -> Result<CreateSourceConnection<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[KAFKA, POSTGRES, LOAD, TEST])? {
+        match self.expect_one_of_keywords(&[KAFKA, POSTGRES, MYSQL, LOAD, TEST])? {
             POSTGRES => {
                 self.expect_keyword(CONNECTION)?;
                 let connection = self.parse_raw_name()?;
@@ -2987,6 +2987,24 @@ impl<'a> Parser<'a> {
                 };
 
                 Ok(CreateSourceConnection::Postgres {
+                    connection,
+                    options,
+                })
+            }
+            MYSQL => {
+                self.expect_keyword(CONNECTION)?;
+                let connection = self.parse_raw_name()?;
+
+                let options = if self.consume_token(&Token::LParen) {
+                    let options =
+                        self.parse_comma_separated(Parser::parse_mysql_connection_option)?;
+                    self.expect_token(&Token::RParen)?;
+                    options
+                } else {
+                    vec![]
+                };
+
+                Ok(CreateSourceConnection::MySql {
                     connection,
                     options,
                 })
@@ -3069,6 +3087,17 @@ impl<'a> Parser<'a> {
             _ => unreachable!(),
         };
         Ok(PgConfigOption {
+            name,
+            value: self.parse_optional_option_value()?,
+        })
+    }
+
+    fn parse_mysql_connection_option(&mut self) -> Result<MySqlConfigOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[DETAILS])? {
+            DETAILS => MySqlConfigOptionName::Details,
+            _ => unreachable!(),
+        };
+        Ok(MySqlConfigOption {
             name,
             value: self.parse_optional_option_value()?,
         })

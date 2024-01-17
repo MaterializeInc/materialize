@@ -38,6 +38,7 @@ use crate::render::context::{
     SpecializedArrangementImport,
 };
 use crate::render::RenderTimestamp;
+use crate::typedefs::{RowAgent, RowEnter, RowRowAgent, RowRowEnter};
 
 impl<G> Context<G>
 where
@@ -324,35 +325,29 @@ where
     G::Timestamp: crate::render::RenderTimestamp,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
-    use crate::typedefs::{RowRowSpine, RowSpine};
-    use differential_dataflow::operators::arrange::TraceAgent;
     match trace {
-        SpecializedArrangement::RowUnit(inner) => {
-            build_halfjoin::<_, TraceAgent<RowSpine<_, _>>, _>(
-                updates,
-                inner,
-                None,
-                Some(vec![]),
-                prev_key,
-                prev_thinning,
-                comparison,
-                closure,
-                shutdown_token,
-            )
-        }
-        SpecializedArrangement::RowRow(inner) => {
-            build_halfjoin::<_, TraceAgent<RowRowSpine<_, _>>, _>(
-                updates,
-                inner,
-                None,
-                None,
-                prev_key,
-                prev_thinning,
-                comparison,
-                closure,
-                shutdown_token,
-            )
-        }
+        SpecializedArrangement::RowUnit(inner) => build_halfjoin::<_, RowAgent<_, _>, _>(
+            updates,
+            inner,
+            None,
+            Some(vec![]),
+            prev_key,
+            prev_thinning,
+            comparison,
+            closure,
+            shutdown_token,
+        ),
+        SpecializedArrangement::RowRow(inner) => build_halfjoin::<_, RowRowAgent<_, _>, _>(
+            updates,
+            inner,
+            None,
+            None,
+            prev_key,
+            prev_thinning,
+            comparison,
+            closure,
+            shutdown_token,
+        ),
     }
 }
 
@@ -375,23 +370,20 @@ where
     G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T> + Columnation,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
-    use crate::typedefs::{RowEnter, RowRowEnter};
     match trace {
-        SpecializedArrangementImport::RowUnit(inner) => {
-            build_halfjoin::<_, RowEnter<T, Diff, G::Timestamp>, _>(
-                updates,
-                inner,
-                None,
-                Some(vec![]),
-                prev_key,
-                prev_thinning,
-                comparison,
-                closure,
-                shutdown_token,
-            )
-        }
+        SpecializedArrangementImport::RowUnit(inner) => build_halfjoin::<_, RowEnter<_, _, _>, _>(
+            updates,
+            inner,
+            None,
+            Some(vec![]),
+            prev_key,
+            prev_thinning,
+            comparison,
+            closure,
+            shutdown_token,
+        ),
         SpecializedArrangementImport::RowRow(inner) => {
-            build_halfjoin::<_, RowRowEnter<T, Diff, G::Timestamp>, _>(
+            build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
                 updates,
                 inner,
                 None,
@@ -563,7 +555,6 @@ where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
 {
-    use crate::typedefs::{RowAgent, RowRowAgent};
     match trace {
         SpecializedArrangement::RowUnit(inner) => build_update_stream::<_, RowAgent<_, _>>(
             inner,
@@ -596,10 +587,9 @@ where
     T: Timestamp + Lattice + Columnation,
     G::Timestamp: Lattice + crate::render::RenderTimestamp + Refines<T> + Columnation,
 {
-    use crate::typedefs::{RowEnter, RowRowEnter};
     match trace {
         SpecializedArrangementImport::RowUnit(inner) => {
-            build_update_stream::<_, RowEnter<T, Diff, G::Timestamp>>(
+            build_update_stream::<_, RowEnter<_, _, _>>(
                 inner,
                 None,
                 Some(vec![]),
@@ -609,7 +599,7 @@ where
             )
         }
         SpecializedArrangementImport::RowRow(inner) => {
-            build_update_stream::<_, RowRowEnter<T, Diff, G::Timestamp>>(
+            build_update_stream::<_, RowRowEnter<_, _, _>>(
                 inner,
                 None,
                 None,

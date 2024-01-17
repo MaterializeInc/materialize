@@ -911,7 +911,8 @@ impl_display_t!(KafkaSinkConfigOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PgConfigOptionName {
-    /// Hex encoded string of binary serialization of `dataflow_types::PostgresSourceDetails`
+    /// Hex encoded string of binary serialization of
+    /// `mz_storage_types::sources::postgres::PostgresSourcePublicationDetails`
     Details,
     /// The name of the publication to sync
     Publication,
@@ -948,6 +949,40 @@ impl<T: AstInfo> AstDisplay for PgConfigOption<T> {
 }
 impl_display_t!(PgConfigOption);
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MySqlConfigOptionName {
+    /// Hex encoded string of binary serialization of
+    /// `mz_storage_types::sources::mysql::MySqlSourceDetails`
+    Details,
+}
+
+impl AstDisplay for MySqlConfigOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            MySqlConfigOptionName::Details => "DETAILS",
+        })
+    }
+}
+impl_display!(MySqlConfigOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// An option in a `{FROM|INTO} CONNECTION ...` statement.
+pub struct MySqlConfigOption<T: AstInfo> {
+    pub name: MySqlConfigOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for MySqlConfigOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+impl_display_t!(MySqlConfigOption);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSourceConnection<T: AstInfo> {
     Kafka {
@@ -955,9 +990,12 @@ pub enum CreateSourceConnection<T: AstInfo> {
         options: Vec<KafkaSourceConfigOption<T>>,
     },
     Postgres {
-        /// The postgres connection.
         connection: T::ItemName,
         options: Vec<PgConfigOption<T>>,
+    },
+    MySql {
+        connection: T::ItemName,
+        options: Vec<MySqlConfigOption<T>>,
     },
     LoadGenerator {
         generator: LoadGenerator,
@@ -988,6 +1026,18 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
                 options,
             } => {
                 f.write_str("POSTGRES CONNECTION ");
+                f.write_node(connection);
+                if !options.is_empty() {
+                    f.write_str(" (");
+                    f.write_node(&display::comma_separated(options));
+                    f.write_str(")");
+                }
+            }
+            CreateSourceConnection::MySql {
+                connection,
+                options,
+            } => {
+                f.write_str("MYSQL CONNECTION ");
                 f.write_node(connection);
                 if !options.is_empty() {
                     f.write_str(" (");

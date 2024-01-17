@@ -18,7 +18,6 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use bytes::BufMut;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::BoxStream;
 use itertools::Itertools;
@@ -39,7 +38,7 @@ use mz_persist_txn::txn_read::TxnsRead;
 use mz_persist_txn::txns::TxnsHandle;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_proto::RustType;
 use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_stash::{self, AppendBatch, StashFactory, TypedCollection};
 use mz_stash_types::metrics::Metrics as StashMetrics;
@@ -62,14 +61,9 @@ use mz_storage_types::controller::{
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_policy::ReadPolicy;
-use mz_storage_types::sinks::{
-    ProtoDurableExportMetadata, SinkAsOf, StorageSinkConnection, StorageSinkDesc,
-};
+use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{IngestionDescription, SourceData, SourceExport};
 use mz_storage_types::AlterCompatible;
-use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
-use prost::Message;
-use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio_stream::StreamMap;
@@ -77,6 +71,7 @@ use tracing::{debug, info, warn};
 
 use crate::command_wals::ProtoShardId;
 
+use crate::persist_handles::SnapshotStatsAsOf;
 use crate::rehydration::RehydratingStorageClient;
 
 mod collection_mgmt;
@@ -89,118 +84,14 @@ mod statistics;
 pub static METADATA_COLLECTION: TypedCollection<proto::GlobalId, proto::DurableCollectionMetadata> =
     TypedCollection::new("storage-collection-metadata");
 
-pub static METADATA_EXPORT: TypedCollection<proto::GlobalId, proto::DurableExportMetadata> =
-    TypedCollection::new("storage-export-metadata-u64");
-
 pub static PERSIST_TXNS_SHARD: TypedCollection<(), String> =
     TypedCollection::new("persist-txns-shard");
 
 pub static ALL_COLLECTIONS: &[&str] = &[
     METADATA_COLLECTION.name(),
-    METADATA_EXPORT.name(),
     PERSIST_TXNS_SHARD.name(),
     command_wals::SHARD_FINALIZATION.name(),
 ];
-
-// Do this dance so that we keep the storage controller expressed in terms of a generic timestamp `T`.
-struct MetadataExportFetcher;
-trait MetadataExport<T>
-where
-    // Associated type would be better but you can't express this relationship without unstable
-    DurableExportMetadata<T>: RustType<proto::DurableExportMetadata>,
-{
-    fn get_stash_collection(
-    ) -> &'static TypedCollection<proto::GlobalId, proto::DurableExportMetadata>;
-}
-
-impl MetadataExport<mz_repr::Timestamp> for MetadataExportFetcher {
-    fn get_stash_collection(
-    ) -> &'static TypedCollection<proto::GlobalId, proto::DurableExportMetadata> {
-        &METADATA_EXPORT
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DurableExportMetadata<T> {
-    pub initial_as_of: SinkAsOf<T>,
-}
-
-impl PartialOrd for DurableExportMetadata<mz_repr::Timestamp> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl std::cmp::Ord for DurableExportMetadata<mz_repr::Timestamp> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let mut s = vec![];
-        let mut o = vec![];
-        self.encode(&mut s);
-        other.encode(&mut o);
-        s.cmp(&o)
-    }
-}
-
-impl RustType<ProtoDurableExportMetadata> for DurableExportMetadata<mz_repr::Timestamp> {
-    fn into_proto(&self) -> ProtoDurableExportMetadata {
-        ProtoDurableExportMetadata {
-            initial_as_of: Some(self.initial_as_of.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoDurableExportMetadata) -> Result<Self, TryFromProtoError> {
-        Ok(DurableExportMetadata {
-            initial_as_of: proto
-                .initial_as_of
-                .into_rust_if_some("ProtoDurableExportMetadata::initial_as_of")?,
-        })
-    }
-}
-
-impl RustType<mz_storage_types::collections::DurableExportMetadata>
-    for DurableExportMetadata<mz_repr::Timestamp>
-{
-    fn into_proto(&self) -> mz_storage_types::collections::DurableExportMetadata {
-        mz_storage_types::collections::DurableExportMetadata {
-            initial_as_of: Some(self.initial_as_of.into_proto()),
-        }
-    }
-
-    fn from_proto(
-        proto: mz_storage_types::collections::DurableExportMetadata,
-    ) -> Result<Self, TryFromProtoError> {
-        Ok(DurableExportMetadata {
-            initial_as_of: proto
-                .initial_as_of
-                .into_rust_if_some("DurableExportMetadata::initial_as_of")?,
-        })
-    }
-}
-
-impl DurableExportMetadata<mz_repr::Timestamp> {
-    pub fn encode<B: BufMut>(&self, buf: &mut B) {
-        let persisted: ProtoDurableExportMetadata = self.into_proto();
-        persisted
-            .encode(buf)
-            .expect("no required fields means no initialization errors");
-    }
-
-    pub fn decode(buf: &[u8]) -> Result<Self, String> {
-        let proto = ProtoDurableExportMetadata::decode(buf).map_err(|err| err.to_string())?;
-        proto.into_rust().map_err(|err| err.to_string())
-    }
-}
-
-impl Arbitrary for DurableExportMetadata<mz_repr::Timestamp> {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (any::<SinkAsOf<mz_repr::Timestamp>>(),)
-            .prop_map(|(initial_as_of,)| Self { initial_as_of })
-            .boxed()
-    }
-}
 
 #[derive(Debug)]
 enum PersistTxns<T> {
@@ -339,8 +230,6 @@ where
         + Into<mz_repr::Timestamp>,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
-    MetadataExportFetcher: MetadataExport<T>,
-    DurableExportMetadata<T>: RustType<proto::DurableExportMetadata>,
 {
     type Timestamp = T;
 
@@ -1017,34 +906,6 @@ where
                 acquired_since = ?dependency_since,
                 "prepare_export: sink acquired read holds"
             );
-
-            // It's worth adding a quick note on write frontiers here.
-            //
-            // The write frontier that sinks communicate back to the controller
-            // indicates that all further writes will happen at a time `t` such
-            // that `!timely::ParitalOrder::less_than(&t, &write_frontier)` is
-            // true.  On restart, the sink will receive an SinkAsOf from this
-            // controller indicating that it should ignore everything at or
-            // before the `since` of the from collection. This will not miss any
-            // records because, if there were records not yet written out that
-            // have an uncompacted time of `since`, the write frontier
-            // previously reported from the sink must be less than `since` so we
-            // would not have compacted up to `since`! This is tested by the
-            // kafka persistence tests.
-            //
-            // TODO: Remove upper frontier manipulation from sinks, the read
-            // policy ensures that we can always resume and discern the updates
-            // that happened at upper. The comment above is slightly wrong:
-            // sinks report `F-1` as the upper when they are at upper `F`
-            // (speaking in terms of a timely frontier). We should change sinks
-            // to divorce what they write out to the progress topic and what
-            // they report back as the write upper. To make sure that the
-            // reported write upper conforms with what other parts of the system
-            // think how uppers work.
-            //
-            // Note: This is where the sink code (kafka) calculates the write
-            // frontier that it reports back:
-            // https://github.com/MaterializeInc/materialize/blob/ec8560a532eb5e7282041757d6c1d650f0ffaa77/src/storage/src/sink/kafka.rs#L857
             let read_policy = ReadPolicy::step_back();
 
             let from_collection = self.collection(from_id)?;
@@ -1052,27 +913,10 @@ where
 
             let storage_dependencies = vec![from_id];
 
-            let value = MetadataExportFetcher::get_stash_collection()
-                .insert_key_without_overwrite(
-                    &mut self.stash,
-                    id.into_proto(),
-                    DurableExportMetadata {
-                        initial_as_of: description.sink.as_of.clone(),
-                    }
-                    .into_proto(),
-                )
-                .await?;
-            let mut durable_export_data = DurableExportMetadata::from_proto(value)
-                .map_err(|e| StorageError::IOError(e.into()))?;
-
-            durable_export_data
-                .initial_as_of
-                .downgrade(&dependency_since);
-
             info!(
                 sink_id = id.to_string(),
                 from_id = from_id.to_string(),
-                initial_as_of = ?durable_export_data.initial_as_of,
+                as_of = ?description.sink.as_of,
                 "create_exports: creating sink"
             );
 
@@ -1103,9 +947,10 @@ where
                     from_desc: description.sink.from_desc,
                     connection: description.sink.connection,
                     envelope: description.sink.envelope,
-                    as_of: durable_export_data.initial_as_of,
+                    as_of: description.sink.as_of,
                     status_id,
                     from_storage_metadata,
+                    with_snapshot: description.sink.with_snapshot,
                 },
             };
 
@@ -1144,26 +989,8 @@ where
             // Ensure compatibility
             current_sink.alter_compatible(id, &export.description.sink)?;
 
-            // Get export data
-            let value = MetadataExportFetcher::get_stash_collection()
-                .peek_key_one(&mut self.stash, id.into_proto())
-                .await?
-                .expect("known to exist");
-
-            let mut durable_export_data = DurableExportMetadata::from_proto(value)
-                .map_err(|e| StorageError::IOError(e.into()))?;
-
             let from_collection = self.collection(export.description.sink.from)?;
             let from_storage_metadata = from_collection.collection_metadata.clone();
-
-            let read_capability = export.read_capability.to_owned();
-
-            // Downgrade this since--this mostly informs us whether or not we
-            // want to read the snapshot. For more details, see the
-            // implementation of `downgrade`.
-            durable_export_data
-                .initial_as_of
-                .downgrade(&read_capability);
 
             let status_id = if let Some(status_collection_id) = export.description.sink.status_id {
                 Some(
@@ -1182,7 +1009,18 @@ where
                     from_desc: export.description.sink.from_desc.clone(),
                     connection: export.description.sink.connection.clone(),
                     envelope: export.description.sink.envelope,
-                    as_of: durable_export_data.initial_as_of,
+                    with_snapshot: export.description.sink.with_snapshot,
+                    // Here we are about to send a RunSinkCommand with the current read capaibility
+                    // held by this sink. However, clusters are already running a version of the
+                    // sink and nothing guarantees that by the time this command arrives at the
+                    // clusters they won't have made additional progress such that this read
+                    // capability is invalidated.
+                    // The solution to this problem is for the controller to track specific
+                    // executions of dataflows such that it can track the shutdown of the current
+                    // instance and the initialization of the new instance separately and ensure
+                    // read holds are held for the correct amount of time.
+                    // TODO(petrosagg): change the controller to explicitly track dataflow executions
+                    as_of: export.read_capability.clone(),
                     status_id,
                     from_storage_metadata,
                 },
@@ -1404,7 +1242,22 @@ where
         id: GlobalId,
         as_of: Antichain<Self::Timestamp>,
     ) -> Result<SnapshotStats<Self::Timestamp>, StorageError> {
-        // TODO(txn-lazy): Fix stats for persist-txn shards.
+        let metadata = &self.collection(id)?.collection_metadata;
+        // See the comments in Self::snapshot for what's going on here.
+        let as_of = match metadata.txns_shard.as_ref() {
+            None => SnapshotStatsAsOf::Direct(as_of),
+            Some(txns_id) => {
+                let txns_read = self.txns.expect_enabled_lazy(txns_id);
+                let as_of = as_of
+                    .into_option()
+                    .expect("cannot read as_of the empty antichain");
+                txns_read.update_gt(as_of.clone()).await;
+                let data_snapshot = txns_read
+                    .data_snapshot(metadata.data_shard, as_of.clone())
+                    .await;
+                SnapshotStatsAsOf::Txns(data_snapshot)
+            }
+        };
         self.persist_read_handles.snapshot_stats(id, as_of).await
     }
 
@@ -2212,18 +2065,15 @@ where
                     // names, but runs quick.
                     let (
                         metadata_collection,
-                        metadata_export,
                         persist_txns_shard,
                         shard_finalization,
                     ) = futures::join!(
                         maybe_get_init_batch(&tx, &METADATA_COLLECTION),
-                        maybe_get_init_batch(&tx, &METADATA_EXPORT),
                         maybe_get_init_batch(&tx, &PERSIST_TXNS_SHARD),
                         maybe_get_init_batch(&tx, &command_wals::SHARD_FINALIZATION),
                     );
                     let batches: Vec<AppendBatch> = [
                         metadata_collection,
-                        metadata_export,
                         persist_txns_shard,
                         shard_finalization,
                     ]

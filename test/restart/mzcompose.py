@@ -26,7 +26,11 @@ SERVICES = [
     Kafka(auto_create_topics=True),
     SchemaRegistry(),
     Materialized(),
-    Testdrive(),
+    Testdrive(
+        entrypoint_extra=[
+            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+        ],
+    ),
     testdrive_no_reset,
     Cockroach(setup_materialize=True),
 ]
@@ -69,7 +73,7 @@ def workflow_retain_history(c: Composition) -> None:
         "CREATE MATERIALIZED VIEW retain_mv WITH (RETAIN HISTORY = FOR '2s') AS SELECT * FROM retain_t"
     )
     c.sql(
-        "CREATE SOURCE retain_s FROM LOAD GENERATOR COUNTER WITH (SIZE = '1', RETAIN HISTORY = FOR '5s')"
+        "CREATE SOURCE retain_s FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY = FOR '5s')"
     )
     names = ["mv", "s"]
     check_retain_history_for(names)
@@ -379,7 +383,8 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-status-history-${testdrive.seed}')
               FORMAT TEXT
 
-            > CREATE SINK kafka_sink FROM kafka_source
+            > CREATE SINK kafka_sink
+              FROM kafka_source
               INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${testdrive.seed}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE DEBEZIUM
@@ -395,9 +400,7 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
             service="testdrive_no_reset",
             input=dedent(
                 """
-                > ALTER SOURCE kafka_source SET (SIZE = '1')
-
-                > ALTER SINK kafka_sink SET (SIZE = '1')
+                > ALTER CONNECTION kafka_conn SET (SECURITY PROTOCOL PLAINTEXT)
                 """
             ),
         )

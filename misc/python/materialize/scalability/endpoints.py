@@ -79,18 +79,21 @@ class MaterializeNonRemote(Endpoint):
     def host(self) -> str:
         return "localhost"
 
+    def internal_host(self) -> str:
+        return "localhost"
+
     def user(self) -> str:
         return "materialize"
 
     def password(self) -> str:
         return "materialize"
 
-    def priv_port(self) -> int:
+    def internal_port(self) -> int:
         raise NotImplementedError
 
     def lift_limits(self) -> None:
         priv_conn = pg8000.connect(
-            host=self.host(), user="mz_system", port=self.priv_port()
+            host=self.internal_host(), user="mz_system", port=self.internal_port()
         )
         priv_conn.autocommit = True
         priv_cursor = priv_conn.cursor()
@@ -107,7 +110,7 @@ class MaterializeLocal(MaterializeNonRemote):
     def port(self) -> int:
         return 6875
 
-    def priv_port(self) -> int:
+    def internal_port(self) -> int:
         return 6877
 
     def up(self) -> None:
@@ -142,7 +145,7 @@ class MaterializeContainer(MaterializeNonRemote):
         assert self._port is not None
         return self._port
 
-    def priv_port(self) -> int:
+    def internal_port(self) -> int:
         return self.composition.port("materialized", 6877)
 
     def up(self) -> None:
@@ -170,7 +173,8 @@ class MaterializeContainer(MaterializeNonRemote):
             Materialized(image=self.image, sanity_restart=False)
         ):
             self.composition.up("materialized")
-            self._port = self.composition.default_port("materialized")
+            self.composition.up("balancerd")
+            self._port = self.composition.default_port("balancerd")
 
     def __str__(self) -> str:
         return (

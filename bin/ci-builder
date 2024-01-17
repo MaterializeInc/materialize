@@ -186,6 +186,7 @@ case "$cmd" in
             --env POLAR_SIGNALS_API_TOKEN
             --env PYPI_TOKEN
             --env MZ_DEV_BUILD_SHA
+            --env BUILDKITE_SENTRY_DSN
             # For Miri with nightly Rust
             --env ZOOKEEPER_ADDR
             --env KAFKA_ADDRS

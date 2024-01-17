@@ -35,5 +35,3 @@ true
 
 > SELECT COUNT(*) > 0 FROM mz_internal.mz_dataflow_operators;
 true
-
-> DROP CLUSTER linear_join CASCADE;

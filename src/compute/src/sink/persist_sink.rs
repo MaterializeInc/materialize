@@ -107,7 +107,7 @@ where
         SnapshotMode::Include,
         Antichain::new(), // we want all updates
         None,             // no MFP
-        None,             // no flow control
+        compute_state.dataflow_max_inflight_bytes,
     );
     let persist_collection = ok_stream
         .as_collection()
@@ -292,14 +292,12 @@ where
 
     // The description and the data-passthrough outputs are both driven by this input, so
     // they use a standard input connection.
-    let mut desired_input = mint_op.new_input(desired_stream, Pipeline);
+    let mut desired_input =
+        mint_op.new_input_for_many(desired_stream, Pipeline, [&output, &data_output]);
 
-    let mut persist_feedback_input = mint_op.new_input_connection(
-        persist_feedback_stream,
-        Pipeline,
-        // Neither output's capabilities should depend on the feedback input.
-        vec![Antichain::new(), Antichain::new()],
-    );
+    // Neither output's capabilities should depend on the feedback input.
+    let mut persist_feedback_input =
+        mint_op.new_disconnected_input(persist_feedback_stream, Pipeline);
 
     let shutdown_button = mint_op.build(move |capabilities| async move {
         // Non-active workers should just pass the data through.
@@ -308,10 +306,12 @@ where
             // its capability here. The data-passthrough output just uses the data
             // capabilities.
             drop(capabilities);
-            while let Some(event) = desired_input.next_mut().await {
+            while let Some(event) = desired_input.next().await {
                 match event {
-                    Event::Data(cap, data) => {
-                        data_output.give_container(&cap, data).await;
+                    Event::Data([_output_cap, data_output_cap], mut data) => {
+                        data_output
+                            .give_container(&data_output_cap, &mut data)
+                            .await;
                     }
                     Event::Progress(_) => {}
                 }
@@ -398,11 +398,11 @@ where
 
         loop {
             tokio::select! {
-                Some(event) = desired_input.next_mut() => {
+                Some(event) = desired_input.next() => {
                     match event {
-                        Event::Data(cap, data) => {
+                        Event::Data([_output_cap, data_output_cap], mut data) => {
                             // Just passthrough the data.
-                            data_output.give_container(&cap, data).await;
+                            data_output.give_container(&data_output_cap, &mut data).await;
                             continue;
                         }
                         Event::Progress(frontier) => {
@@ -588,28 +588,27 @@ where
 
     let (mut output, output_stream) = write_op.new_output();
 
-    let mut descriptions_input = write_op.new_input(&batch_descriptions.broadcast(), Pipeline);
-    let mut desired_input = write_op.new_input(
+    let mut descriptions_input =
+        write_op.new_input_for(&batch_descriptions.broadcast(), Pipeline, &output);
+    let mut desired_input = write_op.new_input_for(
         desired_stream,
         Exchange::new(
             move |(row, _ts, _diff): &(Result<Row, DataflowError>, Timestamp, Diff)| row.hashed(),
         ),
+        &output,
     );
-    let mut persist_input = write_op.new_input_connection(
+    // This input is disconnected so that the persist frontier is not taken into account when
+    // determining downstream implications. We're only interested in the frontier to know when we
+    // are ready to write out new data (when the corrections have "settled"). But the persist
+    // frontier must not hold back the downstream frontier, otherwise the `append_batches` operator
+    // would never append batches because it waits for its input frontier to advance before it does
+    // so. The input frontier would never advance if we don't write new updates to persist, leading
+    // to a Catch-22-type situation.
+    let mut persist_input = write_op.new_disconnected_input(
         persist_stream,
         Exchange::new(
             move |(row, _ts, _diff): &(Result<Row, DataflowError>, Timestamp, Diff)| row.hashed(),
         ),
-        // This connection specification makes sure that the persist frontier is
-        // not taken into account when determining downstream implications.
-        // We're only interested in the frontier to know when we are ready to
-        // write out new data (when the corrections have "settled"). But the
-        // persist frontier must not hold back the downstream frontier,
-        // otherwise the `append_batches` operator would never append batches
-        // because it waits for its input frontier to advance before it does so.
-        // The input frontier would never advance if we don't write new updates
-        // to persist, leading to a Catch-22-type situation.
-        vec![Antichain::new()],
     );
 
     // This operator accepts the current and desired update streams for a `persist` shard.
@@ -662,11 +661,11 @@ where
 
         loop {
             tokio::select! {
-                Some(event) = descriptions_input.next_mut() => {
+                Some(event) = descriptions_input.next() => {
                     match event {
                         Event::Data(cap, data) => {
                             // Ingest new batch descriptions.
-                            for description in data.drain(..) {
+                            for description in data {
                                 if sink_id.is_user() {
                                     trace!(
                                         "persist_sink {sink_id}/{shard_id}: \
@@ -702,9 +701,9 @@ where
                         }
                     }
                 }
-                Some(event) = desired_input.next_mut() => {
+                Some(event) = desired_input.next() => {
                     match event {
-                        Event::Data(_cap, data) => {
+                        Event::Data(_cap, mut data) => {
                             // Extract desired rows as positive contributions to `correction`.
                             if sink_id.is_user() && !data.is_empty() {
                                 trace!(
@@ -721,7 +720,7 @@ where
                                     persist_frontier
                                 );
                             }
-                            correction.with_correction_buffer(sink_metrics, sink_worker_metrics, |buffer| buffer.append(data));
+                            correction.with_correction_buffer(sink_metrics, sink_worker_metrics, |buffer| buffer.append(&mut data));
 
                             continue;
                         }
@@ -730,9 +729,9 @@ where
                         }
                     }
                 }
-                Some(event) = persist_input.next_mut() => {
+                Some(event) = persist_input.next() => {
                     match event {
-                        Event::Data(_cap, data) => {
+                        Event::Data(_cap, mut data) => {
                             // Extract persist rows as negative contributions to `correction`.
                             correction.with_correction_buffer(sink_metrics, sink_worker_metrics, |buffer| buffer.extend(data.drain(..).map(|(d, t, r)| (d, t, -r))));
 
@@ -950,16 +949,10 @@ where
     // when we either append to persist successfully or when we learn about a
     // new current frontier because a `compare_and_append` failed. That's why
     // input capability tracking is not connected to the output.
-    let mut descriptions_input = append_op.new_input_connection(
-        batch_descriptions,
-        Exchange::new(move |_| hashed_id),
-        vec![Antichain::new()],
-    );
-    let mut batches_input = append_op.new_input_connection(
-        batches,
-        Exchange::new(move |_| hashed_id),
-        vec![Antichain::new()],
-    );
+    let mut descriptions_input =
+        append_op.new_disconnected_input(batch_descriptions, Exchange::new(move |_| hashed_id));
+    let mut batches_input =
+        append_op.new_disconnected_input(batches, Exchange::new(move |_| hashed_id));
 
     // This operator accepts the batch descriptions and tokens that represent
     // written batches. Written batches get appended to persist when we learn
@@ -1020,11 +1013,11 @@ where
 
         loop {
             tokio::select! {
-                Some(event) = descriptions_input.next_mut() => {
+                Some(event) = descriptions_input.next() => {
                     match event {
                         Event::Data(_cap, data) => {
                             // Ingest new batch descriptions.
-                            for batch_description in data.drain(..) {
+                            for batch_description in data {
                                 if sink_id.is_user() {
                                     trace!(
                                         "persist_sink {sink_id}/{shard_id}: \
@@ -1054,11 +1047,11 @@ where
                         }
                     }
                 }
-                Some(event) = batches_input.next_mut() => {
+                Some(event) = batches_input.next() => {
                     match event {
                         Event::Data(_cap, data) => {
                             // Ingest new written batches
-                            for batch in data.drain(..) {
+                            for batch in data {
                                 match batch {
                                     BatchOrData::Batch(batch) => {
                                         let batch = write.batch_from_transmittable_batch(batch);

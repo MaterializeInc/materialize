@@ -29,7 +29,7 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
 
 # For now sources are not considered in blue-green deployments, so create them separately
 > DROP SOURCE IF EXISTS counter
-> CREATE SOURCE counter FROM LOAD GENERATOR counter (TICK INTERVAL '0.1s')
+> CREATE SOURCE counter FROM LOAD GENERATOR counter (TICK INTERVAL '1s')
 
 > DROP SOURCE IF EXISTS tpch
 > CREATE SOURCE tpch
@@ -89,7 +89,7 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
         LEFT JOIN mz_internal.mz_materialization_lag l ON (l.object_id = d.id)
         WHERE
             h.hydrated AND
-            (l.local_lag < '1s' OR l.local_lag IS NULL)
+            (l.local_lag <= '1s' OR l.local_lag IS NULL)
     ),
     -- Collect dataflows that are not yet ready.
     pending_dataflows AS (

@@ -126,6 +126,13 @@ def get_node_selector(
 def test_disk_label(mz: MaterializeApplication) -> None:
     """Test that cluster replicas have the correct materialize.cloud/disk labels"""
 
+    # If cluster_always_use_disk is set to true, it will take precedence over the DISK keyword in CREATE CLUSTER.
+    mz.environmentd.sql(
+        "ALTER SYSTEM SET cluster_always_use_disk = false;",
+        port="internal",
+        user="mz_system",
+    )
+
     for value in ("true", "false"):
         mz.environmentd.sql(
             f"CREATE CLUSTER disk_{value} MANAGED, SIZE = '2-1', DISK = {value}"
@@ -144,6 +151,13 @@ def test_disk_label(mz: MaterializeApplication) -> None:
         ), node_selectors
 
         mz.environmentd.sql(f"DROP CLUSTER disk_{value} CASCADE")
+
+    # Reset
+    mz.environmentd.sql(
+        "ALTER SYSTEM SET cluster_always_use_disk = true;",
+        port="internal",
+        user="mz_system",
+    )
 
 
 def test_cluster_replica_sizes(mz: MaterializeApplication) -> None:

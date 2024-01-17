@@ -30,11 +30,13 @@ abc:abc
   SASL PASSWORD = SECRET confluent_password
   );
 
+> CREATE CLUSTER canary_sources SIZE '3xsmall';
+
 > CREATE SOURCE bytes
+  IN CLUSTER canary_sources
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-bytes-${testdrive.seed}')
   FORMAT BYTES
-  ENVELOPE NONE
-  WITH (SIZE '3xsmall');
+  ENVELOPE NONE;
 
 > CREATE MATERIALIZED VIEW bytes_view AS SELECT COUNT(*) AS cnt FROM bytes;
 

@@ -16,22 +16,30 @@ $ kafka-create-topic topic=test
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> CREATE CLUSTER audit_log_kafka_src SIZE = '${arg.default-storage-size}';
+
 > CREATE SOURCE kafka_src
+  IN CLUSTER audit_log_kafka_src
   FROM KAFKA CONNECTION kafka_conn
   (TOPIC 'testdrive-test-${testdrive.seed}')
-  FORMAT CSV WITH 2 COLUMNS
+  FORMAT CSV WITH 2 COLUMNS;
 
-> SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal', user FROM mz_audit_events ORDER BY id DESC LIMIT 3
-create  cluster "{\"id\":\"<GID>\",\"name\":\"materialize_public_kafka_src\"}"  materialize
-create  cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"materialize_public_kafka_src\",\"disk\":true,\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"linked\"}" materialize
-create  source  "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_src\",\"schema\":\"public\",\"size\":\"${arg.default-storage-size}\",\"type\":\"kafka\"}"  materialize
+> SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal', user FROM mz_audit_events ORDER BY id DESC LIMIT 4
+create source "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_src\",\"schema\":\"public\",\"size\":null,\"type\":\"kafka\"}" materialize
+create source "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_src_progress\",\"schema\":\"public\",\"size\":null,\"type\":\"progress\"}" materialize
+create cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"audit_log_kafka_src\",\"disk\":true,\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"r1\"}" materialize
+create cluster "{\"id\":\"<GID>\",\"name\":\"audit_log_kafka_src\"}" materialize
+
+> CREATE CLUSTER audit_log_counter_src SIZE = '${arg.default-storage-size}';
 
 > CREATE SOURCE counter_src
+  IN CLUSTER audit_log_counter_src
   FROM LOAD GENERATOR COUNTER;
 
-> SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal', user FROM mz_audit_events ORDER BY id DESC LIMIT 3
-create  cluster "{\"id\":\"<GID>\",\"name\":\"materialize_public_counter_src\"}"  materialize
-create  cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"materialize_public_counter_src\",\"disk\":true,\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"linked\"}" materialize
-create  source  "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"counter_src\",\"schema\":\"public\",\"size\":\"${arg.default-storage-size}\",\"type\":\"load-generator\"}"  materialize
+> SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal', user FROM mz_audit_events ORDER BY id DESC LIMIT 4
+create source "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"counter_src\",\"schema\":\"public\",\"size\":null,\"type\":\"load-generator\"}" materialize
+create source "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"counter_src_progress\",\"schema\":\"public\",\"size\":null,\"type\":\"progress\"}" materialize
+create cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"audit_log_counter_src\",\"disk\":true,\"logical_size\":\"${arg.default-storage-size}\",\"replica_name\":\"r1\"}" materialize
+create cluster "{\"id\":\"<GID>\",\"name\":\"audit_log_counter_src\"}" materialize
 
-> DROP SOURCE counter_src
+> DROP CLUSTER audit_log_kafka_src, audit_log_counter_src CASCADE;

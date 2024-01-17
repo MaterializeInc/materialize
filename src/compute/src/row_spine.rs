@@ -17,12 +17,13 @@ mod spines {
     use differential_dataflow::trace::implementations::ord_neu::{OrdKeyBatch, OrdKeyBuilder};
     use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
+    use differential_dataflow::trace::implementations::Layout;
     use differential_dataflow::trace::implementations::Update;
-    use differential_dataflow::trace::implementations::{Layout, OffsetList};
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
     use std::rc::Rc;
     use timely::container::columnation::{Columnation, TimelyStack};
 
+    use super::offset_opt::OffsetOptimized;
     use super::DatumContainer;
     use mz_repr::Row;
 
@@ -62,7 +63,7 @@ mod spines {
         type KeyContainer = DatumContainer;
         type ValContainer = DatumContainer;
         type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
-        type OffsetContainer = OffsetList;
+        type OffsetContainer = OffsetOptimized;
     }
     impl<U: Update<Key = Row>> Layout for RowValLayout<U>
     where
@@ -74,7 +75,7 @@ mod spines {
         type KeyContainer = DatumContainer;
         type ValContainer = TimelyStack<U::Val>;
         type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
-        type OffsetContainer = OffsetList;
+        type OffsetContainer = OffsetOptimized;
     }
     impl<U: Update<Key = Row, Val = ()>> Layout for RowLayout<U>
     where
@@ -85,7 +86,7 @@ mod spines {
         type KeyContainer = DatumContainer;
         type ValContainer = TimelyStack<()>;
         type UpdContainer = TimelyStack<(U::Time, U::Diff)>;
-        type OffsetContainer = OffsetList;
+        type OffsetContainer = OffsetOptimized;
     }
 }
 
@@ -296,6 +297,172 @@ mod container {
             _types: Option<&[ColumnType]>,
         ) -> Self::DatumIter<'short> {
             *self
+        }
+    }
+}
+
+mod offset_opt {
+
+    use std::cmp::Ordering;
+    use std::ops::Deref;
+
+    use differential_dataflow::trace::cursor::MyTrait;
+    use differential_dataflow::trace::implementations::BatchContainer;
+    use differential_dataflow::trace::implementations::OffsetList;
+
+    enum OffsetStride {
+        Empty,
+        Zero,
+        Striding(usize, usize),
+        Saturated(usize, usize, usize),
+    }
+
+    impl OffsetStride {
+        /// Accepts or rejects a newly pushed element.
+        fn push(&mut self, item: usize) -> bool {
+            match self {
+                OffsetStride::Empty => {
+                    if item == 0 {
+                        *self = OffsetStride::Zero;
+                        true
+                    } else {
+                        false
+                    }
+                }
+                OffsetStride::Zero => {
+                    *self = OffsetStride::Striding(item, 2);
+                    true
+                }
+                OffsetStride::Striding(stride, count) => {
+                    if item == *stride * *count {
+                        *count += 1;
+                        true
+                    } else if item == *stride * (*count - 1) {
+                        *self = OffsetStride::Saturated(*stride, *count, 1);
+                        true
+                    } else {
+                        false
+                    }
+                }
+                OffsetStride::Saturated(stride, count, reps) => {
+                    if item == *stride * (*count - 1) {
+                        *reps += 1;
+                        true
+                    } else {
+                        false
+                    }
+                }
+            }
+        }
+
+        fn index(&self, index: usize) -> usize {
+            match self {
+                OffsetStride::Empty => {
+                    panic!("Empty OffsetStride")
+                }
+                OffsetStride::Zero => 0,
+                OffsetStride::Striding(stride, _steps) => *stride * index,
+                OffsetStride::Saturated(stride, steps, _reps) => {
+                    if index < *steps {
+                        *stride * index
+                    } else {
+                        *stride * (*steps - 1)
+                    }
+                }
+            }
+        }
+
+        fn len(&self) -> usize {
+            match self {
+                OffsetStride::Empty => 0,
+                OffsetStride::Zero => 1,
+                OffsetStride::Striding(_stride, steps) => *steps,
+                OffsetStride::Saturated(_stride, steps, reps) => *steps + *reps,
+            }
+        }
+    }
+
+    pub struct OffsetOptimized {
+        strided: OffsetStride,
+        spilled: OffsetList,
+    }
+
+    impl BatchContainer for OffsetOptimized {
+        type PushItem = usize;
+        type ReadItem<'a> = Wrapper<usize>;
+
+        fn copy(&mut self, item: Self::ReadItem<'_>) {
+            #[allow(clippy::if_same_then_else)]
+            if !self.spilled.is_empty() {
+                self.spilled.push(*item);
+            } else if !self.strided.push(*item) {
+                self.spilled.push(*item);
+            }
+        }
+
+        fn with_capacity(_size: usize) -> Self {
+            Self {
+                strided: OffsetStride::Empty,
+                spilled: OffsetList::with_capacity(0),
+            }
+        }
+
+        fn merge_capacity(_cont1: &Self, _cont2: &Self) -> Self {
+            Self {
+                strided: OffsetStride::Empty,
+                spilled: OffsetList::with_capacity(0),
+            }
+        }
+
+        fn index(&self, index: usize) -> Self::ReadItem<'_> {
+            if index < self.strided.len() {
+                Wrapper(self.strided.index(index))
+            } else {
+                Wrapper(self.spilled.index(index - self.strided.len()))
+            }
+        }
+
+        fn len(&self) -> usize {
+            self.strided.len() + self.spilled.len()
+        }
+    }
+
+    impl OffsetOptimized {
+        pub fn heap_size(&self, callback: impl FnMut(usize, usize)) {
+            use crate::extensions::arrange::offset_list_size;
+            offset_list_size(&self.spilled, callback);
+        }
+    }
+
+    /// Helper struct to provide `MyTrait` for `Copy` types.
+    #[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Copy)]
+    pub struct Wrapper<T: Copy>(T);
+
+    impl<T: Copy> Deref for Wrapper<T> {
+        type Target = T;
+
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
+    impl<'a, T: Copy + Ord> MyTrait<'a> for Wrapper<T> {
+        type Owned = T;
+
+        fn into_owned(self) -> Self::Owned {
+            self.0
+        }
+
+        fn clone_onto(&self, other: &mut Self::Owned) {
+            *other = self.0;
+        }
+
+        fn compare(&self, other: &Self::Owned) -> Ordering {
+            self.0.cmp(other)
+        }
+
+        fn borrow_as(other: &'a Self::Owned) -> Self {
+            Self(*other)
         }
     }
 }

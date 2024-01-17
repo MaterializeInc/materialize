@@ -121,4 +121,5 @@ known_errors = [
     "invalid IANA Time Zone Database identifier",
     "Top-level LIMIT must be a constant expression",
     "LIMIT must not be negative",
+    "materialized view objects cannot depend on log sources",  # explain create materialized view
 ]

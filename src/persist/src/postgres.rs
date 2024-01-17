@@ -24,6 +24,8 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_postgres_client::metrics::PostgresClientMetrics;
 use mz_postgres_client::{PostgresClient, PostgresClientConfig, PostgresClientKnobs};
+use tokio_postgres::error::SqlState;
+use tracing::warn;
 
 use crate::error::Error;
 use crate::location::{CaSResult, Consensus, ExternalError, ResultStream, SeqNo, VersionedData};
@@ -194,12 +196,19 @@ impl PostgresConsensus {
         //
         // See: https://github.com/MaterializeInc/materialize/issues/13975
         // See: https://www.cockroachlabs.com/docs/stable/configure-zone.html#variables
-        client
+        match client
             .batch_execute(&format!(
                 "{} {}",
                 SCHEMA, "ALTER TABLE consensus CONFIGURE ZONE USING gc.ttlseconds = 600;",
             ))
-            .await?;
+            .await
+        {
+            Ok(()) => {}
+            Err(e) if e.code() == Some(&SqlState::INSUFFICIENT_PRIVILEGE) => {
+                warn!("unable to ALTER TABLE consensus, this is expected and OK when connecting with a read-only user");
+            }
+            Err(e) => return Err(e.into()),
+        }
 
         Ok(PostgresConsensus { postgres_client })
     }

@@ -33,6 +33,7 @@ fn main() {
         .extern_path(".mz_expr.scalar", "::mz_expr")
         .extern_path(".mz_kafka_util.addr", "::mz_kafka_util")
         .extern_path(".mz_postgres_util.desc", "::mz_postgres_util::desc")
+        .extern_path(".mz_mysql_util", "::mz_mysql_util")
         .extern_path(".mz_repr.adt.regex", "::mz_repr::adt::regex")
         .extern_path(".mz_repr.antichain", "::mz_repr::antichain")
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
@@ -61,6 +62,7 @@ fn main() {
                 "storage-types/src/sources/encoding.proto",
                 "storage-types/src/sources/envelope.proto",
                 "storage-types/src/sources/kafka.proto",
+                "storage-types/src/sources/mysql.proto",
                 "storage-types/src/sources/postgres.proto",
                 "storage-types/src/sources/load_generator.proto",
                 "storage-types/src/sources/testscript.proto",

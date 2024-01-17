@@ -356,31 +356,15 @@ pub fn plan_explain_plan(
                 );
             }
 
-            let Plan::CreateMaterializedView(plan::CreateMaterializedViewPlan {
-                name,
-                materialized_view:
-                    plan::MaterializedView {
-                        expr: raw_plan,
-                        column_names,
-                        cluster_id,
-                        non_null_assertions,
-                        refresh_schedule,
-                        ..
-                    },
-                ..
-            }) = ddl::plan_create_materialized_view(scx, *stmt, params)?
+            let Plan::CreateMaterializedView(plan) =
+                ddl::plan_create_materialized_view(scx, *stmt, params)?
             else {
                 sql_bail!("expected CreateMaterializedViewPlan plan");
             };
 
             crate::plan::Explainee::Statement(ExplaineeStatement::CreateMaterializedView {
-                name,
-                raw_plan,
-                column_names,
-                cluster_id,
                 broken,
-                non_null_assertions,
-                refresh_schedule,
+                plan,
             })
         }
         Explainee::CreateIndex(mut stmt, broken) => {
@@ -395,17 +379,11 @@ pub fn plan_explain_plan(
                 );
             }
 
-            let Plan::CreateIndex(plan::CreateIndexPlan { name, index, .. }) =
-                ddl::plan_create_index(scx, *stmt)?
-            else {
+            let Plan::CreateIndex(plan) = ddl::plan_create_index(scx, *stmt)? else {
                 sql_bail!("expected CreateIndexPlan plan");
             };
 
-            crate::plan::Explainee::Statement(ExplaineeStatement::CreateIndex {
-                name,
-                index,
-                broken,
-            })
+            crate::plan::Explainee::Statement(ExplaineeStatement::CreateIndex { broken, plan })
         }
     };
 

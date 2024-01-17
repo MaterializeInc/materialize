@@ -45,13 +45,19 @@ pub(crate) fn render_sink<'g, G: Scope<Timestamp = ()>>(
     let sink_render = get_sink_render_for(&sink.connection);
 
     let mut tokens = vec![];
+
+    let snapshot_mode = if sink.with_snapshot {
+        SnapshotMode::Include
+    } else {
+        SnapshotMode::Exclude
+    };
     let (ok_collection, err_collection, persist_tokens) = persist_source::persist_source(
         scope,
         sink.from,
         Arc::clone(&storage_state.persist_clients),
         sink.from_storage_metadata.clone(),
-        Some(sink.as_of.frontier.clone()),
-        SnapshotMode::Include,
+        Some(sink.as_of.clone()),
+        snapshot_mode,
         timely::progress::Antichain::new(),
         None,
         None,

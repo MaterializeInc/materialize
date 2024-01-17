@@ -264,15 +264,19 @@ where
         trace!(%upper, "timely-{worker_id} source({source_id}) received resume upper");
     });
 
-    let (data, progress, health, tokens) =
+    let (input_data, progress, health, tokens) =
         source_connection.render(scope, config, resume_uppers, start_signal);
 
     let name = format!("SourceStats({})", source_id);
     let mut builder = AsyncOperatorBuilder::new(name, scope.clone());
 
-    let mut data_input = builder.new_input(&data.inner, Pipeline);
     let (mut data_output, data) = builder.new_output();
-    let (mut _progress_output, derived_progress) = builder.new_output();
+    let (progress_output, derived_progress) = builder.new_output();
+    let mut data_input = builder.new_input_for_many(
+        &input_data.inner,
+        Pipeline,
+        [&data_output, &progress_output],
+    );
     let (mut health_output, derived_health) = builder.new_output();
 
     builder.build(move |mut caps| async move {
@@ -281,8 +285,8 @@ where
 
         let mut statuses_by_idx = BTreeMap::new();
 
-        while let Some(event) = data_input.next_mut().await {
-            let AsyncEvent::Data(cap, data) = event else {
+        while let Some(event) = data_input.next().await {
+            let AsyncEvent::Data([cap_data, _cap_progress], mut data) = event else {
                 continue;
             };
             for ((output_index, message), _, _) in data.iter() {
@@ -312,7 +316,7 @@ where
                     Err(_) => {}
                 }
             }
-            data_output.give_container(&cap, data).await;
+            data_output.give_container(&cap_data, &mut data).await;
 
             for statuses in statuses_by_idx.values_mut() {
                 if statuses.is_empty() {
@@ -586,7 +590,7 @@ where
 
     // Need to broadcast the remap changes to all workers.
     let remap_trace_updates = remap_trace_updates.inner.broadcast();
-    let mut remap_input = reclock_op.new_input(&remap_trace_updates, Pipeline);
+    let mut remap_input = reclock_op.new_disconnected_input(&remap_trace_updates, Pipeline);
 
     reclock_op.build(move |capabilities| async move {
         // The capability of the output after reclocking the source frontier
@@ -609,8 +613,8 @@ where
         let work_to_do = tokio::sync::Notify::new();
         loop {
             tokio::select! {
-                Some(event) = remap_input.next_mut() => match event {
-                    AsyncEvent::Data(_cap, data) => remap_updates_stash.append(data),
+                Some(event) = remap_input.next() => match event {
+                    AsyncEvent::Data(_cap, mut data) => remap_updates_stash.append(&mut data),
                     // If the remap frontier advanced it's time to carve out a batch that includes
                     // all updates not beyond the upper
                     AsyncEvent::Progress(remap_upper) => {

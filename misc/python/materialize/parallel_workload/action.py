@@ -91,6 +91,7 @@ class Action:
                     "was concurrently dropped",  # role was dropped
                     "unknown cluster",  # cluster was dropped
                     "the transaction's active cluster has been dropped",  # cluster was dropped
+                    "was removed",  # dependency was removed, started with moving optimization off main thread, see #24367
                 ]
             )
         if exe.db.scenario == Scenario.Cancel:
@@ -111,6 +112,9 @@ class Action:
                     "Connection refused",
                 ]
             )
+        if exe.db.scenario in (Scenario.Kill, Scenario.TogglePersistTxn):
+            # Expected, see #20465
+            result.extend(["unknown catalog item", "unknown schema"])
         if exe.db.scenario == Scenario.Rename:
             result.extend(["unknown schema", "ambiguous reference to schema name"])
         if materialize.parallel_workload.database.NAUGHTY_IDENTIFIERS:
@@ -200,6 +204,9 @@ class SelectAction(Action):
                 expressions += f", {window_fn}({column1}) OVER (PARTITION BY {column2} ORDER BY {column3})"
         else:
             expressions = "*"
+
+        if self.rng.choice([True, False]):
+            expressions += f", mz_unsafe.mz_sleep({self.rng.randint(1, 5)})"
 
         query = f"SELECT {expressions} FROM {obj_name} "
 
@@ -460,18 +467,7 @@ class DropIndexAction(Action):
                 return False
 
             query = f"DROP INDEX {index}"
-            try:
-                exe.execute(query)
-            except QueryError as e:
-                # expected, see #20465
-                if exe.db.scenario not in (
-                    Scenario.Kill,
-                    Scenario.TogglePersistTxn,
-                ) or (
-                    "unknown catalog item" not in e.msg
-                    and "unknown schema" not in e.msg
-                ):
-                    raise e
+            exe.execute(query)
             exe.db.indexes.remove(index)
             return True
 
@@ -509,18 +505,7 @@ class DropTableAction(Action):
                 return False
 
             query = f"DROP TABLE {table}"
-            try:
-                exe.execute(query)
-            except QueryError as e:
-                # expected, see #20465
-                if exe.db.scenario not in (
-                    Scenario.Kill,
-                    Scenario.TogglePersistTxn,
-                ) or (
-                    "unknown catalog item" not in e.msg
-                    and "unknown schema" not in e.msg
-                ):
-                    raise e
+            exe.execute(query)
             exe.db.tables.remove(table)
         return True
 
@@ -659,15 +644,7 @@ class DropSchemaAction(Action):
                 return False
 
             query = f"DROP SCHEMA {schema}"
-            try:
-                exe.execute(query)
-            except QueryError as e:
-                # expected, see #20465
-                if (
-                    exe.db.scenario not in (Scenario.Kill, Scenario.TogglePersistTxn)
-                    or "unknown schema" not in e.msg
-                ):
-                    raise e
+            exe.execute(query)
             exe.db.schemas.remove(schema)
         return True
 
@@ -813,18 +790,7 @@ class DropViewAction(Action):
                 query = f"DROP MATERIALIZED VIEW {view}"
             else:
                 query = f"DROP VIEW {view}"
-            try:
-                exe.execute(query)
-            except QueryError as e:
-                # expected, see #20465
-                if exe.db.scenario not in (
-                    Scenario.Kill,
-                    Scenario.TogglePersistTxn,
-                ) or (
-                    "unknown catalog item" not in e.msg
-                    and "unknown schema" not in e.msg
-                ):
-                    raise e
+            exe.execute(query)
             exe.db.views.remove(view)
         return True
 
@@ -1333,18 +1299,7 @@ class DropWebhookSourceAction(Action):
                 return False
 
             query = f"DROP SOURCE {source}"
-            try:
-                exe.execute(query)
-            except QueryError as e:
-                # expected, see #20465
-                if exe.db.scenario not in (
-                    Scenario.Kill,
-                    Scenario.TogglePersistTxn,
-                ) or (
-                    "unknown catalog item" not in e.msg
-                    and "unknown schema" not in e.msg
-                ):
-                    raise e
+            exe.execute(query)
             exe.db.webhook_sources.remove(source)
         return True
 
@@ -1406,18 +1361,7 @@ class DropKafkaSourceAction(Action):
                 return False
 
             query = f"DROP SOURCE {source}"
-            try:
-                exe.execute(query)
-            except QueryError as e:
-                # expected, see #20465
-                if exe.db.scenario not in (
-                    Scenario.Kill,
-                    Scenario.TogglePersistTxn,
-                ) or (
-                    "unknown catalog item" not in e.msg
-                    and "unknown schema" not in e.msg
-                ):
-                    raise e
+            exe.execute(query)
             exe.db.kafka_sources.remove(source)
         return True
 
@@ -1483,18 +1427,7 @@ class DropPostgresSourceAction(Action):
                 return False
 
             query = f"DROP SOURCE {source.executor.source}"
-            try:
-                exe.execute(query)
-            except QueryError as e:
-                # expected, see #20465
-                if exe.db.scenario not in (
-                    Scenario.Kill,
-                    Scenario.TogglePersistTxn,
-                ) or (
-                    "unknown catalog item" not in e.msg
-                    and "unknown schema" not in e.msg
-                ):
-                    raise e
+            exe.execute(query)
             exe.db.postgres_sources.remove(source)
         return True
 
@@ -1550,18 +1483,7 @@ class DropKafkaSinkAction(Action):
                 return False
 
             query = f"DROP SINK {sink}"
-            try:
-                exe.execute(query)
-            except QueryError as e:
-                # expected, see #20465
-                if exe.db.scenario not in (
-                    Scenario.Kill,
-                    Scenario.TogglePersistTxn,
-                ) or (
-                    "unknown catalog item" not in e.msg
-                    and "unknown schema" not in e.msg
-                ):
-                    raise e
+            exe.execute(query)
             exe.db.kafka_sinks.remove(sink)
         return True
 

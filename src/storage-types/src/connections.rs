@@ -259,6 +259,13 @@ impl Connection<InlinedConnection> {
         }
     }
 
+    pub fn unwrap_mysql(self) -> <InlinedConnection as ConnectionAccess>::MySql {
+        match self {
+            Self::MySql(conn) => conn,
+            o => unreachable!("{o:?} is not a MySQL connection"),
+        }
+    }
+
     pub fn unwrap_ssh(self) -> <InlinedConnection as ConnectionAccess>::Ssh {
         match self {
             Self::Ssh(conn) => conn,

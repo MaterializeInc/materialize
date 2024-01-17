@@ -16,7 +16,6 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use once_cell::sync::Lazy;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -239,7 +238,7 @@ impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PostgresSourcePublicationDetails {
     pub tables: Vec<mz_postgres_util::desc::PostgresTableDesc>,
     pub slot: String,
@@ -247,6 +246,25 @@ pub struct PostgresSourcePublicationDetails {
     /// The None value indicates an unknown timeline, to account for sources that existed
     /// prior to this field being introduced
     pub timeline_id: Option<u64>,
+}
+
+impl Arbitrary for PostgresSourcePublicationDetails {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        (
+            proptest::collection::vec(any::<mz_postgres_util::desc::PostgresTableDesc>(), 1..4),
+            any::<String>(),
+            any::<Option<u64>>(),
+        )
+            .prop_map(|(tables, slot, timeline_id)| Self {
+                tables,
+                slot,
+                timeline_id,
+            })
+            .boxed()
+    }
 }
 
 impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicationDetails {

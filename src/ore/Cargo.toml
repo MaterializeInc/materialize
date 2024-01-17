@@ -28,6 +28,7 @@ compact_bytes = { version = "0.1.1", optional = true }
 ctor = { version = "0.1.26", optional = true }
 either = "1.8.0"
 futures = { version = "0.3.25", optional = true }
+hibitset = { version = "0.6.4", optional = true }
 lgalloc = { version = "0.1", optional = true }
 mz-test-macro = { path = "../test-macro", default-features = false }
 num = "0.4.0"
@@ -40,6 +41,7 @@ prometheus = { version = "0.13.3", default-features = false, optional = true }
 proptest = { version = "1.0.0", default-features = false, features = [
   "std",
 ], optional = true }
+rand = { version = "0.8.5", optional = true }
 smallvec = { version = "1.10.0", optional = true }
 stacker = { version = "0.1.15", optional = true }
 sentry = { version = "0.29.1", optional = true, features = ["debug-images"] }
@@ -78,13 +80,17 @@ hyper = { version = "0.14.23", features = ["http1", "server"], optional = true }
 hyper-tls = { version = "0.5.0", optional = true }
 opentelemetry = { version = "0.21.0", features = ["trace"], optional = true }
 opentelemetry-otlp = { version = "0.14.0", optional = true }
-opentelemetry_sdk = { version = "0.21.2", features = ["rt-tokio"], optional = true }
+opentelemetry_sdk = { version = "0.21.2", features = [
+  "rt-tokio",
+], optional = true }
 console-subscriber = { version = "0.1.10", optional = true }
 sentry-tracing = { version = "0.29.1", optional = true }
 yansi = { version = "0.5.1", optional = true }
 
 [dev-dependencies]
 anyhow = { version = "1.0.66" }
+criterion = { version = "0.4.0", features = ["async_tokio"] }
+mz-ore = { path = "../ore", features = ["id_gen"] }
 scopeguard = "1.1.0"
 serde_json = "1.0.89"
 tokio = { version = "1.32.0", features = ["macros", "rt-multi-thread"] }
@@ -130,6 +136,7 @@ cli = ["clap"]
 stack = ["stacker"]
 test = ["anyhow", "ctor", "tracing-subscriber"]
 metrics = ["prometheus"]
+id_gen = ["hibitset", "rand"]
 
 [[test]]
 name = "future"
@@ -138,6 +145,10 @@ required-features = ["async"]
 [[test]]
 name = "task"
 required-features = ["async"]
+
+[[bench]]
+name = "id_gen"
+harness = false
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

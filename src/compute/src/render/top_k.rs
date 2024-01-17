@@ -37,7 +37,7 @@ use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
-use crate::typedefs::{KeySpine, KeyValSpine, RowRowSpine, RowSpine};
+use crate::typedefs::{KeyBatcher, KeyValSpine, RowRowSpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
 impl<G> Context<G>
@@ -136,7 +136,7 @@ where
                             };
                             (group_row, row)
                         })
-                        .consolidate_named_if::<KeySpine<_, _, _>>(
+                        .consolidate_named_if::<KeyBatcher<_, _, _>>(
                             must_consolidate,
                             "Consolidated MonotonicTopK input",
                         );
@@ -379,7 +379,7 @@ where
         (
             oks.negate()
                 .concat(&input)
-                .consolidate_named::<KeySpine<_, _, _>>("Consolidated TopK"),
+                .consolidate_named::<KeyBatcher<_, _, _>>("Consolidated TopK"),
             errs,
         )
     }
@@ -413,7 +413,7 @@ where
                     (group_key, row)
                 }
             })
-            .consolidate_named_if::<KeySpine<_, _, _>>(
+            .consolidate_named_if::<KeyBatcher<_, _, _>>(
                 must_consolidate,
                 "Consolidated MonotonicTop1 input",
             );

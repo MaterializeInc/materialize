@@ -111,7 +111,7 @@ fn plan_alter_cluster_owner(
     match resolve_cluster(scx, &name, if_exists)? {
         Some(cluster) => {
             // Prevent changes to linked clusters.
-            ensure_cluster_is_not_linked(scx, cluster.id())?;
+            ensure_cluster_is_not_linked(scx, cluster.id());
             Ok(Plan::AlterOwner(AlterOwnerPlan {
                 id: ObjectId::Cluster(cluster.id()),
                 object_type: ObjectType::Cluster,

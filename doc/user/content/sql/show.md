@@ -37,7 +37,7 @@ SHOW cluster;
 ```
  cluster
 ---------
- default
+ quickstart
 ```
 
 ### Show transaction isolation level

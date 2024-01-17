@@ -411,9 +411,6 @@ ALTER SYSTEM SET max_credit_consumption_rate = 3
 ! CREATE CLUSTER REPLICA c1.r3 SIZE '1'
 contains:creating cluster replica would violate max_credit_consumption_rate limit (desired: 4, limit: 3, current: 3)
 
-! CREATE SOURCE lg2 FROM LOAD GENERATOR COUNTER WITH (SIZE = '8-8');
-contains:creating cluster replica would violate max_credit_consumption_rate limit (desired: 11, limit: 3, current: 3)
-
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_credit_consumption_rate = 4.0
 

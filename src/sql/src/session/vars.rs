@@ -96,7 +96,7 @@ use mz_repr::user::ExternalUserMetadata;
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_sql_parser::ident;
 use mz_storage_types::controller::PersistTxnTablesImpl;
-use mz_tracing::CloneableEnvFilter;
+use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::Serialize;
@@ -988,19 +988,58 @@ static LOGGING_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| Server
     internal: true,
 });
 
+static OPENTELEMETRY_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("opentelemetry_filter"),
+    value: CloneableEnvFilter::from_str("off").expect("valid EnvFilter"),
+    description: "Sets the filter to apply to OpenTelemetry-backed distributed tracing.",
+    internal: true,
+});
+
+static LOGGING_FILTER_DEFAULTS: Lazy<ServerVar<Vec<SerializableDirective>>> =
+    Lazy::new(|| ServerVar {
+        name: UncasedStr::new("log_filter_defaults"),
+        value: mz_ore::tracing::LOGGING_DEFAULTS
+            .iter()
+            .map(|d| d.clone().into())
+            .collect(),
+        description: "Sets additional default directives to apply to stderr logging. \
+            These apply to all variations of `log_filter`. Directives other than \
+            `module=off` are likely incorrect.",
+        internal: true,
+    });
+
+static OPENTELEMETRY_FILTER_DEFAULTS: Lazy<ServerVar<Vec<SerializableDirective>>> =
+    Lazy::new(|| ServerVar {
+        name: UncasedStr::new("opentelemetry_filter_defaults"),
+        value: mz_ore::tracing::OPENTELEMETRY_DEFAULTS
+            .iter()
+            .map(|d| d.clone().into())
+            .collect(),
+        description: "Sets additional default directives to apply to OpenTelemetry-backed \
+            distributed tracing. \
+            These apply to all variations of `opentelemetry_filter`. Directives other than \
+            `module=off` are likely incorrect.",
+        internal: true,
+    });
+
+static SENTRY_FILTERS: Lazy<ServerVar<Vec<SerializableDirective>>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("sentry_filters"),
+    value: mz_ore::tracing::SENTRY_DEFAULTS
+        .iter()
+        .map(|d| d.clone().into())
+        .collect(),
+    description: "Sets additional default directives to apply to sentry logging. \
+            These apply on top of a default `info` directive. Directives other than \
+            `module=off` are likely incorrect.",
+    internal: true,
+});
+
 static WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<ServerVar<usize>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("webhooks_secrets_caching_ttl_secs"),
     value: usize::cast_from(
         mz_secrets::cache::DEFAULT_TTL_SECS.load(std::sync::atomic::Ordering::Relaxed),
     ),
     description: "Sets the time-to-live for values in the Webhooks secrets cache.",
-    internal: true,
-});
-
-static OPENTELEMETRY_FILTER: Lazy<ServerVar<CloneableEnvFilter>> = Lazy::new(|| ServerVar {
-    name: UncasedStr::new("opentelemetry_filter"),
-    value: CloneableEnvFilter::from_str("off").expect("valid EnvFilter"),
-    description: "Sets the filter to apply to OpenTelemetry-backed distributed tracing.",
     internal: true,
 });
 
@@ -1148,6 +1187,15 @@ const KAFKA_FETCH_METADATA_TIMEOUT: ServerVar<Duration> = ServerVar {
     value: mz_kafka_util::client::DEFAULT_FETCH_METADATA_TIMEOUT,
     description: "Controls the timeout when fetching kafka metadata. \
         Defaults to 10s.",
+    internal: true,
+};
+
+/// Controls the timeout when fetching kafka progress records. Defaults to 60s.
+const KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("kafka_progress_record_fetch_timeout"),
+    value: mz_kafka_util::client::DEFAULT_PROGRESS_RECORD_FETCH_TIMEOUT,
+    description: "Controls the timeout when fetching kafka progress records. \
+        Defaults to 60s.",
     internal: true,
 };
 
@@ -3020,6 +3068,7 @@ impl SystemVars {
             .with_var(&KAFKA_TRANSACTION_TIMEOUT)
             .with_var(&KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT)
             .with_var(&KAFKA_FETCH_METADATA_TIMEOUT)
+            .with_var(&KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT)
             .with_var(&ENABLE_LAUNCHDARKLY)
             .with_var(&MAX_CONNECTIONS)
             .with_var(&KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES)
@@ -3037,6 +3086,9 @@ impl SystemVars {
             .with_var(&MAX_TIMESTAMP_INTERVAL)
             .with_var(&LOGGING_FILTER)
             .with_var(&OPENTELEMETRY_FILTER)
+            .with_var(&LOGGING_FILTER_DEFAULTS)
+            .with_var(&OPENTELEMETRY_FILTER_DEFAULTS)
+            .with_var(&SENTRY_FILTERS)
             .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
             .with_var(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
             .with_var(&grpc_client::CONNECT_TIMEOUT)
@@ -3639,6 +3691,11 @@ impl SystemVars {
         *self.expect_value(&KAFKA_FETCH_METADATA_TIMEOUT)
     }
 
+    /// Returns the `kafka_progress_record_fetch_timeout` configuration parameter.
+    pub fn kafka_progress_record_fetch_timeout(&self) -> Duration {
+        *self.expect_value(&KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT)
+    }
+
     /// Returns the `crdb_connect_timeout` configuration parameter.
     pub fn crdb_connect_timeout(&self) -> Duration {
         *self.expect_value(&CRDB_CONNECT_TIMEOUT)
@@ -3841,6 +3898,18 @@ impl SystemVars {
 
     pub fn opentelemetry_filter(&self) -> CloneableEnvFilter {
         self.expect_value(&*OPENTELEMETRY_FILTER).clone()
+    }
+
+    pub fn logging_filter_defaults(&self) -> Vec<SerializableDirective> {
+        self.expect_value(&*LOGGING_FILTER_DEFAULTS).clone()
+    }
+
+    pub fn opentelemetry_filter_defaults(&self) -> Vec<SerializableDirective> {
+        self.expect_value(&*OPENTELEMETRY_FILTER_DEFAULTS).clone()
+    }
+
+    pub fn sentry_filters(&self) -> Vec<SerializableDirective> {
+        self.expect_value(&*SENTRY_FILTERS).clone()
     }
 
     pub fn webhooks_secrets_caching_ttl_secs(&self) -> usize {
@@ -5071,6 +5140,33 @@ impl Value for Vec<Ident> {
     }
 }
 
+impl Value for Vec<SerializableDirective> {
+    fn type_name() -> String {
+        "directive list".to_string()
+    }
+
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<Vec<SerializableDirective>, VarError> {
+        let values = input.to_vec();
+        let dirs: Result<_, _> = values
+            .iter()
+            .flat_map(|i| i.split(','))
+            .map(|d| SerializableDirective::from_str(d.trim()))
+            .collect();
+        dirs.map_err(|e| VarError::InvalidParameterValue {
+            parameter: param.into(),
+            values: values.to_vec(),
+            reason: e.to_string(),
+        })
+    }
+
+    fn format(&self) -> String {
+        self.iter().map(|d| d.to_string()).join(", ")
+    }
+}
+
 // Implement `Value` for `Option<V>` for any owned `V`.
 impl<V> Value for Option<V>
 where
@@ -5517,7 +5613,11 @@ impl Value for CloneableEnvFilter {
 }
 
 pub fn is_tracing_var(name: &str) -> bool {
-    name == LOGGING_FILTER.name() || name == OPENTELEMETRY_FILTER.name()
+    name == LOGGING_FILTER.name()
+        || name == LOGGING_FILTER_DEFAULTS.name()
+        || name == OPENTELEMETRY_FILTER.name()
+        || name == OPENTELEMETRY_FILTER_DEFAULTS.name()
+        || name == SENTRY_FILTERS.name()
 }
 
 /// Returns whether the named variable is a compute configuration parameter
@@ -5543,6 +5643,7 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == PG_SOURCE_KEEPALIVES_RETRIES.name()
         || name == PG_SOURCE_TCP_USER_TIMEOUT.name()
         || name == PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT.name()
+        || name == ENABLE_STORAGE_SHARD_FINALIZATION.name()
         || name == SSH_CHECK_INTERVAL.name()
         || name == SSH_CONNECT_TIMEOUT.name()
         || name == SSH_KEEPALIVES_IDLE.name()
@@ -5551,6 +5652,7 @@ pub fn is_storage_config_var(name: &str) -> bool {
         || name == KAFKA_TRANSACTION_TIMEOUT.name()
         || name == KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT.name()
         || name == KAFKA_FETCH_METADATA_TIMEOUT.name()
+        || name == KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
         || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()

@@ -36,6 +36,7 @@ $ kafka-ingest format=avro topic=non-dbz-data schema=${non-dbz-schema} timestamp
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE non_dbz_data
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
@@ -91,6 +92,7 @@ Used Indexes:
   - materialize.public.i1_primary_idx (*** full scan ***)
 
 > CREATE SOURCE non_dbz_data_indexed
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE

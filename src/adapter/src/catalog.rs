@@ -50,7 +50,6 @@ use mz_controller::clusters::{
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::OptimizedMirRelationExpr;
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::CollectionExt;
 use mz_ore::collections::HashSet;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -63,7 +62,6 @@ use mz_repr::namespaces::MZ_TEMP_SCHEMA;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId, ScalarType};
 use mz_secrets::InMemorySecretsController;
-use mz_sql::ast::display::AstDisplay;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogRecordField,
@@ -76,18 +74,14 @@ use mz_sql::names::{
     PartialItemName, QualifiedItemName, QualifiedSchemaName, ResolvedDatabaseSpecifier, SchemaId,
     SchemaSpecifier, SystemObjectId, PUBLIC_ROLE_NAME,
 };
-use mz_sql::plan::{
-    PlanContext, PlanNotice, SourceSinkClusterConfig as PlanStorageClusterConfig, StatementDesc,
-};
+use mz_sql::plan::{PlanContext, PlanNotice, StatementDesc};
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::{
     ConnectionCounter, OwnedVarInput, SystemVars, Var, VarInput, CATALOG_KIND_IMPL,
     PERSIST_TXN_TABLES,
 };
-use mz_sql::{plan, rbac, DEFAULT_SCHEMA};
-use mz_sql_parser::ast::{
-    CreateSinkOption, CreateSourceOption, QualifiedReplica, Statement, WithOptionValue,
-};
+use mz_sql::{rbac, DEFAULT_SCHEMA};
+use mz_sql_parser::ast::QualifiedReplica;
 use mz_stash::{DebugStashFactory, StashFactory};
 use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_storage_types::connections::ConnectionContext;
@@ -719,6 +713,7 @@ impl Catalog {
 
     #[cfg(test)]
     pub async fn allocate_system_id(&self) -> Result<GlobalId, Error> {
+        use mz_ore::collections::CollectionExt;
         self.storage()
             .await
             .allocate_system_ids(1)
@@ -1274,33 +1269,6 @@ impl Catalog {
         tx: &mut Transaction<'_>,
         state: &mut CatalogState,
     ) -> Result<(), AdapterError> {
-        // NOTE(benesch): to support altering legacy sized sources and sinks
-        // (those with linked clusters), we need to generate retractions for
-        // `mz_sources` and `mz_sinks` in a separate pass over the operations.
-        // The reason is that the alteration is split over several operations:
-        // dropping the linked cluster, recreating it, and then altering the
-        // source or sink. By the time we get to altering the source or sink,
-        // we've already recreated the linked cluster at the new size, and can
-        // no longer determine the old size of the cluster.
-        //
-        // This is a bit tangled, and this code is ugly and only works for
-        // transactions that don't alter the same source or sink more than once,
-        // but it doesn't seem worth refactoring since all this code will be
-        // removed once cluster unification is complete.
-        let mut old_source_sink_sizes = BTreeMap::new();
-        for op in &ops {
-            if let Op::AlterSource { id, .. } | Op::AlterSink { id, .. } = op {
-                builtin_table_updates.extend(state.pack_item_update(*id, -1));
-                let existing = old_source_sink_sizes.insert(
-                    *id,
-                    state.get_storage_object_size(*id).map(|s| s.to_string()),
-                );
-                if existing.is_some() {
-                    coord_bail!("internal error: attempted to alter same source/sink twice in same transaction (id {id})");
-                }
-            }
-        }
-
         for op in ops {
             match op {
                 Op::AlterRole {
@@ -1347,194 +1315,6 @@ impl Catalog {
                     id,
                     cluster,
                 )?,
-                Op::AlterSink { id, cluster_config } => {
-                    use mz_sql::ast::Value;
-                    use mz_sql_parser::ast::CreateSinkOptionName::*;
-
-                    let entry = state.get_entry(&id);
-                    let name = entry.name().clone();
-
-                    if entry.id().is_system() {
-                        let schema_name = state
-                            .resolve_full_name(&name, session.map(|session| session.conn_id()))
-                            .schema;
-                        return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReadOnlySystemSchema(schema_name),
-                        )));
-                    }
-
-                    let mut new_sink = match entry.item() {
-                        CatalogItem::Sink(sink) => sink.clone(),
-                        other => {
-                            coord_bail!("ALTER SINK entry was not a sink: {}", other.typ())
-                        }
-                    };
-
-                    // Since the catalog serializes the items using only their creation statement
-                    // and context, we need to parse and rewrite the with options in that statement.
-                    // (And then make any other changes to the source definition to match.)
-                    let mut stmt = mz_sql::parse::parse(&new_sink.create_sql)
-                        .expect("invalid create sql persisted to catalog")
-                        .into_element()
-                        .ast;
-
-                    let create_stmt = match &mut stmt {
-                        Statement::CreateSink(s) => s,
-                        _ => coord_bail!("sink {id} was not created with a CREATE SINK statement"),
-                    };
-
-                    create_stmt
-                        .with_options
-                        .retain(|x| ![Size].contains(&x.name));
-
-                    let new_cluster_option = match &cluster_config {
-                        PlanStorageClusterConfig::Existing { .. } => {
-                            coord_bail!("cannot set cluster of existing source");
-                        }
-                        PlanStorageClusterConfig::Linked { size } => Some((Size, size.clone())),
-                        PlanStorageClusterConfig::Undefined => None,
-                    };
-
-                    if let Some((name, value)) = new_cluster_option {
-                        create_stmt.with_options.push(CreateSinkOption {
-                            name,
-                            value: Some(WithOptionValue::Value(Value::String(value))),
-                        });
-                    }
-
-                    let new_size = match &cluster_config {
-                        PlanStorageClusterConfig::Linked { size } => Some(size.clone()),
-                        _ => None,
-                    };
-
-                    let create_sql = stmt.to_ast_string_stable();
-                    new_sink.create_sql = create_sql;
-                    let sink = CatalogEntry {
-                        item: CatalogItem::Sink(new_sink),
-                        ..(entry.clone())
-                    };
-
-                    tx.update_item(id, sink.clone().into())?;
-
-                    state.add_to_audit_log(
-                        oracle_write_ts,
-                        session,
-                        tx,
-                        builtin_table_updates,
-                        audit_events,
-                        EventType::Alter,
-                        ObjectType::Sink,
-                        EventDetails::AlterSourceSinkV1(mz_audit_log::AlterSourceSinkV1 {
-                            id: id.to_string(),
-                            name: Self::full_name_detail(&state.resolve_full_name(
-                                &name,
-                                session.map(|session| session.conn_id()),
-                            )),
-                            old_size: old_source_sink_sizes[&id].clone(),
-                            new_size,
-                        }),
-                    )?;
-
-                    let to_name = entry.name().clone();
-                    Self::update_item(state, builtin_table_updates, id, to_name, sink.item)?;
-                }
-                Op::AlterSource { id, cluster_config } => {
-                    use mz_sql::ast::Value;
-                    use mz_sql_parser::ast::CreateSourceOptionName::*;
-
-                    let entry = state.get_entry(&id);
-                    let name = entry.name().clone();
-
-                    if entry.id().is_system() {
-                        let schema_name = state
-                            .resolve_full_name(&name, session.map(|session| session.conn_id()))
-                            .schema;
-                        return Err(AdapterError::Catalog(Error::new(
-                            ErrorKind::ReadOnlySystemSchema(schema_name),
-                        )));
-                    }
-
-                    let mut new_source = match entry.item() {
-                        CatalogItem::Source(source) => source.clone(),
-                        other => {
-                            coord_bail!("ALTER SOURCE entry was not a source: {}", other.typ())
-                        }
-                    };
-
-                    // Since the catalog serializes the items using only their creation statement
-                    // and context, we need to parse and rewrite the with options in that statement.
-                    // (And then make any other changes to the source definition to match.)
-                    let mut stmt = mz_sql::parse::parse(
-                        &new_source
-                            .create_sql
-                            .expect("must exist for non-system sources"),
-                    )
-                    .expect("invalid create sql persisted to catalog")
-                    .into_element()
-                    .ast;
-
-                    let create_stmt = match &mut stmt {
-                        Statement::CreateSource(s) => s,
-                        _ => coord_bail!(
-                            "source {id} was not created with a CREATE SOURCE statement"
-                        ),
-                    };
-
-                    create_stmt
-                        .with_options
-                        .retain(|x| ![Size].contains(&x.name));
-
-                    let new_cluster_option = match &cluster_config {
-                        PlanStorageClusterConfig::Existing { .. } => {
-                            coord_bail!("cannot set cluster of existing source");
-                        }
-                        PlanStorageClusterConfig::Linked { size } => Some((Size, size.clone())),
-                        PlanStorageClusterConfig::Undefined => None,
-                    };
-
-                    if let Some((name, value)) = new_cluster_option {
-                        create_stmt.with_options.push(CreateSourceOption {
-                            name,
-                            value: Some(WithOptionValue::Value(Value::String(value))),
-                        });
-                    }
-
-                    let new_size = match &cluster_config {
-                        PlanStorageClusterConfig::Linked { size } => Some(size.clone()),
-                        _ => None,
-                    };
-
-                    let create_sql = stmt.to_ast_string_stable();
-                    new_source.create_sql = Some(create_sql);
-                    let source = CatalogEntry {
-                        item: CatalogItem::Source(new_source.clone()),
-                        ..(entry.clone())
-                    };
-
-                    tx.update_item(id, source.clone().into())?;
-
-                    state.add_to_audit_log(
-                        oracle_write_ts,
-                        session,
-                        tx,
-                        builtin_table_updates,
-                        audit_events,
-                        EventType::Alter,
-                        ObjectType::Source,
-                        EventDetails::AlterSourceSinkV1(mz_audit_log::AlterSourceSinkV1 {
-                            id: id.to_string(),
-                            name: Self::full_name_detail(&state.resolve_full_name(
-                                &name,
-                                session.map(|session| session.conn_id()),
-                            )),
-                            old_size: old_source_sink_sizes[&id].clone(),
-                            new_size,
-                        }),
-                    )?;
-
-                    let to_name = entry.name().clone();
-                    Self::update_item(state, builtin_table_updates, id, to_name, source.item)?;
-                }
                 Op::CreateDatabase {
                     name,
                     oid,
@@ -3784,14 +3564,6 @@ pub enum Op {
         id: GlobalId,
         cluster: ClusterId,
     },
-    AlterSink {
-        id: GlobalId,
-        cluster_config: plan::SourceSinkClusterConfig,
-    },
-    AlterSource {
-        id: GlobalId,
-        cluster_config: plan::SourceSinkClusterConfig,
-    },
     AlterRole {
         id: RoleId,
         name: String,
@@ -4493,6 +4265,10 @@ impl SessionCatalog for ConnCatalog<'_> {
         let comment_id = self.state.get_comment_id(ObjectId::Item(*id));
         self.state.comments.get_object_comments(comment_id)
     }
+
+    fn get_linked_cluster(&self, id: GlobalId) -> Option<ClusterId> {
+        self.state.get_linked_cluster(id).map(|cluster| cluster.id)
+    }
 }
 
 #[cfg(test)]
@@ -4515,7 +4291,6 @@ mod tests {
     use mz_catalog::durable::objects::serialization::proto;
     use mz_controller_types::{ClusterId, ReplicaId};
     use mz_expr::MirScalarExpr;
-    use mz_ore::collections::CollectionExt;
     use mz_ore::now::{to_datetime, NOW_ZERO, SYSTEM_TIME};
     use mz_ore::task;
     use mz_persist_client::PersistClient;
@@ -4823,6 +4598,7 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_normalized_create() {
+        use mz_ore::collections::CollectionExt;
         Catalog::with_debug(NOW_ZERO.clone(), |catalog| async move {
             let conn_catalog = catalog.for_system_session();
             let scx = &mut StatementContext::new(None, &conn_catalog);

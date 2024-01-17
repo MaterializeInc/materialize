@@ -76,7 +76,9 @@ false
 
 # Regression test for https://github.com/MaterializeInc/materialize/issues/16326
 
-> CREATE SOURCE lgtpch FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1) FOR ALL TABLES WITH (SIZE = '1');
+> CREATE CLUSTER lgtpch_cluster_cleanup SIZE '1';
+
+> CREATE SOURCE lgtpch IN CLUSTER lgtpch_cluster_cleanup FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1) FOR ALL TABLES;
 > CREATE MATERIALIZED VIEW q14 AS
   SELECT
     100.00 * sum(case

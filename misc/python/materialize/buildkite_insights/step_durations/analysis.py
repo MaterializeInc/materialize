@@ -39,6 +39,22 @@ BUILDKITE_BUILD_STATES = [
     "finished",
 ]
 
+MZ_PIPELINES = [
+    "cleanup",
+    "coverage",
+    "deploy",
+    "deploy-lsp",
+    "deploy-mz",
+    "deploy-website",
+    "license",
+    "nightlies",
+    "release-qualification",
+    "security",
+    "sql-logic-tests",
+    "tests",
+    "www",
+]
+
 
 @dataclass
 class StepData:
@@ -200,11 +216,17 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    parser.add_argument("--pipeline", default="tests", type=str)
+    parser.add_argument("--pipeline", choices=MZ_PIPELINES, default="tests", type=str)
     parser.add_argument("--build-step-key", default=None, type=str)
-    parser.add_argument("--no-fetch", action="store_true")
-    parser.add_argument("--max-fetches", default=5, type=int)
-    parser.add_argument("--branch", default="main", type=str)
+    parser.add_argument(
+        "--no-fetch",
+        action="store_true",
+        help="The data of a previous fetch of the specified pipeline will be used. Note that filters such as 'branch' and 'build-state' are applied at fetch-time.",
+    )
+    parser.add_argument("--max-fetches", default=2, type=int)
+    parser.add_argument(
+        "--branch", default="main", type=str, help="Use '*' for all branches"
+    )
     parser.add_argument(
         "--build-state",
         default=None,
@@ -224,7 +246,7 @@ if __name__ == "__main__":
         args.build_step_key,
         args.no_fetch,
         args.max_fetches,
-        args.branch,
+        args.branch if args.branch != "*" else None,
         args.build_state,
         args.output_type,
     )

@@ -2523,6 +2523,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ebdb29d2ea9ed0083cd8cece49bbd968021bd99b0849edb4a9a7ee0fdf6a4e0"
 
 [[package]]
+name = "hibitset"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3ede5cfa60c958e60330d65163adbc4211e15a2653ad80eb0cce878de120121"
+dependencies = [
+ "rayon",
+]
+
+[[package]]
 name = "hmac"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3409,6 +3418,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util",
+ "tracing",
  "twox-hash",
  "url",
 ]
@@ -3684,7 +3694,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "0.83.0-dev"
+version = "0.84.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3796,7 +3806,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "0.83.0-dev"
+version = "0.84.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -3946,7 +3956,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.83.0-dev"
+version = "0.84.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -4145,7 +4155,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.83.0-dev"
+version = "0.84.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -4604,10 +4614,21 @@ name = "mz-mysql-util"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "indexmap 1.9.1",
+ "itertools",
  "mysql_async",
  "mz-ore",
+ "mz-proto",
+ "mz-repr",
  "mz-ssh-util",
+ "once_cell",
+ "proptest",
+ "prost",
+ "prost-build",
+ "protobuf-src",
+ "serde",
  "thiserror",
+ "tonic-build",
  "tracing",
  "workspace-hack",
 ]
@@ -4734,13 +4755,16 @@ dependencies = [
  "clap",
  "compact_bytes",
  "console-subscriber",
+ "criterion",
  "ctor",
  "either",
  "futures",
+ "hibitset",
  "http",
  "hyper",
  "hyper-tls",
  "lgalloc",
+ "mz-ore",
  "mz-test-macro",
  "native-tls",
  "num",
@@ -4753,6 +4777,7 @@ dependencies = [
  "pin-project",
  "prometheus",
  "proptest",
+ "rand",
  "scopeguard",
  "sentry",
  "sentry-tracing",
@@ -4821,7 +4846,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.83.0-dev"
+version = "0.84.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -5629,7 +5654,7 @@ dependencies = [
 
 [[package]]
 name = "mz-stash-debug"
-version = "0.83.0-dev"
+version = "0.84.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -5946,7 +5971,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "0.83.0-dev"
+version = "0.84.0-dev"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -6027,7 +6052,6 @@ dependencies = [
  "futures-util",
  "mz-ore",
  "num-traits",
- "polonius-the-crab",
  "proptest",
  "serde",
  "timely",
@@ -6836,12 +6860,6 @@ checksum = "521fa9638fa597e1dc53e9412a4f9cefb01187ee1f7413076f9e6749e2885ba9"
 dependencies = [
  "plotters-backend",
 ]
-
-[[package]]
-name = "polonius-the-crab"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0119ad75060c93b2017796396280ab9c1870738bf3b66a8cb20deb3c9075426"
 
 [[package]]
 name = "portable-atomic"

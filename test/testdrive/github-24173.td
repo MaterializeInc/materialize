@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> CREATE SOURCE tpch FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1) FOR ALL TABLES WITH (SIZE = '1');
+> CREATE SOURCE tpch
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1) FOR ALL TABLES;
 
 > CREATE CONNECTION kafka_fixed TO KAFKA (
     BROKER '${testdrive.kafka-addr}',
@@ -19,14 +21,17 @@
     URL '${testdrive.schema-registry-url}'
   );
 
-> CREATE SINK sink FROM supplier
+> CREATE SINK sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM supplier
   INTO KAFKA CONNECTION kafka_fixed (TOPIC 'testdrive-supplier-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
 > CREATE SOURCE progress_check
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_fixed (TOPIC 'testdrive-progress-fixed-${testdrive.seed}')
   FORMAT JSON ENVELOPE NONE
 
-> SELECT COUNT(*) FROM progress_check WHERE data->'timestamp' = 'null'::jsonb;
+> SELECT COUNT(*) FROM progress_check WHERE data->'frontier' = '[]'::jsonb;
 1

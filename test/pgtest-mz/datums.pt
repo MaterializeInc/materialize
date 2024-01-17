@@ -5,7 +5,7 @@
 # because the timestamps change each execution.
 send
 Query {"query": "DROP SOURCE IF EXISTS gen"}
-Query {"query": "CREATE SOURCE gen FROM LOAD GENERATOR DATUMS WITH (size = '1')"}
+Query {"query": "CREATE SOURCE gen FROM LOAD GENERATOR DATUMS"}
 Query {"query": "SELECT * FROM gen AS OF 18446744073709551615"}
 ----
 

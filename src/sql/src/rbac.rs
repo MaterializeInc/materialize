@@ -31,8 +31,7 @@ use crate::names::{
 };
 use crate::plan;
 use crate::plan::{
-    DataSourceDesc, Explainee, MutationKind, Plan, SideEffectingFunc, SourceSinkClusterConfig,
-    UpdatePrivilege,
+    DataSourceDesc, Explainee, MutationKind, Plan, SideEffectingFunc, UpdatePrivilege,
 };
 use crate::session::user::{
     RoleMetadata, MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER,
@@ -401,12 +400,12 @@ fn generate_rbac_requirements(
             source,
             if_not_exists: _,
             timeline: _,
-            cluster_config,
+            in_cluster,
         }) => RbacRequirements {
             privileges: generate_required_source_privileges(
                 name,
                 &source.data_source,
-                cluster_config,
+                *in_cluster,
                 role_id,
             ),
             item_usage: &CREATE_ITEM_USAGE,
@@ -424,14 +423,14 @@ fn generate_rbac_requirements(
                                  source,
                                  if_not_exists: _,
                                  timeline: _,
-                                 cluster_config,
+                                 in_cluster,
                              },
                          resolved_ids: _,
                      }| {
                         generate_required_source_privileges(
                             name,
                             &source.data_source,
-                            cluster_config,
+                            *in_cluster,
                             role_id,
                         )
                         .into_iter()
@@ -459,7 +458,7 @@ fn generate_rbac_requirements(
             sink,
             with_snapshot: _,
             if_not_exists: _,
-            cluster_config,
+            in_cluster,
         }) => {
             let mut privileges = vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
@@ -471,12 +470,11 @@ fn generate_rbac_requirements(
                 iter::once(sink.from),
                 role_id,
             ));
-            match cluster_config.cluster_id() {
-                Some(id) => {
-                    privileges.push((SystemObjectId::Object(id.into()), AclMode::CREATE, role_id))
-                }
-                None => privileges.push((SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id)),
-            }
+            privileges.push((
+                SystemObjectId::Object(in_cluster.into()),
+                AclMode::CREATE,
+                role_id,
+            ));
             RbacRequirements {
                 privileges,
                 item_usage: &CREATE_ITEM_USAGE,
@@ -881,11 +879,6 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
-        Plan::AlterSink(plan::AlterSinkPlan { id, size: _ }) => RbacRequirements {
-            ownership: vec![ObjectId::Item(*id)],
-            item_usage: &CREATE_ITEM_USAGE,
-            ..Default::default()
-        },
         Plan::AlterConnection(plan::AlterConnectionPlan { id, action: _ }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id)],
             ..Default::default()
@@ -913,14 +906,14 @@ fn generate_rbac_requirements(
                                  source,
                                  if_not_exists: _,
                                  timeline: _,
-                                 cluster_config,
+                                 in_cluster,
                              },
                          resolved_ids: _,
                      }| {
                         generate_required_source_privileges(
                             name,
                             &source.data_source,
-                            cluster_config,
+                            *in_cluster,
                             role_id,
                         )
                         .into_iter()
@@ -1414,7 +1407,7 @@ fn ownership_err(
 fn generate_required_source_privileges(
     name: &QualifiedItemName,
     data_source: &DataSourceDesc,
-    cluster_config: &SourceSinkClusterConfig,
+    in_cluster: Option<ClusterId>,
     role_id: RoleId,
 ) -> Vec<(SystemObjectId, AclMode, RoleId)> {
     let mut privileges = vec![(
@@ -1422,7 +1415,7 @@ fn generate_required_source_privileges(
         AclMode::CREATE,
         role_id,
     )];
-    match (data_source, cluster_config.cluster_id()) {
+    match (data_source, in_cluster) {
         (_, Some(id)) => {
             privileges.push((SystemObjectId::Object(id.into()), AclMode::CREATE, role_id))
         }

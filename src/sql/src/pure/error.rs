@@ -12,7 +12,7 @@ use std::sync::Arc;
 use mz_ccsr::ListError;
 use mz_repr::adt::system::Oid;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{ReferencedSubsources, UnresolvedItemName};
+use mz_sql_parser::ast::ReferencedSubsources;
 use mz_storage_types::errors::{ContextCreationError, CsrConnectError};
 
 use crate::names::{FullItemName, PartialItemName};
@@ -32,19 +32,6 @@ pub enum PgSourcePurificationError {
     },
     #[error("missing TABLES specification")]
     RequiresReferencedSubsources,
-    #[error("multiple subsources would be named {name}")]
-    SubsourceNameConflict {
-        name: UnresolvedItemName,
-        upstream_references: Vec<UnresolvedItemName>,
-    },
-    #[error("multiple subsources refer to table {name}")]
-    SubsourceDuplicateReference {
-        name: UnresolvedItemName,
-        target_names: Vec<UnresolvedItemName>,
-    },
-    /// This is the ALTER SOURCE version of [`Self::SubsourceDuplicateReference`].
-    #[error("another subsource already refers to {name}")]
-    SubsourceAlreadyReferredTo { name: UnresolvedItemName },
     #[error("insufficient privileges")]
     UserLacksUsageOnSchemas { user: String, schemas: Vec<String> },
     #[error("insufficient privileges")]
@@ -82,20 +69,6 @@ impl PgSourcePurificationError {
             } => Some(format!(
                 "missing schemas: {}",
                 itertools::join(schemas.iter(), ", ")
-            )),
-            Self::SubsourceNameConflict {
-                name: _,
-                upstream_references,
-            } => Some(format!(
-                "referenced tables with duplicate name: {}",
-                itertools::join(upstream_references, ", ")
-            )),
-            Self::SubsourceDuplicateReference {
-                name: _,
-                target_names,
-            } => Some(format!(
-                "subsources referencing table: {}",
-                itertools::join(target_names, ", ")
             )),
             Self::UserLacksUsageOnSchemas { user, schemas } => Some(format!(
                 "user {} lacks USAGE privileges for schemas {}",
@@ -135,9 +108,6 @@ impl PgSourcePurificationError {
             ),
             Self::RequiresReferencedSubsources => {
                 Some("provide a FOR TABLES (..), FOR SCHEMAS (..), or FOR ALL TABLES clause".into())
-            }
-            Self::SubsourceNameConflict { .. } | Self::SubsourceAlreadyReferredTo { .. } => {
-                Some("Specify target table names using FOR TABLES (foo AS bar), or limit the upstream tables using FOR SCHEMAS (foo)".into())
             }
             Self::UnrecognizedTypes {
                 cols: _,
@@ -225,7 +195,7 @@ impl LoadGeneratorSourcePurificationError {
     }
 }
 
-/// Logical errors detectable during purification for a KAFKA SOURCE.
+/// Logical errors detectable during purification for a KAFKA SINK.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum KafkaSinkPurificationError {
     #[error("{0} is not a KAFKA CONNECTION")]
@@ -251,7 +221,7 @@ impl KafkaSinkPurificationError {
 
 use mz_ore::error::ErrorExt;
 
-/// Logical errors detectable during purification for a KAFKA SOURCE.
+/// Logical errors detectable during purification for Confluent Schema Registry.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum CsrPurificationError {
     #[error("{0} is not a CONFLUENT SCHEMA REGISTRY CONNECTION")]
@@ -273,5 +243,77 @@ impl CsrPurificationError {
 
     pub fn hint(&self) -> Option<String> {
         None
+    }
+}
+
+/// Logical errors detectable during purification for a MySQL SOURCE.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum MySqlSourcePurificationError {
+    #[error("CREATE SOURCE specifies DETAILS option")]
+    UserSpecifiedDetails,
+    #[error("{0} is not a MYSQL CONNECTION")]
+    NotMySqlConnection(FullItemName),
+    #[error("Invalid MySQL system replication settings")]
+    ReplicationSettingsError(Vec<(String, String, String)>),
+    #[error("referenced tables use unsupported types")]
+    UnrecognizedTypes { cols: Vec<(String, String, String)> },
+    #[error("Invalid MySQL table reference: {0}")]
+    InvalidTableReference(String),
+    #[error("No tables found")]
+    EmptyDatabase,
+    #[error("missing TABLES specification")]
+    RequiresReferencedSubsources,
+    #[error("No tables found in referenced schemas")]
+    NoTablesFoundForSchemas(Vec<String>),
+}
+
+impl MySqlSourcePurificationError {
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::ReplicationSettingsError(settings) => Some(format!(
+                "Invalid MySQL system replication settings: {}",
+                itertools::join(
+                    settings.iter().map(|(setting, expected, actual)| format!(
+                        "{}: expected {}, got {}",
+                        setting, expected, actual
+                    )),
+                    "; "
+                )
+            )),
+            Self::UnrecognizedTypes { cols } => Some(format!(
+                "the following columns contain unsupported types:\n{}",
+                itertools::join(
+                    cols.into_iter().map(|(table, column, data_type)| format!(
+                        "'{}' for {}.{}",
+                        data_type, column, table
+                    )),
+                    "\n"
+                )
+            )),
+            Self::NoTablesFoundForSchemas(schemas) => Some(format!(
+                "missing schemas: {}",
+                itertools::join(schemas.iter(), ", ")
+            )),
+            _ => None,
+        }
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            Self::UserSpecifiedDetails => Some(
+                "If trying to use the output of SHOW CREATE SOURCE, remove the DETAILS option."
+                    .into(),
+            ),
+            Self::ReplicationSettingsError(_) => {
+                Some("Set the necessary MySQL database system settings.".into())
+            }
+            Self::RequiresReferencedSubsources => {
+                Some("provide a FOR TABLES (..), FOR SCHEMAS (..), or FOR ALL TABLES clause".into())
+            }
+            Self::InvalidTableReference(_) => Some(
+                "Specify tables names as SCHEMA_NAME.TABLE_NAME in a FOR TABLES (..) clause".into(),
+            ),
+            _ => None,
+        }
     }
 }

@@ -68,7 +68,7 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
 
     let mut builder = AsyncOperatorBuilder::new("CDCv2-Decode".to_owned(), input.scope());
 
-    let mut input_handle = builder.new_input(
+    let mut input_handle = builder.new_disconnected_input(
         &input.inner,
         Exchange::new(|(x, _, _): &(SourceOutput<Option<Vec<u8>>, _>, _, _)| x.key.hashed()),
     );
@@ -91,12 +91,12 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
         let mut resolver =
             ConfluentAvroResolver::new(&schema, registry, confluent_wire_format).unwrap();
 
-        while let Some(event) = input_handle.next_mut().await {
+        while let Some(event) = input_handle.next().await {
             let AsyncEvent::Data(_time, data) = event else {
                 continue;
             };
 
-            for (data, _time, _diff) in data.drain(..) {
+            for (data, _time, _diff) in data {
                 let value = match &data.value {
                     Some(value) => value,
                     None => continue,
@@ -433,8 +433,8 @@ where
 
     let mut builder = AsyncOperatorBuilder::new(op_name, input.scope());
 
-    let mut input = builder.new_input(&input.inner, Exchange::new(dist));
     let (mut output_handle, output) = builder.new_output();
+    let mut input = builder.new_input_for(&input.inner, Exchange::new(dist), &output_handle);
 
     let (_, transient_errors) = builder.build_fallible(move |caps| {
         Box::pin(async move {

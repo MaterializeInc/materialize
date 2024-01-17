@@ -33,10 +33,14 @@ $ protobuf-compile-descriptors inputs=recursive.proto output=recursive.pb set-va
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
-! CREATE SOURCE recursive FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-recursive-${testdrive.seed}')
+! CREATE SOURCE recursive
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-recursive-${testdrive.seed}')
   FORMAT PROTOBUF MESSAGE '.Self' USING SCHEMA '${recursive-schema}'
 contains:Recursive types are not supported: Self
 
-! CREATE SOURCE recursive FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-recursive-${testdrive.seed}')
+! CREATE SOURCE recursive
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-recursive-${testdrive.seed}')
   FORMAT PROTOBUF MESSAGE '.Mutual1' USING SCHEMA '${recursive-schema}'
 contains:Recursive types are not supported: Mutual1

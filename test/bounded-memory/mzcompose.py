@@ -30,7 +30,14 @@ ITERATIONS = 128
 SERVICES = [
     Cockroach(setup_materialize=True),
     Materialized(external_cockroach=True),
-    Testdrive(no_reset=True, seed=1, default_timeout="3600s"),
+    Testdrive(
+        no_reset=True,
+        seed=1,
+        default_timeout="3600s",
+        entrypoint_extra=[
+            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
+        ],
+    ),
     Redpanda(),
     Postgres(),
     Clusterd(),
@@ -68,8 +75,10 @@ class PgCdcScenario(Scenario):
     )
     MZ_SETUP = dedent(
         """
+        > DROP CLUSTER IF EXISTS single_replica_cluster;
+        > CREATE CLUSTER single_replica_cluster SIZE '${arg.default-storage-size}';
         > CREATE SOURCE mz_source
-          IN CLUSTER clusterd
+          IN CLUSTER single_replica_cluster
           FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
           FOR ALL TABLES;
 
@@ -113,8 +122,10 @@ class KafkaScenario(Scenario):
 
     SOURCE = dedent(
         """
+        > DROP CLUSTER IF EXISTS single_replica_cluster;
+        > CREATE CLUSTER single_replica_cluster SIZE '${arg.default-storage-size}';
         > CREATE SOURCE s1
-          IN CLUSTER clusterd
+          IN CLUSTER single_replica_cluster
           FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}')
           FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
           ENVELOPE UPSERT;
@@ -445,7 +456,10 @@ SCENARIOS = [
         + KafkaScenario.END_MARKER
         + dedent(
             """
+            > DROP CLUSTER IF EXISTS single_replica_cluster;
+            > CREATE CLUSTER single_replica_cluster SIZE '${arg.default-storage-size}';
             > CREATE SOURCE s1
+              IN CLUSTER single_replica_cluster
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE UPSERT;
@@ -475,6 +489,113 @@ SCENARIOS = [
         ),
         materialized_memory="10Gb",
     ),
+    Scenario(
+        name="table-aggregate",
+        pre_restart=dedent(
+            f"""
+            > SET statement_timeout = '600 s';
+
+            > CREATE TABLE t1 (key1 INTEGER, key2 INTEGER, key3 INTEGER, key4 INTEGER)
+
+            > CREATE MATERIALIZED VIEW v1 IN CLUSTER clusterd AS SELECT key1, MIN(key2), MAX(key3) FROM t1 GROUP BY key1;
+            > CREATE DEFAULT INDEX ON v1;
+
+            > CREATE MATERIALIZED VIEW v2 IN CLUSTER clusterd AS SELECT key2, MIN(key1), MAX(key1) FROM t1 GROUP BY key2;
+            > CREATE DEFAULT INDEX ON v2;
+
+            > CREATE MATERIALIZED VIEW v3 IN CLUSTER clusterd AS SELECT key3, MIN(key1), MAX(key1) FROM t1 GROUP BY key3;
+            > CREATE DEFAULT INDEX ON v3;
+
+            > CREATE MATERIALIZED VIEW v4 IN CLUSTER clusterd AS SELECT key4, MIN(key1), MAX(key1) FROM t1 GROUP BY key4;
+            > CREATE DEFAULT INDEX ON v4;
+
+            > INSERT INTO t1 (key1, key2, key3, key4)
+              SELECT
+                generate_series,
+                MOD(generate_series, 10),
+                MOD(generate_series, 100),
+                MOD(generate_series, 1000)
+                FROM generate_series(1, {REPEAT} * {ITERATIONS})
+
+            > SELECT COUNT(*) > 0 FROM v1;
+            true
+            > SELECT COUNT(*) > 0 FROM v2;
+            true
+            > SELECT COUNT(*) > 0 FROM v3;
+            true
+            > SELECT COUNT(*) > 0 FROM v4;
+            true
+            """
+        ),
+        post_restart=dedent(
+            """
+            > SELECT COUNT(*) > 0 FROM v1;
+            true
+            > SELECT COUNT(*) > 0 FROM v2;
+            true
+            > SELECT COUNT(*) > 0 FROM v3;
+            true
+            > SELECT COUNT(*) > 0 FROM v4;
+            true
+            """
+        ),
+        clusterd_memory="7Gb",
+    ),
+    Scenario(
+        name="table-outer-join",
+        pre_restart=dedent(
+            f"""
+            > SET statement_timeout = '600 s';
+
+            > CREATE TABLE t1 (key1 INTEGER, f1 STRING DEFAULT 'abcdefghi')
+
+            > CREATE TABLE t2 (key2 INTEGER, f2 STRING DEFAULT 'abcdefghi')
+
+            > CREATE MATERIALIZED VIEW v1
+              IN CLUSTER clusterd AS
+              SELECT * FROM t1 LEFT JOIN t2 ON (key1 = key2)
+
+            > CREATE DEFAULT INDEX ON v1;
+
+            > CREATE MATERIALIZED VIEW v2
+              IN CLUSTER clusterd AS
+              SELECT * FROM t2 LEFT JOIN t1 ON (key1 = key2)
+
+            > CREATE DEFAULT INDEX ON v2;
+
+            > INSERT INTO t1 (key1)
+              SELECT generate_series FROM generate_series(1, {REPEAT} * {ITERATIONS})
+
+            > INSERT INTO t2 (key2)
+              SELECT MOD(generate_series, 10) FROM generate_series(1, {REPEAT} * {ITERATIONS})
+
+            # Records have no match in t2
+            > INSERT INTO t1 (key1)
+              SELECT generate_series + 1 * ({REPEAT} * {ITERATIONS})
+              FROM generate_series(1, {REPEAT} * {ITERATIONS})
+
+            # Records have no match in t1
+            > INSERT INTO t2 (key2)
+              SELECT generate_series + 2 * ({REPEAT} * {ITERATIONS})
+              FROM generate_series(1, {REPEAT} * {ITERATIONS})
+
+            > SELECT COUNT(*) > 0 FROM v1;
+            true
+
+            > SELECT COUNT(*) > 0 FROM v2;
+            true
+            """
+        ),
+        post_restart=dedent(
+            """
+            > SELECT COUNT(*) > 0 FROM v1;
+            true
+
+            > SELECT COUNT(*) > 0 FROM v2;
+            true
+            """
+        ),
+    ),
 ]
 
 
@@ -496,10 +617,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             continue
 
         if scenario.disabled:
-            print(f"Scenario {scenario.name} is disabled, skipping.")
+            print(f"+++ Scenario {scenario.name} is disabled, skipping.")
             continue
         else:
-            print(f"Running scenario {scenario.name} ...")
+            print(f"+++ Running scenario {scenario.name} ...")
 
         c.down(destroy_volumes=True)
 

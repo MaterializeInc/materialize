@@ -78,6 +78,8 @@ IGNORE_RE = re.compile(
     | cluster-clusterd[12]-1\ .*\ halting\ process:\ new\ timely\ configuration\ does\ not\ match\ existing\ timely\ configuration
     # Emitted by tests employing explicit mz_panic()
     | forced\ panic
+    # Emitted by broken_statements.slt in order to stop panic propagation, as 'forced panic' will unwantedly panic the `environmentd` thread.
+    | forced\ optimizer\ panic
     # Expected once compute cluster has panicked, brings no new information
     | timely\ communication\ error:
     # Expected once compute cluster has panicked, only happens in CI
@@ -86,8 +88,10 @@ IGNORE_RE = re.compile(
     | restart-materialized-1\ .*relation\ \\"fence\\"\ does\ not\ exist
     # Expected when CRDB is corrupted
     | restart-materialized-1\ .*relation\ "consensus"\ does\ not\ exist
-    # Will print a separate panic line which will be handled and contains the relevant information
+    # Will print a separate panic line which will be handled and contains the relevant information (old style) TODO(#24260): remove this
     | internal\ error:\ panic\ at\ the\ `.*`\ optimization\ stage
+    # Will print a separate panic line which will be handled and contains the relevant information (new style)
+    | internal\ error:\ unexpected\ panic\ during\ query\ optimization
     # redpanda INFO logging
     | larger\ sizes\ prevent\ running\ out\ of\ memory
     # Old versions won't support new parameters
@@ -99,6 +103,8 @@ IGNORE_RE = re.compile(
     | platform-checks-clusterd.* \| .* received\ persist\ state\ from\ the\ future
     | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage(\ to\ set\ (default|configured)\ parameter)?
     | internal\ error:\ no\ AWS\ external\ ID\ prefix\ configured
+    # For persist-catalog-migration ignore failpoint panics
+    | persist-catalog-migration-materialized.* \| .* failpoint\ .* panic
     )
     """,
     re.VERBOSE | re.MULTILINE,
@@ -137,6 +143,7 @@ def annotate_errors(errors: list[str], title: str, style: str) -> None:
     if not errors:
         return
 
+    errors = group_identical_errors(errors)
     suite_name = os.getenv("BUILDKITE_LABEL") or "Logged Errors"
 
     error_str = "\n".join(f"* {error}" for error in errors)
@@ -163,6 +170,22 @@ def annotate_errors(errors: list[str], title: str, style: str) -> None:
         ],
         stdin=markdown.encode(),
     )
+
+
+def group_identical_errors(errors: list[str]) -> list[str]:
+    errors_with_counts: dict[str, int] = {}
+
+    for error in errors:
+        errors_with_counts[error] = 1 + errors_with_counts.get(error, 0)
+
+    consolidated_errors = []
+
+    for error, count in errors_with_counts.items():
+        consolidated_errors.append(
+            error if count == 1 else f"{error}\n({count} occurrences)"
+        )
+
+    return consolidated_errors
 
 
 def annotate_logged_errors(log_files: list[str]) -> int:

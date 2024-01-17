@@ -15,8 +15,7 @@ from materialize.checks.executors import MzcomposeExecutor, MzcomposeExecutorPar
 from materialize.checks.scenarios import *  # noqa: F401 F403
 from materialize.checks.scenarios import Scenario
 from materialize.checks.scenarios_backup_restore import *  # noqa: F401 F403
-from materialize.checks.scenarios_persist_catalog import *  # noqa: F401 F403
-from materialize.checks.scenarios_persist_txn import *  # noqa: F401 F403
+from materialize.checks.scenarios_platform_v2 import *  # noqa: F401 F403
 from materialize.checks.scenarios_upgrade import *  # noqa: F401 F403
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
@@ -33,6 +32,8 @@ from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive as TestdriveService
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import all_subclasses
+
+DEFAULT_TESTDRIVE_TIMEOUT = "300s"
 
 SERVICES = [
     TestCerts(),
@@ -93,7 +94,7 @@ SERVICES = [
         catalog_store="stash",
     ),
     TestdriveService(
-        default_timeout="300s",
+        default_timeout=DEFAULT_TESTDRIVE_TIMEOUT,
         no_reset=True,
         seed=1,
         entrypoint_extra=[

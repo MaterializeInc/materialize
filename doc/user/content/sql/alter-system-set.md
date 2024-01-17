@@ -1,13 +1,14 @@
 ---
 title: "ALTER SYSTEM SET"
-description: "Modify the value of a system variable."
+description: "`ALTER SYSTEM SET` modifies system variables, or session variables globally (i.e. for all users)."
 menu:
   main:
     parent: 'commands'
 
 ---
 
-`ALTER SYSTEM SET` modifies the value of a system variable.
+`ALTER SYSTEM SET` modifies the value of a system variable, or the value of a
+session variable globally (i.e. for all users).
 
 To see the current value of a system variable, use [`SHOW`](../show).
 

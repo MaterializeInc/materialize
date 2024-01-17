@@ -88,6 +88,7 @@ $ nop
 #   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 # > CREATE SOURCE pg_dbz
+#   IN CLUSTER ${arg.single-replica-cluster}
 #   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-pg-dbz-data-${testdrive.seed}')
 #   FORMAT AVRO USING SCHEMA '${pg-dbz-schema}'
 #   ENVELOPE DEBEZIUM

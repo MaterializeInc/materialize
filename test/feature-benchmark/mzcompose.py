@@ -146,7 +146,7 @@ def run_one_scenario(
 
         c.up("testdrive", persistent=True)
 
-        additional_system_parameter_defaults = {}
+        additional_system_parameter_defaults = {"max_clusters": "15"}
 
         if params is not None:
             for param in params.split(";"):
@@ -187,6 +187,7 @@ def run_one_scenario(
                 termination_conditions=make_termination_conditions(args),
                 aggregation_class=make_aggregation_class(),
                 measure_memory=args.measure_memory,
+                default_size=size,
             )
 
             aggregations = benchmark.run()
@@ -428,9 +429,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 def _are_regressions_justified(
     this_tag: str | None, baseline_tag: str | None
 ) -> tuple[bool, str]:
-    if not _tag_references_release_version(
-        this_tag
-    ) or not _tag_references_release_version(baseline_tag):
+    if (
+        this_tag is None
+        or not _tag_references_release_version(this_tag)
+        or not _tag_references_release_version(baseline_tag)
+    ):
         return False, ""
 
     # Checked in _tag_references_release_version

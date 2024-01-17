@@ -16,7 +16,6 @@ use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::pin::pin;
 use std::rc::Rc;
-use std::slice;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -206,7 +205,7 @@ where
         format!("shard_source_descs_return({})", name),
         scope.clone(),
     );
-    let mut completed_fetches = builder.new_input(
+    let mut completed_fetches = builder.new_disconnected_input(
         &completed_fetches_stream,
         // We must ensure all completed fetches are fed into
         // the worker responsible for managing part leases
@@ -220,11 +219,11 @@ where
             // subscriber was even created.
             return;
         };
-        while let Some(event) = completed_fetches.next_mut().await {
+        while let Some(event) = completed_fetches.next().await {
             let Event::Data(_cap, data) = event else {
                 continue;
             };
-            for part in data.drain(..) {
+            for part in data {
                 lease_returner.return_leased_part(
                     lease_returner.leased_part_from_exchangeable::<G::Timestamp>(part),
                 );
@@ -302,12 +301,6 @@ where
         // NOTE: We have to do this before our `snapshot()` call because that
         // will block when there is no data yet available in the shard.
         cap_set.downgrade(as_of.clone());
-        let mut current_ts = match as_of.clone().into_option() {
-            Some(ts) => ts,
-            None => {
-                return;
-            }
-        };
 
         let mut snapshot_parts = match snapshot_mode {
             SnapshotMode::Include => match read.snapshot(as_of.clone()).await {
@@ -354,28 +347,36 @@ where
 
         let mut shard_stream = pin!(listen_head.chain(listen_tail));
 
-        // Read from the subscription and pass them on.
-        let mut upper = Antichain::from_elem(Timestamp::minimum());
-        // If `until.less_equal(progress)`, it means that all subsequent batches will contain only
+        // Ideally, we'd like our audit overhead to be proportional to the actual amount of "real"
+        // work we're doing in the source. So: start with a small, constant budget; add to the
+        // budget when we do real work; and skip auditing a part if we don't have the budget for it.
+        let mut audit_budget_bytes = cfg.dynamic.blob_target_size().saturating_mul(2);
+
+        // All future updates will be timestamped after this frontier.
+        let mut current_frontier = as_of.clone();
+
+        // If `until.less_equal(current_frontier)`, it means that all subsequent batches will contain only
         // times greater or equal to `until`, which means they can be dropped in their entirety.
-        while !PartialOrder::less_equal(&until, &upper) {
+        while !PartialOrder::less_equal(&until, &current_frontier) {
             let (parts, progress) = shard_stream.next().await.expect("infinite stream");
 
             // Emit the part at the `(ts, 0)` time. The `granular_backpressure`
             // operator will refine this further, if its enabled.
-            let session_cap = cap_set.delayed(&current_ts);
+            let current_ts = current_frontier
+                .as_option()
+                .expect("until should always be <= the empty frontier");
+            let session_cap = cap_set.delayed(current_ts);
 
             for mut part_desc in parts {
                 // TODO: Push the filter down into the Subscribe?
                 if cfg.dynamic.stats_filter_enabled() {
                     let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| {
-                        should_fetch_part(
-                            &stats.decode(),
-                            AntichainRef::new(slice::from_ref(&current_ts)),
-                        )
+                        should_fetch_part(&stats.decode(), current_frontier.borrow())
                     });
                     let bytes = u64::cast_from(part_desc.encoded_size_bytes);
                     if should_fetch {
+                        audit_budget_bytes =
+                            audit_budget_bytes.saturating_add(part_desc.encoded_size_bytes);
                         metrics.pushdown.parts_fetched_count.inc();
                         metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
                     } else {
@@ -386,7 +387,8 @@ where
                             part_desc.key.hash(&mut h);
                             usize::cast_from(h.finish()) % 100 < cfg.dynamic.stats_audit_percent()
                         };
-                        if should_audit {
+                        if should_audit && part_desc.encoded_size_bytes < audit_budget_bytes {
+                            audit_budget_bytes -= part_desc.encoded_size_bytes;
                             metrics.pushdown.parts_audited_count.inc();
                             metrics.pushdown.parts_audited_bytes.inc_by(bytes);
                             part_desc.request_filter_pushdown_audit();
@@ -416,11 +418,8 @@ where
                     .await;
             }
 
-            if let Some(ts) = progress.as_option() {
-                current_ts = ts.clone();
-            }
+            current_frontier.join_assign(&progress);
             cap_set.downgrade(progress.iter());
-            upper = progress;
         }
     });
 
@@ -449,12 +448,13 @@ where
 {
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_fetch({})", name), descs.scope());
-    let mut descs_input = builder.new_input(
-        descs,
-        Exchange::new(|&(i, _): &(usize, _)| u64::cast_from(i)),
-    );
     let (mut fetched_output, fetched_stream) = builder.new_output();
     let (mut completed_fetches_output, completed_fetches_stream) = builder.new_output();
+    let mut descs_input = builder.new_input_for_many(
+        descs,
+        Exchange::new(|&(i, _): &(usize, _)| u64::cast_from(i)),
+        [&fetched_output, &completed_fetches_output],
+    );
     let name_owned = name.to_owned();
 
     let shutdown_button = builder.build(move |_capabilities| async move {
@@ -473,11 +473,11 @@ where
                 .await
         };
 
-        while let Some(event) = descs_input.next_mut().await {
-            if let Event::Data(cap, data) = event {
+        while let Some(event) = descs_input.next().await {
+            if let Event::Data([fetched_cap, completed_fetches_cap], data) = event {
                 // `LeasedBatchPart`es cannot be dropped at this point w/o
                 // panicking, so swap them to an owned version.
-                for (_idx, part) in data.drain(..) {
+                for (_idx, part) in data {
                     let leased_part = fetcher.leased_part_from_exchangeable(part);
                     let fetched = fetcher
                         .fetch_leased_part(&leased_part)
@@ -489,9 +489,9 @@ where
                         // outputs or sessions across await points, which
                         // would prevent messages from being flushed from
                         // the shared timely output buffer.
-                        fetched_output.give(&cap, fetched).await;
+                        fetched_output.give(&fetched_cap, fetched).await;
                         completed_fetches_output
-                            .give(&cap, leased_part.into_exchangeable_part())
+                            .give(&completed_fetches_cap, leased_part.into_exchangeable_part())
                             .await;
                     }
                 }

@@ -613,7 +613,7 @@ ALTER SCHEMA d.amb RENAME TO this_rename_will_fail;
 # Test subsource renames
 
 statement ok
-CREATE SOURCE s FROM LOAD GENERATOR AUCTION FOR ALL TABLES WITH (SIZE '1');
+CREATE SOURCE s FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 
 statement ok
 ALTER SOURCE users RENAME TO userz

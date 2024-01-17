@@ -15,9 +15,8 @@ use std::rc::Weak;
 
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::Arrange;
-use differential_dataflow::trace::{Batch, Batcher, Builder, Trace};
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::trace::{Batcher, Builder};
+use differential_dataflow::{AsCollection, Collection, Hashable};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
@@ -25,11 +24,13 @@ use timely::dataflow::operators::generic::operator::{self, Operator};
 use timely::dataflow::operators::generic::{InputHandle, OperatorInfo, OutputHandle};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
-use timely::{Data, ExchangeData};
+use timely::progress::{Antichain, Timestamp};
+use timely::{Data, ExchangeData, PartialOrder};
 
 use crate::buffer::ConsolidateBuffer;
 use crate::builder_async::{
-    AsyncInputHandle, AsyncOutputHandle, OperatorBuilder as OperatorBuilderAsync,
+    AsyncInputHandle, AsyncOutputHandle, ConnectedToOne, Disconnected,
+    OperatorBuilder as OperatorBuilderAsync,
 };
 
 /// Extension methods for timely [`Stream`]s.
@@ -78,7 +79,7 @@ where
         B: FnOnce(
             Capability<G::Timestamp>,
             OperatorInfo,
-            AsyncInputHandle<G::Timestamp, Vec<D1>, P::Puller>,
+            AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
             AsyncOutputHandle<G::Timestamp, Vec<D2>, Tee<G::Timestamp, D2>>,
         ) -> BFut,
         BFut: Future + 'static,
@@ -101,8 +102,8 @@ where
         B: FnOnce(
             Capability<G::Timestamp>,
             OperatorInfo,
-            AsyncInputHandle<G::Timestamp, Vec<D1>, P1::Puller>,
-            AsyncInputHandle<G::Timestamp, Vec<D2>, P2::Puller>,
+            AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
+            AsyncInputHandle<G::Timestamp, Vec<D2>, ConnectedToOne>,
             AsyncOutputHandle<G::Timestamp, Vec<D3>, Tee<G::Timestamp, D3>>,
         ) -> BFut,
         BFut: Future + 'static,
@@ -114,7 +115,7 @@ where
     /// inspect the frontier at the input.
     fn sink_async<P, B, BFut>(&self, pact: P, name: String, constructor: B)
     where
-        B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, Vec<D1>, P::Puller>) -> BFut,
+        B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, Vec<D1>, Disconnected>) -> BFut,
         BFut: Future + 'static,
         P: ParallelizationContract<G::Timestamp, D1>;
 
@@ -227,16 +228,20 @@ where
 
     /// Consolidates the collection if `must_consolidate` is `true` and leaves it
     /// untouched otherwise.
-    fn consolidate_named_if<Tr>(self, must_consolidate: bool, name: &str) -> Self
+    fn consolidate_named_if<Ba>(self, must_consolidate: bool, name: &str) -> Self
     where
         D1: differential_dataflow::ExchangeData + Hash,
         R: Semigroup + differential_dataflow::ExchangeData,
         G::Timestamp: Lattice,
-        Tr: Trace<KeyOwned = D1, ValOwned = (), Time = G::Timestamp, Diff = R> + 'static,
-        Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = ((D1, ()), G::Timestamp, R), Time = G::Timestamp>,
-        Tr::Builder:
-            Builder<Item = ((D1, ()), G::Timestamp, R), Time = G::Timestamp, Output = Tr::Batch>;
+        Ba: Batcher<Item = ((D1, ()), G::Timestamp, R), Time = G::Timestamp> + 'static;
+
+    /// Consolidates the collection.
+    fn consolidate_named<Ba>(self, name: &str) -> Self
+    where
+        D1: differential_dataflow::ExchangeData + Hash,
+        R: Semigroup + differential_dataflow::ExchangeData,
+        G::Timestamp: Lattice,
+        Ba: Batcher<Item = ((D1, ()), G::Timestamp, R), Time = G::Timestamp> + 'static;
 }
 
 impl<G, D1> StreamExt<G, D1> for Stream<G, D1>
@@ -294,7 +299,7 @@ where
         B: FnOnce(
             Capability<G::Timestamp>,
             OperatorInfo,
-            AsyncInputHandle<G::Timestamp, Vec<D1>, P::Puller>,
+            AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
             AsyncOutputHandle<G::Timestamp, Vec<D2>, Tee<G::Timestamp, D2>>,
         ) -> BFut,
         BFut: Future + 'static,
@@ -303,8 +308,8 @@ where
         let mut builder = OperatorBuilderAsync::new(name, self.scope());
         let operator_info = builder.operator_info();
 
-        let input = builder.new_input(self, pact);
         let (output, stream) = builder.new_output();
+        let input = builder.new_input_for(self, pact, &output);
 
         builder.build(move |mut capabilities| {
             // `capabilities` should be a single-element vector.
@@ -329,8 +334,8 @@ where
         B: FnOnce(
             Capability<G::Timestamp>,
             OperatorInfo,
-            AsyncInputHandle<G::Timestamp, Vec<D1>, P1::Puller>,
-            AsyncInputHandle<G::Timestamp, Vec<D2>, P2::Puller>,
+            AsyncInputHandle<G::Timestamp, Vec<D1>, ConnectedToOne>,
+            AsyncInputHandle<G::Timestamp, Vec<D2>, ConnectedToOne>,
             AsyncOutputHandle<G::Timestamp, Vec<D3>, Tee<G::Timestamp, D3>>,
         ) -> BFut,
         BFut: Future + 'static,
@@ -340,9 +345,9 @@ where
         let mut builder = OperatorBuilderAsync::new(name, self.scope());
         let operator_info = builder.operator_info();
 
-        let input1 = builder.new_input(self, pact1);
-        let input2 = builder.new_input(other, pact2);
         let (output, stream) = builder.new_output();
+        let input1 = builder.new_input_for(self, pact1, &output);
+        let input2 = builder.new_input_for(other, pact2, &output);
 
         builder.build(move |mut capabilities| {
             // `capabilities` should be a single-element vector.
@@ -358,14 +363,14 @@ where
     /// inspect the frontier at the input.
     fn sink_async<P, B, BFut>(&self, pact: P, name: String, constructor: B)
     where
-        B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, Vec<D1>, P::Puller>) -> BFut,
+        B: FnOnce(OperatorInfo, AsyncInputHandle<G::Timestamp, Vec<D1>, Disconnected>) -> BFut,
         BFut: Future + 'static,
         P: ParallelizationContract<G::Timestamp, D1>,
     {
         let mut builder = OperatorBuilderAsync::new(name, self.scope());
         let operator_info = builder.operator_info();
 
-        let input = builder.new_input(self, pact);
+        let input = builder.new_disconnected_input(self, pact);
 
         builder.build(move |_capabilities| constructor(operator_info, input));
     }
@@ -543,16 +548,12 @@ where
         self.inner.with_token(token).as_collection()
     }
 
-    fn consolidate_named_if<Tr>(self, must_consolidate: bool, name: &str) -> Self
+    fn consolidate_named_if<Ba>(self, must_consolidate: bool, name: &str) -> Self
     where
         D1: differential_dataflow::ExchangeData + Hash,
         R: Semigroup + differential_dataflow::ExchangeData,
         G::Timestamp: Lattice + Ord,
-        Tr: Trace<KeyOwned = D1, ValOwned = (), Time = G::Timestamp, Diff = R> + 'static,
-        Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = ((D1, ()), G::Timestamp, R), Time = G::Timestamp>,
-        Tr::Builder:
-            Builder<Item = ((D1, ()), G::Timestamp, R), Time = G::Timestamp, Output = Tr::Batch>,
+        Ba: Batcher<Item = ((D1, ()), G::Timestamp, R), Time = G::Timestamp> + 'static,
     {
         if must_consolidate {
             // We employ AHash below instead of the default hasher in DD to obtain
@@ -584,14 +585,26 @@ where
                 data.hash(&mut h);
                 h.finish()
             });
-            use differential_dataflow::trace::cursor::MyTrait;
             // Access to `arrange_core` is OK because we specify the trace and don't hold on to it.
-            #[allow(clippy::disallowed_methods)]
-            self.arrange_core::<_, Tr>(exchange, name)
-                .as_collection(|k, _v| k.into_owned())
+            consolidate_pact::<Ba, _, _, _, _, _>(&self.map(|k| (k, ())), exchange, name)
+                .map(|(k, ())| k)
         } else {
             self
         }
+    }
+
+    fn consolidate_named<Ba>(self, name: &str) -> Self
+    where
+        D1: differential_dataflow::ExchangeData + Hash,
+        R: Semigroup + differential_dataflow::ExchangeData,
+        G::Timestamp: Lattice + Ord,
+        Ba: Batcher<Item = ((D1, ()), G::Timestamp, R), Time = G::Timestamp> + 'static,
+    {
+        let exchange =
+            Exchange::new(move |update: &((D1, ()), G::Timestamp, R)| (update.0).0.hashed().into());
+
+        consolidate_pact::<Ba, _, _, _, _, _>(&self.map(|k| (k, ())), exchange, name)
+            .map(|(k, ())| k)
     }
 }
 
@@ -622,4 +635,155 @@ where
     });
 
     stream
+}
+
+/// Aggregates the weights of equal records into at most one record.
+///
+/// The data are accumulated in place, each held back until their timestamp has completed.
+///
+/// This serves as a low-level building-block for more user-friendly functions.
+pub fn consolidate_pact<B, P, G, K, V, R>(
+    collection: &Collection<G, (K, V), R>,
+    pact: P,
+    name: &str,
+) -> Collection<G, (K, V), R>
+where
+    G: Scope,
+    K: Data,
+    V: Data,
+    R: Data + Semigroup,
+    B: Batcher<Item = ((K, V), G::Timestamp, R), Time = G::Timestamp> + 'static,
+    P: ParallelizationContract<G::Timestamp, ((K, V), G::Timestamp, R)>,
+{
+    collection
+        .inner
+        .unary_frontier(pact, name, |_cap, info| {
+            // Acquire a logger for arrange events.
+            let logger = {
+                let scope = collection.scope();
+                let register = scope.log_register();
+                register.get::<differential_dataflow::logging::DifferentialEvent>(
+                    "differential/arrange",
+                )
+            };
+
+            let mut batcher = B::new(logger, info.global_id);
+            // Capabilities for the lower envelope of updates in `batcher`.
+            let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
+            let mut prev_frontier = Antichain::from_elem(G::Timestamp::minimum());
+
+            move |input, output| {
+                input.for_each(|cap, data| {
+                    capabilities.insert(cap.retain());
+                    batcher.push_batch(data);
+                });
+
+                if prev_frontier.borrow() != input.frontier().frontier() {
+                    if capabilities
+                        .elements()
+                        .iter()
+                        .any(|c| !input.frontier().less_equal(c.time()))
+                    {
+                        let mut upper = Antichain::new(); // re-used allocation for sealing batches.
+
+                        // For each capability not in advance of the input frontier ...
+                        for (index, capability) in capabilities.elements().iter().enumerate() {
+                            if !input.frontier().less_equal(capability.time()) {
+                                // Assemble the upper bound on times we can commit with this capabilities.
+                                // We must respect the input frontier, and *subsequent* capabilities, as
+                                // we are pretending to retire the capability changes one by one.
+                                upper.clear();
+                                for time in input.frontier().frontier().iter() {
+                                    upper.insert(time.clone());
+                                }
+                                for other_capability in &capabilities.elements()[(index + 1)..] {
+                                    upper.insert(other_capability.time().clone());
+                                }
+
+                                // send the batch to downstream consumers, empty or not.
+                                let mut session = output.session(&capabilities.elements()[index]);
+                                // Extract updates not in advance of `upper`.
+                                let output =
+                                    batcher.seal::<ConsolidateBuilder<_, _, _, _>>(upper.clone());
+                                for mut batch in output {
+                                    session.give_container(&mut batch);
+                                }
+                            }
+                        }
+
+                        // Having extracted and sent batches between each capability and the input frontier,
+                        // we should downgrade all capabilities to match the batcher's lower update frontier.
+                        // This may involve discarding capabilities, which is fine as any new updates arrive
+                        // in messages with new capabilities.
+
+                        let mut new_capabilities = Antichain::new();
+                        for time in batcher.frontier().iter() {
+                            if let Some(capability) = capabilities
+                                .elements()
+                                .iter()
+                                .find(|c| c.time().less_equal(time))
+                            {
+                                new_capabilities.insert(capability.delayed(time));
+                            } else {
+                                panic!("failed to find capability");
+                            }
+                        }
+
+                        capabilities = new_capabilities;
+                    }
+
+                    prev_frontier.clear();
+                    prev_frontier.extend(input.frontier().frontier().iter().cloned());
+                }
+            }
+        })
+        .as_collection()
+}
+
+/// A builder that wraps a session for direct output to a stream.
+struct ConsolidateBuilder<K: Data, V: Data, T: Timestamp, R: Data> {
+    // Session<'a, T, Vec<((K, V), T, R)>, Counter<T, ((K, V), T, R), Tee<T, ((K, V), T, R)>>>,
+    buffer: Vec<Vec<((K, V), T, R)>>,
+}
+
+impl<K: Data, V: Data, T: Timestamp, R: Data> Builder for ConsolidateBuilder<K, V, T, R> {
+    type Item = ((K, V), T, R);
+    type Time = T;
+    type Output = Vec<Vec<Self::Item>>;
+
+    fn new() -> Self {
+        Self {
+            buffer: Vec::default(),
+        }
+    }
+
+    fn with_capacity(_keys: usize, _vals: usize, _upds: usize) -> Self {
+        Self::new()
+    }
+
+    fn push(&mut self, element: Self::Item) {
+        if let Some(last) = self.buffer.last_mut() {
+            if last.len() < last.capacity() {
+                last.push(element);
+                return;
+            }
+        }
+        let mut new =
+            Vec::with_capacity(timely::container::buffer::default_capacity::<Self::Item>());
+        new.push(element);
+        self.buffer.push(new);
+    }
+
+    fn copy(&mut self, element: &Self::Item) {
+        self.push(element.clone())
+    }
+
+    fn done(
+        self,
+        _lower: Antichain<Self::Time>,
+        _upper: Antichain<Self::Time>,
+        _since: Antichain<Self::Time>,
+    ) -> Self::Output {
+        self.buffer
+    }
 }

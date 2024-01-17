@@ -36,7 +36,7 @@ use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
     AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
     AlterConnectionOptionName, AlterRoleOption, AlterRoleStatement, AlterSetClusterStatement,
-    AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
+    AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
     AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
     AlterSystemResetStatement, AlterSystemSetStatement, CommentObjectType, CommentStatement,
     CreateConnectionOption, CreateConnectionOptionName, CreateConnectionType, CreateTypeListOption,
@@ -61,6 +61,9 @@ use mz_storage_types::sources::envelope::{
 };
 use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
 use mz_storage_types::sources::load_generator::{LoadGenerator, LoadGeneratorSourceConnection};
+use mz_storage_types::sources::mysql::{
+    MySqlSourceConnection, MySqlSourceDetails, ProtoMySqlSourceDetails,
+};
 use mz_storage_types::sources::postgres::{
     PostgresSourceConnection, PostgresSourcePublicationDetails,
     ProtoPostgresSourcePublicationDetails,
@@ -84,10 +87,11 @@ use crate::ast::{
     CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
     CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DbzMode,
     DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, IndexOption,
-    IndexOptionName, KeyConstraint, LoadGeneratorOption, LoadGeneratorOptionName, PgConfigOption,
-    PgConfigOptionName, ProtobufSchema, QualifiedReplica, ReferencedSubsources, ReplicaDefinition,
-    ReplicaOption, ReplicaOptionName, RoleAttribute, SourceIncludeMetadata, Statement,
-    TableConstraint, UnresolvedDatabaseName, ViewDefinition,
+    IndexOptionName, KeyConstraint, LoadGeneratorOption, LoadGeneratorOptionName,
+    MySqlConfigOption, MySqlConfigOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema,
+    QualifiedReplica, ReferencedSubsources, ReplicaDefinition, ReplicaOption, ReplicaOptionName,
+    RoleAttribute, SourceIncludeMetadata, Statement, TableConstraint, UnresolvedDatabaseName,
+    ViewDefinition,
 };
 use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError, CatalogItem, CatalogItemType,
@@ -113,7 +117,7 @@ use crate::plan::{
     AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan,
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan,
     AlterOptionParameter, AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan,
-    AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan, AlterSourcePlan, AlterSystemResetAllPlan,
+    AlterSecretPlan, AlterSetClusterPlan, AlterSourcePlan, AlterSystemResetAllPlan,
     AlterSystemResetPlan, AlterSystemSetPlan, CommentPlan, CompactionWindow, ComputeReplicaConfig,
     ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
     CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
@@ -121,9 +125,8 @@ use crate::plan::{
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
     DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
-    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source,
-    SourceSinkClusterConfig, Table, Type, VariableValue, View, WebhookHeaderFilters,
-    WebhookHeaders, WebhookValidation,
+    PlanClusterOption, PlanContext, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source,
+    Table, Type, VariableValue, View, WebhookHeaderFilters, WebhookHeaders, WebhookValidation,
 };
 use crate::session::vars;
 use crate::session::vars::ENABLE_REFRESH_EVERY_MVS;
@@ -408,6 +411,8 @@ generate_extracted_config!(
     (TextColumns, Vec::<UnresolvedItemName>, Default(vec![]))
 );
 
+generate_extracted_config!(MySqlConfigOption, (Details, String));
+
 pub fn plan_create_webhook_source(
     scx: &StatementContext,
     stmt: CreateWebhookSourceStatement<Aug>,
@@ -528,7 +533,9 @@ pub fn plan_create_webhook_source(
     let typ = RelationType::new(column_ty);
     let desc = RelationDesc::new(typ, column_names);
 
-    let cluster_config = source_sink_cluster_config(scx, "source", Some(&in_cluster), None)?;
+    // Webhook sources must currently specify the cluster on which they run, so
+    // we don't need to wait to normalize the statement.
+    let in_cluster = source_sink_cluster_config(scx, "source", &mut Some(in_cluster), None)?;
 
     // Check for an object in the catalog with this same name
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
@@ -558,17 +565,17 @@ pub fn plan_create_webhook_source(
         },
         if_not_exists,
         timeline,
-        cluster_config,
+        in_cluster: Some(in_cluster),
     }))
 }
 
 pub fn plan_create_source(
     scx: &StatementContext,
-    stmt: CreateSourceStatement<Aug>,
+    mut stmt: CreateSourceStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let CreateSourceStatement {
         name,
-        in_cluster,
+        in_cluster: _,
         col_names,
         connection,
         envelope,
@@ -771,7 +778,7 @@ pub fn plan_create_source(
                     .or_insert(table);
             }
 
-            let publication_catalog = crate::catalog::ErsatzCatalog(tables_by_name);
+            let publication_catalog = crate::catalog::SubsourceCatalog(tables_by_name);
 
             let mut text_cols: BTreeMap<Oid, BTreeSet<String>> = BTreeMap::new();
 
@@ -959,6 +966,58 @@ pub fn plan_create_source(
                     publication_details,
                 });
             // The postgres source only outputs data to its subsources. The catalog object
+            // representing the source itself is just an empty relation with no columns
+            let encoding = SourceDataEncoding::Single(DataEncoding::new(
+                DataEncodingInner::RowCodec(RelationDesc::empty()),
+            ));
+            (connection, encoding, Some(available_subsources))
+        }
+        CreateSourceConnection::MySql {
+            connection,
+            options,
+        } => {
+            let connection_item = scx.get_item_by_resolved_name(connection)?;
+            match connection_item.connection()? {
+                Connection::MySql(connection) => connection,
+                _ => sql_bail!(
+                    "{} is not a MySQL connection",
+                    scx.catalog.resolve_full_name(connection_item.name())
+                ),
+            };
+            let MySqlConfigOptionExtracted { details, seen: _ } = options.clone().try_into()?;
+
+            let details = details
+                .as_ref()
+                .ok_or_else(|| sql_err!("internal error: MySQL source missing details"))?;
+            let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
+            let details =
+                ProtoMySqlSourceDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
+            let details = MySqlSourceDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
+
+            let mut available_subsources = BTreeMap::new();
+
+            for (index, table) in details.tables.iter().enumerate() {
+                let name = FullItemName {
+                    // In MySQL we use 'mysql' as the default database name since there is
+                    // no concept of a 'database' in MySQL (schemas and databases are the same thing)
+                    database: RawDatabaseSpecifier::Name("mysql".to_string()),
+                    schema: table.schema_name.clone(),
+                    item: table.name.clone(),
+                };
+                // The zero-th output is the main output
+                // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
+                // to handle the main source and the subsources uniformly
+                available_subsources.insert(name, index + 1);
+            }
+
+            let connection =
+                GenericSourceConnection::<ReferencedConnection>::from(MySqlSourceConnection {
+                    connection: connection_item.id(),
+                    connection_id: connection_item.id(),
+                    details,
+                });
+
+            // The MySQL source only outputs data to its subsources. The catalog object
             // representing the source itself is just an empty relation with no columns
             let encoding = SourceDataEncoding::Single(DataEncoding::new(
                 DataEncodingInner::RowCodec(RelationDesc::empty()),
@@ -1195,8 +1254,6 @@ pub fn plan_create_source(
         }
     }
 
-    let cluster_config = source_sink_cluster_config(scx, "source", in_cluster.as_ref(), size)?;
-
     let timestamp_interval = match timestamp_interval {
         Some(duration) => {
             let min = scx.catalog.system_vars().min_timestamp_interval();
@@ -1253,6 +1310,11 @@ pub fn plan_create_source(
         });
     }
 
+    // We will rewrite the cluster if one is not provided, so we must use the
+    // `in_cluster` value we plan to normalize when we canonicalize the create
+    // statement.
+    let in_cluster = source_sink_cluster_config(scx, "source", &mut stmt.in_cluster, size)?;
+
     let create_sql = normalize::create_statement(scx, Statement::CreateSource(stmt))?;
 
     // Allow users to specify a timeline. If they do not, determine a default
@@ -1298,7 +1360,7 @@ pub fn plan_create_source(
         source,
         if_not_exists,
         timeline,
-        cluster_config,
+        in_cluster: Some(in_cluster),
     }))
 }
 
@@ -1458,7 +1520,7 @@ pub fn plan_create_subsource(
         source,
         if_not_exists,
         timeline: Timeline::EpochMilliseconds,
-        cluster_config: SourceSinkClusterConfig::Undefined,
+        in_cluster: None,
     }))
 }
 
@@ -1612,30 +1674,64 @@ fn get_encoding(
     Ok(encoding)
 }
 
+/// Determine the cluster ID to use for this item.
+///
+/// If `in_cluster` is `None` we will update it to refer to the default cluster.
+/// Because of this, do not normalize/canonicalize the create SQL statement
+/// until after calling this function.
 fn source_sink_cluster_config(
     scx: &StatementContext,
     ty: &'static str,
-    in_cluster: Option<&ResolvedClusterName>,
+    in_cluster: &mut Option<ResolvedClusterName>,
     size: Option<String>,
-) -> Result<SourceSinkClusterConfig, PlanError> {
-    match (in_cluster, size) {
-        (None, None) => Ok(SourceSinkClusterConfig::Undefined),
-        (Some(in_cluster), None) => {
-            let cluster = scx.catalog.get_cluster(in_cluster.id);
-            // At most 1 replica
-            if cluster.replica_ids().len() > 1 {
-                sql_bail!("cannot create {ty} in cluster with more than one replica")
-            }
+) -> Result<ClusterId, PlanError> {
+    // If we're replanning an item that has a linked cluster, always return it
+    // as such. This can be removed after the migration that deprecates cluster
+    // links.
+    if let Some(PlanContext {
+        planning_id: Some(planning_id),
+        ..
+    }) = scx.pcx
+    {
+        if let Some(cluster_id) = scx.catalog.get_linked_cluster(*planning_id) {
+            mz_ore::soft_assert_or_log!(
+                in_cluster.is_none(),
+                "linked clusters never explicitly named, but re-planning {} had cluster \
+                specified as {:?}",
+                planning_id,
+                in_cluster
+            );
 
-            // We also don't allow more objects to be added to a cluster that is already
-            // linked to another object.
-            ensure_cluster_is_not_linked(scx, in_cluster.id)?;
+            *in_cluster = Some(ResolvedClusterName {
+                id: cluster_id,
+                print_name: None,
+            });
 
-            Ok(SourceSinkClusterConfig::Existing { id: in_cluster.id })
+            return Ok(cluster_id);
         }
-        (None, Some(size)) => Ok(SourceSinkClusterConfig::Linked { size }),
-        _ => sql_bail!("only one of IN CLUSTER or SIZE can be set"),
     }
+
+    if size.is_some() {
+        sql_bail!("specifying {ty} SIZE deprecated; use IN CLUSTER")
+    }
+
+    let cluster = match in_cluster {
+        None => {
+            let cluster = scx.catalog.resolve_cluster(None)?;
+            *in_cluster = Some(ResolvedClusterName {
+                id: cluster.id(),
+                print_name: None,
+            });
+            cluster
+        }
+        Some(in_cluster) => scx.catalog.get_cluster(in_cluster.id),
+    };
+
+    if cluster.replica_ids().len() > 1 {
+        sql_bail!("cannot create {ty} in cluster with more than one replica")
+    }
+
+    Ok(cluster.id())
 }
 
 generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default(true)));
@@ -2060,7 +2156,7 @@ pub fn plan_create_materialized_view(
         .catalog
         .is_system_schema_specifier(&name.qualifiers.schema_spec)
     {
-        ensure_cluster_is_not_linked(scx, cluster_id)?;
+        ensure_cluster_is_not_linked(scx, cluster_id);
     }
 
     let query::PlannedRootQuery {
@@ -2328,20 +2424,18 @@ generate_extracted_config!(CreateSinkOption, (Size, String), (Snapshot, bool));
 
 pub fn plan_create_sink(
     scx: &StatementContext,
-    stmt: CreateSinkStatement<Aug>,
+    mut stmt: CreateSinkStatement<Aug>,
 ) -> Result<Plan, PlanError> {
-    let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt.clone()))?;
-
     let CreateSinkStatement {
         name,
-        in_cluster,
+        in_cluster: _,
         from,
         connection,
         format,
         envelope,
         if_not_exists,
         with_options,
-    } = stmt;
+    } = stmt.clone();
 
     const ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] =
         &[CreateSinkOptionName::Size, CreateSinkOptionName::Snapshot];
@@ -2490,10 +2584,14 @@ pub fn plan_create_sink(
         seen: _,
     } = with_options.try_into()?;
 
-    let cluster_config = source_sink_cluster_config(scx, "sink", in_cluster.as_ref(), size)?;
-
     // WITH SNAPSHOT defaults to true
     let with_snapshot = snapshot.unwrap_or(true);
+
+    // We will rewrite the cluster if one is not provided, so we must use the
+    // `in_cluster` value we plan to normalize when we canonicalize the create
+    // statement.
+    let in_cluster = source_sink_cluster_config(scx, "sink", &mut stmt.in_cluster, size)?;
+    let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt))?;
 
     Ok(Plan::CreateSink(CreateSinkPlan {
         name,
@@ -2505,7 +2603,7 @@ pub fn plan_create_sink(
         },
         with_snapshot,
         if_not_exists,
-        cluster_config,
+        in_cluster,
     }))
 }
 
@@ -2769,7 +2867,6 @@ fn kafka_sink_builder(
         connection: connection_id,
         format,
         topic: topic_name,
-        fuel: 10000,
         relation_key_indices,
         key_desc_and_indices,
         value_desc,
@@ -2898,7 +2995,7 @@ pub fn plan_create_index(
         .catalog
         .is_system_schema_specifier(&index_name.qualifiers.schema_spec)
     {
-        ensure_cluster_is_not_linked(scx, cluster_id)?;
+        ensure_cluster_is_not_linked(scx, cluster_id);
     }
     *in_cluster = Some(ResolvedClusterName {
         id: cluster_id,
@@ -3475,7 +3572,7 @@ pub fn plan_create_cluster_replica(
             hypothetical_replica_count: current_replica_count + 1,
         });
     }
-    ensure_cluster_is_not_linked(scx, cluster.id())?;
+    ensure_cluster_is_not_linked(scx, cluster.id());
 
     let config = plan_replica_config(scx, options)?;
 
@@ -3754,7 +3851,7 @@ fn plan_drop_cluster(
                     dependents: Vec::new(),
                 });
             }
-            ensure_cluster_is_not_linked(scx, cluster.id())?;
+            ensure_cluster_is_not_linked(scx, cluster.id());
             Some(cluster.id())
         }
         None => None,
@@ -3779,7 +3876,7 @@ fn plan_drop_cluster_replica(
 ) -> Result<Option<(ClusterId, ReplicaId)>, PlanError> {
     let cluster = resolve_cluster_replica(scx, name, if_exists)?;
     if let Some((cluster, _)) = &cluster {
-        ensure_cluster_is_not_linked(scx, cluster.id())?;
+        ensure_cluster_is_not_linked(scx, cluster.id());
     }
     Ok(cluster.map(|(cluster, replica_id)| (cluster.id(), replica_id)))
 }
@@ -4300,7 +4397,7 @@ pub fn plan_alter_cluster(
     };
 
     // Prevent changes to linked clusters.
-    ensure_cluster_is_not_linked(scx, cluster.id())?;
+    ensure_cluster_is_not_linked(scx, cluster.id());
 
     let mut options: PlanClusterOption = Default::default();
 
@@ -4488,7 +4585,7 @@ pub fn plan_alter_item_set_cluster(
                 .catalog
                 .is_system_schema_specifier(&entry.name().qualifiers.schema_spec)
             {
-                ensure_cluster_is_not_linked(scx, in_cluster.id())?;
+                ensure_cluster_is_not_linked(scx, in_cluster.id());
             }
 
             if current_cluster == in_cluster.id() {
@@ -5101,21 +5198,14 @@ pub fn plan_alter_sink(
     let AlterSinkStatement {
         sink_name,
         if_exists,
-        action,
+        action: _,
     } = stmt;
 
     let sink_name = normalize::unresolved_item_name(sink_name)?;
     let entry = match scx.catalog.resolve_item(&sink_name) {
         Ok(sink) => sink,
         Err(_) if if_exists => {
-            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
-                name: sink_name.to_string(),
-                object_type: ObjectType::Sink,
-            });
-
-            return Ok(Plan::AlterNoop(AlterNoopPlan {
-                object_type: ObjectType::Sink,
-            }));
+            bail_unsupported!("ALTER SINK");
         }
         Err(e) => return Err(e.into()),
     };
@@ -5126,39 +5216,8 @@ pub fn plan_alter_sink(
             entry.item_type()
         )
     }
-    let id = entry.id();
 
-    let mut size = AlterOptionParameter::Unchanged;
-    match action {
-        AlterSinkAction::SetOptions(options) => {
-            let CreateSinkOptionExtracted {
-                size: size_opt,
-                snapshot,
-                seen: _,
-            } = options.try_into()?;
-
-            if let Some(value) = size_opt {
-                size = AlterOptionParameter::Set(value);
-            }
-            if let Some(_) = snapshot {
-                sql_bail!("Cannot modify the SNAPSHOT of a SINK.");
-            }
-        }
-        AlterSinkAction::ResetOptions(reset) => {
-            for name in reset {
-                match name {
-                    CreateSinkOptionName::Size => {
-                        size = AlterOptionParameter::Reset;
-                    }
-                    CreateSinkOptionName::Snapshot => {
-                        sql_bail!("Cannot modify the SNAPSHOT of a SINK.");
-                    }
-                }
-            }
-        }
-    };
-
-    Ok(Plan::AlterSink(AlterSinkPlan { id, size }))
+    bail_unsupported!("ALTER SINK");
 }
 
 pub fn describe_alter_source(
@@ -5207,14 +5266,10 @@ pub fn plan_alter_source(
     }
     let id = entry.id();
 
-    let mut size = AlterOptionParameter::Unchanged;
     let action = match action {
         AlterSourceAction::SetOptions(options) => {
-            let CreateSourceOptionExtracted {
-                seen,
-                size: size_opt,
-                ..
-            } = CreateSourceOptionExtracted::try_from(options)?;
+            let CreateSourceOptionExtracted { seen, .. } =
+                CreateSourceOptionExtracted::try_from(options)?;
 
             if let Some(option) = seen
                 .iter()
@@ -5223,25 +5278,37 @@ pub fn plan_alter_source(
                 sql_bail!("Cannot modify the {} of a SOURCE.", option.to_ast_string());
             }
 
-            if let Some(value) = size_opt {
-                size = AlterOptionParameter::Set(value);
-            }
-
-            crate::plan::AlterSourceAction::Resize(size)
-        }
-        AlterSourceAction::ResetOptions(reset) => {
-            for name in reset {
-                match name {
-                    CreateSourceOptionName::Size => {
-                        size = AlterOptionParameter::Reset;
-                    }
-                    o => {
-                        sql_bail!("Cannot modify the {} of a SOURCE.", o.to_ast_string());
-                    }
+            // This used to be supported to resize source's linked clusters, but
+            // we no longer support linked clusters.
+            match entry.cluster_id() {
+                None => bail_never_supported!("ALTER SOURCE...SET SIZE for non-cluster source"),
+                Some(cluster_id) => {
+                    let cluster = scx.catalog.get_cluster(cluster_id);
+                    return Err(crate::plan::PlanError::AlterSourceSinkSizeUnsupported {
+                        cluster: cluster.name().to_string(),
+                    });
                 }
             }
+        }
+        AlterSourceAction::ResetOptions(reset) => {
+            if let Some(option) = reset
+                .iter()
+                .find(|o| !matches!(o, CreateSourceOptionName::Size))
+            {
+                sql_bail!("Cannot modify the {} of a SOURCE.", option.to_ast_string());
+            }
 
-            crate::plan::AlterSourceAction::Resize(size)
+            // This used to be supported to resize source's linked clusters, but
+            // we no longer support linked clusters.
+            match entry.cluster_id() {
+                None => bail_never_supported!("ALTER SOURCE...RESET SIZE for non-cluster source"),
+                Some(cluster_id) => {
+                    let cluster = scx.catalog.get_cluster(cluster_id);
+                    return Err(crate::plan::PlanError::AlterSourceSinkSizeUnsupported {
+                        cluster: cluster.name().to_string(),
+                    });
+                }
+            }
         }
         AlterSourceAction::DropSubsources {
             if_exists,
@@ -5612,24 +5679,21 @@ pub(crate) fn resolve_item_or_type<'a>(
     }
 }
 
-/// Returns an error if the given cluster is a linked cluster
-pub(crate) fn ensure_cluster_is_not_linked(
-    scx: &StatementContext,
-    cluster_id: ClusterId,
-) -> Result<(), PlanError> {
+/// Panics if the given cluster is a linked cluster
+///
+/// TODO: deprecate in subsequent versions when we no longer track the linked
+/// relationships of clusters on boot.
+pub(crate) fn ensure_cluster_is_not_linked(scx: &StatementContext, cluster_id: ClusterId) {
     let cluster = scx.catalog.get_cluster(cluster_id);
+    // linked_object_id will panic when called with a value that would return
+    // Some, but panicking here just to ensure that those semantics are
+    // abundantly clear.
     if let Some(linked_id) = cluster.linked_object_id() {
-        let cluster_name = scx.catalog.get_cluster(cluster_id).name().to_string();
-        let linked_object_name = scx
-            .catalog
-            .resolve_full_name(scx.catalog.get_item(&linked_id).name())
-            .to_string();
-        Err(PlanError::ModifyLinkedCluster {
-            cluster_name,
-            linked_object_name,
-        })
-    } else {
-        Ok(())
+        panic!(
+            "can no longer create new linked clusters, but cluster {} linked to {}",
+            cluster.id(),
+            linked_id
+        );
     }
 }
 

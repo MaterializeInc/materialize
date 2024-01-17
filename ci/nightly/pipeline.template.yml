@@ -484,7 +484,6 @@ steps:
 
       - id: checks-backup-rollback
         label: "Checks + backup + rollback to previous"
-        skip: "Requires #18628 to be fixed"
         timeout_in_minutes: 60
         artifact_paths: junit_*.xml
         agents:
@@ -720,6 +719,17 @@ steps:
               composition: platform-checks
               args: [--scenario=PersistCatalogToggle, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-timestamp-oracle-toggle
+        label: "Checks + Toggle timestamp oracle"
+        timeout_in_minutes: 45
+        artifact_paths: junit_*.xml
+        agents:
+          queue: builder-linux-x86_64
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=TimestampOracleToggle, "--seed=$BUILDKITE_JOB_ID"]
+
       - id: checks-upgrade-matrix
         label: "Random upgrades over the entire matrix"
         timeout_in_minutes: 600
@@ -787,7 +797,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: persist
-              args: [--consensus=mem, --blob=mem, --persist-txn]
+              args: [--node-count=4, --consensus=cockroach, --blob=maelstrom, --time-limit=300, --rate=500, --persist-txn]
 
   - id: persistence-failpoints
     label: Persistence failpoints
@@ -982,6 +992,52 @@ steps:
             composition: rqg
             args: ["dbt3-joins", "--seed=$BUILDKITE_JOB_ID"]
 
+    - id: rqg-lateral-joins
+      label: "RQG lateral-joins workload"
+      artifact_paths: junit_*.xml
+      timeout_in_minutes: 45
+      agents:
+        queue: linux-x86_64
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: rqg
+            args: ["lateral-joins", "--seed=$BUILDKITE_JOB_ID"]
+
+    - id: rqg-subqueries
+      label: "RQG subqueries workload"
+      artifact_paths: junit_*.xml
+      timeout_in_minutes: 45
+      agents:
+        queue: linux-x86_64
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: rqg
+            args: ["subqueries", "--seed=$BUILDKITE_JOB_ID"]
+
+    - id: rqg-window-functions
+      label: "RQG window functions workload"
+      artifact_paths: junit_*.xml
+      timeout_in_minutes: 45
+      agents:
+        queue: linux-x86_64
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: rqg
+            args: ["window-functions", "--seed=$BUILDKITE_JOB_ID"]
+
+    - id: rqg-wmr
+      label: "RQG WMR workload"
+      artifact_paths: junit_*.xml
+      timeout_in_minutes: 45
+      agents:
+        queue: linux-x86_64
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: rqg
+            # Postgres does not support WMR, so our only hope for a comparison
+            # test is to use a previous Mz version via --other-tag=...
+            args: ["wmr", "--seed=$BUILDKITE_JOB_ID", "--other-tag=common-ancestor"]
+
     - id: rqg-banking
       label: "RQG banking workload"
       artifact_paths: junit_*.xml
@@ -1012,6 +1068,16 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: pubsub-disruption
+
+  - id: retain-history
+    label: "Check retain history"
+    timeout_in_minutes: 15
+    artifact_paths: junit_*.xml
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: retain-history
 
   - id: data-ingest
     label: "Data Ingest"
@@ -1098,7 +1164,8 @@ steps:
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: linux-x86_64-small
+          # OOMs with linux-x86_64-small
+          queue: linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1172,7 +1239,7 @@ steps:
 
   - id: persist-txn-fencing
     label: Persist-txn fencing
-    timeout_in_minutes: 60
+    timeout_in_minutes: 90
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:

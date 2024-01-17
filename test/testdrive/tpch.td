@@ -11,25 +11,35 @@
 # cardinality, don't depend on exact count that could change if the rng
 # implementation changes, just check that it's within the spec range.
 
-! CREATE SOURCE gen FROM LOAD GENERATOR TPCH (SCALE FACTOR 0)
+! CREATE SOURCE gen
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR 0)
 contains: multi-output sources require a FOR TABLES (..) or FOR ALL TABLES statement
 
-! CREATE SOURCE gen FROM LOAD GENERATOR TPCH (SCALE FACTOR 9223372036854775807) FOR ALL TABLES
+! CREATE SOURCE gen
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR 9223372036854775807) FOR ALL TABLES
 contains: unsupported scale factor 9223372036854776000
 
-! CREATE SOURCE gen FROM LOAD GENERATOR TPCH (SCALE FACTOR -1) FOR ALL TABLES
+! CREATE SOURCE gen
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR -1) FOR ALL TABLES
 contains: unsupported scale factor -1
 
-> CREATE SOURCE gen FROM LOAD GENERATOR TPCH (SCALE FACTOR .01) FOR ALL TABLES
+> CREATE SOURCE gen
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM LOAD GENERATOR TPCH (SCALE FACTOR .01) FOR ALL TABLES
 
 $ set-from-sql var=source-size
-SELECT size FROM mz_sources WHERE name = 'gen'
+SELECT size FROM (
+    SHOW SOURCES
+) WHERE name = 'gen'
 
 > SHOW SOURCES
 name           type            size             cluster
 -------------------------------------------------------
  customer      subsource       <null>           <null>
- gen           load-generator  ${source-size}   materialize_public_gen
+ gen           load-generator  ${source-size}   ${arg.single-replica-cluster}
  gen_progress  progress        <null>           <null>
  lineitem      subsource       <null>           <null>
  nation        subsource       <null>           <null>

@@ -19,6 +19,10 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.rqg import RQG
+from materialize.version_list import (
+    ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS,
+    resolve_ancestor_image_tag,
+)
 
 SERVICES = [RQG()]
 
@@ -32,7 +36,10 @@ class Dataset(Enum):
             case Dataset.SIMPLE:
                 return ["simple.sql"]
             case Dataset.DBT3:
-                return ["dbt3-ddl.sql", "dbt3-s0.0001.dump"]
+                # With Postgres, CREATE MATERIALZIED VIEW from dbt3-ddl.sql will produce
+                # a view thats is empty unless REFRESH MATERIALIZED VIEW from dbt3-ddl-refresh-mvs.sql
+                # is also run after the data has been loaded by dbt3-s0.0001.dump
+                return ["dbt3-ddl.sql", "dbt3-s0.0001.dump", "dbt3-ddl-refresh-mvs.sql"]
             case _:
                 assert False
 
@@ -54,6 +61,9 @@ class ReferenceImplementation(Enum):
 @dataclass
 class Workload:
     name: str
+    # All paths are relative to the CWD of the rqg container, which is /RQG and contains
+    # a checked-out copy of the MaterializeInc/RQG repository
+    # Use /workdir/file-name-goes-here.yy for files located in test/rqg
     grammar: str
     reference_implementation: ReferenceImplementation | None
     dataset: Dataset | None = None
@@ -69,12 +79,43 @@ WORKLOADS = [
         dataset=Dataset.SIMPLE,
         grammar="conf/mz/simple-aggregates.yy",
         reference_implementation=ReferenceImplementation.POSTGRES,
+        validator="ResultsetComparatorSimplify",
+    ),
+    Workload(
+        name="lateral-joins",
+        dataset=Dataset.SIMPLE,
+        grammar="conf/mz/lateral-joins.yy",
+        reference_implementation=ReferenceImplementation.POSTGRES,
+        validator="ResultsetComparatorSimplify",
     ),
     Workload(
         name="dbt3-joins",
         dataset=Dataset.DBT3,
         grammar="conf/mz/dbt3-joins.yy",
         reference_implementation=ReferenceImplementation.POSTGRES,
+        validator="ResultsetComparatorSimplify",
+    ),
+    Workload(
+        name="subqueries",
+        dataset=Dataset.SIMPLE,
+        grammar="conf/mz/subqueries.yy",
+        reference_implementation=ReferenceImplementation.POSTGRES,
+        validator="ResultsetComparatorSimplify",
+    ),
+    Workload(
+        name="window-functions",
+        dataset=Dataset.SIMPLE,
+        grammar="conf/mz/window-functions.yy",
+        reference_implementation=ReferenceImplementation.POSTGRES,
+        validator="ResultsetComparatorSimplify",
+    ),
+    Workload(
+        name="wmr",
+        grammar="conf/mz/with-mutually-recursive.yy",
+        # Postgres does not support WMR, so our only hope for a comparison
+        # test is to use a previous Mz version via --other-tag=...
+        reference_implementation=ReferenceImplementation.MATERIALIZE,
+        validator="ResultsetComparatorSimplify",
     ),
     Workload(
         # A workload that performs DML that preserve the dataset's invariants
@@ -109,7 +150,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Run the Workload for the specifid time in seconds",
     )
     parser.add_argument(
-        "--debug", action="store_true", help="Run the RQG With RQG_DEBUG=1"
+        "--threads",
+        type=int,
+        help="Run the Workload with the specified number of concurrent threads",
+    )
+    parser.add_argument(
+        "--sqltrace", action="store_true", help="Print all generated SQL statements"
+    )
+    parser.add_argument(
+        "--skip-recursive-rules",
+        action="store_true",
+        help="Generate simpler queries by avoiding recursive productions",
     )
     parser.add_argument(
         "--seed",
@@ -153,7 +204,20 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
 
     psql_urls = ["postgresql://materialize@mz_this:6875/materialize"]
 
-    match workload.reference_implementation:
+    if args.other_tag == "common-ancestor":
+        args.other_tag = resolve_ancestor_image_tag(
+            ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS
+        )
+        print(f"Resolving --other-tag to {args.other_tag}")
+
+    # If we have --other-tag, assume we want to run a comparison test against Materialize
+    reference_implementation = (
+        ReferenceImplementation.MATERIALIZE
+        if args.other_tag and workload.reference_implementation is not None
+        else workload.reference_implementation
+    )
+
+    match reference_implementation:
         case ReferenceImplementation.MATERIALIZE:
             participants.append(
                 Materialized(
@@ -177,18 +241,14 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
     files = [] if workload.dataset is None else workload.dataset.files()
 
     dsn2 = (
-        [f"--dsn2=dbi:Pg:{workload.reference_implementation.dsn()}"]
-        if workload.reference_implementation is not None
+        [f"--dsn2=dbi:Pg:{reference_implementation.dsn()}"]
+        if reference_implementation is not None
         else []
     )
 
     duration = args.duration if args.duration is not None else workload.duration
-    assert duration is not None
-
-    grammar = args.grammar if args.grammar is not None else workload.grammar
-    assert grammar is not None
-
-    env_extra = {"RQG_DEBUG": "1"} if args.debug else {}
+    grammar = args.grammar or workload.grammar
+    threads = args.threads or workload.threads
 
     with c.override(*participants):
         try:
@@ -199,25 +259,25 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
                     print(f"--- Populating {psql_url} with {file} ...")
                     c.exec("rqg", "bash", "-c", f"psql -f conf/mz/{file} {psql_url}")
 
-            if duration > 0:
-                c.exec(
-                    "rqg",
-                    "perl",
-                    "gentest.pl",
-                    "--dsn1=dbi:Pg:dbname=materialize;host=mz_this;user=materialize;port=6875",
-                    *dsn2,
-                    f"--grammar={grammar}",
-                    f"--validator={workload.validator}"
-                    if workload.validator is not None
-                    else "",
-                    f"--starting-rule={args.starting_rule}"
-                    if args.starting_rule is not None
-                    else "",
-                    "--queries=10000000",
-                    f"--threads={workload.threads}",
-                    f"--duration={duration}",
-                    f"--seed={args.seed}",
-                    env_extra=env_extra,
-                )
+            c.exec(
+                "rqg",
+                "perl",
+                "gentest.pl",
+                "--dsn1=dbi:Pg:dbname=materialize;host=mz_this;user=materialize;port=6875",
+                *dsn2,
+                f"--grammar={grammar}",
+                f"--validator={workload.validator}"
+                if workload.validator is not None
+                else "",
+                f"--starting-rule={args.starting_rule}"
+                if args.starting_rule is not None
+                else "",
+                "--queries=100000000",
+                f"--threads={threads}",
+                f"--duration={duration}",
+                f"--seed={args.seed}",
+                "--sqltrace" if args.sqltrace else "",
+                "--skip-recursive-rules" if args.skip_recursive_rules else "",
+            )
         finally:
             c.capture_logs()

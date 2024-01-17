@@ -39,6 +39,10 @@ a b
 $ set-from-sql var=expected-user
 SELECT user FROM linked_cluster_audit_event_user ORDER BY priority DESC LIMIT 1
 
+# Later versions of MZ do not create linked clusters
+$ skip-if
+SELECT mz_version_num() >= 8100;
+
 # Test that the "disk" option on the linked cluster defaults to false
 > SELECT cluster, replica FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'materialize_public_kafka_source'
 materialize_public_kafka_source  linked

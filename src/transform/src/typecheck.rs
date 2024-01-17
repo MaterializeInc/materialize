@@ -14,6 +14,7 @@ use std::fmt::Write;
 use std::sync::{Arc, Mutex};
 
 use itertools::Itertools;
+use mz_expr::explain::{HumanizedExplain, HumanizerMode};
 use mz_expr::{
     non_nullable_columns, AggregateExpr, ColumnOrder, Id, JoinImplementation, LocalId,
     MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
@@ -1510,6 +1511,10 @@ impl<'a> TypeError<'a> {
                 let are = if num_cols == 1 { "is" } else { "are" };
                 let s = if num_cols == 1 { "" } else { "s" };
                 let input_type = columns_pretty(input_type, humanizer);
+
+                // TODO(cloud#8196)
+                let mode = HumanizedExplain::new(false);
+                let order = mode.expr(order, None);
 
                 writeln!(
                     f,

@@ -19,6 +19,7 @@
 $ kafka-create-topic topic=none-topic partitions=1
 
 > CREATE SOURCE none_source
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-none-topic-${testdrive.seed}')
   KEY FORMAT TEXT
   VALUE FORMAT TEXT
@@ -26,6 +27,7 @@ $ kafka-create-topic topic=none-topic partitions=1
   ENVELOPE NONE
 
 > CREATE SOURCE none_source_no_key
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-none-topic-${testdrive.seed}')
   FORMAT TEXT
   ENVELOPE NONE
@@ -111,6 +113,7 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 {"id": 1} {"before": {"row": {"id": 1, "creature": "fish"}}, "after": {"row": {"id": 1, "creature": "mudskipper"}}, "op": "u", "source": {"file": "binlog1", "pos": 1, "row": 1, "snapshot": {"boolean": false}}}
 
 > CREATE SOURCE debezium_source
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -138,6 +141,7 @@ $ kafka-ingest format=avro topic=upsert-topic key-format=avro key-schema=${keysc
 {"key": "fish"} {"f1": "fish", "f2": 1000}
 
 > CREATE SOURCE upsert_source
+  IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-topic-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT

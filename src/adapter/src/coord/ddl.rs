@@ -45,7 +45,6 @@ use mz_storage_client::controller::ExportDescription;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_storage_types::read_policy::ReadPolicy;
-use mz_storage_types::sinks::SinkAsOf;
 use mz_storage_types::sources::GenericSourceConnection;
 use serde_json::json;
 use tracing::{event, warn, Level};
@@ -343,7 +342,7 @@ impl Coordinator {
                     update_default_arrangement_merge_options = true;
                     update_http_config = true;
                 }
-                catalog::Op::AlterSource { id, .. } | catalog::Op::RenameItem { id, .. } => {
+                catalog::Op::RenameItem { id, .. } => {
                     let item = self.catalog().get_entry(id);
                     let is_webhook_source = item
                         .source()
@@ -607,7 +606,7 @@ impl Coordinator {
                     for (config, slot_name) in replication_slots_to_drop {
                         // Try to drop the replication slots, but give up after a while.
                         let _ = Retry::default()
-                            .max_duration(Duration::from_secs(30))
+                            .max_duration(Duration::from_secs(60))
                             .retry_async(|_state| async {
                                 mz_postgres_util::drop_replication_slots(
                                     &ssh_tunnel_manager,
@@ -990,11 +989,7 @@ impl Coordinator {
             storage_ids: btreeset! {sink.from},
             compute_ids: btreemap! {},
         };
-        let min_as_of = self.least_valid_read(&id_bundle);
-        let as_of = SinkAsOf {
-            frontier: min_as_of,
-            strict: !sink.with_snapshot,
-        };
+        let as_of = self.least_valid_read(&id_bundle);
 
         let storage_sink_from_entry = self.catalog().get_entry(&sink.from);
         let storage_sink_desc = mz_storage_types::sinks::StorageSinkDesc {
@@ -1012,6 +1007,7 @@ impl Coordinator {
                 .into_inline_connection(self.catalog().state()),
             envelope: sink.envelope,
             as_of,
+            with_snapshot: sink.with_snapshot,
             status_id,
             from_storage_metadata: (),
         };
@@ -1226,9 +1222,7 @@ impl Coordinator {
                     | CatalogItem::Func(_) => {}
                 },
                 Op::AlterRole { .. }
-                | Op::AlterSink { .. }
                 | Op::AlterSetCluster { .. }
-                | Op::AlterSource { .. }
                 | Op::UpdatePrivilege { .. }
                 | Op::UpdateDefaultPrivilege { .. }
                 | Op::GrantRole { .. }

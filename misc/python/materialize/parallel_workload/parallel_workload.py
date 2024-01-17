@@ -236,9 +236,7 @@ def run(
     elif scenario == Scenario.TogglePersistTxn:
 
         def toggle_persist_txn(params: dict[str, str]) -> dict[str, str]:
-            params["persist_txn_tables"] = (
-                "off" if params.get("persist_txn_tables") == "eager" else "eager"
-            )
+            params["persist_txn_tables"] = random.choice(["off", "eager", "lazy"])
             return params
 
         worker_rng = random.Random(rng.randrange(SEED_RANGE))

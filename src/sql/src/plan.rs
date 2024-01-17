@@ -81,6 +81,7 @@ pub(crate) mod transform_expr;
 pub(crate) mod typeconv;
 pub(crate) mod with_options;
 
+use crate::plan;
 use crate::plan::with_options::OptionalDuration;
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
@@ -145,7 +146,6 @@ pub enum Plan {
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
     AlterSetCluster(AlterSetClusterPlan),
-    AlterSink(AlterSinkPlan),
     AlterConnection(AlterConnectionPlan),
     AlterSource(AlterSourcePlan),
     PurifiedAlterSource {
@@ -221,7 +221,8 @@ impl Plan {
             StatementKind::AlterSetCluster => {
                 vec![PlanKind::AlterNoop, PlanKind::AlterSetCluster]
             }
-            StatementKind::AlterSink => vec![PlanKind::AlterNoop, PlanKind::AlterSink],
+            // TODO: If we ever support ALTER SINK again, this will need to be changed
+            StatementKind::AlterSink => vec![PlanKind::AlterNoop],
             StatementKind::AlterSource => vec![PlanKind::AlterNoop, PlanKind::AlterSource],
             StatementKind::AlterSystemReset => {
                 vec![PlanKind::AlterNoop, PlanKind::AlterSystemReset]
@@ -374,7 +375,6 @@ impl Plan {
             Plan::AlterSetCluster(_) => "alter set cluster",
             Plan::AlterIndexSetOptions(_) => "alter index",
             Plan::AlterIndexResetOptions(_) => "alter index",
-            Plan::AlterSink(_) => "alter sink",
             Plan::AlterConnection(_) => "alter connection",
             Plan::AlterSource(_) | Plan::PurifiedAlterSource { .. } => "alter source",
             Plan::AlterItemRename(_) => "rename item",
@@ -552,7 +552,8 @@ pub struct CreateSourcePlan {
     pub source: Source,
     pub if_not_exists: bool,
     pub timeline: Timeline,
-    pub cluster_config: SourceSinkClusterConfig,
+    // None for subsources, which run on the parent cluster.
+    pub in_cluster: Option<ClusterId>,
 }
 
 #[derive(Debug)]
@@ -560,50 +561,6 @@ pub struct CreateSourcePlans {
     pub source_id: GlobalId,
     pub plan: CreateSourcePlan,
     pub resolved_ids: ResolvedIds,
-}
-
-/// Specifies the cluster for a source or a sink.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum SourceSinkClusterConfig {
-    /// Use an existing cluster.
-    Existing {
-        /// The ID of the cluster to use.
-        id: ClusterId,
-    },
-    /// Create a new linked storage cluster of the specified size.
-    ///
-    /// NOTE(benesch): in the future, we hope to remove the concept of a linked
-    /// cluster, and always associate sources and sinks with an existing
-    /// cluster.
-    Linked {
-        /// The size of the replica to create in the linked cluster.
-        size: String,
-    },
-    /// The user did not specify a cluster behavior, so the actual behavior depends on
-    /// the context. For sources the behavior depends on the data source:
-    ///
-    ///   - Ingestion: Use the default behavior.
-    ///   - Source: Use the same cluster as the data source source.
-    ///   - Progress: Use the same cluster as the non-progress source.
-    ///   - Webhook: Does not allow undefined configs.
-    ///
-    /// For sinks, always use the default behavior.
-    ///
-    /// NOTE(benesch): we plan to remove this variant in the future by having
-    /// the planner bind a source or sink with no `SIZE` or `IN CLUSTER` option
-    /// to the active cluster. This behavior won't be ergonomic until we have
-    /// multipurpose clusters though.
-    Undefined,
-}
-
-impl SourceSinkClusterConfig {
-    /// Returns the ID of the cluster that this source/sink will be created on, if one exists.
-    pub fn cluster_id(&self) -> Option<&ClusterId> {
-        match self {
-            SourceSinkClusterConfig::Existing { id } => Some(id),
-            SourceSinkClusterConfig::Linked { .. } | SourceSinkClusterConfig::Undefined => None,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -634,7 +591,7 @@ pub struct CreateSinkPlan {
     pub sink: Sink,
     pub with_snapshot: bool,
     pub if_not_exists: bool,
-    pub cluster_config: SourceSinkClusterConfig,
+    pub in_cluster: ClusterId,
 }
 
 #[derive(Debug)]
@@ -658,7 +615,7 @@ pub struct CreateViewPlan {
     pub ambiguous_columns: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CreateMaterializedViewPlan {
     pub name: QualifiedItemName,
     pub materialized_view: MaterializedView,
@@ -672,7 +629,7 @@ pub struct CreateMaterializedViewPlan {
     pub ambiguous_columns: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CreateIndexPlan {
     pub name: QualifiedItemName,
     pub index: Index,
@@ -858,21 +815,15 @@ pub enum ExplaineeStatement {
     },
     /// The object to be explained is a CREATE MATERIALIZED VIEW.
     CreateMaterializedView {
-        name: QualifiedItemName,
-        raw_plan: HirRelationExpr,
-        column_names: Vec<ColumnName>,
-        cluster_id: ClusterId,
         /// Broken flag (see [`ExplaineeStatement::broken()`]).
         broken: bool,
-        non_null_assertions: Vec<usize>,
-        refresh_schedule: Option<RefreshSchedule>,
+        plan: plan::CreateMaterializedViewPlan,
     },
     /// The object to be explained is a CREATE INDEX.
     CreateIndex {
-        name: QualifiedItemName,
-        index: Index,
         /// Broken flag (see [`ExplaineeStatement::broken()`]).
         broken: bool,
+        plan: plan::CreateIndexPlan,
     },
 }
 
@@ -880,8 +831,8 @@ impl ExplaineeStatement {
     pub fn depends_on(&self) -> BTreeSet<GlobalId> {
         match self {
             Self::Select { raw_plan, .. } => raw_plan.depends_on(),
-            Self::CreateMaterializedView { raw_plan, .. } => raw_plan.depends_on(),
-            Self::CreateIndex { index, .. } => btreeset! {index.on},
+            Self::CreateMaterializedView { plan, .. } => plan.materialized_view.expr.depends_on(),
+            Self::CreateIndex { plan, .. } => btreeset! {plan.index.on},
         }
     }
 
@@ -1022,12 +973,6 @@ pub enum AlterOptionParameter<T = String> {
 }
 
 #[derive(Debug)]
-pub struct AlterSinkPlan {
-    pub id: GlobalId,
-    pub size: AlterOptionParameter,
-}
-
-#[derive(Debug)]
 pub enum AlterConnectionAction {
     RotateKeys,
     AlterOptions {
@@ -1045,7 +990,6 @@ pub struct AlterConnectionPlan {
 
 #[derive(Debug)]
 pub enum AlterSourceAction {
-    Resize(AlterOptionParameter),
     DropSubsourceExports {
         to_drop: BTreeSet<GlobalId>,
     },
@@ -1609,11 +1553,15 @@ impl Params {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Copy)]
 pub struct PlanContext {
     pub wall_time: DateTime<Utc>,
+    pub planning_id: Option<GlobalId>,
 }
 
 impl PlanContext {
     pub fn new(wall_time: DateTime<Utc>) -> Self {
-        Self { wall_time }
+        Self {
+            wall_time,
+            planning_id: None,
+        }
     }
 
     /// Return a PlanContext with zero values. This should only be used when
@@ -1622,6 +1570,11 @@ impl PlanContext {
     pub fn zero() -> Self {
         PlanContext {
             wall_time: now::to_datetime(NOW_ZERO()),
+            planning_id: None,
         }
+    }
+
+    pub fn set_planning_id(&mut self, id: GlobalId) {
+        self.planning_id = Some(id);
     }
 }
