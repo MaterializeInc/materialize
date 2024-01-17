@@ -26,8 +26,9 @@ use mz_repr::bytes::ByteSize;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{Datum, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    CteBlock, ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
-    IfExistsBehavior, OrderByExpr, SetExpr, SubscribeOutput, UnresolvedItemName,
+    CteBlock, ExplainPushdownStatement, ExplainSinkSchemaFor, ExplainSinkSchemaStatement,
+    ExplainTimestampStatement, Expr, IfExistsBehavior, OrderByExpr, SetExpr, SubscribeOutput,
+    UnresolvedItemName,
 };
 use mz_sql_parser::ident;
 use mz_storage_types::sinks::{KafkaSinkConnection, KafkaSinkFormat, StorageSinkConnection};
@@ -285,6 +286,25 @@ pub fn describe_explain_plan(
     )
 }
 
+pub fn describe_explain_pushdown(
+    scx: &StatementContext,
+    statement: ExplainPushdownStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    let relation_desc = RelationDesc::empty()
+        .with_column("Source", ScalarType::String.nullable(false))
+        .with_column("Total Bytes", ScalarType::UInt64.nullable(false))
+        .with_column("Selected Bytes", ScalarType::UInt64.nullable(false))
+        .with_column("Total Parts", ScalarType::UInt64.nullable(false))
+        .with_column("Selected Parts", ScalarType::UInt64.nullable(false));
+
+    Ok(
+        StatementDesc::new(Some(relation_desc)).with_params(match statement.explainee {
+            Explainee::Select(select, _) => describe_select(scx, *select)?.param_types,
+            _ => vec![],
+        }),
+    )
+}
+
 pub fn describe_explain_timestamp(
     scx: &StatementContext,
     ExplainTimestampStatement { select, .. }: ExplainTimestampStatement<Aug>,
@@ -486,6 +506,15 @@ pub fn plan_explain_schema(
         },
         _ => unreachable!("plan_create_sink returns a CreateSinkPlan"),
     }
+}
+
+pub fn plan_explain_pushdown(
+    scx: &StatementContext,
+    statement: ExplainPushdownStatement<Aug>,
+    params: &Params,
+) -> Result<Plan, PlanError> {
+    let explainee = plan_explainee(scx, statement.explainee, params)?;
+    Ok(Plan::ExplainPushdown(ExplainPushdownPlan { explainee }))
 }
 
 pub fn plan_explain_timestamp(

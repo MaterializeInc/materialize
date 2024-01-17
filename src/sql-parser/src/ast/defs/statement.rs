@@ -86,6 +86,7 @@ pub enum Statement<T: AstInfo> {
     Rollback(RollbackStatement),
     Subscribe(SubscribeStatement<T>),
     ExplainPlan(ExplainPlanStatement<T>),
+    ExplainPushdown(ExplainPushdownStatement<T>),
     ExplainTimestamp(ExplainTimestampStatement<T>),
     ExplainSinkSchema(ExplainSinkSchemaStatement<T>),
     Declare(DeclareStatement<T>),
@@ -155,6 +156,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Rollback(stmt) => f.write_node(stmt),
             Statement::Subscribe(stmt) => f.write_node(stmt),
             Statement::ExplainPlan(stmt) => f.write_node(stmt),
+            Statement::ExplainPushdown(stmt) => f.write_node(stmt),
             Statement::ExplainTimestamp(stmt) => f.write_node(stmt),
             Statement::ExplainSinkSchema(stmt) => f.write_node(stmt),
             Statement::Declare(stmt) => f.write_node(stmt),
@@ -3053,6 +3055,19 @@ impl<T: AstInfo> AstDisplay for ExplainSinkSchemaStatement<T> {
     }
 }
 impl_display_t!(ExplainSinkSchemaStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExplainPushdownStatement<T: AstInfo> {
+    pub explainee: Explainee<T>,
+}
+
+impl<T: AstInfo> AstDisplay for ExplainPushdownStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("EXPLAIN FILTER PUSHDOWN FOR ");
+        f.write_node(&self.explainee);
+    }
+}
+impl_display_t!(ExplainPushdownStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainTimestampStatement<T: AstInfo> {
