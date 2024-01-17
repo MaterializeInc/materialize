@@ -274,8 +274,12 @@ impl<'a> DataflowBuilder<'a> {
         dataflow.export_sink(id, sink_description);
 
         // Optimize the dataflow across views, and any other ways that appeal.
-        let dataflow_metainfo =
-            mz_transform::optimize_dataflow(dataflow, self, &mz_transform::EmptyStatisticsOracle)?;
+        let dataflow_metainfo = mz_transform::optimize_dataflow(
+            dataflow,
+            self,
+            &mz_transform::EmptyStatisticsOracle,
+            self.catalog.system_config().enable_eager_delta_joins(),
+        )?;
 
         Ok(dataflow_metainfo)
     }

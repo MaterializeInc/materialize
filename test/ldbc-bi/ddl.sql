@@ -19,10 +19,13 @@ DROP TABLE IF EXISTS Person_studyAt_University CASCADE;
 DROP TABLE IF EXISTS Person_workAt_Company CASCADE;
 DROP TABLE IF EXISTS Person_knows_Person CASCADE;
 
+\! echo OLD TABLES DROPPED
+\! date -Iseconds
+
 -- static tables
 
 CREATE TABLE Organisation (
-    id bigint,
+    id bigint NOT NULL,
     type text NOT NULL,
     name text NOT NULL,
     url text NOT NULL,
@@ -32,7 +35,7 @@ CREATE TABLE Organisation (
 CREATE INDEX Organisation_id ON Organisation (id);
 
 CREATE TABLE Place (
-    id bigint,
+    id bigint NOT NULL,
     name text NOT NULL,
     url text NOT NULL,
     type text NOT NULL,
@@ -42,7 +45,7 @@ CREATE TABLE Place (
 CREATE INDEX Place_id ON Place (id);
 
 CREATE TABLE Tag (
-    id bigint,
+    id bigint NOT NULL,
     name text NOT NULL,
     url text NOT NULL,
     TypeTagClassId bigint NOT NULL
@@ -53,7 +56,7 @@ CREATE INDEX Tag_name ON Tag (name);
 CREATE INDEX Tag_TypeTagClassId ON Tag (TypeTagClassId);
 
 CREATE TABLE TagClass (
-    id bigint,
+    id bigint NOT NULL,
     name text NOT NULL,
     url text NOT NULL,
     SubclassOfTagClassId bigint -- null for the root TagClass (Thing)
@@ -81,7 +84,7 @@ CREATE INDEX Comment_id ON Comment (id);
 
 CREATE TABLE Forum (
     creationDate timestamp with time zone NOT NULL,
-    id bigint,
+    id bigint NOT NULL,
     title text NOT NULL,
     ModeratorPersonId bigint -- can be null as its cardinality is 0..1
 );
@@ -107,7 +110,7 @@ CREATE INDEX Post_id ON Post (id);
 
 CREATE TABLE Person (
     creationDate timestamp with time zone NOT NULL,
-    id bigint,
+    id bigint NOT NULL,
     firstName text NOT NULL,
     lastName text NOT NULL,
     gender text NOT NULL,

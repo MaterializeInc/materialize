@@ -66,6 +66,7 @@
 //!   indexes: &mz_transform::EmptyIndexOracle,
 //!   stats: &mz_transform::EmptyStatisticsOracle,
 //!   global_id: None,
+//!   enable_eager_delta_joins: false,
 //!   dataflow_metainfo: &mut DataflowMetainfo::default(),
 //! });
 //!

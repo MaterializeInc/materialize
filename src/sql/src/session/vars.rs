@@ -2267,6 +2267,14 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
+        name: enable_eager_delta_joins,
+        desc:
+            "eager delta joins",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_cc_cluster_sizes,
         desc: "use of 'cc' cluster sizes",
         default: false,
@@ -3177,7 +3185,7 @@ impl SystemVars {
         let var = self
             .vars
             .get(var.name)
-            .expect("provided var should be in state");
+            .unwrap_or_else(|| panic!("provided var {var:?} should be in state"));
 
         var.value_any()
             .downcast_ref()
@@ -5612,7 +5620,9 @@ pub fn is_tracing_var(name: &str) -> bool {
         || name == SENTRY_FILTERS.name()
 }
 
-/// Returns whether the named variable is a compute configuration parameter.
+/// Returns whether the named variable is a compute configuration parameter
+/// (things that go in `ComputeParameters` and are sent to replicas via `UpdateConfiguration`
+/// commands).
 pub fn is_compute_config_var(name: &str) -> bool {
     name == MAX_RESULT_SIZE.name()
         || name == COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES.name()

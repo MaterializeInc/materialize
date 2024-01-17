@@ -26,6 +26,7 @@ use mz_expr::{
 };
 use mz_ore::cast::{CastFrom, CastLossy, TryCastFrom};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 
 use crate::attribute::cardinality::{FactorizerVariable, SymExp};
 use crate::attribute::{Cardinality, DerivedAttributesBuilder};
@@ -67,7 +68,12 @@ impl crate::Transform for JoinImplementation {
         relation: &mut MirRelationExpr,
         ctx: &mut TransformCtx,
     ) -> Result<(), TransformError> {
-        let result = self.action_recursive(relation, &mut IndexMap::new(ctx.indexes), ctx.stats);
+        let result = self.action_recursive(
+            relation,
+            &mut IndexMap::new(ctx.indexes),
+            ctx.stats,
+            ctx.enable_eager_delta_joins,
+        );
         mz_repr::explain::trace_plan(&*relation);
         result
     }
@@ -83,10 +89,11 @@ impl JoinImplementation {
         relation: &mut MirRelationExpr,
         indexes: &mut IndexMap,
         stats: &dyn StatisticsOracle,
+        eager_delta_joins: bool,
     ) -> Result<(), TransformError> {
         self.checked_recur(|_| {
             if let MirRelationExpr::Let { id, value, body } = relation {
-                self.action_recursive(value, indexes, stats)?;
+                self.action_recursive(value, indexes, stats, eager_delta_joins)?;
                 match &**value {
                     MirRelationExpr::ArrangeBy { keys, .. } => {
                         for key in keys {
@@ -101,14 +108,16 @@ impl JoinImplementation {
                     }
                     _ => {}
                 }
-                self.action_recursive(body, indexes, stats)?;
+                self.action_recursive(body, indexes, stats, eager_delta_joins)?;
                 indexes.remove_local(*id);
                 Ok(())
             } else {
                 let (mfp, mfp_input) =
                     MapFilterProject::extract_non_errors_from_expr_ref_mut(relation);
-                mfp_input.try_visit_mut_children(|e| self.action_recursive(e, indexes, stats))?;
-                self.action(mfp_input, mfp, indexes, stats)?;
+                mfp_input.try_visit_mut_children(|e| {
+                    self.action_recursive(e, indexes, stats, eager_delta_joins)
+                })?;
+                self.action(mfp_input, mfp, indexes, stats, eager_delta_joins)?;
                 Ok(())
             }
         })
@@ -121,6 +130,7 @@ impl JoinImplementation {
         mfp_above: MapFilterProject,
         indexes: &IndexMap,
         stats: &dyn StatisticsOracle,
+        eager_delta_joins: bool,
     ) -> Result<(), TransformError> {
         if let MirRelationExpr::Join {
             inputs,
@@ -143,6 +153,13 @@ impl JoinImplementation {
             implementation: implementation @ (Unimplemented | Differential(..)),
         } = relation
         {
+            // If we eagerly plan delta joins, we don't need the second run to "pick up" delta joins
+            // that could be planned with the arrangements from a differential. If such a delta
+            // join were viable, we'd have already planned it the first time.
+            if eager_delta_joins && !matches!(implementation, Unimplemented) {
+                return Ok(());
+            }
+
             let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
 
             // Canonicalize the equivalence classes
@@ -226,7 +243,9 @@ impl JoinImplementation {
             // The first fundamental question is whether we should employ a delta query or not.
             //
             // Here we conservatively use the rule that if sufficient arrangements exist we will
-            // use a delta query (except for 2-input joins).
+            // use a delta query (except for 2-input joins). (With eager delta joins, we will
+            // settle for fewer arrangements in the delta join than in the differential join.)
+            //
             // An arrangement is considered available for an input
             // - if it is a `Get` with columns present in `indexes`,
             //   - or the same wrapped by an IndexedFilter,
@@ -402,42 +421,166 @@ impl JoinImplementation {
             }
 
             let old_implementation = implementation.clone();
+            let num_inputs = inputs.len();
+            // We've already planned a differential join... should we replace it with a delta join?
+            //
+            // This code path is only active when `eager_delta_joins` is false.
+            if matches!(old_implementation, Differential(..)) {
+                soft_assert_or_log!(
+                    !eager_delta_joins,
+                    "eager delta joins run join implementation just once"
+                );
 
-            let delta_query_plan = || {
-                delta_queries::plan(
-                    relation,
-                    &input_mapper,
-                    &available_arrangements,
-                    &unique_keys,
-                    &cardinalities,
-                    &filters,
-                )
-            };
-            let differential_plan = || {
-                differential::plan(
-                    relation,
-                    &input_mapper,
-                    &available_arrangements,
-                    &unique_keys,
-                    &cardinalities,
-                    &filters,
-                )
-            };
-
-            match old_implementation {
-                Unimplemented => {
-                    *relation = delta_query_plan()
-                        .or_else(|_| differential_plan())
-                        .expect("Failed to produce a join plan")
+                // Binary joins can't be delta joins---give up.
+                if inputs.len() <= 2 {
+                    return Ok(());
                 }
-                Differential(..) => {
-                    // As noted above, we don't want to change from Differential to an other
-                    // Differential, so we only consider Delta joins here.
-                    if let Ok(delta_query_plan) = delta_query_plan() {
+
+                // Only plan a delta join if it's no new arrangements (beyond what differential planned).
+                if let Ok((delta_query_plan, 0)) = delta_queries::plan(
+                    relation,
+                    &input_mapper,
+                    &available_arrangements,
+                    &unique_keys,
+                    &cardinalities,
+                    &filters,
+                ) {
+                    tracing::debug!(plan = ?delta_query_plan, "replacing differential join with delta join");
+                    *relation = delta_query_plan;
+                }
+
+                return Ok(());
+            }
+
+            // To have reached here, we must be in our first run of join planning.
+            //
+            // We plan a differential join first.
+            let (differential_query_plan, differential_new_arrangements) = differential::plan(
+                relation,
+                &input_mapper,
+                &available_arrangements,
+                &unique_keys,
+                &cardinalities,
+                &filters,
+            )
+            .expect("Failed to produce a differential join plan");
+
+            // Binary joins _must_ be differential. We won't plan a delta join.
+            if num_inputs <= 2 {
+                // if inputs.len() == 0 then something is very wrong.
+                soft_assert_or_log!(num_inputs != 0, "join with no inputs");
+                // if inputs.len() == 1:
+                // Single input joins are filters and should be planned as
+                // differential plans instead of delta queries. Because a
+                // a filter gets converted into a single input join only when
+                // there are existing arrangements, without this early return,
+                // filters will always be planned as delta queries.
+                // (ggevay: This is an old comment, and I'm not sure whether a single-input join
+                // could still actually occur. It is not happening in any of our slts currently.)
+                soft_assert_or_log!(
+                    num_inputs != 1,
+                    "join with only one input (should be filter)"
+                );
+                // if inputs.len() == 2:
+                // We decided to always plan this as a differential join for now, because the usual
+                // advantage of a Delta join avoiding intermediate arrangements doesn't apply.
+                // See more details here:
+                // https://github.com/MaterializeInc/materialize/pull/16099#issuecomment-1316857374
+                // https://github.com/MaterializeInc/materialize/pull/17708#discussion_r1112848747
+                *relation = differential_query_plan;
+
+                return Ok(());
+            }
+
+            // We are planning a multiway join for the first time.
+            //
+            // We compare the delta and differential join plans.
+            //
+            // A delta query requires that, for every order, there is an arrangement for every
+            // input except for the starting one. Such queries are viable when:
+            //
+            //   (a) all the arrangements already exist, or
+            //   (b) both:
+            //       (i) we wouldn't create more arrangements than a differential join would
+            //       (ii) `enable_eager_delta_joins` is on
+            //
+            // A differential join of k relations requires k-2 arrangements of intermediate
+            // results (plus k arrangements of the inputs).
+            //
+            // Consider A ⨝ B ⨝ C ⨝ D. If planned as a differential join, we might have:
+            //          A » B » C » D
+            // This corresponds to the tree:
+            //
+            // A   B
+            //  \ /
+            //   ⨝   C
+            //    \ /
+            //     ⨝   D
+            //      \ /
+            //       ⨝
+            //
+            // At the two internal joins, the differential join will need two new arrangements.
+            //
+            // TODO(mgree): with this refactoring, we should compute `orders` once---both joins
+            //              call `optimize_orders` and we can save some work.
+            match delta_queries::plan(
+                relation,
+                &input_mapper,
+                &available_arrangements,
+                &unique_keys,
+                &cardinalities,
+                &filters,
+            ) {
+                // If delta plan's inputs need no new arrangements, pick the delta plan.
+                Ok((delta_query_plan, 0)) => {
+                    soft_assert_or_log!(
+                        matches!(old_implementation, Unimplemented | Differential(..)),
+                        "delta query plans should not be planned twice"
+                    );
+                    tracing::debug!(
+                        plan = ?delta_query_plan,
+                        differential_new_arrangements = differential_new_arrangements,
+                        "picking delta query plan (no new arrangements)");
+                    *relation = delta_query_plan;
+                }
+                // If the delta plan needs new arrangements, compare with the differential plan.
+                Ok((delta_query_plan, delta_new_arrangements)) => {
+                    tracing::debug!(
+                        delta_new_arrangements = delta_new_arrangements,
+                        differential_new_arrangements = differential_new_arrangements,
+                        "comparing delta and differential joins",
+                    );
+
+                    if eager_delta_joins && delta_new_arrangements <= differential_new_arrangements
+                    {
+                        // If we're eagerly planning delta joins, pick the delta plan if it's more economical.
+                        tracing::debug!(
+                            plan = ?delta_query_plan,
+                            "picking delta query plan");
                         *relation = delta_query_plan;
+                    } else if let Unimplemented = old_implementation {
+                        // If we haven't planned the join yet, use the differential plan.
+                        tracing::debug!(
+                            plan = ?differential_query_plan,
+                            "picking differential query plan");
+                        *relation = differential_query_plan;
+                    } else {
+                        // But don't replace an existing differential plan.
+                        tracing::debug!(plan = ?old_implementation, "keeping old plan");
+                        soft_assert_or_log!(
+                            matches!(old_implementation, Differential(..)),
+                            "implemented plan in second run of join implementation should be differential \
+                             if the delta plan is not viable")
                     }
                 }
-                _ => unreachable!(), // because of the match statement that is one level up
+                // If we can't plan a delta join, plan a differential join.
+                Err(err) => {
+                    soft_panic_or_log!("delta planning failed: {err}");
+                    tracing::debug!(
+                        plan = ?differential_query_plan,
+                        "picking differential query plan (delta planning failed)");
+                    *relation = differential_query_plan;
+                }
             }
         }
         Ok(())
@@ -495,6 +638,8 @@ mod index_map {
 
 mod delta_queries {
 
+    use std::collections::BTreeSet;
+
     use mz_expr::{
         FilterCharacteristics, JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr,
     };
@@ -502,9 +647,9 @@ mod delta_queries {
     use crate::TransformError;
 
     /// Creates a delta query plan, and any predicates that need to be lifted.
+    /// It also returns the number of new arrangements necessary for this plan.
     ///
-    /// The method returns `Err` if it fails to find a sufficiently pleasing plan or
-    /// if any errors occur during planning.
+    /// The method returns `Err` if any errors occur during planning.
     pub fn plan(
         join: &MirRelationExpr,
         input_mapper: &JoinInputMapper,
@@ -512,7 +657,7 @@ mod delta_queries {
         unique_keys: &[Vec<Vec<usize>>],
         cardinalities: &[Option<usize>],
         filters: &[FilterCharacteristics],
-    ) -> Result<MirRelationExpr, TransformError> {
+    ) -> Result<(MirRelationExpr, usize), TransformError> {
         let mut new_join = join.clone();
 
         if let MirRelationExpr::Join {
@@ -521,29 +666,6 @@ mod delta_queries {
             implementation,
         } = &mut new_join
         {
-            if inputs.len() <= 2 {
-                // if inputs.len() == 0 then something is very wrong.
-                //
-                // if inputs.len() == 1:
-                // Single input joins are filters and should be planned as
-                // differential plans instead of delta queries. Because a
-                // a filter gets converted into a single input join only when
-                // there are existing arrangements, without this early return,
-                // filters will always be planned as delta queries.
-                // (ggevay: This is an old comment, and I'm not sure whether a single-input join
-                // could still actually occur. It is not happening in any of our slts currently.)
-                //
-                // if inputs.len() == 2:
-                // We decided to always plan this as a differential join for now, because the usual
-                // advantage of a Delta join avoiding intermediate arrangements doesn't apply.
-                // See more details here:
-                // https://github.com/MaterializeInc/materialize/pull/16099#issuecomment-1316857374
-                // https://github.com/MaterializeInc/materialize/pull/17708#discussion_r1112848747
-                return Err(TransformError::Internal(String::from(
-                    "should be planned as differential plan",
-                )));
-            }
-
             // Determine a viable order for each relation, or return `Err` if none found.
             let orders = super::optimize_orders(
                 equivalences,
@@ -554,17 +676,21 @@ mod delta_queries {
                 input_mapper,
             )?;
 
-            // A viable delta query requires that, for every order,
-            // there is an arrangement for every input except for
-            // the starting one.
-            if !orders
-                .iter()
-                .all(|o| o.iter().skip(1).all(|(c, _, _)| c.arranged))
-            {
-                return Err(TransformError::Internal(String::from(
-                    "delta plan not viable",
-                )));
-            }
+            // Count new arrangements.
+            let new_arrangements: usize =
+                orders
+                    .iter()
+                    .flat_map(|o| {
+                        o.iter().skip(1).filter_map(|(c, key, input)| {
+                            if c.arranged {
+                                None
+                            } else {
+                                Some((input, key))
+                            }
+                        })
+                    })
+                    .collect::<BTreeSet<_>>()
+                    .len();
 
             // Convert the order information into specific (input, key, characteristics) information.
             let mut orders = orders
@@ -592,7 +718,7 @@ mod delta_queries {
             super::install_lifted_mfp(&mut new_join, lifted_mfp)?;
 
             // Hooray done!
-            Ok(new_join)
+            Ok((new_join, new_arrangements))
         } else {
             Err(TransformError::Internal(String::from(
                 "delta_queries::plan call on non-join expression",
@@ -602,6 +728,8 @@ mod delta_queries {
 }
 
 mod differential {
+    use std::collections::BTreeSet;
+
     use mz_expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
     use mz_ore::soft_assert_eq_or_log;
 
@@ -609,6 +737,7 @@ mod differential {
     use crate::TransformError;
 
     /// Creates a linear differential plan, and any predicates that need to be lifted.
+    /// It also returns the number of new arrangements necessary for this plan.
     pub fn plan(
         join: &MirRelationExpr,
         input_mapper: &JoinInputMapper,
@@ -616,7 +745,7 @@ mod differential {
         unique_keys: &[Vec<Vec<usize>>],
         cardinalities: &[Option<usize>],
         filters: &[FilterCharacteristics],
-    ) -> Result<MirRelationExpr, TransformError> {
+    ) -> Result<(MirRelationExpr, usize), TransformError> {
         let mut new_join = join.clone();
 
         if let MirRelationExpr::Join {
@@ -627,6 +756,9 @@ mod differential {
         {
             // We compute one order for each possible starting point, and we will choose one from
             // these.
+            //
+            // It is an invariant that the orders are in input order: the ith order begins with the ith input.
+            //
             // We could change this preference at any point, but the list of orders should still inform.
             // Important, we should choose something stable under re-ordering, to converge under fixed
             // point iteration; we choose to start with the first input optimizing our criteria, which
@@ -639,6 +771,25 @@ mod differential {
                 filters,
                 input_mapper,
             )?;
+
+            // Count new arrangements.
+            //
+            // We collect the count for each input, to be used to calculate `new_arrangements` below.
+            let new_input_arrangements: Vec<usize> = orders
+                .iter()
+                .map(|o| {
+                    o.iter()
+                        .filter_map(|(c, key, input)| {
+                            if c.arranged {
+                                None
+                            } else {
+                                Some((*input, key.clone()))
+                            }
+                        })
+                        .collect::<BTreeSet<_>>()
+                        .len()
+                })
+                .collect();
 
             // Inside each order, we take the `FilterCharacteristics` from each element, and OR it
             // to every other element to the right. This is because we are gonna be looking for the
@@ -694,6 +845,9 @@ mod differential {
 
             let (start, mut start_key, start_characteristics) = order[0].clone();
 
+            // Count new arrangements for this choice of ordering.
+            let new_arrangements = inputs.len() - 2 + new_input_arrangements[start];
+
             // Implement arrangements in each of the inputs.
             let (lifted_mfp, lifted_projections) =
                 super::implement_arrangements(inputs, available, order.iter());
@@ -721,7 +875,7 @@ mod differential {
             super::install_lifted_mfp(&mut new_join, lifted_mfp)?;
 
             // Hooray done!
-            Ok(new_join)
+            Ok((new_join, new_arrangements))
         } else {
             Err(TransformError::Internal(String::from(
                 "differential::plan call on non-join expression.",
@@ -893,6 +1047,9 @@ fn permute_order(
     })
 }
 
+// Computes the best join orders for each input.
+//
+// If there are N inputs, returns N orders, with the ith input starting the ith order.
 fn optimize_orders(
     equivalences: &[Vec<MirScalarExpr>], // join equivalences: inside a Vec, the exprs are equivalent
     available: &[Vec<Vec<MirScalarExpr>>], // available arrangements per input

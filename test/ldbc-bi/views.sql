@@ -1,12 +1,12 @@
 -- static entity views (Umbra's create-static-materialized-views.sql)
-CREATE OR REPLACE MATERIALIZED VIEW Country AS
+CREATE OR REPLACE VIEW Country AS
     SELECT id, name, url, PartOfPlaceId AS PartOfContinentId
     FROM Place
     WHERE type = 'Country'
 ;
 CREATE INDEX Country_id ON Country (id);
 
-CREATE OR REPLACE MATERIALIZED VIEW City AS
+CREATE OR REPLACE VIEW City AS
     SELECT id, name, url, PartOfPlaceId AS PartOfCountryId
     FROM Place
     WHERE type = 'City'
@@ -14,7 +14,7 @@ CREATE OR REPLACE MATERIALIZED VIEW City AS
 CREATE INDEX City_id ON City (id);
 CREATE INDEX City_PartOfCountryId ON City (PartOfCountryId);
 
-CREATE OR REPLACE MATERIALIZED VIEW Company AS
+CREATE OR REPLACE VIEW Company AS
     SELECT id, name, url, LocationPlaceId AS LocatedInCountryId
     FROM Organisation
     WHERE type = 'Company'
@@ -22,7 +22,7 @@ CREATE OR REPLACE MATERIALIZED VIEW Company AS
 
 CREATE INDEX Company_id ON Company (id);
 
-CREATE OR REPLACE MATERIALIZED VIEW University AS
+CREATE OR REPLACE VIEW University AS
     SELECT id, name, url, LocationPlaceId AS LocatedInCityId
     FROM Organisation
     WHERE type = 'University'
@@ -30,7 +30,7 @@ CREATE OR REPLACE MATERIALIZED VIEW University AS
 CREATE INDEX University_id ON University (id);
 
 -- Umbra manually materializes this using load_mht (queries.py)
-CREATE OR REPLACE MATERIALIZED VIEW Message_hasTag_Tag AS
+CREATE OR REPLACE VIEW Message_hasTag_Tag AS
   (SELECT creationDate, CommentId as MessageId, TagId FROM Comment_hasTag_Tag)
   UNION
   (SELECT creationDate, PostId as MessageId, TagId FROM Post_hasTag_Tag);
@@ -39,7 +39,7 @@ CREATE INDEX Message_hasTag_Tag_MessageId ON Message_hasTag_Tag (MessageId);
 CREATE INDEX Message_hasTag_Tag_TagId ON Message_hasTag_Tag (TagId);
 
 -- Umbra manually materializes this using load_plm (queries.py)
-CREATE OR REPLACE MATERIALIZED VIEW Person_likes_Message AS
+CREATE OR REPLACE VIEW Person_likes_Message AS
   (SELECT creationDate, PersonId, CommentId as MessageId FROM Person_likes_Comment)
   UNION
   (SELECT creationDate, PersonId, PostId as MessageId FROM Person_likes_Post);
@@ -48,7 +48,7 @@ CREATE INDEX Person_likes_Message_PersonId ON Person_likes_Message (PersonId);
 CREATE INDEX Person_likes_Message_MessageId ON Person_likes_Message (MessageId);
 
 -- A recursive materialized view containing the root Post of each Message (for Posts, themselves, for Comments, traversing up the Message thread to the root Post of the tree)
-CREATE OR REPLACE MATERIALIZED VIEW Message AS
+CREATE OR REPLACE VIEW Message AS
 WITH MUTUALLY RECURSIVE
   -- compute the transitive closure (with root information) using minimnal info
   roots (MessageId bigint, RootPostId bigint, RootPostLanguage text, ContainerForumId bigint, ParentMessageId bigint) AS

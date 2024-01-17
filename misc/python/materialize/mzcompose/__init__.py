@@ -64,6 +64,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_columnation_lgalloc": "true",
     "enable_comment": "true",
     "enable_disk_cluster_replicas": "true",
+    "enable_eager_delta_joins": "false",
     "enable_expressions_in_limit_syntax": "true",
     "enable_jemalloc_profiling": "true",
     "enable_logical_compaction_window": "true",

@@ -190,6 +190,7 @@ impl Optimize<Index> for Optimizer {
             &mut df_desc,
             &df_builder,
             &mz_transform::EmptyStatisticsOracle,
+            self.config.enable_eager_delta_joins,
         )?;
 
         if index.keys.is_empty() {

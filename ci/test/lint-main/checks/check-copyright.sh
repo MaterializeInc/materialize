@@ -59,6 +59,7 @@ copyright_files=$(grep -vE \
     -e '^test/pgtest-mz/.*\.pt' \
     -e '^test/coordtest/.*\.ct' \
     -e '^test/ldbc-bi/.*\.sql' \
+    -e '^test/ldbc-bi/.*\.log' \
     -e '^src/catalog/tests/snapshots/.*\.snap' \
     -e '^src/catalog/src/durable/upgrade/snapshots/.*' \
     -e '^src/catalog/src/durable/upgrade/persist/snapshots/.*\.snap' \

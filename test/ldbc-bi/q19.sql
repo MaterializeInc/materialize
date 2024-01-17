@@ -26,7 +26,7 @@
 \set city2Id 1148
  */
 
-CREATE OR REPLACE MATERIALIZED VIEW PathQ19 AS
+CREATE OR REPLACE VIEW PathQ19 AS
 WITH
   -- asymmetrize...
   knows_asymmetric AS (
@@ -40,9 +40,9 @@ WITH
         person1id AS src,
         person2id AS dst,
         greatest(round(40 - sqrt(count(*)))::bigint, 1) AS w
-    FROM knows_asymmetric pp,
-         Message m1,
-         Message m2
+    FROM Message m1,
+         Message m2,
+         knows_asymmetric pp
     WHERE pp.person1id = least(m1.creatorpersonid, m2.creatorpersonid)
       AND pp.person2id = greatest(m1.creatorpersonid, m2.creatorpersonid)
       AND m1.parentmessageid = m2.messageid

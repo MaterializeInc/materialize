@@ -31,7 +31,7 @@
 \set company 'Express_Air'
  */
 -- edge relation
-CREATE OR REPLACE MATERIALIZED VIEW PathQ20 AS
+CREATE OR REPLACE VIEW PathQ20 AS
   SELECT p1.personid AS src, p2.personid AS dst, min(abs(p1.classYear - p2.classYear)) + 1 AS w
   FROM Person_knows_person pp, Person_studyAt_University p1, Person_studyAt_University p2
   WHERE pp.person1id = p1.personid

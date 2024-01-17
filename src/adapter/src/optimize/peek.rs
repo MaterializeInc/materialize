@@ -299,7 +299,12 @@ impl<'s> Optimize<LocalMirPlan<ResolvedLocal<'s>>> for Optimizer {
             );
         }
 
-        let df_meta = mz_transform::optimize_dataflow(&mut df_desc, &df_builder, &*stats)?;
+        let df_meta = mz_transform::optimize_dataflow(
+            &mut df_desc,
+            &df_builder,
+            &*stats,
+            self.config.enable_eager_delta_joins,
+        )?;
 
         // Return the (sealed) plan at the end of this optimization step.
         Ok(GlobalMirPlan {
