@@ -112,15 +112,8 @@ pub(super) struct Instance<T> {
     /// New entries are added for all collections exported from dataflows created through
     /// [`ActiveInstance::create_dataflow`].
     ///
-    /// Entries are removed when two conditions are fulfilled:
-    ///
-    ///  * The collection's read frontier has advanced to the empty frontier, implying that
-    ///    [`ActiveInstance::drop_collections`] was called.
-    ///  * All replicas have reported the empty frontier for the collection, implying that they
-    ///    have stopped reading from the collection's inputs.
-    ///
-    /// Only if both these conditions hold is dropping a collection's state, and the associated
-    /// read holds on its inputs, sound.
+    /// Entries are removed by [`Instance::cleanup_collections`]. See that method's documentation
+    /// about the conditions for removing collection state.
     collections: BTreeMap<GlobalId, CollectionState<T>>,
     /// IDs of log sources maintained by this compute instance.
     log_sources: BTreeMap<LogVariant, GlobalId>,
@@ -266,7 +259,7 @@ impl<T> Instance<T> {
     ///
     /// This method is invoked by `ActiveComputeController::process`, which we expect to
     /// be periodically called during normal operation.
-    pub(super) fn refresh_state_metrics(&self) {
+    fn refresh_state_metrics(&self) {
         self.metrics
             .replica_count
             .set(u64::cast_from(self.replicas.len()));
@@ -301,6 +294,40 @@ impl<T> Instance<T> {
             .collect();
 
         self.deliver_introspection_updates(IntrospectionType::ComputeDependencies, updates);
+    }
+
+    /// Clean up collection state that is not needed anymore.
+    ///
+    /// Three conditions need to be true before we can remove state for a collection:
+    ///
+    ///  1. A client must have explicitly dropped the collection. If that is not the case, clients
+    ///     can still reasonably assume that the controller knows about the collection and can
+    ///     answer queries about it.
+    ///  2. There must be no outstanding read capabilities on the collection. As long as someone
+    ///     still holds read capabilities on a collection, we need to keep it around to be able
+    ///     to properly handle downgrading of said capabilities.
+    ///  3. All replica write frontiers for the collection must have advanced to the empty
+    ///     frontier. Advancement to the empty frontier signals that replicas are done computing
+    ///     the collection and that they won't send more `ComputeResponse`s for it. As long as we
+    ///     might receive responses for a collection we want to keep it around to be able to
+    ///     validate and handle these responses.
+    fn cleanup_collections(&mut self) {
+        let to_remove: Vec<_> = self
+            .collections_iter()
+            .filter(|(_id, collection)| {
+                collection.dropped
+                    && collection.read_frontier().is_empty()
+                    && collection
+                        .replica_write_frontiers
+                        .values()
+                        .all(|frontier| frontier.is_empty())
+            })
+            .map(|(id, _collection)| *id)
+            .collect();
+
+        for id in to_remove {
+            self.remove_collection(id);
+        }
     }
 
     /// List compute collections that depend on the given collection.
@@ -390,7 +417,10 @@ where
     ///
     /// Panics if the compute instance still has active replicas.
     /// Panics if the compute instance still has collections installed.
-    pub fn drop(self) {
+    pub fn drop(mut self) {
+        // Collections might have been dropped but not cleaned up yet.
+        self.cleanup_collections();
+
         assert!(
             self.replicas.is_empty(),
             "cannot drop instances with provisioned replicas"
@@ -544,8 +574,7 @@ where
         config.logging.index_logs = self.compute.log_sources.clone();
         let log_ids: BTreeSet<_> = config.logging.index_logs.values().collect();
 
-        // Initialize frontier tracking for the new replica
-        // and clean up any dropped collections that we can
+        // Initialize frontier tracking for the new replica.
         let mut updates = Vec::new();
         for (compute_id, collection) in &mut self.compute.collections {
             // Skip log collections not maintained by this replica.
@@ -669,7 +698,7 @@ where
     }
 
     /// Rehydrate any failed replicas of this instance.
-    pub fn rehydrate_failed_replicas(&mut self) {
+    fn rehydrate_failed_replicas(&mut self) {
         let failed_replicas = self.compute.failed_replicas.clone();
         for replica_id in failed_replicas {
             self.rehydrate_replica(replica_id);
@@ -872,9 +901,14 @@ where
     /// Drops the read capability for the given collections and allows their resources to be
     /// reclaimed.
     pub fn drop_collections(&mut self, ids: Vec<GlobalId>) -> Result<(), CollectionMissing> {
-        // Validate that the ids exist.
-        self.validate_ids(ids.iter().cloned())?;
+        // Mark the collections as dropped to allow them to be removed from the controller state.
+        for id in &ids {
+            let collection = self.compute.collection_mut(*id)?;
+            collection.dropped = true;
+        }
 
+        // Adjust read policies to announce that clients are not interested in reading from the
+        // dropped collections anymore.
         let policies = ids
             .into_iter()
             .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())));
@@ -1015,14 +1049,6 @@ where
         Ok(())
     }
 
-    /// Validate that a collection exists for all identifiers, and error if any do not.
-    fn validate_ids(&self, ids: impl Iterator<Item = GlobalId>) -> Result<(), CollectionMissing> {
-        for id in ids {
-            self.compute.collection(id)?;
-        }
-        Ok(())
-    }
-
     /// Accept write frontier updates from the compute layer.
     ///
     /// # Panics
@@ -1038,7 +1064,6 @@ where
         let mut advanced_collections = Vec::new();
         let mut compute_read_capability_changes = BTreeMap::default();
         let mut storage_read_capability_changes = BTreeMap::default();
-        let mut dropped_collection_ids = Vec::new();
         for (id, new_upper) in updates.iter() {
             let collection = self
                 .compute
@@ -1061,10 +1086,6 @@ where
                     "Frontier regression: {old:?} -> {new_upper:?}, \
                      collection={id}, replica={replica_id}",
                 );
-            }
-
-            if new_upper.is_empty() {
-                dropped_collection_ids.push(*id);
             }
 
             let mut new_read_capability = collection
@@ -1117,23 +1138,16 @@ where
             .collect();
         self.storage_controller
             .update_write_frontiers(&storage_updates);
-
-        if !dropped_collection_ids.is_empty() {
-            self.update_dropped_collections(dropped_collection_ids);
-        }
     }
 
     /// Remove frontier tracking state for the given replica.
     #[tracing::instrument(level = "debug", skip(self))]
     fn remove_write_frontiers(&mut self, replica_id: ReplicaId) {
         let mut storage_read_capability_changes = BTreeMap::default();
-        let mut dropped_collection_ids = Vec::new();
-        for (id, collection) in self.compute.collections.iter_mut() {
+        for collection in self.compute.collections.values_mut() {
             let last_upper = collection.replica_write_frontiers.remove(&replica_id);
 
             if let Some(frontier) = last_upper {
-                dropped_collection_ids.push(*id);
-
                 // Update read holds on storage dependencies.
                 for storage_id in &collection.storage_dependencies {
                     let update = storage_read_capability_changes
@@ -1146,9 +1160,6 @@ where
         if !storage_read_capability_changes.is_empty() {
             self.storage_controller
                 .update_read_capabilities(&mut storage_read_capability_changes);
-        }
-        if !dropped_collection_ids.is_empty() {
-            self.update_dropped_collections(dropped_collection_ids);
         }
     }
 
@@ -1193,26 +1204,18 @@ where
             }
         }
 
-        // Translate our net compute actions into `AllowCompaction` commands
-        // and a list of collections that are potentially ready to be dropped
-        let mut dropped_collection_ids = Vec::new();
+        // Translate our net compute actions into `AllowCompaction` commands.
         for (id, change) in compute_net.iter_mut() {
             let frontier = self
                 .compute
                 .collection(*id)
                 .expect("existence checked above")
                 .read_frontier();
-            if frontier.is_empty() {
-                dropped_collection_ids.push(*id);
-            }
             if !change.is_empty() {
                 let frontier = frontier.to_owned();
                 self.compute
                     .send(ComputeCommand::AllowCompaction { id: *id, frontier });
             }
-        }
-        if !dropped_collection_ids.is_empty() {
-            self.update_dropped_collections(dropped_collection_ids);
         }
 
         // We may have storage consequences to process.
@@ -1282,25 +1285,6 @@ where
             }
             ComputeResponse::SubscribeResponse(id, response) => {
                 self.handle_subscribe_response(id, response, replica_id)
-            }
-        }
-    }
-
-    /// Cleans up collection state, if necessary, in response to drop operations targeted
-    /// at a replica and given collections (via reporting of an empty frontier).
-    fn update_dropped_collections(&mut self, dropped_collection_ids: Vec<GlobalId>) {
-        for id in dropped_collection_ids {
-            // clean up the given collection if read frontier is empty
-            // and all replica frontiers are empty
-            if let Ok(collection) = self.compute.collection(id) {
-                if collection.read_frontier().is_empty()
-                    && collection
-                        .replica_write_frontiers
-                        .values()
-                        .all(|frontier| frontier.is_empty())
-                {
-                    self.compute.remove_collection(id);
-                }
             }
         }
     }
@@ -1379,7 +1363,7 @@ where
     ) -> Option<ComputeControllerResponse<T>> {
         if !self.compute.collections.contains_key(&subscribe_id) {
             tracing::warn!(?replica_id, "Response for unknown subscribe {subscribe_id}",);
-            tracing::error!("Replica sent a response for an unknown subscibe");
+            tracing::error!("Replica sent a response for an unknown subscribe");
             return None;
         }
 
@@ -1442,6 +1426,17 @@ where
                 ))
             }
         }
+    }
+
+    /// Process pending maintenance work.
+    ///
+    /// This method is invoked periodically by the global controller.
+    /// It is a good place to perform maintenance work that arises from various controller state
+    /// changes and that cannot conveniently be handled synchronously with those state changes.
+    pub fn maintain(&mut self) {
+        self.compute.refresh_state_metrics();
+        self.compute.cleanup_collections();
+        self.rehydrate_failed_replicas();
     }
 }
 

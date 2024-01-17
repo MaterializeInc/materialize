@@ -21,8 +21,7 @@
 //! collection. It is an error to use an identifier before it has been "created" with
 //! `create_dataflow()`. Once created, the controller holds a read capability for each output
 //! collection of a dataflow, which is manipulated with `set_read_policy()`. Eventually, a
-//! collection is dropped with either `drop_collections()` or by allowing compaction to the empty
-//! frontier.
+//! collection is dropped with `drop_collections()`.
 //!
 //! Created dataflows will prevent the compaction of their inputs, including other compute
 //! collections but also collections managed by the storage layer. Each dataflow input is prevented
@@ -584,14 +583,9 @@ where
     /// Processes the work queued by [`ComputeController::ready`].
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn process(&mut self) -> Option<ComputeControllerResponse<T>> {
-        // Update controller state metrics.
+        // Perform periodic instance maintenance work.
         for instance in self.compute.instances.values_mut() {
-            instance.refresh_state_metrics();
-        }
-
-        // Rehydrate any failed replicas.
-        for instance in self.compute.instances.values_mut() {
-            instance.activate(self.storage).rehydrate_failed_replicas();
+            instance.activate(self.storage).maintain();
         }
 
         // Record pending introspection updates.
@@ -670,6 +664,12 @@ pub struct CollectionState<T> {
     ///
     /// Log collections are special in that they are only maintained by a subset of all replicas.
     log_collection: bool,
+    /// Whether this collection has been dropped by a controller client.
+    ///
+    /// The controller is allowed to remove the `CollectionState` for a collection only when
+    /// `dropped == true`. Otherwise, clients might still expect to be able to query information
+    /// about this collection.
+    dropped: bool,
 
     /// Accumulation of read capabilities for the collection.
     ///
@@ -733,6 +733,7 @@ impl<T: Timestamp> CollectionState<T> {
 
         Self {
             log_collection: false,
+            dropped: false,
             read_capabilities,
             implied_capability: since.clone(),
             read_policy: ReadPolicy::ValidFrom(since),
