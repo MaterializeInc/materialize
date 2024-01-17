@@ -223,7 +223,7 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
         else []
     )
 
-    duration = args.duration or workload.duration
+    duration = args.duration if args.duration is not None else workload.duration
     grammar = args.grammar or workload.grammar
     threads = args.threads or workload.threads
 
