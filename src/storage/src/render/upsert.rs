@@ -425,7 +425,7 @@ where
             upsert_shared_metrics,
             &upsert_metrics,
             source_config.source_statistics,
-            upsert_config.shrink_upsert_unused_buffers_by_ratio
+            upsert_config.shrink_upsert_unused_buffers_by_ratio,
         );
         let mut events = vec![];
         let mut snapshot_upper = Antichain::from_elem(Timestamp::minimum());
@@ -435,19 +435,29 @@ where
         let mut legacy_errors_to_correct = vec![];
 
         while !PartialOrder::less_equal(&resume_upper, &snapshot_upper)
-            || (upsert_config.wait_for_input_resumption && !PartialOrder::less_equal(&resume_upper, &input_upper))
+            || (upsert_config.wait_for_input_resumption
+                && !PartialOrder::less_equal(&resume_upper, &input_upper))
         {
             let previous_event = tokio::select! {
                 // Note that these are both cancel-safe. The reason we drain the `input` is to
                 // ensure the `output_frontier` (and therefore flow control on `previous`) make
                 // progress.
-                previous_event = previous.next(), if !PartialOrder::less_equal(&resume_upper, &snapshot_upper) => {
+                previous_event = previous.next(), if !PartialOrder::less_equal(
+                    &resume_upper,
+                    &snapshot_upper,
+                ) => {
                     previous_event
                 }
                 input_event = input.next() => {
                     match input_event {
                         Some(AsyncEvent::Data(_cap, mut data)) => {
-                            stage_input(&mut stash, &mut data, &input_upper, &resume_upper, upsert_config.shrink_upsert_unused_buffers_by_ratio);
+                            stage_input(
+                                &mut stash,
+                                &mut data,
+                                &input_upper,
+                                &resume_upper,
+                                upsert_config.shrink_upsert_unused_buffers_by_ratio
+                            );
                         }
                         Some(AsyncEvent::Progress(upper)) => {
                             input_upper = upper;
@@ -552,17 +562,26 @@ where
         // Now it's time to emit the error corrections. It doesn't matter at what timestamp we emit
         // them at because all they do is change the representation. The error count at any
         // timestamp remains constant.
-        upsert_metrics.legacy_value_errors.set(u64::cast_from(legacy_errors_to_correct.len()));
+        upsert_metrics
+            .legacy_value_errors
+            .set(u64::cast_from(legacy_errors_to_correct.len()));
         consolidation::consolidate(&mut legacy_errors_to_correct);
         for (mut error, diff) in legacy_errors_to_correct {
-            assert!(error.is_legacy_dont_touch_it, "attempted to correct non-legacy error");
+            assert!(
+                error.is_legacy_dont_touch_it,
+                "attempted to correct non-legacy error"
+            );
             tracing::info!("correcting legacy error {error:?} with diff {diff}");
             let time = output_cap.time().clone();
             let retraction = Err(UpsertError::Value(error.clone()));
             error.is_legacy_dont_touch_it = false;
             let insertion = Err(UpsertError::Value(error));
-            output_handle.give(&output_cap, (retraction, time.clone(), -diff)).await;
-            output_handle.give(&output_cap, (insertion, time, diff)).await;
+            output_handle
+                .give(&output_cap, (retraction, time.clone(), -diff))
+                .await;
+            output_handle
+                .give(&output_cap, (insertion, time, diff))
+                .await;
         }
 
         tracing::info!(
@@ -591,8 +610,23 @@ where
             }
         } {
             match event {
+                AsyncEvent::Data(cap, mut data) if output_cap.time().less_equal(cap.time()) => {
+                    stage_input(
+                        &mut stash,
+                        &mut data,
+                        &input_upper,
+                        &resume_upper,
+                        upsert_config.shrink_upsert_unused_buffers_by_ratio,
+                    );
+                }
                 AsyncEvent::Data(_cap, mut data) => {
-                    stage_input(&mut stash, &mut data, &input_upper, &resume_upper, upsert_config.shrink_upsert_unused_buffers_by_ratio);
+                    stage_input(
+                        &mut stash,
+                        &mut data,
+                        &input_upper,
+                        &resume_upper,
+                        upsert_config.shrink_upsert_unused_buffers_by_ratio,
+                    );
                 }
                 AsyncEvent::Progress(upper) => {
                     // Ignore progress updates before the `resume_upper`, which is our initial
