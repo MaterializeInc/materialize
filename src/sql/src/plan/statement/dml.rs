@@ -21,7 +21,7 @@ use mz_expr::MirRelationExpr;
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
-use mz_repr::{RelationDesc, ScalarType};
+use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
     ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
     IfExistsBehavior, OrderByExpr, SubscribeOutput, UnresolvedItemName,
@@ -42,7 +42,7 @@ use crate::normalize;
 use crate::plan::query::{plan_expr, plan_up_to, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::{ddl, StatementContext, StatementDesc};
-use crate::plan::with_options::TryFromValue;
+use crate::plan::with_options::{self, TryFromValue};
 use crate::plan::{
     self, side_effecting_func, transform_ast, CopyToFrom, CopyToPlan, CreateSinkPlan,
     ExplainSinkSchemaPlan, ExplainTimestampPlan,
@@ -770,13 +770,11 @@ fn plan_copy_to(
     format: CopyFormat,
     options: CopyOptionExtracted,
 ) -> Result<Plan, PlanError> {
-    let aws_connection_name = match options.aws_connection {
-        Some(conn) => conn,
+    let conn_id = match options.aws_connection {
+        Some(conn_id) => GlobalId::from(conn_id),
         None => sql_bail!("AWS CONNECTION is required for COPY ... TO <filename>"),
     };
-    let connection = scx
-        .resolve_item(mz_sql_parser::ast::RawItemName::Name(aws_connection_name))?
-        .connection()?;
+    let connection = scx.get_item(&conn_id).connection()?;
 
     match connection {
         mz_storage_types::connections::Connection::Aws(_) => {}
@@ -905,8 +903,8 @@ generate_extracted_config!(
     (Escape, String),
     (Quote, String),
     (Header, bool),
-    (AwsConnection, UnresolvedItemName),
-    // TODO(mouli): Use ByteSize https://github.com/MaterializeInc/materialize/pull/24252 is merged
+    (AwsConnection, with_options::Object),
+    // TODO(mouli): Use ByteSize after https://github.com/MaterializeInc/materialize/pull/24252 is merged
     (MaxFileSize, String)
 );
 
