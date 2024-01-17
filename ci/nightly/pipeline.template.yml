@@ -1302,6 +1302,17 @@ steps:
         agents:
           queue: linux-x86_64-small
 
+  - id: qa-canary-load
+    label: "QA Canary Environment Base Load"
+    timeout_in_minutes: 360
+    artifact_paths: junit_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: canary-load
+          args: ["--runtime=18000"]
+    agents:
+      queue: linux-x86_64-small
+
   - wait: ~
     continue_on_failure: true
 
