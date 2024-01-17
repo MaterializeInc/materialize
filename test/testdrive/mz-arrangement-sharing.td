@@ -707,8 +707,8 @@ ReduceMinsMaxes
 "ArrangeAccumulable [val: empty]"             3
 "ArrangeBy[[Column(0), Column(2)]]"           1
 "ArrangeBy[[Column(0)]] [val: empty]"         2
-"ArrangeBy[[Column(0)]]-errors"              20
-"ArrangeBy[[Column(0)]]"                     37
+"ArrangeBy[[Column(0)]]-errors"              21
+"ArrangeBy[[Column(0)]]"                     38
 "ArrangeBy[[Column(1), Column(3)]]"           2
 "ArrangeBy[[Column(1)]]-errors"               4
 "ArrangeBy[[Column(1)]]"                      9
@@ -719,8 +719,6 @@ ReduceMinsMaxes
 "ArrangeBy[[Column(4)]]"                      5
 "ArrangeBy[[Column(5)]]-errors"               2
 "ArrangeBy[[Column(5)]]"                      2
-"ArrangeBy[[Column(8)]]-errors"               1
-"ArrangeBy[[Column(8)]]"                      1
 "Arranged DistinctBy [val: empty]"            7
 "Arranged MinsMaxesHierarchical input"        7
 "Arranged ReduceInaccumulable"                1

@@ -430,6 +430,7 @@ system. The view can be accessed by Materialize superusers.
 <!-- RELATION_SPEC mz_internal.mz_notices -->
 | Field                   | Type                         | Meaning                                                                                                                                           |
 | ----------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                    | [`text`]                     | Materialize's unique ID for this notice.                                                                                                          |
 | `notice_type`           | [`text`]                     | The notice type.                                                                                                                                  |
 | `message`               | [`text`]                     | A brief description of the issue highlighted by this notice.                                                                                      |
 | `hint`                  | [`text`]                     | A high-level hint that tells the user what can be improved.                                                                                       |
@@ -454,10 +455,11 @@ superusers and Materialize support.
 <!-- RELATION_SPEC mz_internal.mz_notices_redacted -->
 | Field                   | Type                         | Meaning                                                                                                                                           |
 | ----------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                    | [`text`]                     | Materialize's unique ID for this notice.                                                                                                          |
 | `notice_type`           | [`text`]                     | The notice type.                                                                                                                                  |
-| `message`               | [`text`]                     | A redacted brief description of the issue highlighted by this notice.                                                                                      |
-| `hint`                  | [`text`]                     | A redacted high-level hint that tells the user what can be improved.                                                                                       |
-| `action`                | [`text`]                     | A redacted concrete action that will resolve the notice.                                                                                                   |
+| `message`               | [`text`]                     | A redacted brief description of the issue highlighted by this notice.                                                                             |
+| `hint`                  | [`text`]                     | A redacted high-level hint that tells the user what can be improved.                                                                              |
+| `action`                | [`text`]                     | A redacted concrete action that will resolve the notice.                                                                                          |
 | `action_type`           | [`text`]                     | The type of the `action` string (`sql_statements` for a valid SQL string or `plain_text` for plain text).                                         |
 | `object_id`             | [`text`]                     | The ID of the materialized view or index. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). For global notices, this column is `NULL`. |
 | `created_at`            | [`timestamp with time zone`] | The time at which the notice was created. Note that some notices are re-created on `environmentd` restart.                                        |

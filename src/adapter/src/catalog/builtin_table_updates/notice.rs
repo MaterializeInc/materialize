@@ -136,6 +136,7 @@ impl CatalogState {
 
             // Pre-convert some fields into a type that can be wrapped into a
             // Datum.
+            let id = notice.id.to_string();
             let item_id = notice.item_id.as_ref().map(ToString::to_string);
             let deps = notice
                 .dependencies
@@ -146,6 +147,8 @@ impl CatalogState {
                 .try_into()
                 .expect("must fit");
 
+            // push `id` column
+            packer.push(Datum::String(id.as_str()));
             // push `notice_type` column (TODO(21513): encode as int?)
             packer.push(Datum::String(notice.kind.as_str()));
             // push `message` column
