@@ -218,8 +218,12 @@ if __name__ == "__main__":
 
     parser.add_argument("--pipeline", choices=MZ_PIPELINES, default="tests", type=str)
     parser.add_argument("--build-step-key", default=None, type=str)
-    parser.add_argument("--no-fetch", action="store_true")
-    parser.add_argument("--max-fetches", default=5, type=int)
+    parser.add_argument(
+        "--no-fetch",
+        action="store_true",
+        help="The data of a previous fetch of the specified pipeline will be used. Note that filters such as 'branch' and 'build-state' are applied at fetch-time.",
+    )
+    parser.add_argument("--max-fetches", default=2, type=int)
     parser.add_argument(
         "--branch", default="main", type=str, help="Use '*' for all branches"
     )
