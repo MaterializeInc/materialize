@@ -2270,7 +2270,7 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: enable_copy_to_filename,
+        name: enable_copy_to_expr,
         desc: "COPY ... TO 's3://...'",
         default: false,
         internal: true,

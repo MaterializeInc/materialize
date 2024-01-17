@@ -7,11 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Tests for COPY TO filename.
+# Tests for COPY TO expr.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_aws_connection = true;
-ALTER SYSTEM SET enable_copy_to_filename = true;
+ALTER SYSTEM SET enable_copy_to_expr = true;
 
 # Prepare table data
 > CREATE TABLE t (a int);
@@ -21,20 +21,20 @@ ALTER SYSTEM SET enable_copy_to_filename = true;
   TO AWS (ASSUME ROLE ARN 'assume-role', ASSUME ROLE SESSION NAME 'session-name');
 
 ! COPY t TO 's3://path/to/dir';
-contains:AWS CONNECTION is required for COPY ... TO <filename>
+contains:AWS CONNECTION is required for COPY ... TO <expr>
 
 ! COPY t TO 's3://path/to/dir'
   WITH (
     AWS CONNECTION = aws_conn
   );
-contains:only CSV format is supported for COPY ... TO <filename>
+contains:only CSV format is supported for COPY ... TO <expr>
 
 ! COPY t TO 's3://path/to/dir'
   WITH (
     AWS CONNECTION = aws_conn,
     FORMAT = 'binary'
   );
-contains:only CSV format is supported for COPY ... TO <filename>
+contains:only CSV format is supported for COPY ... TO <expr>
 
 ! COPY t TO '/path/'
   WITH (

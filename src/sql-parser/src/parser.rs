@@ -5157,7 +5157,7 @@ impl<'a> Parser<'a> {
                     (CopyDirection::To, CopyTarget::Stdout)
                 } else {
                     let url_expr = self.parse_expr().map_parser_err(StatementKind::Copy)?;
-                    (CopyDirection::To, CopyTarget::Filename(url_expr))
+                    (CopyDirection::To, CopyTarget::Expr(url_expr))
                 }
             }
             _ => unreachable!(),
