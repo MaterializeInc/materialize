@@ -2992,10 +2992,10 @@ async fn get_initial_oracle_timestamps(
 pub async fn load_remote_system_parameters(
     storage: &mut Box<dyn OpenableDurableCatalogState>,
     system_parameter_sync_config: Option<SystemParameterSyncConfig>,
+    system_parameter_sync_timeout: Duration,
 ) -> Result<Option<BTreeMap<String, OwnedVarInput>>, AdapterError> {
     if let Some(system_parameter_sync_config) = system_parameter_sync_config {
         tracing::info!("parameter sync on boot: start sync");
-        const FRONTEND_SYNC_TIMEOUT: Duration = Duration::from_secs(30);
 
         // We intentionally block initial startup, potentially forever,
         // on initializing LaunchDarkly. This may seem scary, but the
@@ -3053,10 +3053,10 @@ pub async fn load_remote_system_parameters(
             tracing::info!("parameter sync on boot: end sync");
             Ok(Some(ops))
         };
-        return if !storage.has_system_config_synced_once().await? {
+        if !storage.has_system_config_synced_once().await? {
             frontend_sync.await
         } else {
-            match mz_ore::future::timeout(FRONTEND_SYNC_TIMEOUT, frontend_sync).await {
+            match mz_ore::future::timeout(system_parameter_sync_timeout, frontend_sync).await {
                 Ok(ops) => Ok(ops),
                 Err(TimeoutError::Inner(e)) => Err(e),
                 Err(TimeoutError::DeadlineElapsed) => {
@@ -3064,8 +3064,8 @@ pub async fn load_remote_system_parameters(
                     Ok(None)
                 }
             }
-        };
+        }
+    } else {
+        Ok(None)
     }
-
-    Ok(None)
 }

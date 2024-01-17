@@ -139,6 +139,8 @@ pub struct Config {
     /// An SDK key for LaunchDarkly. Enables system parameter synchronization
     /// with LaunchDarkly.
     pub launchdarkly_sdk_key: Option<String>,
+    /// The duration at which the system parameter synchronization times out during startup.
+    pub config_sync_timeout: Duration,
     /// The interval in seconds at which to synchronize system parameter values.
     pub config_sync_loop_interval: Option<Duration>,
     /// An invertible map from system parameter names to LaunchDarkly feature
@@ -388,6 +390,7 @@ impl Listeners {
         let remote_system_parameters = load_remote_system_parameters(
             &mut openable_adapter_storage,
             system_parameter_sync_config.clone(),
+            config.config_sync_timeout,
         )
         .await?;
 

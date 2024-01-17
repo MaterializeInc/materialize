@@ -472,6 +472,14 @@ pub struct Args {
         value_delimiter = ';'
     )]
     launchdarkly_key_map: Vec<KeyValueArg<String, String>>,
+    /// The duration at which the system parameter synchronization times out during startup.
+    #[clap(
+        long,
+        env = "CONFIG_SYNC_TIMEOUT",
+        parse(try_from_str = humantime::parse_duration),
+        default_value = "30s"
+    )]
+    config_sync_timeout: Duration,
     /// The interval in seconds at which to synchronize system parameter values.
     ///
     /// If this is not explicitly set, the loop that synchronizes LaunchDarkly
@@ -938,6 +946,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     .into_iter()
                     .map(|kv| (kv.key, kv.value))
                     .collect(),
+                config_sync_timeout: args.config_sync_timeout,
                 config_sync_loop_interval: args.config_sync_loop_interval,
                 bootstrap_role: args.bootstrap_role,
                 deploy_generation: args.deploy_generation,
