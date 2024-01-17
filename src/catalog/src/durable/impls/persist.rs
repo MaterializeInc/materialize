@@ -124,7 +124,7 @@ impl UnopenedPersistCatalogState {
     }
 
     /// Create a new [`UnopenedPersistCatalogState`] to the catalog state associated with `organization_id`.
-    #[tracing::instrument(level = "info", skip(persist_client))]
+    #[tracing::instrument(level = "info", skip(persist_client, metrics))]
     pub(crate) async fn new(
         persist_client: PersistClient,
         organization_id: Uuid,
@@ -503,7 +503,7 @@ impl UnopenedPersistCatalogState {
 
     /// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
     /// iff the current global upper of the catalog is `current_upper`.
-    #[tracing::instrument(level = "info", skip(self))]
+    #[tracing::instrument(level = "info", skip(self, updates))]
     pub(crate) async fn compare_and_append<T: IntoStateUpdateKindRaw>(
         &mut self,
         updates: Vec<StateUpdate<T>>,
