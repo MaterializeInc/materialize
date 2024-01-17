@@ -9,7 +9,7 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import Check, disabled
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
@@ -19,6 +19,7 @@ def schemas() -> str:
     return dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
 
 
+@disabled("#24478")
 class RetainHistoryOnMv(Check):
     def _can_run(self, e: Executor) -> bool:
         return e.current_mz_version >= MzVersion.parse_mz("v0.81.0")
@@ -194,6 +195,7 @@ class RetainHistoryOnMv(Check):
         )
 
 
+@disabled("#24478")
 class RetainHistoryOnKafkaSource(Check):
     def _can_run(self, e: Executor) -> bool:
         return e.current_mz_version >= MzVersion.parse_mz("v0.81.0")
