@@ -69,23 +69,19 @@ pub async fn ensure_replication_commit_order(conn: &mut Conn) -> Result<(), MySq
     }
 }
 
+/// Represents either a GTID Interval or a single GTID point
+/// If this is a single GTID point, start == end
 #[derive(Debug, Clone, Deserialize, Serialize, Hash, PartialEq, Eq)]
 pub struct GtidInterval {
     pub start: u64,
-    pub end: Option<u64>,
-}
-
-impl GtidInterval {
-    pub fn contains(&self, other: &GtidInterval) -> bool {
-        self.start <= other.start
-            && self.end.unwrap_or(self.start) >= other.end.unwrap_or(other.start)
-    }
+    pub end: u64,
 }
 
 impl fmt::Display for GtidInterval {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(end) = self.end {
-            write!(f, "{}-{}", self.start, end)
+        // A singular GTID interval is represented as a single point
+        if self.start != self.end {
+            write!(f, "{}-{}", self.start, self.end)
         } else {
             write!(f, "{}", self.start)
         }
@@ -109,12 +105,12 @@ impl FromStr for GtidInterval {
         if vals.len() == 1 {
             Ok(Self {
                 start: vals[0],
-                end: None,
+                end: vals[0],
             })
         } else if vals.len() == 2 {
             Ok(Self {
                 start: vals[0],
-                end: Some(vals[1]),
+                end: vals[1],
             })
         } else {
             Err(io::Error::new(
@@ -128,7 +124,7 @@ impl FromStr for GtidInterval {
 /// Represents a MySQL GTID with a single Source-ID and a list of intervals
 /// e.g. `3E11FA47-71CA-11E1-9E33-C80AA9429562:1-3:4:5-9`
 /// If this represents a single GTID point e.g. `3E11FA47-71CA-11E1-9E33-C80AA9429562:5`
-/// it will contain just one interval with one start and no end
+/// it will contain just one interval with the same start and end values
 /// By convention, intervals will be non-overlapping and sorted in ascending order by start
 /// value and consolidated to combine consecutive intervals
 #[derive(Debug, Clone, Deserialize, Serialize, Hash, PartialEq, Eq)]
@@ -160,30 +156,22 @@ impl Gtid {
                 self.intervals
             )
         });
-        // If this interval is a range use the end value; if not we can use the start value
-        last_interval.end.unwrap_or(last_interval.start)
+        last_interval.end
     }
 
     pub fn add_interval(&mut self, new: GtidInterval) {
         if let Some(last) = self.intervals.last_mut() {
             // Only allow adding the interval if it is after the last interval
             assert!(
-                last.end.unwrap_or(last.start) < new.start,
+                last.end < new.start,
                 "interval must be after the last interval"
             );
 
-            match last.end {
-                Some(end) if new.start == end + 1 => {
-                    // If the interval starts right after the last interval ends, just extend the last interval
-                    last.end = Some(new.end.unwrap_or(new.start));
-                }
-                None if new.start == last.start + 1 => {
-                    // If the interval starts right after the last 'point' interval starts, just extend the last interval
-                    last.end = Some(new.end.unwrap_or(new.start));
-                }
-                _ => {
-                    self.intervals.push(new);
-                }
+            if new.start == last.end + 1 {
+                // If the interval starts right after the last interval ends, just extend the last interval
+                last.end = new.end;
+            } else {
+                self.intervals.push(new);
             }
         } else {
             // This is the first interval

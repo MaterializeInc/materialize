@@ -40,6 +40,8 @@ impl TransactionId {
     pub fn new(id: u64) -> Self {
         Self(id)
     }
+
+    pub const MAX: TransactionId = TransactionId(u64::MAX);
 }
 
 impl Add for TransactionId {

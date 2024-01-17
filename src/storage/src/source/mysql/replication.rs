@@ -30,7 +30,7 @@ use uuid::Uuid;
 use mz_mysql_util::GtidSet;
 use mz_mysql_util::{
     ensure_full_row_binlog_format, ensure_gtid_consistency, ensure_replication_commit_order,
-    MySqlTableDesc,
+    MySqlTableDesc, ER_SOURCE_FATAL_ERROR_READING_BINLOG_CODE,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
@@ -140,9 +140,7 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
                             // If the replication stream cannot be obtained from the resume point there is
                             // nothing else to do. These errors are not retractable.
                             for (output_index, _) in table_info.values() {
-                                // We pick `u64::MAX` as the TransactionId which will (in practice) never conflict
-                                // any previously revealed portions of the TVC.
-                                let update = ((*output_index, Err(err.clone())), TransactionId::new(u64::MAX), 1);
+                                let update = ((*output_index, Err(err.clone())), TransactionId::MAX, 1);
                                 data_output.give(&data_cap_set[0], update).await;
                             }
                             definite_error_handle.give(&definite_error_cap_set[0], ReplicationError::Definite(Rc::new(err))).await;
@@ -168,9 +166,7 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
                     // If the replication stream cannot be obtained in a definite way there is
                     // nothing else to do. These errors are not retractable.
                     for (output_index, _) in table_info.values() {
-                        // We pick `u64::MAX` as the TransactionId which will (in practice) never conflict
-                        // any previously revealed portions of the TVC.
-                        let update = ((*output_index, Err(err.clone())), TransactionId::new(u64::MAX), 1);
+                        let update = ((*output_index, Err(err.clone())), TransactionId::MAX, 1);
                         data_output.give(&data_cap_set[0], update).await;
                     }
                     definite_error_handle.give(&definite_error_cap_set[0], ReplicationError::Definite(Rc::new(err))).await;
@@ -369,7 +365,7 @@ async fn raw_stream<'a>(
     ))
     .await?;
 
-    // Try to generate a deterministic server-id for identifying us as a replica on the upstream mysql server.
+    // Generate a deterministic server-id for identifying us as a replica on the upstream mysql server.
     // The value does not actually matter since it's irrelevant for GTID-based replication and won't cause errors
     // if it happens to be the same as another replica in the mysql cluster (based on testing),
     // but by setting it to a constant value we can make it easier for users to identify Materialize connections
@@ -393,7 +389,9 @@ async fn raw_stream<'a>(
         .await
     {
         Ok(stream) => stream,
-        Err(mysql_async::Error::Server(ref server_err)) if server_err.code == 1236 => {
+        Err(mysql_async::Error::Server(ref server_err))
+            if server_err.code == ER_SOURCE_FATAL_ERROR_READING_BINLOG_CODE =>
+        {
             // The GTID set we requested is no longer available
             return Ok(Err(DefiniteError::BinlogNotAvailable));
         }
