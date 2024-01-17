@@ -13,7 +13,6 @@ from textwrap import dedent
 from typing import Any
 
 from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.services.materialized import Materialized
 
 
 class Executor:
@@ -22,7 +21,7 @@ class Executor:
     def Lambda(self, _lambda: Callable[["Executor"], float]) -> float:
         return _lambda(self)
 
-    def Td(self, input: str) -> Any:
+    def Td(self, input: str, no_reset: bool = True) -> Any:
         raise NotImplementedError
 
     def Kgen(self, topic: str, args: list[str]) -> Any:
@@ -45,32 +44,26 @@ class Executor:
 
 
 class Docker(Executor):
-    def __init__(
-        self, composition: Composition, seed: int, materialized: Materialized
-    ) -> None:
+    def __init__(self, composition: Composition, seed: int) -> None:
         self._composition = composition
         self._seed = seed
-        self._materialized = materialized
 
     def RestartMz(self) -> None:
         self._composition.kill("materialized")
-        # Make sure we are restarting Materialized() with the
-        # same parameters (docker tag, SIZE) it was initially started with
-        with self._composition.override(self._materialized):
-            self._composition.up("materialized")
+        self._composition.up("materialized")
         return None
 
-    def Td(self, input: str) -> Any:
-        return self._composition.exec(
+    def Td(self, input: str, no_reset: bool = True) -> Any:
+        args = [
             "testdrive",
-            "--no-reset",
             f"--seed={self._seed}",
             "--initial-backoff=10ms",  # Retry every 10ms until success
             "--backoff-factor=0",
             "--no-consistency-checks",
-            stdin=input,
-            capture=True,
-        ).stdout
+        ]
+        if no_reset:
+            args.append("--no-reset")
+        return self._composition.exec(*args, stdin=input, capture=True).stdout
 
     def Kgen(self, topic: str, args: list[str]) -> Any:
         return self._composition.run(
@@ -164,14 +157,18 @@ class MzCloud(Executor):
         )
         print("reset done")
 
-    def Td(self, input: str) -> Any:
-        return self._composition.exec(
+    def Td(self, input: str, no_reset: bool = True) -> Any:
+        args = [
             "testdrive",
-            "--no-reset",
             *self._testdrive_args,
             "--initial-backoff=10ms",
             "--backoff-factor=0",
             "--no-consistency-checks",
+        ]
+        if no_reset:
+            args.append("--no-reset")
+        return self._composition.exec(
+            *args,
             stdin=input,
             capture=True,
         ).stdout

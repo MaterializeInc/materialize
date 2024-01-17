@@ -70,9 +70,12 @@ class Benchmark:
             f"Running scenario {name}, scale = {scenario.scale()}, N = {scenario.n()}"
         )
 
+        # Reset state
+        self._executor.Td("$ nop", no_reset=False)
+
         # Run the shared() section once for both Mzs under measurement
         shared = scenario.shared()
-        if self._mz_id == 0 and shared is not None:
+        if shared is not None:
             print(f"Running the shared() section for {name} ...")
 
             for shared_item in shared if isinstance(shared, list) else [shared]:

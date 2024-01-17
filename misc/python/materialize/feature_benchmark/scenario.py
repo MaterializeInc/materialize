@@ -77,7 +77,7 @@ class RootScenario:
     def view_ten(self) -> TdAction:
         return TdAction(
             """
-> CREATE VIEW ten (f1) AS (VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9));
+> CREATE VIEW IF NOT EXISTS ten (f1) AS (VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9));
 """
         )
 
@@ -87,9 +87,9 @@ class RootScenario:
             f"(a{i+1}.f1 * {10**i})" for i in range(0, ceil(self.scale()))
         )
 
-    def join(self) -> str:
+    def join(self, ten: str = "ten") -> str:
         """Returns a string of the form 'ten AS a1 , ten AS a2 , ten AS a3 ...'"""
-        return ", ".join(f"ten AS a{i+1}" for i in range(0, ceil(self.scale())))
+        return ", ".join(f"{ten} AS a{i+1}" for i in range(0, ceil(self.scale())))
 
     def keyschema(self) -> str:
         return (

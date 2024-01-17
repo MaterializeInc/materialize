@@ -12,6 +12,8 @@ import os
 import sys
 import time
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from textwrap import dedent
 
 from materialize.docker import is_image_tag_of_version
@@ -107,12 +109,17 @@ SERVICES = [
     Balancerd(),
     # Overridden below
     Materialized(),
+    # Overridden below
     Testdrive(),
 ]
 
 
 def run_one_scenario(
-    c: Composition, scenario: type[Scenario], args: argparse.Namespace
+    c: Composition,
+    scenario: type[Scenario],
+    instance: str,
+    size: int,
+    args: argparse.Namespace,
 ) -> list[Comparator]:
     name = scenario.__name__
     print(f"--- Now benchmarking {name} ...")
@@ -125,78 +132,25 @@ def run_one_scenario(
 
     common_seed = round(time.time())
 
-    for mz_id, instance in enumerate(["this", "other"]):
-        balancerd, tag, size, params = (
-            (args.this_balancerd, args.this_tag, args.this_size, args.this_params)
-            if instance == "this"
-            else (
-                args.other_balancerd,
-                args.other_tag,
-                args.other_size,
-                args.other_params,
-            )
-        )
+    executor = Docker(composition=c, seed=common_seed)
+    mz_version = MzVersion.parse_mz(c.query_mz_version())
 
-        if tag == "common-ancestor":
-            tag = resolve_ancestor_image_tag(
-                ANCESTOR_OVERRIDES_FOR_PERFORMANCE_REGRESSIONS
-            )
+    benchmark = Benchmark(
+        mz_id=0 if instance == "this" else 1,
+        mz_version=mz_version,
+        scenario=scenario,
+        scale=args.scale,
+        executor=executor,
+        filter=make_filter(args),
+        termination_conditions=make_termination_conditions(args),
+        aggregation_class=make_aggregation_class(),
+        measure_memory=args.measure_memory,
+        default_size=size,
+    )
 
-        entrypoint_host = "balancerd" if balancerd else "materialized"
-
-        c.up("testdrive", persistent=True)
-
-        additional_system_parameter_defaults = {"max_clusters": "15"}
-
-        if params is not None:
-            for param in params.split(";"):
-                param_name, param_value = param.split("=")
-                additional_system_parameter_defaults[param_name] = param_value
-
-        mz_image = f"materialize/materialized:{tag}" if tag else None
-        mz = create_mz_service(mz_image, size, additional_system_parameter_defaults)
-
-        if tag is not None and not c.try_pull_service_image(mz):
-            print(
-                f"Unable to find materialize image with tag {tag}, proceeding with latest instead!"
-            )
-            mz_image = "materialize/materialized:latest"
-            mz = create_mz_service(mz_image, size, additional_system_parameter_defaults)
-
-        start_overridden_mz_and_cockroach(c, mz, instance)
-        if balancerd:
-            c.up("balancerd")
-
-        with c.override(
-            Testdrive(
-                materialize_url=f"postgres://materialize@{entrypoint_host}:6875",
-                default_timeout=default_timeout,
-                materialize_params={"statement_timeout": f"'{default_timeout}'"},
-            )
-        ):
-            executor = Docker(composition=c, seed=common_seed, materialized=mz)
-            mz_version = MzVersion.parse_mz(c.query_mz_version())
-
-            benchmark = Benchmark(
-                mz_id=mz_id,
-                mz_version=mz_version,
-                scenario=scenario,
-                scale=args.scale,
-                executor=executor,
-                filter=make_filter(args),
-                termination_conditions=make_termination_conditions(args),
-                aggregation_class=make_aggregation_class(),
-                measure_memory=args.measure_memory,
-                default_size=size,
-            )
-
-            aggregations = benchmark.run()
-            for aggregation, comparator in zip(aggregations, comparators):
-                comparator.append(aggregation.aggregate())
-
-        c.kill("cockroach", "materialized", "testdrive")
-        c.rm("cockroach", "materialized", "testdrive")
-        c.rm_volumes("mzdata")
+    aggregations = benchmark.run()
+    for aggregation, comparator in zip(aggregations, comparators):
+        comparator.append(aggregation.aggregate())
 
     return comparators
 
@@ -220,10 +174,49 @@ def create_mz_service(
     )
 
 
-def start_overridden_mz_and_cockroach(
-    c: Composition, mz: Materialized, instance: str
-) -> None:
-    with c.override(mz):
+@contextmanager
+def override_mz_and_cockroach(
+    c: Composition, instance: str, size: int, args: argparse.Namespace
+) -> Iterator[None]:
+    balancerd, tag, params = (
+        (args.this_balancerd, args.this_tag, args.this_params)
+        if instance == "this"
+        else (
+            args.other_balancerd,
+            args.other_tag,
+            args.other_params,
+        )
+    )
+
+    if tag == "common-ancestor":
+        tag = resolve_ancestor_image_tag(ANCESTOR_OVERRIDES_FOR_PERFORMANCE_REGRESSIONS)
+
+    entrypoint_host = "balancerd" if balancerd else "materialized"
+
+    additional_system_parameter_defaults = {"max_clusters": "15"}
+
+    if params is not None:
+        for param in params.split(";"):
+            param_name, param_value = param.split("=")
+            additional_system_parameter_defaults[param_name] = param_value
+
+    mz_image = f"materialize/materialized:{tag}" if tag else None
+    mz = create_mz_service(mz_image, size, additional_system_parameter_defaults)
+
+    if tag is not None and not c.try_pull_service_image(mz):
+        print(
+            f"Unable to find materialize image with tag {tag}, proceeding with latest instead!"
+        )
+        mz_image = "materialize/materialized:latest"
+        mz = create_mz_service(mz_image, size, additional_system_parameter_defaults)
+
+    td = Testdrive(
+        materialize_url=f"postgres://materialize@{entrypoint_host}:6875",
+        default_timeout=default_timeout,
+        materialize_params={"statement_timeout": f"'{default_timeout}'"},
+    )
+
+    with c.override(mz, td):
         print(f"The version of the '{instance.upper()}' Mz instance is:")
         c.run(
             "materialized",
@@ -234,6 +227,13 @@ def start_overridden_mz_and_cockroach(
         )
 
         c.up("cockroach", "materialized")
+
+        if balancerd:
+            c.up("balancerd")
+
+        c.up("testdrive", persistent=True)
+
+        yield
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -390,18 +390,44 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
 
         report = Report()
+        comparators_this = []
+        comparators_other = []
+
+        with override_mz_and_cockroach(c, "this", args.this_size, args):
+            for scenario in scenarios_to_run:
+                comparators_this.append(
+                    run_one_scenario(c, scenario, "this", args.this_size, args)
+                )
+
+        c.kill("cockroach", "materialized", "testdrive")
+        c.rm("cockroach", "materialized", "testdrive")
+        c.rm_volumes("mzdata")
+
+        with override_mz_and_cockroach(c, "other", args.other_size, args):
+            for scenario in scenarios_to_run:
+                comparators_other.append(
+                    run_one_scenario(c, scenario, "other", args.other_size, args)
+                )
+
+        c.kill("cockroach", "materialized", "testdrive")
+        c.rm("cockroach", "materialized", "testdrive")
+        c.rm_volumes("mzdata")
 
         scenarios_with_regressions = []
-        for scenario in scenarios_to_run:
-            comparators = run_one_scenario(c, scenario, args)
-            report.extend(comparators)
+        for comparator_this, comparator_other, scenario in zip(
+            comparators_this, comparators_other, scenarios_to_run
+        ):
+            for c_this, c_other in zip(comparator_this, comparator_other):
+                c_this.append(c_other._points[0])
+
+                report.append(c_this)
 
             # Do not retry the scenario if no regressions
-            if any([c.is_regression() for c in comparators]):
+            if any([c.is_regression() for c in comparator_this]):
                 scenarios_with_regressions.append(scenario)
 
-            print(f"+++ Benchmark Report for cycle {cycle+1}:")
-            report.dump()
+        print(f"+++ Benchmark Report for cycle {cycle+1}:")
+        report.dump()
 
         scenarios_to_run = scenarios_with_regressions
         if len(scenarios_to_run) == 0:
