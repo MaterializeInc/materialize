@@ -34,9 +34,9 @@ impl Coordinator {
         } = plan;
 
         let style = ExprPrepStyle::OneShot {
-            logical_time: EvalTime::Deferred,
+            logical_time: EvalTime::NotAvailable,
             session,
-            catalog_state: self.catalog.state(),
+            catalog_state: self.catalog().state(),
         };
 
         prep_scalar_expr(&mut to, style)?;

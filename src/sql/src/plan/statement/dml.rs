@@ -780,11 +780,11 @@ fn plan_copy_to(
 
     match connection {
         mz_storage_types::connections::Connection::Aws(_) => {}
-        _ => sql_bail!("Only AWS CONNECTION is supported for COPY ... TO <url>"),
+        _ => sql_bail!("only AWS CONNECTION is supported for COPY ... TO <url>"),
     }
 
     if format != CopyFormat::Csv {
-        sql_bail!("Only CSV format is supported for COPY ... TO <url>");
+        sql_bail!("only CSV format is supported for COPY ... TO <url>");
     }
 
     let format_params = CopyFormatParams::Csv(CopyCsvFormatParams {
@@ -811,7 +811,7 @@ fn plan_copy_to(
     };
 
     let to = plan_expr(ecx, &to_expr)?
-        .type_as_any(ecx)?
+        .type_as(ecx, &ScalarType::String)?
         .lower_uncorrelated()?;
 
     Ok(Plan::CopyTo(CopyToPlan {
@@ -957,7 +957,7 @@ pub fn plan_copy(
                 CopyRelation::Table { name, columns } => {
                     if !columns.is_empty() {
                         // TODO(mouli): Add support for this
-                        sql_bail!("Specifying columns for COPY <table_name> TO commands not yet supported. Please use COPY (SELECT...) TO ... instead");
+                        sql_bail!("specifying columns for COPY <table_name> TO commands not yet supported; use COPY (SELECT...) TO ... instead");
                     }
                     CopyToFrom::Id {
                         id: *name.item_id(),
