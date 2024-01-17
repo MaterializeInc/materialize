@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::process;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use anyhow::Context;
 use clap::Parser;
@@ -141,6 +142,7 @@ async fn main() {
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     let metrics_registry = MetricsRegistry::new();
+    let start = Instant::now();
     let openable_state: Box<dyn OpenableDurableCatalogState> = match args.store {
         CatalogKind::Stash => {
             let postgres_url = args.postgres_url.expect("required for stash");
@@ -214,7 +216,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 None => Default::default(),
                 Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
             };
-            upgrade_check(openable_state, cluster_replica_sizes).await
+            upgrade_check(openable_state, cluster_replica_sizes, start).await
         }
     }
 }
@@ -383,6 +385,7 @@ async fn epoch(
 async fn upgrade_check(
     openable_state: Box<dyn OpenableDurableCatalogState>,
     cluster_replica_sizes: ClusterReplicaSizeMap,
+    start: Instant,
 ) -> Result<(), anyhow::Error> {
     let now = SYSTEM_TIME.clone();
     let mut storage = openable_state
@@ -423,11 +426,13 @@ async fn upgrade_check(
         &mut storage,
     )
     .await?;
+    let dur = start.elapsed();
 
     let msg = format!(
-        "catalog upgrade from {} to {} would succeed",
+        "catalog upgrade from {} to {} would succeed in about {} ms",
         last_catalog_version,
         &BUILD_INFO.human_version(),
+        dur.as_millis(),
     );
     println!("{msg}");
     Ok(())
