@@ -27,9 +27,10 @@ impl Catalog {
     pub fn render_notices(
         &self,
         df_meta: DataflowMetainfo<RawOptimizerNotice>,
+        notice_ids: Vec<GlobalId>,
         item_id: Option<GlobalId>,
     ) -> DataflowMetainfo<Arc<OptimizerNotice>> {
-        self.state.render_notices(df_meta, item_id)
+        self.state.render_notices(df_meta, notice_ids, item_id)
     }
 
     /// Pack a [`BuiltinTableUpdate`] with the given `diff` for each
@@ -52,8 +53,12 @@ impl CatalogState {
     pub fn render_notices(
         &self,
         df_meta: DataflowMetainfo<RawOptimizerNotice>,
+        notice_ids: Vec<GlobalId>,
         item_id: Option<GlobalId>,
     ) -> DataflowMetainfo<Arc<OptimizerNotice>> {
+        // The caller should supply a pre-allocated GlobalId for each notice.
+        assert_eq!(notice_ids.len(), df_meta.optimizer_notices.len());
+
         // Helper for rendering redacted fields.
         fn some_if_neq<T: Eq>(x: T, y: &T) -> Option<T> {
             if &x != y {
@@ -63,54 +68,52 @@ impl CatalogState {
             }
         }
 
-        let optimizer_notices = df_meta
-            .optimizer_notices
-            .into_iter()
-            .map(|notice| {
-                // Render non-redacted fields.
-                let message = notice.message(self, false).to_string();
-                let hint = notice.hint(self, false).to_string();
-                let action = match notice.action_kind(self) {
-                    ActionKind::SqlStatements => {
-                        Action::SqlStatements(notice.action(self, false).to_string())
-                    }
-                    ActionKind::PlainText => {
-                        Action::PlainText(notice.action(self, false).to_string())
-                    }
-                    ActionKind::None => {
-                        Action::None // No concrete action.
-                    }
-                };
-                // Render redacted fields.
-                let message_redacted = notice.message(self, true).to_string();
-                let hint_redacted = notice.hint(self, true).to_string();
-                let action_redacted = match notice.action_kind(self) {
-                    ActionKind::SqlStatements => {
-                        Action::SqlStatements(notice.action(self, true).to_string())
-                    }
-                    ActionKind::PlainText => {
-                        Action::PlainText(notice.action(self, true).to_string())
-                    }
-                    ActionKind::None => {
-                        Action::None // No concrete action.
-                    }
-                };
-                // Assemble the rendered notice.
-                OptimizerNotice {
-                    kind: OptimizerNoticeKind::from(&notice),
-                    item_id,
-                    dependencies: notice.dependencies(),
-                    message_redacted: some_if_neq(message_redacted, &message),
-                    hint_redacted: some_if_neq(hint_redacted, &hint),
-                    action_redacted: some_if_neq(action_redacted, &action),
-                    message,
-                    hint,
-                    action,
-                    created_at: (self.config().now)(),
+        let optimizer_notices = std::iter::zip(
+            df_meta.optimizer_notices.into_iter(),
+            notice_ids.into_iter(),
+        )
+        .map(|(notice, id)| {
+            // Render non-redacted fields.
+            let message = notice.message(self, false).to_string();
+            let hint = notice.hint(self, false).to_string();
+            let action = match notice.action_kind(self) {
+                ActionKind::SqlStatements => {
+                    Action::SqlStatements(notice.action(self, false).to_string())
                 }
-            })
-            .map(From::from) // Wrap each notice into an `Arc`.
-            .collect();
+                ActionKind::PlainText => Action::PlainText(notice.action(self, false).to_string()),
+                ActionKind::None => {
+                    Action::None // No concrete action.
+                }
+            };
+            // Render redacted fields.
+            let message_redacted = notice.message(self, true).to_string();
+            let hint_redacted = notice.hint(self, true).to_string();
+            let action_redacted = match notice.action_kind(self) {
+                ActionKind::SqlStatements => {
+                    Action::SqlStatements(notice.action(self, true).to_string())
+                }
+                ActionKind::PlainText => Action::PlainText(notice.action(self, true).to_string()),
+                ActionKind::None => {
+                    Action::None // No concrete action.
+                }
+            };
+            // Assemble the rendered notice.
+            OptimizerNotice {
+                id,
+                kind: OptimizerNoticeKind::from(&notice),
+                item_id,
+                dependencies: notice.dependencies(),
+                message_redacted: some_if_neq(message_redacted, &message),
+                hint_redacted: some_if_neq(hint_redacted, &hint),
+                action_redacted: some_if_neq(action_redacted, &action),
+                message,
+                hint,
+                action,
+                created_at: (self.config().now)(),
+            }
+        })
+        .map(From::from) // Wrap each notice into an `Arc`.
+        .collect();
 
         DataflowMetainfo {
             optimizer_notices,

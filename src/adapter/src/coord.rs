@@ -1980,7 +1980,15 @@ impl Coordinator {
                     let global_lir_plan = optimizer.optimize(global_mir_plan)?;
 
                     let (physical_plan, metainfo) = global_lir_plan.unapply();
-                    let metainfo = self.catalog().render_notices(metainfo, Some(entry.id()));
+                    let metainfo = {
+                        // Pre-allocate a vector of transient GlobalIds for each notice.
+                        let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
+                            .take(metainfo.optimizer_notices.len())
+                            .collect::<Result<Vec<_>, _>>()?;
+                        // Return a metainfo with rendered notices.
+                        self.catalog()
+                            .render_notices(metainfo, notice_ids, Some(entry.id()))
+                    };
 
                     let catalog = self.catalog_mut();
                     catalog.set_optimized_plan(id, optimized_plan);
@@ -2023,7 +2031,15 @@ impl Coordinator {
                     let global_lir_plan = optimizer.optimize(global_mir_plan)?;
 
                     let (physical_plan, metainfo) = global_lir_plan.unapply();
-                    let metainfo = self.catalog().render_notices(metainfo, Some(entry.id()));
+                    let metainfo = {
+                        // Pre-allocate a vector of transient GlobalIds for each notice.
+                        let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
+                            .take(metainfo.optimizer_notices.len())
+                            .collect::<Result<Vec<_>, _>>()?;
+                        // Return a metainfo with rendered notices.
+                        self.catalog()
+                            .render_notices(metainfo, notice_ids, Some(entry.id()))
+                    };
 
                     let catalog = self.catalog_mut();
                     catalog.set_optimized_plan(id, optimized_plan);
