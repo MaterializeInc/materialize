@@ -33,6 +33,8 @@ from materialize.mzcompose.services.testdrive import Testdrive as TestdriveServi
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import all_subclasses
 
+DEFAULT_TESTDRIVE_TIMEOUT = "300s"
+
 SERVICES = [
     TestCerts(),
     Cockroach(
@@ -92,7 +94,7 @@ SERVICES = [
         catalog_store="stash",
     ),
     TestdriveService(
-        default_timeout="300s",
+        default_timeout=DEFAULT_TESTDRIVE_TIMEOUT,
         no_reset=True,
         seed=1,
         entrypoint_extra=[
