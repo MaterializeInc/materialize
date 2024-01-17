@@ -644,3 +644,20 @@ query TT
 SELECT MIN(i16), MAX(i16) from t_16
 ----
 -1 1
+
+# Verify that the behavior of `stddev` is sane when variance is small
+
+query I
+SELECT stddev(x) FROM (VALUES (0.6), (0.6)) v(x)
+----
+0
+
+query I
+SELECT stddev(x) FROM (VALUES (0.6)) v(x)
+----
+NULL
+
+query I
+SELECT stddev(x) FROM generate_series(0, -1) empty(x)
+----
+NULL
