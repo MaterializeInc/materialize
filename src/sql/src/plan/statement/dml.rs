@@ -785,7 +785,11 @@ fn plan_copy_to(
         sql_bail!("only CSV format is supported for COPY ... TO <expr>");
     }
 
-    let format_params = CopyFormatParams::Csv(Default::default());
+    // TODO(mouli): Get these from sql options
+    let format_params = CopyFormatParams::Csv(
+        CopyCsvFormatParams::try_new(None, None, None, None, None)
+            .map_err(|e| sql_err!("{}", e))?,
+    );
 
     // Converting the to expr to a MirScalarExpr
     let mut to_expr = to.clone();
@@ -861,16 +865,16 @@ fn plan_copy_from(
             let quote = extract_byte_param_value(options.quote, "quote")?;
             let escape = extract_byte_param_value(options.escape, "escape")?;
             let delimiter = extract_byte_param_value(options.delimiter, "delimiter")?;
-            if delimiter == quote {
-                sql_bail!("COPY delimiter and quote must be different");
-            }
-            CopyFormatParams::Csv(CopyCsvFormatParams::new(
-                delimiter,
-                quote,
-                escape,
-                options.header,
-                options.null,
-            ))
+            CopyFormatParams::Csv(
+                CopyCsvFormatParams::try_new(
+                    delimiter,
+                    quote,
+                    escape,
+                    options.header,
+                    options.null,
+                )
+                .map_err(|e| sql_err!("{}", e))?,
+            )
         }
         CopyFormat::Binary => bail_unsupported!("FORMAT BINARY"),
     };
