@@ -43,16 +43,16 @@ impl Coordinator {
         let temp_storage = RowArena::new();
         let evaled = to.eval(&[], &temp_storage)?;
         if evaled == Datum::Null {
-            coord_bail!("url value can not be null");
+            coord_bail!("COPY TO target value can not be null");
         }
         let to_url = match Uri::from_str(evaled.unwrap_str()) {
             Ok(url) => {
                 if url.scheme_str() != Some("s3") {
-                    coord_bail!("only 's3://...' urls are supported for COPY ... TO statements");
+                    coord_bail!("only 's3://...' urls are supported as COPY TO target");
                 }
                 url
             }
-            Err(e) => coord_bail!("could not parse url: {}", e),
+            Err(e) => coord_bail!("could not parse COPY TO target url: {}", e),
         };
 
         // TODO(mouli): Implement this

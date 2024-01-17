@@ -772,7 +772,7 @@ fn plan_copy_to(
 ) -> Result<Plan, PlanError> {
     let aws_connection_name = match options.aws_connection {
         Some(conn) => conn,
-        None => sql_bail!("AWS CONNECTION is required for COPY ... TO <url>"),
+        None => sql_bail!("AWS CONNECTION is required for COPY ... TO <filename>"),
     };
     let connection = scx
         .resolve_item(mz_sql_parser::ast::RawItemName::Name(aws_connection_name))?
@@ -780,11 +780,11 @@ fn plan_copy_to(
 
     match connection {
         mz_storage_types::connections::Connection::Aws(_) => {}
-        _ => sql_bail!("only AWS CONNECTION is supported for COPY ... TO <url>"),
+        _ => sql_bail!("only AWS CONNECTION is supported for COPY ... TO <filename>"),
     }
 
     if format != CopyFormat::Csv {
-        sql_bail!("only CSV format is supported for COPY ... TO <url>");
+        sql_bail!("only CSV format is supported for COPY ... TO <filename>");
     }
 
     let format_params = CopyFormatParams::Csv(CopyCsvFormatParams {
@@ -801,7 +801,7 @@ fn plan_copy_to(
     let relation_type = RelationDesc::empty();
     let ecx = &ExprContext {
         qcx: &QueryContext::root(scx, QueryLifetime::OneShot),
-        name: "COPY TO URL",
+        name: "COPY TO target",
         scope: &Scope::empty(),
         relation_type: relation_type.typ(),
         allow_aggregates: false,
@@ -950,8 +950,8 @@ pub fn plan_copy(
             }
             _ => sql_bail!("COPY FROM {} not supported", target),
         },
-        (CopyDirection::To, CopyTarget::Url(url_expr)) => {
-            scx.require_feature_flag(&vars::ENABLE_COPY_TO_URL)?;
+        (CopyDirection::To, CopyTarget::Filename(url_expr)) => {
+            scx.require_feature_flag(&vars::ENABLE_COPY_TO_FILENAME)?;
 
             let from = match relation {
                 CopyRelation::Table { name, columns } => {

@@ -11,7 +11,7 @@
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_aws_connection = true;
-ALTER SYSTEM SET enable_copy_to_url = true;
+ALTER SYSTEM SET enable_copy_to_filename = true;
 
 # Prepare table data
 > CREATE TABLE t (a int);
@@ -21,41 +21,41 @@ ALTER SYSTEM SET enable_copy_to_url = true;
   TO AWS (ASSUME ROLE ARN 'assume-role', ASSUME ROLE SESSION NAME 'session-name');
 
 ! COPY t TO 's3://path/to/dir';
-contains:AWS CONNECTION is required for COPY ... TO <url>
+contains:AWS CONNECTION is required for COPY ... TO <filename>
 
 ! COPY t TO 's3://path/to/dir'
   WITH (
     AWS CONNECTION = aws_conn
   );
-contains:only CSV format is supported for COPY ... TO <url>
+contains:only CSV format is supported for COPY ... TO <filename>
 
 ! COPY t TO 's3://path/to/dir'
   WITH (
     AWS CONNECTION = aws_conn,
     FORMAT = 'binary'
   );
-contains:only CSV format is supported for COPY ... TO <url>
+contains:only CSV format is supported for COPY ... TO <filename>
 
 ! COPY t TO '/path/'
   WITH (
     AWS CONNECTION = aws_conn,
     FORMAT = 'csv'
   );
-contains:only 's3://...' urls are supported
+contains:only 's3://...' urls are supported as COPY TO target
 
 ! COPY t TO NULL
   WITH (
     AWS CONNECTION = aws_conn,
     FORMAT = 'csv'
   );
-contains:url value can not be null
+contains:COPY TO target value can not be null
 
 ! COPY t TO 1234
   WITH (
     AWS CONNECTION = aws_conn,
     FORMAT = 'csv'
   );
-contains:COPY TO URL must have type text, not type integer
+contains:COPY TO target must have type text, not type integer
 
 ! COPY (SELECT * FROM t ORDER BY 1) TO NULL
   WITH (
