@@ -7,107 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use mz_ore::now::EpochMillis;
 use mz_persist_types::Codec64;
-use mz_repr::{Datum, GlobalId, Row, TimestampManipulation};
+use mz_repr::{GlobalId, Row, TimestampManipulation};
+use mz_storage_client::client::StatusUpdate;
 use timely::progress::Timestamp;
 
 use crate::collection_mgmt::CollectionManager;
 use crate::IntrospectionType;
 
 pub use mz_storage_client::healthcheck::*;
-
-/// Represents an entry in `mz_internal.mz_{source|sink}_status_history`
-/// For brevity's sake, this is represented as a single type because currently
-/// the two relation's have the same shape. If thta changes, we can bifurcate this
-#[derive(Clone)]
-pub struct RawStatusUpdate {
-    /// The ID of the collection
-    pub id: GlobalId,
-    /// The timestamp of the status update
-    pub ts: DateTime<Utc>,
-    /// The name of the status update
-    pub status_name: String,
-    /// A succinct error, if any
-    pub error: Option<String>,
-    /// Hints about the error, if any
-    pub hints: BTreeSet<String>,
-    /// The full set of namespaced errors that consolidated into the `error`, if any
-    pub namespaced_errors: BTreeMap<String, String>,
-}
-
-impl From<RawStatusUpdate> for Row {
-    fn from(update: RawStatusUpdate) -> Self {
-        let timestamp = Datum::TimestampTz(update.ts.try_into().expect("must fit"));
-        let id = update.id.to_string();
-        let id = Datum::String(&id);
-        let status = Datum::String(&update.status_name);
-        let error = update.error.as_deref().into();
-
-        let mut row = Row::default();
-        let mut packer = row.packer();
-        packer.extend([timestamp, id, status, error]);
-
-        if !update.hints.is_empty() || !update.namespaced_errors.is_empty() {
-            packer.push_dict_with(|dict_packer| {
-                // `hint` and `namespaced` are ordered,
-                // as well as the BTree's they each contain.
-                if !update.hints.is_empty() {
-                    dict_packer.push(Datum::String("hints"));
-                    dict_packer.push_list(update.hints.iter().map(|s| Datum::String(s)));
-                }
-                if !update.namespaced_errors.is_empty() {
-                    dict_packer.push(Datum::String("namespaced"));
-                    dict_packer.push_dict(
-                        update
-                            .namespaced_errors
-                            .iter()
-                            .map(|(k, v)| (k.as_str(), Datum::String(v))),
-                    );
-                }
-            });
-        } else {
-            packer.push(Datum::Null);
-        }
-
-        row
-    }
-}
-
-impl RawStatusUpdate {
-    pub fn dropped_status(id: GlobalId, ts: DateTime<Utc>) -> RawStatusUpdate {
-        RawStatusUpdate {
-            id,
-            ts,
-            status_name: "dropped".to_string(),
-            error: None,
-            hints: Default::default(),
-            namespaced_errors: Default::default(),
-        }
-    }
-
-    fn produce_new_status(prev: &str, new: &str) -> bool {
-        match (prev, new) {
-            (prev, _) if prev == "ceased" => false,
-            (_, new) if new == "ceased" => true,
-            // TODO(guswynn): Ideally only `failed` sources should not be marked as paused.
-            // Additionally, dropping a replica and then restarting environmentd will
-            // fail this check. This will all be resolved in:
-            // https://github.com/MaterializeInc/materialize/pull/23013
-            (prev, new) if prev == "stalled" && new == "paused" => false,
-            // Don't re-mark that object as paused.
-            (prev, new) if prev == "paused" && new == "paused" => false,
-            // De-duplication of other statuses is currently managed by the
-            // `health_operator`.
-            _ => true,
-        }
-    }
-}
 
 /// A lightweight wrapper around [`CollectionManager`] that assists with
 /// appending status updates to to `mz_internal.mz_{source|status}_history`
@@ -147,7 +60,7 @@ where
 
     pub(super) async fn append_updates(
         &mut self,
-        updates: Vec<RawStatusUpdate>,
+        updates: Vec<StatusUpdate>,
         type_: IntrospectionType,
     ) {
         let source_status_history_id = *self
@@ -160,9 +73,9 @@ where
         let new: Vec<_> = updates
             .iter()
             .filter(
-                |r| match (self.previous_statuses.get(&r.id).as_deref(), &r.status_name) {
+                |r| match (self.previous_statuses.get(&r.id).as_deref(), &r.status) {
                     (None, _) => true,
-                    (Some(old), new) => RawStatusUpdate::produce_new_status(old, new),
+                    (Some(old), new) => StatusUpdate::produce_new_status(old, new),
                 },
             )
             .cloned()
@@ -179,12 +92,16 @@ where
             .await;
 
         self.previous_statuses
-            .extend(new.into_iter().map(|r| (r.id, r.status_name)));
+            .extend(new.into_iter().map(|r| (r.id, r.status)));
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
+    use mz_repr::Datum;
+
     use super::*;
 
     #[mz_ore::test]
@@ -193,10 +110,10 @@ mod tests {
         let hint = "hint message";
         let id = GlobalId::User(1);
         let status = "dropped";
-        let row = Row::from(RawStatusUpdate {
+        let row = Row::from(StatusUpdate {
             id,
-            ts: chrono::offset::Utc::now(),
-            status_name: status.to_string(),
+            timestamp: chrono::offset::Utc::now(),
+            status: status.to_string(),
             error: Some(error_message.to_string()),
             hints: BTreeSet::from([hint.to_string()]),
             namespaced_errors: Default::default(),
@@ -237,10 +154,10 @@ mod tests {
         let error_message = "error message";
         let id = GlobalId::User(1);
         let status = "dropped";
-        let row = Row::from(RawStatusUpdate {
+        let row = Row::from(StatusUpdate {
             id,
-            ts: chrono::offset::Utc::now(),
-            status_name: status.to_string(),
+            timestamp: chrono::offset::Utc::now(),
+            status: status.to_string(),
             error: Some(error_message.to_string()),
             hints: Default::default(),
             namespaced_errors: Default::default(),
@@ -265,10 +182,10 @@ mod tests {
         let id = GlobalId::User(1);
         let status = "dropped";
         let hint = "hint message";
-        let row = Row::from(RawStatusUpdate {
+        let row = Row::from(StatusUpdate {
             id,
-            ts: chrono::offset::Utc::now(),
-            status_name: status.to_string(),
+            timestamp: chrono::offset::Utc::now(),
+            status: status.to_string(),
             error: None,
             hints: BTreeSet::from([hint.to_string()]),
             namespaced_errors: Default::default(),
@@ -309,10 +226,10 @@ mod tests {
         let error_message = "error message";
         let id = GlobalId::User(1);
         let status = "dropped";
-        let row = Row::from(RawStatusUpdate {
+        let row = Row::from(StatusUpdate {
             id,
-            ts: chrono::offset::Utc::now(),
-            status_name: status.to_string(),
+            timestamp: chrono::offset::Utc::now(),
+            status: status.to_string(),
             error: Some(error_message.to_string()),
             hints: Default::default(),
             namespaced_errors: BTreeMap::from([("thing".to_string(), "error".to_string())]),
@@ -354,10 +271,10 @@ mod tests {
         let hint = "hint message";
         let id = GlobalId::User(1);
         let status = "dropped";
-        let row = Row::from(RawStatusUpdate {
+        let row = Row::from(StatusUpdate {
             id,
-            ts: chrono::offset::Utc::now(),
-            status_name: status.to_string(),
+            timestamp: chrono::offset::Utc::now(),
+            status: status.to_string(),
             error: Some(error_message.to_string()),
             hints: BTreeSet::from([hint.to_string()]),
             namespaced_errors: BTreeMap::from([("thing".to_string(), "error".to_string())]),
