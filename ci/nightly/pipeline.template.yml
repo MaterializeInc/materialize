@@ -1025,6 +1025,19 @@ steps:
             composition: rqg
             args: ["window-functions", "--seed=$BUILDKITE_JOB_ID"]
 
+    - id: rqg-wmr
+      label: "RQG WMR workload"
+      artifact_paths: junit_*.xml
+      timeout_in_minutes: 45
+      agents:
+        queue: linux-x86_64
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: rqg
+            # Postgres does not support WMR, so our only hope for a comparison
+            # test is to use a previous Mz version via --other-tag=...
+            args: ["wmr", "--seed=$BUILDKITE_JOB_ID", "--other-tag=common-ancestor"]
+
     - id: rqg-banking
       label: "RQG banking workload"
       artifact_paths: junit_*.xml
