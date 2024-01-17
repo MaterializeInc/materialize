@@ -155,7 +155,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Run the Workload with the specified number of concurrent threads",
     )
     parser.add_argument(
-        "--debug", action="store_true", help="Run the RQG With RQG_DEBUG=1"
+        "--sqltrace", action="store_true", help="Print all generated SQL statements"
+    )
+    parser.add_argument(
+        "--skip-recursive-rules",
+        action="store_true",
+        help="Generate simpler queries by avoiding recursive productions",
     )
     parser.add_argument(
         "--seed",
@@ -245,8 +250,6 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
     grammar = args.grammar or workload.grammar
     threads = args.threads or workload.threads
 
-    env_extra = {"RQG_DEBUG": "1"} if args.debug else {}
-
     with c.override(*participants):
         try:
             c.up(*[p.name for p in participants])
@@ -273,7 +276,8 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
                 f"--threads={threads}",
                 f"--duration={duration}",
                 f"--seed={args.seed}",
-                env_extra=env_extra,
+                "--sqltrace" if args.sqltrace else "",
+                "--skip-recursive-rules" if args.skip_recursive_rules else "",
             )
         finally:
             c.capture_logs()
