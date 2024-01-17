@@ -641,10 +641,8 @@ pub const DEFAULT_TRANSACTION_TIMEOUT: Duration = Duration::from_secs(60);
 /// The `rdkafka` default.
 /// - <https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md>
 pub const DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT: Duration = Duration::from_secs(30);
-
 /// A reasonable default timeout when fetching metadata or partitions.
 pub const DEFAULT_FETCH_METADATA_TIMEOUT: Duration = Duration::from_secs(10);
-
 /// The timeout for reading records from the progress topic. Set to something slightly longer than
 /// the idle transaction timeout (60s) to wait out any stuck producers.
 pub const DEFAULT_PROGRESS_RECORD_FETCH_TIMEOUT: Duration = Duration::from_secs(90);

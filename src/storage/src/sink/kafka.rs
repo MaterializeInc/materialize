@@ -115,8 +115,6 @@ use crate::render::sinks::SinkRender;
 use crate::statistics::SinkStatistics;
 use crate::storage_state::StorageState;
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
-
 impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
     fn uses_keys(&self) -> bool {
         true
@@ -204,6 +202,8 @@ struct TransactionalProducer {
     /// The total number bytes staged for the currently open transactions. It is reset to zero
     /// every time a transaction commits.
     staged_bytes: u64,
+    /// The timeout to use for network operations.
+    socket_timeout: Duration,
 }
 
 impl TransactionalProducer {
@@ -220,6 +220,7 @@ impl TransactionalProducer {
         let transactional_id =
             connection.transactional_id(&storage_configuration.connection_context, sink_id);
 
+        let timeout_config = &storage_configuration.parameters.kafka_timeout_config;
         let mut options = BTreeMap::new();
         // Ensure that messages are sinked in order and without duplicates. Note that this only
         // applies to a single instance of a producer - in the case of restarts, all bets are off
@@ -244,7 +245,10 @@ impl TransactionalProducer {
         // Make the Kafka producer wait at least 10 ms before sending out MessageSets
         options.insert("queue.buffering.max.ms", format!("{}", 10));
         // Time out transactions after 60 seconds
-        options.insert("transaction.timeout.ms", format!("{}", 60_000));
+        options.insert(
+            "transaction.timeout.ms",
+            format!("{}", timeout_config.transaction_timeout.as_millis()),
+        );
         // Use the transactional ID requested by the user.
         options.insert("transactional.id", transactional_id);
         // Allow Kafka monitoring tools to identify this producer.
@@ -269,10 +273,12 @@ impl TransactionalProducer {
             statistics,
             staged_messages: 0,
             staged_bytes: 0,
+            socket_timeout: timeout_config.socket_timeout,
         };
 
+        let timeout = timeout_config.socket_timeout;
         producer
-            .spawn_blocking(|p| p.init_transactions(DEFAULT_TIMEOUT))
+            .spawn_blocking(move |p| p.init_transactions(timeout))
             .await?;
 
         Ok(producer)
@@ -355,8 +361,9 @@ impl TransactionalProducer {
             .key(&self.progress_key);
         self.producer.send(record).map_err(|(e, _)| e)?;
 
+        let timeout = self.socket_timeout;
         match self
-            .spawn_blocking(|p| p.commit_transaction(DEFAULT_TIMEOUT))
+            .spawn_blocking(move |p| p.commit_transaction(timeout))
             .await
         {
             Ok(()) => {
@@ -377,7 +384,8 @@ impl TransactionalProducer {
                 // fails, the transaction will be aborted either when fenced out by a future
                 // version of this producer or by the broker-side timeout.
                 if err.txn_requires_abort() {
-                    self.spawn_blocking(|p| p.abort_transaction(DEFAULT_TIMEOUT))
+                    let timeout = self.socket_timeout;
+                    self.spawn_blocking(move |p| p.abort_transaction(timeout))
                         .await?;
                 }
                 Err(ContextCreationError::KafkaError(KafkaError::Transaction(
