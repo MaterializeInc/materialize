@@ -23,6 +23,7 @@ pub static MZ_OPTIMIZER_NOTICES: Lazy<BuiltinTable> = Lazy::new(|| {
         name: "mz_optimizer_notices",
         schema: MZ_INTERNAL_SCHEMA,
         desc: RelationDesc::empty()
+            .with_column("id", String.nullable(false))
             .with_column("notice_type", String.nullable(false))
             .with_column("message", String.nullable(false))
             .with_column("hint", String.nullable(false))
@@ -44,7 +45,7 @@ pub static MZ_OPTIMIZER_NOTICES: Lazy<BuiltinTable> = Lazy::new(|| {
                 "created_at",
                 TimestampTz { precision: None }.nullable(false),
             )
-            .without_keys(),
+            .with_key(vec![0]),
         is_retained_metrics_object: false,
         access: vec![MONITOR_SELECT],
     }
@@ -63,6 +64,7 @@ pub static MZ_NOTICES: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
     sql: "SELECT
+    n.id,
     n.notice_type,
     n.message,
     n.hint,
@@ -87,6 +89,7 @@ pub static MZ_NOTICES_REDACTED: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
     sql: "SELECT
+    id,
     notice_type,
     coalesce(redacted_message, message) as message,
     coalesce(redacted_hint, hint) as hint,
@@ -103,7 +106,7 @@ FROM
 pub const MZ_NOTICES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_notices_ind",
     schema: MZ_INTERNAL_SCHEMA,
-    sql: "IN CLUSTER mz_introspection ON mz_internal.mz_notices (object_id)",
+    sql: "IN CLUSTER mz_introspection ON mz_internal.mz_notices(id)",
     is_retained_metrics_object: false,
 };
 

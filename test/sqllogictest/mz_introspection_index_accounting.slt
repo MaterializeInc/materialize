@@ -63,7 +63,7 @@ mz_message_batch_counts_received_raw_s2_primary_idx  CREATE␠INDEX␠"mz_messag
 mz_message_batch_counts_sent_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_batch_counts_sent_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_message_batch_counts_sent_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")
 mz_message_counts_received_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_counts_received_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_message_counts_received_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")
 mz_message_counts_sent_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_counts_sent_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_message_counts_sent_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")
-mz_notices_ind  CREATE␠INDEX␠"mz_notices_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_notices"␠("object_id")
+mz_notices_ind  CREATE␠INDEX␠"mz_notices_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_notices"␠("id")
 mz_object_dependencies_ind  CREATE␠INDEX␠"mz_object_dependencies_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_object_dependencies"␠("object_id")
 mz_object_lifetimes_ind  CREATE␠INDEX␠"mz_object_lifetimes_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_object_lifetimes"␠("id")
 mz_object_transitive_dependencies_ind  CREATE␠INDEX␠"mz_object_transitive_dependencies_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_object_transitive_dependencies"␠("object_id")
@@ -296,6 +296,7 @@ mz_notices  action
 mz_notices  action_type
 mz_notices  created_at
 mz_notices  hint
+mz_notices  id
 mz_notices  message
 mz_notices  notice_type
 mz_notices  object_id
@@ -322,6 +323,7 @@ mz_optimizer_notices  action_type
 mz_optimizer_notices  created_at
 mz_optimizer_notices  dependency_ids
 mz_optimizer_notices  hint
+mz_optimizer_notices  id
 mz_optimizer_notices  message
 mz_optimizer_notices  notice_type
 mz_optimizer_notices  object_id

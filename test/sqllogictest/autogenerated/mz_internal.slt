@@ -243,27 +243,29 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_notices' ORDER BY position
 ----
-1  notice_type  text
-2  message  text
-3  hint  text
-4  action  text
-5  redacted_message  text
-6  redacted_hint  text
-7  redacted_action  text
-8  action_type  text
-9  object_id  text
-10  created_at  timestamp␠with␠time␠zone
+1  id  text
+2  notice_type  text
+3  message  text
+4  hint  text
+5  action  text
+6  redacted_message  text
+7  redacted_hint  text
+8  redacted_action  text
+9  action_type  text
+10  object_id  text
+11  created_at  timestamp␠with␠time␠zone
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_notices_redacted' ORDER BY position
 ----
-1  notice_type  text
-2  message  text
-3  hint  text
-4  action  text
-5  action_type  text
-6  object_id  text
-7  created_at  timestamp␠with␠time␠zone
+1  id  text
+2  notice_type  text
+3  message  text
+4  hint  text
+5  action  text
+6  action_type  text
+7  object_id  text
+8  created_at  timestamp␠with␠time␠zone
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_postgres_sources' ORDER BY position
