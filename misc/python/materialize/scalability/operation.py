@@ -12,6 +12,11 @@ from psycopg import Cursor, ProgrammingError
 
 class Operation:
     def execute(self, cursor: Cursor) -> None:
+        raise NotImplementedError
+
+
+class SqlOperation(Operation):
+    def execute(self, cursor: Cursor) -> None:
         try:
             cursor.execute(self.sql_statement().encode("utf8"))
             cursor.fetchall()

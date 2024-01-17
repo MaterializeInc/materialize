@@ -8,44 +8,44 @@
 # by the Apache License, Version 2.0.
 
 
-from materialize.scalability.operation import Operation
+from materialize.scalability.operation import SqlOperation
 
 
-class InsertDefaultValues(Operation):
+class InsertDefaultValues(SqlOperation):
     def sql_statement(self) -> str:
         return "INSERT INTO t1 DEFAULT VALUES;"
 
 
-class SelectOne(Operation):
+class SelectOne(SqlOperation):
     def sql_statement(self) -> str:
         return "SELECT 1;"
 
 
-class SelectStar(Operation):
+class SelectStar(SqlOperation):
     def sql_statement(self) -> str:
         return "SELECT * FROM t1;"
 
 
-class SelectLimit(Operation):
+class SelectLimit(SqlOperation):
     def sql_statement(self) -> str:
         return "SELECT * FROM t1 LIMIT 1;"
 
 
-class SelectCount(Operation):
+class SelectCount(SqlOperation):
     def sql_statement(self) -> str:
         return "SELECT COUNT(*) FROM t1;"
 
 
-class SelectCountInMv(Operation):
+class SelectCountInMv(SqlOperation):
     def sql_statement(self) -> str:
         return "SELECT count FROM mv1;"
 
 
-class SelectUnionAll(Operation):
+class SelectUnionAll(SqlOperation):
     def sql_statement(self) -> str:
         return "SELECT * FROM t1 UNION ALL SELECT * FROM t1;"
 
 
-class Update(Operation):
+class Update(SqlOperation):
     def sql_statement(self) -> str:
         return "UPDATE t1 SET f1 = f1 + 1;"
