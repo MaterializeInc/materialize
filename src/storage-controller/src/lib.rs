@@ -2119,7 +2119,7 @@ where
                 lazy_persist_txn_tables,
             );
             let txns = if lazy_persist_txn_tables {
-                let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id);
+                let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
                 PersistTxns::EnabledLazy {
                     txns_read,
                     txns_client,
