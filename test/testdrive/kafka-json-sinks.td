@@ -16,8 +16,9 @@
     URL '${testdrive.schema-registry-url}'
   );
 
+> CREATE CLUSTER simple_view_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK simple_view_sink
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER simple_view_sink_cluster
   FROM simple_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'unnamed-cols-sink-${testdrive.seed}')
   FORMAT JSON
@@ -26,8 +27,9 @@
 $ kafka-verify-data format=json sink=materialize.public.simple_view_sink key=false
 {"before": null, "after": {"a": 1, "b": 2, "c": 3}}
 
+> CREATE CLUSTER simple_view_upsert_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK simple_view_upsert
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER simple_view_upsert_cluster
   FROM simple_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-unnamed-upsert-${testdrive.seed}')
   KEY (b)
@@ -55,8 +57,9 @@ $ kafka-verify-data format=json sink=materialize.public.simple_view_upsert key=t
   'текст'::bytea c13,
   '{"a": 2}'::jsonb c14
 
+> CREATE CLUSTER types_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK types_sink
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER types_sink_cluster
   FROM types_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-types-sink-${testdrive.seed}')
   FORMAT JSON
@@ -71,8 +74,9 @@ $ kafka-verify-data format=json sink=materialize.public.types_sink key=false
 > CREATE MATERIALIZED VIEW special_characters_view AS
   SELECT 'текст' c1, '"' c2, '''' c3, '\' c4, E'a\n\tb' c5
 
+> CREATE CLUSTER special_characters_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK special_characters_sink
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER special_characters_sink_cluster
   FROM special_characters_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-special-characters-sink-${testdrive.seed}')
   FORMAT JSON
@@ -85,8 +89,9 @@ $ kafka-verify-data format=json sink=materialize.public.special_characters_sink 
 
 > CREATE MATERIALIZED VIEW record_view AS SELECT simple_view FROM simple_view;
 
+> CREATE CLUSTER record_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK record_sink
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER record_sink_cluster
   FROM record_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-record-sink-${testdrive.seed}')
   FORMAT JSON
@@ -114,8 +119,9 @@ contains:column "a" specified more than once
 
 > CREATE MATERIALIZED VIEW complex_type_view AS SELECT '{{1,2},{3,4}}'::int4_list_list c1, '{a=>{b=>1, c=>2}, d=> {e=>3, f=>4}}'::int4_map_map c2;
 
+> CREATE CLUSTER complex_type_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK complex_type_sink
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER complex_type_sink_cluster
   FROM complex_type_view
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-complex-type-sink-${testdrive.seed}')
   FORMAT JSON

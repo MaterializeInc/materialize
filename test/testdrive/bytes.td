@@ -18,8 +18,9 @@ $ kafka-ingest format=bytes topic=bytes timestamp=1
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> CREATE CLUSTER data_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE data
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER data_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-bytes-${testdrive.seed}')
   FORMAT BYTES
   INCLUDE OFFSET
@@ -38,8 +39,9 @@ data           offset
 
 # Test that CREATE SOURCE can specify a custom name for the column.
 
+> CREATE CLUSTER data_named_col_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE data_named_col (named_col)
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER data_named_col_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-bytes-${testdrive.seed}')
   FORMAT BYTES
 
@@ -48,8 +50,9 @@ name       nullable  type
 --------------------------
 named_col  false     bytea
 
+> CREATE CLUSTER data_offset_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE data_offset
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER data_offset_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-bytes-${testdrive.seed}')
   FORMAT BYTES
   INCLUDE OFFSET
@@ -67,8 +70,9 @@ $ kafka-ingest format=bytes topic=bytes-partitions timestamp=1 partition=0
 $ kafka-ingest format=bytes topic=bytes-partitions timestamp=1 partition=1
 ©2
 
+> CREATE CLUSTER data_offset_2_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE data_offset_2
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER data_offset_2_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[0,1], TOPIC 'testdrive-bytes-partitions-${testdrive.seed}')
   FORMAT BYTES
   INCLUDE OFFSET
