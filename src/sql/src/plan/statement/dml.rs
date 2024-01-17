@@ -785,13 +785,7 @@ fn plan_copy_to(
         sql_bail!("only CSV format is supported for COPY ... TO <filename>");
     }
 
-    let format_params = CopyFormatParams::Csv(CopyCsvFormatParams {
-        delimiter: b',',
-        quote: b'"',
-        escape: b'"',
-        null: Cow::from(""),
-        header: false,
-    });
+    let format_params = CopyFormatParams::Csv(Default::default());
 
     // Converting the to expr to a MirScalarExpr
     let mut to_expr = to.clone();
@@ -836,13 +830,12 @@ fn plan_copy_from(
 
     fn extract_byte_param_value(
         v: Option<String>,
-        default: u8,
         param_name: &str,
-    ) -> Result<u8, PlanError> {
+    ) -> Result<Option<u8>, PlanError> {
         match v {
-            Some(v) if v.len() == 1 => Ok(v.as_bytes()[0]),
+            Some(v) if v.len() == 1 => Ok(Some(v.as_bytes()[0])),
             Some(..) => sql_bail!("COPY {} must be a single one-byte character", param_name),
-            None => Ok(default),
+            None => Ok(None),
         }
     }
 
@@ -865,24 +858,19 @@ fn plan_copy_from(
             CopyFormatParams::Text(CopyTextFormatParams { null, delimiter })
         }
         CopyFormat::Csv => {
-            let quote = extract_byte_param_value(options.quote, b'"', "quote")?;
-            let escape = extract_byte_param_value(options.escape, quote, "escape")?;
-            let header = options.header.unwrap_or(false);
-            let delimiter = extract_byte_param_value(options.delimiter, b',', "delimiter")?;
+            let quote = extract_byte_param_value(options.quote, "quote")?;
+            let escape = extract_byte_param_value(options.escape, "escape")?;
+            let delimiter = extract_byte_param_value(options.delimiter, "delimiter")?;
             if delimiter == quote {
                 sql_bail!("COPY delimiter and quote must be different");
             }
-            let null = match options.null {
-                Some(null) => Cow::from(null),
-                None => Cow::from(""),
-            };
-            CopyFormatParams::Csv(CopyCsvFormatParams {
+            CopyFormatParams::Csv(CopyCsvFormatParams::new(
                 delimiter,
                 quote,
                 escape,
-                null,
-                header,
-            })
+                options.header,
+                options.null,
+            ))
         }
         CopyFormat::Binary => bail_unsupported!("FORMAT BINARY"),
     };
