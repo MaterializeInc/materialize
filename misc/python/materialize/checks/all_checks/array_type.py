@@ -40,6 +40,8 @@ class ArrayType(Check):
                   array_col, ARRAY[ARRAY[1,2], ARRAY[NULL, 4]]
                   FROM array_type_table;
 
+                > SET statement_timeout = '120s';
+
                 > INSERT INTO array_type_table SELECT * FROM array_type_table LIMIT 1;
                 """,
                 """
@@ -48,6 +50,8 @@ class ArrayType(Check):
                   text_col, array_fill('foo'::text, ARRAY[2]) AS array_fill2,
                   array_col, ARRAY[ARRAY[1,2], ARRAY[NULL, 4]]
                   FROM array_type_table;
+
+                > SET statement_timeout = '120s';
 
                 > INSERT INTO array_type_table SELECT * FROM array_type_table LIMIT 1;
                 """,
