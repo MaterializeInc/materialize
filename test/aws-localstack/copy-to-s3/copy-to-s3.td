@@ -64,11 +64,14 @@ contains:COPY TO target must have type text, not type integer
   );
 contains:ORDER BY is not supported in SELECT query for COPY statements
 
-# This will be updated once the feature is fully implemented
-! COPY t TO 's3://path/to/' || repeat('dir/', 2)
+# Getting the date from now() to make the test predictable
+$ set-from-sql var=now_date
+SELECT TO_CHAR(now(), 'YYYY-MM-DD');
+
+! COPY t TO 's3://path/to/' || TO_CHAR(now(), 'YYYY-MM-DD')
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "1000",
     FORMAT = 'csv'
   );
-contains:internal error: COPY TO 's3://path/to/dir/dir/' is not yet implemented
+contains:internal error: COPY TO 's3://path/to/${now_date}' is not yet implemented
