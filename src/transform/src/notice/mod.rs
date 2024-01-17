@@ -47,6 +47,8 @@ use mz_repr::GlobalId;
 /// An long lived in-memory representation of a [`RawOptimizerNotice`] that is
 /// meant to be kept as part of the hydrated catalog state.
 pub struct OptimizerNotice {
+    /// An `id` that uniquely identifies this notice in the `mz_notices` relation.
+    pub id: GlobalId,
     /// The notice kind.
     pub kind: OptimizerNoticeKind,
     /// The ID of the catalog item associated with this notice.

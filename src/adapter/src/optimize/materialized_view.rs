@@ -142,6 +142,10 @@ impl GlobalLirPlan {
         &self.df_desc
     }
 
+    pub fn df_meta(&self) -> &DataflowMetainfo {
+        &self.df_meta
+    }
+
     pub fn desc(&self) -> &RelationDesc {
         let sink_exports = &self.df_desc.sink_exports;
         let sink = sink_exports.values().next().expect("valid sink");

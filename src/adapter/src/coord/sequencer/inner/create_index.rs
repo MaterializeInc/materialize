@@ -364,6 +364,11 @@ impl Coordinator {
             owner_id: *self.catalog().get_entry(&on).owner_id(),
         }];
 
+        // Pre-allocate a vector of transient GlobalIds for each notice.
+        let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
+            .take(global_lir_plan.df_meta().optimizer_notices.len())
+            .collect::<Result<Vec<_>, _>>()?;
+
         let transact_result = self
             .catalog_transact_with_side_effects(Some(ctx.session()), ops, |coord| async {
                 // Save plan structures.
@@ -384,10 +389,11 @@ impl Coordinator {
                 // Emit notices.
                 coord.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
 
-                // Notices rendering
-                let df_meta = coord
-                    .catalog()
-                    .render_notices(df_meta, Some(exported_index_id));
+                // Return a metainfo with rendered notices.
+                let df_meta =
+                    coord
+                        .catalog()
+                        .render_notices(df_meta, notice_ids, Some(exported_index_id));
                 coord
                     .catalog_mut()
                     .set_dataflow_metainfo(exported_index_id, df_meta.clone());
