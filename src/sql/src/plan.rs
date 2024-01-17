@@ -805,6 +805,7 @@ pub enum CopyToFrom {
     Query {
         expr: MirRelationExpr,
         desc: RelationDesc,
+        finishing: RowSetFinishing,
     },
 }
 impl CopyToFrom {

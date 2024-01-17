@@ -39,7 +39,7 @@ use crate::ast::{
 use crate::catalog::CatalogItemType;
 use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
-use crate::plan::query::{plan_expr, plan_up_to, ExprContext, QueryLifetime};
+use crate::plan::query::{plan_expr, plan_up_to, ExprContext, PlannedRootQuery, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::{ddl, StatementContext, StatementDesc};
 use crate::plan::with_options::{self, TryFromValue};
@@ -965,11 +965,16 @@ pub fn plan_copy(
                     if !stmt.query.order_by.is_empty() {
                         sql_bail!("ORDER BY is not supported in SELECT query for COPY statements")
                     }
-                    let query =
-                        plan_query(scx, stmt.query, &Params::empty(), QueryLifetime::OneShot)?;
+                    let PlannedRootQuery {
+                        expr,
+                        finishing,
+                        desc,
+                        ..
+                    } = plan_query(scx, stmt.query, &Params::empty(), QueryLifetime::OneShot)?;
                     CopyToFrom::Query {
-                        expr: query.expr,
-                        desc: query.desc,
+                        expr,
+                        desc,
+                        finishing,
                     }
                 }
                 _ => sql_bail!("COPY {} {} not supported", direction, target),
