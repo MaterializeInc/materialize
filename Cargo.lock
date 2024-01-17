@@ -6104,7 +6104,6 @@ dependencies = [
  "mz-ore",
  "mz-proto",
  "proptest",
- "proptest-derive",
  "prost",
  "prost-build",
  "protobuf-src",
