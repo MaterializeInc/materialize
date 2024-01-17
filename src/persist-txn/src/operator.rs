@@ -284,6 +284,10 @@ where
                     // NB: Ignore the data_cap because this input is
                     // disconnected.
                     Event::Data(_data_cap, data) => {
+                        // NB: Nothing to do here for `until` because the both
+                        // `shard_source` (before this operator) and
+                        // `mfp_and_decode` (after this operator) do the
+                        // necessary filtering.
                         for data in data {
                             debug!(
                                 "{} {:.9} emitting data {:?}",
