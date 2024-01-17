@@ -199,9 +199,15 @@ impl<T: Timestamp> Instance<T> {
         as_of: Antichain<T>,
         storage_dependencies: Vec<GlobalId>,
         compute_dependencies: Vec<GlobalId>,
+        write_only: bool,
     ) {
         // Add global collection state.
-        let state = CollectionState::new(as_of.clone(), storage_dependencies, compute_dependencies);
+        let mut state =
+            CollectionState::new(as_of.clone(), storage_dependencies, compute_dependencies);
+        // If the collection is write-only, clear its read policy to reflect that.
+        if write_only {
+            state.read_policy = None;
+        }
         self.collections.insert(id, state);
 
         // Add per-replica collection state.
@@ -903,11 +909,13 @@ where
         // Install collection state for each of the exports.
         let mut updates = Vec::new();
         for export_id in dataflow.export_ids() {
+            let write_only = dataflow.sink_exports.contains_key(&export_id);
             self.compute.add_collection(
                 export_id,
                 as_of.clone(),
                 storage_dependencies.clone(),
                 compute_dependencies.clone(),
+                write_only,
             );
             updates.push((export_id, replica_write_frontier.clone()));
         }
@@ -1151,7 +1159,7 @@ where
                 }
             }
 
-            collection.read_policy = policy;
+            collection.read_policy = Some(policy);
         }
         if !read_capability_changes.is_empty() {
             self.update_read_capabilities(&mut read_capability_changes);
@@ -1217,7 +1225,6 @@ where
             .cloned()
             .collect();
         self.update_global_write_frontiers(&global_updates);
-
     }
 
     /// Remove frontier tracking state for the given replica.
@@ -1258,6 +1265,7 @@ where
             let collection = self.compute.expect_collection_mut(*id);
 
             let old_upper = std::mem::replace(&mut collection.write_frontier, new_upper.clone());
+            let old_since = &collection.implied_capability;
 
             // Safety check against frontier regressions.
             assert!(
@@ -1265,8 +1273,19 @@ where
                 "global frontier regression: {old_upper:?} -> {new_upper:?}, collection={id}",
             );
 
-            let old_since = &collection.implied_capability;
-            let new_since = collection.read_policy.frontier(new_upper.borrow());
+            let new_since = match &collection.read_policy {
+                Some(read_policy) => {
+                    // For readable collections the read frontier is determined by applying the
+                    // client-provided read policy to the write frontier.
+                    read_policy.frontier(new_upper.borrow())
+                }
+                None => {
+                    // Write-only collections cannot be read within the context of the compute
+                    // controller, so we can immediately advance their read frontier to the new write
+                    // frontier.
+                    new_upper.clone()
+                }
+            };
 
             if PartialOrder::less_than(old_since, &new_since) {
                 let mut update = ChangeBatch::new();

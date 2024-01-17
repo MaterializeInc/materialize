@@ -674,7 +674,11 @@ pub struct CollectionState<T> {
     /// The implicit capability associated with collection creation.
     implied_capability: Antichain<T>,
     /// The policy to use to downgrade `self.implied_capability`.
-    read_policy: ReadPolicy<T>,
+    ///
+    /// If `None`, the collection is a write-only collection (i.e. a sink). For write-only
+    /// collections, the `implied_capability` is only required for maintaining read holds on the
+    /// inputs, so we can immediately downgrade it to the `write_frontier`.
+    read_policy: Option<ReadPolicy<T>>,
 
     /// Storage identifiers on which this collection depends.
     storage_dependencies: Vec<GlobalId>,
@@ -731,7 +735,7 @@ impl<T: Timestamp> CollectionState<T> {
             dropped: false,
             read_capabilities,
             implied_capability: since.clone(),
-            read_policy: ReadPolicy::ValidFrom(since),
+            read_policy: Some(ReadPolicy::ValidFrom(since)),
             storage_dependencies,
             compute_dependencies,
             write_frontier: upper,
