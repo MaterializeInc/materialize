@@ -15,7 +15,10 @@ use std::sync::Arc;
 use mz_compute_types::dataflows::IndexDesc;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::ComputeInstanceId;
-use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::{
+    permutation_for_arrangement, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
+    RowSetFinishing,
+};
 use mz_repr::explain::trace_plan;
 use mz_repr::{GlobalId, RelationType, Timestamp};
 use mz_sql::plan::HirRelationExpr;
@@ -27,14 +30,13 @@ use timely::progress::Antichain;
 use tracing::{span, warn, Level};
 
 use crate::catalog::Catalog;
-use crate::coord::peek::{create_fast_path_plan, FastPathPlan};
+use crate::coord::peek::{create_fast_path_plan, PeekDataflowPlan, PeekPlan};
 use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, EvalTime,
     ExprPrepStyle,
 };
 use crate::optimize::{
-    LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode, OptimizerConfig,
-    OptimizerError,
+    MirDataflowDescription, Optimize, OptimizeMode, OptimizerConfig, OptimizerError,
 };
 use crate::session::Session;
 use crate::TimestampContext;
@@ -173,35 +175,16 @@ pub struct ResolvedGlobal<'s> {
 
 /// The (final) result after MIR ⇒ LIR lowering and optimizing the resulting
 /// `DataflowDescription` with `LIR` plans.
-pub enum GlobalLirPlan {
-    FastPath {
-        plan: FastPathPlan,
-        df_meta: DataflowMetainfo,
-        typ: RelationType,
-    },
-    SlowPath {
-        df_desc: LirDataflowDescription,
-        df_meta: DataflowMetainfo,
-        typ: RelationType,
-    },
+pub struct GlobalLirPlan {
+    plan: PeekPlan,
+    df_meta: DataflowMetainfo,
+    typ: RelationType,
 }
 
 impl GlobalLirPlan {
     /// Return the output type for this [`GlobalLirPlan`].
     pub fn typ(&self) -> &RelationType {
-        match self {
-            Self::FastPath { typ, .. } => typ,
-            Self::SlowPath { typ, .. } => typ,
-        }
-    }
-
-    /// Return the default output key for this [`GlobalLirPlan`].
-    pub fn key(&self) -> Vec<MirScalarExpr> {
-        self.typ()
-            .default_key()
-            .into_iter()
-            .map(MirScalarExpr::Column)
-            .collect()
+        &self.typ
     }
 }
 
@@ -410,7 +393,7 @@ impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
         //     .map(|(_key, (_desc, typ))| typ.clone())
         //     .expect("GlobalMirPlan type");
 
-        match create_fast_path_plan(
+        let plan = match create_fast_path_plan(
             &mut df_desc,
             self.select_id,
             Some(&self.finishing),
@@ -434,8 +417,10 @@ impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
                     .map_err(OptimizerError::Internal)?;
                 }
 
-                // Return a variant indicating that we should use a fast path.
-                Ok(GlobalLirPlan::FastPath { plan, df_meta, typ })
+                // Build the PeekPlan
+                let peek_plan = PeekPlan::FastPath(plan);
+
+                peek_plan
             }
             None => {
                 // Ensure all expressions are normalized before finalizing.
@@ -454,13 +439,35 @@ impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
                 )
                 .map_err(OptimizerError::Internal)?;
 
-                // Return a variant indicating that we should use a slow path.
-                Ok(GlobalLirPlan::SlowPath {
-                    df_desc,
-                    df_meta,
-                    typ,
-                })
+                // Build the PeekPlan
+                let peek_plan = {
+                    let arity = typ.arity();
+                    let key = typ
+                        .default_key()
+                        .into_iter()
+                        .map(MirScalarExpr::Column)
+                        .collect::<Vec<_>>();
+                    let (permutation, thinning) = permutation_for_arrangement(&key, arity);
+                    PeekPlan::SlowPath(PeekDataflowPlan::new(
+                        df_desc.clone(),
+                        self.index_id(),
+                        key,
+                        permutation,
+                        thinning.len(),
+                    ))
+                };
+
+                peek_plan
             }
-        }
+        };
+
+        Ok(GlobalLirPlan { plan, df_meta, typ })
+    }
+}
+
+impl GlobalLirPlan {
+    /// Unwraps the parts of the final result of the optimization pipeline.
+    pub fn unapply(self) -> (PeekPlan, DataflowMetainfo) {
+        (self.plan, self.df_meta)
     }
 }

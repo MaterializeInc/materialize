@@ -2333,9 +2333,12 @@ impl Coordinator {
             let global_mir_plan = global_mir_plan.resolve(timestamp_ctx, session);
             let global_lir_plan = optimizer.optimize(global_mir_plan)?;
 
-            let (fast_path_plan, df_meta) = match global_lir_plan {
-                optimize::peek::GlobalLirPlan::FastPath { plan, typ, df_meta } => {
-                    let finishing = if !optimizer.finishing().is_trivial(typ.arity()) {
+            let arity = global_lir_plan.typ().arity();
+            let (peek_plan, df_meta) = global_lir_plan.unapply();
+
+            let fast_path_plan = match peek_plan {
+                crate::coord::peek::PeekPlan::FastPath(plan) => {
+                    let finishing = if !optimizer.finishing().is_trivial(arity) {
                         Some(optimizer.finishing().clone())
                     } else {
                         None
@@ -2347,15 +2350,11 @@ impl Coordinator {
                     // `PlanTrace` for the `FastPathPlan` type.
                     trace_plan(&"fast_path_plan (missing)".to_string());
 
-                    (Some(plan), df_meta)
+                    Some(plan)
                 }
-                optimize::peek::GlobalLirPlan::SlowPath {
-                    df_desc,
-                    df_meta,
-                    typ: _,
-                } => {
-                    trace_plan(&df_desc);
-                    (None, df_meta)
+                crate::coord::peek::PeekPlan::SlowPath(plan) => {
+                    trace_plan(&plan.desc);
+                    None
                 }
             };
 

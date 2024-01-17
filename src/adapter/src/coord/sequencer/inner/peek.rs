@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use mz_controller_types::ClusterId;
-use mz_expr::{permutation_for_arrangement, CollectionPlan};
+use mz_expr::CollectionPlan;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Timestamp};
@@ -26,7 +26,7 @@ use tracing::{event, warn, Level};
 
 use crate::command::ExecuteResponse;
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::peek::{self, PeekDataflowPlan, PeekPlan, PlannedPeek};
+use crate::coord::peek::{self, PeekDataflowPlan, PlannedPeek};
 use crate::coord::sequencer::inner::{check_log_reads, return_if_err};
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{
@@ -511,20 +511,42 @@ impl Coordinator {
             self.index_oracle(optimizer.cluster_id())
                 .sufficient_collections(&source_ids)
         });
-        let peek_plan = self
-            .plan_peek(
-                ctx.session_mut(),
+
+        let session = ctx.session_mut();
+        let conn_id = session.conn_id().clone();
+        let determination = self
+            .sequence_peek_timestamp(
+                session,
                 &when,
+                optimizer.cluster_id(),
                 timeline_context,
                 oracle_read_ts,
-                source_ids,
                 &id_bundle,
+                &source_ids,
                 real_time_recency_ts,
-                &mut optimizer,
-                global_mir_plan,
             )
             .await?;
-        if let Some(transient_index_id) = match &peek_plan.plan {
+
+        let timestamp_context = determination.clone().timestamp_context;
+        let ts = timestamp_context.clone().timestamp_or_default();
+
+        let global_mir_plan = global_mir_plan.resolve(timestamp_context, session);
+        let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
+
+        let source_arity = global_lir_plan.typ().arity();
+        let (plan, df_meta) = global_lir_plan.unapply();
+
+        self.emit_optimizer_notices(&*session, &df_meta.optimizer_notices);
+
+        let planned_peek = PlannedPeek {
+            plan,
+            determination: determination.clone(),
+            conn_id,
+            source_arity,
+            source_ids,
+        };
+
+        if let Some(transient_index_id) = match &planned_peek.plan {
             peek::PeekPlan::FastPath(_) => None,
             peek::PeekPlan::SlowPath(PeekDataflowPlan { id, .. }) => Some(id),
         } {
@@ -533,8 +555,6 @@ impl Coordinator {
             }
         }
 
-        let determination = peek_plan.determination.clone();
-        let ts = determination.timestamp_context.timestamp_or_default();
         if let Some(uuid) = ctx.extra().contents() {
             let mut transitive_storage_deps = BTreeSet::new();
             let mut transitive_compute_deps = BTreeSet::new();
@@ -571,7 +591,7 @@ impl Coordinator {
         let resp = self
             .implement_peek_plan(
                 ctx.extra_mut(),
-                peek_plan,
+                planned_peek,
                 optimizer.finishing().clone(),
                 optimizer.cluster_id(),
                 target_replica,
@@ -722,76 +742,5 @@ impl Coordinator {
         };
 
         Ok(determination)
-    }
-
-    #[tracing::instrument(level = "debug", skip_all)]
-    async fn plan_peek(
-        &mut self,
-        session: &mut Session,
-        when: &QueryWhen,
-        timeline_context: TimelineContext,
-        oracle_read_ts: Option<Timestamp>,
-        source_ids: BTreeSet<GlobalId>,
-        id_bundle: &CollectionIdBundle,
-        real_time_recency_ts: Option<Timestamp>,
-        optimizer: &mut optimize::peek::Optimizer,
-        global_mir_plan: optimize::peek::GlobalMirPlan,
-    ) -> Result<PlannedPeek, AdapterError> {
-        let conn_id = session.conn_id().clone();
-        let determination = self
-            .sequence_peek_timestamp(
-                session,
-                when,
-                optimizer.cluster_id(),
-                timeline_context,
-                oracle_read_ts,
-                id_bundle,
-                &source_ids,
-                real_time_recency_ts,
-            )
-            .await?;
-        let timestamp_context = determination.clone().timestamp_context;
-
-        let global_mir_plan = global_mir_plan.resolve(timestamp_context, session);
-        let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
-
-        let key = global_lir_plan.key();
-        let arity = global_lir_plan.typ().arity();
-
-        let (peek_plan, df_meta) = match global_lir_plan {
-            optimize::peek::GlobalLirPlan::FastPath {
-                plan,
-                df_meta,
-                typ: _,
-            } => {
-                let peek_plan = PeekPlan::FastPath(plan);
-                (peek_plan, df_meta)
-            }
-            optimize::peek::GlobalLirPlan::SlowPath {
-                df_desc,
-                df_meta,
-                typ: _,
-            } => {
-                let (permutation, thinning) = permutation_for_arrangement(&key, arity);
-                let peek_plan = PeekPlan::SlowPath(PeekDataflowPlan::new(
-                    df_desc,
-                    optimizer.index_id(),
-                    key,
-                    permutation,
-                    thinning.len(),
-                ));
-                (peek_plan, df_meta)
-            }
-        };
-
-        self.emit_optimizer_notices(&*session, &df_meta.optimizer_notices);
-
-        Ok(PlannedPeek {
-            plan: peek_plan,
-            determination,
-            conn_id,
-            source_arity: arity,
-            source_ids,
-        })
     }
 }
