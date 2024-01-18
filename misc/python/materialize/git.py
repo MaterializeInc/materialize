@@ -184,6 +184,7 @@ def fetch(
     force: bool = False,
     branch: str | None = None,
     only_tags: bool = False,
+    include_submodules: bool = False,
 ) -> str:
     """Fetch from remotes"""
 
@@ -206,6 +207,9 @@ def fetch(
 
     if all_remotes:
         command.append("--all")
+
+    if not include_submodules:
+        command.append("--no-recurse-submodules")
 
     fetch_tags = (
         include_tags == YesNoOnce.YES
