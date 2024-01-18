@@ -38,6 +38,7 @@ ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
 
 > CREATE SCHEMA prod
 > CREATE MATERIALIZED VIEW prod.counter_mv IN CLUSTER prod AS SELECT count(*) FROM counter
+> CREATE MATERIALIZED VIEW prod.counter_mv2 IN CLUSTER prod_deploy WITH (REFRESH EVERY '60 seconds') AS SELECT count(*), 'some new value' FROM counter
 > CREATE DEFAULT INDEX IN CLUSTER prod ON counter
 > CREATE MATERIALIZED VIEW prod.tpch_mv
   IN CLUSTER prod AS

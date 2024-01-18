@@ -9,6 +9,7 @@
 
 > CREATE SCHEMA prod_deploy
 > CREATE MATERIALIZED VIEW prod_deploy.counter_mv IN CLUSTER prod_deploy AS SELECT count(*), 'some new value' FROM counter
+> CREATE MATERIALIZED VIEW prod_deploy.counter_mv2 IN CLUSTER prod_deploy WITH (REFRESH EVERY '60 seconds') AS SELECT count(*), 'some new value' FROM counter
 > CREATE DEFAULT INDEX IN CLUSTER prod_deploy ON counter
 > CREATE DEFAULT INDEX IN CLUSTER prod_deploy ON prod_deploy.counter_mv
 > CREATE MATERIALIZED VIEW prod_deploy.tpch_mv
