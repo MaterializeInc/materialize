@@ -40,10 +40,11 @@ Change the `<secret_value>` to a unique value that only you know and store it in
 
 ## Step 3. Set up a webhook source
 
-Using the secret from the previous step, create a [webhook source](/sql/create-source/webhook/) in Materialize to ingest data from SnowcatCloud:
+Using the secret from the previous step, create a [webhook source](/sql/create-source/webhook/)
+in Materialize to ingest data from SnowcatCloud:
 
 ```sql
-CREATE SOURCE snowcatcloud_source IN CLUSTER webhooks_cluster
+CREATE SOURCE snowcat_source IN CLUSTER webhooks_cluster
   FROM WEBHOOK
     BODY FORMAT JSON
     CHECK (
@@ -113,16 +114,13 @@ On the **Materialize Settings** page:
 With the source set up in Materialize and the webhook destination configured in
 SnowcatCloud, you can now query the incoming data:
 
-1. [Login to the Materialize console](https://console.materialize.com/).
-
-1. Go to the **SQL Shell**.
-
-1. Select a cluster.
+1. [In the Materialize console](https://console.materialize.com/), navigate to
+   the **SQL Shell**.
 
 1. Use SQL queries to inspect and analyze the incoming data:
 
     ```sql
-    SELECT * FROM snowcatcloud_source LIMIT 10;
+    SELECT * FROM segment_source LIMIT 10;
     ```
 
     Note that while the destination is `PROVISIONING`, you will only see the
@@ -267,7 +265,7 @@ SELECT
     body ->> 'event_version' AS event_version,
     body ->> 'event_fingerprint' AS event_fingerprint
 FROM
-    snowcatcloud_source;
+    snowcat_source;
 ```
 
 ### Timestamp handling

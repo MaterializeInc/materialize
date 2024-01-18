@@ -50,8 +50,8 @@ CREATE SOURCE segment_source IN CLUSTER webhooks_cluster FROM WEBHOOK
   INCLUDE HEADER 'event-type' AS event_type
   INCLUDE HEADERS
   CHECK (
-    WITH ( BODY BYTES, HEADERS, SECRET segment_webhook_secret AS secret BYTES)
-    constant_time_eq(decode(headers->'x-signature', 'hex'), hmac(body, secret, 'sha1'))
+    WITH ( BODY BYTES, HEADERS, SECRET segment_webhook_secret BYTES)
+    constant_time_eq(decode(headers->'x-signature', 'hex'), hmac(body, segment_webhook_secret, 'sha1'))
   );
 ```
 
@@ -78,12 +78,13 @@ actors from injecting data into your source, it is **strongly encouraged** that
 you define a `CHECK` statement with your webhook sources.
 {{< /warning >}}
 
-The `CHECK` clause defines how to validate each request. At the time of writing, Segment
-validates requests by signing them with an HMAC in the `X-Signature` request header. The HMAC is a
-hex-encoded SHA1 hash using the secret from **Step 2.** and the request body. Materialize decodes the signature using
-the [`decode`](/sql/functions/#decode) function, getting the raw bytes, and generate our own HMAC
-using the [`hmac`](/sql/functions/#hmac) function. If the two values are equal, then the request is
-legitimate!
+The `CHECK` clause defines how to validate each request. At the time of writing,
+Segment validates requests by signing them with an HMAC in the `X-Signature`
+request header. The HMAC is a hex-encoded SHA1 hash using the secret
+from **Step 2.** and the request body. Materialize decodes the signature using
+the [`decode`](/sql/functions/#decode) function, getting the raw bytes, and
+generate our own HMAC using the [`hmac`](/sql/functions/#hmac) function. If the
+two values are equal, then the request is legitimate!
 
 ## Step 4. Create a webhook destination in Segment
 
@@ -99,7 +100,10 @@ legitimate!
 
 ## Step 5. Configure the mapping in Segment
 
-A webhook destination in Segment requires a [data mapping](https://segment.com/blog/data-mapping/) to send events from the source to the destination. For this guide, the destination is the Materialize source. Follow these steps to create the correct mapping:
+A webhook destination in Segment requires a [data mapping](https://segment.com/blog/data-mapping/)
+to send events from the source to the destination. For this guide, the
+destination is the Materialize source. Follow these steps to create the correct
+mapping:
 
 1. Go to your webhook destination created in the previous step.
 
@@ -243,8 +247,7 @@ FROM segment_source;
 
 We highly recommend using the [`try_parse_monotonic_iso8601_timestamp`](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown)
 function when casting from `text` to `timestamp`, which enables [temporal filter
-pushdown]
-(https://materialize.com/docs/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
+pushdown](https://materialize.com/docs/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
 
 ### Deduplication
 
@@ -255,7 +258,7 @@ efficiently remove duplicates. For more details, refer to the webhook source
 
 ## Next steps
 
-With Materialize ingesting your Rudderstack data, you can start exploring it,
+With Materialize ingesting your Segment data, you can start exploring it,
 computing real-time results that stay up-to-date as new data arrives, and
 serving results efficiently. For more details, check out the
 [Segment documentation](https://segment.com/docs/connections/destinations/catalog/actions-webhook/) and the

@@ -73,13 +73,19 @@ The process to connect Materialize to a Confluent Cloud Kafka cluster consists o
 
       CREATE SOURCE <source-name>
         FROM KAFKA CONNECTION confluent_cloud (TOPIC '<topic-name>')
-        FORMAT BYTES
+        FORMAT JSON
         WITH (SIZE = '3xsmall');
     ```
 
-    e. If the command executes without an error and outputs _CREATE SOURCE_, it means that you have successfully connected Materialize to your Confluent Cloud Kafka cluster. You can quickly test your connection by running the following statement:
-    ```sql
-      SELECT convert_from(data, 'utf8') from topic_name;
-    ```
+    e. If the command executes without an error and outputs _CREATE SOURCE_, it
+    means that you have successfully connected Materialize to your Confluent
+    Cloud Kafka cluster.
 
-    **Note:** The example above walked through creating a source, which is a way of connecting Materialize to an external data source. We created a connection to Confluent Cloud Kafka using SASL authentication, using credentials securely stored as secrets in Materialize's secret management system. For input formats, we used `bytes`, however, Materialize supports various other options as well. For example, you can ingest Kafka messages formatted in [JSON, Avro and Protobuf](/sql/create-source/kafka/#supported-formats). You can find more details about the various different supported formats and possible configurations [here](/sql/create-source/kafka/).
+    **Note:** The example above walked through creating a source, which is a way
+    of connecting Materialize to an external data source. We created a
+    connection to Confluent Cloud Kafka using SASL authentication and credentials
+    securely stored as secrets in Materialize's secret management system. For
+    input formats, we used `JSON`, but you can also ingest Kafka messages
+    formatted in e.g. [Avro and Protobuf](/sql/create-source/kafka/#supported-formats).
+    You can find more details about the various different supported formats and
+    possible configurations in the [reference documentation](/sql/create-source/kafka/).
