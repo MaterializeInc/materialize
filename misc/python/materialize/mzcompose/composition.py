@@ -92,6 +92,18 @@ class Composition:
         def is_failure(self) -> bool:
             return self.error is not None
 
+        def get_error_file(self) -> str | None:
+            if self.error_location is None:
+                return None
+
+            file_name = self.error_location
+            file_name = re.sub(r":\d+", "", file_name)
+
+            if "/" in file_name:
+                file_name = file_name[file_name.rindex("/") + 1 :]
+
+            return file_name
+
     def __init__(
         self,
         repo: mzbuild.Repository,

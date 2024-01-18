@@ -603,7 +603,9 @@ To see the available workflows, run:
 
             for test_case_name, result in composition.test_results.items():
                 test_case = junit_xml.TestCase(
-                    test_case_name, test_class_name, result.duration
+                    result.get_error_file() or test_case_name,
+                    test_class_name,
+                    result.duration,
                 )
                 if result.is_failure():
                     assert result.error is not None
