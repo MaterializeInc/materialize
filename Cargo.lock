@@ -3619,6 +3619,7 @@ dependencies = [
  "mz-storage-types",
  "serde",
  "timely",
+ "uuid",
  "workspace-hack",
 ]
 
@@ -3726,6 +3727,7 @@ dependencies = [
  "hyper",
  "hyper-openssl",
  "jsonwebtoken",
+ "mz-adapter-types",
  "mz-build-info",
  "mz-environmentd",
  "mz-frontegg-auth",
