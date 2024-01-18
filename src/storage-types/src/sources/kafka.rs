@@ -14,7 +14,6 @@ use std::fmt;
 use std::time::Duration;
 
 use dec::OrderedDecimal;
-use mz_expr::PartitionId;
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
@@ -384,18 +383,6 @@ impl<P> Extrema for RangeBound<P> {
 }
 
 impl SourceTimestamp for Partitioned<RangeBound<i32>, MzOffset> {
-    fn from_compat_ts(pid: PartitionId, offset: MzOffset) -> Self {
-        match pid {
-            PartitionId::Kafka(pid) => Partitioned::new_singleton(RangeBound::exact(pid), offset),
-            PartitionId::None => panic!("invalid partitioned partition {pid}"),
-        }
-    }
-
-    fn try_into_compat_ts(&self) -> Option<(PartitionId, MzOffset)> {
-        let pid = self.interval().singleton()?.unwrap_exact();
-        Some((PartitionId::Kafka(*pid), *self.timestamp()))
-    }
-
     fn encode_row(&self) -> Row {
         use mz_repr::adt::range;
         let mut row = Row::with_capacity(2);

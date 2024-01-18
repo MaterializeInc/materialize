@@ -24,10 +24,3 @@ message ProtoId {
 message ProtoLocalId {
     uint64 value = 1;
 }
-
-message ProtoPartitionId {
-    oneof kind {
-        int32 kafka = 1;
-        google.protobuf.Empty none = 2;
-    }
-}

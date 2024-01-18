@@ -8,9 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::fmt;
-use std::str::FromStr;
 
-use anyhow::Error;
 use mz_lowertest::MzReflect;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::GlobalId;
@@ -131,70 +129,6 @@ pub struct SourceInstanceId {
 impl fmt::Display for SourceInstanceId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}/{}", self.source_id, self.dataflow_id)
-    }
-}
-
-/// Unique identifier for each part of a whole source.
-///     Kafka -> partition
-///     None -> sources that have no notion of partitioning (e.g file sources)
-#[derive(
-    Arbitrary, Copy, Clone, Debug, Eq, Hash, PartialEq, Ord, PartialOrd, Serialize, Deserialize,
-)]
-pub enum PartitionId {
-    Kafka(i32),
-    None,
-}
-
-impl fmt::Display for PartitionId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            PartitionId::Kafka(id) => write!(f, "{}", id),
-            PartitionId::None => write!(f, "none"),
-        }
-    }
-}
-
-impl From<&PartitionId> for Option<String> {
-    fn from(pid: &PartitionId) -> Option<String> {
-        match pid {
-            PartitionId::None => None,
-            _ => Some(pid.to_string()),
-        }
-    }
-}
-
-impl FromStr for PartitionId {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "none" => Ok(PartitionId::None),
-            s => {
-                let val: i32 = s.parse()?;
-                Ok(PartitionId::Kafka(val))
-            }
-        }
-    }
-}
-
-impl RustType<ProtoPartitionId> for PartitionId {
-    fn into_proto(&self) -> ProtoPartitionId {
-        use proto_partition_id::Kind::*;
-        ProtoPartitionId {
-            kind: Some(match self {
-                PartitionId::Kafka(x) => Kafka(*x),
-                PartitionId::None => None(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoPartitionId) -> Result<Self, TryFromProtoError> {
-        use proto_partition_id::Kind::*;
-        match proto.kind {
-            Option::Some(Kafka(x)) => Ok(PartitionId::Kafka(x)),
-            Option::Some(None(_)) => Ok(PartitionId::None),
-            Option::None => Err(TryFromProtoError::missing_field("ProtoPartitionId::kind")),
-        }
     }
 }
 

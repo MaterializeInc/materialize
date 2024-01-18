@@ -20,7 +20,6 @@ use bytes::BufMut;
 
 use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
-use mz_expr::PartitionId;
 
 use mz_persist_types::columnar::{
     ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
@@ -356,26 +355,11 @@ where
 }
 
 pub trait SourceTimestamp: timely::progress::Timestamp + Refines<()> + std::fmt::Display {
-    fn from_compat_ts(pid: PartitionId, offset: MzOffset) -> Self;
-    fn try_into_compat_ts(&self) -> Option<(PartitionId, MzOffset)>;
     fn encode_row(&self) -> Row;
     fn decode_row(row: &Row) -> Self;
 }
 
 impl SourceTimestamp for MzOffset {
-    fn from_compat_ts(pid: PartitionId, offset: MzOffset) -> Self {
-        assert_eq!(
-            pid,
-            PartitionId::None,
-            "invalid non-partitioned partition {pid}"
-        );
-        offset
-    }
-
-    fn try_into_compat_ts(&self) -> Option<(PartitionId, MzOffset)> {
-        Some((PartitionId::None, *self))
-    }
-
     fn encode_row(&self) -> Row {
         Row::pack([Datum::UInt64(self.offset)])
     }
