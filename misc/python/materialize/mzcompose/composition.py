@@ -89,6 +89,10 @@ class Composition:
         error_details: str | None
         error_location: str | None
 
+        def is_failure(self) -> bool:
+            return self.error is not None
+
+
     def __init__(
         self,
         repo: mzbuild.Repository,

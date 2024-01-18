@@ -600,7 +600,8 @@ To see the available workflows, run:
 
             for name, result in composition.test_results.items():
                 test_case = junit_xml.TestCase(name, composition.name, result.duration)
-                if result.error:
+                if result.is_failure():
+                    assert result.error is not None
                     test_case.add_error_info(
                         message=result.error, output=result.error_details
                     )
