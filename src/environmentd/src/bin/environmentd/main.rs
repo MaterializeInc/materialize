@@ -948,13 +948,13 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             .await
     })?;
 
-    metrics.start_time_environmentd.set(
-        envd_start
-            .elapsed()
-            .as_millis()
-            .try_into()
-            .expect("must fit"),
-    );
+    let start_time: i64 = envd_start
+        .elapsed()
+        .as_millis()
+        .try_into()
+        .expect("must fit");
+    println!("START TIME: {start_time} ms");
+    metrics.start_time_environmentd.set(start_time);
     let span = span.exit();
     let id = span.context().span().span_context().trace_id();
     drop(span);
