@@ -312,6 +312,7 @@ class Composition:
                     raise CommandFailureCausedUIError(
                         f"running docker compose failed (exit status {e.returncode})",
                         cmd=e.cmd,
+                        stderr=e.stderr if capture_stderr == True else None,
                     )
             break
 
@@ -1045,12 +1046,12 @@ class Composition:
             ]
 
         if persistent:
-            self.exec(service, *args, stdin=input)
+            self.exec(service, *args, stdin=input, capture_stderr=True)
         else:
             assert (
                 mz_service is None
             ), "testdrive(mz_service = ...) can only be used with persistent Testdrive containers."
-            self.run(service, *args, stdin=input)
+            self.run(service, *args, stdin=input, capture_stderr=True)
 
     def enable_minio_versioning(self) -> None:
         self.up("minio")
