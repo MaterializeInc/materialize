@@ -165,9 +165,9 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t1, t2, t3 WHERE t1.f1 = 123 AND t
 Explained Query:
   CrossJoin type=delta // { arity: 6 }
     implementation
-      %0:t1 » %1:t2[×]UAef » %2:t3[×]UAef
-      %1:t2 » %0:t1[×]UAef » %2:t3[×]UAef
-      %2:t3 » %0:t1[×]UAef » %1:t2[×]UAef
+      %0:t1 » %1:t2[×]Uef » %2:t3[×]Uef
+      %1:t2 » %0:t1[×]Uef » %2:t3[×]Uef
+      %2:t3 » %0:t1[×]Uef » %1:t2[×]Uef
     ArrangeBy keys=[[]] // { arity: 2 }
       Filter (#0 = 123) // { arity: 2 }
         ReadStorage materialize.public.t1 // { arity: 2 }
@@ -331,9 +331,9 @@ EXPLAIN WITH(arity, join_impls) SELECT * FROM t1 WHERE t1.f1 = 123 AND EXISTS (S
 Explained Query:
   CrossJoin type=delta // { arity: 2 }
     implementation
-      %0:t1 » %1:t2[×]UAef » %2:t3[×]UAef
-      %1:t2 » %0:t1[×]UAef » %2:t3[×]UAef
-      %2:t3 » %0:t1[×]UAef » %1:t2[×]UAef
+      %0:t1 » %1:t2[×]Uef » %2:t3[×]Uef
+      %1:t2 » %0:t1[×]Uef » %2:t3[×]Uef
+      %2:t3 » %0:t1[×]Uef » %1:t2[×]Uef
     ArrangeBy keys=[[]] // { arity: 2 }
       Filter (#0 = 123) // { arity: 2 }
         ReadStorage materialize.public.t1 // { arity: 2 }

@@ -677,8 +677,8 @@ EXPLAIN WITH(types, no_fast_path) SELECT 1 = SOME (SELECT col_not_null FROM int_
 Explained Query:
   Return // { types: "(boolean, boolean, boolean?)" }
     Project (#2, #5, #7) // { types: "(boolean, boolean, boolean?)" }
-      Join on=(#0 = #3 = #6 AND #1 = #4) type=differential // { types: "(integer?, integer, boolean, integer?, integer, boolean, integer?, boolean?)" }
-        ArrangeBy keys=[[#0]] // { types: "(integer?, integer)" }
+      Join on=(#0 = #3 = #6 AND #1 = #4) type=delta // { types: "(integer?, integer, boolean, integer?, integer, boolean, integer?, boolean?)" }
+        ArrangeBy keys=[[], [#0], [#0, #1]] // { types: "(integer?, integer)" }
           ReadStorage materialize.public.int_table // { types: "(integer?, integer)" }
         ArrangeBy keys=[[]] // { types: "(boolean)" }
           Union // { types: "(boolean)" }
