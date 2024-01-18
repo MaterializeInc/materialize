@@ -22,7 +22,7 @@ use differential_dataflow::Hashable;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_repr::GlobalId;
-use mz_storage_client::client::StatusUpdate;
+use mz_storage_client::client::{Status, StatusUpdate};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
@@ -169,16 +169,6 @@ pub enum OverallStatus {
 }
 
 impl OverallStatus {
-    /// The user-readable name of the status state.
-    pub(crate) fn name(&self) -> &'static str {
-        match self {
-            OverallStatus::Starting => "starting",
-            OverallStatus::Running => "running",
-            OverallStatus::Stalled { .. } => "stalled",
-            OverallStatus::Ceased { .. } => "ceased",
-        }
-    }
-
     /// The user-readable error string, if there is one.
     pub(crate) fn error(&self) -> Option<&str> {
         match self {
@@ -206,6 +196,17 @@ impl OverallStatus {
                 BTreeSet::new()
             }
             OverallStatus::Stalled { hints, .. } => hints.clone(),
+        }
+    }
+}
+
+impl<'a> From<&'a OverallStatus> for Status {
+    fn from(val: &'a OverallStatus) -> Self {
+        match val {
+            OverallStatus::Starting => Status::Starting,
+            OverallStatus::Running => Status::Running,
+            OverallStatus::Stalled { .. } => Status::Stalled,
+            OverallStatus::Ceased { .. } => Status::Ceased,
         }
     }
 }
@@ -241,7 +242,7 @@ pub trait HealthOperator {
         &self,
         collection_id: GlobalId,
         ts: DateTime<Utc>,
-        new_status: &str,
+        new_status: Status,
         new_error: Option<&str>,
         hints: &BTreeSet<String>,
         namespaced_errors: &BTreeMap<StatusNamespace, String>,
@@ -272,7 +273,7 @@ impl HealthOperator for DefaultWriter {
         &self,
         collection_id: GlobalId,
         ts: DateTime<Utc>,
-        new_status: &str,
+        status: Status,
         new_error: Option<&str>,
         hints: &BTreeSet<String>,
         namespaced_errors: &BTreeMap<StatusNamespace, String>,
@@ -281,7 +282,7 @@ impl HealthOperator for DefaultWriter {
         self.updates.borrow_mut().push(StatusUpdate {
             id: collection_id,
             timestamp: ts,
-            status: new_status.to_string(),
+            status,
             error: new_error.map(|e| e.to_string()),
             hints: hints.clone(),
             namespaced_errors: if write_namespaced_map {
@@ -393,7 +394,7 @@ where
                         .record_new_status(
                             state.id,
                             timestamp,
-                            status.name(),
+                            (&status).into(),
                             status.error(),
                             &status.hints(),
                             status.errors().unwrap_or(&BTreeMap::new()),
@@ -475,7 +476,7 @@ where
                             .record_new_status(
                                 *id,
                                 timestamp,
-                                new_status.name(),
+                                (&new_status).into(),
                                 new_status.error(),
                                 &new_status.hints(),
                                 new_status.errors().unwrap_or(&BTreeMap::new()),
@@ -1005,7 +1006,7 @@ mod tests {
             &self,
             collection_id: GlobalId,
             _ts: DateTime<Utc>,
-            new_status: &str,
+            status: Status,
             new_error: Option<&str>,
             hints: &BTreeSet<String>,
             namespaced_errors: &BTreeMap<StatusNamespace, String>,

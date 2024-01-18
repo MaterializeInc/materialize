@@ -36,7 +36,7 @@ use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::PartialOrder;
-use tonic::{Request, Status, Streaming};
+use tonic::{Request, Status as TonicStatus, Streaming};
 
 use crate::client::proto_storage_server::ProtoStorage;
 use crate::metrics::RehydratingStorageClientMetrics;
@@ -85,7 +85,7 @@ where
     async fn command_response_stream(
         &self,
         request: Request<Streaming<ProtoStorageCommand>>,
-    ) -> Result<tonic::Response<Self::CommandResponseStreamStream>, Status> {
+    ) -> Result<tonic::Response<Self::CommandResponseStreamStream>, TonicStatus> {
         self.forward_bidi_stream(request).await
     }
 }
@@ -354,6 +354,65 @@ impl PackableStats for SinkStatisticsUpdate {
     }
 }
 
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum Status {
+    Starting,
+    Running,
+    Paused,
+    Stalled,
+    Ceased,
+    Dropped,
+}
+
+impl Status {
+    fn to_str(&self) -> &'static str {
+        match self {
+            Status::Starting => "starting",
+            Status::Running => "running",
+            Status::Paused => "paused",
+            Status::Stalled => "stalled",
+            Status::Ceased => "ceased",
+            Status::Dropped => "dropped",
+        }
+    }
+
+    /// Determines if a new status should be produced in context of a previous
+    /// status.
+    pub fn superseded_by(self, new: Status) -> bool {
+        match (self, new) {
+            (Status::Dropped, _) => false,
+            (_, Status::Dropped) => true,
+            (Status::Ceased, _) => false,
+            (_, Status::Ceased) => true,
+            // TODO(guswynn): Ideally only `failed` sources should not be marked as paused.
+            // Additionally, dropping a replica and then restarting environmentd will
+            // fail this check. This will all be resolved in:
+            // https://github.com/MaterializeInc/materialize/pull/23013
+            (Status::Stalled, Status::Paused) => false,
+            // Don't re-mark that object as paused.
+            (Status::Paused, Status::Paused) => false,
+            // De-duplication of other statuses is currently managed by the
+            // `health_operator`.
+            _ => true,
+        }
+    }
+}
+
+impl std::str::FromStr for Status {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "starting" => Status::Starting,
+            "running" => Status::Running,
+            "paused" => Status::Paused,
+            "stalled" => Status::Stalled,
+            "ceased" => Status::Ceased,
+            "dropped" => Status::Dropped,
+            s => return Err(anyhow::anyhow!("{} is not a valid status", s)),
+        })
+    }
+}
+
 /// A source or sink status update.
 ///
 /// Represents a status update for a given object type. The inner value for each
@@ -362,7 +421,7 @@ impl PackableStats for SinkStatisticsUpdate {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct StatusUpdate {
     pub id: GlobalId,
-    pub status: String,
+    pub status: Status,
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub error: Option<String>,
     pub hints: BTreeSet<String>,
@@ -370,35 +429,18 @@ pub struct StatusUpdate {
 }
 
 impl StatusUpdate {
-    pub fn dropped_status(id: GlobalId, timestamp: chrono::DateTime<chrono::Utc>) -> StatusUpdate {
+    pub fn new(
+        id: GlobalId,
+        timestamp: chrono::DateTime<chrono::Utc>,
+        status: Status,
+    ) -> StatusUpdate {
         StatusUpdate {
             id,
             timestamp,
-            status: "dropped".to_string(),
+            status,
             error: None,
             hints: Default::default(),
             namespaced_errors: Default::default(),
-        }
-    }
-
-    /// Determines if a new status should be produced in context of a previous
-    /// status.
-    pub fn produce_new_status(prev: &str, new: &str) -> bool {
-        match (prev, new) {
-            ("dropped", _) => false,
-            (_, "dropped") => true,
-            ("ceased", _) => false,
-            (_, "ceased") => true,
-            // TODO(guswynn): Ideally only `failed` sources should not be marked as paused.
-            // Additionally, dropping a replica and then restarting environmentd will
-            // fail this check. This will all be resolved in:
-            // https://github.com/MaterializeInc/materialize/pull/23013
-            ("stalled", "paused") => false,
-            // Don't re-mark that object as paused.
-            ("paused", "paused") => false,
-            // De-duplication of other statuses is currently managed by the
-            // `health_operator`.
-            _ => true,
         }
     }
 }
@@ -410,7 +452,7 @@ impl From<StatusUpdate> for Row {
         let timestamp = Datum::TimestampTz(update.timestamp.try_into().expect("must fit"));
         let id = update.id.to_string();
         let id = Datum::String(&id);
-        let status = Datum::String(&update.status);
+        let status = Datum::String(update.status.to_str());
         let error = update.error.as_deref().into();
 
         let mut row = Row::default();
@@ -443,11 +485,44 @@ impl From<StatusUpdate> for Row {
     }
 }
 
+impl RustType<proto_storage_response::ProtoStatus> for Status {
+    fn into_proto(&self) -> proto_storage_response::ProtoStatus {
+        use proto_storage_response::proto_status::*;
+
+        proto_storage_response::ProtoStatus {
+            kind: Some(match self {
+                Status::Starting => Kind::Starting(()),
+                Status::Running => Kind::Running(()),
+                Status::Paused => Kind::Paused(()),
+                Status::Stalled => Kind::Stalled(()),
+                Status::Ceased => Kind::Ceased(()),
+                Status::Dropped => Kind::Dropped(()),
+            }),
+        }
+    }
+
+    fn from_proto(proto: proto_storage_response::ProtoStatus) -> Result<Self, TryFromProtoError> {
+        use proto_storage_response::proto_status::*;
+        let kind = proto
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoStatus::kind"))?;
+
+        Ok(match kind {
+            Kind::Starting(()) => Status::Starting,
+            Kind::Running(()) => Status::Running,
+            Kind::Paused(()) => Status::Paused,
+            Kind::Stalled(()) => Status::Stalled,
+            Kind::Ceased(()) => Status::Ceased,
+            Kind::Dropped(()) => Status::Dropped,
+        })
+    }
+}
+
 impl RustType<proto_storage_response::ProtoStatusUpdate> for StatusUpdate {
     fn into_proto(&self) -> proto_storage_response::ProtoStatusUpdate {
         proto_storage_response::ProtoStatusUpdate {
             id: Some(self.id.into_proto()),
-            status: self.status.clone(),
+            status: Some(self.status.into_proto()),
             timestamp: Some(self.timestamp.into_proto()),
             error: self.error.clone(),
             hints: self.hints.iter().cloned().collect(),
@@ -463,7 +538,9 @@ impl RustType<proto_storage_response::ProtoStatusUpdate> for StatusUpdate {
             timestamp: proto
                 .timestamp
                 .into_rust_if_some("ProtoStatusUpdate::timestamp")?,
-            status: proto.status,
+            status: proto
+                .status
+                .into_rust_if_some("ProtoStatusUpdate::status")?,
             error: proto.error,
             hints: proto.hints.into_iter().collect(),
             namespaced_errors: proto.namespaced_errors,

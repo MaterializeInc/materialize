@@ -112,9 +112,20 @@ message ProtoStorageResponse {
         repeated ProtoSinkStatisticsUpdate sink_updates = 2;
     }
 
+    message ProtoStatus {
+        oneof kind {
+            google.protobuf.Empty starting = 1;
+            google.protobuf.Empty running = 2;
+            google.protobuf.Empty paused = 3;
+            google.protobuf.Empty stalled = 4;
+            google.protobuf.Empty ceased = 5;
+            google.protobuf.Empty dropped = 6;
+        }
+    }
+
     message ProtoStatusUpdate {
         mz_repr.global_id.ProtoGlobalId id = 1;
-        string status = 2;
+        ProtoStatus status = 2;
         mz_proto.chrono.ProtoNaiveDateTime timestamp = 3;
         optional string error = 4;
         repeated string hints = 5;

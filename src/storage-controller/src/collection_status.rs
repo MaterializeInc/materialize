@@ -14,7 +14,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_ore::now::EpochMillis;
 use mz_persist_types::Codec64;
 use mz_repr::{GlobalId, Row, TimestampManipulation};
-use mz_storage_client::client::StatusUpdate;
+use mz_storage_client::client::{Status, StatusUpdate};
 use timely::progress::Timestamp;
 
 use crate::collection_mgmt::CollectionManager;
@@ -33,7 +33,7 @@ where
     collection_manager: CollectionManager<T>,
     /// A list of introspection IDs for managed collections
     introspection_ids: Arc<std::sync::Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
-    previous_statuses: BTreeMap<GlobalId, String>,
+    previous_statuses: BTreeMap<GlobalId, Status>,
 }
 
 impl<T> CollectionStatusManager<T>
@@ -53,7 +53,7 @@ where
 
     pub fn extend_previous_statuses<I>(&mut self, previous_statuses: I)
     where
-        I: IntoIterator<Item = (GlobalId, String)>,
+        I: IntoIterator<Item = (GlobalId, Status)>,
     {
         self.previous_statuses.extend(previous_statuses)
     }
@@ -75,7 +75,7 @@ where
             .filter(
                 |r| match (self.previous_statuses.get(&r.id).as_deref(), &r.status) {
                     (None, _) => true,
-                    (Some(old), new) => StatusUpdate::produce_new_status(old, new),
+                    (Some(old), new) => old.superseded_by(*new),
                 },
             )
             .cloned()
