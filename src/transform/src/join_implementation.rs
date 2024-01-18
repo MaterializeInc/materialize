@@ -475,12 +475,8 @@ impl JoinImplementation {
                 // a filter gets converted into a single input join only when
                 // there are existing arrangements, without this early return,
                 // filters will always be planned as delta queries.
-                // (ggevay: This is an old comment, and I'm not sure whether a single-input join
-                // could still actually occur. It is not happening in any of our slts currently.)
-                soft_assert_or_log!(
-                    num_inputs != 1,
-                    "join with only one input (should be filter)"
-                );
+                // Note: This can actually occur, see github-24511.slt.
+                //
                 // if inputs.len() == 2:
                 // We decided to always plan this as a differential join for now, because the usual
                 // advantage of a Delta join avoiding intermediate arrangements doesn't apply.
@@ -846,7 +842,7 @@ mod differential {
             let (start, mut start_key, start_characteristics) = order[0].clone();
 
             // Count new arrangements for this choice of ordering.
-            let new_arrangements = inputs.len() - 2 + new_input_arrangements[start];
+            let new_arrangements = inputs.len().saturating_sub(2) + new_input_arrangements[start];
 
             // Implement arrangements in each of the inputs.
             let (lifted_mfp, lifted_projections) =
