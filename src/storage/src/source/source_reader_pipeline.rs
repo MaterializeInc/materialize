@@ -162,7 +162,7 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     Vec<(
-        Collection<Child<'g, G, mz_repr::Timestamp>, SourceOutput, Diff>,
+        Collection<Child<'g, G, mz_repr::Timestamp>, SourceOutput<C::Time>, Diff>,
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceError, Diff>,
     )>,
     Stream<G, HealthStatusMessage>,
@@ -541,7 +541,7 @@ fn reclock_operator<G, FromTime, D>(
     >,
     remap_trace_updates: Collection<G, FromTime, Diff>,
 ) -> Vec<(
-    Collection<G, SourceOutput, D>,
+    Collection<G, SourceOutput<FromTime>, D>,
     Collection<G, SourceError, Diff>,
 )>
 where
@@ -869,23 +869,23 @@ where
 ///
 /// TODO: This function is a bit of a mess rn but hopefully this function makes
 /// the existing mess more obvious and points towards ways to improve it.
-async fn handle_message<T, D>(
+async fn handle_message<FromTime: Timestamp, D>(
     (output_index, message): (usize, Result<SourceMessage, SourceReaderError>),
-    time: T,
+    from_time: FromTime,
     diff: D,
     bytes_read: &mut usize,
     cap_set: &CapabilitySet<mz_repr::Timestamp>,
     output_handle: &mut AsyncOutputHandle<
         mz_repr::Timestamp,
         Vec<(
-            (usize, Result<SourceOutput, SourceError>),
+            (usize, Result<SourceOutput<FromTime>, SourceError>),
             mz_repr::Timestamp,
             D,
         )>,
         Tee<
             mz_repr::Timestamp,
             (
-                (usize, Result<SourceOutput, SourceError>),
+                (usize, Result<SourceOutput<FromTime>, SourceError>),
                 mz_repr::Timestamp,
                 D,
             ),
@@ -895,12 +895,12 @@ async fn handle_message<T, D>(
     ts: mz_repr::Timestamp,
     source_id: GlobalId,
 ) where
-    T: SourceTimestamp,
+    FromTime: SourceTimestamp,
     D: Semigroup,
 {
     let output = match message {
         Ok(message) => {
-            let (partition, offset) = time
+            let (partition, offset) = from_time
                 .try_into_compat_ts()
                 .expect("data at invalid timestamp");
 
@@ -921,7 +921,7 @@ async fn handle_message<T, D>(
                     key: message.key,
                     value: message.value,
                     metadata: message.metadata,
-                    position_for_upsert: offset,
+                    from_time,
                 }),
             )
         }

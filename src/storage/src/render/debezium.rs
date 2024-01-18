@@ -14,7 +14,7 @@ use std::str::FromStr;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use mz_expr::EvalError;
 use mz_ore::cast::CastFrom;
-use mz_repr::{Datum, Diff, Row, Timestamp};
+use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::errors::{DataflowError, EnvelopeError};
 use mz_storage_types::sources::envelope::{
     DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
@@ -24,15 +24,16 @@ use mz_storage_types::sources::MzOffset;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Capability, OkErr, Operator};
 use timely::dataflow::{Scope, ScopeParent};
+use timely::progress::Timestamp;
 
 use crate::source::types::DecodeResult;
 
-pub(crate) fn render<G: Scope>(
+pub(crate) fn render<G: Scope, FromTime: Timestamp>(
     envelope: &DebeziumEnvelope,
-    input: &Collection<G, DecodeResult, Diff>,
+    input: &Collection<G, DecodeResult<FromTime>, Diff>,
 ) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
 where
-    G: ScopeParent<Timestamp = Timestamp>,
+    G: ScopeParent<Timestamp = mz_repr::Timestamp>,
 {
     let (before_idx, after_idx) = (envelope.before_idx, envelope.after_idx);
     // TODO(guswynn): !!! Correctly deduplicate even in the upsert case
@@ -99,13 +100,13 @@ where
     (oks.as_collection(), errs.as_collection())
 }
 
-pub(crate) fn render_tx<G: Scope>(
+pub(crate) fn render_tx<G: Scope, FromTime: Timestamp>(
     envelope: &DebeziumEnvelope,
-    input: &Collection<G, DecodeResult, Diff>,
+    input: &Collection<G, DecodeResult<FromTime>, Diff>,
     tx_ok: Collection<G, Row, Diff>,
 ) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
 where
-    G: ScopeParent<Timestamp = Timestamp>,
+    G: ScopeParent<Timestamp = mz_repr::Timestamp>,
 {
     let (before_idx, after_idx) = (envelope.before_idx, envelope.after_idx);
 
@@ -127,7 +128,7 @@ where
         tx_metadata_global_id: _,
     } = tx_metadata_description;
 
-    let tx_dist = move |&(ref row, time, _diff): &(Row, Timestamp, Diff)| match row
+    let tx_dist = move |&(ref row, time, _diff): &(Row, mz_repr::Timestamp, Diff)| match row
         .iter()
         .nth(tx_transaction_id_idx)
     {
@@ -136,7 +137,7 @@ where
         _ => time.hashed(),
     };
 
-    let data_dist = move |(result, _, diff): &(DecodeResult, _, _)| {
+    let data_dist = move |(result, _, diff): &(DecodeResult<FromTime>, _, _)| {
         // TODO(petrosagg): any positive diff should be accepted
         assert_eq!(
             *diff, 1,
@@ -189,7 +190,7 @@ where
                 // number of data rows so that we're able to process duplicates.  Otherwise, we're not able to tell the
                 // difference between "we've recieved the tx metadata and processed everything" and "we're still waiting
                 // on the tx metadata".
-                let mut tx_mapping: BTreeMap<String, Timestamp> = BTreeMap::new();
+                let mut tx_mapping: BTreeMap<String, mz_repr::Timestamp> = BTreeMap::new();
                 // Hold onto a capability for each `transaction_id`.  This represents the time at which we'll emit
                 // matched data rows.  This will be dropped when we've matched the indicated number of events.
                 let mut tx_cap_event_count: BTreeMap<String, (Capability<_>, i64)> = BTreeMap::new();
@@ -279,7 +280,7 @@ where
                             let tx_id_and_time = match value.iter().nth(data_transaction_idx).unwrap() {
                                 Datum::List(l) => {
                                     let tx_id = l.iter().nth(data_transaction_id_idx).unwrap().unwrap_str().to_owned();
-                                    let tx_time: Timestamp = match tx_mapping.get(&tx_id) {
+                                    let tx_time: mz_repr::Timestamp = match tx_mapping.get(&tx_id) {
                                         Some(time) => *time,
                                         None => {
                                             data_buffer.push_front(((result, time, diff), data_cap));

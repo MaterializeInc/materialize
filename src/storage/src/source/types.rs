@@ -18,7 +18,7 @@ use std::fmt::Debug;
 use differential_dataflow::Collection;
 use mz_repr::{Diff, Row};
 use mz_storage_types::errors::{DecodeError, SourceErrorDetails};
-use mz_storage_types::sources::{MzOffset, SourceTimestamp};
+use mz_storage_types::sources::SourceTimestamp;
 use mz_timely_util::builder_async::PressOnDropButton;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::{Scope, Stream};
@@ -85,22 +85,20 @@ pub struct SourceMessage {
 
 /// A record produced by a source
 #[derive(Clone, Serialize, Debug, Deserialize)]
-pub struct SourceOutput {
+pub struct SourceOutput<FromTime> {
     /// The record's key (or some empty/default value for sources without the concept of key)
     pub key: Row,
     /// The record's value
     pub value: Row,
     /// Additional metadata columns requested by the user
     pub metadata: Row,
-    /// The offset position in the partition of a kafka source. This is field is on its way out and
-    /// its only valid use is in the upsert operator. Do NOT use it in any new place!
-    // TODO(petrosagg): remove this field
-    pub position_for_upsert: MzOffset,
+    /// The original timestamp of this message
+    pub from_time: FromTime,
 }
 
 /// The output of the decoding operator
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
-pub struct DecodeResult {
+pub struct DecodeResult<FromTime> {
     /// The decoded key
     pub key: Option<Result<Row, DecodeError>>,
     /// The decoded value, as well as the the
@@ -109,10 +107,8 @@ pub struct DecodeResult {
     pub value: Option<Result<Row, DecodeError>>,
     /// Additional metadata requested by the user
     pub metadata: Row,
-    /// The offset position in the partition of a kafka source. This is field is on its way out and
-    /// its only valid use is in the upsert operator. Do NOT use it in any new place!
-    // TODO(petrosagg): remove this field
-    pub position_for_upsert: MzOffset,
+    /// The original timestamp of this message
+    pub from_time: FromTime,
 }
 
 /// A structured error for `SourceReader::get_next_message` implementors.
