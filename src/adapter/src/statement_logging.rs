@@ -189,6 +189,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
             | ExecuteResponse::AlteredSystemConfiguration
             | ExecuteResponse::ClosedCursor
             | ExecuteResponse::Comment
+            | ExecuteResponse::Copied(_)
             | ExecuteResponse::CreatedConnection
             | ExecuteResponse::CreatedDatabase
             | ExecuteResponse::CreatedSchema

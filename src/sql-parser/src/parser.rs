@@ -5153,9 +5153,12 @@ impl<'a> Parser<'a> {
                 (CopyDirection::From, CopyTarget::Stdin)
             }
             TO => {
-                self.expect_keyword(STDOUT)
-                    .map_parser_err(StatementKind::Copy)?;
-                (CopyDirection::To, CopyTarget::Stdout)
+                if self.parse_keyword(STDOUT) {
+                    (CopyDirection::To, CopyTarget::Stdout)
+                } else {
+                    let url_expr = self.parse_expr().map_parser_err(StatementKind::Copy)?;
+                    (CopyDirection::To, CopyTarget::Expr(url_expr))
+                }
             }
             _ => unreachable!(),
         };
@@ -5188,18 +5191,32 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_copy_option(&mut self) -> Result<CopyOption<Raw>, ParserError> {
-        let name =
-            match self.expect_one_of_keywords(&[FORMAT, DELIMITER, NULL, ESCAPE, QUOTE, HEADER])? {
-                FORMAT => CopyOptionName::Format,
-                DELIMITER => CopyOptionName::Delimiter,
-                NULL => CopyOptionName::Null,
-                ESCAPE => CopyOptionName::Escape,
-                QUOTE => CopyOptionName::Quote,
-                HEADER => CopyOptionName::Header,
-                _ => unreachable!(),
-            };
-        let value = self.parse_optional_option_value()?;
-        Ok(CopyOption { name, value })
+        let name = match self
+            .expect_one_of_keywords(&[FORMAT, DELIMITER, NULL, ESCAPE, QUOTE, HEADER, AWS, MAX])?
+        {
+            FORMAT => CopyOptionName::Format,
+            DELIMITER => CopyOptionName::Delimiter,
+            NULL => CopyOptionName::Null,
+            ESCAPE => CopyOptionName::Escape,
+            QUOTE => CopyOptionName::Quote,
+            HEADER => CopyOptionName::Header,
+            AWS => {
+                self.expect_keyword(CONNECTION)?;
+                return Ok(CopyOption {
+                    name: CopyOptionName::AwsConnection,
+                    value: Some(self.parse_object_option_value()?),
+                });
+            }
+            MAX => {
+                self.expect_keywords(&[FILE, SIZE])?;
+                CopyOptionName::MaxFileSize
+            }
+            _ => unreachable!(),
+        };
+        Ok(CopyOption {
+            name,
+            value: self.parse_optional_option_value()?,
+        })
     }
 
     /// Parse a literal value (numbers, strings, date/time, booleans)

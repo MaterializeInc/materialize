@@ -16,11 +16,12 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
+
 use mz_expr::MirRelationExpr;
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
-use mz_repr::{RelationDesc, ScalarType};
+use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
     ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
     IfExistsBehavior, OrderByExpr, SubscribeOutput, UnresolvedItemName,
@@ -38,12 +39,13 @@ use crate::ast::{
 use crate::catalog::CatalogItemType;
 use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
-use crate::plan::query::{plan_up_to, ExprContext, QueryLifetime};
+use crate::plan::query::{plan_expr, plan_up_to, ExprContext, PlannedRootQuery, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::{ddl, StatementContext, StatementDesc};
-use crate::plan::with_options::TryFromValue;
+use crate::plan::with_options::{self, TryFromValue};
 use crate::plan::{
-    self, side_effecting_func, CreateSinkPlan, ExplainSinkSchemaPlan, ExplainTimestampPlan,
+    self, side_effecting_func, transform_ast, CopyToFrom, CopyToPlan, CreateSinkPlan,
+    ExplainSinkSchemaPlan, ExplainTimestampPlan,
 };
 use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan,
@@ -761,6 +763,61 @@ pub fn describe_copy(
     .with_is_copy())
 }
 
+fn plan_copy_to(
+    scx: &StatementContext,
+    from: CopyToFrom,
+    to: &Expr<Aug>,
+    format: CopyFormat,
+    options: CopyOptionExtracted,
+) -> Result<Plan, PlanError> {
+    let conn_id = match options.aws_connection {
+        Some(conn_id) => GlobalId::from(conn_id),
+        None => sql_bail!("AWS CONNECTION is required for COPY ... TO <expr>"),
+    };
+    let connection = scx.get_item(&conn_id).connection()?;
+
+    match connection {
+        mz_storage_types::connections::Connection::Aws(_) => {}
+        _ => sql_bail!("only AWS CONNECTION is supported for COPY ... TO <expr>"),
+    }
+
+    if format != CopyFormat::Csv {
+        sql_bail!("only CSV format is supported for COPY ... TO <expr>");
+    }
+
+    // TODO(mouli): Get these from sql options
+    let format_params = CopyFormatParams::Csv(
+        CopyCsvFormatParams::try_new(None, None, None, None, None)
+            .map_err(|e| sql_err!("{}", e))?,
+    );
+
+    // Converting the to expr to a MirScalarExpr
+    let mut to_expr = to.clone();
+    transform_ast::transform(scx, &mut to_expr)?;
+    let relation_type = RelationDesc::empty();
+    let ecx = &ExprContext {
+        qcx: &QueryContext::root(scx, QueryLifetime::OneShot),
+        name: "COPY TO target",
+        scope: &Scope::empty(),
+        relation_type: relation_type.typ(),
+        allow_aggregates: false,
+        allow_subqueries: false,
+        allow_parameters: false,
+        allow_windows: false,
+    };
+
+    let to = plan_expr(ecx, &to_expr)?
+        .type_as(ecx, &ScalarType::String)?
+        .lower_uncorrelated()?;
+
+    Ok(Plan::CopyTo(CopyToPlan {
+        from,
+        to,
+        connection: connection.to_owned(),
+        format_params,
+    }))
+}
+
 fn plan_copy_from(
     scx: &StatementContext,
     table_name: ResolvedItemName,
@@ -777,13 +834,12 @@ fn plan_copy_from(
 
     fn extract_byte_param_value(
         v: Option<String>,
-        default: u8,
         param_name: &str,
-    ) -> Result<u8, PlanError> {
+    ) -> Result<Option<u8>, PlanError> {
         match v {
-            Some(v) if v.len() == 1 => Ok(v.as_bytes()[0]),
+            Some(v) if v.len() == 1 => Ok(Some(v.as_bytes()[0])),
             Some(..) => sql_bail!("COPY {} must be a single one-byte character", param_name),
-            None => Ok(default),
+            None => Ok(None),
         }
     }
 
@@ -806,24 +862,19 @@ fn plan_copy_from(
             CopyFormatParams::Text(CopyTextFormatParams { null, delimiter })
         }
         CopyFormat::Csv => {
-            let quote = extract_byte_param_value(options.quote, b'"', "quote")?;
-            let escape = extract_byte_param_value(options.escape, quote, "escape")?;
-            let header = options.header.unwrap_or(false);
-            let delimiter = extract_byte_param_value(options.delimiter, b',', "delimiter")?;
-            if delimiter == quote {
-                sql_bail!("COPY delimiter and quote must be different");
-            }
-            let null = match options.null {
-                Some(null) => Cow::from(null),
-                None => Cow::from(""),
-            };
-            CopyFormatParams::Csv(CopyCsvFormatParams {
-                delimiter,
-                quote,
-                escape,
-                null,
-                header,
-            })
+            let quote = extract_byte_param_value(options.quote, "quote")?;
+            let escape = extract_byte_param_value(options.escape, "escape")?;
+            let delimiter = extract_byte_param_value(options.delimiter, "delimiter")?;
+            CopyFormatParams::Csv(
+                CopyCsvFormatParams::try_new(
+                    delimiter,
+                    quote,
+                    escape,
+                    options.header,
+                    options.null,
+                )
+                .map_err(|e| sql_err!("{}", e))?,
+            )
         }
         CopyFormat::Binary => bail_unsupported!("FORMAT BINARY"),
     };
@@ -843,7 +894,10 @@ generate_extracted_config!(
     (Null, String),
     (Escape, String),
     (Quote, String),
-    (Header, bool)
+    (Header, bool),
+    (AwsConnection, with_options::Object),
+    // TODO(mouli): Use ByteSize after https://github.com/MaterializeInc/materialize/pull/24252 is merged
+    (MaxFileSize, String)
 );
 
 pub fn plan_copy(
@@ -886,6 +940,40 @@ pub fn plan_copy(
             }
             _ => sql_bail!("COPY FROM {} not supported", target),
         },
+        (CopyDirection::To, CopyTarget::Expr(to_expr)) => {
+            scx.require_feature_flag(&vars::ENABLE_COPY_TO_EXPR)?;
+
+            let from = match relation {
+                CopyRelation::Table { name, columns } => {
+                    if !columns.is_empty() {
+                        // TODO(mouli): Add support for this
+                        sql_bail!("specifying columns for COPY <table_name> TO commands not yet supported; use COPY (SELECT...) TO ... instead");
+                    }
+                    CopyToFrom::Id {
+                        id: *name.item_id(),
+                    }
+                }
+                CopyRelation::Select(stmt) => {
+                    if !stmt.query.order_by.is_empty() {
+                        sql_bail!("ORDER BY is not supported in SELECT query for COPY statements")
+                    }
+                    let PlannedRootQuery {
+                        expr,
+                        finishing,
+                        desc,
+                        scope: _,
+                    } = plan_query(scx, stmt.query, &Params::empty(), QueryLifetime::OneShot)?;
+                    CopyToFrom::Query {
+                        expr,
+                        desc,
+                        finishing,
+                    }
+                }
+                _ => sql_bail!("COPY {} {} not supported", direction, target),
+            };
+
+            plan_copy_to(scx, from, to_expr, format, options)
+        }
         _ => sql_bail!("COPY {} {} not supported", direction, target),
     }
 }

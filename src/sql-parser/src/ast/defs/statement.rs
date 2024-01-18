@@ -323,20 +323,22 @@ impl AstDisplay for CopyDirection {
 impl_display!(CopyDirection);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CopyTarget {
+pub enum CopyTarget<T: AstInfo> {
     Stdin,
     Stdout,
+    Expr(Expr<T>),
 }
 
-impl AstDisplay for CopyTarget {
+impl<T: AstInfo> AstDisplay for CopyTarget<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(match self {
-            CopyTarget::Stdin => "STDIN",
-            CopyTarget::Stdout => "STDOUT",
-        })
+        match self {
+            CopyTarget::Stdin => f.write_str("STDIN"),
+            CopyTarget::Stdout => f.write_str("STDOUT"),
+            CopyTarget::Expr(expr) => f.write_node(expr),
+        }
     }
 }
-impl_display!(CopyTarget);
+impl_display_t!(CopyTarget);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CopyOptionName {
@@ -346,6 +348,8 @@ pub enum CopyOptionName {
     Escape,
     Quote,
     Header,
+    AwsConnection,
+    MaxFileSize,
 }
 
 impl AstDisplay for CopyOptionName {
@@ -357,6 +361,8 @@ impl AstDisplay for CopyOptionName {
             CopyOptionName::Escape => "ESCAPE",
             CopyOptionName::Quote => "QUOTE",
             CopyOptionName::Header => "HEADER",
+            CopyOptionName::AwsConnection => "AWS CONNECTION",
+            CopyOptionName::MaxFileSize => "MAX FILE SIZE",
         })
     }
 }
@@ -385,7 +391,7 @@ pub struct CopyStatement<T: AstInfo> {
     /// DIRECTION
     pub direction: CopyDirection,
     // TARGET
-    pub target: CopyTarget,
+    pub target: CopyTarget<T>,
     // OPTIONS
     pub options: Vec<CopyOption<T>>,
 }

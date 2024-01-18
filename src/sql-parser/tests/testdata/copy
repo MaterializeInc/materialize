@@ -72,16 +72,16 @@ Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")
 parse-statement
 COPY t TO STDOUT ()
 ----
-error: Expected one of FORMAT or DELIMITER or NULL or ESCAPE or QUOTE or HEADER, found right parenthesis
+error: Expected one of FORMAT or DELIMITER or NULL or ESCAPE or QUOTE or HEADER or AWS or MAX, found right parenthesis
 COPY t TO STDOUT ()
                   ^
 
 parse-statement
 COPY t TO STDIN
 ----
-error: Expected STDOUT, found STDIN
-COPY t TO STDIN
-          ^
+COPY t TO stdin
+=>
+Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Expr(Identifier([Ident("stdin")])), options: [] })
 
 parse-statement
 COPY (select 1) FROM STDIN
@@ -97,3 +97,62 @@ COPY t TO STDOUT WITH
 error: Expected left parenthesis, found EOF
 COPY t TO STDOUT WITH
                      ^
+
+# Copy to S3
+parse-statement
+COPY t TO 's3://path/' WITH (FORMAT = csv, MAX FILE SIZE = 10240, AWS CONNECTION = aws_conn)
+----
+COPY t TO 's3://path/' WITH (FORMAT = csv, MAX FILE SIZE = 10240, AWS CONNECTION = aws_conn)
+=>
+Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Expr(Value(String("s3://path/"))), options: [CopyOption { name: Format, value: Some(Ident(Ident("csv"))) }, CopyOption { name: MaxFileSize, value: Some(Value(Number("10240"))) }, CopyOption { name: AwsConnection, value: Some(Item(Name(UnresolvedItemName([Ident("aws_conn")])))) }] })
+
+# S3 path can be a scalar expression
+parse-statement
+COPY t TO 's3://path/' || mz_now() WITH (FORMAT = csv, MAX FILE SIZE = 10240, AWS CONNECTION = aws_conn)
+----
+COPY t TO 's3://path/' || mz_now() WITH (FORMAT = csv, MAX FILE SIZE = 10240, AWS CONNECTION = aws_conn)
+=>
+Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Expr(Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("s3://path/")), expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("mz_now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })) }), options: [CopyOption { name: Format, value: Some(Ident(Ident("csv"))) }, CopyOption { name: MaxFileSize, value: Some(Value(Number("10240"))) }, CopyOption { name: AwsConnection, value: Some(Item(Name(UnresolvedItemName([Ident("aws_conn")])))) }] })
+
+parse-statement
+COPY t TO 's3://path/' || repeat('1', 2)
+----
+COPY t TO 's3://path/' || repeat('1', 2)
+=>
+Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [] }, direction: To, target: Expr(Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("s3://path/")), expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("repeat")])), args: Args { args: [Value(String("1")), Value(Number("2"))], order_by: [] }, filter: None, over: None, distinct: false })) }), options: [] })
+
+parse-statement
+COPY (select * from t) TO 's3://path/' || repeat('1', 2)
+----
+COPY (SELECT * FROM t) TO 's3://path/' || repeat('1', 2)
+=>
+Copy(CopyStatement { relation: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }), direction: To, target: Expr(Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("s3://path/")), expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("repeat")])), args: Args { args: [Value(String("1")), Value(Number("2"))], order_by: [] }, filter: None, over: None, distinct: false })) }), options: [] })
+
+parse-statement
+COPY (select *, mz_now() from t) TO 's3://path/'
+----
+COPY (SELECT *, mz_now() FROM t) TO 's3://path/'
+=>
+Copy(CopyStatement { relation: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard, Expr { expr: Function(Function { name: Name(UnresolvedItemName([Ident("mz_now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }), direction: To, target: Expr(Value(String("s3://path/"))), options: [] })
+
+
+parse-statement
+COPY t(column1, column2) TO 's3://path/'
+----
+COPY t(column1, column2) TO 's3://path/'
+=>
+Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [Ident("column1"), Ident("column2")] }, direction: To, target: Expr(Value(String("s3://path/"))), options: [] })
+
+parse-statement
+COPY t(column1, column2) TO '/any/path/'
+----
+COPY t(column1, column2) TO '/any/path/'
+=>
+Copy(CopyStatement { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), columns: [Ident("column1"), Ident("column2")] }, direction: To, target: Expr(Value(String("/any/path/"))), options: [] })
+
+parse-statement
+COPY (select * from t order by 1) TO 's3://path/' || repeat('1', 2)
+----
+COPY (SELECT * FROM t ORDER BY 1) TO 's3://path/' || repeat('1', 2)
+=>
+Copy(CopyStatement { relation: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("t")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Value(Number("1")), asc: None, nulls_last: None }], limit: None, offset: None }, as_of: None }), direction: To, target: Expr(Op { op: Op { namespace: None, op: "||" }, expr1: Value(String("s3://path/")), expr2: Some(Function(Function { name: Name(UnresolvedItemName([Ident("repeat")])), args: Args { args: [Value(String("1")), Value(Number("2"))], order_by: [] }, filter: None, over: None, distinct: false })) }), options: [] })

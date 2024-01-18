@@ -63,7 +63,7 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    for name in ["secrets-manager", "aws-connection"]:
+    for name in ["secrets-manager", "aws-connection", "copy-to-s3"]:
         with c.test_case(name):
             c.workflow(name)
 
@@ -208,3 +208,8 @@ def workflow_secrets_manager(c: Composition) -> None:
 def workflow_aws_connection(c: Composition) -> None:
     c.up("localstack", "materialized")
     c.run("testdrive", "aws-connection/aws-connection.td")
+
+
+def workflow_copy_to_s3(c: Composition) -> None:
+    c.up("localstack", "materialized")
+    c.run("testdrive", "copy-to-s3/copy-to-s3.td")

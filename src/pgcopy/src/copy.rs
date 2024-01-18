@@ -427,13 +427,54 @@ pub fn decode_copy_format_text(
     Ok(rows)
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct CopyCsvFormatParams<'a> {
     pub delimiter: u8,
     pub quote: u8,
     pub escape: u8,
     pub header: bool,
     pub null: Cow<'a, str>,
+}
+
+impl<'a> CopyCsvFormatParams<'a> {
+    pub fn try_new(
+        delimiter: Option<u8>,
+        quote: Option<u8>,
+        escape: Option<u8>,
+        header: Option<bool>,
+        null: Option<String>,
+    ) -> Result<CopyCsvFormatParams<'a>, String> {
+        let mut params = CopyCsvFormatParams {
+            delimiter: b',',
+            quote: b'"',
+            escape: b'"',
+            header: false,
+            null: Cow::from(""),
+        };
+
+        if let Some(delimiter) = delimiter {
+            params.delimiter = delimiter;
+        }
+        if let Some(quote) = quote {
+            params.quote = quote;
+            // escape defaults to the value provided for quote
+            params.escape = quote;
+        }
+        if let Some(escape) = escape {
+            params.escape = escape;
+        }
+        if let Some(header) = header {
+            params.header = header;
+        }
+        if let Some(null) = null {
+            params.null = Cow::from(null);
+        }
+
+        if params.quote == params.delimiter {
+            return Err("COPY delimiter and quote must be different".to_string());
+        }
+        Ok(params)
+    }
 }
 
 pub fn decode_copy_format_csv(
@@ -673,5 +714,47 @@ mod tests {
             );
             assert!(parser.is_eof());
         }
+    }
+
+    #[mz_ore::test]
+    fn test_copy_csv_format_params() {
+        assert_eq!(
+            CopyCsvFormatParams::try_new(Some(b't'), Some(b'q'), None, None, None),
+            Ok(CopyCsvFormatParams {
+                delimiter: b't',
+                quote: b'q',
+                escape: b'q',
+                header: false,
+                null: Cow::from(""),
+            })
+        );
+
+        assert_eq!(
+            CopyCsvFormatParams::try_new(
+                Some(b't'),
+                Some(b'q'),
+                Some(b'e'),
+                Some(true),
+                Some("null".to_string())
+            ),
+            Ok(CopyCsvFormatParams {
+                delimiter: b't',
+                quote: b'q',
+                escape: b'e',
+                header: true,
+                null: Cow::from("null"),
+            })
+        );
+
+        assert_eq!(
+            CopyCsvFormatParams::try_new(
+                None,
+                Some(b','),
+                Some(b'e'),
+                Some(true),
+                Some("null".to_string())
+            ),
+            Err("COPY delimiter and quote must be different".to_string())
+        );
     }
 }

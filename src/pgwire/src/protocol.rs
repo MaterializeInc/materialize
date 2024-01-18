@@ -1729,6 +1729,7 @@ where
             | ExecuteResponse::GrantedPrivilege
             | ExecuteResponse::GrantedRole
             | ExecuteResponse::Inserted(..)
+            | ExecuteResponse::Copied(..)
             | ExecuteResponse::Prepare
             | ExecuteResponse::Raised
             | ExecuteResponse::ReassignOwned

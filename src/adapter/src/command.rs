@@ -266,6 +266,9 @@ pub enum ExecuteResponse {
     ClosedCursor,
     /// The provided comment was created.
     Comment,
+    /// The specified number of rows were copied into the requested output.
+    Copied(usize),
+    /// The response for a COPY TO STDOUT query.
     CopyTo {
         format: mz_sql::plan::CopyFormat,
         resp: Box<ExecuteResponse>,
@@ -447,6 +450,7 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::Canceled => Ok(ExecuteResponse::Canceled),
             ExecuteResponseKind::ClosedCursor => Ok(ExecuteResponse::ClosedCursor),
             ExecuteResponseKind::Comment => Ok(ExecuteResponse::Comment),
+            ExecuteResponseKind::Copied => Err(()),
             ExecuteResponseKind::CopyTo => Err(()),
             ExecuteResponseKind::CopyFrom => Err(()),
             ExecuteResponseKind::CreatedConnection => Ok(ExecuteResponse::CreatedConnection),
@@ -510,6 +514,7 @@ impl ExecuteResponse {
             Canceled => None,
             ClosedCursor => Some("CLOSE CURSOR".into()),
             Comment => Some("COMMENT".into()),
+            Copied(n) => Some(format!("COPY {}", n)),
             CopyTo { .. } => None,
             CopyFrom { .. } => None,
             CreatedConnection { .. } => Some("CREATE CONNECTION".into()),
@@ -601,6 +606,7 @@ impl ExecuteResponse {
             }
             Close => vec![ClosedCursor],
             PlanKind::CopyFrom => vec![ExecuteResponseKind::CopyFrom],
+            PlanKind::CopyTo => vec![ExecuteResponseKind::Copied],
             PlanKind::Comment => vec![ExecuteResponseKind::Comment],
             CommitTransaction => vec![TransactionCommitted, TransactionRolledBack],
             CreateConnection => vec![CreatedConnection],
@@ -626,7 +632,11 @@ impl ExecuteResponse {
             PlanKind::EmptyQuery => vec![ExecuteResponseKind::EmptyQuery],
             ExplainPlan | ExplainTimestamp | Select | ShowAllVariables | ShowCreate
             | ShowColumns | ShowVariable | InspectShard | ExplainSinkSchema => {
-                vec![CopyTo, SendingRows, SendingRowsImmediate]
+                vec![
+                    ExecuteResponseKind::CopyTo,
+                    SendingRows,
+                    SendingRowsImmediate,
+                ]
             }
             Execute | ReadThenWrite => vec![
                 Deleted,
@@ -647,7 +657,7 @@ impl ExecuteResponse {
             PlanKind::SetVariable | ResetVariable | PlanKind::SetTransaction => {
                 vec![ExecuteResponseKind::SetVariable]
             }
-            PlanKind::Subscribe => vec![Subscribing, CopyTo],
+            PlanKind::Subscribe => vec![Subscribing, ExecuteResponseKind::CopyTo],
             StartTransaction => vec![StartedTransaction],
             SideEffectingFunc => vec![SendingRowsImmediate],
             ValidateConnection => vec![ExecuteResponseKind::ValidatedConnection],
