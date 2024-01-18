@@ -10,64 +10,83 @@ aliases:
   - /sql/create-source/webhook/#connecting-with-segment
 ---
 
-[Segment](https://segment.com/) is a Customer Data Platform (CDP) that collects and routes events
-from your web and mobile app. You can use Materialize to process, sink or serve each event.
-
-This guide will walk you through the steps to ingest data from Segment to Materialize.
+This guide walks through the steps to ingest data from [Segment](https://segment.com/)
+into Materialize using the [Webhook source](/sql/create-source/webhook/).
 
 ### Before you begin
 
-Ensure that you have a Segment source.
+Ensure that you have:
 
-## Step 1. (Optional) Create a Materialize Cluster
+- A Segment [source](https://segment.com/docs/connections/sources/) set up and running.
+
+## Step 1. (Optional) Create a cluster
 
 If you already have a cluster for your webhook sources, you can skip this step.
 
-To create a Materialize cluster, follow the steps outlined in our
-create a [cluster guide](/sql/create-cluster),
-or create a managed cluster for all your webhooks using the following SQL statement:
+To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/create-cluster):
 
 ```sql
 CREATE CLUSTER webhooks_cluster (SIZE = '3xsmall');
 ```
 
-## Step 2. Create a Shared Secret
+## Step 2. Create a secret
 
-To validate requests between Segment and Materialize, create a shared secret:
+To validate requests between Segment and Materialize, you must create a [secret](/sql/create-secret/):
 
 ```sql
-CREATE SECRET segment_shared_secret AS '<secret_value>';
+CREATE SECRET segment_webhook_secret AS '<secret_value>';
 ```
 
 Change the `<secret_value>` to a unique value that only you know and store it in a secure location.
 
-## Step 3. Set Up a Webhook Source
+## Step 3. Set up a webhook source
 
 Using the secret from the previous step, create a [webhook source](/sql/create-source/webhook/)
 in Materialize to ingest data from Segment:
 
 ```sql
-CREATE SOURCE my_segment_source IN CLUSTER webhooks_cluster FROM WEBHOOK
+CREATE SOURCE segment_source IN CLUSTER webhooks_cluster FROM WEBHOOK
   BODY FORMAT JSON
   INCLUDE HEADER 'event-type' AS event_type
   INCLUDE HEADERS
   CHECK (
-    WITH ( BODY BYTES, HEADERS, SECRET segment_shared_secret AS secret BYTES)
-    constant_time_eq(decode(headers->'x-signature', 'hex'), hmac(body, secret, 'sha1'))
+    WITH ( BODY BYTES, HEADERS, SECRET segment_webhook_secret BYTES)
+    constant_time_eq(decode(headers->'x-signature', 'hex'), hmac(body, segment_webhook_secret, 'sha1'))
   );
 ```
 
-After a successful run, the command returns a `NOTICE` message containing the [webhook URL](https://materialize.com/docs/sql/create-source/webhook/#webhook-url).
-Copy and store it. You will need it for the next steps. Otherwise, you can query it here: [`mz_internal.mz_webhook_sources`](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_webhook_sources).
+After a successful run, the command returns a `NOTICE` message containing the
+unique [webhook URL](https://materialize.com/docs/sql/create-source/webhook/#webhook-url)
+that allows you to `POST` events to the source. Copy and store it. You will need
+it for the next step.
 
-In the code, you will notice a `CHECK` statement. It defines how to validate each request. At the time of writing, Segment
-validates requests by signing them with an HMAC in the `X-Signature` request header. The HMAC is a
-hex-encoded SHA1 hash using the shared secret from the previous step and request body. Materialize decodes the signature using
-the [`decode`](/sql/functions/#decode) function, getting the raw bytes, and generate our own HMAC
-using the [`hmac`](/sql/functions/#hmac) function. If the two values are equal, then the request is
-legitimate!
+The URL will have the following format:
 
-## Step 4. Create a Webhook Destination in Segment
+```
+https://<HOST>/api/webhook/<database>/<schema>/<src_name>
+```
+
+If you missed the notice, you can find the URLs for all webhook sources in the
+[`mz_internal.mz_webhook_sources`](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_webhook_sources)
+system table.
+
+### Access and authentication
+
+{{< warning >}}
+Without a `CHECK` statement, **all requests will be accepted**. To prevent bad
+actors from injecting data into your source, it is **strongly encouraged** that
+you define a `CHECK` statement with your webhook sources.
+{{< /warning >}}
+
+The `CHECK` clause defines how to validate each request. At the time of writing,
+Segment validates requests by signing them with an HMAC in the `X-Signature`
+request header. The HMAC is a hex-encoded SHA1 hash using the secret
+from **Step 2.** and the request body. Materialize decodes the signature using
+the [`decode`](/sql/functions/#decode) function, getting the raw bytes, and
+generate our own HMAC using the [`hmac`](/sql/functions/#hmac) function. If the
+two values are equal, then the request is legitimate!
+
+## Step 4. Create a webhook destination in Segment
 
 1. In Segment, go to **Connections > Catalog**.
 
@@ -79,9 +98,12 @@ legitimate!
 
 5. Jot a *Destination Name* and click **Create Destination**.
 
-## Step 5. Configure the Mappings in Segment
+## Step 5. Configure the mapping in Segment
 
-A webhook destination in Segment requires a [data mapping](https://segment.com/blog/data-mapping/) to send events from the source to the destination. For this guide, the destination is the Materialize source. Follow these steps to create the correct mapping:
+A webhook destination in Segment requires a [data mapping](https://segment.com/blog/data-mapping/)
+to send events from the source to the destination. For this guide, the
+destination is the Materialize source. Follow these steps to create the correct
+mapping:
 
 1. Go to your webhook destination created in the previous step.
 
@@ -112,9 +134,27 @@ A webhook destination in Segment requires a [data mapping](https://segment.com/b
  4. Click **Save Changes**.
   {{< /note >}}
 
-## Step 5. Parse Incoming Data
+## Step 6. Validate incoming data
 
-Create a view to parse incoming events from Segment. You have the option to either build your own parser view by [pasting your event JSON here](/transform-data/json/), or use any of the following templates for the most common types of Segment:
+With the source set up in Materialize and the webhook destination configured in
+Segment, you can now query the incoming data:
+
+1. [In the Materialize console](https://console.materialize.com/), navigate to
+   the **SQL Shell**.
+
+1. Use SQL queries to inspect and analyze the incoming data:
+
+    ```sql
+    SELECT * FROM segment_source LIMIT 10;
+    ```
+
+## Step 7. Transform incoming data
+
+### JSON parsing
+
+Webhook data is ingested as a JSON blob. We recommend creating a parsing view on
+top of your webhook source that uses [`jsonb` operators](https://materialize.com/docs/sql/types/jsonb/#operators)
+to map the individual fields to columns with the required data types.
 
 {{< tabs >}}
 
@@ -138,7 +178,7 @@ CREATE VIEW parse_segment AS SELECT
     body->>'type' AS type,
     body->>'userId' AS user_id,
     body->>'version' AS version
-FROM my_segment_source;
+FROM segment_source;
 ```
 {{< /tab >}}
 
@@ -165,7 +205,7 @@ CREATE VIEW parse_segment AS SELECT
     body->>'type' AS type,
     body->>'userId' AS user_id,
     try_parse_monotonic_iso8601_timestamp(body->>'originalTimestamp') AS original_timestamp
-FROM my_segment_source;
+FROM segment_source;
 ```
 
 {{< /tab >}}
@@ -196,21 +236,30 @@ CREATE VIEW parse_segment AS SELECT
     body->>'type' AS type,
     body->>'userId' AS user_id,
     body->>'version' AS version
-FROM my_segment_source;
+FROM segment_source;
 ```
 {{< /tab >}}
 {{< /tabs >}}
 
+{{< json-parser >}}
 
-This view parses the incoming data, transforming the nested JSON structure into discernible columns, such as `type` or `userId`. It uses
-the [`try_parse_monotonic_iso8601_timestamp`](/sql/functions/pushdown/) function when parsing timestamps, to enable
-[temporal filter pushdown](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
+### Timestamp handling
 
-Furthermore, with the vast amount of data processed and potential network issues, it's not uncommon to receive duplicate records. You can use the
-`DISTINCT` clause to remove duplicates, for more details, refer to the webhook source [documentation](/sql/create-source/webhook/#handling-duplicated-and-partial-events).
+We highly recommend using the [`try_parse_monotonic_iso8601_timestamp`](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown)
+function when casting from `text` to `timestamp`, which enables [temporal filter
+pushdown](https://materialize.com/docs/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
 
-{{< note >}} For comprehensive details regarding Segment's webhook destination, refer to their [official documentation](https://segment.com/docs/connections/destinations/catalog/actions-webhook/). {{< /note >}}
+### Deduplication
 
----
+With the vast amount of data processed and potential network issues, it's not
+uncommon to receive duplicate records. You can use the `DISTINCT ON` clause to
+efficiently remove duplicates. For more details, refer to the webhook source
+[reference documentation](/sql/create-source/webhook/#handling-duplicated-and-partial-events).
 
-By following the steps outlined above, you will have successfully set up a seamless integration between Segment and Materialize, allowing for real-time data ingestion using webhooks.
+## Next steps
+
+With Materialize ingesting your Segment data, you can start exploring it,
+computing real-time results that stay up-to-date as new data arrives, and
+serving results efficiently. For more details, check out the
+[Segment documentation](https://segment.com/docs/connections/destinations/catalog/actions-webhook/) and the
+[webhook source reference documentation](/sql/create-source/webhook/).

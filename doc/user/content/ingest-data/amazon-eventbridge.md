@@ -1,22 +1,23 @@
 ---
-title: "RudderStack"
-description: "How to stream data from RudderStack to Materialize using webhooks"
+title: "Amazon EventBridge"
+description: "How to stream data from Amazon EventBridge to Materialize using webhooks"
 menu:
   main:
     parent: "webhooks"
-    name: "RudderStack"
-    weight: 10
+    name: "Amazon EventBridge"
+    weight: 5
+aliases:
+  - /sql/create-source/webhook/#connecting-with-amazon-eventbridge
 ---
 
-This guide walks through the steps to ingest data from [RudderStack](https://rudderstack.com/)
+This guide walks through the steps to ingest data from [Amazon EventBridge](https://aws.amazon.com/eventbridge/)
 into Materialize using the [Webhook source](/sql/create-source/webhook/).
 
 ## Before you begin
 
 Ensure that you have:
 
-- A RudderStack [account](https://app.rudderstack.com/signup)
-- A RudderStack [source](https://www.rudderstack.com/docs/sources/overview/) set up and running.
+- An [EventBridge-enabled Amazon Simple Storage Service (S3) bucket](https://docs.aws.amazon.com/AmazonS3/latest/user-guide/Welcome.html).
 
 ## Step 1. (Optional) Create a cluster
 
@@ -30,30 +31,31 @@ CREATE CLUSTER webhooks_cluster (SIZE = '3xsmall');
 
 ## Step 2. Create a secret
 
-To validate requests between Rudderstack and Materialize, you must create a [secret](/sql/create-secret/):
+To validate requests between Amazon EventBridge and Materialize, you must create
+a [secret](/sql/create-secret/):
 
 ```sql
-CREATE SECRET rudderstack_webhook_secret AS '<secret_value>';
+CREATE SECRET eventbridge_webhook_secret AS '<secret_value>';
 ```
 
-Change the `<secret_value>` to a unique value that only you know and store it in a secure location.
+Change the `<secret_value>` to a unique value that only you know and store it in
+a secure location.
 
 ## Step 3. Set up a webhook source
 
-Using the secret from **Step 2.**, create a [webhook source](/sql/create-source/webhook/) in Materialize to ingest data from RudderStack:
+Using the secret from **Step 2.**, create a [webhook source](/sql/create-source/webhook/)
+in Materialize to ingest data from Amazon EventBridge.
 
 ```sql
-CREATE SOURCE rudderstack_source IN CLUSTER webhooks_cluster
-  FROM WEBHOOK
-    BODY FORMAT JSON
-    CHECK (
-      WITH (
-        HEADERS,
-        BODY AS request_body,
-        SECRET rudderstack_webhook_secret
-      )
-      constant_time_eq(headers->'authorization', rudderstack_webhook_secret)
-);
+CREATE SOURCE eventbridge_source IN CLUSTER webhooks_cluster
+FROM WEBHOOK
+  BODY FORMAT JSON
+  -- Include all headers, but filter out the secret.
+  INCLUDE HEADERS ( NOT 'x-mz-api-key' )
+  CHECK (
+    WITH ( HEADERS, SECRET eventbridge_webhook_secret)
+    constant_time_eq(headers->'x-mz-api-key', secret)
+  );
 ```
 
 After a successful run, the command returns a `NOTICE` message containing the
@@ -82,39 +84,20 @@ you define a `CHECK` statement with your webhook sources.
 The above webhook source uses [basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme).
 This enables a simple and rudimentary way to grant authorization to your webhook source.
 
-## Step 4. Create a webhook destination in RudderStack
+## Step 4. Create an API destination in Amazon EventBridge
 
-To configure the webhook endpoint as a destination in RudderStack, follow the
-steps outlined below:
+[//]: # "TODO(morsapaes) This needs to be broken down into instructions, same as
+the other guides."
 
-1.  **Select your RudderStack source**
-
-    Identify the source you wish to add a webhook endpoint to. If you don't have
-    a source set up, follow the steps outlined in the Rudderstack
-    [Getting Started](https://www.rudderstack.com/docs/dashboard-guides/sources/) guide.
-
-1.  **Add a webhook destination and connect it to the Rudderstack source**
-    1. Navigate to the **Add Destination** menu.
-    1. Select the **Webhook** option.
-    1. Assign a name to your destination and click **Continue**.
-
-#### Connection settings
-
-On the **Connection Settings** page:
-
-- **Webhook URL**: Define the endpoint where events will be dispatched by RudderStack. Use the URL from **Step 3.**.
-
-- **URL method**: Use the `POST` method to send events to Materialize.
-
-- **Headers**: These headers get added to the RudderStack request sent to your webhook. For this setup, ensure that the following headers are added:
-
-    - `Content-Type`: `application/json`
-    - `Authorization`: Use the secret created in **Step 2.**.
+For guidance on creating an API destination in Amazon EventBridge to connect to
+Materialize, check out [this guide](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-tutorial-datadog.html).
+Use the secret created in **Step 2.** as the **API key name** for request
+validation.
 
 ## Step 5. Validate incoming data
 
-With the source set up in Materialize and the webhook destination configured in
-Rudderstack, you can now query the incoming data:
+With the source set up in Materialize and the API destination configured in
+Amazon EventBridge, you can now query the incoming data:
 
 1. [In the Materialize console](https://console.materialize.com/), navigate to
    the **SQL Shell**.
@@ -122,11 +105,8 @@ Rudderstack, you can now query the incoming data:
 1. Use SQL queries to inspect and analyze the incoming data:
 
     ```sql
-    SELECT * FROM rudderstack_source LIMIT 10;
+    SELECT * FROM eventbridge_source LIMIT 10;
     ```
-
-    If you don't see any data, head over to the [RudderStack console](https://app.rudderstack.com/)
-    and try to sync your source to trigger a new data ingestion.
 
 ## Step 6. Transform incoming data
 
@@ -135,16 +115,6 @@ Rudderstack, you can now query the incoming data:
 Webhook data is ingested as a JSON blob. We recommend creating a parsing view on
 top of your webhook source that uses [`jsonb` operators](https://materialize.com/docs/sql/types/jsonb/#operators)
 to map the individual fields to columns with the required data types.
-
-```sql
-CREATE VIEW json_parsed AS
-  SELECT
-    (body -> '_metadata' ->> 'nodeVersion')::text AS nodeVersion,
-    (body ->> 'channel')::text AS channel,
-    (body ->> 'event')::text AS event,
-    (body ->> 'userId')::text AS userId
-  FROM rudderstack_source;
-```
 
 {{< json-parser >}}
 
@@ -163,8 +133,8 @@ efficiently remove duplicates. For more details, refer to the webhook source
 
 ## Next steps
 
-With Materialize ingesting your Rudderstack data, you can start exploring it,
+With Materialize ingesting your Stripe data, you can start exploring it,
 computing real-time results that stay up-to-date as new data arrives, and
 serving results efficiently. For more details, check out the
-[Rudderstack documentation](https://rudderstack.com/docs/) and the
+[Stripe documentation](https://stripe.com/docs/webhooks) and the
 [webhook source reference documentation](/sql/create-source/webhook/).

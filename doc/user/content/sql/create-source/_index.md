@@ -32,7 +32,7 @@ Materialize bundles **native connectors** that allow ingesting data from the fol
 - [Other databases](/integrations/#other-databases)
 {{</ linkbox >}}
 {{< linkbox title="Webhooks" >}}
-- [Amazon EventBridge](/sql/create-source/webhook/#connecting-with-amazon-eventbridge)
+- [Amazon EventBridge](/ingest-data/amazon-eventbridge/)
 - [Segment](/ingest-data/segment/)
 - [Other webhooks](/sql/create-source/webhook)
 {{</ linkbox >}}
@@ -80,9 +80,9 @@ Materialize can decode JSON messages into a single column named `data` with type
 `jsonb`. Refer to the [`jsonb` type](/sql/types/jsonb) documentation for the
 supported operations on this type.
 
-If your JSON messages have a consistent shape, consider creating a
-[view](/get-started/key-concepts/#views) that extracts the fields of the JSON
-into columns:
+If your JSON messages have a consistent shape, we recommend creating a parsing
+[view](/get-started/key-concepts/#views) that maps the individual fields to
+columns with the required data types:
 
 ```sql
 -- extract jsonb into typed columns
@@ -93,6 +93,8 @@ CREATE VIEW my_typed_source AS
     (data->>'field3')::float AS field_3
   FROM my_jsonb_source;
 ```
+
+To avoid doing this tedious task manually, you can use [this **JSON parsing widget**](/sql/types/jsonb/#parsing)!
 
 ##### Schema registry integration
 

@@ -576,13 +576,18 @@ CREATE SOURCE json_source
 ```
 
 ```sql
-CREATE MATERIALIZED VIEW typed_kafka_source AS
+CREATE VIEW typed_kafka_source AS
   SELECT
     (data->>'field1')::boolean AS field_1,
     (data->>'field2')::int AS field_2,
     (data->>'field3')::float AS field_3
   FROM json_source;
 ```
+
+JSON-formatted messages are ingested as a JSON blob. We recommend creating a
+parsing view on top of your Kafka source that maps the individual fields to
+columns with the required data types. To avoid doing this tedious task
+manually, you can use [this **JSON parsing widget**](/sql/types/jsonb/#parsing)!
 
 {{< /tab >}}
 {{< tab "Protobuf">}}

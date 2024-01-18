@@ -90,16 +90,22 @@ The process to connect Materialize to Upstash Kafka consists of the following st
 
       CREATE SOURCE <source-name>
         FROM KAFKA CONNECTION upstash_kafka (TOPIC '<topic-name>')
-        FORMAT BYTES
+        FORMAT JSON
         WITH (SIZE = '3xsmall');
     ```
 
-    e. If the command executes without an error and outputs _CREATE SOURCE_, it means that you have successfully connected Materialize to your Upstash Kafka cluster. You can quickly test your connection by running the following statement:
-    ```sql
-      SELECT convert_from(data, 'utf8') from <source-name>;
-    ```
+    e. If the command executes without an error and outputs _CREATE SOURCE_, it
+    means that you have successfully connected Materialize to your Upstash
+    Kafka cluster.
 
-    **Note:** The example above walked through creating a source, which is a way of connecting Materialize to an external data source. We created a connection to Upstash Kafka using SASL authentication, using credentials securely stored as secrets in Materialize's secret management system. For input formats, we used `BYTES` to deserialize JSON-formatted data; however, Materialize supports other formats as well, like [Avro, and Protobuf](/sql/create-source/kafka/#supported-formats).
+    **Note:** The example above walked through creating a source, which is a way
+    of connecting Materialize to an external data source. We created a
+    connection to Upstash Kafka using SASL authentication and credentials
+    securely stored as secrets in Materialize's secret management system. For
+    input formats, we used `JSON`, but you can also ingest Kafka messages
+    formatted in e.g. [Avro and Protobuf](/sql/create-source/kafka/#supported-formats).
+    You can find more details about the various different supported formats and
+    possible configurations in the [reference documentation](/sql/create-source/kafka/).
 
 5. #### Create a sink in Materialize
 

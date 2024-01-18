@@ -105,13 +105,19 @@ The process to connect Materialize to Redpanda Cloud consists of the following s
 
       CREATE SOURCE <topic-name>
         FROM KAFKA CONNECTION redpanda_cloud (TOPIC '<topic-name>')
-        FORMAT BYTES
+        FORMAT JSON
         WITH (SIZE = '3xsmall');
     ```
 
-    e. If the command executes without an error and outputs _CREATE SOURCE_, it means that you have successfully connected Materialize to your Redpanda cluster. You can quickly test your connection by running the following statement:
-    ```sql
-      SELECT convert_from(data, 'utf8') from topic_name;
-    ```
+    e. If the command executes without an error and outputs _CREATE SOURCE_, it
+    means that you have successfully connected Materialize to your Redpanda
+    cluster.
 
-    **Note:** The example above walked through creating a source, which is a way of connecting Materialize to an external data source. We created a connection to Redpanda using SASL authentication, using credentials securely stored as secrets in Materialize's secret management system. For input formats, we used `bytes`, however, Materialize supports various other options as well. For example, you can ingest Redpanda messages formatted in [JSON, Avro and Protobuf](/sql/create-source/kafka/#supported-formats). You can find more details about the various different supported formats and possible configurations [here](/sql/create-source/kafka/).
+    **Note:** The example above walked through creating a source, which is a way
+    of connecting Materialize to an external data source. We created a
+    connection to Redpanda Cloud using SASL authentication and credentials
+    securely stored as secrets in Materialize's secret management system. For
+    input formats, we used `JSON`, but you can also ingest Kafka messages
+    formatted in e.g. [Avro and Protobuf](/sql/create-source/kafka/#supported-formats).
+    You can find more details about the various different supported formats and
+    possible configurations in the [reference documentation](/sql/create-source/kafka/).

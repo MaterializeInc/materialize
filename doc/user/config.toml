@@ -64,13 +64,6 @@ parent = 'ingest-data'
 weight = 30
 
 [[menu.main]]
-identifier = "eventbridge"
-name = "Amazon EventBridge"
-parent = 'webhooks'
-weight = 5
-url = "/sql/create-source/webhook/#connecting-with-amazon-eventbridge"
-
-[[menu.main]]
 identifier = "network-security"
 name = "Network security"
 parent = 'ingest-data'

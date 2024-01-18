@@ -120,8 +120,6 @@ You can explicitly [cast](../../functions/cast) from [`text`](../text) to `jsonb
      "\"foo\""
     ```
 
-
-
 ### Subscripting
 
 You can use subscript notation (`[]`) to extract an element from a `jsonb` array
@@ -184,6 +182,10 @@ SELECT ('["a", "b"]::jsonb)[1] = '"b"'
 ```
 
 Note the extra double quotes on the right-hand side of the comparison.
+
+### Parsing
+
+{{< json-parser >}}
 
 ## Examples
 

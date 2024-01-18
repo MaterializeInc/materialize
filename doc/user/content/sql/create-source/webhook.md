@@ -247,10 +247,8 @@ CREATE MATERIALIZED VIEW my_build_jobs_merged IN CLUSTER my_compute_cluster AS (
 ```
 
 {{< note >}}
-
 When casting from `text` to `timestamp` you should prefer to use the [`try_parse_monotonic_iso8601_timestamp`](/sql/functions/pushdown/)
 function, which enables [temporal filter pushdown](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
-
 {{< /note >}}
 
 ### Handling batch events
@@ -315,56 +313,21 @@ FROM WEBHOOK
         BODY AS request_body,
         SECRET basic_hook_auth
       )
-      constant_time_eq(headers->'authorization', BASIC_HOOK_AUTH)
+      constant_time_eq(headers->'authorization', basic_hook_auth)
     );
 ```
 
 Your new webhook is now up and ready to accept requests using basic
 authentication.
 
-### Connecting with Amazon EventBridge
+#### JSON parsing
 
-[Amazon EventBridge](https://aws.amazon.com/eventbridge/) is a serverless event
-bus that allows you to send events from your AWS services to external
-destinations. You can ingest these events into Materialize using a webhook
-source, and join them with your other data!
+Webhook data is ingested as a JSON blob. We recommend creating a parsing view on
+top of your webhook source that maps the individual fields to columns with the
+required data types. To avoid doing this tedious task manually, you can use
+[this **JSON parsing widget**](/sql/types/jsonb/#parsing)!
 
-The first step for setting up a webhook source is to create a shared secret.
-While this isn't required, it's the recommended best practice.
-
-```sql
-CREATE SECRET event_bridge_api_key AS 'abc123';
-```
-
-When you create a new EventBridge rule, you should make sure to include this
-shared secret as a header in each request, so that Materialize can validate
-it.
-
-After defining the shared secret, create the source:
-
-```sql
-CREATE SOURCE my_event_bridge_source IN CLUSTER my_cluster FROM WEBHOOK
-  BODY FORMAT JSON
-  -- Includes all headers, but filters out our shared secret.
-  INCLUDE HEADERS ( NOT 'x-mz-api-key' )
-  CHECK (
-    WITH ( HEADERS, SECRET event_bridge_api_key AS secret)
-    constant_time_eq(headers->'x-mz-api-key', secret)
-  );
-```
-
-This creates a source called _my_event_bridge_source_ and installs it in cluster
-named _my_cluster_. The source will have two columns, _body_ of type `jsonb`
-and _headers_ of type `map[text=>text]`. The shared secret will be used to
-validate each request, but will be filtered out of the map in the _headers_
-column.
-
-After the source is created, you can connect with EventBridge. Follow
-[Amazon's tutorial for connecting with Datadog](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-tutorial-datadog.html),
-using the shared secret specified in the `CHECK` statement (`x-mz-api-key`) as
-the **API key name** for request validation.
-
-## Related pages
+### Related pages
 
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE SOURCE`](../)
