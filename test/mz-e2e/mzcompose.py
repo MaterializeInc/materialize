@@ -13,7 +13,6 @@ import json
 import os
 import ssl
 import time
-import urllib.parse
 
 import pg8000
 
@@ -74,7 +73,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         time.sleep(10)
 
-        assert "materialize.cloud" in cloud_hostname(c)
+        assert "materialize.cloud" in c.cloud_hostname()
         wait_for_cloud(c)
 
         # Test - `mz app-password`
@@ -87,7 +86,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert "mzp_" in new_app_password
 
         pg8000.connect(
-            host=cloud_hostname(c),
+            host=c.cloud_hostname(),
             user=USERNAME,
             password=new_app_password,
             port=6875,
@@ -245,20 +244,10 @@ def workflow_disable_region(c: Composition) -> None:
     c.run("mz", "region", "disable")
 
 
-def cloud_hostname(c: Composition) -> str:
-    print("Obtaining hostname of cloud instance ...")
-    region_status = c.run("mz", "region", "show", capture=True)
-    sql_line = region_status.stdout.split("\n")[2]
-    cloud_url = sql_line.split("\t")[1].strip()
-    # It is necessary to append the 'https://' protocol; otherwise, urllib can't parse it correctly.
-    cloud_hostname = urllib.parse.urlparse("https://" + cloud_url).hostname
-    return str(cloud_hostname)
-
-
 def wait_for_cloud(c: Composition) -> None:
     print(f"Waiting for cloud cluster to come up with username {USERNAME} ...")
     _wait_for_pg(
-        host=cloud_hostname(c),
+        host=c.cloud_hostname(),
         user=USERNAME,
         password=APP_PASSWORD,
         port=6875,

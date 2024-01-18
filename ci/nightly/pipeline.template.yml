@@ -859,6 +859,20 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: mz-e2e
 
+  - id: qa-canary-load
+    label: "QA Canary Environment Base Load"
+    artifact_paths: junit_*.xml
+    timeout_in_minutes: 360
+    concurrency: 1
+    concurrency_group: 'qa-canary-load'
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: canary-load
+          args: ["--runtime=18000"]
+    agents:
+      queue: linux-x86_64-small
+    branches: "main"
+
   - group: "Output consistency"
     key: output-consistency
     steps:
@@ -1301,17 +1315,6 @@ steps:
               composition: ruby
         agents:
           queue: linux-x86_64-small
-
-  - id: qa-canary-load
-    label: "QA Canary Environment Base Load"
-    timeout_in_minutes: 360
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: canary-load
-          args: ["--runtime=18000"]
-    agents:
-      queue: linux-x86_64-small
 
   - wait: ~
     continue_on_failure: true

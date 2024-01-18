@@ -105,7 +105,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         time.sleep(10)
 
-        assert "materialize.cloud" in cloud_hostname(c)
+        assert "materialize.cloud" in c.cloud_hostname()
         wait_for_cloud(c)
 
         if args.version_check:
@@ -128,20 +128,10 @@ def workflow_disable_region(c: Composition) -> None:
     c.run("mz", "region", "disable")
 
 
-def cloud_hostname(c: Composition) -> str:
-    print("Obtaining hostname of cloud instance ...")
-    region_status = c.run("mz", "region", "show", capture=True)
-    sql_line = region_status.stdout.split("\n")[2]
-    cloud_url = sql_line.split("\t")[1].strip()
-    # It is necessary to append the 'https://' protocol; otherwise, urllib can't parse it correctly.
-    cloud_hostname = urllib.parse.urlparse("https://" + cloud_url).hostname
-    return str(cloud_hostname)
-
-
 def wait_for_cloud(c: Composition) -> None:
     print(f"Waiting for cloud cluster to come up with username {USERNAME} ...")
     _wait_for_pg(
-        host=cloud_hostname(c),
+        host=c.cloud_hostname(),
         user=USERNAME,
         password=APP_PASSWORD,
         port=6875,
@@ -161,7 +151,7 @@ def version_check(c: Composition) -> None:
 
     print("Obtaining mz_version() string from the cloud ...")
     cloud_cursor = pg8000.connect(
-        host=cloud_hostname(c),
+        host=c.cloud_hostname(),
         user=USERNAME,
         password=APP_PASSWORD,
         port=6875,
@@ -177,7 +167,7 @@ def version_check(c: Composition) -> None:
 
 
 def td(c: Composition, *args: str) -> None:
-    materialize_url = f"postgres://{urllib.parse.quote(USERNAME)}:{urllib.parse.quote(APP_PASSWORD)}@{urllib.parse.quote(cloud_hostname(c))}:6875"
+    materialize_url = f"postgres://{urllib.parse.quote(USERNAME)}:{urllib.parse.quote(APP_PASSWORD)}@{urllib.parse.quote(c.cloud_hostname())}:6875"
 
     with c.override(
         Testdrive(
