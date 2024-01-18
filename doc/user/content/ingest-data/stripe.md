@@ -10,84 +10,40 @@ aliases:
   - /sql/create-source/webhook/#connecting-with-stripe
 ---
 
-[Stripe](https://stripe.com/) is a developer-focused payments platform. You can
-use Materialize's webhook source to ingest data from Stripe in real time.
-
-This guide will walk you through the steps to ingest data from Stripe to
-Materialize.
+This guide walks through the steps to ingest data from [Stripe](https://stripe.com/)
+into Materialize using the [Webhook source](/sql/create-source/wehbook).
 
 ### Before you begin
 
 Ensure that you have a Stripe account.
 
-## Step 1. (Optional) Create a Materialize cluster
+## Step 1. (Optional) Create a cluster
 
 If you already have a cluster for your webhook sources, you can skip this step.
 
-To create a Materialize cluster, follow the steps outlined in our
-create a [cluster guide](/sql/create-cluster),
-or create a managed cluster for all your webhooks using the following SQL statement:
+To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/create-cluster):
 
 ```sql
 CREATE CLUSTER webhooks_cluster (SIZE = '3xsmall');
 ```
 
-## Step 2. Set up a webhook source
+## Step 2. Create a secret
 
-Create a [webhook source](/sql/create-source/webhook/) in Materialize to ingest
-data from Stripe:
+To validate requests between Stripe and Materialize, you must create a [secret](/sql/create-secret/):
 
 ```sql
-CREATE SOURCE stripe_source
-IN CLUSTER webhooks_cluster
-FROM WEBHOOK
-    BODY FORMAT JSON;
+CREATE SECRET stripe_webhook_secret AS '<secret_value>';
 ```
 
-After a successful run, the command returns a `NOTICE` message containing the [webhook URL](https://materialize.com/docs/sql/create-source/webhook/#webhook-url).
-Copy and store it. You will need it for the next step.
+Change the `<secret_value>` to a unique value that only you know and store it in a secure location.
 
-If you missed the notice, you can find the URLs for all webhook sources in the
-[`mz_internal.mz_webhook_sources`](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_webhook_sources)
-system table.
+## Step 3. Set up a webhook source
 
-## Step 3. Create a webhook endpoint in Stripe
-
-1. In Stripe, go to **Developers > Webhooks**.
-
-2. Click **Add endpoint**.
-
-3. Enter the webhook URL from the previous step in the *Endpoint URL* field.
-
-4. Configure the events you'd like to receive.
-
-5. Create the endpoint.
-
-6. Copy the signing secret and save it for the next step.
-
-## Step 4. Recreate the webhook source with validation
-
-To ensure that only your Stripe account can write to your webhook source, add
-[validation with the `CHECK` clause](/sql/create-source/webhook/#validating-requests)
-to your webhook.
-
-First, add the signing secret from the last step to Materialize:
+Using the secret from **Step 2.**, create a [webhook source](/sql/create-source/webhook/)
+in Materialize to ingest data from Stripe.
 
 ```sql
-CREATE SECRET stripe_webhook_secret AS '<signing-secret>';
-```
-
-Then, drop the webhook source you created without validation:
-
-```sql
-DROP SOURCE stripe_source;
-```
-
-Finally, recreate the webhook source with the following `CHECK` clause:
-
-```sql
-CREATE SOURCE stripe_source
-IN CLUSTER webhooks_cluster
+CREATE SOURCE stripe_source IN CLUSTER webhooks_cluster
 FROM WEBHOOK
     BODY FORMAT JSON;
     CHECK (
@@ -118,28 +74,66 @@ FROM WEBHOOK
     );
 ```
 
-For details about the Stripe signing scheme, consult the
-[webhook signature validation](https://stripe.com/docs/webhooks#verify-manually)
-section of the Stripe documentation.
+After a successful run, the command returns a `NOTICE` message containing the
+unique [webhook URL](https://materialize.com/docs/sql/create-source/webhook/#webhook-url)
+that allows you to `POST` events to the source. Copy and store it. You will need
+it for the next step.
 
-## Step 5. Monitor incoming data
+The URL will have the following format:
 
-With the source set up in Materialize, you can now monitor the incoming data
-from Stripe:
-
-```sql
-SELECT * FROM stripe_source LIMIT 10;
+```
+https://<HOST>/api/webhook/<database>/<schema>/<src_name>
 ```
 
-This will show you the last ten records ingested from Stripe. You may need
-to wait for webhook-generating events in Stripe to occur.
+If you missed the notice, you can find the URLs for all webhook sources in the
+[`mz_internal.mz_webhook_sources`](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_webhook_sources)
+system table.
 
-## Step 6. Parse incoming data
+### Access and authentication
 
-Create a view to parse incoming events from Stripe. You have the option to
-either build your own parser view by [pasting your event JSON
-here](/transform-data/json/), or use the following starter template:
+{{< warning >}}
+Without a `CHECK` statement, **all requests will be accepted**. To prevent bad
+actors from injecting data into your source, it is **strongly encouraged** that
+you define a `CHECK` statement with your webhook sources.
+{{< /warning >}}
 
+The `CHECK` clause defines how to validate each request. For details on the
+Stripe signing scheme, check out the [Stripe documentation](https://stripe.com/docs/webhooks#verify-manually).
+
+## Step 4. Create a webhook endpoint in Stripe
+
+1. In Stripe, go to **Developers > Webhooks**.
+
+2. Click **Add endpoint**.
+
+3. Enter the webhook URL from the previous step in the *Endpoint URL* field.
+
+4. Configure the events you'd like to receive.
+
+5. Create the endpoint.
+
+6. Copy the signing secret and save it for the next step.
+
+## Step 5. Validate incoming data
+
+1. [In the Materialize console](https://console.materialize.com/), navigate to
+   the **SQL Shell**.
+
+1. Use SQL queries to inspect and analyze the incoming data:
+
+    ```sql
+    SELECT * FROM rudderstack_source LIMIT 10;
+    ```
+
+    You may need to wait for webhook-generating events in Stripe to occur.
+
+## Step 6. Transform incoming data
+
+### JSON parsing
+
+Webhook data is ingested as a JSON blob. We recommend creating a parsing view on
+top of your webhook source that uses [`jsonb` operators](https://materialize.com/docs/sql/types/jsonb/#operators)
+to map the individual fields to columns with the required data types.
 ```sql
 CREATE VIEW parse_stripe AS SELECT
     body->>'api_version' AS api_version,
@@ -154,19 +148,26 @@ CREATE VIEW parse_stripe AS SELECT
 FROM stripe_source;
 ```
 
-This view parses the incoming data, transforming the nested JSON structure into
-discernible columns, such as `created` and `type`.
+{{< json-parser >}}
+
+### Timestamp handling
+
+We highly recommend using the [`try_parse_monotonic_iso8601_timestamp`](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown)
+function when casting from `text` to `timestamp`, which enables [temporal filter
+pushdown]
+(https://materialize.com/docs/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
+
+### Deduplication
 
 With the vast amount of data processed and potential network issues, it's not
-uncommon to receive duplicate records. You can use the `DISTINCT` clause to
-remove duplicates. For more details, refer to the webhook source
-[documentation](/sql/create-source/webhook/#handling-duplicated-and-partial-events).
+uncommon to receive duplicate records. You can use the `DISTINCT ON` clause to
+efficiently remove duplicates. For more details, refer to the webhook source
+[reference documentation](/sql/create-source/webhook/#handling-duplicated-and-partial-events).
 
-{{< note >}}
-For comprehensive details regarding Stripe's webhook destination, refer to their
-[official documentation](https://stripe.com/docs/webhooks).
-{{< /note >}}
+## Next steps
 
----
-
-By following the steps outlined above, you will have successfully set up a seamless integration between Stripe and Materialize, allowing for real-time data ingestion using webhooks.
+With Materialize ingesting your Stripe data, you can start exploring it,
+computing real-time results that stay up-to-date as new data arrives, and
+serving results efficiently. For more details, check out the
+[Stripe documentation](https://stripe.com/docs/webhooks) and the
+[webhook source reference documentation](/sql/create-source/wehbook).

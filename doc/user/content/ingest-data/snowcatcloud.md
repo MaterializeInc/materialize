@@ -8,90 +8,110 @@ menu:
     weight: 10
 ---
 
-[SnowcatCloud](https://www.snowcatcloud.com/) provides cloud-hosted and managed infrastructure to collect, enrich, and route event data using Snowplow and Analytics.js compatible pipelines. SnowcatCloud is SOC 2 Type 2 certified and has infrastructure in NA, EU, and AP.
-
-This guide will walk you through the steps to ingest data from SnowcatCloud to Materialize.
+This guide walks through the steps to ingest data from [SnowcatCloud](https://www.snowcatcloud.com/)
+into Materialize using the [Webhook source](/sql/create-source/wehbook).
 
 ## Before you begin
 
 Ensure that you have:
 
-- [A SnowcatCloud account](https://app.snowcatcloud.com/register)
+- [ [SnowcatCloud account](https://app.snowcatcloud.com/register)
 - A Snowplow or Analytics.js compatible pipeline set up and running.
 
-## Step 1. (Optional) Create a Materialize cluster
+## Step 1. (Optional) Create a cluster
 
 If you already have a cluster for your webhook sources, you can skip this step.
 
-To create a Materialize cluster, follow the steps outlined in Materialize create a [cluster](/sql/create-cluster) guide,
-or create a managed cluster using the following SQL statement:
+To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/create-cluster):
 
 ```sql
-CREATE CLUSTER snowcatcloud_cluster (SIZE = '3xsmall');
+CREATE CLUSTER webhooks_cluster (SIZE = '3xsmall');
 ```
 
-## Step 2. Create a Shared Secret
+## Step 2. Create a secret
 
-To ensure data authenticity between SnowcatCloud and Materialize, establish a shared secret:
+To validate requests between SnowcatCloud and Materialize, you must create a [secret](/sql/create-secret/):
 
 ```sql
-CREATE SECRET snowcatcloud_shared_secret AS '<secret_value>';
+CREATE SECRET snowcat_webhook_secret AS '<secret_value>';
 ```
-
-This shared secret allows Materialize to authenticate each incoming request, ensuring the data's integrity.
 
 Change the `<secret_value>` to a unique value that only you know and store it in a secure location.
 
-## Step 3. Set Up a Webhook Source
+## Step 3. Set up a webhook source
 
 Using the secret from the previous step, create a [webhook source](/sql/create-source/webhook/) in Materialize to ingest data from SnowcatCloud:
 
 ```sql
-CREATE SOURCE snowcatcloud_source IN CLUSTER snowcatcloud_cluster
+CREATE SOURCE snowcatcloud_source IN CLUSTER webhooks_cluster
   FROM WEBHOOK
     BODY FORMAT JSON
     CHECK (
       WITH (
         HEADERS,
         BODY AS body,
-        SECRET snowcatcloud_shared_secret
+        SECRET snowcat_webhook_secret
       )
-      constant_time_eq(headers->'authorization', snowcatcloud_shared_secret)
+      constant_time_eq(headers->'authorization', snowcat_webhook_secret)
 );
 ```
+
+After a successful run, the command returns a `NOTICE` message containing the
+unique [webhook URL](https://materialize.com/docs/sql/create-source/webhook/#webhook-url)
+that allows you to `POST` events to the source. Copy and store it. You will need
+it for the next step.
+
+The URL will have the following format:
+
+```
+https://<HOST>/api/webhook/<database>/<schema>/<src_name>
+```
+
+If you missed the notice, you can find the URLs for all webhook sources in the
+[`mz_internal.mz_webhook_sources`](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_webhook_sources)
+system table.
+
+### Access and authentication
+
+{{< warning >}}
+Without a `CHECK` statement, **all requests will be accepted**. To prevent bad
+actors from injecting data into your source, it is **strongly encouraged** that
+you define a `CHECK` statement with your webhook sources.
+{{< /warning >}}
 
 The above webhook source uses [basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme).
 This enables a simple and rudimentary way to grant authorization to your webhook source.
 
-After a successful run, the command returns a `NOTICE` message containing the [webhook URL](https://materialize.com/docs/sql/create-source/webhook/#webhook-url).
-Copy and store it. You will need it for the next steps. Otherwise, you can query it here: [`mz_internal.mz_webhook_sources`](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_webhook_sources).
+## Step 4. Create a webhook destination in SnowcatCloud
 
-## Step 4. Add a Materialize Destination in SnowcatCloud
+To configure a Materialize webhook as a destination in SnowcatCloud, follow the
+steps outlined below:
 
-To configure a Materialize webhook as a destination in SnowcatCloud, follow the steps outlined below:
+1.  **Select your SnowcatCloud pipe**
 
-1.  **Select Your SnowcatCloud Pipe**: Identify the pipeline you wish to add Materialize to as a destination.
+    Identify the pipeline you wish to add Materialize to as a destination.
 
-1.  **Select Materialize as a Destination**:
+1.  **Select Materialize as a destination**
     1. Navigate to the destinations section.
     1. Click **Configure** on the **Materialize** destination.
 
-### Configuring Connection Settings
+#### Connection settings
 
-On the Materialize Settings page:
+On the **Materialize Settings** page:
 
-- **Webhook URL**: Define the endpoint where events will be dispatched by SnowcatCloud. Use the URL from [Step 3](#step-3-set-up-a-webhook-source), which should have the following structure.
+- **Webhook URL**: Define the endpoint where events will be dispatched by
+    SnowcatCloud. Use the URL from **Step 3.**.
 
-    ```
-    https://<HOST>/api/webhook/<database>/<schema>/<src_name>
-    ```
+- **Secret**: Use the secret created in **Step 2.**.
 
-- **Shared Secret**: Add the shared secret (the same value used in [Step 2](#step-2-create-a-shared-secret)).
-- **Click Save & Test**: If the webhook is configured successfully, you will see a success message and the destination will start `PROVISIONING`; once it is `ACTIVE`, all your data will be streaming to Materialize's webhook.
+- **Click Save & Test**: If the webhook is configured successfully, you will see
+    a success message and the destination will start `PROVISIONING`; once it is
+    `ACTIVE`, all your data will be streaming to Materialize's webhook.
 
-## Step 5. Inspect Incoming Data
+## Step 5. Validate incoming data
 
-With the source set up in Materialize, you can now monitor the incoming data from SnowcatCloud:
+With the source set up in Materialize and the webhook destination configured in
+SnowcatCloud, you can now query the incoming data:
 
 1. [Login to the Materialize console](https://console.materialize.com/).
 
@@ -105,17 +125,20 @@ With the source set up in Materialize, you can now monitor the incoming data fro
     SELECT * FROM snowcatcloud_source LIMIT 10;
     ```
 
-This will show you the last ten records ingested from SnowcatCloud. Note that while the destination is `PROVISIONING`, you will only see the test event.
+    Note that while the destination is `PROVISIONING`, you will only see the
+    test event.
 
-## Step 6. Parse Incoming Data
+## Step 6. Transform incoming data
 
-The query below parses the incoming data, transforming the nested JSON structure into discernible columns on a materialized view. It uses
-the [`try_parse_monotonic_iso8601_timestamp`](/sql/functions/pushdown/) function when parsing timestamps, to enable
-[temporal filter pushdown](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown). Refer to SnowcatCloud's
-[documentation](https://docs.snowcatcloud.com/) on which columns are available for your pipeline (enrichments).
+Webhook data is ingested as a JSON blob. We recommend creating a parsing view on
+top of your webhook source that uses [`jsonb` operators](https://materialize.com/docs/sql/types/jsonb/#operators)
+to map the individual fields to columns with the required data types.
+
+To see what columns are available for your pipeline (enrichments), refer to
+the [SnowcatCloud documentation](https://docs.snowcatcloud.com/).
 
 ```sql
-CREATE MATERIALIZED VIEW events AS
+CREATE VIEW events AS
 SELECT
     body ->> 'app_id' AS app_id,
     body ->> 'platform' AS platform,
@@ -247,10 +270,24 @@ FROM
     snowcatcloud_source;
 ```
 
-Furthermore, with the vast amount of data processed and potential network issues, it's not uncommon to receive duplicate records. You can use the
-`DISTINCT ON` clause to remove duplicates. For more details, refer to the webhook source [documentation](/sql/create-source/webhook/#handling-duplicated-and-partial-events).
+### Timestamp handling
 
+We highly recommend using the [`try_parse_monotonic_iso8601_timestamp`](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown)
+function when casting from `text` to `timestamp`, which enables [temporal filter
+pushdown]
+(https://materialize.com/docs/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
 
----
+### Deduplication
 
-By following the steps outlined above, you will have successfully set up a seamless integration between SnowcatCloud and Materialize, allowing for real-time data ingestion using webhooks.
+With the vast amount of data processed and potential network issues, it's not
+uncommon to receive duplicate records. You can use the `DISTINCT ON` clause to
+efficiently remove duplicates. For more details, refer to the webhook source
+[reference documentation](/sql/create-source/webhook/#handling-duplicated-and-partial-events).
+
+## Next steps
+
+With Materialize ingesting your Rudderstack data, you can start exploring it,
+computing real-time results that stay up-to-date as new data arrives, and
+serving results efficiently. For more details, check out the
+[SnowcatCloud documentation](https://docs.snowcatcloud.com/) and the
+[webhook source reference documentation](/sql/create-source/wehbook).
