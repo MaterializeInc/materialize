@@ -92,7 +92,6 @@ class Composition:
         def is_failure(self) -> bool:
             return self.error is not None
 
-
     def __init__(
         self,
         repo: mzbuild.Repository,
@@ -505,9 +504,12 @@ class Composition:
         )
 
     def try_determine_error_location_from_cmd(self, cmd: list[str]) -> str | None:
+        root_path_as_string = f"{MZ_ROOT}/"
         for cmd_part in cmd:
             if type(cmd_part) == str and cmd_part.startswith("--source="):
-                return cmd_part.removeprefix("--source=")
+                return cmd_part.removeprefix("--source=").replace(
+                    root_path_as_string, ""
+                )
 
         return None
 
