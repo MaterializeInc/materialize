@@ -313,12 +313,6 @@ impl<T: Timestamp + Lattice + Codec64> TxnsRead<T> {
             .await
     }
 
-    /// See [crate::txn_cache::TxnsCacheState::data_listen_next].
-    pub async fn data_listen_next(&self, data_id: ShardId, ts: T) -> DataListenNext<T> {
-        self.send(|tx| TxnsReadCmd::DataListenNext { data_id, ts, tx })
-            .await
-    }
-
     /// See [TxnsCache::update_ge].
     pub async fn update_ge(&self, ts: T) {
         let wait = WaitTs::GreaterEqual(ts);
@@ -406,11 +400,6 @@ enum TxnsReadCmd<T> {
         data_id: ShardId,
         as_of: T,
         tx: oneshot::Sender<DataSnapshot<T>>,
-    },
-    DataListenNext {
-        data_id: ShardId,
-        ts: T,
-        tx: oneshot::Sender<DataListenNext<T>>,
     },
     Wait {
         id: Uuid,
@@ -546,7 +535,20 @@ where
                         entries
                     );
 
+                    let prev_frontier = self.cache.progress_exclusive.clone();
                     self.cache.push_entries(entries, frontier.clone());
+                    if prev_frontier < self.cache.progress_exclusive {
+                        debug!(
+                            "compacting TxnsRead cache to {:?} progress={:?}",
+                            prev_frontier, self.cache.progress_exclusive
+                        );
+                        // NB: If we add back a `data_listen_next` method, then
+                        // this will need to held back for any active users of
+                        // that. We'd probably package that up in some sort of
+                        // "subscription" abstraction that holds a capability on
+                        // this compaction frontier.
+                        self.cache.compact_to(&prev_frontier);
+                    }
 
                     // The frontier has advanced, so respond to waits and retain
                     // those that still have to wait.
@@ -580,10 +582,6 @@ where
                 }
                 TxnsReadCmd::DataSnapshot { data_id, as_of, tx } => {
                     let res = self.cache.data_snapshot(data_id, as_of.clone());
-                    let _ = tx.send(res);
-                }
-                TxnsReadCmd::DataListenNext { data_id, ts, tx } => {
-                    let res = self.cache.data_listen_next(&data_id, ts);
                     let _ = tx.send(res);
                 }
                 TxnsReadCmd::Wait { id, ts, tx } => {
