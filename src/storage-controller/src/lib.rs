@@ -46,8 +46,8 @@ use mz_stash::{self, AppendBatch, StashFactory, TypedCollection};
 use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunSinkCommand,
-    SinkStatisticsUpdate, SourceStatisticsUpdate, StatusUpdate, StorageCommand, StorageResponse,
-    TimestamplessUpdate,
+    SinkStatisticsUpdate, SourceStatisticsUpdate, Status, StatusUpdate, StorageCommand,
+    StorageResponse, TimestamplessUpdate,
 };
 use mz_storage_client::controller::{
     CollectionDescription, CollectionState, DataSource, DataSourceOther, ExportDescription,
@@ -755,11 +755,13 @@ where
                                 last_status_per_id.into_iter().map(|(id, row)| {
                                     (
                                         id,
-                                        row.iter()
-                                            .nth(status_col)
-                                            .expect("schema has not changed")
-                                            .unwrap_str()
-                                            .into(),
+                                        Status::from_str(
+                                            row.iter()
+                                                .nth(status_col)
+                                                .expect("schema has not changed")
+                                                .unwrap_str(),
+                                        )
+                                        .expect("statuses must be uncorrupted"),
                                     )
                                 }),
                             )
@@ -780,11 +782,13 @@ where
                                 last_status_per_id.into_iter().map(|(id, row)| {
                                     (
                                         id,
-                                        row.iter()
-                                            .nth(status_col)
-                                            .expect("schema has not changed")
-                                            .unwrap_str()
-                                            .into(),
+                                        Status::from_str(
+                                            row.iter()
+                                                .nth(status_col)
+                                                .expect("schema has not changed")
+                                                .unwrap_str(),
+                                        )
+                                        .expect("statuses must be uncorrupted"),
                                     )
                                 }),
                             )
@@ -1688,7 +1692,7 @@ where
 
         let mut dropped_sources = vec![];
         for id in pending_source_drops.drain(..) {
-            dropped_sources.push(StatusUpdate::dropped_status(id, status_now));
+            dropped_sources.push(StatusUpdate::new(id, status_now, Status::Dropped));
         }
 
         self.collection_status_manager
@@ -1707,7 +1711,7 @@ where
         {
             let mut sink_statistics = self.sink_statistics.lock().expect("poisoned");
             for id in pending_sink_drops.drain(..) {
-                dropped_sinks.push(StatusUpdate::dropped_status(id, status_now));
+                dropped_sinks.push(StatusUpdate::new(id, status_now, Status::Dropped));
                 sink_statistics.remove(&id);
             }
         }

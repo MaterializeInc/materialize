@@ -14,7 +14,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_ore::now::EpochMillis;
 use mz_persist_types::Codec64;
 use mz_repr::{GlobalId, Row, TimestampManipulation};
-use mz_storage_client::client::StatusUpdate;
+use mz_storage_client::client::{Status, StatusUpdate};
 use timely::progress::Timestamp;
 
 use crate::collection_mgmt::CollectionManager;
@@ -33,7 +33,7 @@ where
     collection_manager: CollectionManager<T>,
     /// A list of introspection IDs for managed collections
     introspection_ids: Arc<std::sync::Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
-    previous_statuses: BTreeMap<GlobalId, String>,
+    previous_statuses: BTreeMap<GlobalId, Status>,
 }
 
 impl<T> CollectionStatusManager<T>
@@ -53,7 +53,7 @@ where
 
     pub fn extend_previous_statuses<I>(&mut self, previous_statuses: I)
     where
-        I: IntoIterator<Item = (GlobalId, String)>,
+        I: IntoIterator<Item = (GlobalId, Status)>,
     {
         self.previous_statuses.extend(previous_statuses)
     }
@@ -75,13 +75,13 @@ where
             .filter(
                 |r| match (self.previous_statuses.get(&r.id).as_deref(), &r.status) {
                     (None, _) => true,
-                    (Some(old), new) => StatusUpdate::produce_new_status(old, new),
+                    (Some(old), new) => old.superseded_by(*new),
                 },
             )
             .collect();
 
         self.previous_statuses
-            .extend(new.iter().map(|r| (r.id, r.status.clone())));
+            .extend(new.iter().map(|r| (r.id, r.status)));
 
         self.collection_manager
             .append_to_collection(
@@ -107,11 +107,11 @@ mod tests {
         let error_message = "error message";
         let hint = "hint message";
         let id = GlobalId::User(1);
-        let status = "dropped";
+        let status = Status::Dropped;
         let row = Row::from(StatusUpdate {
             id,
             timestamp: chrono::offset::Utc::now(),
-            status: status.to_string(),
+            status,
             error: Some(error_message.to_string()),
             hints: BTreeSet::from([hint.to_string()]),
             namespaced_errors: Default::default(),
@@ -126,7 +126,7 @@ mod tests {
         }
 
         assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
-        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status));
+        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status.to_str()));
         assert_eq!(row.iter().nth(3).unwrap(), Datum::String(error_message));
 
         let details = row
@@ -151,11 +151,11 @@ mod tests {
     fn test_row_without_hint() {
         let error_message = "error message";
         let id = GlobalId::User(1);
-        let status = "dropped";
+        let status = Status::Dropped;
         let row = Row::from(StatusUpdate {
             id,
             timestamp: chrono::offset::Utc::now(),
-            status: status.to_string(),
+            status,
             error: Some(error_message.to_string()),
             hints: Default::default(),
             namespaced_errors: Default::default(),
@@ -170,7 +170,7 @@ mod tests {
         }
 
         assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
-        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status));
+        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status.to_str()));
         assert_eq!(row.iter().nth(3).unwrap(), Datum::String(error_message));
         assert_eq!(row.iter().nth(4).unwrap(), Datum::Null);
     }
@@ -178,12 +178,12 @@ mod tests {
     #[mz_ore::test]
     fn test_row_without_error() {
         let id = GlobalId::User(1);
-        let status = "dropped";
+        let status = Status::Dropped;
         let hint = "hint message";
         let row = Row::from(StatusUpdate {
             id,
             timestamp: chrono::offset::Utc::now(),
-            status: status.to_string(),
+            status,
             error: None,
             hints: BTreeSet::from([hint.to_string()]),
             namespaced_errors: Default::default(),
@@ -198,7 +198,7 @@ mod tests {
         }
 
         assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
-        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status));
+        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status.to_str()));
         assert_eq!(row.iter().nth(3).unwrap(), Datum::Null);
 
         let details = row
@@ -223,11 +223,11 @@ mod tests {
     fn test_row_with_namespaced() {
         let error_message = "error message";
         let id = GlobalId::User(1);
-        let status = "dropped";
+        let status = Status::Dropped;
         let row = Row::from(StatusUpdate {
             id,
             timestamp: chrono::offset::Utc::now(),
-            status: status.to_string(),
+            status,
             error: Some(error_message.to_string()),
             hints: Default::default(),
             namespaced_errors: BTreeMap::from([("thing".to_string(), "error".to_string())]),
@@ -242,7 +242,7 @@ mod tests {
         }
 
         assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
-        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status));
+        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status.to_str()));
         assert_eq!(row.iter().nth(3).unwrap(), Datum::String(error_message));
 
         let details = row
@@ -268,11 +268,11 @@ mod tests {
         let error_message = "error message";
         let hint = "hint message";
         let id = GlobalId::User(1);
-        let status = "dropped";
+        let status = Status::Dropped;
         let row = Row::from(StatusUpdate {
             id,
             timestamp: chrono::offset::Utc::now(),
-            status: status.to_string(),
+            status,
             error: Some(error_message.to_string()),
             hints: BTreeSet::from([hint.to_string()]),
             namespaced_errors: BTreeMap::from([("thing".to_string(), "error".to_string())]),
@@ -287,7 +287,7 @@ mod tests {
         }
 
         assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
-        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status));
+        assert_eq!(row.iter().nth(2).unwrap(), Datum::String(status.to_str()));
         assert_eq!(row.iter().nth(3).unwrap(), Datum::String(error_message));
 
         let details = row
