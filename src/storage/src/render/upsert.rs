@@ -355,6 +355,119 @@ fn stage_input<T, O>(
     }
 }
 
+/// Helper method for `upsert_inner` used to stage `data` updates
+/// from the input timely edge.
+async fn drain_staged_input<S, G, T, O, E>(
+    stash: &mut Vec<(T, UpsertKey, Reverse<O>, Option<UpsertValue>)>,
+    commands_state: &mut indexmap::IndexMap<UpsertKey, types::UpsertValueAndSize>,
+    output_updates: &mut Vec<(Result<Row, UpsertError>, T, Diff)>,
+    multi_get_scratch: &mut Vec<UpsertKey>,
+    upper: &Antichain<T>,
+    error_emitter: &mut E,
+    state: &mut UpsertState<'_, S>,
+) where
+    S: UpsertStateBackend,
+    G: Scope,
+    T: PartialOrder + Ord + Clone,
+    O: Ord,
+    E: UpsertErrorEmitter<G>,
+{
+    stash.sort_unstable();
+
+    // Find the prefix that we can emit
+    let idx = stash.partition_point(|(ts, _, _, _)| !upper.less_equal(ts));
+
+    // Read the previous values _per key_ out of `state`, recording it
+    // along with the value with the _latest timestamp for that key_.
+    commands_state.clear();
+    for (_, key, _, _) in stash.iter().take(idx) {
+        commands_state.entry(*key).or_default();
+    }
+
+    // These iterators iterate in the same order because `commands_state`
+    // is an `IndexMap`.
+    multi_get_scratch.clear();
+    multi_get_scratch.extend(commands_state.iter().map(|(k, _)| *k));
+    match state
+        .multi_get(multi_get_scratch.drain(..), commands_state.values_mut())
+        .await
+    {
+        Ok(_) => {}
+        Err(e) => {
+            error_emitter
+                .emit("Failed to fetch records from state".to_string(), e)
+                .await;
+        }
+    }
+
+    // From the prefix that can be emitted we can deduplicate based on (ts, key) in
+    // order to only process the command with the maximum order within the (ts,
+    // key) group. This is achieved by wrapping order in `Reverse(order)` above.;
+    let mut commands = stash.drain(..idx).dedup_by(|a, b| {
+        let ((a_ts, a_key, _, _), (b_ts, b_key, _, _)) = (a, b);
+        a_ts == b_ts && a_key == b_key
+    });
+
+    let bincode_opts = types::upsert_bincode_opts();
+    // Upsert the values into `commands_state`, by recording the latest
+    // value (or deletion). These will be synced at the end to the `state`.
+    //
+    // Note that we are effectively doing "mini-upsert" here, using
+    // `command_state`. This "mini-upsert" is seeded with data from `state`, using
+    // a single `multi_get` above, and the final state is written out into
+    // `state` using a single `multi_put`. This simplifies `UpsertStateBackend`
+    // implementations, and reduces the number of reads and write we need to do.
+    //
+    // This "mini-upsert" technique is actually useful in `UpsertState`'s
+    // `merge_snapshot_chunk` implementation, minimizing gets and puts on
+    // the `UpsertStateBackend` implementations. In some sense, its "upsert all the way down".
+    while let Some((ts, key, _, value)) = commands.next() {
+        let command_state = commands_state
+            .get_mut(&key)
+            .expect("key missing from commands_state");
+
+        if let Some(cs) = command_state.value.as_mut() {
+            cs.ensure_decoded(bincode_opts);
+        }
+
+        match value {
+            Some(value) => {
+                if let Some(old_value) = command_state.value.replace(value.clone().into()) {
+                    output_updates.push((old_value.to_decoded(), ts.clone(), -1));
+                }
+                output_updates.push((value, ts, 1));
+            }
+            None => {
+                if let Some(old_value) = command_state.value.take() {
+                    output_updates.push((old_value.to_decoded(), ts, -1));
+                }
+            }
+        }
+    }
+
+    match state
+        .multi_put(commands_state.drain(..).map(|(k, cv)| {
+            (
+                k,
+                types::PutValue {
+                    value: cv.value.map(|cv| cv.to_decoded()),
+                    previous_persisted_size: cv
+                        .size
+                        .map(|v| v.try_into().expect("less than i64 size")),
+                },
+            )
+        }))
+        .await
+    {
+        Ok(_) => {}
+        Err(e) => {
+            error_emitter
+                .emit("Failed to update records in state".to_string(), e)
+                .await;
+        }
+    }
+}
+
 // Created a struct to hold the configs for upserts.
 // So that new configs don't require a new method parameter.
 struct UpsertConfig {
@@ -433,6 +546,8 @@ where
         let mut stash = vec![];
         let mut input_upper = Antichain::from_elem(Timestamp::minimum());
         let mut legacy_errors_to_correct = vec![];
+
+        let mut error_emitter = (&mut health_output, &health_cap);
 
         while !PartialOrder::less_equal(&resume_upper, &snapshot_upper)
             || (upsert_config.wait_for_input_resumption
@@ -533,11 +648,10 @@ where
                     }
                 }
                 Err(e) => {
-                    process_upsert_state_error::<G>(
+                    UpsertErrorEmitter::<G>::emit(
+                        &mut error_emitter,
                         "Failed to rehydrate state".to_string(),
                         e,
-                        &mut health_output,
-                        &health_cap,
                     )
                     .await;
                 }
@@ -634,110 +748,17 @@ where
                     if PartialOrder::less_than(&upper, &resume_upper) {
                         continue;
                     }
-                    stash.sort_unstable();
 
-                    // Find the prefix that we can emit
-                    let idx = stash.partition_point(|(ts, _, _, _)| !upper.less_equal(ts));
-
-                    // Read the previous values _per key_ out of `state`, recording it
-                    // along with the value with the _latest timestamp for that key_.
-                    commands_state.clear();
-                    for (_, key, _, _) in stash.iter().take(idx) {
-                        commands_state.entry(*key).or_default();
-                    }
-
-                    // These iterators iterate in the same order because `commands_state`
-                    // is an `IndexMap`.
-                    multi_get_scratch.clear();
-                    multi_get_scratch.extend(commands_state.iter().map(|(k, _)| *k));
-                    match state
-                        .multi_get(multi_get_scratch.drain(..), commands_state.values_mut())
-                        .await
-                    {
-                        Ok(_) => {}
-                        Err(e) => {
-                            process_upsert_state_error::<G>(
-                                "Failed to fetch records from state".to_string(),
-                                e,
-                                &mut health_output,
-                                &health_cap,
-                            )
-                            .await;
-                        }
-                    }
-
-                    // From the prefix that can be emitted we can deduplicate based on (ts, key) in
-                    // order to only process the command with the maximum order within the (ts,
-                    // key) group. This is achieved by wrapping order in `Reverse(order)` above.
-                    let mut commands = stash.drain(..idx).dedup_by(|a, b| {
-                        let ((a_ts, a_key, _, _), (b_ts, b_key, _, _)) = (a, b);
-                        a_ts == b_ts && a_key == b_key
-                    });
-
-                    let bincode_opts = types::upsert_bincode_opts();
-                    // Upsert the values into `commands_state`, by recording the latest
-                    // value (or deletion). These will be synced at the end to the `state`.
-                    //
-                    // Note that we are effectively doing "mini-upsert" here, using
-                    // `command_state`. This "mini-upsert" is seeded with data from `state`, using
-                    // a single `multi_get` above, and the final state is written out into
-                    // `state` using a single `multi_put`. This simplifies `UpsertStateBackend`
-                    // implementations, and reduces the number of reads and write we need to do.
-                    //
-                    // This "mini-upsert" technique is actually useful in `UpsertState`'s
-                    // `merge_snapshot_chunk` implementation, minimizing gets and puts on
-                    // the `UpsertStateBackend` implementations. In some sense, its "upsert all the way down".
-                    while let Some((ts, key, _, value)) = commands.next() {
-                        let command_state = commands_state
-                            .get_mut(&key)
-                            .expect("key missing from commands_state");
-
-                        if let Some(cs) = command_state.value.as_mut() {
-                            cs.ensure_decoded(bincode_opts);
-                        }
-
-                        match value {
-                            Some(value) => {
-                                if let Some(old_value) =
-                                    command_state.value.replace(value.clone().into())
-                                {
-                                    output_updates.push((old_value.to_decoded(), ts.clone(), -1));
-                                }
-                                output_updates.push((value, ts, 1));
-                            }
-                            None => {
-                                if let Some(old_value) = command_state.value.take() {
-                                    output_updates.push((old_value.to_decoded(), ts, -1));
-                                }
-                            }
-                        }
-                    }
-
-                    match state
-                        .multi_put(commands_state.drain(..).map(|(k, cv)| {
-                            (
-                                k,
-                                types::PutValue {
-                                    value: cv.value.map(|cv| cv.to_decoded()),
-                                    previous_persisted_size: cv
-                                        .size
-                                        .map(|v| v.try_into().expect("less than i64 size")),
-                                },
-                            )
-                        }))
-                        .await
-                    {
-                        Ok(_) => {}
-                        Err(e) => {
-                            process_upsert_state_error::<G>(
-                                "Failed to update records in state".to_string(),
-                                e,
-                                &mut health_output,
-                                &health_cap,
-                            )
-                            .await;
-                        }
-                    }
+                    drain_staged_input::<_, G, _, _, _>(
+                        &mut stash,
+                        &mut commands_state,
+                        &mut output_updates,
+                        &mut multi_get_scratch,
+                        &upper,
+                        &mut error_emitter,
+                        &mut state,
+                    )
+                    .await;
 
                     // Emit the _consolidated_ changes to the output.
                     output_handle
@@ -760,6 +781,27 @@ where
         health_stream,
         shutdown_button.press_on_drop(),
     )
+}
+
+#[async_trait::async_trait(?Send)]
+trait UpsertErrorEmitter<G> {
+    async fn emit(&mut self, context: String, e: anyhow::Error);
+}
+
+#[async_trait::async_trait(?Send)]
+impl<G: Scope> UpsertErrorEmitter<G>
+    for (
+        &mut AsyncOutputHandle<
+            <G as ScopeParent>::Timestamp,
+            Vec<(OutputIndex, HealthStatusUpdate)>,
+            TeeCore<<G as ScopeParent>::Timestamp, Vec<(OutputIndex, HealthStatusUpdate)>>,
+        >,
+        &Capability<<G as ScopeParent>::Timestamp>,
+    )
+{
+    async fn emit(&mut self, context: String, e: anyhow::Error) {
+        process_upsert_state_error::<G>(context, e, self.0, self.1).await
+    }
 }
 
 /// Emit the given error, and stall till the dataflow is restarted.
