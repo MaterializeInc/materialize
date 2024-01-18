@@ -33,10 +33,18 @@ message ProtoComputeResponse {
         ProtoSubscribeResponse resp = 2;
     }
 
+    message ProtoOperatorHydrationKind {
+        mz_repr.global_id.ProtoGlobalId export_id = 1;
+        uint64 worker_id = 2;
+        uint64 node_id = 3;
+        bool hydrated = 4;
+    }
+
     oneof kind {
         mz_storage_client.client.ProtoTrace frontier_upper = 1;
         ProtoPeekResponseKind peek_response = 2;
         ProtoSubscribeResponseKind subscribe_response = 3;
+        ProtoOperatorHydrationKind operator_hydration = 4;
     }
 }
 

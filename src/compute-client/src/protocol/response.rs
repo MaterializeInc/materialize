@@ -127,6 +127,13 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// [`CreateDataflow` command]: super::command::ComputeCommand::CreateDataflow
     /// [`AllowCompaction` command]: super::command::ComputeCommand::AllowCompaction
     SubscribeResponse(GlobalId, SubscribeResponse<T>),
+
+    OperatorHydration {
+        export_id: GlobalId,
+        worker_id: usize,
+        node_id: u64,
+        hydrated: bool,
+    },
 }
 
 impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
@@ -152,6 +159,17 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
                         resp: Some(resp.into_proto()),
                     })
                 }
+                ComputeResponse::OperatorHydration {
+                    export_id,
+                    worker_id,
+                    node_id,
+                    hydrated,
+                } => OperatorHydration(ProtoOperatorHydrationKind {
+                    export_id: Some(export_id.into_proto()),
+                    worker_id: worker_id.into_proto(),
+                    node_id: node_id.into_proto(),
+                    hydrated: hydrated.into_proto(),
+                }),
             }),
         }
     }
@@ -174,6 +192,14 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
                 resp.resp
                     .into_rust_if_some("ProtoSubscribeResponseKind::resp")?,
             )),
+            Some(OperatorHydration(resp)) => Ok(ComputeResponse::OperatorHydration {
+                export_id: resp
+                    .export_id
+                    .into_rust_if_some("ProtoOperatorHydrationKind::export_id")?,
+                worker_id: resp.worker_id.into_rust()?,
+                node_id: resp.node_id,
+                hydrated: resp.hydrated,
+            }),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoComputeResponse::kind",
             )),

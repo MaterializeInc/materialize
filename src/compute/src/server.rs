@@ -450,6 +450,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             if let Some(mut compute_state) = self.activate_compute(&mut response_tx) {
                 compute_state.report_compute_frontiers();
                 compute_state.report_dropped_collections();
+                compute_state.report_hydrated_operators();
             }
 
             // Handle any received commands.

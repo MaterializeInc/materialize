@@ -109,7 +109,7 @@ use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::{Batch, Batcher, Trace, TraceReader};
-use differential_dataflow::{AsCollection, Collection, Data, ExchangeData, Hashable};
+use differential_dataflow::{AsCollection, Collection, ExchangeData, Hashable};
 use itertools::izip;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_compute_types::plan::{IdPlan, Plan};
@@ -131,14 +131,16 @@ use timely::order::Product;
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 use timely::worker::Worker as TimelyWorker;
-use timely::PartialOrder;
+use timely::{Data, PartialOrder};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::{LogDataflowErrors, LogImportFrontiers};
-use crate::render::context::{ArrangementFlavor, Context, ShutdownToken, SpecializedArrangement};
+use crate::render::context::{
+    ArrangementFlavor, Context, ShutdownToken, SpecializedArrangement, SpecializedArrangementImport,
+};
 use crate::typedefs::{ErrSpine, KeySpine};
 
 pub mod context;
@@ -260,7 +262,9 @@ pub fn build_compute_dataflow<A: Allocate>(
         // in order to support additional timestamp coordinates for iteration.
         if recursive {
             scope.clone().iterative::<PointStamp<u64>, _, _>(|region| {
-                let mut context = Context::for_dataflow_in(&dataflow, region.clone());
+                let hydration_queue = Rc::clone(&compute_state.hydration_queue);
+                let mut context =
+                    Context::for_dataflow_in(&dataflow, region.clone(), hydration_queue);
                 context.linear_join_spec = compute_state.linear_join_spec;
                 context.enable_specialized_arrangements =
                     compute_state.enable_specialized_arrangements;
@@ -314,7 +318,9 @@ pub fn build_compute_dataflow<A: Allocate>(
             });
         } else {
             scope.clone().region_named(&build_name, |region| {
-                let mut context = Context::for_dataflow_in(&dataflow, region.clone());
+                let hydration_queue = Rc::clone(&compute_state.hydration_queue);
+                let mut context =
+                    Context::for_dataflow_in(&dataflow, region.clone(), hydration_queue);
                 context.linear_join_spec = compute_state.linear_join_spec;
                 context.enable_specialized_arrangements =
                     compute_state.enable_specialized_arrangements;
@@ -753,19 +759,22 @@ where
     /// The return type reflects the uncertainty about the data representation, perhaps
     /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
     pub fn render_plan(&mut self, plan: IdPlan) -> CollectionBundle<G> {
+        let node_id = plan.node_id();
         // TODO make sure that the names match the `EXPLAIN PHYSICAL PLAN` output
-        let region_name = format!("LIR[{}]: {}", plan.node_id(), plan.type_name());
+        let region_name = format!("LIR[{}]: {}", node_id, plan.type_name());
         self.scope.clone().region_named(&region_name, |region| {
-            self.render_plan_into_region(plan, region)
+            let bundle = self.render_plan_into_region(plan, region);
+            self.log_operator_hydration(&bundle, node_id);
+            bundle.leave_region()
         })
     }
 
-    fn render_plan_into_region(
+    fn render_plan_into_region<'g>(
         &mut self,
         plan: IdPlan,
-        region: &mut Child<G, G::Timestamp>,
-    ) -> CollectionBundle<G> {
-        let collection = match plan {
+        region: &mut Child<'g, G, G::Timestamp>,
+    ) -> CollectionBundle<Child<'g, G, G::Timestamp>> {
+        match plan {
             Plan::Constant { rows, node_id: _ } => {
                 // Produce both rows and errs to avoid conditional dataflow construction.
                 let (rows, errs) = match rows {
@@ -982,9 +991,64 @@ where
                     self.enable_specialized_arrangements,
                 )
             }
-        };
+        }
+    }
 
-        collection.leave_region()
+    fn log_operator_hydration<S>(&self, bundle: &CollectionBundle<S>, node_id: u64)
+    where
+        S: Scope<Timestamp = G::Timestamp>,
+    {
+        match &bundle.collection {
+            Some((oks, _)) => self.log_operator_hydration_inner(&oks.inner, node_id),
+            None => {
+                use ArrangementFlavor::*;
+                use SpecializedArrangement as A;
+                use SpecializedArrangementImport as AI;
+
+                let arrangement = bundle.arranged.values().next().unwrap();
+                match arrangement {
+                    Local(A::RowRow(a), _) => self.log_operator_hydration_inner(&a.stream, node_id),
+                    Local(A::RowUnit(a), _) => {
+                        self.log_operator_hydration_inner(&a.stream, node_id)
+                    }
+                    Trace(_, AI::RowRow(a), _) => {
+                        self.log_operator_hydration_inner(&a.stream, node_id)
+                    }
+                    Trace(_, AI::RowUnit(a), _) => {
+                        self.log_operator_hydration_inner(&a.stream, node_id)
+                    }
+                }
+            }
+        }
+    }
+
+    fn log_operator_hydration_inner<S, D>(&self, stream: &Stream<S, D>, node_id: u64)
+    where
+        S: Scope<Timestamp = G::Timestamp>,
+        D: Clone + 'static,
+    {
+        let as_of = self.as_of_frontier.clone();
+        let logger = self.hydration_logger.clone();
+
+        let mut hydrated = false;
+        logger.log(node_id, hydrated);
+
+        let name = format!("LogOperationHydration (LIR:{node_id}");
+        stream.sink(Pipeline, &name, move |input| {
+            // Drain all input.
+            input.for_each(|_, _| ());
+
+            let mut frontier = Antichain::new();
+            for time in &input.frontier().frontier() {
+                let mut time = time.clone();
+                frontier.insert(*time.event_time());
+            }
+
+            if !hydrated && PartialOrder::less_than(&as_of, &frontier) {
+                hydrated = true;
+                logger.log(node_id, hydrated);
+            }
+        });
     }
 }
 

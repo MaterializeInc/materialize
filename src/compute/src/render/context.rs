@@ -10,8 +10,9 @@
 //! Management of dataflow-local state, like arrangements, while building a
 //! dataflow.
 
-use std::collections::BTreeMap;
-use std::rc::Weak;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, VecDeque};
+use std::rc::{Rc, Weak};
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
@@ -82,6 +83,7 @@ where
     /// Specification for rendering linear joins.
     pub(super) linear_join_spec: LinearJoinSpec,
     pub(super) enable_specialized_arrangements: bool,
+    pub(super) hydration_logger: HydrationLogger,
 }
 
 impl<S: Scope> Context<S>
@@ -92,6 +94,7 @@ where
     pub fn for_dataflow_in<Plan>(
         dataflow: &DataflowDescription<Plan, CollectionMetadata>,
         scope: S,
+        hydration_queue: Rc<RefCell<VecDeque<(GlobalId, u64, bool)>>>,
     ) -> Self {
         use mz_ore::collections::CollectionExt as IteratorExt;
         let dataflow_id = scope.addr().into_first();
@@ -99,6 +102,10 @@ where
             .as_of
             .clone()
             .unwrap_or_else(|| Antichain::from_elem(Timestamp::minimum()));
+        let hydration_logger = HydrationLogger {
+            export_ids: dataflow.export_ids().collect(),
+            queue: hydration_queue,
+        };
 
         Self {
             scope,
@@ -110,6 +117,7 @@ where
             shutdown_token: Default::default(),
             linear_join_spec: Default::default(),
             enable_specialized_arrangements: Default::default(),
+            hydration_logger,
         }
     }
 }
@@ -196,6 +204,21 @@ impl ShutdownToken {
     /// Returns a reference to the wrapped `Weak`.
     pub(crate) fn get_inner(&self) -> Option<&Weak<()>> {
         self.0.as_ref()
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct HydrationLogger {
+    export_ids: Vec<GlobalId>,
+    queue: Rc<RefCell<VecDeque<(GlobalId, u64, bool)>>>,
+}
+
+impl HydrationLogger {
+    pub fn log(&self, node_id: u64, hydrated: bool) {
+        for id in &self.export_ids {
+            let mut queue = self.queue.borrow_mut();
+            queue.push_back((*id, node_id, hydrated));
+        }
     }
 }
 

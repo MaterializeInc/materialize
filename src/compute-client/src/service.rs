@@ -411,6 +411,7 @@ where
 
                 emit_response
             }
+            resp @ ComputeResponse::OperatorHydration { .. } => Some(Ok(resp)),
         }
     }
 }

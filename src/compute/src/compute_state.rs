@@ -7,7 +7,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::num::NonZeroUsize;
 use std::ops::DerefMut;
 use std::rc::Rc;
@@ -104,6 +104,8 @@ pub struct ComputeState {
     pub enable_specialized_arrangements: bool,
     /// Other configuration for compute
     pub context: ComputeInstanceContext,
+    /// (export_id, node_id, hydrated)
+    pub hydration_queue: Rc<RefCell<VecDeque<(GlobalId, u64, bool)>>>,
 }
 
 impl ComputeState {
@@ -134,6 +136,7 @@ impl ComputeState {
             tracing_handle,
             enable_specialized_arrangements: Default::default(),
             context,
+            hydration_queue: Default::default(),
         }
     }
 
@@ -538,6 +541,19 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             self.send_compute_response(ComputeResponse::FrontierUpper {
                 id,
                 upper: Antichain::new(),
+            });
+        }
+    }
+
+    pub fn report_hydrated_operators(&mut self) {
+        let mut hydration_queue = self.compute_state.hydration_queue.borrow_mut();
+        let worker_id = self.timely_worker.index();
+        for (export_id, node_id, hydrated) in hydration_queue.drain(..) {
+            self.send_compute_response(ComputeResponse::OperatorHydration {
+                export_id,
+                worker_id,
+                node_id,
+                hydrated,
             });
         }
     }

@@ -27,7 +27,7 @@ use timely::progress::Antichain;
 use crate::dataflows::proto_dataflow_description::{
     ProtoIndexExport, ProtoIndexImport, ProtoSinkExport, ProtoSourceImport,
 };
-use crate::plan::{Plan, IdPlan};
+use crate::plan::{IdPlan, Plan};
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
 
@@ -234,10 +234,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     }
 }
 
-impl<P, S, T> DataflowDescription<P, S, T>
-where
-    P: CollectionPlan,
-{
+impl<P, S, T> DataflowDescription<P, S, T> {
     /// Assigns the `as_of` frontier to the supplied argument.
     ///
     /// This method allows the dataflow to indicate a frontier up through
@@ -322,7 +319,9 @@ where
         assert!(builds.next().is_none());
         build
     }
+}
 
+impl<P, S, T> DataflowDescription<P, S, T> where P: CollectionPlan {
     /// Computes the set of identifiers upon which the specified collection
     /// identifier depends.
     ///

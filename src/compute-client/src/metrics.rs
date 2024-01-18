@@ -447,6 +447,7 @@ struct ResponseMetrics<M> {
     frontier_upper: M,
     peek_response: M,
     subscribe_response: M,
+    operator_hydration: M,
 }
 
 impl<M> ResponseMetrics<M> {
@@ -458,6 +459,7 @@ impl<M> ResponseMetrics<M> {
             frontier_upper: build_metric("frontier_upper"),
             peek_response: build_metric("peek_response"),
             subscribe_response: build_metric("subscribe_response"),
+            operator_hydration: build_metric("operator_hydration"),
         }
     }
 
@@ -468,6 +470,7 @@ impl<M> ResponseMetrics<M> {
             FrontierUpper(_) => &self.frontier_upper,
             PeekResponse(_) => &self.peek_response,
             SubscribeResponse(_) => &self.subscribe_response,
+            OperatorHydration(_) => &self.operator_hydration,
         }
     }
 }

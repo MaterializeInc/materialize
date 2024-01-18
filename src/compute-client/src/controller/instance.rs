@@ -1278,6 +1278,15 @@ where
             ComputeResponse::SubscribeResponse(id, response) => {
                 self.handle_subscribe_response(id, response, replica_id)
             }
+            ComputeResponse::OperatorHydration {
+                export_id,
+                worker_id,
+                node_id,
+                hydrated,
+            } => {
+                self.handle_operator_hydration(export_id, worker_id, node_id, hydrated, replica_id);
+                None
+            }
         }
     }
 
@@ -1436,6 +1445,22 @@ where
                     SubscribeResponse::DroppedAt(subscribe.frontier),
                 ))
             }
+        }
+    }
+
+    fn handle_operator_hydration(
+        &self,
+        id: GlobalId,
+        worker_id: usize,
+        node_id: u64,
+        hydrated: bool,
+        replica_id: ReplicaId,
+    ) {
+        // TODO
+        if hydrated {
+            println!("operator hydrated: collection={id}, replica={replica_id}, worker={worker_id}, LIR={node_id}");
+        } else {
+            println!("operator created: collection={id}, replica={replica_id}, worker={worker_id}, LIR={node_id}");
         }
     }
 }
