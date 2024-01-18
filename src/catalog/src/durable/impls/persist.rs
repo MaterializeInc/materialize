@@ -243,7 +243,7 @@ impl UnopenedPersistCatalogState {
             ?self.upper,
             ?self.epoch,
             ?epoch_lower_bound,
-            ?new_epoch,
+            ?current_epoch,
             "fencing previous catalogs"
         );
         self.epoch = Some(current_epoch);
@@ -277,11 +277,7 @@ impl UnopenedPersistCatalogState {
             persist_client: self.persist_client,
             shard_id: self.shard_id,
             upper: self.upper,
-<<<<<<< HEAD
             epoch: current_epoch,
-=======
-            epoch: new_epoch,
->>>>>>> 11752b6aa5 (catalog: Improve startup times)
             // Initialize empty in-memory state.
             snapshot: Snapshot::empty(),
             metrics: self.metrics,
@@ -379,17 +375,7 @@ impl UnopenedPersistCatalogState {
                             self.epoch = Some(epoch);
                         }
                     },
-
-<<<<<<< HEAD
                     (StateUpdateKind::Epoch(_), -1) => {
-=======
-                    (StateUpdateKind::Epoch(epoch), -1) => {
-                        soft_assert_eq_or_log!(
-                            self.epoch,
-                            Some(epoch),
-                            "retraction does not match existing epoch"
-                        );
->>>>>>> 11752b6aa5 (catalog: Improve startup times)
                         // Nothing to do, we're about to get fenced.
                     }
                     (StateUpdateKind::Config(key, value), 1) => {
