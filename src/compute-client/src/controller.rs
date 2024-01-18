@@ -54,8 +54,8 @@ use uuid::Uuid;
 
 use crate::controller::error::{
     CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
-    InstanceExists, InstanceMissing, PeekError, ReplicaCreationError, ReplicaDropError,
-    SubscribeTargetError,
+    InstanceExists, InstanceMissing, PeekError, ReadPolicyError, ReplicaCreationError,
+    ReplicaDropError, SubscribeTargetError,
 };
 use crate::controller::instance::{ActiveInstance, Instance};
 use crate::controller::replica::ReplicaConfig;
@@ -566,11 +566,14 @@ where
     /// capability is already ahead of it.
     ///
     /// Identifiers not present in `policies` retain their existing read policies.
+    ///
+    /// It is an error to attempt to set a read policy for a collection that is not readable in the
+    /// context of compute. At this time, only indexes are readable compute collections.
     pub fn set_read_policy(
         &mut self,
         instance_id: ComputeInstanceId,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
-    ) -> Result<(), CollectionUpdateError> {
+    ) -> Result<(), ReadPolicyError> {
         self.instance(instance_id)?.set_read_policy(policies)?;
         Ok(())
     }

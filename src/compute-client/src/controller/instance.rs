@@ -89,6 +89,20 @@ impl From<CollectionMissing> for PeekError {
 }
 
 #[derive(Error, Debug)]
+pub(super) enum ReadPolicyError {
+    #[error("collection does not exist: {0}")]
+    CollectionMissing(GlobalId),
+    #[error("collection is write-only: {0}")]
+    WriteOnlyCollection(GlobalId),
+}
+
+impl From<CollectionMissing> for ReadPolicyError {
+    fn from(error: CollectionMissing) -> Self {
+        Self::CollectionMissing(error.0)
+    }
+}
+
+#[derive(Error, Debug)]
 pub(super) enum SubscribeTargetError {
     #[error("subscribe does not exist: {0}")]
     SubscribeMissing(GlobalId),
@@ -1019,18 +1033,27 @@ where
     /// Drops the read capability for the given collections and allows their resources to be
     /// reclaimed.
     pub fn drop_collections(&mut self, ids: Vec<GlobalId>) -> Result<(), CollectionMissing> {
-        // Mark the collections as dropped to allow them to be removed from the controller state.
+        let mut read_capability_updates = BTreeMap::new();
+
         for id in &ids {
             let collection = self.compute.collection_mut(*id)?;
+
+            // Mark the collection as dropped to allow it to be removed from the controller state.
             collection.dropped = true;
+
+            // Drop the implied read capability to announce that clients are not interested in the
+            // collection anymore.
+            let old_capability = std::mem::take(&mut collection.implied_capability);
+            let mut update = ChangeBatch::new();
+            update.extend(old_capability.iter().map(|t| (t.clone(), -1)));
+            read_capability_updates.insert(*id, update);
         }
 
-        // Adjust read policies to announce that clients are not interested in reading from the
-        // dropped collections anymore.
-        let policies = ids
-            .into_iter()
-            .map(|id| (id, ReadPolicy::ValidFrom(Antichain::new())));
-        self.set_read_policy(policies.collect())
+        if !read_capability_updates.is_empty() {
+            self.update_read_capabilities(&mut read_capability_updates);
+        }
+
+        Ok(())
     }
 
     /// Initiate a peek request for the contents of `id` at `timestamp`.
@@ -1136,30 +1159,33 @@ where
     /// capability is already ahead of it.
     ///
     /// Identifiers not present in `policies` retain their existing read policies.
+    ///
+    /// It is an error to attempt to set a read policy for a collection that is not readable in the
+    /// context of compute. At this time, only indexes are readable compute collections.
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn set_read_policy(
         &mut self,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
-    ) -> Result<(), CollectionMissing> {
+    ) -> Result<(), ReadPolicyError> {
         let mut read_capability_changes = BTreeMap::default();
-        for (id, policy) in policies.into_iter() {
+        for (id, new_policy) in policies.into_iter() {
             let collection = self.compute.collection_mut(id)?;
-            let mut new_read_capability = policy.frontier(collection.write_frontier.borrow());
 
-            if timely::order::PartialOrder::less_equal(
-                &collection.implied_capability,
-                &new_read_capability,
-            ) {
+            let old_capability = &collection.implied_capability;
+            let new_capability = new_policy.frontier(collection.write_frontier.borrow());
+            if PartialOrder::less_than(old_capability, &new_capability) {
                 let mut update = ChangeBatch::new();
-                update.extend(new_read_capability.iter().map(|time| (time.clone(), 1)));
-                std::mem::swap(&mut collection.implied_capability, &mut new_read_capability);
-                update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
-                if !update.is_empty() {
-                    read_capability_changes.insert(id, update);
-                }
+                update.extend(old_capability.iter().map(|t| (t.clone(), -1)));
+                update.extend(new_capability.iter().map(|t| (t.clone(), 1)));
+                read_capability_changes.insert(id, update);
+                collection.implied_capability = new_capability;
             }
 
-            collection.read_policy = Some(policy);
+            if let Some(read_policy) = &mut collection.read_policy {
+                *read_policy = new_policy;
+            } else {
+                return Err(ReadPolicyError::WriteOnlyCollection(id));
+            }
         }
         if !read_capability_changes.is_empty() {
             self.update_read_capabilities(&mut read_capability_changes);
