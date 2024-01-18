@@ -595,11 +595,16 @@ To see the available workflows, run:
             with composition.test_case(f"workflow-{args.workflow}"):
                 composition.workflow(args.workflow, *args.unknown_subargs[1:])
 
-            # Upload test report to Buildkite Test Analytics.
-            junit_suite = junit_xml.TestSuite(composition.name)
+            test_suite_name = composition.name
+            test_class_name = os.getenv("BUILDKITE_LABEL") or test_suite_name
 
-            for name, result in composition.test_results.items():
-                test_case = junit_xml.TestCase(name, composition.name, result.duration)
+            # Upload test report to Buildkite Test Analytics.
+            junit_suite = junit_xml.TestSuite(test_suite_name)
+
+            for test_case_name, result in composition.test_results.items():
+                test_case = junit_xml.TestCase(
+                    test_case_name, test_class_name, result.duration
+                )
                 if result.is_failure():
                     assert result.error is not None
                     test_case.add_error_info(
