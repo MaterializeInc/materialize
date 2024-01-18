@@ -32,7 +32,7 @@ Materialize bundles **native connectors** that allow ingesting data from the fol
 - [Other databases](/integrations/#other-databases)
 {{</ linkbox >}}
 {{< linkbox title="Webhooks" >}}
-- [Amazon EventBridge](/sql/create-source/webhook/#connecting-with-amazon-eventbridge)
+- [Amazon EventBridge](/ingest-data/amazon-eventbridge/)
 - [Segment](/ingest-data/segment/)
 - [Other webhooks](/sql/create-source/webhook)
 {{</ linkbox >}}

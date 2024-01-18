@@ -9,7 +9,7 @@ menu:
 ---
 
 This guide walks through the steps to ingest data from [SnowcatCloud](https://www.snowcatcloud.com/)
-into Materialize using the [Webhook source](/sql/create-source/wehbook/).
+into Materialize using the [Webhook source](/sql/create-source/webhook/).
 
 ## Before you begin
 
@@ -287,4 +287,4 @@ With Materialize ingesting your Rudderstack data, you can start exploring it,
 computing real-time results that stay up-to-date as new data arrives, and
 serving results efficiently. For more details, check out the
 [SnowcatCloud documentation](https://docs.snowcatcloud.com/) and the
-[webhook source reference documentation](/sql/create-source/wehbook/).
+[webhook source reference documentation](/sql/create-source/webhook/).
