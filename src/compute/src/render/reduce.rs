@@ -60,14 +60,17 @@ where
 {
     /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.
-    pub fn render_reduce(
+    pub fn render_reduce<S>(
         &mut self,
-        input: CollectionBundle<G, T>,
+        input: CollectionBundle<S, T>,
         key_val_plan: KeyValPlan,
         reduce_plan: ReducePlan,
         input_key: Option<Vec<MirScalarExpr>>,
         mfp_after: Option<MapFilterProject>,
-    ) -> CollectionBundle<G, T> {
+    ) -> CollectionBundle<S, T>
+    where
+        S: Scope<Timestamp = G::Timestamp>,
+    {
         // Convert `mfp_after` to an actionable plan.
         let mfp_after = mfp_after.map(|m| {
             m.into_plan()
@@ -76,6 +79,7 @@ where
                 .expect("Fused Reduce MFPs do not have temporal predicates")
         });
 
+        // TODO: remove this superflous region
         input.scope().region_named("Reduce", |inner| {
             let KeyValPlan {
                 mut key_plan,

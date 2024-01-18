@@ -479,6 +479,25 @@ impl<T, ID: Copy> Plan<T, ID> {
             | ArrangeBy { node_id, .. } => *node_id,
         }
     }
+
+    pub fn type_name(&self) -> &'static str {
+        use Plan::*;
+        match self {
+            Constant { .. } => "Constant",
+            Get { .. } => "Get",
+            Let { .. } => "Let",
+            LetRec { .. } => "LetRec",
+            Mfp { .. } => "Mfp",
+            FlatMap { .. } => "FlatMap",
+            Join { .. } => "Join",
+            Reduce { .. } => "Reduce",
+            TopK { .. } => "TopK",
+            Negate { .. } => "Negate",
+            Threshold { .. } => "Threshold",
+            Union { .. } => "Union",
+            ArrangeBy { .. } => "ArrangeBy",
+        }
+    }
 }
 
 impl Arbitrary for Plan {

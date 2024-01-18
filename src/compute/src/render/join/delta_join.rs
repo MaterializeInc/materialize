@@ -48,13 +48,18 @@ where
     ///
     /// The join is followed by the application of `map_filter_project`, whose
     /// implementation will be pushed in to the join pipeline if at all possible.
-    pub fn render_delta_join(
+    pub fn render_delta_join<S>(
         &mut self,
-        inputs: Vec<CollectionBundle<G>>,
+        inputs: Vec<CollectionBundle<S>>,
         join_plan: DeltaJoinPlan,
-    ) -> CollectionBundle<G> {
+    ) -> CollectionBundle<S>
+    where
+        S: Scope<Timestamp = G::Timestamp>,
+    {
+        let mut scope = inputs[0].scope();
         // We create a new region to contain the dataflow paths for the delta join.
-        let (oks, errs) = self.scope.clone().region_named("Join(Delta)", |inner| {
+        // TODO: remove this superflous region
+        let (oks, errs) = scope.region_named("Join(Delta)", |inner| {
             // Collects error streams for the ambient scope.
             let mut inner_errs = Vec::new();
 

@@ -151,11 +151,11 @@ where
     G::Timestamp: Lattice + Refines<T> + Columnation,
     T: Timestamp + Lattice + Columnation,
 {
-    pub(crate) fn render_threshold(
+    pub(crate) fn render_threshold<S>(
         &self,
-        input: CollectionBundle<G, T>,
+        input: CollectionBundle<S, T>,
         threshold_plan: ThresholdPlan,
-    ) -> CollectionBundle<G, T> {
+    ) -> CollectionBundle<S, T> where S: Scope<Timestamp = G::Timestamp> {
         match threshold_plan {
             ThresholdPlan::Basic(BasicThresholdPlan {
                 ensure_arrangement: (key, _, _),

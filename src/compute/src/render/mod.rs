@@ -753,7 +753,19 @@ where
     /// The return type reflects the uncertainty about the data representation, perhaps
     /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
     pub fn render_plan(&mut self, plan: IdPlan) -> CollectionBundle<G> {
-        match plan {
+        // TODO make sure that the names match the `EXPLAIN PHYSICAL PLAN` output
+        let region_name = format!("LIR[{}]: {}", plan.node_id(), plan.type_name());
+        self.scope.clone().region_named(&region_name, |region| {
+            self.render_plan_into_region(plan, region)
+        })
+    }
+
+    fn render_plan_into_region(
+        &mut self,
+        plan: IdPlan,
+        region: &mut Child<G, G::Timestamp>,
+    ) -> CollectionBundle<G> {
+        let collection = match plan {
             Plan::Constant { rows, node_id: _ } => {
                 // Produce both rows and errs to avoid conditional dataflow construction.
                 let (rows, errs) = match rows {
@@ -778,7 +790,7 @@ where
                             None
                         }
                     })
-                    .to_stream(&mut self.scope)
+                    .to_stream(region)
                     .as_collection();
 
                 let mut error_time: mz_repr::Timestamp = Timestamp::minimum();
@@ -792,7 +804,7 @@ where
                             1,
                         )
                     })
-                    .to_stream(&mut self.scope)
+                    .to_stream(region)
                     .as_collection();
 
                 CollectionBundle::from_collections(ok_collection, err_collection)
@@ -807,7 +819,8 @@ where
                 // If `mfp` happens to be trivial, we can just return the collection.
                 let mut collection = self
                     .lookup_id(id)
-                    .unwrap_or_else(|| panic!("Get({:?}) not found at render time", id));
+                    .unwrap_or_else(|| panic!("Get({:?}) not found at render time", id))
+                    .enter_region(region);
                 match plan {
                     mz_compute_types::plan::GetPlan::PassArrangements => {
                         // Assert that each of `keys` are present in `collection`.
@@ -848,7 +861,7 @@ where
                 let prebound = self.insert_id(Id::Local(id), value);
                 assert!(prebound.is_none());
 
-                let body = self.render_plan(*body);
+                let body = self.render_plan(*body).enter_region(region);
                 self.remove_id(Id::Local(id));
                 body
             }
@@ -861,7 +874,7 @@ where
                 input_key_val,
                 node_id: _,
             } => {
-                let input = self.render_plan(*input);
+                let input = self.render_plan(*input).enter_region(region);
                 // If `mfp` is non-trivial, we should apply it and produce a collection.
                 if mfp.is_identity() {
                     input
@@ -879,7 +892,7 @@ where
                 input_key,
                 node_id: _,
             } => {
-                let input = self.render_plan(*input);
+                let input = self.render_plan(*input).enter_region(region);
                 self.render_flat_map(input, func, exprs, mfp, input_key)
             }
             Plan::Join {
@@ -889,7 +902,7 @@ where
             } => {
                 let inputs = inputs
                     .into_iter()
-                    .map(|input| self.render_plan(input))
+                    .map(|input| self.render_plan(input).enter_region(region))
                     .collect();
                 match plan {
                     mz_compute_types::plan::join::JoinPlan::Linear(linear_plan) => {
@@ -908,7 +921,7 @@ where
                 mfp_after,
                 node_id: _,
             } => {
-                let input = self.render_plan(*input);
+                let input = self.render_plan(*input).enter_region(region);
                 let mfp_option = (!mfp_after.is_identity()).then_some(mfp_after);
                 self.render_reduce(input, key_val_plan, plan, input_key, mfp_option)
             }
@@ -917,11 +930,11 @@ where
                 top_k_plan,
                 node_id: _,
             } => {
-                let input = self.render_plan(*input);
+                let input = self.render_plan(*input).enter_region(region);
                 self.render_topk(input, top_k_plan)
             }
             Plan::Negate { input, node_id: _ } => {
-                let input = self.render_plan(*input);
+                let input = self.render_plan(*input).enter_region(region);
                 let (oks, errs) = input.as_specific_collection(None);
                 CollectionBundle::from_collections(oks.negate(), errs)
             }
@@ -930,7 +943,7 @@ where
                 threshold_plan,
                 node_id: _,
             } => {
-                let input = self.render_plan(*input);
+                let input = self.render_plan(*input).enter_region(region);
                 self.render_threshold(input, threshold_plan)
             }
             Plan::Union {
@@ -941,15 +954,16 @@ where
                 let mut oks = Vec::new();
                 let mut errs = Vec::new();
                 for input in inputs.into_iter() {
-                    let (os, es) = self.render_plan(input).as_specific_collection(None);
+                    let input = self.render_plan(input).enter_region(region);
+                    let (os, es) = input.as_specific_collection(None);
                     oks.push(os);
                     errs.push(es);
                 }
-                let mut oks = differential_dataflow::collection::concatenate(&mut self.scope, oks);
+                let mut oks = differential_dataflow::collection::concatenate(region, oks);
                 if consolidate_output {
                     oks = oks.consolidate_named::<KeySpine<_, _, _>>("UnionConsolidation")
                 }
-                let errs = differential_dataflow::collection::concatenate(&mut self.scope, errs);
+                let errs = differential_dataflow::collection::concatenate(region, errs);
                 CollectionBundle::from_collections(oks, errs)
             }
             Plan::ArrangeBy {
@@ -959,7 +973,7 @@ where
                 input_mfp,
                 node_id: _,
             } => {
-                let input = self.render_plan(*input);
+                let input = self.render_plan(*input).enter_region(region);
                 input.ensure_collections(
                     keys,
                     input_key,
@@ -968,7 +982,9 @@ where
                     self.enable_specialized_arrangements,
                 )
             }
-        }
+        };
+
+        collection.leave_region()
     }
 }
 

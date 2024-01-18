@@ -45,14 +45,18 @@ where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
 {
-    pub(crate) fn render_topk(
+    pub(crate) fn render_topk<S>(
         &mut self,
-        input: CollectionBundle<G>,
+        input: CollectionBundle<S>,
         top_k_plan: TopKPlan,
-    ) -> CollectionBundle<G> {
+    ) -> CollectionBundle<S>
+    where
+        S: Scope<Timestamp = G::Timestamp>,
+    {
         let (ok_input, err_input) = input.as_specific_collection(None);
 
         // We create a new region to compartmentalize the topk logic.
+        // TODO: remove this superflous region
         let (ok_result, err_collection) = ok_input.scope().region_named("TopK", |inner| {
             let ok_input = ok_input.enter_region(inner);
             let mut err_collection = err_input.enter_region(inner);

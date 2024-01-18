@@ -139,12 +139,17 @@ where
     G::Timestamp: Lattice + Refines<T> + Columnation,
     T: Timestamp + Lattice + Columnation,
 {
-    pub(crate) fn render_join(
+    pub(crate) fn render_join<S>(
         &mut self,
-        inputs: Vec<CollectionBundle<G, T>>,
+        inputs: Vec<CollectionBundle<S, T>>,
         linear_plan: LinearJoinPlan,
-    ) -> CollectionBundle<G, T> {
-        self.scope.clone().region_named("Join(Linear)", |inner| {
+    ) -> CollectionBundle<S, T>
+    where
+        S: Scope<Timestamp = G::Timestamp>,
+    {
+        let mut scope = inputs[0].scope();
+        // TODO: remove this superflous region
+        scope.region_named("Join(Linear)", |inner| {
             // Collect all error streams, and concatenate them at the end.
             let mut errors = Vec::new();
 
