@@ -62,6 +62,7 @@ SERVICES = [
             f"MZ_STORAGE_USAGE_COLLECTION_INTERVAL={COLLECTION_INTERVAL_SECS}s"
         ],
         additional_system_parameter_defaults={"persist_rollup_threshold": "20"},
+        catalog_store="stash",
     ),
     Testdrive(default_timeout="120s", no_reset=True),
 ]
