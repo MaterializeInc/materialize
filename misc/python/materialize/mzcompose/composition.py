@@ -29,6 +29,7 @@ import sys
 import threading
 import time
 import traceback
+import urllib.parse
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
@@ -1110,3 +1111,13 @@ class Composition:
             "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
         )
         self.up("materialized")
+
+    def cloud_hostname(self) -> str:
+        """Uses the mz command line tool to get the hostname of the cloud instance"""
+        print("Obtaining hostname of cloud instance ...")
+        region_status = self.run("mz", "region", "show", capture=True)
+        sql_line = region_status.stdout.split("\n")[2]
+        cloud_url = sql_line.split("\t")[1].strip()
+        # It is necessary to append the 'https://' protocol; otherwise, urllib can't parse it correctly.
+        cloud_hostname = urllib.parse.urlparse("https://" + cloud_url).hostname
+        return str(cloud_hostname)

@@ -653,7 +653,7 @@ class Retraction(Dataflow):
     def before(self) -> Action:
         return TdAction(
             f"""
-> DROP TABLE IF EXISTS ten CASCADE;
+> DROP TABLE IF EXISTS ten;
 
 > CREATE TABLE ten (f1 INTEGER);
 
@@ -821,7 +821,7 @@ class FullOuterJoin(Dataflow):
 
 > DROP MATERIALIZED VIEW IF EXISTS v1 CASCADE;
 
-> DROP TABLE IF EXISTS ten;
+> DROP TABLE IF EXISTS ten CASCADE;
 
 > CREATE TABLE ten (f1 INTEGER);
 
