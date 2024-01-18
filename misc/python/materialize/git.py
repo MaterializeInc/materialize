@@ -208,7 +208,10 @@ def fetch(
     if all_remotes:
         command.append("--all")
 
-    if not include_submodules:
+    # explicitly specify both cases to be independent of the git config
+    if include_submodules:
+        command.append("--recurse-submodules")
+    else:
         command.append("--no-recurse-submodules")
 
     fetch_tags = (
