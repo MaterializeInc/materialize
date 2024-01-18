@@ -134,6 +134,7 @@ Stripe signing scheme, check out the [Stripe documentation](https://stripe.com/d
 Webhook data is ingested as a JSON blob. We recommend creating a parsing view on
 top of your webhook source that uses [`jsonb` operators](https://materialize.com/docs/sql/types/jsonb/#operators)
 to map the individual fields to columns with the required data types.
+
 ```sql
 CREATE VIEW parse_stripe AS SELECT
     body->>'api_version' AS api_version,
@@ -154,8 +155,7 @@ FROM stripe_source;
 
 We highly recommend using the [`try_parse_monotonic_iso8601_timestamp`](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown)
 function when casting from `text` to `timestamp`, which enables [temporal filter
-pushdown]
-(https://materialize.com/docs/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
+pushdown](https://materialize.com/docs/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
 
 ### Deduplication
 

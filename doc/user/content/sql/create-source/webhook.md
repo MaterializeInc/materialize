@@ -247,10 +247,8 @@ CREATE MATERIALIZED VIEW my_build_jobs_merged IN CLUSTER my_compute_cluster AS (
 ```
 
 {{< note >}}
-
 When casting from `text` to `timestamp` you should prefer to use the [`try_parse_monotonic_iso8601_timestamp`](/sql/functions/pushdown/)
 function, which enables [temporal filter pushdown](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
-
 {{< /note >}}
 
 ### Handling batch events
@@ -322,7 +320,14 @@ FROM WEBHOOK
 Your new webhook is now up and ready to accept requests using basic
 authentication.
 
-## Related pages
+#### JSON parsing
+
+Webhook data is ingested as a JSON blob. We recommend creating a parsing view on
+top of your webhook source that maps the individual fields to columns with the
+required data types. To avoid doing this tedious task manually, you can use
+[this **JSON parsing widget**](/sql/types/jsonb/#parsing)!
+
+### Related pages
 
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE SOURCE`](../)

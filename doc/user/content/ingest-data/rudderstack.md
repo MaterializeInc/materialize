@@ -152,8 +152,7 @@ CREATE VIEW json_parsed AS
 
 We highly recommend using the [`try_parse_monotonic_iso8601_timestamp`](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown)
 function when casting from `text` to `timestamp`, which enables [temporal filter
-pushdown]
-(https://materialize.com/docs/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
+pushdown](https://materialize.com/docs/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
 
 ### Deduplication
 
