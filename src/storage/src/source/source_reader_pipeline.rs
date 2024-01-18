@@ -77,9 +77,7 @@ use tracing::{info, trace};
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
 use crate::metrics::StorageMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};
-use crate::source::types::{
-    MaybeLength, SourceMessage, SourceOutput, SourceReaderError, SourceRender,
-};
+use crate::source::types::{SourceMessage, SourceOutput, SourceReaderError, SourceRender};
 use crate::statistics::SourceStatistics;
 
 /// Shared configuration information for all source types. This is used in the
@@ -164,7 +162,7 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     Vec<(
-        Collection<Child<'g, G, mz_repr::Timestamp>, SourceOutput<C::Key, C::Value>, Diff>,
+        Collection<Child<'g, G, mz_repr::Timestamp>, SourceOutput, Diff>,
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceError, Diff>,
     )>,
     Stream<G, HealthStatusMessage>,
@@ -239,14 +237,7 @@ fn source_render_operator<G, C>(
     resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
-    Collection<
-        G,
-        (
-            usize,
-            Result<SourceMessage<C::Key, C::Value>, SourceReaderError>,
-        ),
-        Diff,
-    >,
+    Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
     Stream<G, Infallible>,
     Stream<G, HealthStatusMessage>,
     Vec<PressOnDropButton>,
@@ -309,8 +300,8 @@ where
                 match message {
                     Ok(message) => {
                         source_statistics.inc_messages_received_by(1);
-                        let key_len = u64::cast_from(message.key.len().unwrap_or(0));
-                        let value_len = u64::cast_from(message.value.len().unwrap_or(0));
+                        let key_len = u64::cast_from(message.key.byte_len());
+                        let value_len = u64::cast_from(message.value.byte_len());
                         source_statistics.inc_bytes_received_by(key_len + value_len);
                     }
                     Err(_) => {}
@@ -534,7 +525,7 @@ where
 /// Receives un-timestamped batches from the source reader and updates to the
 /// remap trace on a second input. This operator takes the remap information,
 /// reclocks incoming batches and sends them forward.
-fn reclock_operator<G, K, V, FromTime, D>(
+fn reclock_operator<G, FromTime, D>(
     scope: &G,
     config: RawSourceCreationConfig,
     mut timestamper: ReclockFollower<FromTime, mz_repr::Timestamp>,
@@ -542,7 +533,7 @@ fn reclock_operator<G, K, V, FromTime, D>(
         Event<
             FromTime,
             (
-                (usize, Result<SourceMessage<K, V>, SourceReaderError>),
+                (usize, Result<SourceMessage, SourceReaderError>),
                 FromTime,
                 D,
             ),
@@ -550,13 +541,11 @@ fn reclock_operator<G, K, V, FromTime, D>(
     >,
     remap_trace_updates: Collection<G, FromTime, Diff>,
 ) -> Vec<(
-    Collection<G, SourceOutput<K, V>, D>,
+    Collection<G, SourceOutput, D>,
     Collection<G, SourceError, Diff>,
 )>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
-    K: timely::Data + MaybeLength,
-    V: timely::Data + MaybeLength,
     FromTime: SourceTimestamp,
     D: Semigroup + Into<Diff>,
 {
@@ -605,8 +594,8 @@ where
         let mut source_upper = MutableAntichain::new_bottom(FromTime::minimum());
 
         // Stash of batches that have not yet been timestamped.
-        type Batch<K, V, T, D> = Vec<((usize, Result<SourceMessage<K, V>, SourceReaderError>), T, D)>;
-        let mut untimestamped_batches: Vec<(FromTime, Batch<K, V, FromTime, D>)> = Vec::new();
+        type Batch<T, D> = Vec<((usize, Result<SourceMessage, SourceReaderError>), T, D)>;
+        let mut untimestamped_batches: Vec<(FromTime, Batch<FromTime, D>)> = Vec::new();
 
         // Stash of reclock updates that are still beyond the upper frontier
         let mut remap_updates_stash = vec![];
@@ -880,8 +869,8 @@ where
 ///
 /// TODO: This function is a bit of a mess rn but hopefully this function makes
 /// the existing mess more obvious and points towards ways to improve it.
-async fn handle_message<K, V, T, D>(
-    (output_index, message): (usize, Result<SourceMessage<K, V>, SourceReaderError>),
+async fn handle_message<T, D>(
+    (output_index, message): (usize, Result<SourceMessage, SourceReaderError>),
     time: T,
     diff: D,
     bytes_read: &mut usize,
@@ -889,14 +878,14 @@ async fn handle_message<K, V, T, D>(
     output_handle: &mut AsyncOutputHandle<
         mz_repr::Timestamp,
         Vec<(
-            (usize, Result<SourceOutput<K, V>, SourceError>),
+            (usize, Result<SourceOutput, SourceError>),
             mz_repr::Timestamp,
             D,
         )>,
         Tee<
             mz_repr::Timestamp,
             (
-                (usize, Result<SourceOutput<K, V>, SourceError>),
+                (usize, Result<SourceOutput, SourceError>),
                 mz_repr::Timestamp,
                 D,
             ),
@@ -906,8 +895,6 @@ async fn handle_message<K, V, T, D>(
     ts: mz_repr::Timestamp,
     source_id: GlobalId,
 ) where
-    K: timely::Data + MaybeLength,
-    V: timely::Data + MaybeLength,
     T: SourceTimestamp,
     D: Semigroup,
 {
@@ -917,13 +904,7 @@ async fn handle_message<K, V, T, D>(
                 .try_into_compat_ts()
                 .expect("data at invalid timestamp");
 
-            // Note: empty and null payload/keys are currently treated as the same thing.
-            if let Some(len) = message.key.len() {
-                *bytes_read += len;
-            }
-            if let Some(len) = message.value.len() {
-                *bytes_read += len;
-            }
+            *bytes_read += message.key.byte_len() + message.value.byte_len();
 
             match metric_updates.entry(partition) {
                 Entry::Occupied(mut entry) => {
@@ -936,12 +917,12 @@ async fn handle_message<K, V, T, D>(
 
             (
                 output_index,
-                Ok(SourceOutput::new(
-                    message.key,
-                    message.value,
-                    message.metadata,
-                    offset,
-                )),
+                Ok(SourceOutput {
+                    key: message.key,
+                    value: message.value,
+                    metadata: message.metadata,
+                    position_for_upsert: offset,
+                }),
             )
         }
         Err(SourceReaderError { inner }) => {

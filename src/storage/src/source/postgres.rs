@@ -110,8 +110,6 @@ mod replication;
 mod snapshot;
 
 impl SourceRender for PostgresSourceConnection {
-    type Key = ();
-    type Value = Row;
     type Time = MzOffset;
 
     const STATUS_NAMESPACE: StatusNamespace = StatusNamespace::Postgres;
@@ -125,7 +123,7 @@ impl SourceRender for PostgresSourceConnection {
         resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<G, (usize, Result<SourceMessage<(), Row>, SourceReaderError>), Diff>,
+        Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Vec<PressOnDropButton>,
@@ -181,7 +179,7 @@ impl SourceRender for PostgresSourceConnection {
 
         let updates = snapshot_updates.concat(&repl_updates).map(|(output, res)| {
             let res = res.map(|row| SourceMessage {
-                key: (),
+                key: Row::default(),
                 value: row,
                 metadata: Row::default(),
             });

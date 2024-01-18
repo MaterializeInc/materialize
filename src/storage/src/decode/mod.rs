@@ -57,7 +57,7 @@ mod protobuf;
 /// also builds a differential dataflow collection that respects the
 /// data and progress messages in the underlying CDCv2 stream.
 pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
-    input: &Collection<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, Diff>,
+    input: &Collection<G, SourceOutput, Diff>,
     schema: String,
     storage_configuration: StorageConfiguration,
     csr_connection: Option<CsrConnection>,
@@ -70,7 +70,7 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
 
     let mut input_handle = builder.new_disconnected_input(
         &input.inner,
-        Exchange::new(|(x, _, _): &(SourceOutput<Option<Vec<u8>>, _>, _, _)| x.key.hashed()),
+        Exchange::new(|(x, _, _): &(SourceOutput, _, _)| x.key.hashed()),
     );
 
     let channel_tx = Rc::clone(&channel_rx);
@@ -97,9 +97,10 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
             };
 
             for (data, _time, _diff) in data {
-                let value = match &data.value {
-                    Some(value) => value,
-                    None => continue,
+                let value = match data.value.unpack_first() {
+                    Datum::Bytes(value) => value,
+                    Datum::Null => continue,
+                    _ => unreachable!("invalid datum"),
                 };
                 let (mut data, schema, _) = match resolver.resolve(&*value).await {
                     Ok(Ok(ok)) => ok,
@@ -407,7 +408,7 @@ async fn decode_delimited(
 /// (which is not always possible otherwise, since often gibberish strings can be interpreted as Avro,
 ///  so the only signal is how many bytes you managed to decode).
 pub fn render_decode_delimited<G>(
-    input: &Collection<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, Diff>,
+    input: &Collection<G, SourceOutput, Diff>,
     key_encoding: Option<DataEncoding>,
     value_encoding: DataEncoding,
     debug_name: String,
@@ -428,8 +429,7 @@ where
             .unwrap_or(""),
         value_encoding.op_name()
     );
-    let dist =
-        |(x, _, _): &(SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, _, _)| x.value.hashed();
+    let dist = |(x, _, _): &(SourceOutput, _, _)| x.value.hashed();
 
     let mut builder = AsyncOperatorBuilder::new(op_name, input.scope());
 
@@ -471,25 +471,25 @@ where
                         let mut n_errors = 0;
                         let mut n_successes = 0;
                         for (output, ts, diff) in data.iter() {
-                            let SourceOutput {
-                                key,
-                                value,
-                                metadata,
-                                position_for_upsert: position,
-                            } = output;
+                            let key_buf = match output.key.unpack_first() {
+                                Datum::Bytes(buf) => Some(buf),
+                                Datum::Null => None,
+                                d => unreachable!("invalid datum: {d}"),
+                            };
 
-                            let key = match key_decoder.as_mut().zip(key.as_ref()) {
+                            let key = match key_decoder.as_mut().zip(key_buf) {
                                 Some((decoder, buf)) => {
                                     decode_delimited(decoder, buf).await?.transpose()
                                 }
                                 None => None,
                             };
 
-                            let value = match value.as_ref() {
-                                Some(buf) => {
+                            let value = match output.value.unpack_first() {
+                                Datum::Bytes(buf) => {
                                     decode_delimited(&mut value_decoder, buf).await?.transpose()
                                 }
-                                None => None,
+                                Datum::Null => None,
+                                d => unreachable!("invalid datum: {d}"),
                             };
 
                             if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
@@ -501,8 +501,8 @@ where
                             let result = DecodeResult {
                                 key,
                                 value,
-                                position_for_upsert: *position,
-                                metadata: metadata.clone(),
+                                position_for_upsert: output.position_for_upsert,
+                                metadata: output.metadata.clone(),
                             };
                             output_container.push((result, ts.clone(), *diff));
                         }

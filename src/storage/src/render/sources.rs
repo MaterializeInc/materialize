@@ -45,18 +45,6 @@ use crate::render::upsert::UpsertKey;
 use crate::source::types::{DecodeResult, SourceOutput};
 use crate::source::{self, RawSourceCreationConfig};
 
-/// A type-level enum that holds one of two types of sources depending on their message type
-///
-/// This enum puts no restrictions to the generic parameters of the variants since it only serves
-/// as a type-level enum.
-pub enum SourceType<G: Scope> {
-    /// A delimited source
-    Delimited(Collection<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, Diff>),
-    /// A source that produces Row's natively, and skips any `render_decode` stream adapters, and
-    /// can produce retractions
-    Row(Collection<G, SourceOutput<(), Row>, Diff>),
-}
-
 /// The output index for health streams, used to handle multiplexed streams
 pub(crate) type OutputIndex = usize;
 
@@ -143,76 +131,41 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
     let (streams, mut health, source_tokens) = match connection {
-        GenericSourceConnection::Kafka(connection) => {
-            let (streams, health, source_tokens) = source::create_raw_source(
-                scope,
-                resume_stream,
-                base_source_config.clone(),
-                connection,
-                start_signal,
-            );
-            let streams: Vec<_> = streams
-                .into_iter()
-                .map(|(ok, err)| (SourceType::Delimited(ok), err))
-                .collect();
-            (streams, health, source_tokens)
-        }
-        GenericSourceConnection::Postgres(connection) => {
-            let (streams, health, source_tokens) = source::create_raw_source(
-                scope,
-                resume_stream,
-                base_source_config.clone(),
-                connection,
-                start_signal,
-            );
-            let streams: Vec<_> = streams
-                .into_iter()
-                .map(|(ok, err)| (SourceType::Row(ok), err))
-                .collect();
-            (streams, health, source_tokens)
-        }
-        GenericSourceConnection::MySql(connection) => {
-            let (streams, health, source_tokens) = source::create_raw_source(
-                scope,
-                resume_stream,
-                base_source_config.clone(),
-                connection,
-                start_signal,
-            );
-            let streams: Vec<_> = streams
-                .into_iter()
-                .map(|(ok, err)| (SourceType::Row(ok), err))
-                .collect();
-            (streams, health, source_tokens)
-        }
-        GenericSourceConnection::LoadGenerator(connection) => {
-            let (streams, health, source_tokens) = source::create_raw_source(
-                scope,
-                resume_stream,
-                base_source_config.clone(),
-                connection,
-                start_signal,
-            );
-            let streams: Vec<_> = streams
-                .into_iter()
-                .map(|(ok, err)| (SourceType::Row(ok), err))
-                .collect();
-            (streams, health, source_tokens)
-        }
-        GenericSourceConnection::TestScript(connection) => {
-            let (streams, health, source_tokens) = source::create_raw_source(
-                scope,
-                resume_stream,
-                base_source_config.clone(),
-                connection,
-                start_signal,
-            );
-            let streams: Vec<_> = streams
-                .into_iter()
-                .map(|(ok, err)| (SourceType::Delimited(ok), err))
-                .collect();
-            (streams, health, source_tokens)
-        }
+        GenericSourceConnection::Kafka(connection) => source::create_raw_source(
+            scope,
+            resume_stream,
+            base_source_config.clone(),
+            connection,
+            start_signal,
+        ),
+        GenericSourceConnection::Postgres(connection) => source::create_raw_source(
+            scope,
+            resume_stream,
+            base_source_config.clone(),
+            connection,
+            start_signal,
+        ),
+        GenericSourceConnection::MySql(connection) => source::create_raw_source(
+            scope,
+            resume_stream,
+            base_source_config.clone(),
+            connection,
+            start_signal,
+        ),
+        GenericSourceConnection::LoadGenerator(connection) => source::create_raw_source(
+            scope,
+            resume_stream,
+            base_source_config.clone(),
+            connection,
+            start_signal,
+        ),
+        GenericSourceConnection::TestScript(connection) => source::create_raw_source(
+            scope,
+            resume_stream,
+            base_source_config.clone(),
+            connection,
+            start_signal,
+        ),
     };
 
     needed_tokens.extend(source_tokens);
@@ -250,7 +203,7 @@ fn render_source_stream<G>(
     scope: &mut G,
     dataflow_debug_name: &String,
     id: GlobalId,
-    ok_source: SourceType<G>,
+    ok_source: Collection<G, SourceOutput, Diff>,
     description: IngestionDescription<CollectionMetadata>,
     as_of: Antichain<G::Timestamp>,
     mut error_collections: Vec<Collection<G, DataflowError, Diff>>,
@@ -293,10 +246,6 @@ where
                 DataEncodingInner::Avro(enc) => enc,
                 _ => unreachable!("Attempted to create non-Avro CDCv2 source"),
             };
-            let ok_source = match ok_source {
-                SourceType::Delimited(s) => s,
-                _ => unreachable!("Attempted to create non-delimited CDCv2 source"),
-            };
 
             // TODO(petrosagg): this should move to the envelope section below and
             // made to work with a stream of Rows instead of decoding Avro directly
@@ -311,26 +260,32 @@ where
             needed_tokens.push(token);
             (oks, None, empty(scope))
         } else {
-            // Depending on the type of _raw_ source produced for the given source
-            // connection, render the _decode_ part of the pipeline, that turns a raw data
-            // stream into a `DecodeResult`.
-            let (decoded_stream, decode_health) = match ok_source {
-                SourceType::Delimited(source) => render_decode_delimited(
-                    &source,
-                    key_encoding,
-                    value_encoding,
-                    dataflow_debug_name.clone(),
-                    storage_state.metrics.decode_defs.clone(),
-                    storage_state.storage_configuration.clone(),
-                ),
-                SourceType::Row(source) => (
-                    source.map(|r| DecodeResult {
+            let (decoded_stream, decode_health) = match (key_encoding, value_encoding) {
+                // TODO(petrosagg): encoding should become an optional field in the description
+                // struct that is only `Some(_)` when an encoding step is to be performed. We
+                // shouldn't have `RowCodec` as an option at all
+                (
+                    None,
+                    DataEncoding {
+                        inner: DataEncodingInner::RowCodec(_),
+                        ..
+                    },
+                ) => (
+                    ok_source.map(|r| DecodeResult {
                         key: None,
                         value: Some(Ok(r.value)),
                         metadata: Row::default(),
                         position_for_upsert: r.position_for_upsert,
                     }),
                     empty(scope),
+                ),
+                (key_encoding, value_encoding) => render_decode_delimited(
+                    &ok_source,
+                    key_encoding,
+                    value_encoding,
+                    dataflow_debug_name.clone(),
+                    storage_state.metrics.decode_defs.clone(),
+                    storage_state.storage_configuration.clone(),
                 ),
             };
 

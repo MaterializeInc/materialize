@@ -29,8 +29,6 @@ use crate::source::RawSourceCreationConfig;
 
 /// Describes a source that can render itself in a timely scope.
 pub trait SourceRender {
-    type Key: timely::Data + MaybeLength;
-    type Value: timely::Data + MaybeLength;
     type Time: SourceTimestamp;
     const STATUS_NAMESPACE: StatusNamespace;
 
@@ -66,14 +64,7 @@ pub trait SourceRender {
         resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<
-            G,
-            (
-                usize,
-                Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>,
-            ),
-            Diff,
-        >,
+        Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Vec<PressOnDropButton>,
@@ -83,45 +74,28 @@ pub trait SourceRender {
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
 #[derive(Debug, Clone)]
-pub struct SourceMessage<Key, Value> {
+pub struct SourceMessage {
     /// The message key
-    pub key: Key,
+    pub key: Row,
     /// The message value
-    pub value: Value,
+    pub value: Row,
     /// Additional metadata columns requested by the user
     pub metadata: Row,
 }
 
 /// A record produced by a source
 #[derive(Clone, Serialize, Debug, Deserialize)]
-pub struct SourceOutput<K, V> {
+pub struct SourceOutput {
     /// The record's key (or some empty/default value for sources without the concept of key)
-    pub key: K,
+    pub key: Row,
     /// The record's value
-    pub value: V,
+    pub value: Row,
     /// Additional metadata columns requested by the user
     pub metadata: Row,
     /// The offset position in the partition of a kafka source. This is field is on its way out and
     /// its only valid use is in the upsert operator. Do NOT use it in any new place!
     // TODO(petrosagg): remove this field
     pub position_for_upsert: MzOffset,
-}
-
-impl<K, V> SourceOutput<K, V> {
-    /// Build a new SourceOutput
-    pub fn new(
-        key: K,
-        value: V,
-        metadata: Row,
-        position_for_upsert: MzOffset,
-    ) -> SourceOutput<K, V> {
-        SourceOutput {
-            key,
-            value,
-            metadata,
-            position_for_upsert,
-        }
-    }
 }
 
 /// The output of the decoding operator
@@ -155,35 +129,5 @@ impl SourceReaderError {
         SourceReaderError {
             inner: SourceErrorDetails::Other(format!("{}", e)),
         }
-    }
-}
-
-/// Types that implement this trait expose a length function
-pub trait MaybeLength {
-    /// Returns the size of the object
-    fn len(&self) -> Option<usize>;
-}
-
-impl MaybeLength for () {
-    fn len(&self) -> Option<usize> {
-        None
-    }
-}
-
-impl MaybeLength for Vec<u8> {
-    fn len(&self) -> Option<usize> {
-        Some(self.len())
-    }
-}
-
-impl MaybeLength for mz_repr::Row {
-    fn len(&self) -> Option<usize> {
-        Some(self.data().len())
-    }
-}
-
-impl<T: MaybeLength> MaybeLength for Option<T> {
-    fn len(&self) -> Option<usize> {
-        self.as_ref().and_then(|v| v.len())
     }
 }
