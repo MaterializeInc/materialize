@@ -164,6 +164,7 @@ use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_expr::refresh_schedule::RefreshSchedule;
+use mz_ore::future::TimeoutError;
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
@@ -3007,6 +3008,7 @@ async fn get_initial_oracle_timestamps(
 pub async fn load_remote_system_parameters(
     storage: &mut Box<dyn OpenableDurableCatalogState>,
     system_parameter_sync_config: Option<SystemParameterSyncConfig>,
+    system_parameter_sync_timeout: Duration,
 ) -> Result<Option<BTreeMap<String, OwnedVarInput>>, AdapterError> {
     if let Some(system_parameter_sync_config) = system_parameter_sync_config {
         tracing::info!("parameter sync on boot: start sync");
@@ -3021,9 +3023,10 @@ pub async fn load_remote_system_parameters(
         // result in running an untested configuration.
         //
         // Note this only applies during initial startup. Restarting
-        // after we've synced once doesn't block on LaunchDarkly, as it
-        // seems reasonable to assume that the last-synced configuration
-        // was valid enough.
+        // after we've synced once only blocks for a maximum of
+        // `FRONTEND_SYNC_TIMEOUT` on LaunchDarkly, as it seems
+        // reasonable to assume that the last-synced configuration was
+        // valid enough.
         //
         // This philosophy appears to provide a good balance between not
         // running untested configurations in production while also not
@@ -3049,8 +3052,8 @@ pub async fn load_remote_system_parameters(
         //       LaunchDarkly configuration, for when LaunchDarkly comes
         //       back online.
         //    6. Reboot environmentd.
-        if !storage.has_system_config_synced_once().await? {
-            let mut params = SynchronizedParameters::new(SystemVars::default());
+        let mut params = SynchronizedParameters::new(SystemVars::default());
+        let frontend_sync = async {
             let frontend = SystemParameterFrontend::from(&system_parameter_sync_config).await?;
             frontend.pull(&mut params);
             let ops = params
@@ -3064,11 +3067,21 @@ pub async fn load_remote_system_parameters(
                 })
                 .collect();
             tracing::info!("parameter sync on boot: end sync");
-            return Ok(Some(ops));
+            Ok(Some(ops))
+        };
+        if !storage.has_system_config_synced_once().await? {
+            frontend_sync.await
         } else {
-            tracing::info!("parameter sync on boot: skipping sync as config has synced once");
+            match mz_ore::future::timeout(system_parameter_sync_timeout, frontend_sync).await {
+                Ok(ops) => Ok(ops),
+                Err(TimeoutError::Inner(e)) => Err(e),
+                Err(TimeoutError::DeadlineElapsed) => {
+                    tracing::info!("parameter sync on boot: sync has timed out");
+                    Ok(None)
+                }
+            }
         }
+    } else {
+        Ok(None)
     }
-
-    Ok(None)
 }
