@@ -398,7 +398,7 @@ where
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
-    mz_storage_controller::Controller<T>: StorageController<Timestamp = T>,
+    T: Into<mz_repr::Timestamp>,
 {
     /// Creates a new controller.
     pub async fn new(
