@@ -555,7 +555,7 @@ impl Listeners {
             })
             .transpose()?;
         let mut persist_txn_tables =
-            persist_txn_tables_default.unwrap_or(PersistTxnTablesImpl::Off);
+            persist_txn_tables_default.unwrap_or(PersistTxnTablesImpl::Eager);
         if let Some(value) = persist_txn_tables_stash_ld {
             persist_txn_tables = value;
         }

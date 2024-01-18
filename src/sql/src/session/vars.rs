@@ -694,7 +694,7 @@ const PERSIST_FAST_PATH_LIMIT: ServerVar<usize> = ServerVar {
 
 pub const PERSIST_TXN_TABLES: ServerVar<PersistTxnTablesImpl> = ServerVar {
     name: UncasedStr::new("persist_txn_tables"),
-    value: PersistTxnTablesImpl::Off,
+    value: PersistTxnTablesImpl::Eager,
     description: "\
         Whether to use the new persist-txn tables implementation or the legacy \
         one.
