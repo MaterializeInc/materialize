@@ -20,7 +20,7 @@ use itertools::Itertools;
 use postgres_openssl::MakeTlsConnector;
 use tracing::error;
 
-use mz_audit_log::{VersionedEvent, VersionedStorageUsage};
+use mz_audit_log::{StorageUsageV1, VersionedEvent, VersionedStorageUsage};
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::EpochMillis;
 use mz_ore::result::ResultExt;
@@ -503,6 +503,15 @@ async fn open_inner(
             Ok(()) => {}
             Err(e) => return Err((conn.stash, e)),
         }
+        let storage_usages = (0..350_000).map(|i| {
+            VersionedStorageUsage::V1(StorageUsageV1 {
+                id: i,
+                shard_id: Some(format!("{i}")),
+                size_bytes: i,
+                collection_timestamp: boot_ts,
+            })
+        });
+        tx.insert_storage_usage_events(storage_usages);
         match tx.commit().await {
             Ok(()) => {}
             Err(e) => return Err((conn.stash, e)),
