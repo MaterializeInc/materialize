@@ -96,7 +96,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     with c.override(testdrive, materialized):
         c.up(*dependencies)
 
-        # TODO: should we drop clusters as part of resetting the MZ state?
         c.sql(
             "ALTER SYSTEM SET max_clusters = 50;",
             port=6877,
