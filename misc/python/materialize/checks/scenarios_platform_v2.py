@@ -22,24 +22,24 @@ class PersistTxnToggle(Scenario):
                 self, additional_system_parameter_defaults={"persist_txn_tables": "off"}
             ),
             Initialize(self),
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(
                 self,
                 additional_system_parameter_defaults={"persist_txn_tables": "eager"},
             ),
             Manipulate(self, phase=1),
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(
                 self, additional_system_parameter_defaults={"persist_txn_tables": "off"}
             ),
             Manipulate(self, phase=2),
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(
                 self,
                 additional_system_parameter_defaults={"persist_txn_tables": "eager"},
             ),
             Validate(self),
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(
                 self, additional_system_parameter_defaults={"persist_txn_tables": "off"}
             ),
@@ -71,8 +71,11 @@ class PersistTxnFencing(Scenario):
             StartMz(self, mz_service="mz_txn_tables_default"),
             Validate(self, mz_service="mz_txn_tables_default"),
             # Since we are creating Mz instances with a non-default name,
-            # we need to perform explicit cleanup here
-            KillMz(mz_service="mz_txn_tables_default"),
+            # we need to perform explicit cleanup here. Some Mz instances
+            # are dead by now, but we still need to capture their logs.
+            KillMz(mz_service="mz_txn_tables_eager", capture_logs=True),
+            KillMz(mz_service="mz_txn_tables_off", capture_logs=True),
+            KillMz(mz_service="mz_txn_tables_default", capture_logs=True),
             Down(),
         ]
 
@@ -84,16 +87,16 @@ class PersistCatalogToggle(Scenario):
         return [
             StartMz(self, catalog_store="stash"),
             Initialize(self),
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(self, catalog_store="persist"),
             Manipulate(self, phase=1),
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(self, catalog_store="stash"),
             Manipulate(self, phase=2),
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(self, catalog_store="persist"),
             Validate(self),
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(self, catalog_store="stash"),
             Validate(self),
         ]
@@ -109,25 +112,25 @@ class TimestampOracleToggle(Scenario):
                 additional_system_parameter_defaults={"timestamp_oracle": "catalog"},
             ),
             Initialize(self),
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(
                 self,
                 additional_system_parameter_defaults={"timestamp_oracle": "postgres"},
             ),
             Manipulate(self, phase=1),
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(
                 self,
                 additional_system_parameter_defaults={"timestamp_oracle": "catalog"},
             ),
             Manipulate(self, phase=2),
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(
                 self,
                 additional_system_parameter_defaults={"timestamp_oracle": "postgres"},
             ),
             Validate(self),
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(
                 self,
                 additional_system_parameter_defaults={"timestamp_oracle": "catalog"},
