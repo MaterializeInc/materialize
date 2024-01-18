@@ -46,7 +46,7 @@ from materialize import MZ_ROOT, mzbuild, spawn, ui
 from materialize.mzcompose import loader
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.minio import minio_blob_uri
-from materialize.ui import UIError
+from materialize.ui import CommandFailureCausedUIError, UIError
 
 
 class UnknownCompositionError(UIError):
@@ -309,8 +309,9 @@ class Composition:
                     time.sleep(1)
                     continue
                 else:
-                    raise UIError(
-                        f"running docker compose failed (exit status {e.returncode})"
+                    raise CommandFailureCausedUIError(
+                        f"running docker compose failed (exit status {e.returncode})",
+                        cmd=e.cmd,
                     )
             break
 

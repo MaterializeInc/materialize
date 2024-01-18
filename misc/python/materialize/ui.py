@@ -180,6 +180,23 @@ class UIError(Exception):
         self.hint = hint
 
 
+class CommandFailureCausedUIError(UIError):
+    """
+    An UIError that is caused by executing a command.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        cmd: list[str],
+        stderr: str | None = None,
+        hint: str | None = None,
+    ):
+        super().__init__(message, hint)
+        self.cmd = cmd
+        self.stderr = stderr
+
+
 @contextmanager
 def error_handler(prog: str) -> Any:
     """Catches and pretty-prints any raised `UIError`s.
