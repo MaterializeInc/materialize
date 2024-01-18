@@ -124,7 +124,7 @@ impl UnopenedPersistCatalogState {
     }
 
     /// Create a new [`UnopenedPersistCatalogState`] to the catalog state associated with `organization_id`.
-    #[tracing::instrument(level = "debug", skip(persist_client))]
+    #[tracing::instrument(level = "info", skip(persist_client, metrics))]
     pub(crate) async fn new(
         persist_client: PersistClient,
         organization_id: Uuid,
@@ -171,7 +171,7 @@ impl UnopenedPersistCatalogState {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[tracing::instrument(level = "info", skip(self))]
     async fn open_inner(
         mut self,
         mode: Mode,
@@ -300,11 +300,13 @@ impl UnopenedPersistCatalogState {
 
     /// Generates a timestamp for reading from the catalog that is as fresh as possible, given
     /// `upper`.
+    #[tracing::instrument(level = "info", skip(self))]
     pub(crate) fn as_of(&self, upper: Timestamp) -> Timestamp {
         as_of(&self.read_handle, upper)
     }
 
     /// Reports if the catalog state has been initialized, and the current upper.
+    #[tracing::instrument(level = "info", skip(self))]
     async fn is_initialized_inner(&mut self) -> Result<(bool, Timestamp), CatalogError> {
         let (persist_shard_readable, upper) = self.is_persist_shard_readable().await;
         let is_initialized = if !persist_shard_readable {
@@ -320,6 +322,7 @@ impl UnopenedPersistCatalogState {
 
     /// Reports if the persist shard can be read at some time, and the current upper. A persist
     /// shard can only be read once it's been written to at least once.
+    #[tracing::instrument(level = "info", skip(self))]
     async fn is_persist_shard_readable(&mut self) -> (bool, Timestamp) {
         is_persist_shard_readable(&mut self.write_handle).await
     }
@@ -328,7 +331,7 @@ impl UnopenedPersistCatalogState {
     /// state.
     ///
     /// The output is consolidated and sorted by timestamp in ascending order and the current upper.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[tracing::instrument(level = "info", skip(self))]
     async fn current_snapshot(&mut self) -> (Vec<StateUpdate<StateUpdateKind>>, Timestamp) {
         const EMPTY_SNAPSHOT: Vec<StateUpdate> = Vec::new();
         let (persist_shard_readable, current_upper) = self.is_persist_shard_readable().await;
@@ -345,7 +348,7 @@ impl UnopenedPersistCatalogState {
     /// state up to, and including, `as_of`.
     ///
     /// The output is consolidated and sorted by timestamp in ascending order.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[tracing::instrument(level = "info", skip(self))]
     async fn snapshot<'a>(&mut self, as_of: Timestamp) -> Vec<StateUpdate<StateUpdateKind>> {
         self.snapshot_binary(as_of)
             .await
@@ -358,7 +361,7 @@ impl UnopenedPersistCatalogState {
     /// state up to, and including, `as_of`, in binary format.
     ///
     /// The output is consolidated and sorted by timestamp in ascending order.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[tracing::instrument(level = "info", skip(self))]
     pub(crate) async fn snapshot_binary(
         &mut self,
         as_of: Timestamp,
@@ -378,6 +381,7 @@ impl UnopenedPersistCatalogState {
 
     /// Generates an iterator of [`StateUpdate`] that contain all unconsolidated updates to the
     /// catalog state up to, and including, `as_of`.
+    #[tracing::instrument(level = "info", skip(self))]
     async fn snapshot_unconsolidated(
         &mut self,
         as_of: Timestamp,
@@ -402,6 +406,7 @@ impl UnopenedPersistCatalogState {
     /// Get the current value of config `key`.
     ///
     /// Some configs need to be read before the catalog is opened for bootstrapping.
+    #[tracing::instrument(level = "info", skip(self))]
     async fn get_current_config(&mut self, key: &str) -> Result<Option<u64>, CatalogError> {
         let (persist_shard_readable, current_upper) = self.is_persist_shard_readable().await;
         if persist_shard_readable {
@@ -415,6 +420,7 @@ impl UnopenedPersistCatalogState {
     /// Get value of config `key` at `as_of`.
     ///
     /// Some configs need to be read before the catalog is opened for bootstrapping.
+    #[tracing::instrument(level = "info", skip(self))]
     async fn get_config(
         &mut self,
         key: &str,
@@ -442,6 +448,7 @@ impl UnopenedPersistCatalogState {
     /// Get all Configs.
     ///
     /// Some configs need to be read before the catalog is opened for bootstrapping.
+    #[tracing::instrument(level = "info", skip(self))]
     async fn get_configs(&mut self, as_of: Timestamp) -> Result<Vec<Config>, DurableCatalogError> {
         let current_epoch = self.epoch.clone();
         self.snapshot_binary(as_of)
@@ -480,7 +487,7 @@ impl UnopenedPersistCatalogState {
     /// Get the user version of this instance.
     ///
     /// The user version is used to determine if a migration is needed.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[tracing::instrument(level = "info", skip(self))]
     pub(crate) async fn get_user_version(
         &mut self,
         as_of: Timestamp,
@@ -489,12 +496,14 @@ impl UnopenedPersistCatalogState {
     }
 
     /// Get epoch at `as_of`.
+    #[tracing::instrument(level = "info", skip(self))]
     async fn get_epoch(&mut self, as_of: Timestamp) -> Epoch {
         get_epoch(&mut self.read_handle, as_of, &self.metrics).await
     }
 
     /// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
     /// iff the current global upper of the catalog is `current_upper`.
+    #[tracing::instrument(level = "info", skip(self, updates))]
     pub(crate) async fn compare_and_append<T: IntoStateUpdateKindRaw>(
         &mut self,
         updates: Vec<StateUpdate<T>>,
@@ -518,7 +527,7 @@ impl UnopenedPersistCatalogState {
 
 #[async_trait]
 impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[tracing::instrument(level = "info", skip(self))]
     async fn open_savepoint(
         mut self: Box<Self>,
         boot_ts: EpochMillis,
@@ -537,7 +546,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         .await
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[tracing::instrument(level = "info", skip(self))]
     async fn open_read_only(
         mut self: Box<Self>,
         boot_ts: EpochMillis,
@@ -548,7 +557,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
             .await
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[tracing::instrument(level = "info", skip(self))]
     async fn open(
         mut self: Box<Self>,
         boot_ts: EpochMillis,
@@ -572,11 +581,12 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         Ok(DebugCatalogState::Persist(*self))
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[tracing::instrument(level = "info", skip(self))]
     async fn is_initialized(&mut self) -> Result<bool, CatalogError> {
         Ok(self.is_initialized_inner().await?.0)
     }
 
+    #[tracing::instrument(level = "info", skip(self))]
     async fn epoch(&mut self) -> Result<Epoch, CatalogError> {
         let (persist_shard_readable, current_upper) = self.is_persist_shard_readable().await;
         if persist_shard_readable {
@@ -588,12 +598,12 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[tracing::instrument(level = "info", skip(self))]
     async fn get_deployment_generation(&mut self) -> Result<Option<u64>, CatalogError> {
         self.get_current_config(DEPLOY_GENERATION).await
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[tracing::instrument(level = "info", skip(self))]
     async fn has_system_config_synced_once(&mut self) -> Result<bool, CatalogError> {
         self.get_current_config(SYSTEM_CONFIG_SYNCED_KEY)
             .await
@@ -604,6 +614,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
         panic!("Persist implementation does not have a tombstone")
     }
 
+    #[tracing::instrument(level = "info", skip(self))]
     async fn get_catalog_kind_config(&mut self) -> Result<Option<CatalogKind>, CatalogError> {
         let value = self.get_current_config(CATALOG_KIND_KEY).await?;
         value.map(CatalogKind::try_from).transpose().map_err(|err| {
@@ -1127,7 +1138,7 @@ impl DurableCatalogState for PersistCatalogState {
     // only need one part of the snapshot. A Potential mitigation against these performance hits is
     // to utilize `CoW`s in `Transaction`s to avoid cloning unnecessary state.
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[tracing::instrument(level = "info", skip(self))]
     async fn get_and_prune_storage_usage(
         &mut self,
         retention_period: Option<Duration>,
