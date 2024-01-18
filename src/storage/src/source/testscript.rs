@@ -11,7 +11,7 @@ use std::convert::Infallible;
 
 use differential_dataflow::{AsCollection, Collection};
 use mz_ore::collections::CollectionExt;
-use mz_repr::{Diff, Row};
+use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::sources::{MzOffset, TestScriptSourceConnection};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use timely::dataflow::operators::ToStream;
@@ -41,8 +41,6 @@ pub enum ScriptCommand {
 }
 
 impl SourceRender for TestScriptSourceConnection {
-    type Key = Option<Vec<u8>>;
-    type Value = Option<Vec<u8>>;
     type Time = MzOffset;
 
     const STATUS_NAMESPACE: StatusNamespace = StatusNamespace::Generator;
@@ -54,14 +52,7 @@ impl SourceRender for TestScriptSourceConnection {
         _resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<
-            G,
-            (
-                usize,
-                Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>,
-            ),
-            Diff,
-        >,
+        Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Vec<PressOnDropButton>,
@@ -80,9 +71,13 @@ impl SourceRender for TestScriptSourceConnection {
                 match command {
                     ScriptCommand::Emit { key, value, offset } => {
                         // For now we only support `Finalized` messages
+                        let key = match key {
+                            Some(key) => Row::pack([Datum::Bytes(key.as_bytes())]),
+                            None => Row::pack([Datum::Null]),
+                        };
                         let msg = Ok(SourceMessage {
-                            key: key.map(|k| k.into_bytes()),
-                            value: Some(value.into_bytes()),
+                            key,
+                            value: Row::pack([Datum::Bytes(value.as_bytes())]),
                             metadata: Row::default(),
                         });
                         let ts = MzOffset::from(offset);

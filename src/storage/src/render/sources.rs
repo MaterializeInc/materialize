@@ -18,7 +18,7 @@ use std::sync::Arc;
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use mz_ore::cast::CastLossy;
 use mz_persist_client::operators::shard_source::SnapshotMode;
-use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
 use mz_storage_operators::persist_source;
 use mz_storage_operators::persist_source::Subtime;
 use mz_storage_types::controller::CollectionMetadata;
@@ -37,25 +37,13 @@ use timely::dataflow::operators::generic::operator::empty;
 use timely::dataflow::operators::{Concat, ConnectLoop, Exchange, Feedback, Leave, Map, OkErr};
 use timely::dataflow::scopes::{Child, Scope};
 use timely::dataflow::Stream;
-use timely::progress::{Antichain, Timestamp as _};
+use timely::progress::{Antichain, Timestamp};
 
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};
 use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
 use crate::render::upsert::UpsertKey;
-use crate::source::types::{DecodeResult, SourceOutput};
+use crate::source::types::{DecodeResult, SourceOutput, SourceRender};
 use crate::source::{self, RawSourceCreationConfig};
-
-/// A type-level enum that holds one of two types of sources depending on their message type
-///
-/// This enum puts no restrictions to the generic parameters of the variants since it only serves
-/// as a type-level enum.
-pub enum SourceType<G: Scope> {
-    /// A delimited source
-    Delimited(Collection<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, Diff>),
-    /// A source that produces Row's natively, and skips any `render_decode` stream adapters, and
-    /// can produce retractions
-    Row(Collection<G, SourceOutput<(), Row>, Diff>),
-}
 
 /// The output index for health streams, used to handle multiplexed streams
 pub(crate) type OutputIndex = usize;
@@ -71,10 +59,11 @@ pub(crate) type OutputIndex = usize;
 ///
 /// This function is intended to implement the recipe described here:
 /// <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/platform/architecture-storage.md#source-ingestion>
-pub fn render_source<'g, G: Scope<Timestamp = ()>>(
+pub fn render_source<'g, G: Scope<Timestamp = ()>, C>(
     scope: &mut Child<'g, G, mz_repr::Timestamp>,
     dataflow_debug_name: &String,
     id: GlobalId,
+    connection: C,
     description: IngestionDescription<CollectionMetadata>,
     as_of: Antichain<mz_repr::Timestamp>,
     resume_uppers: BTreeMap<GlobalId, Antichain<mz_repr::Timestamp>>,
@@ -88,7 +77,11 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
     )>,
     Stream<G, HealthStatusMessage>,
     Vec<PressOnDropButton>,
-) {
+)
+where
+    G: Scope<Timestamp = ()>,
+    C: SourceConnection + SourceRender + 'static,
+{
     // Tokens that we should return from the method.
     let mut needed_tokens = Vec::new();
 
@@ -98,7 +91,6 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
     // is called on each timely worker as part of
     // [`super::build_storage_dataflow`].
 
-    let connection = description.desc.connection.clone();
     let source_name = format!("{}-{}", connection.name(), id);
 
     let base_source_config = RawSourceCreationConfig {
@@ -142,78 +134,13 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
 
     // Build the _raw_ ok and error sources using `create_raw_source` and the
     // correct `SourceReader` implementations
-    let (streams, mut health, source_tokens) = match connection {
-        GenericSourceConnection::Kafka(connection) => {
-            let (streams, health, source_tokens) = source::create_raw_source(
-                scope,
-                resume_stream,
-                base_source_config.clone(),
-                connection,
-                start_signal,
-            );
-            let streams: Vec<_> = streams
-                .into_iter()
-                .map(|(ok, err)| (SourceType::Delimited(ok), err))
-                .collect();
-            (streams, health, source_tokens)
-        }
-        GenericSourceConnection::Postgres(connection) => {
-            let (streams, health, source_tokens) = source::create_raw_source(
-                scope,
-                resume_stream,
-                base_source_config.clone(),
-                connection,
-                start_signal,
-            );
-            let streams: Vec<_> = streams
-                .into_iter()
-                .map(|(ok, err)| (SourceType::Row(ok), err))
-                .collect();
-            (streams, health, source_tokens)
-        }
-        GenericSourceConnection::MySql(connection) => {
-            let (streams, health, source_tokens) = source::create_raw_source(
-                scope,
-                resume_stream,
-                base_source_config.clone(),
-                connection,
-                start_signal,
-            );
-            let streams: Vec<_> = streams
-                .into_iter()
-                .map(|(ok, err)| (SourceType::Row(ok), err))
-                .collect();
-            (streams, health, source_tokens)
-        }
-        GenericSourceConnection::LoadGenerator(connection) => {
-            let (streams, health, source_tokens) = source::create_raw_source(
-                scope,
-                resume_stream,
-                base_source_config.clone(),
-                connection,
-                start_signal,
-            );
-            let streams: Vec<_> = streams
-                .into_iter()
-                .map(|(ok, err)| (SourceType::Row(ok), err))
-                .collect();
-            (streams, health, source_tokens)
-        }
-        GenericSourceConnection::TestScript(connection) => {
-            let (streams, health, source_tokens) = source::create_raw_source(
-                scope,
-                resume_stream,
-                base_source_config.clone(),
-                connection,
-                start_signal,
-            );
-            let streams: Vec<_> = streams
-                .into_iter()
-                .map(|(ok, err)| (SourceType::Delimited(ok), err))
-                .collect();
-            (streams, health, source_tokens)
-        }
-    };
+    let (streams, mut health, source_tokens) = source::create_raw_source(
+        scope,
+        resume_stream,
+        base_source_config.clone(),
+        connection,
+        start_signal,
+    );
 
     needed_tokens.extend(source_tokens);
 
@@ -246,11 +173,11 @@ pub fn render_source<'g, G: Scope<Timestamp = ()>>(
 
 /// Completes the rendering of a particular source stream by applying decoding and envelope
 /// processing as necessary
-fn render_source_stream<G>(
+fn render_source_stream<G, FromTime>(
     scope: &mut G,
     dataflow_debug_name: &String,
     id: GlobalId,
-    ok_source: SourceType<G>,
+    ok_source: Collection<G, SourceOutput<FromTime>, Diff>,
     description: IngestionDescription<CollectionMetadata>,
     as_of: Antichain<G::Timestamp>,
     mut error_collections: Vec<Collection<G, DataflowError, Diff>>,
@@ -264,7 +191,8 @@ fn render_source_stream<G>(
     Stream<G, HealthStatusMessage>,
 )
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope<Timestamp = mz_repr::Timestamp>,
+    FromTime: Timestamp,
 {
     let mut needed_tokens = vec![];
 
@@ -293,10 +221,6 @@ where
                 DataEncodingInner::Avro(enc) => enc,
                 _ => unreachable!("Attempted to create non-Avro CDCv2 source"),
             };
-            let ok_source = match ok_source {
-                SourceType::Delimited(s) => s,
-                _ => unreachable!("Attempted to create non-delimited CDCv2 source"),
-            };
 
             // TODO(petrosagg): this should move to the envelope section below and
             // made to work with a stream of Rows instead of decoding Avro directly
@@ -311,26 +235,32 @@ where
             needed_tokens.push(token);
             (oks, None, empty(scope))
         } else {
-            // Depending on the type of _raw_ source produced for the given source
-            // connection, render the _decode_ part of the pipeline, that turns a raw data
-            // stream into a `DecodeResult`.
-            let (decoded_stream, decode_health) = match ok_source {
-                SourceType::Delimited(source) => render_decode_delimited(
-                    &source,
+            let (decoded_stream, decode_health) = match (key_encoding, value_encoding) {
+                // TODO(petrosagg): encoding should become an optional field in the description
+                // struct that is only `Some(_)` when an encoding step is to be performed. We
+                // shouldn't have `RowCodec` as an option at all
+                (
+                    None,
+                    DataEncoding {
+                        inner: DataEncodingInner::RowCodec(_),
+                        ..
+                    },
+                ) => (
+                    ok_source.map(|r| DecodeResult {
+                        key: None,
+                        value: Some(Ok(r.value)),
+                        metadata: Row::default(),
+                        from_time: r.from_time,
+                    }),
+                    empty(scope),
+                ),
+                (key_encoding, value_encoding) => render_decode_delimited(
+                    &ok_source,
                     key_encoding,
                     value_encoding,
                     dataflow_debug_name.clone(),
                     storage_state.metrics.decode_defs.clone(),
                     storage_state.storage_configuration.clone(),
-                ),
-                SourceType::Row(source) => (
-                    source.map(|r| DecodeResult {
-                        key: None,
-                        value: Some(Ok(r.value)),
-                        metadata: Row::default(),
-                        position_for_upsert: r.position_for_upsert,
-                    }),
-                    empty(scope),
                 ),
             };
 
@@ -385,7 +315,7 @@ where
                         &format!("upsert_rehydration_backpressure({})", id),
                         |scope| {
                             let (previous, previous_token, feedback_handle, backpressure_metrics) =
-                                if Timestamp::minimum() < upper_ts {
+                                if mz_repr::Timestamp::minimum() < upper_ts {
                                     let as_of = Antichain::from_elem(upper_ts.saturating_sub(1));
 
                                     let backpressure_max_inflight_bytes =
@@ -623,8 +553,8 @@ struct KV {
     val: Option<Result<Row, DecodeError>>,
 }
 
-fn append_metadata_to_value<G: Scope>(
-    results: Collection<G, DecodeResult, Diff>,
+fn append_metadata_to_value<G: Scope, FromTime: Timestamp>(
+    results: Collection<G, DecodeResult<FromTime>, Diff>,
 ) -> Collection<G, KV, Diff> {
     results.map(move |res| {
         let val = res.value.map(|val_result| {
@@ -641,13 +571,13 @@ fn append_metadata_to_value<G: Scope>(
 }
 
 /// Convert from streams of [`DecodeResult`] to UpsertCommands, inserting the Key according to [`KeyEnvelope`]
-fn upsert_commands<G: Scope>(
-    input: Collection<G, DecodeResult, Diff>,
+fn upsert_commands<G: Scope, FromTime: Timestamp>(
+    input: Collection<G, DecodeResult<FromTime>, Diff>,
     upsert_envelope: UpsertEnvelope,
-) -> Collection<G, (UpsertKey, Option<Result<Row, UpsertError>>, MzOffset), Diff> {
+) -> Collection<G, (UpsertKey, Option<Result<Row, UpsertError>>, FromTime), Diff> {
     let mut row_buf = Row::default();
     input.map(move |result| {
-        let order = result.position_for_upsert;
+        let from_time = result.from_time;
 
         let key = match result.key {
             Some(Ok(key)) => Ok(key),
@@ -659,8 +589,8 @@ fn upsert_commands<G: Scope>(
         let key = match key {
             Ok(key) => key,
             err @ Err(_) => match result.value {
-                Some(_) => return (UpsertKey::from_key(err.as_ref()), Some(err), order),
-                None => return (UpsertKey::from_key(err.as_ref()), None, order),
+                Some(_) => return (UpsertKey::from_key(err.as_ref()), Some(err), from_time),
+                None => return (UpsertKey::from_key(err.as_ref()), None, from_time),
             },
         };
 
@@ -705,7 +635,7 @@ fn upsert_commands<G: Scope>(
             None => None,
         };
 
-        (key, value, order)
+        (key, value, from_time)
     })
 }
 

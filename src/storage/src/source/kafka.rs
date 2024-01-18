@@ -124,8 +124,6 @@ pub struct KafkaOffsetCommiter {
 }
 
 impl SourceRender for KafkaSourceConnection {
-    type Key = Option<Vec<u8>>;
-    type Value = Option<Vec<u8>>;
     // TODO(petrosagg): The type used for the partition (RangeBound<PartitionId>) doesn't need to
     // be so complicated and we could instead use `Partitioned<PartitionId, Option<u64>>` where all
     // ranges are inclusive and a time of `None` signifies that a particular partition is not
@@ -142,14 +140,7 @@ impl SourceRender for KafkaSourceConnection {
             + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<
-            G,
-            (
-                usize,
-                Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>,
-            ),
-            Diff,
-        >,
+        Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Vec<PressOnDropButton>,
@@ -906,10 +897,10 @@ impl KafkaSourceReader {
     /// past the expected offset and seeks the consumer if it is not.
     fn handle_message(
         &mut self,
-        message: Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, KafkaHeaderParseError>,
+        message: Result<SourceMessage, KafkaHeaderParseError>,
         (partition, offset): (PartitionId, MzOffset),
     ) -> Option<(
-        Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, KafkaHeaderParseError>,
+        Result<SourceMessage, KafkaHeaderParseError>,
         Partitioned<RangeBound<PartitionId>, MzOffset>,
         Diff,
     )> {
@@ -966,7 +957,7 @@ fn construct_source_message(
     msg: &BorrowedMessage<'_>,
     metadata_columns: &[KafkaMetadataKind],
 ) -> (
-    Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, KafkaHeaderParseError>,
+    Result<SourceMessage, KafkaHeaderParseError>,
     (PartitionId, MzOffset),
 ) {
     let pid = msg.partition();
@@ -1053,12 +1044,22 @@ fn construct_source_message(
         }
     }
 
-    let msg = SourceMessage {
-        key: msg.key().map(|k| k.to_vec()),
-        value: msg.payload().map(|p| p.to_vec()),
-        metadata,
+    let key = match msg.key() {
+        Some(bytes) => Row::pack([Datum::Bytes(bytes)]),
+        None => Row::pack([Datum::Null]),
     };
-    (Ok(msg), (pid, offset.into()))
+    let value = match msg.payload() {
+        Some(bytes) => Row::pack([Datum::Bytes(bytes)]),
+        None => Row::pack([Datum::Null]),
+    };
+    (
+        Ok(SourceMessage {
+            key,
+            value,
+            metadata,
+        }),
+        (pid, offset.into()),
+    )
 }
 
 /// Wrapper around a partition containing the underlying consumer
@@ -1095,7 +1096,7 @@ impl PartitionConsumer {
         &mut self,
     ) -> Result<
         Option<(
-            Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>, KafkaHeaderParseError>,
+            Result<SourceMessage, KafkaHeaderParseError>,
             (PartitionId, MzOffset),
         )>,
         KafkaError,

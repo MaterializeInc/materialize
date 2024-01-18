@@ -24,7 +24,6 @@
 #![allow(clippy::needless_borrow)]
 
 use std::cell::RefCell;
-use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::fmt::Display;
@@ -41,7 +40,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::stream::StreamExt;
 use itertools::Itertools;
-use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
@@ -53,16 +51,14 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::SourceError;
 use mz_storage_types::sources::encoding::SourceDataEncoding;
-use mz_storage_types::sources::{MzOffset, SourceConnection, SourceExport, SourceTimestamp};
+use mz_storage_types::sources::{SourceConnection, SourceExport, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
-    AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
-    PressOnDropButton,
+    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use mz_timely_util::capture::UnboundedTokioCapture;
 use mz_timely_util::operator::StreamExt as _;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::capture::capture::Capture;
 use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, Leave, Partition};
@@ -77,9 +73,7 @@ use tracing::{info, trace};
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
 use crate::metrics::StorageMetrics;
 use crate::source::reclock::{ReclockBatch, ReclockError, ReclockFollower, ReclockOperator};
-use crate::source::types::{
-    MaybeLength, SourceMessage, SourceOutput, SourceReaderError, SourceRender,
-};
+use crate::source::types::{SourceMessage, SourceOutput, SourceReaderError, SourceRender};
 use crate::statistics::SourceStatistics;
 
 /// Shared configuration information for all source types. This is used in the
@@ -164,7 +158,7 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     Vec<(
-        Collection<Child<'g, G, mz_repr::Timestamp>, SourceOutput<C::Key, C::Value>, Diff>,
+        Collection<Child<'g, G, mz_repr::Timestamp>, SourceOutput<C::Time>, Diff>,
         Collection<Child<'g, G, mz_repr::Timestamp>, SourceError, Diff>,
     )>,
     Stream<G, HealthStatusMessage>,
@@ -239,14 +233,7 @@ fn source_render_operator<G, C>(
     resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
-    Collection<
-        G,
-        (
-            usize,
-            Result<SourceMessage<C::Key, C::Value>, SourceReaderError>,
-        ),
-        Diff,
-    >,
+    Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
     Stream<G, Infallible>,
     Stream<G, HealthStatusMessage>,
     Vec<PressOnDropButton>,
@@ -309,8 +296,8 @@ where
                 match message {
                     Ok(message) => {
                         source_statistics.inc_messages_received_by(1);
-                        let key_len = u64::cast_from(message.key.len().unwrap_or(0));
-                        let value_len = u64::cast_from(message.value.len().unwrap_or(0));
+                        let key_len = u64::cast_from(message.key.byte_len());
+                        let value_len = u64::cast_from(message.value.byte_len());
                         source_statistics.inc_bytes_received_by(key_len + value_len);
                     }
                     Err(_) => {}
@@ -534,7 +521,7 @@ where
 /// Receives un-timestamped batches from the source reader and updates to the
 /// remap trace on a second input. This operator takes the remap information,
 /// reclocks incoming batches and sends them forward.
-fn reclock_operator<G, K, V, FromTime, D>(
+fn reclock_operator<G, FromTime, D>(
     scope: &G,
     config: RawSourceCreationConfig,
     mut timestamper: ReclockFollower<FromTime, mz_repr::Timestamp>,
@@ -542,7 +529,7 @@ fn reclock_operator<G, K, V, FromTime, D>(
         Event<
             FromTime,
             (
-                (usize, Result<SourceMessage<K, V>, SourceReaderError>),
+                (usize, Result<SourceMessage, SourceReaderError>),
                 FromTime,
                 D,
             ),
@@ -550,13 +537,11 @@ fn reclock_operator<G, K, V, FromTime, D>(
     >,
     remap_trace_updates: Collection<G, FromTime, Diff>,
 ) -> Vec<(
-    Collection<G, SourceOutput<K, V>, D>,
+    Collection<G, SourceOutput<FromTime>, D>,
     Collection<G, SourceError, Diff>,
 )>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
-    K: timely::Data + MaybeLength,
-    V: timely::Data + MaybeLength,
     FromTime: SourceTimestamp,
     D: Semigroup + Into<Diff>,
 {
@@ -596,7 +581,7 @@ where
         // The capability of the output after reclocking the source frontier
         let mut cap_set = CapabilitySet::from_elem(capabilities.into_element());
 
-        let mut source_metrics = metrics.get_source_metrics(&name, id, worker_id);
+        let source_metrics = metrics.get_source_metrics(&name, id, worker_id);
 
         // Compute the overall resume upper to report for the ingestion
         let resume_upper = Antichain::from_iter(resume_uppers.values().flat_map(|f| f.iter().cloned()));
@@ -605,8 +590,8 @@ where
         let mut source_upper = MutableAntichain::new_bottom(FromTime::minimum());
 
         // Stash of batches that have not yet been timestamped.
-        type Batch<K, V, T, D> = Vec<((usize, Result<SourceMessage<K, V>, SourceReaderError>), T, D)>;
-        let mut untimestamped_batches: Vec<(FromTime, Batch<K, V, FromTime, D>)> = Vec::new();
+        type Batch<T, D> = Vec<((usize, Result<SourceMessage, SourceReaderError>), T, D)>;
+        let mut untimestamped_batches: Vec<(FromTime, Batch<FromTime, D>)> = Vec::new();
 
         // Stash of reclock updates that are still beyond the upper frontier
         let mut remap_updates_stash = vec![];
@@ -695,23 +680,32 @@ where
 
                     // Accumulate updates to bytes_read for Prometheus metrics collection
                     let mut bytes_read = 0;
-                    // Accumulate updates to offsets for Prometheus and system table metrics collection
-                    let mut metric_updates = BTreeMap::new();
 
                     let mut total_processed = 0;
-                    for ((message, from_ts, diff), into_ts) in timestamper.reclock(msgs) {
+                    for (((idx, msg), from_ts, diff), into_ts) in timestamper.reclock(msgs) {
                         let into_ts = into_ts.expect("reclock for update not beyond upper failed");
-                        handle_message(
-                            message,
-                            from_ts,
-                            diff,
-                            &mut bytes_read,
-                            &cap_set,
-                            &mut reclocked_output,
-                            &mut metric_updates,
-                            into_ts,
-                            id,
-                        ).await;
+                        let output = match msg {
+                            Ok(message) => {
+                                bytes_read += message.key.byte_len() + message.value.byte_len();
+                                let ok = SourceOutput {
+                                    key: message.key,
+                                    value: message.value,
+                                    metadata: message.metadata,
+                                    from_time: from_ts,
+                                };
+                                (idx, Ok(ok))
+                            }
+                            Err(SourceReaderError { inner }) => {
+                                let err = SourceError {
+                                    source_id: id,
+                                    error: inner,
+                                };
+                                (idx, Err(err))
+                            }
+                        };
+
+                        let ts_cap = cap_set.delayed(&into_ts);
+                        reclocked_output.give(&ts_cap, (output, into_ts, diff)).await;
                         total_processed += 1;
                     }
                     // The loop above might have completely emptied batches. We can now remove them
@@ -725,7 +719,6 @@ where
                     );
 
                     bytes_read_counter.inc_by(u64::cast_from(bytes_read));
-                    source_metrics.record_partition_offsets(metric_updates);
 
                     // This is correct for totally ordered times because there can be at
                     // most one entry in the `CapabilitySet`. If this ever changes we
@@ -760,12 +753,6 @@ where
                         "timely-{worker_id} reclock({id}) downgrading timestamper: since={}",
                         into_ready_upper.pretty()
                     );
-
-                    // TODO(aljoscha&guswynn): will these be overwritten with multi-worker
-                    let ts = into_ready_upper.as_option().cloned().unwrap_or(mz_repr::Timestamp::MAX);
-                    for partition_metrics in source_metrics.partition_metrics.values_mut() {
-                        partition_metrics.closed_ts.set(ts.into());
-                    }
 
                     cap_set.downgrade(into_ready_upper.elements());
                     timestamper.compact(into_ready_upper.clone());
@@ -873,86 +860,4 @@ where
             }
         }
     })
-}
-
-/// Take `message` and assign it the appropriate timestamps and push it into the
-/// dataflow layer, if possible.
-///
-/// TODO: This function is a bit of a mess rn but hopefully this function makes
-/// the existing mess more obvious and points towards ways to improve it.
-async fn handle_message<K, V, T, D>(
-    (output_index, message): (usize, Result<SourceMessage<K, V>, SourceReaderError>),
-    time: T,
-    diff: D,
-    bytes_read: &mut usize,
-    cap_set: &CapabilitySet<mz_repr::Timestamp>,
-    output_handle: &mut AsyncOutputHandle<
-        mz_repr::Timestamp,
-        Vec<(
-            (usize, Result<SourceOutput<K, V>, SourceError>),
-            mz_repr::Timestamp,
-            D,
-        )>,
-        Tee<
-            mz_repr::Timestamp,
-            (
-                (usize, Result<SourceOutput<K, V>, SourceError>),
-                mz_repr::Timestamp,
-                D,
-            ),
-        >,
-    >,
-    metric_updates: &mut BTreeMap<PartitionId, (MzOffset, mz_repr::Timestamp, Diff)>,
-    ts: mz_repr::Timestamp,
-    source_id: GlobalId,
-) where
-    K: timely::Data + MaybeLength,
-    V: timely::Data + MaybeLength,
-    T: SourceTimestamp,
-    D: Semigroup,
-{
-    let output = match message {
-        Ok(message) => {
-            let (partition, offset) = time
-                .try_into_compat_ts()
-                .expect("data at invalid timestamp");
-
-            // Note: empty and null payload/keys are currently treated as the same thing.
-            if let Some(len) = message.key.len() {
-                *bytes_read += len;
-            }
-            if let Some(len) = message.value.len() {
-                *bytes_read += len;
-            }
-
-            match metric_updates.entry(partition) {
-                Entry::Occupied(mut entry) => {
-                    entry.insert((offset, ts, entry.get().2 + 1));
-                }
-                Entry::Vacant(entry) => {
-                    entry.insert((offset, ts, 1));
-                }
-            }
-
-            (
-                output_index,
-                Ok(SourceOutput::new(
-                    message.key,
-                    message.value,
-                    message.metadata,
-                    offset,
-                )),
-            )
-        }
-        Err(SourceReaderError { inner }) => {
-            let err = SourceError {
-                source_id,
-                error: inner,
-            };
-            (output_index, Err(err))
-        }
-    };
-
-    let ts_cap = cap_set.delayed(&ts);
-    output_handle.give(&ts_cap, (output, ts, diff)).await;
 }

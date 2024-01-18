@@ -23,7 +23,7 @@ use differential_dataflow::{AsCollection, Collection, Hashable};
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
 use mz_interchange::avro::ConfluentAvroResolver;
 use mz_ore::error::ErrorExt;
-use mz_repr::{Datum, Diff, Row, Timestamp};
+use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::CsrConnection;
 use mz_storage_types::errors::{CsrConnectError, DecodeError, DecodeErrorKind};
@@ -37,6 +37,7 @@ use regex::Regex;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Map;
 use timely::dataflow::{Scope, Stream};
+use timely::progress::Timestamp;
 use timely::scheduling::SyncActivator;
 use tracing::error;
 
@@ -56,8 +57,8 @@ mod protobuf;
 /// This not only literally decodes the avro-encoded messages, but
 /// also builds a differential dataflow collection that respects the
 /// data and progress messages in the underlying CDCv2 stream.
-pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
-    input: &Collection<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, Diff>,
+pub fn render_decode_cdcv2<G: Scope<Timestamp = mz_repr::Timestamp>, FromTime: Timestamp>(
+    input: &Collection<G, SourceOutput<FromTime>, Diff>,
     schema: String,
     storage_configuration: StorageConfiguration,
     csr_connection: Option<CsrConnection>,
@@ -70,7 +71,7 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
 
     let mut input_handle = builder.new_disconnected_input(
         &input.inner,
-        Exchange::new(|(x, _, _): &(SourceOutput<Option<Vec<u8>>, _>, _, _)| x.key.hashed()),
+        Exchange::new(|(x, _, _): &(SourceOutput<FromTime>, _, _)| x.key.hashed()),
     );
 
     let channel_tx = Rc::clone(&channel_rx);
@@ -97,9 +98,10 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
             };
 
             for (data, _time, _diff) in data {
-                let value = match &data.value {
-                    Some(value) => value,
-                    None => continue,
+                let value = match data.value.unpack_first() {
+                    Datum::Bytes(value) => value,
+                    Datum::Null => continue,
+                    _ => unreachable!("invalid datum"),
                 };
                 let (mut data, schema, _) = match resolver.resolve(&*value).await {
                     Ok(Ok(ok)) => ok,
@@ -406,20 +408,17 @@ async fn decode_delimited(
 /// often lets us, for example, detect when Avro decoding has gone off the rails
 /// (which is not always possible otherwise, since often gibberish strings can be interpreted as Avro,
 ///  so the only signal is how many bytes you managed to decode).
-pub fn render_decode_delimited<G>(
-    input: &Collection<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, Diff>,
+pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
+    input: &Collection<G, SourceOutput<FromTime>, Diff>,
     key_encoding: Option<DataEncoding>,
     value_encoding: DataEncoding,
     debug_name: String,
     metrics: DecodeMetricDefs,
     storage_configuration: StorageConfiguration,
 ) -> (
-    Collection<G, DecodeResult, Diff>,
+    Collection<G, DecodeResult<FromTime>, Diff>,
     Stream<G, HealthStatusMessage>,
-)
-where
-    G: Scope,
-{
+) {
     let op_name = format!(
         "{}{}DecodeDelimited",
         key_encoding
@@ -428,8 +427,7 @@ where
             .unwrap_or(""),
         value_encoding.op_name()
     );
-    let dist =
-        |(x, _, _): &(SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>, _, _)| x.value.hashed();
+    let dist = |(x, _, _): &(SourceOutput<FromTime>, _, _)| x.value.hashed();
 
     let mut builder = AsyncOperatorBuilder::new(op_name, input.scope());
 
@@ -471,25 +469,25 @@ where
                         let mut n_errors = 0;
                         let mut n_successes = 0;
                         for (output, ts, diff) in data.iter() {
-                            let SourceOutput {
-                                key,
-                                value,
-                                metadata,
-                                position_for_upsert: position,
-                            } = output;
+                            let key_buf = match output.key.unpack_first() {
+                                Datum::Bytes(buf) => Some(buf),
+                                Datum::Null => None,
+                                d => unreachable!("invalid datum: {d}"),
+                            };
 
-                            let key = match key_decoder.as_mut().zip(key.as_ref()) {
+                            let key = match key_decoder.as_mut().zip(key_buf) {
                                 Some((decoder, buf)) => {
                                     decode_delimited(decoder, buf).await?.transpose()
                                 }
                                 None => None,
                             };
 
-                            let value = match value.as_ref() {
-                                Some(buf) => {
+                            let value = match output.value.unpack_first() {
+                                Datum::Bytes(buf) => {
                                     decode_delimited(&mut value_decoder, buf).await?.transpose()
                                 }
-                                None => None,
+                                Datum::Null => None,
+                                d => unreachable!("invalid datum: {d}"),
                             };
 
                             if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
@@ -501,8 +499,8 @@ where
                             let result = DecodeResult {
                                 key,
                                 value,
-                                position_for_upsert: *position,
-                                metadata: metadata.clone(),
+                                metadata: output.metadata.clone(),
+                                from_time: output.from_time.clone(),
                             };
                             output_container.push((result, ts.clone(), *diff));
                         }

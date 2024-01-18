@@ -46,8 +46,6 @@ mod timestamp;
 use timestamp::TransactionId;
 
 impl SourceRender for MySqlSourceConnection {
-    type Key = ();
-    type Value = Row;
     // TODO: Eventually replace with a Partitioned<Uuid, TransactionId> timestamp
     type Time = TransactionId;
 
@@ -62,7 +60,7 @@ impl SourceRender for MySqlSourceConnection {
         resume_uppers: impl futures::Stream<Item = Antichain<TransactionId>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<G, (usize, Result<SourceMessage<(), Row>, SourceReaderError>), Diff>,
+        Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Vec<PressOnDropButton>,
@@ -117,7 +115,7 @@ impl SourceRender for MySqlSourceConnection {
 
         let updates = snapshot_updates.concat(&repl_updates).map(|(output, res)| {
             let res = res.map(|row| SourceMessage {
-                key: (),
+                key: Row::default(),
                 value: row,
                 metadata: Row::default(),
             });

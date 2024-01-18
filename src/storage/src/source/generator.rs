@@ -68,8 +68,6 @@ pub fn as_generator(g: &LoadGenerator, tick_micros: Option<u64>) -> Box<dyn Gene
 }
 
 impl SourceRender for LoadGeneratorSourceConnection {
-    type Key = ();
-    type Value = Row;
     type Time = MzOffset;
 
     const STATUS_NAMESPACE: StatusNamespace = StatusNamespace::Generator;
@@ -81,14 +79,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
         _resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        Collection<
-            G,
-            (
-                usize,
-                Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>,
-            ),
-            Diff,
-        >,
+        Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
         Vec<PressOnDropButton>,
@@ -128,7 +119,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
                         let message = (
                             output,
                             Ok(SourceMessage {
-                                key: (),
+                                key: Row::default(),
                                 value,
                                 metadata: Row::default(),
                             }),

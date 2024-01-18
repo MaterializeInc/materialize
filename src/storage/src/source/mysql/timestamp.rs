@@ -10,9 +10,8 @@
 use core::ops::Add;
 use std::fmt;
 
-use mz_expr::PartitionId;
 use mz_repr::{Datum, Row};
-use mz_storage_types::sources::{MzOffset, SourceTimestamp};
+use mz_storage_types::sources::SourceTimestamp;
 use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
@@ -90,21 +89,6 @@ impl Refines<()> for TransactionId {
 }
 
 impl SourceTimestamp for TransactionId {
-    fn from_compat_ts(pid: PartitionId, offset: MzOffset) -> Self {
-        assert_eq!(
-            pid,
-            PartitionId::None,
-            "invalid non-partitioned partition {pid}"
-        );
-        let id: u64 = offset.offset;
-        Self::new(id)
-    }
-
-    fn try_into_compat_ts(&self) -> Option<(PartitionId, MzOffset)> {
-        let id: u64 = self.0;
-        Some((PartitionId::None, MzOffset::from(id)))
-    }
-
     fn encode_row(&self) -> Row {
         Row::pack([Datum::UInt64(self.0)])
     }

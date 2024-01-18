@@ -204,7 +204,7 @@ use mz_ore::error::ErrorExt;
 use mz_repr::{GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
-use mz_storage_types::sources::IngestionDescription;
+use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription};
 use timely::communication::Allocate;
 use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave, Map};
 use timely::dataflow::Scope;
@@ -242,24 +242,76 @@ pub fn build_ingestion_dataflow<A: Allocate>(
         // and one timestamped with `mz_repr::Timestamp` which is the final scope of the dataflow.
         // Refer to the module documentation for an explanation of this structure.
         // The scope.clone() occurs to allow import in the region.
-        root_scope.clone().scoped(&name, |into_time_scope| {
+        root_scope.clone().scoped(&name, |mz_scope| {
             let debug_name = format!("{debug_name}-sources");
 
             let mut tokens = vec![];
 
-            let (feedback_handle, feedback) = into_time_scope.feedback(Default::default());
+            let (feedback_handle, feedback) = mz_scope.feedback(Default::default());
 
-            let (mut outputs, source_health, source_tokens) = crate::render::sources::render_source(
-                into_time_scope,
-                &debug_name,
-                primary_source_id,
-                description.clone(),
-                as_of.clone(),
-                resume_uppers.clone(),
-                source_resume_uppers,
-                &feedback,
-                storage_state,
-            );
+            let connection = description.desc.connection.clone();
+            let (mut outputs, source_health, source_tokens) = match connection {
+                GenericSourceConnection::Kafka(c) => crate::render::sources::render_source(
+                    mz_scope,
+                    &debug_name,
+                    primary_source_id,
+                    c,
+                    description.clone(),
+                    as_of.clone(),
+                    resume_uppers.clone(),
+                    source_resume_uppers,
+                    &feedback,
+                    storage_state,
+                ),
+                GenericSourceConnection::Postgres(c) => crate::render::sources::render_source(
+                    mz_scope,
+                    &debug_name,
+                    primary_source_id,
+                    c,
+                    description.clone(),
+                    as_of.clone(),
+                    resume_uppers.clone(),
+                    source_resume_uppers,
+                    &feedback,
+                    storage_state,
+                ),
+                GenericSourceConnection::MySql(c) => crate::render::sources::render_source(
+                    mz_scope,
+                    &debug_name,
+                    primary_source_id,
+                    c,
+                    description.clone(),
+                    as_of.clone(),
+                    resume_uppers.clone(),
+                    source_resume_uppers,
+                    &feedback,
+                    storage_state,
+                ),
+                GenericSourceConnection::LoadGenerator(c) => crate::render::sources::render_source(
+                    mz_scope,
+                    &debug_name,
+                    primary_source_id,
+                    c,
+                    description.clone(),
+                    as_of.clone(),
+                    resume_uppers.clone(),
+                    source_resume_uppers,
+                    &feedback,
+                    storage_state,
+                ),
+                GenericSourceConnection::TestScript(c) => crate::render::sources::render_source(
+                    mz_scope,
+                    &debug_name,
+                    primary_source_id,
+                    c,
+                    description.clone(),
+                    as_of.clone(),
+                    resume_uppers.clone(),
+                    source_resume_uppers,
+                    &feedback,
+                    storage_state,
+                ),
+            };
             tokens.extend(source_tokens);
 
             let mut health_configs = BTreeMap::new();
@@ -284,7 +336,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     "timely-{worker_id} rendering {export_id} with multi-worker persist_sink",
                 );
                 let (upper_stream, errors, sink_tokens) = crate::render::persist_sink::render(
-                    into_time_scope,
+                    mz_scope,
                     export_id,
                     export.storage_metadata.clone(),
                     source_data,
@@ -308,13 +360,13 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 health_configs.insert(export.output_index, export_id);
             }
 
-            into_time_scope
+            mz_scope
                 .concatenate(upper_streams)
                 .connect_loop(feedback_handle);
 
             let health_stream = root_scope.concatenate(health_streams);
             let health_token = crate::healthcheck::health_operator(
-                into_time_scope,
+                mz_scope,
                 storage_state.now.clone(),
                 resume_uppers
                     .iter()
