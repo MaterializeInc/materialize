@@ -1241,7 +1241,14 @@ mod tests {
             let subscribe = mz_ore::task::spawn_blocking(
                 || format!("{:.9}-{}", data_id.to_string(), as_of),
                 move || {
-                    let mut subscribe = DataSubscribe::new("test", client, txns_id, data_id, as_of);
+                    let mut subscribe = DataSubscribe::new(
+                        "test",
+                        client,
+                        txns_id,
+                        data_id,
+                        as_of,
+                        Antichain::new(),
+                    );
                     let data_id = format!("{:.9}", data_id.to_string());
                     let _guard = info_span!("read_worker", %data_id, as_of).entered();
                     loop {

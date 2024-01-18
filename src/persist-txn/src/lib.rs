@@ -117,6 +117,7 @@
 //! # use mz_persist_txn::operator::DataSubscribe;
 //! # use mz_persist_txn::txns::TxnsHandle;
 //! # use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
+//! # use timely::progress::Antichain;
 //! #
 //! # tokio::runtime::Runtime::new().unwrap().block_on(async {
 //! # let client = PersistClient::new_for_tests().await;
@@ -163,7 +164,7 @@
 //!     .apply(&mut txns).await;
 //!
 //! // Read data shard(s) at some `read_ts`.
-//! let mut subscribe = DataSubscribe::new("example", client, txns_id, d1, 4);
+//! let mut subscribe = DataSubscribe::new("example", client, txns_id, d1, 4, Antichain::new());
 //! while subscribe.progress() <= 4 {
 //!     subscribe.step();
 //! #   tokio::task::yield_now().await;
@@ -696,8 +697,14 @@ pub mod tests {
         #[allow(ungated_async_fn_track_caller)]
         #[track_caller]
         pub async fn assert_subscribe(&self, data_id: ShardId, as_of: u64, until: u64) {
-            let mut data_subscribe =
-                DataSubscribe::new("test", self.client.clone(), self.txns_id, data_id, as_of);
+            let mut data_subscribe = DataSubscribe::new(
+                "test",
+                self.client.clone(),
+                self.txns_id,
+                data_id,
+                as_of,
+                Antichain::new(),
+            );
             data_subscribe.step_past(until - 1).await;
             self.assert_eq(data_id, as_of, until, data_subscribe.output().clone());
         }

@@ -195,7 +195,7 @@ where
             metadata.clone(),
             as_of.clone(),
             snapshot_mode,
-            until,
+            until.clone(),
             map_filter_project,
             flow_control,
             subscribe_sleep,
@@ -231,6 +231,7 @@ where
                 .expect("as_of is provided for table sources")
                 .into_option()
                 .expect("shard is not closed"),
+            until,
             Arc::new(metadata.relation_desc),
             Arc::new(UnitSchema),
         ),

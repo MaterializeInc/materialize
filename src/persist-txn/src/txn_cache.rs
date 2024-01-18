@@ -1039,7 +1039,14 @@ mod tests {
             data_id: ShardId,
             as_of: u64,
         ) -> DataSubscribe {
-            DataSubscribe::new("test", client.clone(), self.txns_id, data_id, as_of)
+            DataSubscribe::new(
+                "test",
+                client.clone(),
+                self.txns_id,
+                data_id,
+                as_of,
+                Antichain::new(),
+            )
         }
     }
 

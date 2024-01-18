@@ -34,7 +34,7 @@ use timely::dataflow::{ProbeHandle, Scope, Stream};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::worker::Worker;
-use timely::{Data, WorkerConfig};
+use timely::{Data, PartialOrder, WorkerConfig};
 use tracing::{debug, trace};
 
 use crate::txn_cache::{TxnsCache, TxnsCacheState};
@@ -90,6 +90,7 @@ pub fn txns_progress<K, V, T, D, P, C, F, G>(
     txns_id: ShardId,
     data_id: ShardId,
     as_of: T,
+    until: Antichain<T>,
     data_key_schema: Arc<K::Schema>,
     data_val_schema: Arc<V::Schema>,
 ) -> (Stream<G, P>, Vec<PressOnDropButton>)
@@ -123,6 +124,7 @@ where
         txns_id,
         data_id,
         as_of,
+        until,
         data_key_schema,
         data_val_schema,
         unique_id,
@@ -206,6 +208,7 @@ fn txns_progress_frontiers<K, V, T, D, P, C, G>(
     txns_id: ShardId,
     data_id: ShardId,
     as_of: T,
+    until: Antichain<T>,
     data_key_schema: Arc<K::Schema>,
     data_val_schema: Arc<V::Schema>,
     unique_id: u64,
@@ -281,6 +284,10 @@ where
                     // NB: Ignore the data_cap because this input is
                     // disconnected.
                     Event::Data(_data_cap, data) => {
+                        // NB: Nothing to do here for `until` because the both
+                        // `shard_source` (before this operator) and
+                        // `mfp_and_decode` (after this operator) do the
+                        // necessary filtering.
                         for data in data {
                             debug!(
                                 "{} {:.9} emitting data {:?}",
@@ -292,6 +299,26 @@ where
                         }
                     }
                     Event::Progress(progress) => {
+                        // If `until.less_equal(progress)`, it means that all
+                        // subsequent batches will contain only times greater or
+                        // equal to `until`, which means they can be dropped in
+                        // their entirety.
+                        //
+                        // Ideally this check would live in
+                        // `txns_progress_source`, but that turns out to be much
+                        // more invasive (requires replacing lots of `T`s with
+                        // `Antichain<T>`s). Given that we've been thinking
+                        // about reworking the operators, do the easy but more
+                        // wasteful thing for now.
+                        if PartialOrder::less_equal(&until, &progress) {
+                            debug!(
+                                "{} progress {:?} has passed until {:?}",
+                                name,
+                                progress.elements(),
+                                until.elements()
+                            );
+                            return;
+                        }
                         // We reached the empty frontier! Shut down.
                         let Some(input_progress_exclusive) = progress.as_option() else {
                             return;
@@ -505,6 +532,7 @@ impl DataSubscribe {
         txns_id: ShardId,
         data_id: ShardId,
         as_of: u64,
+        until: Antichain<u64>,
     ) -> Self {
         let mut worker = Worker::new(
             WorkerConfig::default(),
@@ -520,7 +548,7 @@ impl DataSubscribe {
                     data_id,
                     Some(Antichain::from_elem(as_of)),
                     SnapshotMode::Include,
-                    Antichain::new(),
+                    until.clone(),
                     false.then_some(|_, _: &_, _| unreachable!()),
                     Arc::new(StringSchema),
                     Arc::new(UnitSchema),
@@ -545,6 +573,7 @@ impl DataSubscribe {
                     txns_id,
                     data_id,
                     as_of,
+                    until,
                     Arc::new(StringSchema),
                     Arc::new(UnitSchema),
                 );
@@ -567,7 +596,7 @@ impl DataSubscribe {
     /// Returns the exclusive progress of the dataflow.
     pub fn progress(&self) -> u64 {
         self.txns
-            .with_frontier(|f| f.as_option().expect("txns is not closed").clone())
+            .with_frontier(|f| *f.as_option().unwrap_or(&u64::MAX))
     }
 
     /// Steps the dataflow, capturing output.
@@ -862,5 +891,52 @@ mod tests {
             sub.progress() > 20,
             "operator should advance past 20 when shard is forgotten"
         );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn as_of_until() {
+        let client = PersistClient::new_for_tests().await;
+        let mut txns = TxnsHandle::expect_open(client.clone()).await;
+        let log = txns.new_log();
+
+        let d0 = txns.expect_register(1).await;
+        txns.expect_commit_at(2, d0, &["2"], &log).await;
+        txns.expect_commit_at(3, d0, &["3"], &log).await;
+        txns.expect_commit_at(4, d0, &["4"], &log).await;
+        txns.expect_commit_at(5, d0, &["5"], &log).await;
+        txns.expect_commit_at(6, d0, &["6"], &log).await;
+        txns.expect_commit_at(7, d0, &["7"], &log).await;
+
+        let mut sub = DataSubscribe::new(
+            "as_of_until",
+            client,
+            txns.txns_id(),
+            d0,
+            3,
+            Antichain::from_elem(5),
+        );
+        // Manually step the dataflow, instead of going through the
+        // `DataSubscribe` helper because we're interested in all captured
+        // events.
+        while sub.txns.less_equal(&5) {
+            sub.worker.step();
+            tokio::task::yield_now().await;
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        let actual = sub.capture.into_iter().collect::<Vec<_>>();
+        let expected = vec![
+            EventCore::Messages(
+                3,
+                vec![
+                    ("2".to_owned(), 3, 1),
+                    ("3".to_owned(), 3, 1),
+                    ("4".to_owned(), 4, 1),
+                ],
+            ),
+            EventCore::Progress(vec![(0, -1), (3, 1)]),
+            EventCore::Progress(vec![(3, -1)]),
+        ];
+        assert_eq!(actual, expected);
     }
 }
