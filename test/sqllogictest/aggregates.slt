@@ -673,7 +673,7 @@ NULL
 
 
 # Should include two sum(*) aggregates.
-query T
+query T multiline
 EXPLAIN RAW PLAN FOR SELECT stddev(x), sum(x) FROM t_variance;
 ----
 Project (#4, #3)
@@ -681,9 +681,10 @@ Project (#4, #3)
     Reduce aggregates=[sum((#0 * #0)), sum(#0), count(#0), sum(#0)]
       Get materialize.public.t_variance
 
+EOF
 
 # Should include only one sum(*) aggregate.
-query T
+query T multiline
 EXPLAIN OPTIMIZED PLAN FOR SELECT stddev(x), sum(x) FROM t_variance;
 ----
 Explained Query:
@@ -705,3 +706,4 @@ Explained Query:
       Reduce aggregates=[sum((#0 * #0)), sum(#0), count(#0)]
         ReadStorage materialize.public.t_variance
 
+EOF
