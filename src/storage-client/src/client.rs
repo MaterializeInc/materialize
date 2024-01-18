@@ -381,17 +381,21 @@ impl StatusUpdate {
         }
     }
 
+    /// Determines if a new status should be produced in context of a previous
+    /// status.
     pub fn produce_new_status(prev: &str, new: &str) -> bool {
         match (prev, new) {
-            (prev, _) if prev == "ceased" => false,
-            (_, new) if new == "ceased" => true,
+            ("dropped", _) => false,
+            (_, "dropped") => true,
+            ("ceased", _) => false,
+            (_, "ceased") => true,
             // TODO(guswynn): Ideally only `failed` sources should not be marked as paused.
             // Additionally, dropping a replica and then restarting environmentd will
             // fail this check. This will all be resolved in:
             // https://github.com/MaterializeInc/materialize/pull/23013
-            (prev, new) if prev == "stalled" && new == "paused" => false,
+            ("stalled", "paused") => false,
             // Don't re-mark that object as paused.
-            (prev, new) if prev == "paused" && new == "paused" => false,
+            ("paused", "paused") => false,
             // De-duplication of other statuses is currently managed by the
             // `health_operator`.
             _ => true,
