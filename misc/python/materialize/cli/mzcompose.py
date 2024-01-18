@@ -360,30 +360,52 @@ class SqlCommand(Command):
         if not service:
             raise UIError(f"unknown service {args.service!r}")
 
-        image = service["image"].split(":")[0]
-        if image != "materialize/materialized":
-            raise UIError(
-                f"cannot connect SQL shell to non-materialized service {args.service!r}"
-            )
-
         # Attempting to load the default port will produce a nice error message
         # if the service isn't running or isn't exposing a port.
         composition.default_port(args.service)
 
-        deps = composition.repo.resolve_dependencies([composition.repo.images["psql"]])
-        deps.acquire()
-        deps["psql"].run(
-            [
-                "-h",
-                service.get("hostname", args.service),
-                "-p",
-                "6875",
-                "-U",
-                "materialize",
-                "materialize",
-            ],
-            docker_args=["--interactive", f"--network={composition.name}_default"],
-        )
+        image = service["image"].split(":")[0]
+        if image == "materialize/materialized":
+            deps = composition.repo.resolve_dependencies(
+                [composition.repo.images["psql"]]
+            )
+            deps.acquire()
+            deps["psql"].run(
+                [
+                    "-h",
+                    service.get("hostname", args.service),
+                    "-p",
+                    "6875",
+                    "-U",
+                    "materialize",
+                    "materialize",
+                ],
+                docker_args=["--interactive", f"--network={composition.name}_default"],
+            )
+        elif image == "mysql":
+            deps = composition.repo.resolve_dependencies(
+                [composition.repo.images["mysql-client"]]
+            )
+            deps.acquire()
+            deps["mysql-client"].run(
+                [
+                    "-h",
+                    service.get("hostname", args.service),
+                    "--port",
+                    "3306",
+                    "-u",
+                    "root",
+                ],
+                docker_args=[
+                    "--interactive",
+                    f"--network={composition.name}_default",
+                    "-e=MYSQL_PWD=p@ssw0rd",
+                ],
+            )
+        else:
+            raise UIError(
+                f"cannot connect SQL shell to non-materialized service {args.service!r}"
+            )
 
 
 class WebCommand(Command):

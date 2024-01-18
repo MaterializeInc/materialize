@@ -110,7 +110,7 @@ pub struct RawSourceCreationConfig {
     /// The upper frontier this source should resume ingestion at
     pub as_of: Antichain<mz_repr::Timestamp>,
     /// For each source export, the upper frontier this source should resume ingestion at in the
-    /// source time domain.
+    /// system time domain.
     pub resume_uppers: BTreeMap<GlobalId, Antichain<mz_repr::Timestamp>>,
     /// For each source export, the upper frontier this source should resume ingestion at in the
     /// source time domain.

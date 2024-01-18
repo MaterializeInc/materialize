@@ -278,6 +278,8 @@ pub enum TransientError {
 /// A definite error that always ends up in the collection of a specific table.
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
 pub enum DefiniteError {
+    #[error("slot compacted past snapshot point. snapshot consistent point={0} resume_lsn={1}")]
+    SlotCompactedPastResumePoint(MzOffset, MzOffset),
     #[error("table was truncated")]
     TableTruncated,
     #[error("table was dropped")]

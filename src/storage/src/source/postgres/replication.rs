@@ -211,10 +211,19 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             while let Some(event) = rewind_input.next().await {
                 if let AsyncEvent::Data(caps, data) = event {
                     for req in data {
-                        assert!(
-                            resume_lsn <= req.snapshot_lsn + 1,
-                            "slot compacted past snapshot point. snapshot consistent point={} resume_lsn={resume_lsn}", req.snapshot_lsn + 1
-                        );
+                        if resume_lsn > req.snapshot_lsn + 1 {
+                            let err = DefiniteError::SlotCompactedPastResumePoint(req.snapshot_lsn + 1, resume_lsn);
+                            // If the replication stream cannot be obtained from the resume point there is nothing
+                            // else to do. These errors are not retractable.
+                            for &oid in table_info.keys() {
+                                // We pick `u64::MAX` as the LSN which will (in practice) never conflict
+                                // any previously revealed portions of the TVC.
+                                let update = ((oid, Err(err.clone())), MzOffset::from(u64::MAX), 1);
+                                data_output.give(&data_cap_set[0], update).await;
+                            }
+                            definite_error_handle.give(&definite_error_cap_set[0], ReplicationError::Definite(Rc::new(err))).await;
+                            return Ok(());
+                        }
                         rewinds.insert(req.oid, (caps.clone(), req));
                     }
                 }

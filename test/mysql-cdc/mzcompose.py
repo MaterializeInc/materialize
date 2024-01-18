@@ -13,7 +13,11 @@ from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
-    Materialized(),
+    Materialized(
+        additional_system_parameter_defaults={
+            "log_filter": "mz_storage::source::mysql=trace,info"
+        }
+    ),
     MySql(
         additional_args=[
             "--log-bin=mysql-bin",
@@ -38,6 +42,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     c.up("materialized", "mysql")
+
     c.run(
         "testdrive",
         f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",

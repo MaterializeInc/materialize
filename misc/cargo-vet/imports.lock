@@ -1311,6 +1311,12 @@ criteria = "safe-to-deploy"
 version = "0.1.2"
 notes = "No unsafe usage or ambient capabilities. Old crate from released and unchanged from 2017"
 
+[[audits.embark-studios.audits.tap]]
+who = "Johan Andersson <opensource@embark-studios.com>"
+criteria = "safe-to-deploy"
+version = "1.0.1"
+notes = "No unsafe usage or ambient capabilities"
+
 [[audits.embark-studios.audits.thiserror]]
 who = "Johan Andersson <opensource@embark-studios.com>"
 criteria = "safe-to-deploy"
