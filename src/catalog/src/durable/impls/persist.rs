@@ -107,7 +107,7 @@ pub struct UnopenedPersistCatalogState {
     /// Catalog shard ID.
     shard_id: ShardId,
     /// Cache of the most recent catalog snapshot.
-    snapshot_cache: Option<(Timestamp, Vec<StateUpdate<StateUpdateKindRaw>>)>,
+    snapshot_cache: Option<(Vec<StateUpdate<StateUpdateKindRaw>>, Timestamp)>,
     /// The epoch of the catalog, if one exists.
     epoch: Option<Epoch>,
     /// Metrics for the persist catalog.
@@ -158,14 +158,18 @@ impl UnopenedPersistCatalogState {
             )
             .await
             .expect("invalid usage");
-        let epoch = get_current_epoch(&mut write_handle, &mut read_handle, &metrics).await;
+        let current_snapshot =
+            current_snapshot_binary(&mut write_handle, &mut read_handle, &metrics).await;
+        let epoch = current_snapshot
+            .as_ref()
+            .map(|(snapshot, _)| extract_epoch(snapshot.iter()));
         UnopenedPersistCatalogState {
             since_handle,
             write_handle,
             read_handle,
             persist_client,
             shard_id,
-            snapshot_cache: None,
+            snapshot_cache: current_snapshot,
             metrics,
             epoch,
         }
@@ -367,16 +371,16 @@ impl UnopenedPersistCatalogState {
         as_of: Timestamp,
     ) -> &Vec<StateUpdate<StateUpdateKindRaw>> {
         match &self.snapshot_cache {
-            Some((cached_as_of, _)) if as_of == *cached_as_of => {}
+            Some((_, cached_as_of)) if as_of == *cached_as_of => {}
             _ => {
                 let snapshot: Vec<_> = snapshot_binary(&mut self.read_handle, as_of, &self.metrics)
                     .await
                     .collect();
-                self.snapshot_cache = Some((as_of, snapshot));
+                self.snapshot_cache = Some((snapshot, as_of));
             }
         }
 
-        &self.snapshot_cache.as_ref().expect("populated above").1
+        &self.snapshot_cache.as_ref().expect("populated above").0
     }
 
     /// Generates an iterator of [`StateUpdate`] that contain all unconsolidated updates to the
@@ -498,7 +502,8 @@ impl UnopenedPersistCatalogState {
     /// Get epoch at `as_of`.
     #[tracing::instrument(level = "info", skip(self))]
     async fn get_epoch(&mut self, as_of: Timestamp) -> Epoch {
-        get_epoch(&mut self.read_handle, as_of, &self.metrics).await
+        let snapshot = self.snapshot_binary(as_of).await;
+        extract_epoch(snapshot.into_iter())
     }
 
     /// Appends `updates` to the catalog state and downgrades the catalog's upper to `next_upper`
@@ -1311,6 +1316,26 @@ async fn snapshot(
         .map(|update| update.try_into().expect("kind decoding error"))
 }
 
+/// Generates an iterator of [`StateUpdate`] that contain all current updates to the catalog
+/// state.
+///
+/// The output is consolidated and sorted by timestamp in ascending order.
+#[tracing::instrument(level = "debug", skip(read_handle, metrics))]
+async fn current_snapshot_binary(
+    write_handle: &mut WriteHandle<SourceData, (), Timestamp, Diff>,
+    read_handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
+    metrics: &Arc<Metrics>,
+) -> Option<(Vec<StateUpdate<StateUpdateKindRaw>>, Timestamp)> {
+    let (persist_shard_readable, current_upper) = is_persist_shard_readable(write_handle).await;
+    if persist_shard_readable {
+        let as_of = as_of(read_handle, current_upper);
+        let snapshot = snapshot_binary(read_handle, as_of, metrics).await.collect();
+        Some((snapshot, as_of))
+    } else {
+        None
+    }
+}
+
 /// Generates an iterator of [`StateUpdate`] that contain all updates to the catalog
 /// state up to, and including, `as_of`.
 ///
@@ -1352,29 +1377,11 @@ async fn snapshot_binary_inner(
         .sorted_by(|a, b| Ord::cmp(&b.ts, &a.ts))
 }
 
-/// Get the current epoch.
-async fn get_current_epoch(
-    write_handle: &mut WriteHandle<SourceData, (), Timestamp, Diff>,
-    read_handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
-    metrics: &Arc<Metrics>,
-) -> Option<Epoch> {
-    let (persist_shard_readable, current_upper) = is_persist_shard_readable(write_handle).await;
-    if persist_shard_readable {
-        let as_of = as_of(read_handle, current_upper);
-        Some(get_epoch(read_handle, as_of, metrics).await)
-    } else {
-        None
-    }
-}
-
-/// Get epoch at `as_of`.
-async fn get_epoch(
-    read_handle: &mut ReadHandle<SourceData, (), Timestamp, Diff>,
-    as_of: Timestamp,
-    metrics: &Arc<Metrics>,
+fn extract_epoch<'a>(
+    snapshot_binary: impl Iterator<Item = &'a StateUpdate<StateUpdateKindRaw>> + DoubleEndedIterator,
 ) -> Epoch {
-    let epochs = snapshot_binary(read_handle, as_of, metrics)
-        .await
+    snapshot_binary
+        .into_iter()
         .rev()
         // The epoch can never be migrated so we know that it will always convert successfully
         // from binary.
@@ -1386,9 +1393,9 @@ async fn get_epoch(
         .filter_map(|kind| match kind {
             StateUpdateKind::Epoch(epoch) => Some(epoch),
             _ => None,
-        });
-    // There must always be a single epoch.
-    epochs.into_element()
+        })
+        // There must always be a single epoch.
+        .into_element()
 }
 
 // Debug methods.
