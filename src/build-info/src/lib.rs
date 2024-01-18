@@ -98,6 +98,8 @@ macro_rules! build_info {
                            printf "either build from working Git clone " >&2
                            printf "(see https://materialize.com/docs/install/#build-from-source), " >&2
                            printf "or specify SHA manually by setting MZ_DEV_BUILD_SHA environment variable" >&2
+                           printf "If you are using git worktrees, you must be in the primary worktree" >&2
+                           printf "for automatic detection to work." >&2
                            exit 1
                        }
                    fi"#
