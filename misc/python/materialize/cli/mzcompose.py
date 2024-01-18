@@ -601,7 +601,9 @@ To see the available workflows, run:
             for name, result in composition.test_results.items():
                 test_case = junit_xml.TestCase(name, composition.name, result.duration)
                 if result.error:
-                    test_case.add_error_info(message=result.error)
+                    test_case.add_error_info(
+                        message=result.error, output=result.error_details
+                    )
                 junit_suite.test_cases.append(test_case)
             junit_report = ci_util.junit_report_filename("mzcompose")
             with junit_report.open("w") as f:
