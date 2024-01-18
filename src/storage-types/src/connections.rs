@@ -20,6 +20,7 @@ use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceReader};
 use mz_kafka_util::client::{BrokerRewrite, MzClientContext, MzKafkaError, TunnelingClientContext};
 use mz_ore::error::ErrorExt;
+use mz_ore::task::RuntimeExt;
 use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
@@ -31,9 +32,15 @@ use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
 use mz_tracing::CloneableEnvFilter;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
-use rdkafka::client::BrokerAddr;
+use rdkafka::admin::AdminClient;
+use rdkafka::client::{BrokerAddr, Client};
 use rdkafka::config::FromClientConfigAndContext;
-use rdkafka::consumer::{BaseConsumer, Consumer};
+use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext, ConsumerGroupMetadata};
+use rdkafka::error::{KafkaError, KafkaResult};
+use rdkafka::message::ToBytes;
+use rdkafka::producer::{BaseProducer, BaseRecord, Producer, ProducerContext};
+use rdkafka::topic_partition_list::TopicPartitionList;
+use rdkafka::util::Timeout;
 use rdkafka::ClientContext;
 use serde::{Deserialize, Serialize};
 use tokio::net;
@@ -452,6 +459,167 @@ impl<C: ConnectionAccess> KafkaConnection<C> {
     }
 }
 
+/// A wrapper for use around `rdkafka` types to ensure that they are
+/// safely used within async context. In particular, this ensures that
+/// the _dropping_ of rdkafka clients happens in a separate thread, so that
+/// this does not block the tokio task.
+pub struct RdkafkaWrapper<T: Send + 'static> {
+    /// The inner is an `Option` so it can be taken by the `Drop` impl.
+    ///
+    /// Its an Arc because some `rdkafka` apis take `self: &Arc<Self>`. This
+    /// causes double-indirection in some cases.
+    inner: Option<Arc<T>>,
+}
+
+impl<T: Send + 'static> Drop for RdkafkaWrapper<T> {
+    fn drop(&mut self) {
+        let handle = tokio::runtime::Handle::try_current();
+
+        let inner = self.inner.take().unwrap();
+        // Note that `Arc::into_inner` is guaranteed to return `Some(_)` for _exactly_
+        // one clone of the `Arc`.
+        let inner = Arc::into_inner(inner);
+
+        if let (Some(inner), Ok(handle)) = (inner, handle) {
+            handle.spawn_blocking_named(|| "drop_rdkafka_object".to_string(), move || drop(inner));
+        }
+    }
+}
+
+impl<T: Send + 'static> Clone for RdkafkaWrapper<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+pub struct RdkafkaWrapperPartitionQueue<C: ConsumerContext + Send + 'static> {
+    // the order of declaration of these values matters. We want to drop
+    // the `PartitionQueue`'s, before the `RdkafkaWrapper`-d consumer, so that the `Drop`
+    // impl of the wrapper runs around the consumer actually sees the final owner of the
+    // value and destructs it in a different thread.
+    partition_queue: rdkafka::consumer::base_consumer::PartitionQueue<C>,
+    _consumer: RdkafkaWrapper<BaseConsumer<C>>,
+}
+
+impl<C: ConsumerContext + Send + 'static> RdkafkaWrapper<BaseConsumer<C>> {
+    /// `split_partition_queue_for_sources` takes `self: &Arc<BaseConsumer>`, but we do NOT want to
+    /// expose access to the inner `Arc` to the user. This would allow them to clone it, and drop
+    /// it without going through `RdkafkaWrapper::drop`, so we wrap that impl here.
+    ///
+    /// Note that the returned `PartitionQueue` is also wrapped, because it contains a clone of its
+    /// `BaseConsumer`.
+    pub fn split_partition_queue_for_sources<F>(
+        &self,
+        topic: &str,
+        partition: i32,
+        non_empty_callback: F,
+    ) -> Option<RdkafkaWrapperPartitionQueue<C>>
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        let consumer = self.clone();
+        self.inner
+            .as_ref()
+            .unwrap()
+            .split_partition_queue(topic, partition)
+            .map(|mut q| {
+                q.set_nonempty_callback(non_empty_callback);
+
+                RdkafkaWrapperPartitionQueue {
+                    partition_queue: q,
+                    _consumer: consumer,
+                }
+            })
+    }
+}
+
+// We don't implement `Deref` generically over any `T`. This is because some `rdkafka` apis
+// (namely, `BaseProducer`) are `: Clone`. Exposing those by `Deref`-ing them would allow the user
+// to clone and then `Drop` them incorrectly.
+
+impl<T: ClientContext + Send + 'static> std::ops::Deref for RdkafkaWrapper<AdminClient<T>> {
+    type Target = AdminClient<T>;
+    fn deref(&self) -> &Self::Target {
+        self.inner.as_ref().unwrap().as_ref()
+    }
+}
+
+impl<T: ConsumerContext + Send + 'static> std::ops::Deref for RdkafkaWrapper<BaseConsumer<T>> {
+    type Target = BaseConsumer<T>;
+    fn deref(&self) -> &Self::Target {
+        self.inner.as_ref().unwrap().as_ref()
+    }
+}
+
+impl<T: ConsumerContext + Send + 'static> std::ops::Deref for RdkafkaWrapperPartitionQueue<T> {
+    type Target = rdkafka::consumer::base_consumer::PartitionQueue<T>;
+    fn deref(&self) -> &Self::Target {
+        &self.partition_queue
+    }
+}
+
+// Wrappers over `BaseProducer` apis that ensure they don't clone the producer.
+
+impl<C: ProducerContext + Send + 'static> RdkafkaWrapper<BaseProducer<C>> {
+    #[allow(clippy::result_large_err)]
+    pub fn send<'a, K, P>(
+        &self,
+        record: BaseRecord<'a, K, P, C::DeliveryOpaque>,
+    ) -> Result<(), (KafkaError, BaseRecord<'a, K, P, C::DeliveryOpaque>)>
+    where
+        K: ToBytes + ?Sized,
+        P: ToBytes + ?Sized,
+    {
+        self.inner.as_ref().unwrap().send(record)
+    }
+}
+impl<C, P: Send + 'static> Producer<C> for RdkafkaWrapper<P>
+where
+    C: ProducerContext,
+    P: Producer<C>,
+{
+    fn client(&self) -> &Client<C> {
+        self.inner.as_ref().unwrap().client()
+    }
+    fn flush<T: Into<Timeout>>(&self, timeout: T) -> KafkaResult<()> {
+        self.inner.as_ref().unwrap().flush(timeout)
+    }
+
+    fn in_flight_count(&self) -> i32 {
+        self.inner.as_ref().unwrap().in_flight_count()
+    }
+
+    fn init_transactions<T: Into<Timeout>>(&self, timeout: T) -> KafkaResult<()> {
+        self.inner.as_ref().unwrap().init_transactions(timeout)
+    }
+
+    fn begin_transaction(&self) -> KafkaResult<()> {
+        self.inner.as_ref().unwrap().begin_transaction()
+    }
+
+    fn send_offsets_to_transaction<T: Into<Timeout>>(
+        &self,
+        offsets: &TopicPartitionList,
+        cgm: &ConsumerGroupMetadata,
+        timeout: T,
+    ) -> KafkaResult<()> {
+        self.inner
+            .as_ref()
+            .unwrap()
+            .send_offsets_to_transaction(offsets, cgm, timeout)
+    }
+
+    fn commit_transaction<T: Into<Timeout>>(&self, timeout: T) -> KafkaResult<()> {
+        self.inner.as_ref().unwrap().commit_transaction(timeout)
+    }
+
+    fn abort_transaction<T: Into<Timeout>>(&self, timeout: T) -> KafkaResult<()> {
+        self.inner.as_ref().unwrap().abort_transaction(timeout)
+    }
+}
+
 impl KafkaConnection {
     /// Creates a Kafka client for the connection.
     pub async fn create_with_context<C, T>(
@@ -459,10 +627,10 @@ impl KafkaConnection {
         storage_configuration: &StorageConfiguration,
         context: C,
         extra_options: &BTreeMap<&str, String>,
-    ) -> Result<T, ContextCreationError>
+    ) -> Result<RdkafkaWrapper<T>, ContextCreationError>
     where
         C: ClientContext,
-        T: FromClientConfigAndContext<TunnelingClientContext<C>>,
+        T: FromClientConfigAndContext<TunnelingClientContext<C>> + Send + 'static,
     {
         let mut options = self.options.clone();
 
@@ -611,7 +779,9 @@ impl KafkaConnection {
             }
         }
 
-        Ok(config.create_with_context(context)?)
+        Ok(RdkafkaWrapper {
+            inner: Some(Arc::new(config.create_with_context(context)?)),
+        })
     }
 
     async fn validate(
@@ -620,7 +790,7 @@ impl KafkaConnection {
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
         let (context, error_rx) = MzClientContext::with_errors();
-        let consumer: BaseConsumer<_> = self
+        let consumer: RdkafkaWrapper<BaseConsumer<_>> = self
             .create_with_context(storage_configuration, context, &BTreeMap::new())
             .await?;
 

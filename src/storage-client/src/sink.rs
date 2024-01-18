@@ -18,6 +18,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::task;
 use mz_repr::Timestamp;
 use mz_storage_types::configuration::StorageConfiguration;
+use mz_storage_types::connections::RdkafkaWrapper;
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt};
 use mz_storage_types::sinks::KafkaSinkConnection;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
@@ -213,7 +214,7 @@ pub async fn ensure_kafka_topic(
         cleanup_policy,
     }: TopicConfig,
 ) -> Result<bool, anyhow::Error> {
-    let client: AdminClient<_> = connection
+    let client: RdkafkaWrapper<AdminClient<_>> = connection
         .connection
         .create_with_context(
             storage_configuration,
@@ -413,7 +414,7 @@ pub async fn determine_sink_resume_upper(
 
     // Construct two cliens in read committed and read uncommitted isolations respectively. See
     // comment below for an explanation on why we need it.
-    let progress_client_read_committed: BaseConsumer<_> = {
+    let progress_client_read_committed: RdkafkaWrapper<BaseConsumer<_>> = {
         let mut opts = common_options.clone();
         opts.insert("isolation.level", "read_committed".into());
         let ctx = MzClientContext::default();
@@ -423,7 +424,7 @@ pub async fn determine_sink_resume_upper(
             .await?
     };
 
-    let progress_client_read_uncommitted: BaseConsumer<_> = {
+    let progress_client_read_uncommitted: RdkafkaWrapper<BaseConsumer<_>> = {
         let mut opts = common_options;
         opts.insert("isolation.level", "read_uncommitted".into());
         let ctx = MzClientContext::default();

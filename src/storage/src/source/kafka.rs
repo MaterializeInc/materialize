@@ -26,6 +26,7 @@ use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{adt::jsonb::Jsonb, Datum, Diff, GlobalId, Row};
 use mz_ssh_util::tunnel::SshTunnelStatus;
+use mz_storage_types::connections::{RdkafkaWrapper, RdkafkaWrapperPartitionQueue};
 use mz_storage_types::errors::ContextCreationError;
 use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection, RangeBound};
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
@@ -33,7 +34,6 @@ use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use mz_timely_util::order::Partitioned;
 use rdkafka::client::Client;
-use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
 use rdkafka::message::{BorrowedMessage, Headers};
@@ -67,7 +67,7 @@ pub struct KafkaSourceReader {
     /// Source global ID
     id: GlobalId,
     /// Kafka consumer for this source
-    consumer: Arc<BaseConsumer<TunnelingClientContext<GlueConsumerContext>>>,
+    consumer: RdkafkaWrapper<BaseConsumer<TunnelingClientContext<GlueConsumerContext>>>,
     /// List of consumers. A consumer should be assigned per partition to guarantee fairness
     partition_consumers: Vec<PartitionConsumer>,
     /// Worker ID
@@ -120,7 +120,7 @@ struct WatermarkOffsets {
 pub struct KafkaOffsetCommiter {
     config: RawSourceCreationConfig,
     topic_name: String,
-    consumer: Arc<BaseConsumer<TunnelingClientContext<GlueConsumerContext>>>,
+    consumer: RdkafkaWrapper<BaseConsumer<TunnelingClientContext<GlueConsumerContext>>>,
 }
 
 impl SourceRender for KafkaSourceConnection {
@@ -220,7 +220,7 @@ impl SourceRender for KafkaSourceConnection {
             let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
             let health_status = Arc::new(Mutex::new(Default::default()));
             let notificator = Arc::new(Notify::new());
-            let consumer: Result<BaseConsumer<_>, _> = connection
+            let consumer: Result<RdkafkaWrapper<BaseConsumer<_>>, _> = connection
                 .create_with_context(
                     &config.config,
                     GlueConsumerContext {
@@ -256,7 +256,7 @@ impl SourceRender for KafkaSourceConnection {
                 .await;
 
             let consumer = match consumer {
-                Ok(consumer) => Arc::new(consumer),
+                Ok(consumer) => consumer,
                 Err(e) => {
                     let update = HealthStatusUpdate::halting(
                         format!(
@@ -302,7 +302,7 @@ impl SourceRender for KafkaSourceConnection {
             let metadata_thread_handle = {
                 let partition_info = Arc::downgrade(&partition_info);
                 let topic = topic.clone();
-                let consumer = Arc::clone(&consumer);
+                let consumer = consumer.clone();
 
                 // We want a fairly low ceiling on our polling frequency, since we rely
                 // on this heartbeat to determine the health of our Kafka connection.
@@ -399,7 +399,7 @@ impl SourceRender for KafkaSourceConnection {
                 source_name: config.name.clone(),
                 id: config.id,
                 partition_consumers: Vec::new(),
-                consumer: Arc::clone(&consumer),
+                consumer: consumer.clone(),
                 worker_id: config.worker_id,
                 worker_count: config.worker_count,
                 last_offsets: BTreeMap::new(),
@@ -716,7 +716,7 @@ impl KafkaOffsetCommiter {
                 tpl.add_partition_offset(&self.topic_name, pid, offset_to_commit)
                     .expect("offset known to be valid");
             }
-            let consumer = Arc::clone(&self.consumer);
+            let consumer = self.consumer.clone();
             mz_ore::task::spawn_blocking(
                 || format!("source({}) kafka offset commit", self.config.id),
                 move || consumer.commit(&tpl, CommitMode::Sync),
@@ -776,19 +776,19 @@ impl KafkaSourceReader {
         for pc in &mut self.partition_consumers {
             pc.partition_queue = self
                 .consumer
-                .split_partition_queue(&self.topic_name, pc.pid)
+                .split_partition_queue_for_sources(&self.topic_name, pc.pid, {
+                    let context = Arc::clone(&context);
+                    move || context.inner().activate()
+                })
                 .expect("partition known to be valid");
-            pc.partition_queue.set_nonempty_callback({
-                let context = Arc::clone(&context);
-                move || context.inner().activate()
-            });
         }
 
-        let mut partition_queue = self
+        let partition_queue = self
             .consumer
-            .split_partition_queue(&self.topic_name, partition_id)
+            .split_partition_queue_for_sources(&self.topic_name, partition_id, move || {
+                context.inner().activate()
+            })
             .expect("partition known to be valid");
-        partition_queue.set_nonempty_callback(move || context.inner().activate());
         self.partition_consumers.push(PartitionConsumer::new(
             partition_id,
             partition_queue,
@@ -1067,7 +1067,7 @@ struct PartitionConsumer {
     /// the partition id with which this consumer is associated
     pid: PartitionId,
     /// The underlying Kafka partition queue
-    partition_queue: PartitionQueue<TunnelingClientContext<GlueConsumerContext>>,
+    partition_queue: RdkafkaWrapperPartitionQueue<TunnelingClientContext<GlueConsumerContext>>,
     /// Additional metadata columns requested by the user
     metadata_columns: Vec<KafkaMetadataKind>,
 }
@@ -1076,7 +1076,7 @@ impl PartitionConsumer {
     /// Creates a new partition consumer from underlying Kafka consumer
     fn new(
         pid: PartitionId,
-        partition_queue: PartitionQueue<TunnelingClientContext<GlueConsumerContext>>,
+        partition_queue: RdkafkaWrapperPartitionQueue<TunnelingClientContext<GlueConsumerContext>>,
         metadata_columns: Vec<KafkaMetadataKind>,
     ) -> Self {
         PartitionConsumer {
@@ -1179,6 +1179,8 @@ mod tests {
     //
     // You need to set up a topic "queue-test" with 1000 "hello" messages in it. Obviously, running
     // this test requires a running Kafka instance at localhost:9092.
+    //
+    // Note that this does not use `RdkafkaWrapper`, but it is just a test.
     #[mz_ore::test]
     #[ignore]
     fn demonstrate_kafka_queue_race_condition() -> Result<(), anyhow::Error> {

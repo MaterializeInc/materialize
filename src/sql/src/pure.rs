@@ -43,7 +43,7 @@ use mz_sql_parser::ast::{
 };
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::IntoInlineConnection;
-use mz_storage_types::connections::Connection;
+use mz_storage_types::connections::{Connection, RdkafkaWrapper};
 use mz_storage_types::errors::ContextCreationError;
 use mz_storage_types::sources::mysql::MySqlSourceDetails;
 use mz_storage_types::sources::postgres::PostgresSourcePublicationDetails;
@@ -52,6 +52,7 @@ use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
 use rdkafka::admin::AdminClient;
+use rdkafka::consumer::BaseConsumer;
 use uuid::Uuid;
 
 use crate::ast::{
@@ -397,7 +398,7 @@ async fn purify_create_sink(
                 sql_bail!("LEGACY IDs option is not supported");
             }
 
-            let client: AdminClient<_> = connection
+            let client: RdkafkaWrapper<AdminClient<_>> = connection
                 .create_with_context(
                     storage_configuration,
                     MzClientContext::default(),
@@ -570,7 +571,7 @@ async fn purify_create_source(
                 .topic
                 .ok_or(KafkaSourcePurificationError::ConnectionMissingTopic)?;
 
-            let consumer = connection
+            let consumer: RdkafkaWrapper<BaseConsumer<_>> = connection
                 .create_with_context(
                     storage_configuration,
                     MzClientContext::default(),
@@ -583,8 +584,6 @@ async fn purify_create_source(
                         e.display_with_causes().to_string(),
                     )
                 })?;
-            let consumer = Arc::new(consumer);
-
             match (
                 extracted_options.start_offset,
                 extracted_options.start_timestamp,
@@ -596,7 +595,7 @@ async fn purify_create_source(
                 (Some(start_offsets), None) => {
                     // Validate the start offsets.
                     kafka_util::validate_start_offsets(
-                        Arc::clone(&consumer),
+                        consumer,
                         &topic,
                         start_offsets,
                         storage_configuration
@@ -609,7 +608,7 @@ async fn purify_create_source(
                 (None, Some(time_offset)) => {
                     // Translate `START TIMESTAMP` to a start offset.
                     let start_offsets = kafka_util::lookup_start_offsets(
-                        Arc::clone(&consumer),
+                        consumer,
                         &topic,
                         time_offset,
                         now,

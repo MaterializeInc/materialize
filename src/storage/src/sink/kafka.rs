@@ -90,6 +90,7 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::sink::progress_key::ProgressKey;
 use mz_storage_client::sink::{ProgressRecord, TopicCleanupPolicy, TopicConfig};
 use mz_storage_types::configuration::StorageConfiguration;
+use mz_storage_types::connections::RdkafkaWrapper;
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
     KafkaSinkConnection, KafkaSinkFormat, MetadataFilled, SinkEnvelope, StorageSinkDesc,
@@ -193,7 +194,7 @@ struct TransactionalProducer {
     /// The key each progress record is associated with.
     progress_key: ProgressKey,
     /// The underlying Kafka producer.
-    producer: BaseProducer<TunnelingClientContext<MzClientContext>>,
+    producer: RdkafkaWrapper<BaseProducer<TunnelingClientContext<MzClientContext>>>,
     /// A handle to the metrics associated with this sink.
     statistics: SinkStatistics,
     /// The number of messages staged for the currently open transactions. It is reset to zero
@@ -254,7 +255,7 @@ impl TransactionalProducer {
         // Allow Kafka monitoring tools to identify this producer.
         options.insert("client.id", client_id);
 
-        let producer: BaseProducer<_> = connection
+        let producer: RdkafkaWrapper<BaseProducer<_>> = connection
             .connection
             .create_with_context(storage_configuration, MzClientContext::default(), &options)
             .await?;
@@ -288,7 +289,9 @@ impl TransactionalProducer {
     /// status in case of failure.
     async fn spawn_blocking<F, R>(&self, f: F) -> Result<R, ContextCreationError>
     where
-        F: FnOnce(BaseProducer<TunnelingClientContext<MzClientContext>>) -> Result<R, KafkaError>
+        F: FnOnce(
+                RdkafkaWrapper<BaseProducer<TunnelingClientContext<MzClientContext>>>,
+            ) -> Result<R, KafkaError>
             + Send
             + 'static,
         R: Send + 'static,

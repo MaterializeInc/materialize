@@ -9,8 +9,6 @@
 
 //! Provides parsing and convenience functions for working with Kafka from the `sql` package.
 
-use std::sync::Arc;
-
 use mz_kafka_util::client::DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL;
 use mz_ore::task;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -18,6 +16,7 @@ use mz_sql_parser::ast::{
     KafkaSinkConfigOption, KafkaSinkConfigOptionName, KafkaSourceConfigOption,
     KafkaSourceConfigOptionName,
 };
+use mz_storage_types::connections::RdkafkaWrapper;
 use mz_storage_types::sinks::KafkaSinkCompressionType;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
@@ -96,7 +95,7 @@ impl ImpliedValue for KafkaSinkCompressionType {
 /// * Negative numbers will be translated to a timestamp in millis
 ///   before now (e.g. `-10` means 10 millis ago)
 pub async fn lookup_start_offsets<C>(
-    consumer: Arc<BaseConsumer<C>>,
+    consumer: RdkafkaWrapper<BaseConsumer<C>>,
     topic: &str,
     time_offset: i64,
     now: u64,
@@ -124,7 +123,7 @@ where
         move || {
             // There cannot be more than i32 partitions
             let num_partitions = mz_kafka_util::client::get_partitions(
-                consumer.as_ref().client(),
+                consumer.client(),
                 &topic,
                 fetch_metadata_timeout,
             )
@@ -191,7 +190,7 @@ where
 /// At present, the validation is merely that there are not more start offsets
 /// than parts in the topic.
 pub async fn validate_start_offsets<C>(
-    consumer: Arc<BaseConsumer<C>>,
+    consumer: RdkafkaWrapper<BaseConsumer<C>>,
     topic: &str,
     start_offsets: Vec<i64>,
     fetch_metadata_timeout: Duration,
@@ -204,7 +203,7 @@ where
         let topic = topic.to_string();
         move || {
             let num_partitions = mz_kafka_util::client::get_partitions(
-                consumer.as_ref().client(),
+                consumer.client(),
                 &topic,
                 fetch_metadata_timeout,
             )
