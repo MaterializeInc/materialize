@@ -11,7 +11,7 @@
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_envelope_materialize = true
-
+ALTER SYSTEM SET max_clusters = 20
 
 
 # sinking directly from an UPSERT source with multi-part key
@@ -47,14 +47,16 @@ $ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert
     URL '${testdrive.schema-registry-url}'
   );
 
+> CREATE CLUSTER upsert_input_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE upsert_input
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER upsert_input_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-avro-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
+> CREATE CLUSTER upsert_input_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK upsert_input_sink
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER upsert_input_sink_cluster
   FROM upsert_input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-input-sink-${testdrive.seed}')
   KEY (key1, key2)
@@ -147,15 +149,17 @@ $ set schema=[
 $ kafka-create-topic topic=input
 
 # (PRIMARY KEY (id) NOT ENFORCED)
+> CREATE CLUSTER input_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE input
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER input_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
 > CREATE MATERIALIZED VIEW input_keyed AS SELECT a, max(b) as b FROM input GROUP BY a
 
+> CREATE CLUSTER input_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK input_sink
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER input_sink_cluster
   FROM input_keyed
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-${testdrive.seed}') KEY (a)
   FORMAT AVRO
@@ -163,8 +167,9 @@ $ kafka-create-topic topic=input
 
 # requesting to key by (a, b) is fine when (a) is a unique key
 
+> CREATE CLUSTER input_sink_multiple_keys_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK input_sink_multiple_keys
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER input_sink_multiple_keys_cluster
   FROM input_keyed
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-multikey-${testdrive.seed}') KEY (b, a)
   FORMAT AVRO
@@ -222,15 +227,17 @@ $ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.p
 
 $ kafka-create-topic topic=input-with-deletions
 
+> CREATE CLUSTER input_with_deletions_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE input_with_deletions
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER input_with_deletions_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-with-deletions-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
 > CREATE MATERIALIZED VIEW input_with_deletions_keyed AS SELECT a, max(b) as b FROM input_with_deletions GROUP BY a
 
+> CREATE CLUSTER input_with_deletions_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK input_with_deletions_sink
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER input_with_deletions_sink_cluster
   FROM input_with_deletions_keyed
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'input-sink-with-deletions-${testdrive.seed}') KEY (a)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT
@@ -285,13 +292,15 @@ $ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.p
 
 $ kafka-create-topic topic=non-keyed-input
 
+> CREATE CLUSTER non_keyed_input_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE non_keyed_input
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER non_keyed_input_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-keyed-input-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
 
+> CREATE CLUSTER not_enforced_key_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK not_enforced_key
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER not_enforced_key_cluster
   FROM non_keyed_input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'not-enforced-sink-${testdrive.seed}') KEY (a) NOT ENFORCED
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT

@@ -42,8 +42,9 @@ $ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert
     URL '${testdrive.schema-registry-url}'
   );
 
+> CREATE CLUSTER upsert_input_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE upsert_input
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER upsert_input_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-avro-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
@@ -55,8 +56,9 @@ fish    2  fish     1000  1       <null>
 
 # Checking all combination of NULL DEFAULTS with and without values
 
+> CREATE CLUSTER upsert_input_sink1_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK upsert_input_sink1
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER upsert_input_sink1_cluster
   FROM upsert_input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-input-sink1-${testdrive.seed}')
   KEY (key1, key2)
@@ -69,8 +71,9 @@ fish    2  fish     1000  1       <null>
 $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink1-${testdrive.seed}-value
 {"type":"record","name":"envelope","fields":[{"name":"key1","type":"string"},{"name":"key2","type":["null","long"],"default":null},{"name":"f1","type":["null","string"],"default":null},{"name":"f2","type":["null","long"],"default":null},{"name":"f31","type":["null","long"],"default":null},{"name":"f32","type":["null","string"],"default":null}]}
 
+> CREATE CLUSTER upsert_input_sink2_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK upsert_input_sink2
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER upsert_input_sink2_cluster
   FROM upsert_input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-input-sink2-${testdrive.seed}')
   KEY (key1, key2)
@@ -83,8 +86,9 @@ $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink1-$
 $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink2-${testdrive.seed}-value
 {"type":"record","name":"envelope","fields":[{"name":"key1","type":"string"},{"name":"key2","type":["null","long"],"default":null},{"name":"f1","type":["null","string"],"default":null},{"name":"f2","type":["null","long"],"default":null},{"name":"f31","type":["null","long"],"default":null},{"name":"f32","type":["null","string"],"default":null}]}
 
+> CREATE CLUSTER upsert_input_sink3_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK upsert_input_sink3
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER upsert_input_sink3_cluster
   FROM upsert_input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-input-sink3-${testdrive.seed}')
   KEY (key1, key2)
@@ -97,8 +101,9 @@ $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink2-$
 $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink3-${testdrive.seed}-value
 {"type":"record","name":"envelope","fields":[{"name":"key1","type":"string"},{"name":"key2","type":["null","long"]},{"name":"f1","type":["null","string"]},{"name":"f2","type":["null","long"]},{"name":"f31","type":["null","long"]},{"name":"f32","type":["null","string"]}]}
 
+> CREATE CLUSTER upsert_input_sink4_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK upsert_input_sink4
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER upsert_input_sink4_cluster
   FROM upsert_input
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-input-sink4-${testdrive.seed}')
   KEY (key1, key2)
@@ -116,8 +121,9 @@ $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink4-$
 
 > CREATE MATERIALIZED VIEW v AS SELECT * from t;
 
+> CREATE CLUSTER sink1_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK sink1
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER sink1_cluster
   FROM v
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink1-${testdrive.seed}')
   KEY (c2) NOT ENFORCED
@@ -130,8 +136,9 @@ $ schema-registry-verify schema-type=avro subject=testdrive-upsert-input-sink4-$
 $ schema-registry-verify schema-type=avro subject=testdrive-sink1-${testdrive.seed}-value
 {"type":"record","name":"envelope","fields":[{"name":"c1","type":["null",{"type":"record","name":"record0","namespace":"com.materialize.sink","fields":[{"name":"x","type":["null","int"],"default":null},{"name":"y","type":["null","int"],"default":null}]}],"default":null},{"name":"c2","type":"string"},{"name":"c3","type":["null",{"type":"map","values":["null","boolean"]}],"default":null},{"name":"c4","type":["null",{"type":"array","items":["null",{"type":"record","name":"record1","namespace":"com.materialize.sink","fields":[{"name":"x","type":["null","int"],"default":null},{"name":"y","type":["null","int"],"default":null}]}]}],"default":null}]}
 
+> CREATE CLUSTER sink2_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK sink2
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER sink2_cluster
   FROM v
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink2-${testdrive.seed}')
   KEY (c2) NOT ENFORCED

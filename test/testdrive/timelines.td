@@ -20,13 +20,15 @@ $ kafka-create-topic topic=input-system
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> CREATE CLUSTER source_system_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE source_system
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER source_system_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-system-${testdrive.seed}')
   FORMAT BYTES
 
+> CREATE CLUSTER source_system_user_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE source_system_user
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER source_system_user_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-system-${testdrive.seed}')
   FORMAT BYTES
   WITH (TIMELINE '${testdrive.seed}-timelines')
@@ -120,8 +122,9 @@ $ kafka-ingest format=avro topic=input-cdcv2 schema=${schema}
 {"array":[{"data":{"id":5,"price":{"int":12}},"time":4,"diff":1}]}
 {"array":[{"data":{"id":5,"price":{"int":12}},"time":5,"diff":-1}]}
 
+> CREATE CLUSTER source_cdcv2_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE source_cdcv2
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER source_cdcv2_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
@@ -134,15 +137,17 @@ $ kafka-ingest format=avro topic=input-cdcv2 schema=${schema}
   WITH (TIMELINE 'mz_foo')
 contains:unacceptable timeline name "mz_foo"
 
+> CREATE CLUSTER source_cdcv2_system_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE source_cdcv2_system
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER source_cdcv2_system_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
   WITH (TIMELINE 'mz_epoch_ms')
 
+> CREATE CLUSTER source_cdcv2_user_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE source_cdcv2_user
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER source_cdcv2_user_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-cdcv2-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE

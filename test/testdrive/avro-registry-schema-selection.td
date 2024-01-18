@@ -29,8 +29,9 @@ $ kafka-ingest format=avro topic=schema-strategy-test schema=${second-writer-sch
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> CREATE CLUSTER schema_strategy_test_inline_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE schema_strategy_test_inline
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER schema_strategy_test_inline_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE STRATEGY INLINE '${reader-schema}'
@@ -42,8 +43,9 @@ a
 0
 2
 
+> CREATE CLUSTER schema_strategy_test_id_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE schema_strategy_test_id
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER schema_strategy_test_id_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE STRATEGY ID ${id1}
@@ -55,8 +57,9 @@ a b
 0 1
 2 3
 
+> CREATE CLUSTER schema_strategy_test_id2_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE schema_strategy_test_id2
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER schema_strategy_test_id2_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE STRATEGY ID ${id2}
@@ -68,8 +71,9 @@ a b c
 0 1 <null>
 2 3 4
 
+> CREATE CLUSTER schema_strategy_test_latest_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE schema_strategy_test_latest
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER schema_strategy_test_latest_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE STRATEGY LATEST

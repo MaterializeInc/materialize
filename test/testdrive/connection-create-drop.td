@@ -80,8 +80,9 @@ materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"te
 ###
 > CREATE CONNECTION testconn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
+> CREATE CLUSTER connection_source_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE connection_source (first, second)
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER connection_source_cluster
   FROM KAFKA CONNECTION testconn (TOPIC 'testdrive-connection_test-${testdrive.seed}')
   FORMAT CSV WITH 2 COLUMNS
 
@@ -176,8 +177,9 @@ contains:CONFLUENT SCHEMA REGISTRY connections do not support SESSION TOKEN valu
     ENVELOPE DEBEZIUM
 contains:is not a KAFKA CONNECTION
 
+> CREATE CLUSTER csr_source_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE csr_source
-    IN CLUSTER ${arg.single-replica-cluster}
+    IN CLUSTER csr_source_cluster
     FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-csr_test-${testdrive.seed}')
     FORMAT AVRO
     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
@@ -190,8 +192,9 @@ id creature
 
 > CREATE CONNECTION broker_connection TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
+> CREATE CLUSTER two_connection_source_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE two_connection_source
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER two_connection_source_cluster
   FROM KAFKA CONNECTION broker_connection (TOPIC 'testdrive-csr_test-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -292,8 +295,9 @@ $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb messag
     URL '${testdrive.schema-registry-url}'
   )
 
+> CREATE CLUSTER import_connection_csr_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE import_connection_csr
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER import_connection_csr_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-import-csr-${testdrive.seed}')
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION proto_csr
 

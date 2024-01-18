@@ -9,6 +9,7 @@
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_create_source_denylist_with_options = true
+ALTER SYSTEM SET max_clusters = 20
 
 # Test support for Avro sources without using the Confluent Schema Registry.
 
@@ -149,8 +150,9 @@ $ kafka-ingest format=avro topic=non-dbz-data schema=${non-dbz-schema} timestamp
 {"a": 1, "b": 2}
 {"a": 2, "b": 3}
 
+> CREATE CLUSTER non_dbz_data_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE non_dbz_data
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER non_dbz_data_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
@@ -163,8 +165,9 @@ a b
 
 # test INCLUDE metadata
 
+> CREATE CLUSTER non_dbz_data_metadata_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE non_dbz_data_metadata
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER non_dbz_data_metadata_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   INCLUDE PARTITION, OFFSET
@@ -176,8 +179,9 @@ a b partition offset
 1 2 0         0
 2 3 0         1
 
+> CREATE CLUSTER non_dbz_data_metadata_named_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE non_dbz_data_metadata_named
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER non_dbz_data_metadata_named_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   INCLUDE PARTITION as part, OFFSET as mzo
@@ -199,8 +203,9 @@ $ kafka-ingest format=avro topic=non-dbz-data-multi-partition schema=${non-dbz-s
 $ kafka-ingest format=avro topic=non-dbz-data-multi-partition schema=${non-dbz-schema} timestamp=1 partition=0
 {"a": 1, "b": 2}
 
+> CREATE CLUSTER non_dbz_data_multi_partition_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE non_dbz_data_multi_partition
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER non_dbz_data_multi_partition_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
@@ -210,8 +215,9 @@ a  b
 -----
 4  1
 
+> CREATE CLUSTER non_dbz_data_multi_partition_2_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE non_dbz_data_multi_partition_2
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER non_dbz_data_multi_partition_2_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[0,0], TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
@@ -222,8 +228,9 @@ a  b
 1  2
 4  1
 
+> CREATE CLUSTER non_dbz_data_multi_partition_fast_forwarded_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE non_dbz_data_multi_partition_fast_forwarded
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER non_dbz_data_multi_partition_fast_forwarded_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[0,1], TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
@@ -233,8 +240,9 @@ a  b
 ----
 1  2
 
+> CREATE CLUSTER non_dbz_data_multi_partition_fast_forwarded_2_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE non_dbz_data_multi_partition_fast_forwarded_2
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER non_dbz_data_multi_partition_fast_forwarded_2_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1,0], TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
@@ -251,8 +259,9 @@ $ kafka-create-topic topic=non-dbz-data-varying-partition partitions=1
 $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz-schema} timestamp=1 partition=0
 {"a": 5, "b": 6}
 
+> CREATE CLUSTER non_dbz_data_varying_partition_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE non_dbz_data_varying_partition
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER non_dbz_data_varying_partition_cluster
   FROM KAFKA CONNECTION kafka_conn (
     TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}',
     TOPIC METADATA REFRESH INTERVAL = '10ms',
@@ -280,8 +289,9 @@ a  b
 7  8
 9  10
 
+> CREATE CLUSTER non_dbz_data_varying_partition_2_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE non_dbz_data_varying_partition_2
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER non_dbz_data_varying_partition_2_cluster
   FROM KAFKA CONNECTION kafka_conn (
     TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}',
     TOPIC METADATA REFRESH INTERVAL = '10ms',
@@ -416,8 +426,9 @@ $ kafka-ingest format=avro topic=non-subset-key key-format=avro key-schema=${key
     URL '${testdrive.schema-registry-url}'
   );
 
+> CREATE CLUSTER non_subset_key_cluster SIZE '${arg.default-storage-size}';
 > CREATE SOURCE non_subset_key
-  IN CLUSTER ${arg.single-replica-cluster}
+  IN CLUSTER non_subset_key_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-subset-key-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
