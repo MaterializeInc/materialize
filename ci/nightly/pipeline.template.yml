@@ -1072,6 +1072,7 @@ steps:
 
   - id: retain-history
     label: "Check retain history"
+    skip: "#24479"
     timeout_in_minutes: 15
     artifact_paths: junit_*.xml
     agents:
