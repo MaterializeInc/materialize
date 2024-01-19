@@ -83,6 +83,10 @@ JSON_FIELD_NAME_PARAM = EnumConstantOperationParam(
     ["a", "b", "c", "z"], add_quotes=True, add_invalid_value=False
 )
 
+JSON_PATH_PARAM = EnumConstantOperationParam(
+    ["{1}", "{1,1}", "{b,b2}"], add_quotes=True, add_invalid_value=False
+)
+
 HASH_ALGORITHM_PARAM = EnumConstantOperationParam(
     ["md5", "sha1", "sha224", "sha256", "sha384", "sha512"], add_quotes=True
 )

@@ -10,6 +10,7 @@
 from materialize.output_consistency.input_data.params.enum_constant_operation_params import (
     JSON_FIELD_INDEX_PARAM,
     JSON_FIELD_NAME_PARAM,
+    JSON_PATH_PARAM,
 )
 from materialize.output_consistency.input_data.params.jsonb_operation_param import (
     JsonbOperationParam,
@@ -62,6 +63,21 @@ JSONB_OPERATION_TYPES.append(
     DbOperation(
         "$ ->> $",
         [JsonbOperationParam(), JSON_FIELD_INDEX_PARAM],
+        TextReturnTypeSpec(),
+        tags={TAG_JSONB_TO_TEXT},
+    )
+)
+JSONB_OPERATION_TYPES.append(
+    DbOperation(
+        "$ #> $",
+        [JsonbOperationParam(), JSON_PATH_PARAM],
+        JsonbReturnTypeSpec(),
+    )
+)
+JSONB_OPERATION_TYPES.append(
+    DbOperation(
+        "$ #>> $",
+        [JsonbOperationParam(), JSON_PATH_PARAM],
         TextReturnTypeSpec(),
         tags={TAG_JSONB_TO_TEXT},
     )
