@@ -47,7 +47,7 @@ from materialize import MZ_ROOT, mzbuild, spawn, ui
 from materialize.mzcompose import loader
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.minio import minio_blob_uri
-from materialize.ui import UIError
+from materialize.ui import CommandFailureCausedUIError, UIError
 
 
 class UnknownCompositionError(UIError):
@@ -87,6 +87,23 @@ class Composition:
     class TestResult:
         duration: float
         error: str | None
+        error_details: str | None
+        error_location: str | None
+
+        def is_failure(self) -> bool:
+            return self.error is not None
+
+        def get_error_file(self) -> str | None:
+            if self.error_location is None:
+                return None
+
+            file_name = self.error_location
+            file_name = re.sub(r":\d+", "", file_name)
+
+            if "/" in file_name:
+                file_name = file_name[file_name.rindex("/") + 1 :]
+
+            return file_name
 
     def __init__(
         self,
@@ -310,8 +327,10 @@ class Composition:
                     time.sleep(1)
                     continue
                 else:
-                    raise UIError(
-                        f"running docker compose failed (exit status {e.returncode})"
+                    raise CommandFailureCausedUIError(
+                        f"running docker compose failed (exit status {e.returncode})",
+                        cmd=e.cmd,
+                        stderr=e.stderr if capture_stderr == True else None,
                     )
             break
 
@@ -472,6 +491,8 @@ class Composition:
             raise UIError(f"test case {name} executed twice")
         ui.header(f"Running test case {name}")
         error = None
+        error_details = None
+        error_location = None
         start_time = time.time()
         try:
             yield
@@ -480,10 +501,30 @@ class Composition:
             error = f"{str(type(e))}: {e}"
             ui.header(f"mzcompose: test case {name} failed: {error}")
 
+            if isinstance(e, CommandFailureCausedUIError):
+                error_details = e.stderr
+                error_location = self.try_determine_error_location_from_cmd(e.cmd)
+
+                if error_location is not None:
+                    error = f"Executing {error_location} failed"
+
             if not isinstance(e, UIError):
                 traceback.print_exc()
-        elapsed = time.time() - start_time
-        self.test_results[name] = Composition.TestResult(elapsed, error)
+
+        duration = time.time() - start_time
+        self.test_results[name] = Composition.TestResult(
+            duration, error, error_details, error_location
+        )
+
+    def try_determine_error_location_from_cmd(self, cmd: list[str]) -> str | None:
+        root_path_as_string = f"{MZ_ROOT}/"
+        for cmd_part in cmd:
+            if type(cmd_part) == str and cmd_part.startswith("--source="):
+                return cmd_part.removeprefix("--source=").replace(
+                    root_path_as_string, ""
+                )
+
+        return None
 
     def sql_connection(
         self,
@@ -1045,12 +1086,12 @@ class Composition:
             ]
 
         if persistent:
-            self.exec(service, *args, stdin=input)
+            self.exec(service, *args, stdin=input, capture_stderr=True)
         else:
             assert (
                 mz_service is None
             ), "testdrive(mz_service = ...) can only be used with persistent Testdrive containers."
-            self.run(service, *args, stdin=input)
+            self.run(service, *args, stdin=input, capture_stderr=True)
 
     def enable_minio_versioning(self) -> None:
         self.up("minio")
