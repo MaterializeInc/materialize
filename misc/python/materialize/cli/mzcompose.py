@@ -617,35 +617,54 @@ To see the available workflows, run:
             with composition.test_case(f"workflow-{args.workflow}"):
                 composition.workflow(args.workflow, *args.unknown_subargs[1:])
 
-            buildkite_step_name = os.getenv("BUILDKITE_LABEL")
-            test_suite_name = buildkite_step_name or composition.name
-            test_class_name = test_suite_name
-
-            # Upload test report to Buildkite Test Analytics.
-            junit_suite = junit_xml.TestSuite(test_suite_name)
-
-            for test_case_key, result in composition.test_results.items():
-                test_case_name = result.get_error_file() or test_case_key
-                test_case = junit_xml.TestCase(
-                    test_case_name,
-                    test_class_name,
-                    result.duration,
-                )
-                if result.is_failure():
-                    assert result.error is not None
-                    test_case.add_error_info(
-                        message=result.error, output=result.error_details
-                    )
-                junit_suite.test_cases.append(test_case)
-            junit_report = ci_util.junit_report_filename("mzcompose")
-            with junit_report.open("w") as f:
-                junit_xml.to_xml_report_file(f, [junit_suite])
-            ci_util.upload_junit_report("mzcompose", junit_report)
+            junit_suite = self.generate_junit_suite(composition)
+            junit_xml_file_path = self.write_junit_report_to_file(junit_suite)
+            ci_util.upload_junit_report("mzcompose", junit_xml_file_path)
 
             if any(
                 result.error is not None for result in composition.test_results.values()
             ):
                 raise UIError("at least one test case failed")
+
+    def generate_junit_suite(self, composition: Composition) -> junit_xml.TestSuite:
+        buildkite_step_name = os.getenv("BUILDKITE_LABEL")
+        test_suite_name = buildkite_step_name or composition.name
+        test_class_name = test_suite_name
+
+        # Upload test report to Buildkite Test Analytics.
+        junit_suite = junit_xml.TestSuite(test_suite_name)
+
+        for test_case_key, result in composition.test_results.items():
+            self.append_to_junit_suite(
+                junit_suite, test_class_name, test_case_key, result
+            )
+
+        return junit_suite
+
+    def append_to_junit_suite(
+        self,
+        junit_suite: junit_xml.TestSuite,
+        test_class_name: str,
+        test_case_key: str,
+        result: Composition.TestResult,
+    ):
+        test_case_name = result.get_error_file() or test_case_key
+        test_case = junit_xml.TestCase(
+            test_case_name,
+            test_class_name,
+            result.duration,
+        )
+        if result.is_failure():
+            assert result.error is not None
+            test_case.add_error_info(message=result.error, output=result.error_details)
+        junit_suite.test_cases.append(test_case)
+
+    def write_junit_report_to_file(self, junit_suite: junit_xml.TestSuite) -> Path:
+        junit_report = ci_util.junit_report_filename("mzcompose")
+        with junit_report.open("w") as f:
+            junit_xml.to_xml_report_file(f, [junit_suite])
+
+        return junit_report
 
 
 BuildCommand = DockerComposeCommand("build", "build or rebuild services")
