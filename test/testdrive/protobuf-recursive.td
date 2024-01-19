@@ -33,6 +33,8 @@ $ protobuf-compile-descriptors inputs=recursive.proto output=recursive.pb set-va
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+$ kafka-create-topic topic=recursive partitions=1
+
 ! CREATE SOURCE recursive
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-recursive-${testdrive.seed}')

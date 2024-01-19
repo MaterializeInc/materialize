@@ -39,6 +39,9 @@ use mz_repr::Timestamp;
 use mz_sql::session::user::{INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SUPPORT_USER, SYSTEM_USER};
 use mz_storage_types::sources::Timeline;
 use postgres::Row;
+use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
+use rdkafka::ClientConfig;
+use rdkafka_sys::RDKafkaErrorCode;
 use regex::Regex;
 use serde_json::json;
 use timely::order::PartialOrder;
@@ -101,6 +104,9 @@ impl MockHttpServer {
 async fn test_no_block() {
     // We manually time out the test because it's better than relying on CI to time out, because
     // an actual failure (as opposed to a CI timeout) causes `services.log` to be uploaded.
+
+    // Allow the use of banned rdkafka methods, because we are just in tests.
+    #[allow(clippy::disallowed_methods)]
     let test_case = async move {
         println!("test_no_block: starting server");
         let server = test_util::TestHarness::default().start().await;
@@ -124,6 +130,21 @@ async fn test_no_block() {
                 .await;
             println!("test_no_block: in thread; create CSR conn done");
             let _ = result.unwrap();
+
+            let admin: AdminClient<_> = ClientConfig::new()
+                .set("bootstrap.servers", &*KAFKA_ADDRS)
+                .create()
+                .expect("Admin client creation failed");
+
+            let new_topic = NewTopic::new("foo", 1, TopicReplication::Fixed(1));
+            let topic_results = admin
+                .create_topics([&new_topic], &AdminOptions::new())
+                .await
+                .expect("topic creation failed");
+            match topic_results[0] {
+                Ok(_) | Err((_, RDKafkaErrorCode::TopicAlreadyExists)) => {}
+                Err((ref err, _)) => panic!("failed to ensure topic: {err}"),
+            }
 
             let result = client
                     .batch_execute(&format!(
@@ -208,8 +229,26 @@ async fn test_drop_connection_race() {
         ))
         .await
         .unwrap();
+
+    // Allow the use of banned rdkafka methods, because we are just in tests.
+    #[allow(clippy::disallowed_methods)]
     let source_task = task::spawn(|| "source_client", async move {
         info!("test_drop_connection_race: in task; creating connection and source");
+        let admin: AdminClient<_> = ClientConfig::new()
+            .set("bootstrap.servers", &*KAFKA_ADDRS)
+            .create()
+            .expect("Admin client creation failed");
+
+        let new_topic = NewTopic::new("foo", 1, TopicReplication::Fixed(1));
+        let topic_results = admin
+            .create_topics([&new_topic], &AdminOptions::new())
+            .await
+            .expect("topic creation failed");
+        match topic_results[0] {
+            Ok(_) | Err((_, RDKafkaErrorCode::TopicAlreadyExists)) => {}
+            Err((ref err, _)) => panic!("failed to ensure topic: {err}"),
+        }
+
         let result = client
             .batch_execute(
                 "CREATE SOURCE foo \

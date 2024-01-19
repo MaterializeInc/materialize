@@ -4260,6 +4260,7 @@ dependencies = [
  "prometheus",
  "proptest",
  "rand",
+ "rdkafka",
  "rdkafka-sys",
  "regex",
  "reqwest",

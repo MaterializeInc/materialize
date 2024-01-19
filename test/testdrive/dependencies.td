@@ -12,6 +12,16 @@
 
 $ set-regex match=cluster1|quickstart replacement=<CLUSTER_NAME>
 
+$ kafka-create-topic topic=data partitions=1
+
+$ kafka-create-topic topic=data-blah partitions=1
+
+$ kafka-create-topic topic=v partitions=1
+
+$ kafka-create-topic topic=v2 partitions=1
+
+$ kafka-create-topic topic=v3 partitions=1
+
 $ set schema={
     "name": "row",
     "type": "record",

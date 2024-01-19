@@ -589,7 +589,18 @@ async fn purify_create_source(
                 extracted_options.start_offset,
                 extracted_options.start_timestamp,
             ) {
-                (None, None) => (),
+                (None, None) => {
+                    // Validate that the topic at least exists.
+                    kafka_util::ensure_topic_exists(
+                        Arc::clone(&consumer),
+                        &topic,
+                        storage_configuration
+                            .parameters
+                            .kafka_timeout_config
+                            .fetch_metadata_timeout,
+                    )
+                    .await?;
+                }
                 (Some(_), Some(_)) => {
                     sql_bail!("cannot specify START TIMESTAMP and START OFFSET at same time")
                 }

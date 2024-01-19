@@ -408,6 +408,8 @@ $ kafka-create-topic topic=new-dbz-data partitions=1
 # 2 3
 # -1 7
 
+$ kafka-create-topic topic=ignored partitions=1
+
 ! CREATE SOURCE recursive
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-ignored-${testdrive.seed}')
