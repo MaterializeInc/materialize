@@ -38,6 +38,7 @@ from semver.version import Version
 
 from materialize import MZ_ROOT, ci_util, mzbuild, spawn, ui
 from materialize.mzcompose.composition import Composition, UnknownCompositionError
+from materialize.mzcompose.test_result import TestResult
 from materialize.ui import UIError
 
 RECOMMENDED_MIN_MEM = 7 * 1024**3  # 7GiB
@@ -647,7 +648,7 @@ To see the available workflows, run:
         junit_suite: junit_xml.TestSuite,
         test_class_name: str,
         test_case_key: str,
-        result: Composition.TestResult,
+        result: TestResult,
     ):
         if result.is_successful():
             test_case_name = test_case_key

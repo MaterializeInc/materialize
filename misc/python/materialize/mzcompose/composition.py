@@ -33,7 +33,6 @@ import urllib.parse
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
 from inspect import Traceback, getframeinfo, getmembers, isfunction, stack
 from tempfile import TemporaryFile
 from typing import Any, TextIO, cast
@@ -47,6 +46,7 @@ from materialize import MZ_ROOT, mzbuild, spawn, ui
 from materialize.mzcompose import loader
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.minio import minio_blob_uri
+from materialize.mzcompose.test_result import TestFailureDetails, TestResult
 from materialize.ui import CommandFailureCausedUIError, UIError
 
 
@@ -83,32 +83,6 @@ class WorkflowArgumentParser(argparse.ArgumentParser):
 class Composition:
     """A loaded mzcompose.py file."""
 
-    @dataclass
-    class TestResult:
-        duration: float
-        errors: list[Composition.TestFailureDetails]
-
-        def is_successful(self) -> bool:
-            return len(self.errors) == 0
-
-    @dataclass
-    class TestFailureDetails:
-        message: str
-        details: str | None
-        location: str | None
-
-        def get_error_file(self) -> str | None:
-            if self.location is None:
-                return None
-
-            file_name = self.location
-            file_name = re.sub(r":\d+", "", file_name)
-
-            if "/" in file_name:
-                file_name = file_name[file_name.rindex("/") + 1 :]
-
-            return file_name
-
     def __init__(
         self,
         repo: mzbuild.Repository,
@@ -125,7 +99,7 @@ class Composition:
         self.project_name = project_name
         self.silent = silent
         self.workflows: dict[str, Callable[..., None]] = {}
-        self.test_results: OrderedDict[str, Composition.TestResult] = OrderedDict()
+        self.test_results: OrderedDict[str, TestResult] = OrderedDict()
         self.files = {}
 
         if name in self.repo.compositions:
@@ -520,14 +494,10 @@ class Composition:
             if not isinstance(e, UIError):
                 traceback.print_exc()
 
-            errors = [
-                Composition.TestFailureDetails(
-                    error_message, error_details, error_location
-                )
-            ]
+            errors = [TestFailureDetails(error_message, error_details, error_location)]
 
         duration = time.time() - start_time
-        self.test_results[name] = Composition.TestResult(duration, errors)
+        self.test_results[name] = TestResult(duration, errors)
 
     def try_determine_error_location_from_cmd(self, cmd: list[str]) -> str | None:
         root_path_as_string = f"{MZ_ROOT}/"
