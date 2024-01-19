@@ -42,6 +42,9 @@ use mz_sql_parser::ast::display::AstDisplay;
 
 use postgres_array::Array;
 use rand::RngCore;
+use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
+use rdkafka::ClientConfig;
+use rdkafka_sys::RDKafkaErrorCode;
 use reqwest::blocking::Client;
 use reqwest::{header::CONTENT_TYPE, Url};
 use serde::{Deserialize, Serialize};
@@ -64,15 +67,21 @@ fn test_persistence() {
         let server = harness.clone().start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
 
-        let new_topic = NewTopic::new("foo", 1, TopicReplication::Fixed(1));
-        let topic_results = admin
-            .create_topics([&new_topic], &AdminOptions::new())
-            .await
-            .expect("topic creation failed");
-        match topic_results[0] {
-            Ok(_) | Err((_, RDKafkaErrorCode::TopicAlreadyExists)) => {}
-            Err((ref err, _)) => panic!("failed to ensure topic: {err}"),
-        }
+        server.runtime().block_on(async {
+            let admin: AdminClient<_> = ClientConfig::new()
+                .set("bootstrap.servers", &*KAFKA_ADDRS)
+                .create()
+                .expect("Admin client creation failed");
+            let new_topic = NewTopic::new("foo", 1, TopicReplication::Fixed(1));
+            let topic_results = admin
+                .create_topics([&new_topic], &AdminOptions::new())
+                .await
+                .expect("topic creation failed");
+            match topic_results[0] {
+                Ok(_) | Err((_, RDKafkaErrorCode::TopicAlreadyExists)) => {}
+                Err((ref err, _)) => panic!("failed to ensure topic: {err}"),
+            }
+        });
 
         client
             .batch_execute(&format!(

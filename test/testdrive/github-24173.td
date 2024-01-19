@@ -11,9 +11,6 @@
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1) FOR ALL TABLES;
 
-# Pre-create the topic so we can create the source based on it
-$ kafka-create-topic topic=progress-fixed partitions=1
-
 > CREATE CONNECTION kafka_fixed TO KAFKA (
     BROKER '${testdrive.kafka-addr}',
     PROGRESS TOPIC 'testdrive-progress-fixed-${testdrive.seed}',
@@ -30,6 +27,9 @@ $ kafka-create-topic topic=progress-fixed partitions=1
   INTO KAFKA CONNECTION kafka_fixed (TOPIC 'testdrive-supplier-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+
+# Wait for the sink to create the topic
+$ kafka-wait-topic topic=testdrive-supplier-${testdrive.seed} partitions=1
 
 > CREATE SOURCE progress_check
   IN CLUSTER ${arg.single-replica-cluster}
