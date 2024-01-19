@@ -477,8 +477,10 @@ class Composition:
         start_time = time.time()
         try:
             yield
+            end_time = time.time()
             ui.header(f"mzcompose: test case {name} succeeded")
         except Exception as e:
+            end_time = time.time()
             error_message = f"{str(type(e))}: {e}"
             error_details = None
             error_location = None
@@ -496,7 +498,7 @@ class Composition:
 
             errors = [TestFailureDetails(error_message, error_details, error_location)]
 
-        duration = time.time() - start_time
+        duration = end_time - start_time
         self.test_results[name] = TestResult(duration, errors)
 
     def try_determine_error_location_from_cmd(self, cmd: list[str]) -> str | None:
