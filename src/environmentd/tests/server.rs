@@ -51,6 +51,8 @@ use tracing::info;
 use tungstenite::error::ProtocolError;
 use tungstenite::{Error, Message};
 
+// Allow the use of banned rdkafka methods, because we are just in tests.
+#[allow(clippy::disallowed_methods)]
 #[mz_ore::test]
 fn test_persistence() {
     let data_dir = tempfile::tempdir().unwrap();
@@ -61,6 +63,17 @@ fn test_persistence() {
     {
         let server = harness.clone().start_blocking();
         let mut client = server.connect(postgres::NoTls).unwrap();
+
+        let new_topic = NewTopic::new("foo", 1, TopicReplication::Fixed(1));
+        let topic_results = admin
+            .create_topics([&new_topic], &AdminOptions::new())
+            .await
+            .expect("topic creation failed");
+        match topic_results[0] {
+            Ok(_) | Err((_, RDKafkaErrorCode::TopicAlreadyExists)) => {}
+            Err((ref err, _)) => panic!("failed to ensure topic: {err}"),
+        }
+
         client
             .batch_execute(&format!(
                 "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}', SECURITY PROTOCOL PLAINTEXT)",
@@ -69,7 +82,7 @@ fn test_persistence() {
             .unwrap();
         client
             .batch_execute(
-                "CREATE SOURCE src FROM KAFKA CONNECTION kafka_conn (TOPIC 'ignored') FORMAT BYTES",
+                "CREATE SOURCE src FROM KAFKA CONNECTION kafka_conn (TOPIC 'foo') FORMAT BYTES",
             )
             .unwrap();
         client
