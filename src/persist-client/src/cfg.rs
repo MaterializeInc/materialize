@@ -28,8 +28,9 @@ use serde::{Deserialize, Serialize};
 use crate::dyn_cfg::{Config, ConfigSet, ConfigType, ConfigUpdates};
 use crate::internal::compact::STREAMING_COMPACTION_ENABLED;
 use crate::internal::machine::{
-    NEXT_LISTEN_BATCH_RETRYER_CLAMP, NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF,
-    NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER,
+    DOWNGRADE_HELD_SINCE, NEXT_LISTEN_BATCH_RETRYER_CLAMP,
+    NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF, NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER,
+    REGISTER_HELD_SINCE,
 };
 use crate::internal::state::ROLLUP_THRESHOLD;
 use crate::operators::{
@@ -256,6 +257,8 @@ impl PersistConfig {
         cfg.hostname = "tests".into();
         cfg.set_config(&STREAMING_COMPACTION_ENABLED, true);
         cfg.set_config(&STREAMING_SNAPSHOT_AND_FETCH_ENABLED, true);
+        cfg.set_config(&REGISTER_HELD_SINCE, true);
+        cfg.set_config(&DOWNGRADE_HELD_SINCE, true);
         cfg
     }
 }

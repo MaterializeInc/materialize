@@ -884,8 +884,9 @@ where
     fn held_since(&self) -> Antichain<T> {
         // To avoid having leases push the since around before the critical handle's registered,
         // always hold the since back to the initial value.
-        if self.critical_readers.is_empty() {
-            return Antichain::from_elem(T::minimum());
+        let initial_since = Antichain::from_elem(T::minimum());
+        if self.critical_readers.is_empty() && self.trace.since() == &initial_since {
+            return initial_since;
         }
 
         let mut since = Antichain::new();
@@ -1881,27 +1882,19 @@ pub(crate) mod tests {
             ))
         );
 
-        let reader = LeasedReaderId::new();
+        let reader = CriticalReaderId::new();
         // Advance the since to 2.
-        let _ = state.collections.register_leased_reader(
-            "",
-            &reader,
-            "",
-            SeqNo::minimum(),
-            Duration::from_secs(10),
-            now(),
-            false,
-        );
+        let _ = state
+            .collections
+            .register_critical_reader::<u64>("", &reader, "", true);
         assert_eq!(
-            state.collections.downgrade_since(
+            state.collections.compare_and_downgrade_since(
                 &reader,
-                SeqNo::minimum(),
-                None,
-                &Antichain::from_elem(2),
-                now(),
-                false,
+                &0u64,
+                (&1, &Antichain::from_elem(2)),
+                true,
             ),
-            Continue(Since(Antichain::from_elem(2)))
+            Continue(Ok(Since(Antichain::from_elem(2))))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         // Cannot take a snapshot with as_of < shard_since.

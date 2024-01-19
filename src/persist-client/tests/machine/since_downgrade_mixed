@@ -15,14 +15,34 @@ shard-desc
 ----
 since=[0] upper=[0]
 
-# A newly registered critical reader gets that since and downgrades it.
-register-critical-reader reader_id=c00000000-0000-0000-0000-000000000000
+# Until a critical handle is registered, the since stays at 0
+# regardless of how a leased reader behaves.
+
+# A newly registered reader gets that since.
+register-leased-reader reader_id=r00000000-0000-0000-0000-000000000000
 ----
 v2 [0]
 
+downgrade-since since=(2) reader_id=r00000000-0000-0000-0000-000000000000
+----
+v3 [2]
+
+expire-leased-reader reader_id=r00000000-0000-0000-0000-000000000000
+----
+v4 ok
+
+shard-desc
+----
+since=[0] upper=[0]
+
+# A newly registered critical reader gets that since and downgrades it.
+register-critical-reader reader_id=c00000000-0000-0000-0000-000000000000
+----
+v5 [0]
+
 compare-and-downgrade-since expect_opaque=0 opaque=0 since=(2) reader_id=c00000000-0000-0000-0000-000000000000
 ----
-v3 0 [2]
+v6 0 [2]
 
 shard-desc
 ----
@@ -31,13 +51,13 @@ since=[2] upper=[0]
 # A newly registered leased reader gets the current since
 register-leased-reader reader_id=r11111111-1111-1111-1111-111111111111
 ----
-v4 [2]
+v7 [2]
 
 # Shard since doesn't change until the meet (min) of all reader sinces changes,
 # regardless of leased or critical.
 downgrade-since since=(3) reader_id=r11111111-1111-1111-1111-111111111111
 ----
-v5 [3]
+v8 [3]
 
 shard-desc
 ----
@@ -45,7 +65,7 @@ since=[2] upper=[0]
 
 compare-and-downgrade-since expect_opaque=0 opaque=0 since=(5) reader_id=c00000000-0000-0000-0000-000000000000
 ----
-v6 0 [5]
+v9 0 [5]
 
 shard-desc
 ----
@@ -53,8 +73,26 @@ since=[3] upper=[0]
 
 downgrade-since since=(10) reader_id=r11111111-1111-1111-1111-111111111111
 ----
-v7 [10]
+v10 [10]
 
 shard-desc
 ----
 since=[5] upper=[0]
+
+# If the critical handle expires, we still hold the since back for the live reader.
+expire-critical-reader reader_id=c00000000-0000-0000-0000-000000000000
+----
+v11 ok
+
+shard-desc
+----
+since=[10] upper=[0]
+
+# When the last reader expires, we drive the since to the empty antichain
+expire-leased-reader reader_id=r11111111-1111-1111-1111-111111111111
+----
+v12 ok
+
+shard-desc
+----
+since=[] upper=[0]
