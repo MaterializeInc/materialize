@@ -1554,11 +1554,19 @@ pub(crate) mod tests {
             (
                 any::<SeqNo>(),
                 any::<Option<T>>(),
+                any::<Option<CriticalReaderId>>(),
                 any::<u64>(),
                 any::<u64>(),
                 any::<HandleDebugState>(),
             ),
-            |(seqno, since, last_heartbeat_timestamp_ms, mut lease_duration_ms, debug)| {
+            |(
+                seqno,
+                since,
+                critical_id,
+                last_heartbeat_timestamp_ms,
+                mut lease_duration_ms,
+                debug,
+            )| {
                 // lease_duration_ms of 0 means this state was written by an old
                 // version of code, which means we'll migrate it in the decode
                 // path. Avoid.
@@ -1568,7 +1576,7 @@ pub(crate) mod tests {
                 LeasedReaderState {
                     seqno,
                     since: since.map_or_else(Antichain::new, Antichain::from_elem),
-                    critical_id: None,
+                    critical_id,
                     last_heartbeat_timestamp_ms,
                     lease_duration_ms,
                     debug,
