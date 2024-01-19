@@ -393,11 +393,13 @@ mod offset_opt {
         type ReadItem<'a> = Wrapper<usize>;
 
         fn copy(&mut self, item: Self::ReadItem<'_>) {
-            #[allow(clippy::if_same_then_else)]
             if !self.spilled.is_empty() {
                 self.spilled.push(*item);
-            } else if !self.strided.push(*item) {
-                self.spilled.push(*item);
+            } else {
+                let inserted = self.strided.push(*item);
+                if !inserted {
+                    self.spilled.push(*item);
+                }
             }
         }
 
