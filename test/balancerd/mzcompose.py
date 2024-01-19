@@ -24,14 +24,16 @@ from materialize.mzcompose.services.test_certs import TestCerts
 TENANT_ID = str(uuid.uuid4())
 ADMIN_USER = "u1"
 OTHER_USER = "u2"
+OTHER_USER_CLIENT = str(uuid.uuid4())
+OTHER_USER_PASSWORD = str(uuid.uuid4())
 USERS = {
     ADMIN_USER: {
         "client": str(uuid.uuid4()),
         "password": str(uuid.uuid4()),
     },
     OTHER_USER: {
-        "client": str(uuid.uuid4()),
-        "password": str(uuid.uuid4()),
+        "client": OTHER_USER_CLIENT,
+        "password": OTHER_USER_PASSWORD,
     },
 }
 ADMIN_ROLE = "admin"
@@ -50,7 +52,7 @@ SERVICES = [
             "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
             f"--frontegg-api-token-url={FRONTEGG_URL}",
             f"--frontegg-admin-role={ADMIN_ROLE}",
-            "--https-resolver-template='materialized:6881'",
+            "--https-resolver-template=materialized:6881",
             "--tls-key=/secrets/balancerd.key",
             "--tls-cert=/secrets/balancerd.crt",
         ],
@@ -113,9 +115,28 @@ def workflow_default(c: Composition) -> None:
             c.workflow(name)
 
 
+def workflow_http(c: Composition) -> None:
+    """Test http endpoint"""
+    c.up("balancerd", "frontegg-mock", "materialized")
+    result = c.exec(
+        "materialized",
+        "curl",
+        "https://balancerd:6876/api/sql",
+        "-k",
+        "-s",
+        "--header",
+        "Content-Type: application/json",
+        "--user",
+        f"{OTHER_USER}:mzp_{OTHER_USER_CLIENT}{OTHER_USER_PASSWORD}",
+        "--data",
+        '{"query": "SELECT 123"}',
+        capture=True,
+    )
+    assert json.loads(result.stdout)["results"][0]["rows"][0][0] == "123"
+
+
 def workflow_wide_result(c: Composition) -> None:
     """Test passthrough of wide rows"""
-    # Start balancerd without Materialize
     c.up("balancerd", "frontegg-mock", "materialized")
 
     cursor = sql_cursor(c)
