@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 
@@ -26,16 +25,15 @@ class TestResult:
 class TestFailureDetails:
     message: str
     details: str | None
+    # depending on the check, this may either be a file name or a path
     location: str | None
+    line_number: int | None
 
-    def get_error_file(self) -> str | None:
+    def location_as_file_name(self) -> str | None:
         if self.location is None:
             return None
 
-        file_name = self.location
-        file_name = re.sub(r":\d+", "", file_name)
+        if "/" in self.location:
+            return self.location[self.location.rindex("/") + 1 :]
 
-        if "/" in file_name:
-            file_name = file_name[file_name.rindex("/") + 1 :]
-
-        return file_name
+        return self.location

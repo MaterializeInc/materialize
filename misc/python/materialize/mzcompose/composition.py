@@ -482,24 +482,69 @@ class Composition:
         except Exception as e:
             end_time = time.time()
             error_message = f"{str(type(e))}: {e}"
-            error_details = None
-            error_location = None
             ui.header(f"mzcompose: test case {name} failed: {error_message}")
+            errors = [
+                TestFailureDetails(
+                    error_message, details=None, location=None, line_number=None
+                )
+            ]
 
             if isinstance(e, CommandFailureCausedUIError):
-                error_details = e.stderr
-                error_location = self.try_determine_error_location_from_cmd(e.cmd)
-
-                if error_location is not None:
-                    error_message = f"Executing {error_location} failed"
+                try:
+                    extracted_errors = self.try_determine_errors_from_cmd_execution(e)
+                except:
+                    extracted_errors = []
+                errors = extracted_errors if len(extracted_errors) > 0 else errors
 
             if not isinstance(e, UIError):
                 traceback.print_exc()
 
-            errors = [TestFailureDetails(error_message, error_details, error_location)]
-
         duration = end_time - start_time
         self.test_results[name] = TestResult(duration, errors)
+
+    def try_determine_errors_from_cmd_execution(
+        self, e: CommandFailureCausedUIError
+    ) -> list[TestFailureDetails]:
+        error_output = e.stderr
+
+        if error_output is None or "+++ !!! Error Report" not in error_output:
+            return []
+
+        error_output = error_output[: error_output.index("+++ !!! Error Report") - 1]
+        error_chunks = error_output.split("^^^ +++")
+
+        collected_errors = []
+        for chunk in error_chunks:
+            chunk = chunk.strip()
+            if len(chunk) == 0:
+                continue
+
+            match = re.search(r"([^.]+\.td):(\d+):\d+:", chunk)
+            if match is not None:
+                # for .td files like Postgres CDC, file_path will just contain the file name
+                file_path = match.group(1)
+                line_number = int(match.group(2))
+            else:
+                # for .py files like platform checks, file_path will be a path
+                file_path = self.try_determine_error_location_from_cmd(e.cmd)
+                if file_path is None or ":" not in file_path:
+                    line_number = None
+                else:
+                    parts = file_path.split(":")
+                    file_path = parts[0]
+                    line_number = int(parts[1])
+
+            message = f"Executing {file_path} failed!"
+            collected_errors.append(
+                TestFailureDetails(
+                    message,
+                    details=chunk,
+                    location=f"{file_path}",
+                    line_number=line_number,
+                )
+            )
+
+        return collected_errors
 
     def try_determine_error_location_from_cmd(self, cmd: list[str]) -> str | None:
         root_path_as_string = f"{MZ_ROOT}/"
