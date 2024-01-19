@@ -2009,23 +2009,17 @@ impl Coordinator {
         let root_dispatch = tracing::dispatcher::get_default(|d| d.clone());
 
         let pipeline_result = match stmt {
-            plan::ExplaineeStatement::Select {
-                raw_plan,
-                row_set_finishing,
-                desc,
-                when,
-                broken,
-            } => {
+            plan::ExplaineeStatement::Select { broken, plan, desc } => {
                 // Please see the doc comment on `explain_query_optimizer_pipeline` for more
                 // information regarding its subtleties.
                 self.explain_query_optimizer_pipeline(
-                    raw_plan,
+                    plan.source,
                     broken,
                     target_cluster,
                     ctx.session_mut(),
-                    row_set_finishing,
+                    plan.finishing,
                     desc,
-                    when,
+                    plan.when,
                     &config,
                     root_dispatch,
                 )

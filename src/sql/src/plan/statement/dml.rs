@@ -327,26 +327,28 @@ pub fn plan_explain_plan(
             crate::plan::Explainee::Index(item.id())
         }
         Explainee::Select(select, broken) => {
+            // The following code should align with `dml::plan_select`.
+            let when = query::plan_as_of(scx, select.as_of)?;
             let query::PlannedRootQuery {
-                expr: mut raw_plan,
+                mut expr,
                 desc,
-                finishing: row_set_finishing,
+                finishing,
                 scope: _,
             } = query::plan_root_query(scx, select.query, QueryLifetime::OneShot)?;
-            let when = query::plan_as_of(scx, select.as_of)?;
-            raw_plan.bind_parameters(params)?;
+            expr.bind_parameters(params)?;
+
+            let plan = SelectPlan {
+                source: expr,
+                when,
+                finishing,
+                copy_to: None,
+            };
 
             if broken {
                 scx.require_feature_flag(&vars::ENABLE_EXPLAIN_BROKEN)?;
             }
 
-            crate::plan::Explainee::Statement(ExplaineeStatement::Select {
-                raw_plan,
-                row_set_finishing,
-                when,
-                desc,
-                broken,
-            })
+            crate::plan::Explainee::Statement(ExplaineeStatement::Select { broken, plan, desc })
         }
         Explainee::CreateMaterializedView(mut stmt, broken) => {
             if stmt.if_exists != IfExistsBehavior::Skip {

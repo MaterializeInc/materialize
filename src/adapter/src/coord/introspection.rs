@@ -57,11 +57,11 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
             },
         ),
         Plan::ExplainPlan(ExplainPlanPlan {
-            explainee: Explainee::Statement(ExplaineeStatement::Select { raw_plan, .. }),
+            explainee: Explainee::Statement(ExplaineeStatement::Select { plan, .. }),
             ..
         }) => (
-            raw_plan.depends_on(),
-            raw_plan.could_run_expensive_function(),
+            plan.source.depends_on(),
+            plan.source.could_run_expensive_function(),
         ),
         Plan::ExplainTimestamp(ExplainTimestampPlan { raw_plan, .. }) => (
             raw_plan.depends_on(),
