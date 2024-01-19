@@ -330,7 +330,8 @@ class Composition:
                     raise CommandFailureCausedUIError(
                         f"running docker compose failed (exit status {e.returncode})",
                         cmd=e.cmd,
-                        stderr=e.stderr if capture_stderr == True else None,
+                        stdout=e.stdout,
+                        stderr=e.stderr,
                     )
             break
 
