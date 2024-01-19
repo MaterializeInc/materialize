@@ -33,6 +33,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
+use crate::dyn_cfg::Config;
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{parse_id, LazyPartStats};
 use crate::internal::gc::GcReq;
@@ -51,6 +52,19 @@ include!(concat!(
     env!("OUT_DIR"),
     "/mz_persist_client.internal.diff.rs"
 ));
+
+/// Determines how often to write rollups, assigning a maintenance task after
+/// `rollup_threshold` seqnos have passed since the last rollup.
+///
+/// Tuning note: in the absence of a long reader seqno hold, and with
+/// incremental GC, this threshold will determine about how many live diffs are
+/// held in Consensus. Lowering this value decreases the live diff count at the
+/// cost of more maintenance work + blob writes.
+pub(crate) const ROLLUP_THRESHOLD: Config<usize> = Config::new(
+    "persist_rollup_threshold",
+    128,
+    "The number of seqnos between rollups.",
+);
 
 /// A token to disambiguate state commands that could not otherwise be
 /// idempotent.

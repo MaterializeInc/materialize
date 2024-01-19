@@ -48,7 +48,7 @@ use crate::internal::state_diff::{
     ProtoStateFieldDiff, ProtoStateFieldDiffsWriter, StateDiff, StateFieldDiff, StateFieldValDiff,
 };
 use crate::internal::trace::Trace;
-use crate::read::LeasedReaderId;
+use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
 use crate::stats::PartStats;
 use crate::{PersistConfig, ShardId, WriterId};
 
@@ -1020,9 +1020,8 @@ impl<T: Timestamp + Codec64> RustType<ProtoLeasedReaderState> for LeasedReaderSt
         // based on the actual value in PersistConfig, but it's only here for a
         // short time and this is way easier.
         if lease_duration_ms == 0 {
-            lease_duration_ms =
-                u64::try_from(PersistConfig::DEFAULT_READ_LEASE_DURATION.as_millis())
-                    .expect("lease duration as millis should fit within u64");
+            lease_duration_ms = u64::try_from(READER_LEASE_DURATION.default().as_millis())
+                .expect("lease duration as millis should fit within u64");
         }
         // MIGRATION: If debug is empty, then the proto field was missing and we
         // need to fill in a default.
@@ -1426,7 +1425,7 @@ mod tests {
         // We fill in DEFAULT_READ_LEASE_DURATION for lease_duration_ms when we
         // migrate from unset.
         expected.lease_duration_ms =
-            u64::try_from(PersistConfig::DEFAULT_READ_LEASE_DURATION.as_millis()).unwrap();
+            u64::try_from(READER_LEASE_DURATION.default().as_millis()).unwrap();
         assert_eq!(<LeasedReaderState<u64>>::from_proto(old).unwrap(), expected);
     }
 

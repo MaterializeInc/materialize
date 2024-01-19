@@ -24,6 +24,47 @@ use crate::dyn_cfg::{Config, ConfigSet};
 use crate::internal::encoding::Schemas;
 use crate::ShardId;
 
+/// Percent of filtered data to opt in to correctness auditing.
+pub(crate) const STATS_AUDIT_PERCENT: Config<usize> = Config::new(
+    "persist_stats_audit_percent",
+    0,
+    "Percent of filtered data to opt in to correctness auditing (Materialize).",
+);
+
+/// Computes and stores statistics about each batch part.
+///
+/// These can be used at read time to entirely skip fetching a part based on its
+/// statistics. See [STATS_FILTER_ENABLED].
+pub(crate) const STATS_COLLECTION_ENABLED: Config<bool> = Config::new(
+    "persist_stats_collection_enabled",
+    true,
+    "\
+    Whether to calculate and record statistics about the data stored in \
+    persist to be used at read time, see persist_stats_filter_enabled \
+    (Materialize).",
+);
+
+/// Uses previously computed statistics about batch parts to entirely skip
+/// fetching them at read time.
+///
+/// See `STATS_COLLECTION_ENABLED`.
+pub const STATS_FILTER_ENABLED: Config<bool> = Config::new(
+    "persist_stats_filter_enabled",
+    true,
+    "\
+    Whether to use recorded statistics about the data stored in persist to \
+    filter at read time, see persist_stats_collection_enabled (Materialize).",
+);
+
+/// The budget (in bytes) of how many stats to write down per batch part. When
+/// the budget is exceeded, stats will be trimmed away according to a variety of
+/// heuristics.
+pub(crate) const STATS_BUDGET_BYTES: Config<usize> = Config::new(
+    "persist_stats_budget_bytes",
+    1024,
+    "The budget (in bytes) of how many stats to maintain per batch part.",
+);
+
 pub(crate) const STATS_UNTRIMMABLE_COLUMNS_EQUALS: Config<String> = Config::new(
     "persist_stats_untrimmable_columns_equals",
     concat!(

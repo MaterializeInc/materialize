@@ -56,8 +56,9 @@
 //!   and doesn't want to instantiate a catalog impl.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use tracing::error;
 
@@ -263,10 +264,14 @@ impl ConfigEntry {
 pub enum ConfigVal {
     /// A `bool` shared value.
     Bool(Arc<AtomicBool>),
+    /// A `u32` shared value.
+    U32(Arc<AtomicU32>),
     /// A `usize` shared value.
     Usize(Arc<AtomicU64>),
     /// A `String` shared value.
     String(Arc<RwLock<String>>),
+    /// A 'Duration' shared value.
+    Duration(Arc<RwLock<Duration>>),
 }
 
 impl ConfigUpdates {
@@ -312,10 +317,14 @@ impl ConfigUpdates {
                     continue;
                 }
             };
+            // TODO(cfg): Restructure this match so that it's harder to miss
+            // when adding a new `ConfigType`.
             match (&val, &config.val) {
                 (ConfigVal::Bool(src), ConfigVal::Bool(dst)) => copy::<bool>(src, dst),
+                (ConfigVal::U32(src), ConfigVal::U32(dst)) => copy::<u32>(src, dst),
                 (ConfigVal::Usize(src), ConfigVal::Usize(dst)) => copy::<usize>(src, dst),
                 (ConfigVal::String(src), ConfigVal::String(dst)) => copy::<String>(src, dst),
+                (ConfigVal::Duration(src), ConfigVal::Duration(dst)) => copy::<Duration>(src, dst),
                 (src, dst) => error!(
                     "config update {} type mismatch: {:?} vs {:?}",
                     name, src, dst
@@ -326,12 +335,12 @@ impl ConfigUpdates {
 }
 
 mod impls {
-    use std::sync::atomic::AtomicBool;
-    use std::sync::atomic::{AtomicU64, Ordering::SeqCst};
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::SeqCst};
     use std::sync::{Arc, RwLock};
+    use std::time::Duration;
 
     use mz_ore::cast::CastFrom;
-    use mz_proto::{RustType, TryFromProtoError};
+    use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
     use crate::dyn_cfg::{proto_config_val, Config, ConfigSet, ConfigType, ConfigVal};
 
@@ -348,6 +357,28 @@ mod impls {
         }
         fn to_val(val: &Self) -> ConfigVal {
             ConfigVal::Bool(Arc::new((*val).into()))
+        }
+        fn set(x: &Self::Shared, val: Self) {
+            x.store(val, SeqCst);
+        }
+        fn get(x: &Self::Shared) -> Self {
+            x.load(SeqCst)
+        }
+    }
+
+    impl ConfigType for u32 {
+        type Default = u32;
+        type Shared = AtomicU32;
+
+        fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>> {
+            let entry = vals.configs.get(config.name)?;
+            match entry.val() {
+                ConfigVal::U32(x) => Some(x),
+                x => panic!("expected u32 value got {:?}", x),
+            }
+        }
+        fn to_val(val: &Self) -> ConfigVal {
+            ConfigVal::U32(Arc::new((*val).into()))
         }
         fn set(x: &Self::Shared, val: Self) {
             x.store(val, SeqCst);
@@ -401,13 +432,37 @@ mod impls {
         }
     }
 
+    impl ConfigType for Duration {
+        type Default = Duration;
+        type Shared = RwLock<Duration>;
+
+        fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>> {
+            let entry = vals.configs.get(config.name)?;
+            match entry.val() {
+                ConfigVal::Duration(x) => Some(x),
+                x => panic!("expected Duration value got {:?}", x),
+            }
+        }
+        fn to_val(val: &Self) -> ConfigVal {
+            ConfigVal::Duration(Arc::new(RwLock::new(val.clone())))
+        }
+        fn set(x: &Self::Shared, val: Self) {
+            *x.write().expect("lock poisoned") = val;
+        }
+        fn get(x: &Self::Shared) -> Self {
+            x.read().expect("lock poisoned").clone()
+        }
+    }
+
     impl RustType<Option<proto_config_val::Val>> for ConfigVal {
         fn into_proto(&self) -> Option<proto_config_val::Val> {
             use crate::dyn_cfg::proto_config_val::Val;
             let val = match self {
                 ConfigVal::Bool(x) => Val::Bool(bool::get(x)),
+                ConfigVal::U32(x) => Val::U32(u32::get(x)),
                 ConfigVal::Usize(x) => Val::Usize(u64::cast_from(usize::get(x))),
                 ConfigVal::String(x) => Val::String(String::get(x)),
+                ConfigVal::Duration(x) => Val::Duration(Duration::get(x).into_proto()),
             };
             Some(val)
         }
@@ -415,9 +470,13 @@ mod impls {
         fn from_proto(proto: Option<proto_config_val::Val>) -> Result<Self, TryFromProtoError> {
             let val = match proto {
                 Some(proto_config_val::Val::Bool(x)) => ConfigVal::Bool(Arc::new(x.into())),
+                Some(proto_config_val::Val::U32(x)) => ConfigVal::U32(Arc::new(x.into())),
                 Some(proto_config_val::Val::Usize(x)) => ConfigVal::Usize(Arc::new(x.into())),
                 Some(proto_config_val::Val::String(x)) => {
                     ConfigVal::String(Arc::new(x.to_owned().into()))
+                }
+                Some(proto_config_val::Val::Duration(x)) => {
+                    ConfigVal::Duration(Arc::new(RwLock::new(x.to_owned().into_rust()?)))
                 }
                 None => {
                     return Err(TryFromProtoError::unknown_enum_variant(

@@ -39,6 +39,7 @@ use timely::PartialOrder;
 use tracing::{debug_span, error, instrument, trace_span, warn, Instrument};
 
 use crate::async_runtime::IsolatedRuntime;
+use crate::cfg::MiB;
 use crate::dyn_cfg::Config;
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{LazyPartStats, Schemas};
@@ -46,7 +47,7 @@ use crate::internal::machine::retry_external;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
 use crate::internal::state::{HollowBatch, HollowBatchPart};
-use crate::stats::{untrimmable_columns, PartStats};
+use crate::stats::{untrimmable_columns, PartStats, STATS_BUDGET_BYTES, STATS_COLLECTION_ENABLED};
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
 
@@ -230,20 +231,32 @@ pub(crate) const BATCH_DELETE_ENABLED: Config<bool> = Config::new(
     "Whether to actually delete blobs when batch delete is called (Materialize).",
 );
 
+/// A target maximum size of blob payloads in bytes. If a logical "batch" is
+/// bigger than this, it will be broken up into smaller, independent pieces.
+/// This is best-effort, not a guarantee (though as of 2022-06-09, we happen to
+/// always respect it). This target size doesn't apply for an individual update
+/// that exceeds it in size, but that scenario is almost certainly a mis-use of
+/// the system.
+pub(crate) const BLOB_TARGET_SIZE: Config<usize> = Config::new(
+    "persist_blob_target_size",
+    128 * MiB,
+    "A target maximum size of persist blob payloads in bytes (Materialize).",
+);
+
 impl BatchBuilderConfig {
     /// Initialize a batch builder config based on a snapshot of the Persist config.
     pub fn new(value: &PersistConfig, _writer_id: &WriterId) -> Self {
         let writer_key = WriterKey::for_version(&value.build_version);
         BatchBuilderConfig {
             writer_key,
-            blob_target_size: value.dynamic.blob_target_size(),
-            batch_delete_enabled: BATCH_DELETE_ENABLED.get(&value.configs),
+            blob_target_size: BLOB_TARGET_SIZE.get(value),
+            batch_delete_enabled: BATCH_DELETE_ENABLED.get(value),
             batch_builder_max_outstanding_parts: value
                 .dynamic
                 .batch_builder_max_outstanding_parts(),
-            stats_collection_enabled: value.dynamic.stats_collection_enabled(),
-            stats_budget: value.dynamic.stats_budget_bytes(),
-            stats_untrimmable_columns: Arc::new(untrimmable_columns(&value.configs)),
+            stats_collection_enabled: STATS_COLLECTION_ENABLED.get(value),
+            stats_budget: STATS_BUDGET_BYTES.get(value),
+            stats_untrimmable_columns: Arc::new(untrimmable_columns(value)),
         }
     }
 }
@@ -958,7 +971,7 @@ mod tests {
         // Set blob_target_size to 0 so that each row gets forced into its own
         // batch. Set max_outstanding to a small value that's >1 to test various
         // edge cases below.
-        cache.cfg.dynamic.set_blob_target_size(0);
+        cache.cfg.set_config(&BLOB_TARGET_SIZE, 0);
         cache.cfg.dynamic.set_batch_builder_max_outstanding_parts(2);
         let client = cache
             .open(PersistLocation::new_in_mem())
@@ -1040,7 +1053,7 @@ mod tests {
     async fn batch_builder_keys() {
         let cache = PersistClientCache::new_no_metrics();
         // Set blob_target_size to 0 so that each row gets forced into its own batch part
-        cache.cfg.dynamic.set_blob_target_size(0);
+        cache.cfg.set_config(&BLOB_TARGET_SIZE, 0);
         let client = cache
             .open(PersistLocation::new_in_mem())
             .await
@@ -1079,7 +1092,7 @@ mod tests {
     async fn batch_builder_partial_order() {
         let cache = PersistClientCache::new_no_metrics();
         // Set blob_target_size to 0 so that each row gets forced into its own batch part
-        cache.cfg.dynamic.set_blob_target_size(0);
+        cache.cfg.set_config(&BLOB_TARGET_SIZE, 0);
         let client = cache
             .open(PersistLocation::new_in_mem())
             .await

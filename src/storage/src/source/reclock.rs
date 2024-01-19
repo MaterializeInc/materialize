@@ -647,9 +647,7 @@ mod tests {
 
     static PERSIST_CACHE: Lazy<Arc<PersistClientCache>> = Lazy::new(|| {
         let persistcfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
-        persistcfg
-            .dynamic
-            .set_reader_lease_duration(PERSIST_READER_LEASE_TIMEOUT_MS);
+        persistcfg.set_reader_lease_duration(PERSIST_READER_LEASE_TIMEOUT_MS);
         Arc::new(PersistClientCache::new(
             persistcfg,
             &MetricsRegistry::new(),

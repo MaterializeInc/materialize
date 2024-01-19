@@ -13,11 +13,14 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::sync::mpsc::TryRecvError;
 use std::sync::{mpsc, Arc};
+use std::time::Duration;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
 use mz_ore::cast::CastFrom;
+use mz_persist_client::cfg::RetryParameters;
+use mz_persist_client::dyn_cfg::{Config, ConfigSet};
 use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
@@ -416,6 +419,34 @@ where
         }
     });
     (passthrough_stream, shutdown_button.press_on_drop())
+}
+
+const DATA_SHARD_RETRYER_INITIAL_BACKOFF: Config<Duration> = Config::new(
+    "persist_txns_data_shard_retryer_initial_backoff",
+    Duration::from_millis(1024),
+    "The initial backoff when polling for new batches from a txns data shard persist_source.",
+);
+
+const DATA_SHARD_RETRYER_MULTIPLIER: Config<u32> = Config::new(
+    "persist_txns_data_shard_retryer_multiplier",
+    2,
+    "The backoff multiplier when polling for new batches from a txns data shard persist_source.",
+);
+
+const DATA_SHARD_RETRYER_CLAMP: Config<Duration> = Config::new(
+    "persist_txns_data_shard_retryer_clamp",
+    Duration::from_secs(16),
+    "The backoff clamp duration when polling for new batches from a txns data shard persist_source.",
+);
+
+/// Retry configuration for persist-txns data shard override of
+/// `next_listen_batch`.
+pub fn txns_data_shard_retry_params(cfg: &ConfigSet) -> RetryParameters {
+    RetryParameters {
+        initial_backoff: DATA_SHARD_RETRYER_INITIAL_BACKOFF.get(cfg),
+        multiplier: DATA_SHARD_RETRYER_MULTIPLIER.get(cfg),
+        clamp: DATA_SHARD_RETRYER_CLAMP.get(cfg),
+    }
 }
 
 // NB: The API of this intentionally mirrors TxnsCache and TxnsRead. Consider

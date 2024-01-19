@@ -15,7 +15,7 @@ import "compute-client/src/logging.proto";
 import "compute-types/src/dataflows.proto";
 import "expr/src/linear.proto";
 import "expr/src/relation.proto";
-import "persist-client/src/cfg.proto";
+import "persist-client/src/dyn_cfg.proto";
 import "proto/src/proto.proto";
 import "repr/src/global_id.proto";
 import "repr/src/row.proto";
@@ -77,7 +77,7 @@ message ProtoPeek {
 
 message ProtoComputeParameters {
     optional uint64 max_result_size = 1;
-    mz_persist_client.cfg.ProtoPersistParameters persist = 2;
+    mz_persist_client.dyn_cfg.ConfigUpdates persist = 2;
     ProtoComputeMaxInflightBytesConfig dataflow_max_inflight_bytes = 3;
     optional bool enable_mz_join_core = 4;
     mz_tracing.params.ProtoTracingParameters tracing = 5;

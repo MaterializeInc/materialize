@@ -147,7 +147,11 @@ mod tests {
     use timely::progress::Antichain;
 
     use crate::cache::StateCache;
-    use crate::cfg::{PersistConfig, PersistParameters, RetryParameters};
+    use crate::cfg::PersistConfig;
+    use crate::internal::machine::{
+        NEXT_LISTEN_BATCH_RETRYER_CLAMP, NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF,
+        NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER,
+    };
     use crate::internal::state::TypedState;
     use crate::tests::new_test_client;
     use crate::{Diagnostics, ShardId};
@@ -282,15 +286,17 @@ mod tests {
 
         let client = new_test_client().await;
         // Override the listen poll so that it's useless.
-        PersistParameters {
-            next_listen_batch_retryer: Some(RetryParameters {
-                initial_backoff: Duration::from_secs(1_000_000),
-                multiplier: 1,
-                clamp: Duration::from_secs(1_000_000),
-            }),
-            ..PersistParameters::default()
-        }
-        .apply(&client.cfg);
+        client.cfg.set_config(
+            &NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF,
+            Duration::from_secs(1_000_000),
+        );
+        client
+            .cfg
+            .set_config(&NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER, 1);
+        client.cfg.set_config(
+            &NEXT_LISTEN_BATCH_RETRYER_CLAMP,
+            Duration::from_secs(1_000_000),
+        );
 
         let (mut write, mut read) = client.expect_open::<(), (), u64, i64>(ShardId::new()).await;
 

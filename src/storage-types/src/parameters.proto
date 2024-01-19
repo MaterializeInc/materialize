@@ -11,15 +11,15 @@ syntax = "proto3";
 
 import "tracing/src/params.proto";
 import "proto/src/proto.proto";
-import "persist-client/src/cfg.proto";
+import "persist-client/src/dyn_cfg.proto";
 import "rocksdb-types/src/config.proto";
 import "service/src/params.proto";
 
 package mz_storage_types.parameters;
 
 message ProtoStorageParameters {
-    reserved 2, 3;
-    mz_persist_client.cfg.ProtoPersistParameters persist = 1;
+    reserved 1, 2, 3;
+    mz_persist_client.dyn_cfg.ConfigUpdates persist = 25;
     uint64 keep_n_source_status_history_entries = 4;
     mz_rocksdb_types.config.ProtoRocksDbTuningParameters upsert_rocksdb_tuning_config = 5;
     bool finalize_shards = 6;

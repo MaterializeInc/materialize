@@ -32,7 +32,9 @@ message ProtoConfigVal {
     string name = 1;
     oneof val {
         bool bool = 2;
+        uint32 u32 = 6;
         uint64 usize = 3;
         string string = 4;
+        mz_proto.ProtoDuration duration = 5;
     }
 }

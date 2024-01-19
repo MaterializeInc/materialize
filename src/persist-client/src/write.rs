@@ -536,7 +536,7 @@ where
     /// to append it to this shard.
     pub fn batch_from_transmittable_batch(&self, batch: ProtoBatch) -> Batch<K, V, T, D> {
         let ret = Batch {
-            batch_delete_enabled: BATCH_DELETE_ENABLED.get(&self.cfg.configs),
+            batch_delete_enabled: BATCH_DELETE_ENABLED.get(&self.cfg),
             metrics: Arc::clone(&self.metrics),
             shard_id: batch
                 .shard_id

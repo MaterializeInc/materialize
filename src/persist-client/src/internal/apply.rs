@@ -30,12 +30,13 @@ use crate::internal::metrics::{CmdMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
 use crate::internal::state::{
     ExpiryMetrics, HollowBatch, Since, SnapshotErr, StateCollections, TypedState, Upper,
+    ROLLUP_THRESHOLD,
 };
 use crate::internal::state_diff::StateDiff;
 use crate::internal::state_versions::{EncodedRollup, StateVersions};
 use crate::internal::trace::FueledMergeReq;
 use crate::internal::watch::StateWatch;
-use crate::rpc::PubSubSender;
+use crate::rpc::{PubSubSender, PUBSUB_PUSH_DIFF_ENABLED};
 use crate::{Diagnostics, PersistConfig, ShardId};
 
 /// An applier of persist commands.
@@ -306,7 +307,7 @@ where
                     cmd.succeeded.inc();
                     self.shard_metrics.cmd_succeeded.inc();
                     self.update_state(new_state);
-                    if self.cfg.dynamic.pubsub_push_diff_enabled() {
+                    if PUBSUB_PUSH_DIFF_ENABLED.get(&self.cfg) {
                         self.pubsub_sender.push_diff(&self.shard_id, &diff);
                     }
                     return Ok((diff.seqno, Ok(res), maintenance));
@@ -457,7 +458,7 @@ where
             );
         }
 
-        let write_rollup = new_state.need_rollup(cfg.dynamic.rollup_threshold());
+        let write_rollup = new_state.need_rollup(ROLLUP_THRESHOLD.get(cfg));
 
         // Find out if this command has been selected to perform gc, so
         // that it will fire off a background request to the
