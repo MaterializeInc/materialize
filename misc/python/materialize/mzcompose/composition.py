@@ -279,6 +279,10 @@ class Composition:
         stdout = None
         if capture:
             stdout = subprocess.PIPE if capture == True else capture
+        elif capture_stderr:
+            # this is necessary for the stderr to work
+            stdout = subprocess.PIPE
+
         stderr = None
         if capture_stderr:
             stderr = subprocess.PIPE if capture_stderr == True else capture_stderr
