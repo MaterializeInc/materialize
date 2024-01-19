@@ -22,25 +22,25 @@ class PersistTxnToggle(Scenario):
                 self, additional_system_parameter_defaults={"persist_txn_tables": "off"}
             ),
             Initialize(self),
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(
                 self,
                 additional_system_parameter_defaults={"persist_txn_tables": "eager"},
             ),
             Manipulate(self, phase=1),
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(
                 self,
                 additional_system_parameter_defaults={"persist_txn_tables": "lazy"},
             ),
             Manipulate(self, phase=2),
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(
                 self,
                 additional_system_parameter_defaults={"persist_txn_tables": "eager"},
             ),
             Validate(self),
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(
                 self, additional_system_parameter_defaults={"persist_txn_tables": "off"}
             ),
@@ -76,7 +76,10 @@ class PersistTxnFencing(Scenario):
             ),
             Validate(self, mz_service="mz_txn_tables_lazy"),
             # Since we are creating Mz instances with a non-default name,
-            # we need to perform explicit cleanup here
+            # we need to perform explicit cleanup here. Some instances are
+            # dead by now, but we still need to capture their logs
+            KillMz(mz_service="mz_txn_tables_default"),
+            KillMz(mz_service="mz_txn_tables_eager"),
             KillMz(mz_service="mz_txn_tables_lazy"),
             Down(),
         ]
