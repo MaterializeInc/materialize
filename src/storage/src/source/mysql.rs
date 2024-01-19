@@ -19,20 +19,18 @@ use itertools::Itertools;
 use mysql_async::Row as MySqlRow;
 use mysql_common::value::convert::from_value;
 use mysql_common::Value;
-use mz_mysql_util::MySqlTableDesc;
 use serde::{Deserialize, Serialize};
-use timely::dataflow::operators::Concat;
-use timely::dataflow::operators::Map;
+use timely::dataflow::operators::{Capability, CapabilitySet, Concat, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
-use mz_mysql_util::{GtidSet, MySqlError};
+use mz_mysql_util::{GtidSet, MySqlError, MySqlTableDesc};
 use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, Diff, Row, ScalarType};
 use mz_sql_parser::ast::{Ident, UnresolvedItemName};
 use mz_storage_types::errors::SourceErrorDetails;
-use mz_storage_types::sources::MySqlSourceConnection;
-use mz_storage_types::sources::SourceTimestamp;
+use mz_storage_types::sources::mysql::{GtidPartition, TransactionId};
+use mz_storage_types::sources::{MySqlSourceConnection, SourceTimestamp};
 use mz_timely_util::builder_async::PressOnDropButton;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
@@ -41,23 +39,19 @@ use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 mod replication;
 mod snapshot;
-mod timestamp;
-
-use timestamp::TransactionId;
 
 impl SourceRender for MySqlSourceConnection {
-    // TODO: Eventually replace with a Partitioned<Uuid, TransactionId> timestamp
-    type Time = TransactionId;
+    type Time = GtidPartition;
 
-    const STATUS_NAMESPACE: StatusNamespace = StatusNamespace::Postgres;
+    const STATUS_NAMESPACE: StatusNamespace = StatusNamespace::MySql;
 
     /// Render the ingestion dataflow. This function only connects things together and contains no
     /// actual processing logic.
-    fn render<G: Scope<Timestamp = TransactionId>>(
+    fn render<G: Scope<Timestamp = GtidPartition>>(
         self,
         scope: &mut G,
         config: RawSourceCreationConfig,
-        resume_uppers: impl futures::Stream<Item = Antichain<TransactionId>> + 'static,
+        _resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
@@ -77,7 +71,7 @@ impl SourceRender for MySqlSourceConnection {
 
                 (
                     *id,
-                    Antichain::from_iter(upper.iter().map(TransactionId::decode_row)),
+                    Antichain::from_iter(upper.iter().map(GtidPartition::decode_row)),
                 )
             })
             .collect();
@@ -110,7 +104,6 @@ impl SourceRender for MySqlSourceConnection {
             subsource_resume_uppers,
             table_info,
             &rewinds,
-            resume_uppers,
         );
 
         let updates = snapshot_updates.concat(&repl_updates).map(|(output, res)| {
@@ -177,12 +170,16 @@ pub enum TransientError {
 /// A definite error that always ends up in the collection of a specific table.
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
 pub enum DefiniteError {
+    #[error("received a gtid set with non-consecutive intervals: {0}")]
+    NonConsecutiveGtidIntervals(String),
+    #[error("received out of order gtids for source {0} at transaction-id {1}")]
+    BinlogGtidMonotonicityViolation(String, u64),
     #[error("received a null value in a non-null column: {0}")]
     NullValueInNonNullColumn(String),
     #[error("mysql server does not have the binlog available at the requested gtid set")]
     BinlogNotAvailable,
-    #[error("mysql server binlogs were rotated to {0} past our resume point of {1}")]
-    BinlogCompactedPastResumePoint(String, String),
+    #[error("mysql server binlogs do not have transaction-id {0} available for source-id {1}")]
+    BinlogMissingResumePoint(u64, String),
     #[error("server gtid error: {0}")]
     ServerGTIDError(String),
 }
@@ -200,8 +197,9 @@ impl From<DefiniteError> for SourceReaderError {
 pub(crate) struct RewindRequest {
     /// The table that should be rewound.
     pub(crate) table: UnresolvedItemName,
-    /// The GTID set at the start of the snapshot, returned by the server's `gtid_executed` system variable.
-    pub(crate) snapshot_gtid_set: GtidSet,
+    /// The singleton Partitioned representing the GTID Set at the start of the snapshot,
+    /// returned by the MySQL server's `gtid_executed` system variable.
+    pub(crate) snapshot_gtid_set: Vec<GtidPartition>,
 }
 
 pub(crate) fn table_name(
@@ -274,4 +272,74 @@ pub(crate) fn pack_mysql_row(
     }
 
     Ok(Ok(row_container.clone()))
+}
+
+/// Constructs a Vec of Partitioned<Uuid, TransactionId> timestamps from a GtidSet.
+/// Each Gtid in the GtidSet is converted into a singleton Partitioned<Uuid, TransactionId> timestamp.
+/// If use_latest is true, then the latest transaction id is used for each Gtid.
+/// Otherwise, the first transaction id is used.
+pub(crate) fn gtid_singletons(
+    gtid_set: GtidSet,
+    use_latest: bool,
+) -> Result<Vec<GtidPartition>, DefiniteError> {
+    gtid_set
+        .gtids()
+        .map(|gtid| {
+            // We expect that the MySql server has been configured to maintain ordering of transactions
+            // during replication and that the transaction ids are monotonically increasing. Since our GtidSet
+            // implementation merges consecutive intervals, we expect that each Gtid will have exactly one interval.
+            if !gtid.intervals().count() == 1 {
+                return Err(DefiniteError::NonConsecutiveGtidIntervals(gtid.to_string()));
+            }
+            Ok(GtidPartition::new_singleton(
+                gtid.uuid,
+                TransactionId::Active(if use_latest {
+                    gtid.latest_transaction_id()
+                } else {
+                    gtid.earliest_transaction_id()
+                }),
+            ))
+        })
+        .collect()
+}
+
+struct GtidPartitionCapability {
+    data: Capability<GtidPartition>,
+    progress: Capability<GtidPartition>,
+}
+
+impl GtidPartitionCapability {
+    fn new(
+        part_ts: &GtidPartition,
+        data_cap_set: &CapabilitySet<GtidPartition>,
+        upper_cap_set: &CapabilitySet<GtidPartition>,
+    ) -> Self {
+        assert!(
+            part_ts.interval().singleton() != None,
+            "expected a single source-id partition"
+        );
+
+        Self {
+            data: data_cap_set.delayed(part_ts),
+            progress: upper_cap_set.delayed(part_ts),
+        }
+    }
+
+    fn downgrade(&mut self, new_upper: &GtidPartition) {
+        assert!(
+            matches!(new_upper.timestamp(), TransactionId::Active(_)),
+            "expected an active timestamp"
+        );
+        assert_eq!(
+            self.data.interval().singleton(),
+            new_upper.interval().singleton(),
+            "expected the same GTID UUID"
+        );
+        self.data.downgrade(new_upper);
+        self.progress.downgrade(new_upper);
+    }
+
+    fn tx_id(&self) -> &TransactionId {
+        self.data.timestamp()
+    }
 }
