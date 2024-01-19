@@ -608,6 +608,9 @@ impl mz_server_core::Server for HttpsBalancer {
             .await;
             drop(active_guard);
             metrics.connection_status(result.is_ok()).inc();
+            if let Err(e) = result {
+                debug!("connection error: {e}");
+            }
             Ok(())
         })
     }
