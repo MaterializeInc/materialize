@@ -135,7 +135,11 @@ async fn main() {
         enable_version_flag: true,
     });
     if let Err(err) = run(args).await {
-        eprintln!("catalog: fatal: {}", err.display_with_causes());
+        eprintln!(
+            "catalog-debug: fatal: {}\nbacktrace: {}",
+            err.display_with_causes(),
+            err.backtrace()
+        );
         process::exit(1);
     }
 }
