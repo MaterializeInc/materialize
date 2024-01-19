@@ -18,7 +18,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use itertools::Itertools;
 use postgres_openssl::MakeTlsConnector;
-use tracing::error;
+use tracing::{error, info};
 
 use mz_audit_log::{StorageUsageV1, VersionedEvent, VersionedStorageUsage};
 use mz_ore::metrics::MetricsFutureExt;
@@ -1149,6 +1149,7 @@ impl DurableCatalogState for Connection {
             Some(period) => u128::from(boot_ts).saturating_sub(period.as_millis()),
         };
         let is_read_only = self.is_read_only();
+        info!("Reading storage usage from stash");
         let (events, consolidate_notif) = self
             .stash
             .with_transaction(move |tx| {
@@ -1178,6 +1179,7 @@ impl DurableCatalogState for Connection {
                 })
             })
             .await?;
+        info!("Waiting for consolidation");
 
         // Before we consider the pruning complete, we need to wait for the consolidate request to
         // finish. We wait for consolidation because the storage usage collection is very large and
@@ -1189,6 +1191,7 @@ impl DurableCatalogState for Connection {
             }
         }
 
+        info!("Done with storage usage");
         Ok(events)
     }
 

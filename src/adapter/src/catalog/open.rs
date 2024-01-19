@@ -820,6 +820,7 @@ impl Catalog {
                 // We can remove this in a subsequent version of Materialize
                 // where we remove the `clusters_by_linked_object_id` attribute
                 // from catalog state.
+                info!("Updating clusters");
                 for mut cluster in txn.get_clusters() {
                     cluster.linked_object_id = None;
                     txn.update_cluster(cluster.id, cluster)?;
@@ -828,10 +829,12 @@ impl Catalog {
                 for (_, cluster) in state.clusters_by_id.iter_mut() {
                     cluster.linked_object_id = None;
                 }
+                info!("Setting catalog version");
                 txn.set_catalog_content_version(config.build_info.version.to_string())?;
             }
 
             // Re-load the system configuration in case it changed after the migrations.
+            info!("Loading sys config");
             Catalog::load_system_configuration(
                 &mut state,
                 &mut txn,
@@ -839,8 +842,10 @@ impl Catalog {
                 config.remote_system_parameters.as_ref(),
             )?;
 
+            info!("Loading catalog items");
             let mut state = Catalog::load_catalog_items(&mut txn, &state)?;
 
+            info!("Doing builtin migrations");
             let mut builtin_migration_metadata = Catalog::generate_builtin_migration_metadata(
                 &state,
                 &mut txn,
@@ -857,7 +862,9 @@ impl Catalog {
                 &mut builtin_migration_metadata,
             )?;
 
+            info!("Committing transaction");
             txn.commit().await?;
+            info!("Commit complete");
             Ok((
                 state,
                 boot_ts,
@@ -898,6 +905,7 @@ impl Catalog {
             let (state, boot_ts, builtin_migration_metadata, last_seen_version) =
                 Self::initialize_state(config.state, &mut storage).await?;
 
+            info!("Opening catalog after initializing state");
             let mut catalog = Catalog {
                 state,
                 plans: CatalogPlans::default(),
@@ -919,6 +927,8 @@ impl Catalog {
                     }
                 }
             }
+
+            info!("Gathering builtin updates");
 
             let mut builtin_table_updates = vec![];
             for (schema_id, schema) in &catalog.state.ambient_schemas_by_id {
@@ -1037,11 +1047,14 @@ impl Catalog {
                     _ => unreachable!("all operators must be scalar functions"),
                 }
             }
+            info!("Getting audit logs");
             let audit_logs = catalog.storage().await.get_audit_logs().await?;
+            info!("Got audit logs");
             for event in audit_logs {
                 builtin_table_updates.push(catalog.state.pack_audit_log_update(&event)?);
             }
 
+            info!("Getting and pruning storage usage");
             // To avoid reading over storage_usage events multiple times, do both
             // the table updates and delete calculations in a single read over the
             // data.
@@ -1057,6 +1070,7 @@ impl Catalog {
                     wait_for_consolidation,
                 )
                 .await?;
+            info!("Got and pruned storage usage");
             for event in storage_usage_events {
                 builtin_table_updates.push(catalog.state.pack_storage_usage_update(&event)?);
             }
@@ -1064,7 +1078,7 @@ impl Catalog {
             for ip in &catalog.state.egress_ips {
                 builtin_table_updates.push(catalog.state.pack_egress_ip_update(ip)?);
             }
-
+            info!("Catalog is open");
             Ok((
                 catalog,
                 builtin_migration_metadata,

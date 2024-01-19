@@ -2775,6 +2775,7 @@ pub fn serve(
                 },
             })
             .await?;
+        info!("Catalog open");
         let session_id = catalog.config().session_id;
         let start_instant = catalog.config().start_instant;
 
