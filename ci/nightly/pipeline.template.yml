@@ -1135,7 +1135,8 @@ steps:
         artifact_paths: [junit_*.xml, parallel-workload-queries.log.zst]
         timeout_in_minutes: 60
         agents:
-          queue: linux-x86_64-small
+          # OOMs with linux-x86_64-small
+          queue: linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1181,7 +1182,7 @@ steps:
         timeout_in_minutes: 60
         agents:
           # OOMs with linux-x86_64-small
-          queue: linux-x86_64-small
+          queue: linux-x86_64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
