@@ -9,17 +9,25 @@
 
 //! Types related to mysql sources
 
-use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
-use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
+use core::ops::Add;
+use std::fmt;
+
 use once_cell::sync::Lazy;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
+use timely::order::{PartialOrder, TotalOrder};
+use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
+use uuid::Uuid;
+
+use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
+use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
+use mz_timely_util::order::Partitioned;
 
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
-use crate::sources::SourceConnection;
+use crate::sources::{SourceConnection, SourceTimestamp};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -157,5 +165,141 @@ impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {
                 .map(mz_mysql_util::MySqlTableDesc::from_proto)
                 .collect::<Result<_, _>>()?,
         })
+    }
+}
+
+/// Represents a MySQL transaction id
+#[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum TransactionId {
+    // Represents a transaction id that is not yet known
+    Absent,
+
+    // Represents the Active transaction_id that has been seen
+    // This requires that the source is configured to apply updates in order
+    // so we can assume all transactions were monotonically increasing and consecutive
+    Active(u64),
+}
+
+impl fmt::Display for TransactionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TransactionId::Absent => write!(f, "Null"),
+            TransactionId::Active(id) => write!(f, "{}", id),
+        }
+    }
+}
+
+impl From<TransactionId> for u64 {
+    fn from(id: TransactionId) -> Self {
+        match id {
+            // TransactionIds start at 1, so we can use 0 to represent the absent id
+            TransactionId::Absent => 0,
+            TransactionId::Active(id) => id,
+        }
+    }
+}
+
+impl TransactionId {
+    pub const MAX: TransactionId = TransactionId::Active(u64::MAX);
+}
+
+impl Add for TransactionId {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        match self {
+            TransactionId::Absent => other,
+            TransactionId::Active(id) => match other {
+                TransactionId::Absent => self,
+                TransactionId::Active(other_id) => TransactionId::Active(id + other_id),
+            },
+        }
+    }
+}
+
+impl Timestamp for TransactionId {
+    // No need to describe complex summaries
+    type Summary = ();
+
+    fn minimum() -> Self {
+        TransactionId::Absent
+    }
+}
+
+impl From<&TransactionId> for u64 {
+    fn from(id: &TransactionId) -> Self {
+        match id {
+            // TransactionIds start at 1, so we can use 0 to represent the absent id
+            TransactionId::Absent => 0,
+            TransactionId::Active(id) => *id,
+        }
+    }
+}
+
+impl TotalOrder for TransactionId {}
+
+impl PartialOrder for TransactionId {
+    fn less_equal(&self, other: &Self) -> bool {
+        Into::<u64>::into(self).less_equal(&Into::<u64>::into(other))
+    }
+}
+
+impl PathSummary<TransactionId> for () {
+    fn results_in(&self, src: &TransactionId) -> Option<TransactionId> {
+        Some(*src)
+    }
+
+    fn followed_by(&self, _other: &Self) -> Option<Self> {
+        Some(())
+    }
+}
+
+impl Refines<()> for TransactionId {
+    fn to_inner(_other: ()) -> Self {
+        Self::minimum()
+    }
+
+    fn to_outer(self) -> () {}
+
+    fn summarize(_path: Self::Summary) -> <() as Timestamp>::Summary {}
+}
+
+/// This type is used to track the progress of the ingestion dataflow, and represents
+/// a 'Gtid Set' of transactions that have been committed on a MySQL cluster.
+/// Each Gtid corresponds to a specific committed transaction, and contains the SourceId (a UUID)
+/// of the server that committed the transaction, and the TransactionId (a u64) representing
+/// the transaction's position.
+/// This type partitions by SourceId and contains the highest TransactionId committed for each
+/// SourceId 'range' in the Gtid Set. We use the highest TransactionId rather than a set of intervals
+/// because we validate that the MySQL server has been configured maintain ordering of transactions
+/// within a source, and that the TransactionIds are monotonically increasing.
+/// A None TransactionId represents that no transactions have been seen for the corresponding
+/// sources (which is useful to represent a frontier of all future possible sources)
+pub type GtidPartition = Partitioned<Uuid, TransactionId>;
+
+impl SourceTimestamp for GtidPartition {
+    fn encode_row(&self) -> Row {
+        let ts = match self.timestamp() {
+            TransactionId::Absent => Datum::Null,
+            TransactionId::Active(id) => Datum::from(*id),
+        };
+        Row::pack(&[
+            Datum::from(self.interval().lower),
+            Datum::from(self.interval().upper),
+            ts,
+        ])
+    }
+
+    fn decode_row(row: &Row) -> Self {
+        let mut datums = row.iter();
+        match (datums.next(), datums.next(), datums.next(), datums.next()) {
+            (Some(Datum::Uuid(lower)), Some(Datum::Uuid(upper)), Some(Datum::UInt64(ts)), None) => {
+                Partitioned::new_range(lower, upper, TransactionId::Active(ts))
+            }
+            (Some(Datum::Uuid(lower)), Some(Datum::Uuid(upper)), Some(Datum::Null), None) => {
+                Partitioned::new_range(lower, upper, TransactionId::Absent)
+            }
+            _ => panic!("invalid row {row:?}"),
+        }
     }
 }

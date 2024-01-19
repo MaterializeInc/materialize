@@ -19,6 +19,8 @@ use std::cmp::Ordering;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
 
+use uuid::Uuid;
+
 use serde::{Deserialize, Serialize};
 use timely::communication::Data;
 use timely::order::Product;
@@ -70,6 +72,18 @@ impl<P: Clone + PartialOrd, T> Partitioned<P, T> {
     /// Returns the timestamp component of this partitioned timestamp.
     pub fn timestamp(&self) -> &T {
         &self.0.inner
+    }
+}
+
+impl<P: Clone + PartialOrd + Sequence, T: Clone> Partitioned<P, T> {
+    /// Returns up to two partitions that contain the interval before and/or
+    /// after given partition point, neither of which contain the point.
+    pub fn split(&self, point: &P) -> Vec<Self> {
+        self.interval()
+            .split(point)
+            .into_iter()
+            .map(|interval| Self(Product::new(interval, self.timestamp().clone())))
+            .collect()
     }
 }
 
@@ -150,6 +164,33 @@ impl Extrema for i32 {
     }
 }
 
+impl Extrema for Uuid {
+    fn minimum() -> Self {
+        Self::nil()
+    }
+    fn maximum() -> Self {
+        Self::from_bytes([0xff; 16])
+    }
+}
+
+pub trait Sequence {
+    // Returns the element value sequenced before the type.
+    fn before(&self) -> Self;
+    // Returns the element value sequenced after the type.
+    fn after(&self) -> Self;
+}
+
+impl Sequence for Uuid {
+    fn before(&self) -> Self {
+        let repr = self.as_u128();
+        Self::from_u128(repr - 1)
+    }
+    fn after(&self) -> Self {
+        let repr = self.as_u128();
+        Self::from_u128(repr + 1)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 /// A type representing an inclusive interval of type `P`, ordered under the subset relation.
 pub struct Interval<P> {
@@ -165,6 +206,35 @@ impl<P: Eq> Interval<P> {
         } else {
             None
         }
+    }
+}
+
+impl<P: PartialOrd> Interval<P> {
+    pub fn contains(&self, other: &P) -> bool {
+        self.lower <= *other && *other <= self.upper
+    }
+}
+
+impl<P: Sequence + PartialOrd + Clone> Interval<P> {
+    /// Returns up to two intervals that contain the range before and/or after given point,
+    /// neither of which contain the point.
+    pub fn split(&self, point: &P) -> Vec<Self> {
+        let mut ret = vec![];
+        let before = point.before();
+        let after = point.after();
+        if self.lower <= before {
+            ret.push(Interval {
+                lower: self.lower.clone(),
+                upper: before,
+            });
+        }
+        if self.upper >= after {
+            ret.push(Interval {
+                lower: after,
+                upper: self.upper.clone(),
+            });
+        }
+        ret
     }
 }
 

@@ -134,6 +134,13 @@ pub struct Gtid {
 }
 
 impl Gtid {
+    pub fn new(uuid: Uuid) -> Self {
+        Self {
+            uuid,
+            intervals: vec![],
+        }
+    }
+
     pub fn earliest_transaction_id(&self) -> u64 {
         self.intervals
             .first()
@@ -159,7 +166,7 @@ impl Gtid {
         last_interval.end
     }
 
-    pub fn add_interval(&mut self, new: GtidInterval) {
+    pub fn add_interval(&mut self, new: GtidInterval) -> &mut Self {
         if let Some(last) = self.intervals.last_mut() {
             // Only allow adding the interval if it is after the last interval
             assert!(
@@ -177,6 +184,12 @@ impl Gtid {
             // This is the first interval
             self.intervals.push(new);
         }
+
+        self
+    }
+
+    pub fn intervals(&self) -> impl Iterator<Item = &GtidInterval> {
+        self.intervals.iter()
     }
 }
 
@@ -236,7 +249,7 @@ impl GtidSet {
         }
     }
 
-    pub fn add_gtid(&mut self, new: Gtid) {
+    pub fn add_gtid(&mut self, new: Gtid) -> &Self {
         if let Some(existing) = self.gtids.get_mut(&new.uuid) {
             for interval in new.intervals {
                 existing.add_interval(interval);
@@ -244,10 +257,17 @@ impl GtidSet {
         } else {
             self.gtids.insert(new.uuid, new);
         }
+        self
     }
 
     pub fn first(&self) -> Option<&Gtid> {
         self.gtids.values().next()
+    }
+
+    /// Returns an iterator over all GTIDs in the set
+    /// ordered by UUID
+    pub fn gtids(self) -> impl Iterator<Item = Gtid> {
+        self.gtids.into_iter().map(|(_, gtid)| gtid)
     }
 }
 

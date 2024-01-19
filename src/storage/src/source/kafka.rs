@@ -181,7 +181,7 @@ impl SourceRender for KafkaSourceConnection {
             let resume_upper = Antichain::from_iter(
                 config.source_resume_uppers[&config.id]
                     .iter()
-                    .map(Partitioned::<_, _>::decode_row),
+                    .map(Partitioned::<RangeBound::<PartitionId>, MzOffset>::decode_row),
             );
             for ts in resume_upper.elements() {
                 if let Some(pid) = ts.interval().singleton() {
