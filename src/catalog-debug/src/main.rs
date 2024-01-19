@@ -19,7 +19,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use clap::Parser;
 use mz_adapter::catalog::Catalog;
 use mz_build_info::{build_info, BuildInfo};
