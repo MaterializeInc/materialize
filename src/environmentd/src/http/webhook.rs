@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use mz_adapter::{AdapterError, AppendWebhookError, AppendWebhookResponse, WebhookAppenderCache};
+use mz_adapter::{AppendWebhookError, AppendWebhookResponse, WebhookAppenderCache};
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::str::StrExt;
 use mz_repr::adt::jsonb::JsonbPacker;
@@ -70,7 +70,7 @@ pub async fn handle_webhook(
             // append data more than once.
             match result {
                 Ok(()) => RetryResult::Ok(()),
-                Err(e @ WebhookError::ChannelClosed) => RetryResult::RetryableErr(e),
+                Err(e @ AppendWebhookError::ChannelClosed) => RetryResult::RetryableErr(e),
                 Err(e) => RetryResult::FatalErr(e),
             }
         })
@@ -89,7 +89,7 @@ async fn append_webhook(
     name: &str,
     body: &Bytes,
     headers: &Arc<BTreeMap<String, String>>,
-) -> Result<(), WebhookError> {
+) -> Result<(), AppendWebhookError> {
     // Shenanigans to get the types working for the async retry.
     let (database, schema, name) = (database.to_string(), schema.to_string(), name.to_string());
 
@@ -109,7 +109,7 @@ async fn append_webhook(
         match guard.remove(&(database.clone(), schema.clone(), name.clone())) {
             Some(appender) if !appender.tx.is_closed() => {
                 guard.insert((database, schema, name), appender.clone());
-                Ok::<_, AdapterError>(appender)
+                Ok::<_, AppendWebhookError>(appender)
             }
             // We don't have a valid appender, so we need to get one.
             //
@@ -137,7 +137,7 @@ async fn append_webhook(
             .eval(Bytes::clone(body), Arc::clone(headers), received_at)
             .await?;
         if !valid {
-            return Err(WebhookError::ValidationFailed);
+            return Err(AppendWebhookError::ValidationFailed);
         }
     }
 
@@ -156,7 +156,7 @@ fn pack_row(
     headers: &BTreeMap<String, String>,
     body_ty: ColumnType,
     header_tys: WebhookHeaders,
-) -> Result<Row, WebhookError> {
+) -> Result<Row, AppendWebhookError> {
     // 1 column for the body plus however many are needed for the headers.
     let num_cols = 1 + header_tys.num_columns();
     let mut num_cols_written = 0;
@@ -168,27 +168,20 @@ fn pack_row(
     // Pack our body into a row.
     match body_ty.scalar_type {
         ScalarType::Bytes => packer.push(Datum::Bytes(&body[..])),
-        ty @ ScalarType::String => {
-            let s = std::str::from_utf8(&body).map_err(|m| WebhookError::InvalidBody {
-                ty,
-                msg: m.to_string(),
-            })?;
+        ScalarType::String => {
+            let s = std::str::from_utf8(&body)
+                .map_err(|m| AppendWebhookError::InvalidUtf8Body { msg: m.to_string() })?;
             packer.push(Datum::String(s));
         }
-        ty @ ScalarType::Jsonb => {
+        ScalarType::Jsonb => {
             let jsonb_packer = JsonbPacker::new(&mut packer);
             jsonb_packer
                 .pack_slice(&body[..])
-                .map_err(|m| WebhookError::InvalidBody {
-                    ty,
-                    msg: m.to_string(),
-                })?;
+                .map_err(|m| AppendWebhookError::InvalidJsonBody { msg: m.to_string() })?;
         }
-        ty => {
-            Err(anyhow::anyhow!(
-                "Invalid body type for Webhook source: {ty:?}"
-            ))?;
-        }
+        ty => Err(anyhow::anyhow!(
+            "Invalid body type for Webhook source: {ty:?}"
+        ))?,
     }
     num_cols_written += 1;
 
@@ -248,8 +241,6 @@ pub enum WebhookError {
     NotFound(String),
     #[error("the required auth could not be found")]
     SecretMissing,
-    #[error("this feature is currently unsupported: {0}")]
-    Unsupported(&'static str),
     #[error("headers of request were invalid: {0}")]
     InvalidHeaders(String),
     #[error("failed to deserialize body as {ty:?}: {msg}")]
@@ -260,28 +251,10 @@ pub enum WebhookError {
     ValidationError,
     #[error("service unavailable")]
     Unavailable,
-    #[error("internal service temporarily closed")]
-    ChannelClosed,
     #[error("internal storage failure! {0:?}")]
     InternalStorageError(StorageError),
-    #[error("internal adapter failure! {0:?}")]
-    InternalAdapterError(AdapterError),
     #[error("internal failure! {0:?}")]
     Internal(#[from] anyhow::Error),
-}
-
-impl From<AdapterError> for WebhookError {
-    fn from(err: AdapterError) -> Self {
-        match err {
-            AdapterError::Unsupported(feat) => WebhookError::Unsupported(feat),
-            AdapterError::UnknownWebhookSource {
-                database,
-                schema,
-                name,
-            } => WebhookError::NotFound(format!("'{database}.{schema}.{name}'")),
-            e => WebhookError::InternalAdapterError(e),
-        }
-    }
 }
 
 impl From<AppendWebhookError> for WebhookError {
@@ -289,11 +262,23 @@ impl From<AppendWebhookError> for WebhookError {
         match err {
             AppendWebhookError::MissingSecret => WebhookError::SecretMissing,
             AppendWebhookError::ValidationError => WebhookError::ValidationError,
-            AppendWebhookError::NonUtf8Body => WebhookError::InvalidBody {
+            AppendWebhookError::InvalidUtf8Body { msg } => WebhookError::InvalidBody {
                 ty: ScalarType::String,
-                msg: "invalid".to_string(),
+                msg,
             },
-            AppendWebhookError::ChannelClosed => WebhookError::ChannelClosed,
+            AppendWebhookError::InvalidJsonBody { msg } => WebhookError::InvalidBody {
+                ty: ScalarType::Jsonb,
+                msg,
+            },
+            AppendWebhookError::UnknownWebhook {
+                database,
+                schema,
+                name,
+            } => WebhookError::NotFound(format!("'{database}.{schema}.{name}'")),
+            AppendWebhookError::ValidationFailed => WebhookError::ValidationFailed,
+            AppendWebhookError::ChannelClosed => {
+                WebhookError::Internal(anyhow::anyhow!("channel closed"))
+            }
             AppendWebhookError::StorageError(storage_err) => {
                 match storage_err {
                     // TODO(parkmycar): Maybe map this to a HTTP 410 Gone instead of 404?
@@ -304,9 +289,7 @@ impl From<AppendWebhookError> for WebhookError {
                     e => WebhookError::InternalStorageError(e),
                 }
             }
-            AppendWebhookError::InternalError => {
-                WebhookError::Internal(anyhow::anyhow!("failed to run validation"))
-            }
+            AppendWebhookError::InternalError(err) => WebhookError::Internal(err),
         }
     }
 }
@@ -317,8 +300,7 @@ impl IntoResponse for WebhookError {
             e @ WebhookError::NotFound(_) | e @ WebhookError::SecretMissing => {
                 (StatusCode::NOT_FOUND, e.to_string()).into_response()
             }
-            e @ WebhookError::Unsupported(_)
-            | e @ WebhookError::InvalidBody { .. }
+            e @ WebhookError::InvalidBody { .. }
             | e @ WebhookError::ValidationFailed
             | e @ WebhookError::ValidationError => {
                 (StatusCode::BAD_REQUEST, e.to_string()).into_response()
@@ -332,9 +314,7 @@ impl IntoResponse for WebhookError {
             e @ WebhookError::InternalStorageError(StorageError::ResourceExhausted(_)) => {
                 (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response()
             }
-            e @ WebhookError::ChannelClosed
-            | e @ WebhookError::InternalStorageError(_)
-            | e @ WebhookError::InternalAdapterError(_) => {
+            e @ WebhookError::InternalStorageError(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
             }
             WebhookError::Internal(e) => (
@@ -353,24 +333,13 @@ mod tests {
     use axum::response::IntoResponse;
     use bytes::Bytes;
     use http::StatusCode;
-    use mz_adapter::{AdapterError, AppendWebhookError};
+    use mz_adapter::AppendWebhookError;
     use mz_repr::{ColumnType, GlobalId, ScalarType};
     use mz_sql::plan::{WebhookHeaderFilters, WebhookHeaders};
     use mz_storage_types::controller::StorageError;
     use proptest::prelude::*;
 
     use super::{filter_headers, pack_row, WebhookError};
-
-    #[mz_ore::test]
-    fn smoke_test_adapter_error_response_status() {
-        // Unsupported errors get mapped to a certain response status.
-        let resp = WebhookError::from(AdapterError::Unsupported("test")).into_response();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-
-        // All other errors should map to 500.
-        let resp = WebhookError::from(AdapterError::Internal("test".to_string())).into_response();
-        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    }
 
     #[mz_ore::test]
     fn smoke_test_storage_error_response_status() {
@@ -387,10 +356,6 @@ mod tests {
         ))
         .into_response();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-
-        // All other errors should map to 500.
-        let resp = WebhookError::from(AdapterError::Internal("test".to_string())).into_response();
-        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[mz_ore::test]

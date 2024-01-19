@@ -55,7 +55,7 @@ use crate::session::{EndTransactionAction, PreparedStatement, Session, Transacti
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::{self, SegmentClientExt, StatementFailureType};
 use crate::webhook::AppendWebhookResponse;
-use crate::{AdapterNotice, PeekResponseUnary, StartupResponse};
+use crate::{AdapterNotice, AppendWebhookError, PeekResponseUnary, StartupResponse};
 
 /// A handle to a running coordinator.
 ///
@@ -325,7 +325,7 @@ Issue a SQL query to get started. Need help?
         database: String,
         schema: String,
         name: String,
-    ) -> Result<AppendWebhookResponse, AdapterError> {
+    ) -> Result<AppendWebhookResponse, AppendWebhookError> {
         let (tx, rx) = oneshot::channel();
 
         // Send our request.
@@ -338,7 +338,7 @@ Issue a SQL query to get started. Need help?
 
         // Using our one shot channel to get the result, returning an error if the sender dropped.
         let response = rx.await.map_err(|_| {
-            AdapterError::Internal("failed to receive webhook response".to_string())
+            AppendWebhookError::InternalError(anyhow::anyhow!("failed to receive webhook response"))
         })?;
 
         response

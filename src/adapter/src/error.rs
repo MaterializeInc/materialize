@@ -159,12 +159,6 @@ pub enum AdapterError {
         cluster_name: String,
         replica_name: String,
     },
-    /// The named webhook source does not exist.
-    UnknownWebhookSource {
-        database: String,
-        schema: String,
-        name: String,
-    },
     /// The named setting does not exist.
     UnrecognizedConfigurationParam(String),
     /// A generic error occurred.
@@ -462,7 +456,6 @@ impl AdapterError {
             AdapterError::UnknownPreparedStatement(_) => SqlState::UNDEFINED_PSTATEMENT,
             AdapterError::UnknownLoginRole(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
             AdapterError::UnknownClusterReplica { .. } => SqlState::UNDEFINED_OBJECT,
-            AdapterError::UnknownWebhookSource { .. } => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnrecognizedConfigurationParam(_) => SqlState::UNDEFINED_OBJECT,
             AdapterError::Unsupported(..) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Unstructured(_) => SqlState::INTERNAL_ERROR,
@@ -648,14 +641,6 @@ impl fmt::Display for AdapterError {
             } => write!(
                 f,
                 "cluster replica '{cluster_name}.{replica_name}' does not exist"
-            ),
-            AdapterError::UnknownWebhookSource {
-                database,
-                schema,
-                name,
-            } => write!(
-                f,
-                "webhook source '{database}.{schema}.{name}' does not exist"
             ),
             AdapterError::UnrecognizedConfigurationParam(setting_name) => write!(
                 f,
