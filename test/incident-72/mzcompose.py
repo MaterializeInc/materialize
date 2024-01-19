@@ -45,13 +45,13 @@ def workflow_default(c: Composition) -> None:
 
     with c.override(PRE_INCIDENT_MZ):
         c.up("materialized")
-        c.run_testdrive("produce-error.td")
+        c.run_testdrive_files("produce-error.td")
         c.kill("materialized")
 
     # Run the new version that will produce the legacy error retractions to
     # heal the shards.
     c.up("materialized")
-    c.run_testdrive("verify-heal-in-memory.td")
+    c.run_testdrive_files("verify-heal-in-memory.td")
     c.kill("materialized")
 
     # Now run a version of Materialize that panics if it ever encounters a
@@ -59,5 +59,5 @@ def workflow_default(c: Composition) -> None:
     # in-memory traces and the on-disk blobs.
     with c.override(REJECT_LEGACY_MZ):
         c.up("materialized")
-        c.run_testdrive("verify-heal-on-disk.td")
+        c.run_testdrive_files("verify-heal-on-disk.td")
         c.kill("materialized")

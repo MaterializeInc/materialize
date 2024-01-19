@@ -480,7 +480,7 @@ class Composition:
             def workflow_default(c: Composition):
                 for tc in test_cases:
                     with c.test_case(tc.name):
-                        c.run_testdrive(*tc.files)
+                        c.run_testdrive_files(*tc.files)
             ```
 
         Args:
@@ -645,7 +645,7 @@ class Composition:
             check=check,
         )
 
-    def run_testdrive(
+    def run_testdrive_files(
         self,
         *args: str,
         rm: bool = False,

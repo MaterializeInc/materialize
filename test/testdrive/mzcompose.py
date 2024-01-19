@@ -142,7 +142,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             junit_report = ci_util.junit_report_filename(c.name)
             print("")
             for file in args.files:
-                c.run_testdrive(
+                c.run_testdrive_files(
                     f"--junit-report={junit_report}",
                     f"--var=replicas={args.replicas}",
                     f"--var=default-replica-size={materialized.default_replica_size}",

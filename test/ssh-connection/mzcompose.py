@@ -53,7 +53,7 @@ def workflow_basic_ssh_features(c: Composition, redpanda: bool = False) -> None:
         dependencies += ["zookeeper", "kafka", "schema-registry"]
     c.up(*dependencies)
 
-    c.run_testdrive("ssh-connections.td")
+    c.run_testdrive_files("ssh-connections.td")
 
     # Check that objects can be restored correctly
     restart_mz(c)
@@ -62,7 +62,7 @@ def workflow_basic_ssh_features(c: Composition, redpanda: bool = False) -> None:
 def workflow_validate_connection(c: Composition) -> None:
     c.up("materialized", "ssh-bastion-host", "postgres")
 
-    c.run_testdrive("setup.td")
+    c.run_testdrive_files("setup.td")
 
     public_key = c.sql_query(
         """
@@ -72,7 +72,7 @@ def workflow_validate_connection(c: Composition) -> None:
         """
     )[0][0]
 
-    c.run_testdrive("--no-reset", "validate-failures.td")
+    c.run_testdrive_files("--no-reset", "validate-failures.td")
 
     c.exec(
         "ssh-bastion-host",
@@ -81,13 +81,13 @@ def workflow_validate_connection(c: Composition) -> None:
         f"echo '{public_key}' > /etc/authorized_keys/mz",
     )
 
-    c.run_testdrive("--no-reset", "validate-success.td")
+    c.run_testdrive_files("--no-reset", "validate-success.td")
 
 
 def workflow_pg(c: Composition) -> None:
     c.up("materialized", "ssh-bastion-host", "postgres")
 
-    c.run_testdrive("setup.td")
+    c.run_testdrive_files("setup.td")
 
     public_key = c.sql_query(
         """
@@ -104,11 +104,11 @@ def workflow_pg(c: Composition) -> None:
         f"echo '{public_key}' > /etc/authorized_keys/mz",
     )
 
-    c.run_testdrive("--no-reset", "pg-source.td")
+    c.run_testdrive_files("--no-reset", "pg-source.td")
     c.kill("ssh-bastion-host")
-    c.run_testdrive("--no-reset", "pg-source-after-ssh-failure.td")
+    c.run_testdrive_files("--no-reset", "pg-source-after-ssh-failure.td")
     c.up("ssh-bastion-host")
-    c.run_testdrive("--no-reset", "pg-source-after-ssh-restart.td")
+    c.run_testdrive_files("--no-reset", "pg-source-after-ssh-restart.td")
 
 
 def workflow_kafka(c: Composition, redpanda: bool = False) -> None:
@@ -128,7 +128,7 @@ def workflow_kafka(c: Composition, redpanda: bool = False) -> None:
             dependencies += ["zookeeper", "kafka", "schema-registry"]
         c.up(*dependencies)
 
-        c.run_testdrive("setup.td")
+        c.run_testdrive_files("setup.td")
 
         public_key = c.sql_query(
             """
@@ -145,12 +145,12 @@ def workflow_kafka(c: Composition, redpanda: bool = False) -> None:
             f"echo '{public_key}' > /etc/authorized_keys/mz",
         )
 
-        c.run_testdrive("--no-reset", "kafka-source.td")
+        c.run_testdrive_files("--no-reset", "kafka-source.td")
         c.kill("ssh-bastion-host")
-        c.run_testdrive("--no-reset", "kafka-source-after-ssh-failure.td")
+        c.run_testdrive_files("--no-reset", "kafka-source-after-ssh-failure.td")
 
         c.up("ssh-bastion-host")
-        c.run_testdrive("--no-reset", "kafka-source-after-ssh-restart.td")
+        c.run_testdrive_files("--no-reset", "kafka-source-after-ssh-restart.td")
 
 
 def workflow_kafka_restart_replica(c: Composition, redpanda: bool = False) -> None:
@@ -170,7 +170,7 @@ def workflow_kafka_restart_replica(c: Composition, redpanda: bool = False) -> No
             dependencies += ["zookeeper", "kafka", "schema-registry"]
         c.up(*dependencies)
 
-        c.run_testdrive("setup.td")
+        c.run_testdrive_files("setup.td")
 
         public_key = c.sql_query(
             """
@@ -187,15 +187,15 @@ def workflow_kafka_restart_replica(c: Composition, redpanda: bool = False) -> No
             f"echo '{public_key}' > /etc/authorized_keys/mz",
         )
 
-        c.run_testdrive("--no-reset", "kafka-source.td")
+        c.run_testdrive_files("--no-reset", "kafka-source.td")
         c.kill("ssh-bastion-host")
-        c.run_testdrive(
+        c.run_testdrive_files(
             "--no-reset",
             "kafka-source-after-ssh-failure-restart-replica.td",
         )
 
         c.up("ssh-bastion-host")
-        c.run_testdrive("--no-reset", "kafka-source-after-ssh-restart.td")
+        c.run_testdrive_files("--no-reset", "kafka-source-after-ssh-restart.td")
 
 
 def workflow_kafka_sink(c: Composition, redpanda: bool = False) -> None:
@@ -215,7 +215,7 @@ def workflow_kafka_sink(c: Composition, redpanda: bool = False) -> None:
             dependencies += ["zookeeper", "kafka", "schema-registry"]
         c.up(*dependencies)
 
-        c.run_testdrive("setup.td")
+        c.run_testdrive_files("setup.td")
 
         public_key = c.sql_query(
             """
@@ -232,12 +232,12 @@ def workflow_kafka_sink(c: Composition, redpanda: bool = False) -> None:
             f"echo '{public_key}' > /etc/authorized_keys/mz",
         )
 
-        c.run_testdrive("--no-reset", "kafka-sink.td")
+        c.run_testdrive_files("--no-reset", "kafka-sink.td")
         c.kill("ssh-bastion-host")
-        c.run_testdrive("--no-reset", "kafka-sink-after-ssh-failure.td")
+        c.run_testdrive_files("--no-reset", "kafka-sink-after-ssh-failure.td")
 
         c.up("ssh-bastion-host")
-        c.run_testdrive("--no-reset", "kafka-sink-after-ssh-restart.td")
+        c.run_testdrive_files("--no-reset", "kafka-sink-after-ssh-restart.td")
 
 
 def workflow_hidden_hosts(c: Composition, redpanda: bool = False) -> None:
@@ -249,7 +249,7 @@ def workflow_hidden_hosts(c: Composition, redpanda: bool = False) -> None:
         dependencies += ["zookeeper", "kafka", "schema-registry"]
     c.up(*dependencies)
 
-    c.run_testdrive("setup.td")
+    c.run_testdrive_files("setup.td")
 
     public_key = c.sql_query(
         """
@@ -280,7 +280,7 @@ def workflow_hidden_hosts(c: Composition, redpanda: bool = False) -> None:
     add_hidden_host("kafka")
     add_hidden_host("schema-registry")
 
-    c.run_testdrive("--no-reset", "hidden-hosts.td")
+    c.run_testdrive_files("--no-reset", "hidden-hosts.td")
 
 
 # Test that if we restart the bastion AND change its server keys(s), we can
@@ -288,7 +288,7 @@ def workflow_hidden_hosts(c: Composition, redpanda: bool = False) -> None:
 def workflow_pg_restart_bastion(c: Composition) -> None:
     c.up("materialized", "ssh-bastion-host", "postgres")
 
-    c.run_testdrive("setup.td")
+    c.run_testdrive_files("setup.td")
 
     public_key = c.sql_query(
         """
@@ -311,7 +311,7 @@ def workflow_pg_restart_bastion(c: Composition) -> None:
         capture=True,
     ).stdout.strip()
 
-    c.run_testdrive("--no-reset", "pg-source.td")
+    c.run_testdrive_files("--no-reset", "pg-source.td")
 
     restart_bastion(c)
     c.exec(
@@ -321,7 +321,7 @@ def workflow_pg_restart_bastion(c: Composition) -> None:
         f"echo '{public_key}' > /etc/authorized_keys/mz",
     )
 
-    c.run_testdrive("--no-reset", "pg-source-ingest-more.td")
+    c.run_testdrive_files("--no-reset", "pg-source-ingest-more.td")
 
     # we do this after we assert that we re-connnected
     # with the passing td file, to ensure that the
@@ -342,7 +342,7 @@ def workflow_pg_restart_bastion(c: Composition) -> None:
 def workflow_pg_restart_postgres(c: Composition) -> None:
     c.up("materialized", "ssh-bastion-host", "postgres")
 
-    c.run_testdrive("setup.td")
+    c.run_testdrive_files("setup.td")
 
     public_key = c.sql_query(
         """
@@ -358,18 +358,18 @@ def workflow_pg_restart_postgres(c: Composition) -> None:
         f"echo '{public_key}' > /etc/authorized_keys/mz",
     )
 
-    c.run_testdrive("--no-reset", "pg-source.td")
+    c.run_testdrive_files("--no-reset", "pg-source.td")
 
     c.kill("postgres")
     c.up("postgres")
 
-    c.run_testdrive("--no-reset", "pg-source-ingest-more.td")
+    c.run_testdrive_files("--no-reset", "pg-source-ingest-more.td")
 
 
 def workflow_pg_via_ssh_tunnel_with_ssl(c: Composition) -> None:
     c.up("materialized", "ssh-bastion-host", "postgres")
 
-    c.run_testdrive("setup.td")
+    c.run_testdrive_files("setup.td")
 
     public_key = c.sql_query(
         """
@@ -386,13 +386,13 @@ def workflow_pg_via_ssh_tunnel_with_ssl(c: Composition) -> None:
         f"echo '{public_key}' > /etc/authorized_keys/mz",
     )
 
-    c.run_testdrive("--no-reset", "pg-source-ssl.td")
+    c.run_testdrive_files("--no-reset", "pg-source-ssl.td")
 
 
 def workflow_ssh_key_after_restart(c: Composition) -> None:
     c.up("materialized")
 
-    c.run_testdrive("setup.td")
+    c.run_testdrive_files("setup.td")
 
     (primary, secondary) = c.sql_query(
         "SELECT public_key_1, public_key_2 FROM mz_ssh_tunnel_connections;"
@@ -424,7 +424,7 @@ def workflow_ssh_key_after_restart(c: Composition) -> None:
 def workflow_rotated_ssh_key_after_restart(c: Composition) -> None:
     c.up("materialized")
 
-    c.run_testdrive("setup.td")
+    c.run_testdrive_files("setup.td")
 
     secondary_public_key = c.sql_query(
         """
@@ -484,11 +484,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     ]:
         workflow(c, redpanda=False)
         c.sanity_restart_mz()
-        c.run_testdrive("--no-reset", "validate-success.td")
+        c.run_testdrive_files("--no-reset", "validate-success.td")
         if args.extended:
             workflow(c, redpanda=True)
             c.sanity_restart_mz()
-            c.run_testdrive("--no-reset", "validate-success.td")
+            c.run_testdrive_files("--no-reset", "validate-success.td")
 
     # These tests core functionality related to pg with ssh and error reporting.
     workflow_basic_ssh_features(c)
@@ -500,7 +500,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     ]:
         workflow(c)
         c.sanity_restart_mz()
-        c.run_testdrive("--no-reset", "validate-success.td")
+        c.run_testdrive_files("--no-reset", "validate-success.td")
 
     if args.extended:
         # Various special cases related to ssh
@@ -519,4 +519,4 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ]:
             workflow(c)
             c.sanity_restart_mz()
-            c.run_testdrive("--no-reset", "validate-success.td")
+            c.run_testdrive_files("--no-reset", "validate-success.td")
