@@ -40,6 +40,7 @@ use timely::PartialOrder;
 use tracing::{debug, trace};
 
 use crate::cfg::RetryParameters;
+use crate::critical::CriticalReaderId;
 use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
 use crate::read::SubscriptionLeaseReturner;
 use crate::stats::PartStats;
@@ -63,6 +64,7 @@ pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
     name: &str,
     client: impl Fn() -> C,
     shard_id: ShardId,
+    critical_id: CriticalReaderId,
     as_of: Option<Antichain<G::Timestamp>>,
     snapshot_mode: SnapshotMode,
     until: Antichain<G::Timestamp>,
@@ -124,6 +126,7 @@ where
         name,
         client(),
         shard_id.clone(),
+        critical_id,
         as_of,
         snapshot_mode,
         until,
@@ -168,6 +171,7 @@ pub(crate) fn shard_source_descs<K, V, D, F, G>(
     name: &str,
     client: impl Future<Output = PersistClient> + Send + 'static,
     shard_id: ShardId,
+    critical_id: CriticalReaderId,
     as_of: Option<Antichain<G::Timestamp>>,
     snapshot_mode: SnapshotMode,
     until: Antichain<G::Timestamp>,
@@ -267,8 +271,9 @@ where
             async move {
                 client
                     .await
-                    .open_leased_reader::<K, V, G::Timestamp, D>(
+                    .open_protected_reader::<K, V, G::Timestamp, D>(
                         shard_id,
+                        Some(critical_id),
                         key_schema,
                         val_schema,
                         diagnostics,
@@ -552,6 +557,7 @@ mod tests {
                         "test_source",
                         move || std::future::ready(persist_client.clone()),
                         shard_id,
+                        PersistClient::CONTROLLER_CRITICAL_SINCE,
                         None, // No explicit as_of!
                         SnapshotMode::Include,
                         until,
@@ -619,6 +625,7 @@ mod tests {
                         "test_source",
                         move || std::future::ready(persist_client.clone()),
                         shard_id,
+                        PersistClient::CONTROLLER_CRITICAL_SINCE,
                         Some(as_of), // We specify the as_of explicitly!
                         SnapshotMode::Include,
                         until,
