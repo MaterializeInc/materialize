@@ -91,7 +91,7 @@ pub struct ComputeState {
     /// History of commands received by this workers and all its peers.
     pub command_history: ComputeCommandHistory<UIntGauge>,
     /// Max size in bytes of any result.
-    max_result_size: u32,
+    max_result_size: u64,
     /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
     pub dataflow_max_inflight_bytes: Option<usize>,
     /// Specification for rendering linear joins.
@@ -127,7 +127,7 @@ impl ComputeState {
             compute_logger: None,
             persist_clients,
             command_history,
-            max_result_size: u32::MAX,
+            max_result_size: u64::MAX,
             dataflow_max_inflight_bytes: None,
             linear_join_spec: Default::default(),
             metrics,
@@ -926,7 +926,7 @@ impl IndexPeek {
     fn seek_fulfillment(
         &mut self,
         upper: &mut Antichain<Timestamp>,
-        max_result_size: u32,
+        max_result_size: u64,
     ) -> Option<PeekResponse> {
         self.trace_bundle.oks_mut().read_upper(upper);
         if upper.less_equal(&self.peek.timestamp) {
@@ -957,7 +957,7 @@ impl IndexPeek {
     /// Collects data for a known-complete peek from the ok stream.
     fn collect_finished_data(
         &mut self,
-        max_result_size: u32,
+        max_result_size: u64,
     ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
         // Check if there exist any errors and, if so, return whatever one we
         // find first.
@@ -989,7 +989,7 @@ impl IndexPeek {
     /// arrangement key-value types.
     fn dispatch_collect_ok_finished_data(
         &mut self,
-        max_result_size: u32,
+        max_result_size: u64,
     ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
         let peek = &mut self.peek;
         let oks = self.trace_bundle.oks_mut();
@@ -1025,7 +1025,7 @@ impl IndexPeek {
         oks_handle: &mut TraceAgent<Tr>,
         key_types: Option<&[ColumnType]>,
         val_types: Option<&[ColumnType]>,
-        max_result_size: u32,
+        max_result_size: u64,
     ) -> Result<Vec<(Row, NonZeroUsize)>, String>
     where
         Tr: TraceReader<Time = Timestamp, Diff = Diff>,

@@ -49,9 +49,9 @@ max_kafka_connections               1000                    "The maximum number 
 max_materialized_views              100                     "The maximum number of materialized views in the region, across all schemas (Materialize)."
 max_objects_per_schema              1000                    "The maximum number of objects in a schema (Materialize)."
 max_postgres_connections            1000                    "The maximum number of PostgreSQL connections in the region, across all schemas (Materialize)."
-max_query_result_size               1073741824              "The maximum size in bytes for a single query's result (Materialize)."
+max_query_result_size               "1GB"                   "The maximum size in bytes for a single query's result (Materialize)."
 max_replicas_per_cluster            5                       "The maximum number of replicas of a single cluster (Materialize)."
-max_result_size                     1073741824              "The maximum size in bytes for an internal query result (Materialize)."
+max_result_size                     "1GB"                   "The maximum size in bytes for an internal query result (Materialize)."
 max_roles                           1000                    "The maximum number of roles in the region (Materialize)."
 max_schemas_per_database            1000                    "The maximum number of schemas in a database (Materialize)."
 max_secrets                         100                     "The maximum number of secrets in the region, across all schemas (Materialize)."
@@ -202,3 +202,15 @@ contains:parameter "cluster_replica" cannot have value "1","2": expects a single
 
 ! SET statement_logging_sample_rate = 1.1
 contains:parameter "statement_logging_sample_rate" cannot have value "1.1": only supports values in range 0.0..=1.0
+
+> SET max_query_result_size = '120 MB';
+> SHOW max_query_result_size
+"120MB"
+
+> SET max_query_result_size = 1048576 -- 1MB
+> SHOW max_query_result_size
+"1MB"
+
+> SET max_query_result_size = 10240 -- 10KB
+> SHOW max_query_result_size
+"10kB"

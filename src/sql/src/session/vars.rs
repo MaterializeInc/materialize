@@ -91,6 +91,7 @@ use mz_persist_client::cfg::{PersistConfig, PersistFeatureFlag};
 use mz_pgwire_common::Severity;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
+use mz_repr::bytes::ByteSize;
 use mz_repr::strconv;
 use mz_repr::user::ExternalUserMetadata;
 use mz_sql_parser::ast::TransactionIsolationLevel;
@@ -522,18 +523,16 @@ pub const MAX_ROLES: ServerVar<u32> = ServerVar {
 // Cloud environmentd is configured with 4 GiB of RAM, so 1 GiB is a good heuristic for a single
 // query.
 // TODO(jkosh44) Eventually we want to be able to return arbitrary sized results.
-pub const MAX_RESULT_SIZE: ServerVar<u32> = ServerVar {
+pub const MAX_RESULT_SIZE: ServerVar<ByteSize> = ServerVar {
     name: UncasedStr::new("max_result_size"),
-    // 1 GiB
-    value: 1_073_741_824,
+    value: ByteSize::gb(1),
     description: "The maximum size in bytes for an internal query result (Materialize).",
     internal: false,
 };
 
-pub const MAX_QUERY_RESULT_SIZE: ServerVar<u32> = ServerVar {
+pub const MAX_QUERY_RESULT_SIZE: ServerVar<ByteSize> = ServerVar {
     name: UncasedStr::new("max_query_result_size"),
-    // 1 GiB
-    value: 1_073_741_824,
+    value: ByteSize::gb(1),
     description: "The maximum size in bytes for a single query's result (Materialize).",
     internal: false,
 };
@@ -2820,8 +2819,8 @@ impl SessionVars {
     }
 
     /// Returns the value of the `max_query_result_size` configuration parameter.
-    pub fn max_query_result_size(&self) -> u32 {
-        *self.expect_value(&MAX_QUERY_RESULT_SIZE)
+    pub fn max_query_result_size(&self) -> u64 {
+        self.expect_value(&MAX_QUERY_RESULT_SIZE).as_bytes()
     }
 
     /// Sets the external metadata associated with the user.
@@ -3459,8 +3458,8 @@ impl SystemVars {
     }
 
     /// Returns the value of the `max_result_size` configuration parameter.
-    pub fn max_result_size(&self) -> u32 {
-        *self.expect_value(&MAX_RESULT_SIZE)
+    pub fn max_result_size(&self) -> u64 {
+        self.expect_value(&MAX_RESULT_SIZE).as_bytes()
     }
 
     /// Returns the value of the `max_copy_from_size` configuration parameter.
@@ -4895,6 +4894,24 @@ impl Value for Numeric {
 
     fn format(&self) -> String {
         self.to_standard_notation_string()
+    }
+}
+
+impl Value for ByteSize {
+    fn type_name() -> String {
+        "bytes".to_string()
+    }
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<ByteSize, VarError> {
+        let s = extract_single_value(param, input)?;
+        s.parse::<ByteSize>()
+            .map_err(|_| VarError::InvalidParameterType(param.into()))
+    }
+
+    fn format(&self) -> String {
+        self.to_string()
     }
 }
 

@@ -71,7 +71,7 @@ SELECT TO_CHAR(now(), 'YYYY-MM-DD');
 ! COPY t TO 's3://path/to/' || TO_CHAR(now(), 'YYYY-MM-DD')
   WITH (
     AWS CONNECTION = aws_conn,
-    MAX FILE SIZE = "1000",
+    MAX FILE SIZE = "100MB",
     FORMAT = 'csv'
   );
 contains:internal error: COPY TO 's3://path/to/${now_date}' is not yet implemented
