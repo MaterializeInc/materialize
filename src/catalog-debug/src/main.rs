@@ -135,7 +135,7 @@ async fn main() {
         enable_version_flag: true,
     });
     if let Err(err) = run(args).await {
-        eprintln!("catalog: fatal: {}", err.display_with_causes());
+        eprintln!("catalog: fatal: {:?}", err.display_with_causes());
         process::exit(1);
     }
 }
