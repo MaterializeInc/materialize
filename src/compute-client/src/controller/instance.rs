@@ -389,10 +389,15 @@ where
     /// # Panics
     ///
     /// Panics if the compute instance still has active replicas.
+    /// Panics if the compute instance still has collections installed.
     pub fn drop(self) {
         assert!(
             self.replicas.is_empty(),
             "cannot drop instances with provisioned replicas"
+        );
+        assert!(
+            self.collections.values().all(|c| c.log_collection),
+            "cannot drop instances with installed collections"
         );
     }
 
