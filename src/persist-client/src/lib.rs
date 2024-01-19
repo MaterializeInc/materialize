@@ -62,6 +62,7 @@ pub mod cli {
     pub mod inspect;
 }
 pub mod critical;
+pub mod dyn_cfg;
 pub mod error;
 pub mod fetch;
 pub mod internals_bench;

@@ -32,7 +32,8 @@ use tokio::runtime::Handle;
 use tracing::{debug_span, instrument, warn, Instrument};
 use uuid::Uuid;
 
-use crate::cfg::{PersistFeatureFlag, RetryParameters};
+use crate::cfg::RetryParameters;
+use crate::dyn_cfg::Config;
 use crate::fetch::{
     fetch_leased_part, FetchBatchFilter, FetchedPart, LeasedBatchPart, SerdeLeasedBatchPart,
     SerdeLeasedBatchPartMetadata,
@@ -976,6 +977,12 @@ where
     }
 }
 
+pub(crate) const STREAMING_SNAPSHOT_AND_FETCH_ENABLED: Config<bool> = Config::new(
+    "persist_streaming_snapshot_and_fetch_enabled",
+    false,
+    "use the new streaming consolidate during snapshot_and_fetch",
+);
+
 impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
     K: Debug + Codec + Ord,
@@ -1000,13 +1007,7 @@ where
         &mut self,
         as_of: Antichain<T>,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
-        if self
-            .machine
-            .applier
-            .cfg
-            .dynamic
-            .enabled(PersistFeatureFlag::STREAMING_SNAPSHOT_AND_FETCH)
-        {
+        if STREAMING_SNAPSHOT_AND_FETCH_ENABLED.get(&self.machine.applier.cfg.configs) {
             return self.snapshot_and_fetch_streaming(as_of).await;
         }
 

@@ -39,7 +39,8 @@ use timely::PartialOrder;
 use tracing::{debug_span, error, instrument, trace_span, warn, Instrument};
 
 use crate::async_runtime::IsolatedRuntime;
-use crate::cfg::{PersistFeatureFlag, ProtoUntrimmableColumns};
+use crate::cfg::ProtoUntrimmableColumns;
+use crate::dyn_cfg::Config;
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
@@ -223,6 +224,13 @@ pub struct BatchBuilderConfig {
     pub(crate) stats_untrimmable_columns: Arc<UntrimmableColumns>,
 }
 
+// TODO: Remove this once we're comfortable that there aren't any bugs.
+pub(crate) const BATCH_DELETE_ENABLED: Config<bool> = Config::new(
+    "persist_batch_delete_enabled",
+    false,
+    "Whether to actually delete blobs when batch delete is called (Materialize).",
+);
+
 impl BatchBuilderConfig {
     /// Initialize a batch builder config based on a snapshot of the Persist config.
     pub fn new(value: &PersistConfig, _writer_id: &WriterId) -> Self {
@@ -230,9 +238,7 @@ impl BatchBuilderConfig {
         BatchBuilderConfig {
             writer_key,
             blob_target_size: value.dynamic.blob_target_size(),
-            batch_delete_enabled: value
-                .dynamic
-                .enabled(PersistFeatureFlag::BATCH_DELETE_ENABLED),
+            batch_delete_enabled: BATCH_DELETE_ENABLED.get(&value.configs),
             batch_builder_max_outstanding_parts: value
                 .dynamic
                 .batch_builder_max_outstanding_parts(),
