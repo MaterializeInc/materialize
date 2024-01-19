@@ -67,6 +67,8 @@ else
     rust_components+=,clippy-preview,rustfmt-preview
 fi
 
+rust_cpu_target=$(cpu_target)
+
 uid=$(id -u)
 gid=$(id -g)
 [[ "$uid" -lt 500 ]] && uid=501
@@ -81,6 +83,7 @@ build() {
         --build-arg "RUST_VERSION=$rust_version" \
         --build-arg "RUST_DATE=$rust_date" \
         --build-arg "RUST_COMPONENTS=$rust_components" \
+        --build-arg "RUST_CPU_TARGET=$rust_cpu_target" \
         --tag materialize/ci-builder:"$tag" \
         --tag materialize/ci-builder:"$cache_tag" \
         "$@" ci/builder

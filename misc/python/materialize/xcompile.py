@@ -53,6 +53,16 @@ def target(arch: Arch) -> str:
     return f"{arch}-unknown-linux-gnu"
 
 
+def target_cpu(arch: Arch) -> str:
+    """Return the CPU micro architecture, assuming a Linux target, we should use for Rust compilation."""
+    if arch == Arch.X86_64:
+        return "x86-64-v3"
+    elif arch == Arch.AARCH64:
+        return "neoverse-n1"
+    else:
+        raise RuntimeError("unreachable")
+
+
 def cargo(
     arch: Arch, subcommand: str, rustflags: list[str], channel: str | None = None
 ) -> list[str]:
@@ -70,10 +80,12 @@ def cargo(
     """
     _target = target(arch)
     _target_env = _target.upper().replace("-", "_")
+    _target_cpu = target_cpu(arch)
 
     rustflags += [
         "-Clink-arg=-Wl,--compress-debug-sections=zlib",
         "-Csymbol-mangling-version=v0",
+        f"-Ctarget-cpu={_target_cpu}",
         "--cfg=tokio_unstable",
     ]
 
