@@ -19,7 +19,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use clap::Parser;
 use mz_adapter::catalog::Catalog;
 use mz_build_info::{build_info, BuildInfo};
@@ -135,7 +135,11 @@ async fn main() {
         enable_version_flag: true,
     });
     if let Err(err) = run(args).await {
-        eprintln!("catalog: fatal: {:?}", err.display_with_causes());
+        eprintln!(
+            "catalog-debug: fatal: {}\nbacktrace: {}",
+            err.display_with_causes(),
+            err.backtrace()
+        );
         process::exit(1);
     }
 }
