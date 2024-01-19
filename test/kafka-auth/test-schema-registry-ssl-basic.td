@@ -186,6 +186,8 @@ contains:Unauthorized
 
 > ALTER CONNECTION schema_registry DROP (SSL CERTIFICATE AUTHORITY) WITH (VALIDATE = false);
 
+$ kafka-create-topic topic=data partitions=1
+
 ! CREATE SOURCE kafka_broken_csr_connector_source_broken
   FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-data-${testdrive.seed}')
     FORMAT AVRO

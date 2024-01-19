@@ -188,6 +188,8 @@ named_id named_geo a
 <null>   <null>    88
 1        nyc       99
 
+$ kafka-create-topic topic=avro-dbz partitions=1
+
 ! CREATE SOURCE avro_debezium
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-dbz-${testdrive.seed}')

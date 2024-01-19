@@ -19,6 +19,8 @@
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+$ kafka-create-topic topic=noexist partitions=1
+
 ! CREATE SOURCE noexist
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-noexist-${testdrive.seed}')

@@ -9,6 +9,8 @@
 
 # Test that Protobuf map fields are unsupported.
 
+$ kafka-create-topic topic=maps partitions=1
+
 $ file-append path=maps.proto
 syntax = "proto3";
 
