@@ -59,7 +59,7 @@ def workflow_versioned_mz(c: Composition) -> None:
     for mz in versioned_mz:
         c.up(mz.name)
 
-        c.run("testdrive", "test*.td")
+        c.run_testdrive("test*.td")
 
         c.kill(mz.name)
 

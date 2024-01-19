@@ -129,8 +129,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     with c.override(*override):
         c.up(*prerequisites, "materialized")
 
-        c.run(
-            "testdrive",
+        c.run_testdrive(
             "setup.td",
         )
 

@@ -258,7 +258,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"echo '{public_key}' >> /etc/authorized_keys/mz",
     )
 
-    c.run("testdrive", f"test-{args.filter}.td")
+    c.run_testdrive(f"test-{args.filter}.td")
 
 
 def add_acl(

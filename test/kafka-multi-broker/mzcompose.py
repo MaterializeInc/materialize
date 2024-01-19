@@ -36,11 +36,11 @@ SERVICES = [
 
 def workflow_default(c: Composition) -> None:
     c.up("zookeeper", "kafka1", "kafka2", "kafka3", "schema-registry", "materialized")
-    c.run("testdrive", "--kafka-addr=kafka2", "01-init.td")
+    c.run_testdrive("--kafka-addr=kafka2", "01-init.td")
     time.sleep(10)
     c.kill("kafka1")
     time.sleep(10)
-    c.run("testdrive", "--kafka-addr=kafka2,kafka3", "--no-reset", "02-after-leave.td")
+    c.run_testdrive("--kafka-addr=kafka2,kafka3", "--no-reset", "02-after-leave.td")
     c.up("kafka1")
     time.sleep(10)
-    c.run("testdrive", "--kafka-addr=kafka1", "--no-reset", "03-after-join.td")
+    c.run_testdrive("--kafka-addr=kafka1", "--no-reset", "03-after-join.td")

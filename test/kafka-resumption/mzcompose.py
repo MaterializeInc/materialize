@@ -53,8 +53,7 @@ def workflow_sink_networking(c: Composition) -> None:
         ]
     ):
         c.up("toxiproxy")
-        c.run(
-            "testdrive",
+        c.run_testdrive(
             "--no-reset",
             "--max-errors=1",
             f"--seed={seed}{i}",
@@ -78,8 +77,8 @@ def workflow_source_resumption(c: Composition) -> None:
     ):
         c.up("materialized", "zookeeper", "kafka", "clusterd")
 
-        c.run("testdrive", "source-resumption/setup.td")
-        c.run("testdrive", "source-resumption/verify.td")
+        c.run_testdrive("source-resumption/setup.td")
+        c.run_testdrive("source-resumption/verify.td")
 
         # Disabled due to https://github.com/MaterializeInc/materialize/issues/20819
         # assert (
@@ -95,8 +94,8 @@ def workflow_source_resumption(c: Composition) -> None:
         c.sleep(10)
 
         # Verify the same data is query-able, and that we can make forward progress
-        c.run("testdrive", "source-resumption/verify.td")
-        c.run("testdrive", "source-resumption/re-ingest-and-verify.td")
+        c.run_testdrive("source-resumption/verify.td")
+        c.run_testdrive("source-resumption/re-ingest-and-verify.td")
 
         # the first clusterd instance ingested 3 messages, so our
         # upper is at the 4th offset (0-indexed)

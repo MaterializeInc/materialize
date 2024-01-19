@@ -55,7 +55,7 @@ def workflow_default(c: Composition) -> None:
         with c.override(Redpanda(version=redpanda_version)):
             c.down(destroy_volumes=True)
             c.up("redpanda", "materialized")
-            c.run("testdrive", *TD_CMD)
+            c.run_testdrive(*TD_CMD)
 
     for confluent_version in CONFLUENT_PLATFORM_VERSIONS:
         print(f"--- Testing Confluent Platform {confluent_version}")
@@ -66,4 +66,4 @@ def workflow_default(c: Composition) -> None:
         ):
             c.down(destroy_volumes=True)
             c.up("zookeeper", "kafka", "schema-registry", "materialized")
-            c.run("testdrive", *TD_CMD)
+            c.run_testdrive(*TD_CMD)

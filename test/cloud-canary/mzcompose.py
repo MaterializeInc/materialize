@@ -198,8 +198,7 @@ def td(c: Composition, *args: str) -> None:
             ],
         )
     ):
-        c.run(
-            "testdrive",
+        c.run_testdrive(
             *args,
             rm=True,
         )

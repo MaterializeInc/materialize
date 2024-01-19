@@ -100,7 +100,7 @@ def _run_test_case(c: Composition, path: Path):
     for test_file in sorted(p for p in path.iterdir()):
         test_file = test_file.relative_to(ROOT)
         if test_file.suffix == ".td":
-            c.run("testdrive", str(test_file))
+            c.run_testdrive(str(test_file))
         elif test_file.suffix == ".json":
             _run_destination_tester(c, test_file)
         elif test_file.name != "00-README":

@@ -25,7 +25,7 @@ SERVICES = [
 def workflow_replication_slots(c: Composition, parser: WorkflowArgumentParser) -> None:
     with c.override(Postgres(extra_command=["-c", "max_replication_slots=2"])):
         c.up("materialized", "postgres")
-        c.run("testdrive", "override/replication-slots.td")
+        c.run_testdrive("override/replication-slots.td")
 
 
 def workflow_wal_level(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -41,7 +41,7 @@ def workflow_wal_level(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
         ):
             c.up("materialized", "postgres")
-            c.run("testdrive", "override/insufficient-wal-level.td")
+            c.run_testdrive("override/insufficient-wal-level.td")
 
 
 def workflow_replication_disabled(
@@ -49,7 +49,7 @@ def workflow_replication_disabled(
 ) -> None:
     with c.override(Postgres(extra_command=["-c", "max_wal_senders=0"])):
         c.up("materialized", "postgres")
-        c.run("testdrive", "override/replication-disabled.td")
+        c.run_testdrive("override/replication-disabled.td")
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -72,8 +72,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     ).stdout
 
     c.up("materialized", "test-certs", "postgres")
-    c.run(
-        "testdrive",
+    c.run_testdrive(
         f"--var=ssl-ca={ssl_ca}",
         f"--var=ssl-cert={ssl_cert}",
         f"--var=ssl-key={ssl_key}",
