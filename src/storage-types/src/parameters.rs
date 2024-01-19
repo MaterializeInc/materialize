@@ -364,10 +364,6 @@ pub struct PgSourceSnapshotConfig {
     /// Whether or not we wait for `count(*)` to finish before beginning to read the snapshot for
     /// the given table.
     pub wait_for_count: bool,
-    /// Whether to query `count(*)` metrics per-worker, or only within the snapshot leader.
-    /// If true, each worker will use an additional connection, as opposed to a singular extra
-    /// connection.
-    pub collect_count_per_worker: bool,
 }
 
 impl PgSourceSnapshotConfig {
@@ -378,8 +374,6 @@ impl PgSourceSnapshotConfig {
             fallback_to_strict_count: true,
             // For now, wait to start snapshotting until after we have the count.
             wait_for_count: true,
-            // This is faster, at the cost of extra connections if `wait_for_count` is false.
-            collect_count_per_worker: true,
         }
     }
 }
@@ -396,7 +390,6 @@ impl RustType<ProtoPgSourceSnapshotConfig> for PgSourceSnapshotConfig {
             collect_strict_count: self.collect_strict_count,
             fallback_to_strict_count: self.fallback_to_strict_count,
             wait_for_count: self.wait_for_count,
-            collect_count_per_worker: self.collect_count_per_worker,
         }
     }
 
@@ -405,7 +398,6 @@ impl RustType<ProtoPgSourceSnapshotConfig> for PgSourceSnapshotConfig {
             collect_strict_count: proto.collect_strict_count,
             fallback_to_strict_count: proto.fallback_to_strict_count,
             wait_for_count: proto.wait_for_count,
-            collect_count_per_worker: proto.collect_count_per_worker,
         })
     }
 }

@@ -1140,15 +1140,6 @@ const PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT: ServerVar<bool> = ServerVar {
         /struct.PgSourceSnapshotConfig.html#structfield.wait_for_count>",
     internal: true,
 };
-/// Please see `PgSourceSnapshotConfig`.
-const PG_SOURCE_SNAPSHOT_COLLECT_COUNT_PER_WORKER: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("pg_source_snapshot_collect_count_per_worker"),
-    value: mz_storage_types::parameters::PgSourceSnapshotConfig::new().collect_count_per_worker,
-    description: "Please see <https://dev.materialize.com/api/rust-private\
-        /mz_storage_types/parameters\
-        /struct.PgSourceSnapshotConfig.html#structfield.collect_count_per_worker>",
-    internal: true,
-};
 
 /// Controls the check interval for connections to SSH bastions via `mz_ssh_util`.
 const SSH_CHECK_INTERVAL: ServerVar<Duration> = ServerVar {
@@ -3132,7 +3123,6 @@ impl SystemVars {
             .with_var(&PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT)
             .with_var(&PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT)
             .with_var(&PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT)
-            .with_var(&PG_SOURCE_SNAPSHOT_COLLECT_COUNT_PER_WORKER)
             .with_var(&SSH_CHECK_INTERVAL)
             .with_var(&SSH_CONNECT_TIMEOUT)
             .with_var(&SSH_KEEPALIVES_IDLE)
@@ -3756,10 +3746,6 @@ impl SystemVars {
     /// Returns the `pg_source_snapshot_collect_strict_count` configuration parameter.
     pub fn pg_source_snapshot_wait_for_count(&self) -> bool {
         *self.expect_value(&PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT)
-    }
-    /// Returns the `pg_source_snapshot_collect_count_per_worker` configuration parameter.
-    pub fn pg_source_snapshot_collect_count_per_worker(&self) -> bool {
-        *self.expect_value(&PG_SOURCE_SNAPSHOT_COLLECT_COUNT_PER_WORKER)
     }
 
     /// Returns the `ssh_check_interval` configuration parameter.
@@ -5792,7 +5778,6 @@ impl SystemVars {
             || name == PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT.name()
             || name == PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT.name()
             || name == PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT.name()
-            || name == PG_SOURCE_SNAPSHOT_COLLECT_COUNT_PER_WORKER.name()
             || name == ENABLE_STORAGE_SHARD_FINALIZATION.name()
             || name == SSH_CHECK_INTERVAL.name()
             || name == SSH_CONNECT_TIMEOUT.name()

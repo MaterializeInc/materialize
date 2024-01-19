@@ -180,7 +180,6 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
             collect_strict_count: config.pg_source_snapshot_collect_strict_count(),
             fallback_to_strict_count: config.pg_source_snapshot_fallback_to_strict_count(),
             wait_for_count: config.pg_source_snapshot_wait_for_count(),
-            collect_count_per_worker: config.pg_source_snapshot_collect_count_per_worker(),
         },
     }
 }

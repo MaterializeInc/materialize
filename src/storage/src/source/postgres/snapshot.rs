@@ -234,19 +234,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         .map(|(k, v)| (*k, v.clone()))
         .collect();
 
-    let all_tables: Vec<_> = table_info
-        .iter()
-        .map(|(_, (_, desc, _))| {
-            (
-                format!(
-                    "{}.{}",
-                    Ident::new_unchecked(desc.namespace.clone()).to_ast_string(),
-                    Ident::new_unchecked(desc.name.clone()).to_ast_string()
-                ),
-                desc.oid.clone(),
-            )
-        })
-        .collect();
     let (button, transient_errors) = builder.build_fallible(move |caps| {
         Box::pin(async move {
             let id = config.id;
@@ -423,8 +410,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 &snapshot,
                 metrics,
                 worker_tables,
-                all_tables,
-                is_snapshot_leader,
                 Arc::clone(&client),
             )
             .await?;
@@ -583,11 +568,7 @@ async fn record_table_sizes(
     snapshot: &str,
     metrics: PgSnapshotMetrics,
     // The table names and oids owned by this worker.
-    worker_tables: Vec<(String, Oid)>,
-    // All tables (names and oids) in the snapshot)
-    all_tables: Vec<(String, Oid)>,
-    // If this worker is the snapshot leader.
-    leader: bool,
+    tables: Vec<(String, Oid)>,
     // An optimization: when `wait_for_count` is true, we can use the client
     // used for replication.
     replication_client: Arc<Client>,
@@ -601,16 +582,6 @@ async fn record_table_sizes(
 
     let source_id = config.id;
     let worker_id = config.worker_id;
-
-    let tables = if !snapshot_config.collect_count_per_worker {
-        if leader {
-            all_tables
-        } else {
-            return Ok(None);
-        }
-    } else {
-        worker_tables
-    };
 
     if tables.is_empty() {
         return Ok(None);

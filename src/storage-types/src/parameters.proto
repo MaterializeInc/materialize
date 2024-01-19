@@ -55,7 +55,6 @@ message ProtoPgSourceSnapshotConfig {
     bool collect_strict_count = 1;
     bool fallback_to_strict_count = 2;
     bool wait_for_count = 3;
-    bool collect_count_per_worker = 4;
 }
 
 message ProtoKafkaTimeouts {
