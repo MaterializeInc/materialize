@@ -27,9 +27,11 @@ class TestResult:
 class TestFailureDetails:
     message: str
     details: str | None
+    test_class_name_override: str | None = None
+    test_case_name_override: str | None = None
     # depending on the check, this may either be a file name or a path
-    location: str | None
-    line_number: int | None
+    location: str | None = None
+    line_number: int | None = None
 
     def location_as_file_name(self) -> str | None:
         if self.location is None:

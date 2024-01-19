@@ -660,10 +660,14 @@ To see the available workflows, run:
             junit_suite.test_cases.append(test_case)
         else:
             for error in result.errors:
-                test_case_name = error.location_as_file_name() or test_case_key
+                test_case_name = (
+                    error.test_case_name_override
+                    or error.location_as_file_name()
+                    or test_case_key
+                )
                 test_case = junit_xml.TestCase(
                     test_case_name,
-                    test_class_name,
+                    error.test_class_name_override or test_class_name,
                     # do not provide the duration when multiple errors are derived from a test execution
                     elapsed_sec=None,
                 )
