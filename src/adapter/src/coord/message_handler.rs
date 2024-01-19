@@ -857,6 +857,7 @@ impl Coordinator {
                 in_immediate_multi_stmt_txn: _,
                 optimizer,
                 global_mir_plan,
+                explain_ctx,
             } => {
                 self.sequence_peek_stage(
                     ctx,
@@ -872,6 +873,7 @@ impl Coordinator {
                         real_time_recency_ts: Some(real_time_recency_ts),
                         optimizer,
                         global_mir_plan,
+                        explain_ctx,
                     }),
                 )
                 .await;

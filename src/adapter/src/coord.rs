@@ -368,6 +368,7 @@ pub enum RealTimeRecencyContext {
         in_immediate_multi_stmt_txn: bool,
         optimizer: optimize::peek::Optimizer,
         global_mir_plan: optimize::peek::GlobalMirPlan,
+        explain_ctx: Option<ExplainContext>,
     },
 }
 
@@ -407,6 +408,9 @@ impl PeekStage {
 pub struct PeekStageValidate {
     plan: mz_sql::plan::SelectPlan,
     target_cluster: TargetCluster,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
@@ -418,6 +422,9 @@ pub struct PeekStageTimestamp {
     timeline_context: TimelineContext,
     in_immediate_multi_stmt_txn: bool,
     optimizer: optimize::peek::Optimizer,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
@@ -430,6 +437,9 @@ pub struct PeekStageOptimizeMir {
     oracle_read_ts: Option<Timestamp>,
     in_immediate_multi_stmt_txn: bool,
     optimizer: optimize::peek::Optimizer,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
@@ -444,6 +454,9 @@ pub struct PeekStageRealTimeRecency {
     in_immediate_multi_stmt_txn: bool,
     optimizer: optimize::peek::Optimizer,
     global_mir_plan: optimize::peek::GlobalMirPlan,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
@@ -458,6 +471,9 @@ pub struct PeekStageOptimizeLir {
     real_time_recency_ts: Option<mz_repr::Timestamp>,
     optimizer: optimize::peek::Optimizer,
     global_mir_plan: optimize::peek::GlobalMirPlan,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
