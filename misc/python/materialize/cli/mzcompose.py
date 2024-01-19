@@ -664,7 +664,8 @@ To see the available workflows, run:
                 test_case = junit_xml.TestCase(
                     test_case_name,
                     test_class_name,
-                    result.duration,
+                    # do not provide the duration when multiple errors are derived from a test execution
+                    elapsed_sec=None,
                 )
                 test_case.add_error_info(message=error.message, output=error.details)
                 junit_suite.test_cases.append(test_case)
