@@ -1818,10 +1818,8 @@ impl Coordinator {
                         plan::ExplaineeStatement::CreateIndex { .. } => {
                             self.explain_create_index(ctx, plan).await;
                         }
-                        _ => {
-                            let result =
-                                self.explain_statement(&mut ctx, plan, target_cluster).await;
-                            ctx.retire(result);
+                        plan::ExplaineeStatement::Select { .. } => {
+                            self.explain_peek(ctx, plan, target_cluster).await;
                         }
                     }
                 } else {

@@ -98,7 +98,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_controller::clusters::{ClusterConfig, ClusterEvent, CreateReplicaConfig};
 use mz_controller::ControllerConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::OptimizedMirRelationExpr;
+use mz_expr::{OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -109,7 +109,7 @@ use mz_ore::{soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::{ExplainConfig, ExplainFormat, UsedIndexes};
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
@@ -145,7 +145,7 @@ use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParam
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
 use crate::coord::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::peek::PendingPeek;
+use crate::coord::peek::{FastPathPlan, PendingPeek};
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::error::AdapterError;
@@ -389,6 +389,7 @@ pub enum PeekStage {
     RealTimeRecency(PeekStageRealTimeRecency),
     OptimizeLir(PeekStageOptimizeLir),
     Finish(PeekStageFinish),
+    Explain(PeekStageExplain),
 }
 
 impl PeekStage {
@@ -400,6 +401,7 @@ impl PeekStage {
             | PeekStage::RealTimeRecency(PeekStageRealTimeRecency { validity, .. })
             | PeekStage::OptimizeLir(PeekStageOptimizeLir { validity, .. })
             | PeekStage::Finish(PeekStageFinish { validity, .. }) => Some(validity),
+            PeekStage::Explain(PeekStageExplain { validity, .. }) => Some(validity),
         }
     }
 }
@@ -487,6 +489,17 @@ pub struct PeekStageFinish {
     timestamp_context: TimestampContext<mz_repr::Timestamp>,
     optimizer: optimize::peek::Optimizer,
     global_lir_plan: optimize::peek::GlobalLirPlan,
+}
+
+#[derive(Debug)]
+pub struct PeekStageExplain {
+    validity: PlanValidity,
+    select_id: GlobalId,
+    finishing: RowSetFinishing,
+    fast_path_plan: Option<FastPathPlan>,
+    df_meta: DataflowMetainfo,
+    used_indexes: UsedIndexes,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -592,6 +605,7 @@ pub struct ExplainContext {
     pub config: ExplainConfig,
     pub format: ExplainFormat,
     pub stage: ExplainStage,
+    pub desc: Option<RelationDesc>,
     pub optimizer_trace: OptimizerTrace,
 }
 

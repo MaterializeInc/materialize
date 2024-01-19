@@ -86,6 +86,10 @@ impl Optimizer {
         &self.finishing
     }
 
+    pub fn select_id(&self) -> GlobalId {
+        self.select_id
+    }
+
     pub fn index_id(&self) -> GlobalId {
         self.index_id
     }

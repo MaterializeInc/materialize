@@ -155,7 +155,7 @@ impl Coordinator {
                     stage,
                 } => {
                     otel_ctx.attach_as_parent();
-                    self.sequence_peek_stage(ctx, otel_ctx, stage).await;
+                    self.execute_peek_stage(ctx, otel_ctx, stage).await;
                 }
                 Message::CreateIndexStageReady {
                     ctx,
@@ -859,7 +859,7 @@ impl Coordinator {
                 global_mir_plan,
                 explain_ctx,
             } => {
-                self.sequence_peek_stage(
+                self.execute_peek_stage(
                     ctx,
                     root_otel_ctx,
                     PeekStage::OptimizeLir(PeekStageOptimizeLir {

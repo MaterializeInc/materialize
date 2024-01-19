@@ -90,6 +90,7 @@ impl Coordinator {
                     config,
                     format,
                     stage,
+                    desc: None,
                     optimizer_trace,
                 }),
             }),
@@ -284,7 +285,7 @@ impl Coordinator {
                             })
                         }
                     }
-                    // Internal optimizer errors errors are handled differently
+                    // Internal optimizer errors are handled differently
                     // depending on the caller.
                     Err(err) => {
                         let Some(explain_ctx) = explain_ctx else {
@@ -459,6 +460,7 @@ impl Coordinator {
                     format,
                     stage,
                     optimizer_trace,
+                    ..
                 },
             ..
         }: CreateIndexExplain,
