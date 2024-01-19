@@ -14,6 +14,7 @@ use mz_controller_types::ClusterId;
 use mz_expr::CollectionPlan;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_repr::explain::{trace_plan, UsedIndexes};
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::CatalogCluster;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
@@ -360,19 +361,27 @@ impl Coordinator {
             }
         };
 
-        let span = tracing::debug_span!("optimize peek task (mir)");
-
         mz_ore::task::spawn_blocking(
             || "optimize peek (MIR)",
             move || {
                 let pipeline = || -> Result<optimize::peek::GlobalMirPlan, AdapterError> {
-                    let local_mir_plan = optimizer.catch_unwind_optimize(plan.source.clone())?;
+                    let _span_guard =
+                        tracing::debug_span!(target: "optimizer", "optimize").entered();
+
+                    let raw_expr = plan.source.clone();
+
+                    // Trace the pipeline input under `optimize/raw`.
+                    tracing::debug_span!(target: "optimizer", "raw").in_scope(|| {
+                        trace_plan(&raw_expr);
+                    });
+
+                    // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
+                    let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
                     let local_mir_plan = local_mir_plan.resolve(ctx.session(), stats);
                     let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
 
                     Ok(global_mir_plan)
                 };
-                let _guard = span.enter();
 
                 let stage = match pipeline() {
                     Ok(global_mir_plan) => PeekStage::RealTimeRecency(PeekStageRealTimeRecency {
@@ -509,31 +518,76 @@ impl Coordinator {
                 real_time_recency_ts,
             )
             .await;
-        let determination = return_if_err!(determination, ctx);
 
+        let determination = return_if_err!(determination, ctx);
         let timestamp_context = determination.clone().timestamp_context;
 
         mz_ore::task::spawn_blocking(
             || "optimize peek (lir)",
             move || {
-                let _span_guard = tracing::debug_span!(target: "optimizer", "optimize").entered();
+                let pipeline =
+                    || -> Result<(optimize::peek::GlobalLirPlan, UsedIndexes), AdapterError> {
+                        let _span_guard =
+                            tracing::debug_span!(target: "optimizer", "optimize").entered();
 
-                let global_mir_plan =
-                    global_mir_plan.resolve(timestamp_context.clone(), ctx.session_mut());
-                let global_lir_plan =
-                    return_if_err!(optimizer.catch_unwind_optimize(global_mir_plan), ctx);
+                        // Collect the list of indexes used by the dataflow at this point
+                        let mut used_indexes = {
+                            let df_desc = global_mir_plan.df_desc();
+                            let df_meta = global_mir_plan.df_meta();
+                            UsedIndexes::new(
+                                df_desc
+                                    .index_imports
+                                    .iter()
+                                    .map(|(id, _index_import)| {
+                                        (*id, df_meta.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
+                                    })
+                                    .collect(),
+                            )
+                        };
 
-                let stage = PeekStage::Finish(PeekStageFinish {
-                    validity,
-                    plan,
-                    id_bundle,
-                    target_replica,
-                    source_ids,
-                    determination,
-                    timestamp_context,
-                    optimizer,
-                    global_lir_plan,
-                });
+                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                        let global_mir_plan =
+                            global_mir_plan.resolve(timestamp_context.clone(), ctx.session_mut());
+                        let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
+
+                        // Trace the resulting plan for the top-level `optimize` path.
+                        match global_lir_plan.peek_plan() {
+                            peek::PeekPlan::FastPath(plan) => {
+                                let arity = global_lir_plan.typ().arity();
+                                let finishing = if !optimizer.finishing().is_trivial(arity) {
+                                    Some(optimizer.finishing().clone())
+                                } else {
+                                    None
+                                };
+                                used_indexes = plan.used_indexes(&finishing);
+
+                                // TODO(aalexandrov): rework `OptimizerTrace` with support
+                                // for diverging plan types towards the end and add a
+                                // `PlanTrace` for the `FastPathPlan` type.
+                                trace_plan(&"fast_path_plan (missing)".to_string());
+                            }
+                            peek::PeekPlan::SlowPath(plan) => trace_plan(&plan.desc),
+                        }
+
+                        Ok((global_lir_plan, used_indexes))
+                    };
+
+                let stage = match pipeline() {
+                    Ok((global_lir_plan, _used_indexes)) => PeekStage::Finish(PeekStageFinish {
+                        validity,
+                        plan,
+                        id_bundle,
+                        target_replica,
+                        source_ids,
+                        determination,
+                        timestamp_context,
+                        optimizer,
+                        global_lir_plan,
+                    }),
+                    Err(err) => {
+                        return ctx.retire(Err(err.into()));
+                    }
+                };
 
                 // Ignore errors if the coordinator has shut down.
                 let _ = internal_cmd_tx.send(Message::PeekStageReady {
