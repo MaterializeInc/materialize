@@ -17,8 +17,8 @@ use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::namespaces::{MZ_CATALOG_SCHEMA, MZ_UNSAFE_SCHEMA, PG_CATALOG_SCHEMA};
 use mz_sql_parser::ast::visit_mut::{self, VisitMut, VisitMutNode};
 use mz_sql_parser::ast::{
-    Expr, Function, FunctionArgs, Ident, Op, OrderByExpr, Query, Select, SelectItem, TableAlias,
-    TableFactor, TableWithJoins, Value, WindowSpec,
+    Expr, Function, FunctionArgs, HomogenizingFunction, Ident, IsExprConstruct, Op, OrderByExpr,
+    Query, Select, SelectItem, TableAlias, TableFactor, TableWithJoins, Value, WindowSpec,
 };
 use mz_sql_parser::ident;
 use uuid::Uuid;
@@ -258,14 +258,42 @@ impl<'a> FuncRewriter<'a> {
             distinct,
             over,
         );
-        Self::plan_divide(
+        let result = Self::plan_divide(
             sum_squares.minus(Self::plan_divide(sum_squared, count.clone())),
             if sample {
                 count.minus(Expr::number("1"))
             } else {
                 count
             },
-        )
+        );
+        // Result is _basically_ what we want, except
+        // that due to numerical inaccuracy, it might be a negative
+        // number very close to zero when it should mathematically be zero.
+        // This makes it so `stddev` fails as it tries to take the square root
+        // of a negative number.
+        // So, we need the following logic:
+        // If `result` is NULL, return NULL (no surprise here)
+        // Otherwise, if `result` is >0, return `result` (no surprise here either)
+        // Otherwise, return 0.
+        //
+        // Unfortunately, we can't use `GREATEST` directly for this,
+        // since `greatest(NULL, 0)` is 0, not NULL, so we need to
+        // create a `Case` expression that computes `result`
+        // twice. Hopefully the optimizer can deal with this!
+        let result_is_null = Expr::IsExpr {
+            expr: Box::new(result.clone()),
+            construct: IsExprConstruct::Null,
+            negated: false,
+        };
+        Expr::Case {
+            operand: None,
+            conditions: vec![result_is_null],
+            results: vec![Expr::Value(Value::Null)],
+            else_result: Some(Box::new(Expr::HomogenizingFunction {
+                function: HomogenizingFunction::Greatest,
+                exprs: vec![result, Expr::number("0")],
+            })),
+        }
     }
 
     fn plan_stddev(

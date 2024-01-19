@@ -644,3 +644,66 @@ query TT
 SELECT MIN(i16), MAX(i16) from t_16
 ----
 -1 1
+
+# Verify that the behavior of `stddev` is sane when variance is small
+
+statement ok
+CREATE TABLE t_variance (x float)
+
+statement ok
+INSERT INTO t_variance VALUES (0.2)
+
+query I
+SELECT stddev(x) FROM t_variance
+----
+NULL
+
+statement ok
+INSERT INTO t_variance VALUES (0.2)
+
+query I
+SELECT stddev(x) FROM t_variance
+----
+0
+
+query I
+SELECT stddev(x) FROM generate_series(0, -1) empty(x)
+----
+NULL
+
+
+# Should include two sum(*) aggregates.
+query T multiline
+EXPLAIN RAW PLAN FOR SELECT stddev(x), sum(x) FROM t_variance;
+----
+Project (#4, #3)
+  Map (sqrtf64(case when (((#0 - ((#1 * #1) / bigint_to_double(case when (#2 = integer_to_bigint(0)) then null else #2 end))) / bigint_to_double(case when ((#2 - integer_to_bigint(1)) = integer_to_bigint(0)) then null else (#2 - integer_to_bigint(1)) end))) IS NULL then null else greatest(((#0 - ((#1 * #1) / bigint_to_double(case when (#2 = integer_to_bigint(0)) then null else #2 end))) / bigint_to_double(case when ((#2 - integer_to_bigint(1)) = integer_to_bigint(0)) then null else (#2 - integer_to_bigint(1)) end)), integer_to_double(0)) end))
+    Reduce aggregates=[sum((#0 * #0)), sum(#0), count(#0), sum(#0)]
+      Get materialize.public.t_variance
+
+EOF
+
+# Should include only one sum(*) aggregate.
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR SELECT stddev(x), sum(x) FROM t_variance;
+----
+Explained Query:
+  Return
+    Project (#4, #3)
+      Map (sqrtf64(case when ((#0) IS NULL OR (#1) IS NULL OR (case when (#2 = 0) then null else #2 end) IS NULL OR (case when (0 = (#2 - 1)) then null else (#2 - 1) end) IS NULL) then null else greatest(((#0 - ((#1 * #1) / bigint_to_double(case when (#2 = 0) then null else #2 end))) / bigint_to_double(case when (0 = (#2 - 1)) then null else (#2 - 1) end)), 0) end))
+        Union
+          Project (#0..=#2, #1)
+            Get l0
+          Map (null, null, 0, null)
+            Union
+              Negate
+                Project ()
+                  Get l0
+              Constant
+                - ()
+  With
+    cte l0 =
+      Reduce aggregates=[sum((#0 * #0)), sum(#0), count(#0)]
+        ReadStorage materialize.public.t_variance
+
+EOF
