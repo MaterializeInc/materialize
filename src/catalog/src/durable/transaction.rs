@@ -1455,9 +1455,61 @@ impl<'a> Transaction<'a> {
     /// that errors can bubble up during initialization.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn commit(self) -> Result<(), CatalogError> {
-        let (txn_batch, durable_catalog) = self.into_parts();
+        let (mut txn_batch, durable_catalog) = self.into_parts();
+        let TransactionBatch {
+            databases,
+            schemas,
+            items,
+            comments,
+            roles,
+            clusters,
+            cluster_replicas,
+            introspection_sources,
+            id_allocator,
+            configs,
+            settings,
+            timestamps,
+            system_gid_mapping,
+            system_configurations,
+            default_privileges,
+            system_privileges,
+            audit_log_updates,
+            storage_usage_updates,
+            connection_timeout: _,
+        } = &mut txn_batch;
+        consolidate_batch_part(databases);
+        consolidate_batch_part(schemas);
+        consolidate_batch_part(items);
+        consolidate_batch_part(comments);
+        consolidate_batch_part(roles);
+        consolidate_batch_part(clusters);
+        consolidate_batch_part(cluster_replicas);
+        consolidate_batch_part(introspection_sources);
+        consolidate_batch_part(id_allocator);
+        consolidate_batch_part(configs);
+        consolidate_batch_part(settings);
+        consolidate_batch_part(timestamps);
+        consolidate_batch_part(system_gid_mapping);
+        consolidate_batch_part(system_configurations);
+        consolidate_batch_part(default_privileges);
+        consolidate_batch_part(system_privileges);
+        consolidate_batch_part(audit_log_updates);
+        consolidate_batch_part(storage_usage_updates);
         durable_catalog.commit_transaction(txn_batch).await
     }
+}
+
+fn consolidate_batch_part<K, V>(batch_part: &mut Vec<(K, V, Diff)>)
+where
+    K: Ord,
+    V: Ord,
+{
+    let mut updates: Vec<_> = std::mem::take(batch_part)
+        .into_iter()
+        .map(|(k, v, d)| ((k, v), d))
+        .collect();
+    differential_dataflow::consolidation::consolidate(&mut updates);
+    *batch_part = updates.into_iter().map(|((k, v), d)| (k, v, d)).collect();
 }
 
 /// Describes a set of changes to apply as the result of a catalog transaction.
