@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from materialize.ui import UIError
+
 
 @dataclass
 class TestResult:
@@ -37,3 +39,18 @@ class TestFailureDetails:
             return self.location[self.location.rindex("/") + 1 :]
 
         return self.location
+
+
+class FailedTestExecutionError(UIError):
+    """
+    An UIError that is caused by a failing test.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        errors: list[TestFailureDetails],
+        hint: str | None = None,
+    ):
+        super().__init__(message, hint)
+        self.errors = errors
