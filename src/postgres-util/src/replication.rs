@@ -110,6 +110,32 @@ pub async fn drop_replication_slots(
     config: Config,
     slots: &[&str],
 ) -> Result<(), PostgresError> {
+    drop_replication_slots_inner(ssh_tunnel_manager, config, slots, false).await
+}
+
+/// Forcibly drops the named replication slots by also terminating their
+/// backend.
+///
+/// # Warning
+/// This function:
+/// - Forcibly stops the named replication slots by terminating the PG process
+///   running the
+/// - Has the potential to introduce confounding anomalies if it races with
+///   creating a replication slot of the same name.
+pub async fn force_drop_replication_slots(
+    ssh_tunnel_manager: &SshTunnelManager,
+    config: Config,
+    slots: &[&str],
+) -> Result<(), PostgresError> {
+    drop_replication_slots_inner(ssh_tunnel_manager, config, slots, true).await
+}
+
+async fn drop_replication_slots_inner(
+    ssh_tunnel_manager: &SshTunnelManager,
+    config: Config,
+    slots: &[&str],
+    terminate_backend: bool,
+) -> Result<(), PostgresError> {
     let client = config
         .connect("postgres_drop_replication_slots", ssh_tunnel_manager)
         .await?;
@@ -121,13 +147,40 @@ pub async fn drop_replication_slots(
                 &[&slot],
             )
             .await?;
-        match rows.len() {
-            0 => {
+        match &rows[..] {
+            [] => {
                 // DROP_REPLICATION_SLOT will error if the slot does not exist
-                // todo@jldlaughlin: don't let invalid Postgres sources ship!
                 continue;
             }
-            1 => {
+            [pid] => {
+                let pid: Option<i32> = pid.get(0);
+
+                match pid {
+                    Some(pid) if terminate_backend => {
+                        // Note that for simplicity's sake we don't check the result
+                        // of this operation because its semantics depend on the
+                        // version of PG running--older versions return true only if
+                        // the operation succeeds; newer versions always return true
+                        // if a timeout isn't specified (which earlier versions
+                        // don't support).
+                        client
+                            .query_one(
+                                "SELECT pg_terminate_backend($1::INT)
+                        FROM pg_stat_activity
+                        WHERE
+                            backend_type = 'walsender'
+                                AND
+                            query LIKE $2::TEXT",
+                                &[
+                                    &pid,
+                                    &format!(r#"START_REPLICATION SLOT "{slot}" LOGICAL%"#),
+                                ],
+                            )
+                            .await?;
+                    }
+                    _ => {}
+                }
+
                 replication_client
                     .simple_query(&format!("DROP_REPLICATION_SLOT {} WAIT", slot))
                     .await?;

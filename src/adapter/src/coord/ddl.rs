@@ -620,8 +620,8 @@ impl Coordinator {
                 task::spawn(|| "drop_replication_slots", async move {
                     for (config, slot_name) in replication_slots_to_drop {
                         // Try to drop the replication slots, but give up after a while.
-                        let _ = Retry::default()
-                            .max_duration(Duration::from_secs(60))
+                        let gentle_shutdown = Retry::default()
+                            .max_duration(Duration::from_secs(10))
                             .retry_async(|_state| async {
                                 mz_postgres_util::drop_replication_slots(
                                     &ssh_tunnel_manager,
@@ -631,6 +631,36 @@ impl Coordinator {
                                 .await
                             })
                             .await;
+
+                        // If we haven't succeeded this far, try one last time
+                        // more forcibly.
+                        if gentle_shutdown.is_err() {
+                            let forceful_shutdown = mz_postgres_util::force_drop_replication_slots(
+                                &ssh_tunnel_manager,
+                                config,
+                                &[&slot_name],
+                            )
+                            .await;
+
+                            // If forcefully dropping fails, it suggests a
+                            // transient error, which is unfortunate but
+                            // acceptable. However, if it succeeds, it suggests
+                            // that the storage dataflow is keeping the
+                            // connection alive.
+                            if forceful_shutdown.is_ok() {
+                                // This represents an error we want to be
+                                // notified of because we don't expect dataflow
+                                // shutdown to take 10 seconds. If this become a
+                                // noisy alert, we can consider increasing the
+                                // timeout iff we determine there is a
+                                // compelling reason the connection gets kept
+                                // alive longer than expected (e.g. overburdened
+                                // clusters).
+                                tracing::error!(
+                                    "had to forcefully drop replication slot {slot_name}"
+                                );
+                            }
+                        }
                     }
                 });
             }

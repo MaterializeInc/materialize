@@ -30,7 +30,7 @@ pub async fn run_verify_slot(
 
     Retry::default()
         .initial_backoff(Duration::from_millis(50))
-        .max_duration(cmp::max(state.default_timeout, Duration::from_secs(60)))
+        .max_duration(cmp::max(state.default_timeout, Duration::from_secs(15)))
         .retry_async_canceling(|_| async {
             println!(">> checking for postgres replication slot {}", &slot);
             let rows = client
