@@ -185,12 +185,14 @@ impl OpenableDurableCatalogState for CatalogMigrator {
             TargetImplementation::MigrationDirection(direction) => direction,
         };
 
+        info!("Getting stash epoch");
         let stash_epoch = self
             .openable_stash
             .epoch()
             .await
             .ok()
             .map(|epoch| epoch_checked_increment(epoch).expect("stash epoch overflowed"));
+        info!("Getting persist epoch");
         let persist_epoch = self
             .openable_persist
             .epoch()
@@ -198,6 +200,7 @@ impl OpenableDurableCatalogState for CatalogMigrator {
             .ok()
             .map(|epoch| epoch_checked_increment(epoch).expect("persist epoch overflowed"));
 
+        info!("Opening stash catalog");
         let stash = self
             .openable_stash
             .open(
@@ -208,6 +211,7 @@ impl OpenableDurableCatalogState for CatalogMigrator {
             )
             .await?;
         fail::fail_point!("post_stash_fence");
+        info!("Opening persist catalog");
         let persist = self
             .openable_persist
             .open(boot_ts, bootstrap_args, deploy_generation, stash_epoch)
@@ -370,11 +374,14 @@ impl CatalogMigrator {
 
         info!("rolling back catalog contents from persist to stash");
 
+        info!("Getting persist snapshot");
         let (persist_snapshot, persist_audit_logs, persist_storage_usages) =
             persist.whole_migration_snapshot().await?;
 
+        info!("Starting stash transaction");
         let (mut stash_txn, stash_audit_logs, stash_storage_usages) =
             stash.whole_migration_transaction().await?;
+        info!("Setting catalog contents in transaction");
         stash_txn.set_catalog(
             persist_snapshot,
             stash_audit_logs,
@@ -382,8 +389,11 @@ impl CatalogMigrator {
             persist_audit_logs,
             persist_storage_usages,
         )?;
+        info!("Setting tombstone");
         stash_txn.set_tombstone(false)?;
+        info!("Committing transaction");
         stash_txn.commit().await?;
+        info!("Roll back complete");
 
         persist.expire().await;
 
