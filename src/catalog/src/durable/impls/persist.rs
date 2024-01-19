@@ -269,6 +269,8 @@ impl UnopenedPersistCatalogState {
             epoch: current_epoch,
             // Initialize empty in-memory state.
             snapshot: Snapshot::empty(),
+            audit_logs: LargeCollectionStartupCache::new_open(),
+            storage_usage_events: LargeCollectionStartupCache::new_open(),
             metrics: self.metrics,
         };
         catalog.sync(upper).await?;
@@ -650,6 +652,48 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
     }
 }
 
+/// Certain large collections are only needed during startup. This struct helps us cache these
+/// values during startup and ignore them at all other times.
+#[derive(Debug)]
+enum LargeCollectionStartupCache<T> {
+    /// Actively caching any new value that is seen.
+    Open(Vec<T>),
+    /// Ignoring any new value that is seen.
+    Closed,
+}
+
+impl<T> LargeCollectionStartupCache<T> {
+    /// Create a new opened [`LargeCollectionStartupCache`].
+    fn new_open() -> LargeCollectionStartupCache<T> {
+        LargeCollectionStartupCache::Open(Vec::new())
+    }
+
+    /// Add value to cache if open, otherwise ignore.
+    fn push(&mut self, value: T) {
+        match self {
+            LargeCollectionStartupCache::Open(cache) => {
+                cache.push(value);
+            }
+            LargeCollectionStartupCache::Closed => {
+                // Cache is closed, ignore value.
+            }
+        }
+    }
+
+    /// If the cache is open, then return all the cached values and close the cache, otherwise
+    /// return `None`.
+    fn take(&mut self) -> Option<Vec<T>> {
+        match self {
+            LargeCollectionStartupCache::Open(cache) => {
+                let cache = Some(std::mem::take(cache));
+                *self = LargeCollectionStartupCache::Closed;
+                cache
+            }
+            LargeCollectionStartupCache::Closed => None,
+        }
+    }
+}
+
 /// A durable store of the catalog state using Persist as an implementation.
 #[derive(Debug)]
 pub struct PersistCatalogState {
@@ -671,6 +715,10 @@ pub struct PersistCatalogState {
     epoch: Epoch,
     /// A cache of the entire catalogs state.
     snapshot: Snapshot,
+    /// A cache of audit logs that is only populated during startup.
+    audit_logs: LargeCollectionStartupCache<proto::AuditLogKey>,
+    /// A cache of storage usage events that is only populated during startup.
+    storage_usage_events: LargeCollectionStartupCache<proto::StorageUsageKey>,
     /// Metrics for the persist catalog.
     metrics: Arc<Metrics>,
 }
@@ -830,8 +878,8 @@ impl PersistCatalogState {
 
             debug!("applying catalog update: ({kind:?}, {ts:?}, {diff:?})");
             match kind {
-                StateUpdateKind::AuditLog(_, _) => {
-                    // We can ignore audit log updates since it's not cached in memory.
+                StateUpdateKind::AuditLog(key, ()) => {
+                    self.audit_logs.push(key);
                 }
                 StateUpdateKind::Cluster(key, value) => {
                     apply(&mut self.snapshot.clusters, key, value, diff);
@@ -878,8 +926,8 @@ impl PersistCatalogState {
                 StateUpdateKind::Setting(key, value) => {
                     apply(&mut self.snapshot.settings, key, value, diff);
                 }
-                StateUpdateKind::StorageUsage(_, _) => {
-                    // We can ignore storage usage since it's not cached in memory.
+                StateUpdateKind::StorageUsage(key, ()) => {
+                    self.storage_usage_events.push(key);
                 }
                 StateUpdateKind::SystemConfiguration(key, value) => {
                     apply(&mut self.snapshot.system_configurations, key, value, diff);
@@ -956,22 +1004,27 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     #[tracing::instrument(level = "debug", skip(self))]
     async fn get_audit_logs(&mut self) -> Result<Vec<VersionedEvent>, CatalogError> {
         self.sync_to_current_upper().await?;
-        // This is only called during bootstrapping and we don't want to cache all
-        // audit logs in memory because they can grow quite large. Therefore, we
-        // go back to persist and grab everything again.
-        let mut audit_logs: Vec<_> = self
-            .persist_snapshot()
-            .await
-            .filter_map(
-                |StateUpdate {
-                     kind,
-                     ts: _,
-                     diff: _,
-                 }| match kind {
-                    StateUpdateKind::AuditLog(key, ()) => Some(key),
-                    _ => None,
-                },
-            )
+        let audit_logs = match self.audit_logs.take() {
+            Some(audit_logs) => audit_logs,
+            None => {
+                error!("audit logs were not found in cache, so they were retrieved from persist, this unexpected and bad for performance");
+                self.persist_snapshot()
+                    .await
+                    .filter_map(
+                        |StateUpdate {
+                             kind,
+                             ts: _,
+                             diff: _,
+                         }| match kind {
+                            StateUpdateKind::AuditLog(key, ()) => Some(key),
+                            _ => None,
+                        },
+                    )
+                    .collect()
+            }
+        };
+        let mut audit_logs: Vec<_> = audit_logs
+            .into_iter()
             .map(RustType::from_proto)
             .map_ok(|key: AuditLogKey| key.event)
             .collect::<Result<_, _>>()?;
@@ -1150,25 +1203,35 @@ impl DurableCatalogState for PersistCatalogState {
         boot_ts: mz_repr::Timestamp,
         _wait_for_consolidation: bool,
     ) -> Result<Vec<VersionedStorageUsage>, CatalogError> {
+        self.sync_to_current_upper().await?;
         // If no usage retention period is set, set the cutoff to MIN so nothing
         // is removed.
         let cutoff_ts = match retention_period {
             None => u128::MIN,
             Some(period) => u128::from(boot_ts).saturating_sub(period.as_millis()),
         };
-        let storage_usage = self
-            .persist_snapshot()
-            .await
-            .filter_map(
-                |StateUpdate {
-                     kind,
-                     ts: _,
-                     diff: _,
-                 }| match kind {
-                    StateUpdateKind::StorageUsage(key, ()) => Some(key),
-                    _ => None,
-                },
-            )
+        let storage_usage = match self.storage_usage_events.take() {
+            Some(storage_usage) => storage_usage,
+            None => {
+                error!("storage usage events were not found in cache, so they were retrieved from persist, this unexpected and bad for performance");
+                self.persist_snapshot()
+                    .await
+                    .filter_map(
+                        |StateUpdate {
+                             kind,
+                             ts: _,
+                             diff: _,
+                         }| match kind {
+                            StateUpdateKind::StorageUsage(key, ()) => Some(key),
+                            _ => None,
+                        },
+                    )
+                    .collect()
+            }
+        };
+
+        let storage_usage = storage_usage
+            .into_iter()
             .map(RustType::from_proto)
             .map_ok(|key: StorageUsageKey| key.metric);
         let mut events = Vec::new();
