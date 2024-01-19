@@ -712,7 +712,7 @@ pub struct SetTransactionPlan {
 
 #[derive(Clone, Debug)]
 pub struct SelectPlan {
-    pub source: MirRelationExpr,
+    pub source: HirRelationExpr,
     pub when: QueryWhen,
     pub finishing: RowSetFinishing,
     pub copy_to: Option<CopyFormat>,
@@ -972,7 +972,7 @@ pub struct InsertPlan {
 #[derive(Debug)]
 pub struct ReadThenWritePlan {
     pub id: GlobalId,
-    pub selection: mz_expr::MirRelationExpr,
+    pub selection: HirRelationExpr,
     pub finishing: RowSetFinishing,
     pub assignments: BTreeMap<usize, mz_expr::MirScalarExpr>,
     pub kind: MutationKind,

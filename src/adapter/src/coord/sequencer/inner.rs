@@ -2817,10 +2817,26 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: plan::InsertPlan,
     ) {
+        // The structure of this code originates from a time where
+        // `ReadThenWritePlan` was carrying an `MirRelationExpr` instead of an
+        // optimized `MirRelationExpr`.
+        //
+        // Ideally, we would like to make the `selection.as_const().is_some()`
+        // check on `plan.values` instead. However, `VALUES (1), (3)` statements
+        // are planned as a Wrap($n, $vals) call, so until we can reduce
+        // HirRelationExpr this will always returns false.
+        //
+        // Unfortunately, hitting the default path of the match below also
+        // causes a lot of tests to fail, so we opted to go with the extra
+        // `plan.values.clone()` statements when producing the `optimized_mir`
+        // and re-optimize the values in the `sequence_read_then_write` call.
         let optimized_mir = if let Some(..) = &plan.values.as_const() {
             // We don't perform any optimizations on an expression that is already
             // a constant for writes, as we want to maximize bulk-insert throughput.
-            let expr = return_if_err!(plan.values.lower(self.catalog().system_config()), ctx);
+            let expr = return_if_err!(
+                plan.values.clone().lower(self.catalog().system_config()),
+                ctx
+            );
             OptimizedMirRelationExpr(expr)
         } else {
             // Collect optimizer parameters.
@@ -2830,7 +2846,7 @@ impl Coordinator {
             let mut optimizer = optimize::view::Optimizer::new(optimizer_config);
 
             // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
-            return_if_err!(optimizer.optimize(plan.values), ctx)
+            return_if_err!(optimizer.optimize(plan.values.clone()), ctx)
         };
 
         match optimized_mir.into_inner() {
@@ -2843,7 +2859,7 @@ impl Coordinator {
                 });
             }
             // All non-constant values must be planned as read-then-writes.
-            selection => {
+            _ => {
                 let desc_arity = match self.catalog().try_get_entry(&plan.id) {
                     Some(table) => table
                         .desc(
@@ -2865,7 +2881,7 @@ impl Coordinator {
                     }
                 };
 
-                if selection.contains_temporal() {
+                if plan.values.contains_temporal() {
                     ctx.retire(Err(AdapterError::Unsupported(
                         "calls to mz_now in write statements",
                     )));
@@ -2881,7 +2897,7 @@ impl Coordinator {
 
                 let read_then_write_plan = plan::ReadThenWritePlan {
                     id: plan.id,
-                    selection,
+                    selection: plan.values,
                     finishing,
                     assignments: BTreeMap::new(),
                     kind: MutationKind::Insert,

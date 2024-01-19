@@ -118,7 +118,7 @@ pub fn plan_delete(
     params: &Params,
 ) -> Result<Plan, PlanError> {
     let rtw_plan = query::plan_delete_query(scx, stmt)?;
-    plan_read_then_write(MutationKind::Delete, scx, params, rtw_plan)
+    plan_read_then_write(MutationKind::Delete, params, rtw_plan)
 }
 
 pub fn describe_update(
@@ -135,12 +135,11 @@ pub fn plan_update(
     params: &Params,
 ) -> Result<Plan, PlanError> {
     let rtw_plan = query::plan_update_query(scx, stmt)?;
-    plan_read_then_write(MutationKind::Update, scx, params, rtw_plan)
+    plan_read_then_write(MutationKind::Update, params, rtw_plan)
 }
 
 pub fn plan_read_then_write(
     kind: MutationKind,
-    scx: &StatementContext,
     params: &Params,
     query::ReadThenWritePlan {
         id,
@@ -150,7 +149,6 @@ pub fn plan_read_then_write(
     }: query::ReadThenWritePlan,
 ) -> Result<Plan, PlanError> {
     selection.bind_parameters(params)?;
-    let selection = selection.lower(scx.catalog.system_vars())?;
     let mut assignments_outer = BTreeMap::new();
     for (idx, mut set) in assignments {
         set.bind_parameters(params)?;
@@ -191,10 +189,15 @@ pub fn plan_select(
         return Ok(Plan::SideEffectingFunc(f));
     }
 
-    let query::PlannedRootQuery {
-        expr, finishing, ..
-    } = plan_query(scx, select.query, params, QueryLifetime::OneShot)?;
     let when = query::plan_as_of(scx, select.as_of)?;
+    let query::PlannedRootQuery {
+        mut expr,
+        desc: _,
+        finishing,
+        scope: _,
+    } = query::plan_root_query(scx, select.query, QueryLifetime::OneShot)?;
+    expr.bind_parameters(params)?;
+
     Ok(Plan::Select(SelectPlan {
         source: expr,
         when,
