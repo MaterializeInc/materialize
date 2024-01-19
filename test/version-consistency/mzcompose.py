@@ -12,6 +12,7 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.test_result import FailedTestExecutionError
 from materialize.version_consistency.version_consistency_test import (
     EVALUATION_STRATEGY_NAMES,
     VersionConsistencyTest,
@@ -87,4 +88,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         test_summary = test.run_output_consistency_tests(connection, args)
 
-        assert test_summary.all_passed(), "At least one test failed"
+    if not test_summary.all_passed():
+        raise FailedTestExecutionError(
+            "At least one test failed", errors=test_summary.failures
+        )
