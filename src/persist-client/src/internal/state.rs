@@ -29,7 +29,7 @@ use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
@@ -647,6 +647,25 @@ where
         // SeqNos.
         if self.is_tombstone() {
             return Break(NoOpStateTransition(Since(Antichain::new())));
+        }
+
+        if let Some(reader_state) = self.leased_readers.get(reader_id) {
+            if let Some(critical_id) = reader_state.critical_id.as_ref() {
+                if let Some(critical_state) = self.critical_readers.get(critical_id) {
+                    if !PartialOrder::less_equal(&critical_state.since, new_since) {
+                        warn!(
+                            "reader {reader_id} should be protected by {critical_id}, \
+                            but its latest since {new_since:?} is not past the since hold at {:?}",
+                            critical_state.since
+                        )
+                    }
+                } else {
+                    warn!(
+                        "reader {reader_id} should be protected by {critical_id}, \
+                        but it does not exist",
+                    )
+                }
+            }
         }
 
         let reader_state = self.leased_reader(reader_id);
