@@ -659,6 +659,8 @@ class Composition:
             "testdrive",
             *args,
             rm=rm,
+            # needed for sufficient error information in the junit.xml
+            capture_stderr=True,
         )
 
     def exec(
