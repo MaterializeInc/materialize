@@ -20,7 +20,7 @@ just the right way. This stretches the limit of argparse, but that complexity
 has been carefully managed. If you are tempted to refactor the argument parsing
 code, please talk to me first!
 """
-
+from __future__ import annotations
 
 import argparse
 import inspect
@@ -622,7 +622,8 @@ To see the available workflows, run:
             ci_util.upload_junit_report("mzcompose", junit_xml_file_path)
 
             if any(
-                result.error is not None for result in composition.test_results.values()
+                not result.is_successful()
+                for result in composition.test_results.values()
             ):
                 raise UIError("at least one test case failed")
 
@@ -648,16 +649,24 @@ To see the available workflows, run:
         test_case_key: str,
         result: Composition.TestResult,
     ):
-        test_case_name = result.get_error_file() or test_case_key
-        test_case = junit_xml.TestCase(
-            test_case_name,
-            test_class_name,
-            result.duration,
-        )
-        if result.is_failure():
-            assert result.error is not None
-            test_case.add_error_info(message=result.error, output=result.error_details)
-        junit_suite.test_cases.append(test_case)
+        if result.is_successful():
+            test_case_name = test_case_key
+            test_case = junit_xml.TestCase(
+                test_case_name,
+                test_class_name,
+                result.duration,
+            )
+            junit_suite.test_cases.append(test_case)
+        else:
+            for error in result.errors:
+                test_case_name = error.get_error_file() or test_case_key
+                test_case = junit_xml.TestCase(
+                    test_case_name,
+                    test_class_name,
+                    result.duration,
+                )
+                test_case.add_error_info(message=error.message, output=error.details)
+                junit_suite.test_cases.append(test_case)
 
     def write_junit_report_to_file(self, junit_suite: junit_xml.TestSuite) -> Path:
         junit_report = ci_util.junit_report_filename("mzcompose")

@@ -86,18 +86,22 @@ class Composition:
     @dataclass
     class TestResult:
         duration: float
-        error: str | None
-        error_details: str | None
-        error_location: str | None
+        errors: list[Composition.TestFailureDetails]
 
-        def is_failure(self) -> bool:
-            return self.error is not None
+        def is_successful(self) -> bool:
+            return len(self.errors) == 0
+
+    @dataclass
+    class TestFailureDetails:
+        message: str
+        details: str | None
+        location: str | None
 
         def get_error_file(self) -> str | None:
-            if self.error_location is None:
+            if self.location is None:
                 return None
 
-            file_name = self.error_location
+            file_name = self.location
             file_name = re.sub(r":\d+", "", file_name)
 
             if "/" in file_name:
@@ -495,31 +499,35 @@ class Composition:
         if name in self.test_results:
             raise UIError(f"test case {name} executed twice")
         ui.header(f"Running test case {name}")
-        error = None
-        error_details = None
-        error_location = None
+        errors = []
         start_time = time.time()
         try:
             yield
             ui.header(f"mzcompose: test case {name} succeeded")
         except Exception as e:
-            error = f"{str(type(e))}: {e}"
-            ui.header(f"mzcompose: test case {name} failed: {error}")
+            error_message = f"{str(type(e))}: {e}"
+            error_details = None
+            error_location = None
+            ui.header(f"mzcompose: test case {name} failed: {error_message}")
 
             if isinstance(e, CommandFailureCausedUIError):
                 error_details = e.stderr
                 error_location = self.try_determine_error_location_from_cmd(e.cmd)
 
                 if error_location is not None:
-                    error = f"Executing {error_location} failed"
+                    error_message = f"Executing {error_location} failed"
 
             if not isinstance(e, UIError):
                 traceback.print_exc()
 
+            errors = [
+                Composition.TestFailureDetails(
+                    error_message, error_details, error_location
+                )
+            ]
+
         duration = time.time() - start_time
-        self.test_results[name] = Composition.TestResult(
-            duration, error, error_details, error_location
-        )
+        self.test_results[name] = Composition.TestResult(duration, errors)
 
     def try_determine_error_location_from_cmd(self, cmd: list[str]) -> str | None:
         root_path_as_string = f"{MZ_ROOT}/"
