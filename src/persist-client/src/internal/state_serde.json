@@ -17,6 +17,7 @@
       "since": {
         "elements": []
       },
+      "critical_id": null,
       "last_heartbeat_timestamp_ms": 9750575345611729810,
       "lease_duration_ms": 8672934464634687609,
       "debug": {
@@ -31,6 +32,7 @@
           4355422458483136946
         ]
       },
+      "critical_id": null,
       "last_heartbeat_timestamp_ms": 3465149119092072769,
       "lease_duration_ms": 7032165947814541071,
       "debug": {

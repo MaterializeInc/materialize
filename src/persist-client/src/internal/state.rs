@@ -438,6 +438,7 @@ where
         &mut self,
         hostname: &str,
         reader_id: &LeasedReaderId,
+        critical_id: Option<&CriticalReaderId>,
         purpose: &str,
         seqno: SeqNo,
         lease_duration: Duration,
@@ -453,7 +454,7 @@ where
             },
             seqno,
             since: self.trace.since().clone(),
-            critical_id: None,
+            critical_id: critical_id.cloned(),
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
             lease_duration_ms: u64::try_from(lease_duration.as_millis())
                 .expect("lease duration as millis should fit within u64"),
@@ -1689,6 +1690,7 @@ pub(crate) mod tests {
         let _ = state.collections.register_leased_reader(
             "",
             &reader,
+            None,
             "",
             seqno,
             Duration::from_secs(10),
@@ -1740,6 +1742,7 @@ pub(crate) mod tests {
         let _ = state.collections.register_leased_reader(
             "",
             &reader2,
+            None,
             "",
             seqno,
             Duration::from_secs(10),
@@ -1783,6 +1786,7 @@ pub(crate) mod tests {
         let _ = state.collections.register_leased_reader(
             "",
             &reader3,
+            None,
             "",
             seqno,
             Duration::from_secs(10),
@@ -1995,6 +1999,7 @@ pub(crate) mod tests {
         let _ = state.collections.register_leased_reader(
             "",
             &reader,
+            None,
             "",
             SeqNo::minimum(),
             Duration::from_secs(10),

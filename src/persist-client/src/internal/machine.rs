@@ -165,6 +165,7 @@ where
     pub async fn register_leased_reader(
         &mut self,
         reader_id: &LeasedReaderId,
+        critical_id: Option<&CriticalReaderId>,
         purpose: &str,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
@@ -175,6 +176,7 @@ where
                 state.register_leased_reader(
                     &cfg.hostname,
                     reader_id,
+                    critical_id,
                     purpose,
                     seqno,
                     lease_duration,
@@ -1892,6 +1894,7 @@ pub mod datadriven {
             .machine
             .register_leased_reader(
                 &reader_id,
+                None,
                 "tests",
                 datadriven.client.cfg.dynamic.reader_lease_duration(),
                 (datadriven.client.cfg.now)(),
