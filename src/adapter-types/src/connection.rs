@@ -21,7 +21,8 @@ pub type ConnectionId = IdHandle<ConnectionIdType, IdAllocatorInnerBitSet>;
 /// Number of bits the org id is offset into a connection id.
 pub const ORG_ID_OFFSET: usize = 19;
 
-/// Extracts the lower 12 bits from an org id
+/// Extracts the lower 12 bits from an org id. These are later used as the [31, 20] bits of a
+/// connection id to help route cancellation requests.
 pub fn org_id_conn_bits(uuid: &Uuid) -> ConnectionIdType {
     let lower = uuid.as_u128();
     let lower = (lower & 0xFFF) << ORG_ID_OFFSET;
@@ -29,7 +30,7 @@ pub fn org_id_conn_bits(uuid: &Uuid) -> ConnectionIdType {
     lower
 }
 
-/// Returns the org's UUID from the connection id.
+/// Returns the portion of the org's UUID present in connection id.
 pub fn conn_id_org_uuid(conn_id: u32) -> String {
     const UPPER: [char; 16] = [
         '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F',

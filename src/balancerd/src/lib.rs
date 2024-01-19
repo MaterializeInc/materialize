@@ -561,6 +561,22 @@ impl mz_server_core::Server for PgwireBalancer {
     }
 }
 
+/// Broadcasts cancellation to all matching environmentds. `conn_id`'s bits [31..20] are the lower
+/// 12 bits of a UUID for an environmentd/organization. Using that and the template in
+/// `cancellation_resolver` we generate a hostname. That hostname resolves to all IPs of envds that
+/// match the UUID (cloud k8s infrastructure maintains that mapping). This function creates a new
+/// task for each envd and relays the cancellation message to it, broadcasting it to any envd that
+/// might match the connection.
+///
+/// This function returns after it has spawned the tasks, and does not wait for them to complete.
+/// This is acceptable because cancellation in the Postgres protocol is best effort and has no
+/// guarantees.
+///
+/// The safety of broadcasting this is due to the various randomness in the connection id and secret
+/// key, which must match exactly in order to execute a query cancellation. The connection id has 19
+/// bits of randomness, and the secret key the full 32, for a total of 51 bits. That is more than
+/// 2e15 combinations, enough to nearly certainly prevent two different envds generating identical
+/// combinations.
 async fn cancel_request(conn_id: u32, secret_key: u32, cancellation_resolver: &str) {
     let addr = cancellation_resolver.replace("{}", &conn_id_org_uuid(conn_id));
     let ips = match tokio::net::lookup_host(&addr).await {
@@ -578,10 +594,10 @@ async fn cancel_request(conn_id: u32, secret_key: u32, cancellation_resolver: &s
     msg.encode(&mut buf).expect("must encode");
     // TODO: Is there a way to not use an Arc here by convincing rust that buf will outlive the
     // spawn? Will awaiting the JoinHandle work?
-    let buf = Arc::new(buf);
+    let buf = buf.freeze();
     for ip in ips {
         debug!("resolved {addr} to {ip}");
-        let buf = Arc::clone(&buf);
+        let buf = buf.clone();
         spawn(|| "cancel request for ip", async move {
             let send = async {
                 let mut stream = TcpStream::connect(&ip).await?;
