@@ -34,7 +34,7 @@ use crate::command::Command;
 use crate::coord::appends::Deferred;
 use crate::coord::statement_logging::StatementLoggingId;
 use crate::coord::{
-    Coordinator, CreateConnectionValidationReady, Message, PeekStage, PeekStageFinish,
+    Coordinator, CreateConnectionValidationReady, Message, PeekStage, PeekStageOptimizeLir,
     PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
 };
 use crate::session::Session;
@@ -849,8 +849,7 @@ impl Coordinator {
             RealTimeRecencyContext::Peek {
                 ctx,
                 root_otel_ctx,
-                copy_to,
-                when,
+                plan,
                 target_replica,
                 timeline_context,
                 oracle_read_ts,
@@ -862,11 +861,10 @@ impl Coordinator {
                 self.sequence_peek_stage(
                     ctx,
                     root_otel_ctx,
-                    PeekStage::Finish(PeekStageFinish {
+                    PeekStage::OptimizeLir(PeekStageOptimizeLir {
                         validity,
-                        copy_to,
+                        plan,
                         id_bundle: None,
-                        when,
                         target_replica,
                         timeline_context,
                         oracle_read_ts,

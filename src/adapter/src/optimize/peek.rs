@@ -175,6 +175,7 @@ pub struct ResolvedGlobal<'s> {
 
 /// The (final) result after MIR ⇒ LIR lowering and optimizing the resulting
 /// `DataflowDescription` with `LIR` plans.
+#[derive(Debug)]
 pub struct GlobalLirPlan {
     plan: PeekPlan,
     df_meta: DataflowMetainfo,

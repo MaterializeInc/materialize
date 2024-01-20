@@ -98,7 +98,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_controller::clusters::{ClusterConfig, ClusterEvent, CreateReplicaConfig};
 use mz_controller::ControllerConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
+use mz_expr::OptimizedMirRelationExpr;
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -115,7 +115,7 @@ use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
 use mz_sql::names::{Aug, ResolvedIds};
-use mz_sql::plan::{self, CopyFormat, CreateConnectionPlan, Params, QueryWhen};
+use mz_sql::plan::{self, CreateConnectionPlan, Params, QueryWhen};
 use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::{RoleMetadata, User};
 use mz_sql::session::vars::{self, ConnectionCounter, OwnedVarInput, SystemVars};
@@ -147,7 +147,7 @@ use crate::coord::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::timeline::{TimelineContext, TimelineState};
-use crate::coord::timestamp_selection::TimestampContext;
+use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::metrics::Metrics;
@@ -359,9 +359,8 @@ pub enum RealTimeRecencyContext {
     },
     Peek {
         ctx: ExecuteContext,
+        plan: mz_sql::plan::SelectPlan,
         root_otel_ctx: OpenTelemetryContext,
-        copy_to: Option<CopyFormat>,
-        when: QueryWhen,
         target_replica: Option<ReplicaId>,
         timeline_context: TimelineContext,
         oracle_read_ts: Option<Timestamp>,
@@ -385,8 +384,9 @@ impl RealTimeRecencyContext {
 pub enum PeekStage {
     Validate(PeekStageValidate),
     Timestamp(PeekStageTimestamp),
-    Optimize(PeekStageOptimize),
+    OptimizeMir(PeekStageOptimizeMir),
     RealTimeRecency(PeekStageRealTimeRecency),
+    OptimizeLir(PeekStageOptimizeLir),
     Finish(PeekStageFinish),
 }
 
@@ -395,8 +395,9 @@ impl PeekStage {
         match self {
             PeekStage::Validate(_) => None,
             PeekStage::Timestamp(PeekStageTimestamp { validity, .. })
-            | PeekStage::Optimize(PeekStageOptimize { validity, .. })
+            | PeekStage::OptimizeMir(PeekStageOptimizeMir { validity, .. })
             | PeekStage::RealTimeRecency(PeekStageRealTimeRecency { validity, .. })
+            | PeekStage::OptimizeLir(PeekStageOptimizeLir { validity, .. })
             | PeekStage::Finish(PeekStageFinish { validity, .. }) => Some(validity),
         }
     }
@@ -411,10 +412,8 @@ pub struct PeekStageValidate {
 #[derive(Debug)]
 pub struct PeekStageTimestamp {
     validity: PlanValidity,
-    source: MirRelationExpr,
-    copy_to: Option<CopyFormat>,
+    plan: mz_sql::plan::SelectPlan,
     source_ids: BTreeSet<GlobalId>,
-    when: QueryWhen,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
     in_immediate_multi_stmt_txn: bool,
@@ -422,12 +421,10 @@ pub struct PeekStageTimestamp {
 }
 
 #[derive(Debug)]
-pub struct PeekStageOptimize {
+pub struct PeekStageOptimizeMir {
     validity: PlanValidity,
-    source: MirRelationExpr,
-    copy_to: Option<CopyFormat>,
+    plan: mz_sql::plan::SelectPlan,
     source_ids: BTreeSet<GlobalId>,
-    when: QueryWhen,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
     oracle_read_ts: Option<Timestamp>,
@@ -438,10 +435,9 @@ pub struct PeekStageOptimize {
 #[derive(Debug)]
 pub struct PeekStageRealTimeRecency {
     validity: PlanValidity,
-    copy_to: Option<CopyFormat>,
+    plan: mz_sql::plan::SelectPlan,
     source_ids: BTreeSet<GlobalId>,
     id_bundle: CollectionIdBundle,
-    when: QueryWhen,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
     oracle_read_ts: Option<Timestamp>,
@@ -451,11 +447,10 @@ pub struct PeekStageRealTimeRecency {
 }
 
 #[derive(Debug)]
-pub struct PeekStageFinish {
+pub struct PeekStageOptimizeLir {
     validity: PlanValidity,
-    copy_to: Option<CopyFormat>,
+    plan: mz_sql::plan::SelectPlan,
     id_bundle: Option<CollectionIdBundle>,
-    when: QueryWhen,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
     oracle_read_ts: Option<Timestamp>,
@@ -463,6 +458,19 @@ pub struct PeekStageFinish {
     real_time_recency_ts: Option<mz_repr::Timestamp>,
     optimizer: optimize::peek::Optimizer,
     global_mir_plan: optimize::peek::GlobalMirPlan,
+}
+
+#[derive(Debug)]
+pub struct PeekStageFinish {
+    validity: PlanValidity,
+    plan: mz_sql::plan::SelectPlan,
+    id_bundle: CollectionIdBundle,
+    target_replica: Option<ReplicaId>,
+    source_ids: BTreeSet<GlobalId>,
+    determination: TimestampDetermination<mz_repr::Timestamp>,
+    timestamp_context: TimestampContext<mz_repr::Timestamp>,
+    optimizer: optimize::peek::Optimizer,
+    global_lir_plan: optimize::peek::GlobalLirPlan,
 }
 
 #[derive(Debug)]
