@@ -19,7 +19,9 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
-use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
+use mz_adapter_types::connection::{
+    org_id_conn_bits, ConnectionId, ConnectionIdType, ORG_ID_OFFSET,
+};
 use mz_build_info::BuildInfo;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::{IdAllocator, IdAllocatorInnerBitSet};
@@ -118,13 +120,11 @@ impl Client {
         // 2. Next 12 bits are the lower 12 bits of the org id. This allows balancerd to route
         //    incoming cancel messages to a subset of the environments.
         // 3. Last 19 bits are random.
-        let env_lower = environment_id.organization_id().as_u128();
-        let env_lower = (env_lower & 0xFFF) << 19;
-        let env_lower: u32 = env_lower.try_into().expect("must fit");
+        let env_lower = org_id_conn_bits(&environment_id.organization_id());
         Client {
             build_info,
             inner_cmd_tx: cmd_tx,
-            id_alloc: IdAllocator::new(1, 1 << 19, env_lower),
+            id_alloc: IdAllocator::new(1, 1 << ORG_ID_OFFSET, env_lower),
             now,
             metrics,
             environment_id,

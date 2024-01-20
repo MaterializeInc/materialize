@@ -29,11 +29,12 @@ use axum::{routing, Router};
 use bytes::BytesMut;
 use futures::TryFutureExt;
 use hyper::StatusCode;
+use mz_adapter_types::connection::conn_id_org_uuid;
 use mz_build_info::{build_info, BuildInfo};
 use mz_frontegg_auth::Authentication as FronteggAuthentication;
 use mz_ore::metrics::{ComputedGauge, IntCounter, IntGauge, MetricsRegistry};
 use mz_ore::netio::AsyncReady;
-use mz_ore::task::JoinSetExt;
+use mz_ore::task::{spawn, JoinSetExt};
 use mz_ore::{metric, netio};
 use mz_pgwire_common::{
     decode_startup, Conn, ErrorResponse, FrontendMessage, FrontendStartupMessage,
@@ -65,6 +66,8 @@ pub struct BalancerConfig {
     pgwire_listen_addr: SocketAddr,
     /// Listen address for HTTPS connections.
     https_listen_addr: SocketAddr,
+    /// Cancellation DNS resolver.
+    cancellation_resolver_template: Option<String>,
     /// DNS resolver.
     resolver: Resolver,
     https_addr_template: String,
@@ -79,6 +82,7 @@ impl BalancerConfig {
         internal_http_listen_addr: SocketAddr,
         pgwire_listen_addr: SocketAddr,
         https_listen_addr: SocketAddr,
+        cancellation_resolver_template: Option<String>,
         resolver: Resolver,
         https_addr_template: String,
         tls: Option<TlsCertConfig>,
@@ -90,6 +94,7 @@ impl BalancerConfig {
             internal_http_listen_addr,
             pgwire_listen_addr,
             https_listen_addr,
+            cancellation_resolver_template,
             resolver,
             https_addr_template,
             tls,
@@ -171,6 +176,7 @@ impl BalancerService {
         {
             let pgwire = PgwireBalancer {
                 resolver: Arc::new(self.cfg.resolver),
+                cancellation_resolver: self.cfg.cancellation_resolver_template.map(Arc::new),
                 tls: pgwire_tls,
                 metrics: ServerMetrics::new(metrics.clone(), "pgwire"),
             };
@@ -353,6 +359,7 @@ impl ServerMetrics {
 
 struct PgwireBalancer {
     tls: Option<TlsConfig>,
+    cancellation_resolver: Option<Arc<String>>,
     resolver: Arc<Resolver>,
     metrics: ServerMetrics,
 }
@@ -479,6 +486,7 @@ impl mz_server_core::Server for PgwireBalancer {
         let tls = self.tls.clone();
         let resolver = Arc::clone(&self.resolver);
         let metrics = self.metrics.clone();
+        let cancellation_resolver = self.cancellation_resolver.clone();
         Box::pin(async move {
             // TODO: Try to merge this with pgwire/server.rs to avoid the duplication. May not be
             // worth it.
@@ -508,11 +516,17 @@ impl mz_server_core::Server for PgwireBalancer {
                             return Ok(());
                         }
 
-                        Some(FrontendStartupMessage::CancelRequest { .. }) => {
-                            // Balancer ignores cancel requests.
-                            //
-                            // TODO: Can/should we return some error here so users are informed
-                            // this won't ever work?
+                        Some(FrontendStartupMessage::CancelRequest {
+                            conn_id,
+                            secret_key,
+                        }) => {
+                            if let Some(resolver) = cancellation_resolver {
+                                spawn(|| "cancel request", async move {
+                                    cancel_request(conn_id, secret_key, &resolver).await;
+                                });
+                            }
+                            // Do not wait on cancel requests to return because cancellation is best
+                            // effort.
                             return Ok(());
                         }
 
@@ -544,6 +558,57 @@ impl mz_server_core::Server for PgwireBalancer {
             metrics.connection_status(result.is_ok()).inc();
             Ok(())
         })
+    }
+}
+
+/// Broadcasts cancellation to all matching environmentds. `conn_id`'s bits [31..20] are the lower
+/// 12 bits of a UUID for an environmentd/organization. Using that and the template in
+/// `cancellation_resolver` we generate a hostname. That hostname resolves to all IPs of envds that
+/// match the UUID (cloud k8s infrastructure maintains that mapping). This function creates a new
+/// task for each envd and relays the cancellation message to it, broadcasting it to any envd that
+/// might match the connection.
+///
+/// This function returns after it has spawned the tasks, and does not wait for them to complete.
+/// This is acceptable because cancellation in the Postgres protocol is best effort and has no
+/// guarantees.
+///
+/// The safety of broadcasting this is due to the various randomness in the connection id and secret
+/// key, which must match exactly in order to execute a query cancellation. The connection id has 19
+/// bits of randomness, and the secret key the full 32, for a total of 51 bits. That is more than
+/// 2e15 combinations, enough to nearly certainly prevent two different envds generating identical
+/// combinations.
+async fn cancel_request(conn_id: u32, secret_key: u32, cancellation_resolver: &str) {
+    let addr = cancellation_resolver.replace("{}", &conn_id_org_uuid(conn_id));
+    let ips = match tokio::net::lookup_host(&addr).await {
+        Ok(ips) => ips,
+        Err(err) => {
+            error!("{addr} failed resolution: {err}");
+            return;
+        }
+    };
+    let mut buf = BytesMut::with_capacity(16);
+    let msg = FrontendStartupMessage::CancelRequest {
+        conn_id,
+        secret_key,
+    };
+    msg.encode(&mut buf).expect("must encode");
+    // TODO: Is there a way to not use an Arc here by convincing rust that buf will outlive the
+    // spawn? Will awaiting the JoinHandle work?
+    let buf = buf.freeze();
+    for ip in ips {
+        debug!("resolved {addr} to {ip}");
+        let buf = buf.clone();
+        spawn(|| "cancel request for ip", async move {
+            let send = async {
+                let mut stream = TcpStream::connect(&ip).await?;
+                stream.write_all(&buf).await?;
+                stream.shutdown().await?;
+                Ok::<_, io::Error>(())
+            };
+            if let Err(err) = send.await {
+                error!("error mirroring cancel to {ip}: {err}");
+            }
+        });
     }
 }
 
