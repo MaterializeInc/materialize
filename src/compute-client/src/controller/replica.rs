@@ -13,7 +13,6 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
-use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::{ClusterReplicaLocation, ClusterStartupEpoch, TimelyConfig};
@@ -37,7 +36,7 @@ use crate::protocol::command::{ComputeCommand, InstanceConfig};
 use crate::protocol::response::{ComputeResponse, SubscribeResponse};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
-type ReplicaClient<T> = Partitioned<ComputeGrpcClient, ComputeCommand<T>, ComputeResponse<T>>;
+type Client<T> = Partitioned<ComputeGrpcClient, ComputeCommand<T>, ComputeResponse<T>>;
 
 /// Replica-specific configuration.
 #[derive(Clone, Debug)]
@@ -49,9 +48,9 @@ pub(super) struct ReplicaConfig {
     pub grpc_client: GrpcClientParameters,
 }
 
-/// State for a single replica.
+/// A client for a replica task.
 #[derive(Debug)]
-pub(super) struct Replica<T> {
+pub(super) struct ReplicaClient<T> {
     /// A sender for commands for the replica.
     ///
     /// If sending to this channel fails, the replica has failed and requires
@@ -64,15 +63,11 @@ pub(super) struct Replica<T> {
     response_rx: UnboundedReceiver<ComputeResponse<T>>,
     /// A handle to the task that aborts it when the replica is dropped.
     _task: AbortOnDropHandle<()>,
-    /// Configuration specific to this replica.
-    pub config: ReplicaConfig,
     /// Replica metrics.
     metrics: ReplicaMetrics,
-    /// The time of the last reported heartbeat.
-    pub last_heartbeat: Option<DateTime<Utc>>,
 }
 
-impl<T> Replica<T>
+impl<T> ReplicaClient<T>
 where
     T: Timestamp + Lattice,
     ComputeGrpcClient: ComputeClient<T>,
@@ -111,9 +106,7 @@ where
             command_tx,
             response_rx,
             _task: task.abort_on_drop(),
-            config,
             metrics,
-            last_heartbeat: None,
         }
     }
 
@@ -183,7 +176,7 @@ where
     ///
     /// The connection is retried forever (with backoff) and this method returns only after
     /// a connection was successfully established.
-    async fn connect(&self) -> ReplicaClient<T> {
+    async fn connect(&self) -> Client<T> {
         Retry::default()
             .clamp_backoff(Duration::from_secs(1))
             .retry_async(|state| {
@@ -228,7 +221,7 @@ where
     /// Returns (with an `Err`) if it encounters an error condition (e.g. the replica disconnects).
     /// If no error condition is encountered, the task runs until the controller disconnects from
     /// the command channel, or the task is dropped.
-    async fn run_message_loop(mut self, mut client: ReplicaClient<T>) -> Result<(), anyhow::Error>
+    async fn run_message_loop(mut self, mut client: Client<T>) -> Result<(), anyhow::Error>
     where
         T: Timestamp + Lattice,
         ComputeGrpcClient: ComputeClient<T>,

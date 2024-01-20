@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroI64;
 use std::time::Instant;
 
-use chrono::{Duration, DurationRound, Utc};
+use chrono::{DateTime, Duration, DurationRound, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
 use futures::{future, StreamExt};
@@ -34,7 +34,7 @@ use timely::PartialOrder;
 use uuid::Uuid;
 
 use crate::controller::error::CollectionMissing;
-use crate::controller::replica::{Replica, ReplicaConfig};
+use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
     CollectionState, ComputeControllerResponse, IntrospectionUpdates, ReplicaId,
 };
@@ -106,7 +106,7 @@ pub(super) struct Instance<T> {
     /// Whether instance initialization has been completed.
     initialized: bool,
     /// The replicas of this compute instance.
-    replicas: BTreeMap<ReplicaId, Replica<T>>,
+    replicas: BTreeMap<ReplicaId, ReplicaState<T>>,
     /// Currently installed compute collections.
     ///
     /// New entries are added for all collections exported from dataflows created through
@@ -142,8 +142,6 @@ pub(super) struct Instance<T> {
     subscribes: BTreeMap<GlobalId, ActiveSubscribe<T>>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
     history: ComputeCommandHistory<UIntGauge, T>,
-    /// IDs of replicas that have failed and require rehydration.
-    failed_replicas: BTreeSet<ReplicaId>,
     /// Sender for responses to be delivered.
     response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
     /// Sender for introspection updates to be recorded.
@@ -216,7 +214,7 @@ impl<T> Instance<T> {
     /// Return whether this instance has any processing work scheduled.
     pub fn wants_processing(&self) -> bool {
         // Do we need to rehydrate failed replicas?
-        !self.failed_replicas.is_empty()
+        self.replicas.values().any(|r| r.failed)
     }
 
     /// Returns whether the identified replica exists.
@@ -373,7 +371,6 @@ where
             peeks: Default::default(),
             subscribes: Default::default(),
             history,
-            failed_replicas: Default::default(),
             response_tx,
             introspection_tx,
             envd_epoch,
@@ -438,10 +435,10 @@ where
         self.history.push(cmd.clone());
 
         // Clone the command for each active replica.
-        for (id, replica) in self.replicas.iter_mut() {
+        for replica in self.replicas.values_mut() {
             // If sending the command fails, the replica requires rehydration.
-            if replica.send(cmd.clone()).is_err() {
-                self.failed_replicas.insert(*id);
+            if replica.client.send(cmd.clone()).is_err() {
+                replica.failed = true;
             }
         }
     }
@@ -458,7 +455,7 @@ where
         let response = self
             .replicas
             .iter_mut()
-            .map(|(id, replica)| async { (*id, replica.recv().await) })
+            .map(|(id, replica)| async { (*id, replica.client.recv().await) })
             .collect::<FuturesUnordered<_>>()
             .next()
             .await;
@@ -471,7 +468,8 @@ where
             }
             Some((replica_id, None)) => {
                 // A replica has failed and requires rehydration.
-                self.failed_replicas.insert(replica_id);
+                let replica = self.replicas.get_mut(&replica_id).unwrap();
+                replica.failed = true;
                 Err(replica_id)
             }
             Some((replica_id, Some(response))) => {
@@ -589,21 +587,22 @@ where
 
         let replica_epoch = self.compute.replica_epochs.entry(id).or_default();
         *replica_epoch += 1;
-        let replica = Replica::spawn(
+        let client = ReplicaClient::spawn(
             id,
             self.compute.build_info,
-            config,
+            config.clone(),
             ClusterStartupEpoch::new(self.compute.envd_epoch, *replica_epoch),
             self.compute.metrics.for_replica(id),
             self.compute.introspection_tx.clone(),
         );
+        let replica = ReplicaState::new(client, config);
 
         // Take this opportunity to clean up the history we should present.
         self.compute.history.reduce();
 
         // Replay the commands at the client, creating new dataflow identifiers.
         for command in self.compute.history.iter() {
-            if replica.send(command.clone()).is_err() {
+            if replica.client.send(command.clone()).is_err() {
                 // We swallow the error here. On the next send, we will fail again, and
                 // restart the connection as well as this rehydration.
                 tracing::warn!("Replica {:?} connection terminated during hydration", id);
@@ -624,8 +623,6 @@ where
             .replicas
             .remove(&id)
             .ok_or(ReplicaMissing(id))?;
-
-        self.compute.failed_replicas.remove(&id);
 
         // Remove frontier tracking for this replica.
         self.remove_write_frontiers(id);
@@ -699,10 +696,13 @@ where
 
     /// Rehydrate any failed replicas of this instance.
     fn rehydrate_failed_replicas(&mut self) {
-        let failed_replicas = self.compute.failed_replicas.clone();
+        let replicas = self.compute.replicas.iter();
+        let failed_replicas: Vec<_> = replicas
+            .filter_map(|(id, replica)| replica.failed.then_some(*id))
+            .collect();
+
         for replica_id in failed_replicas {
             self.rehydrate_replica(replica_id);
-            self.compute.failed_replicas.remove(&replica_id);
         }
     }
 
@@ -1473,6 +1473,30 @@ impl<T: Timestamp> ActiveSubscribe<T> {
         Self {
             frontier: Antichain::from_elem(Timestamp::minimum()),
             target_replica: None,
+        }
+    }
+}
+
+/// State maintained about individual replicas.
+#[derive(Debug)]
+pub struct ReplicaState<T> {
+    /// Client for the running replica task.
+    client: ReplicaClient<T>,
+    /// The replica configuration.
+    config: ReplicaConfig,
+    /// Whether the replica has failed and requires rehydration.
+    failed: bool,
+    /// The time of the last reported heartbeat.
+    last_heartbeat: Option<DateTime<Utc>>,
+}
+
+impl<T> ReplicaState<T> {
+    fn new(client: ReplicaClient<T>, config: ReplicaConfig) -> Self {
+        Self {
+            client,
+            config,
+            failed: false,
+            last_heartbeat: None,
         }
     }
 }
