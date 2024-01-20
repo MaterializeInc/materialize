@@ -12,7 +12,6 @@
 #![cfg(feature = "tracing_")]
 
 use std::fmt::{Debug, Display};
-use std::ops::DerefMut;
 use std::sync::Mutex;
 
 use tracing::{span, subscriber, Dispatch, Level};
@@ -177,7 +176,6 @@ where
     ) {
         // add segment to path
         let mut path = self.path.lock().expect("path shouldn't be poisoned");
-        let path = path.deref_mut();
         let segment = attrs.get_str("path.segment");
         let segment = segment.unwrap_or_else(|| attrs.metadata().name().to_string());
         if !path.is_empty() {
@@ -189,17 +187,17 @@ where
     fn on_enter(&self, _id: &span::Id, _ctx: layer::Context<'_, S>) {
         // push to time stack
         let mut times = self.times.lock().expect("times shouldn't be poisoned");
-        times.deref_mut().push(std::time::Instant::now());
+        times.push(std::time::Instant::now());
     }
 
     fn on_exit(&self, _id: &span::Id, _ctx: layer::Context<'_, S>) {
         // truncate last segment from path
         let mut path = self.path.lock().expect("path shouldn't be poisoned");
-        let path = path.deref_mut();
-        path.truncate(path.rfind('/').unwrap_or(path.len()));
+        let new_len = path.rfind('/').unwrap_or(0);
+        path.truncate(new_len);
         // pop from time stack
         let mut times = self.times.lock().expect("times shouldn't be poisoned");
-        times.deref_mut().pop();
+        times.pop();
     }
 }
 
