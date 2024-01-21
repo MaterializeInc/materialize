@@ -337,9 +337,9 @@ Issue a SQL query to get started. Need help?
         });
 
         // Using our one shot channel to get the result, returning an error if the sender dropped.
-        let response = rx.await.map_err(|_| {
-            AppendWebhookError::InternalError(anyhow::anyhow!("failed to receive webhook response"))
-        })?;
+        let response = rx
+            .await
+            .map_err(|_| anyhow::anyhow!("failed to receive webhook response"))?;
 
         response
     }
