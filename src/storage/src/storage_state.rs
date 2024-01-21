@@ -741,6 +741,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     self.timely_worker.peers(),
                 );
 
+                // Yank the token of the previously existing source dataflow.
+                // This is necessary because we use `CreateIngestionDataflow` to
+                // update dataflow ingestions. Note that this token also
+                // includes any source exports/subsources.
+                self.storage_state.source_tokens.remove(&ingestion_id);
+
                 for (export_id, export) in ingestion_description.source_exports.iter() {
                     let stats = SourceStatistics::new(
                         *export_id,
@@ -810,6 +816,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     self.timely_worker.index(),
                     self.timely_worker.peers(),
                 );
+
+                // Yank the token of the previously existing sink dataflow. This
+                // is necessary because we use `RunSinkDataflow` to update
+                // dataflow sinks.
+                self.storage_state.sink_tokens.remove(&sink_id);
 
                 {
                     // If there is already a shared write frontier, we re-use it, to
