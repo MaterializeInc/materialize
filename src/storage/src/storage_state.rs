@@ -1317,10 +1317,18 @@ impl StorageState {
                     if frontier.is_empty() {
                         fail_point!("crash_on_drop");
 
-                        // Indicates that we may drop `id`, as there are no more valid times to read.
+                        // Indicates that we may drop `id`, as there are no more
+                        // valid times to read.
+                        //
+                        // n.b that we remove so many items keyed with the
+                        // GlobalId suggests that we should consider
+                        // consolidating these map's values into a single
+                        // struct.
                         self.ingestions.remove(&id);
+                        self.source_tokens.remove(&id);
                         self.exports.remove(&id);
                         self.sink_handles.remove(&id);
+                        self.sink_tokens.remove(&id);
                         drop_ids.push(id);
 
                         // This will stop reporting of frontiers.
