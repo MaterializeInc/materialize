@@ -60,7 +60,7 @@ use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
 };
-use crate::{catalog, metrics, ExecuteContext};
+use crate::{catalog, metrics, AppendWebhookError, ExecuteContext};
 
 use super::ExecuteContextExtra;
 
@@ -963,7 +963,7 @@ impl Coordinator {
         database: String,
         schema: String,
         name: String,
-        tx: oneshot::Sender<Result<AppendWebhookResponse, AdapterError>>,
+        tx: oneshot::Sender<Result<AppendWebhookResponse, AppendWebhookError>>,
     ) {
         /// Attempts to resolve a Webhook source from a provided `database.schema.name` path.
         ///
@@ -1048,7 +1048,7 @@ impl Coordinator {
         }
 
         let response = resolve(self, database, schema, name).map_err(|name| {
-            AdapterError::UnknownWebhookSource {
+            AppendWebhookError::UnknownWebhook {
                 database: name.database.expect("provided"),
                 schema: name.schema.expect("provided"),
                 name: name.item,
