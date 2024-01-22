@@ -43,8 +43,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up("materialized", "mysql")
 
-    c.run(
-        "testdrive",
+    c.run_testdrive_files(
         f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
         *args.filter,
     )

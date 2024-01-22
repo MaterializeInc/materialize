@@ -88,8 +88,7 @@ def initialize(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("materialized", "postgres", "toxiproxy")
 
-    c.run(
-        "testdrive",
+    c.run_testdrive_files(
         "configure-toxiproxy.td",
         "populate-tables.td",
         "configure-postgres.td",
@@ -109,12 +108,11 @@ def restart_mz(c: Composition) -> None:
 
 def end(c: Composition) -> None:
     """Validate the data at the end."""
-    c.run("testdrive", "verify-data.td")
+    c.run_testdrive_files("verify-data.td")
 
 
 def disconnect_pg_during_snapshot(c: Composition) -> None:
-    c.run(
-        "testdrive",
+    c.run_testdrive_files(
         "toxiproxy-close-connection.td",
         "toxiproxy-restore-connection.td",
         "delete-rows-t1.td",
@@ -127,8 +125,7 @@ def disconnect_pg_during_snapshot(c: Composition) -> None:
 def restart_pg_during_snapshot(c: Composition) -> None:
     restart_pg(c)
 
-    c.run(
-        "testdrive",
+    c.run_testdrive_files(
         "delete-rows-t1.td",
         "delete-rows-t2.td",
         "alter-table.td",
@@ -137,15 +134,14 @@ def restart_pg_during_snapshot(c: Composition) -> None:
 
 
 def restart_mz_during_snapshot(c: Composition) -> None:
-    c.run("testdrive", "alter-mz.td")
+    c.run_testdrive_files("alter-mz.td")
     restart_mz(c)
 
-    c.run("testdrive", "delete-rows-t1.td", "delete-rows-t2.td", "alter-table.td")
+    c.run_testdrive_files("delete-rows-t1.td", "delete-rows-t2.td", "alter-table.td")
 
 
 def disconnect_pg_during_replication(c: Composition) -> None:
-    c.run(
-        "testdrive",
+    c.run_testdrive_files(
         "wait-for-snapshot.td",
         "delete-rows-t1.td",
         "delete-rows-t2.td",
@@ -157,8 +153,7 @@ def disconnect_pg_during_replication(c: Composition) -> None:
 
 
 def restart_pg_during_replication(c: Composition) -> None:
-    c.run(
-        "testdrive",
+    c.run_testdrive_files(
         "wait-for-snapshot.td",
         "delete-rows-t1.td",
         "alter-table.td",
@@ -167,12 +162,11 @@ def restart_pg_during_replication(c: Composition) -> None:
 
     restart_pg(c)
 
-    c.run("testdrive", "delete-rows-t2.td")
+    c.run_testdrive_files("delete-rows-t2.td")
 
 
 def restart_mz_during_replication(c: Composition) -> None:
-    c.run(
-        "testdrive",
+    c.run_testdrive_files(
         "wait-for-snapshot.td",
         "delete-rows-t1.td",
         "alter-table.td",
@@ -181,12 +175,11 @@ def restart_mz_during_replication(c: Composition) -> None:
 
     restart_mz(c)
 
-    c.run("testdrive", "delete-rows-t2.td")
+    c.run_testdrive_files("delete-rows-t2.td")
 
 
 def fix_pg_schema_while_mz_restarts(c: Composition) -> None:
-    c.run(
-        "testdrive",
+    c.run_testdrive_files(
         "delete-rows-t1.td",
         "delete-rows-t2.td",
         "alter-table.td",
@@ -201,12 +194,13 @@ def verify_no_snapshot_reingestion(c: Composition) -> None:
     """Confirm that Mz does not reingest the entire snapshot on restart by
     revoking its SELECT privileges
     """
-    c.run("testdrive", "wait-for-snapshot.td", "postgres-disable-select-permission.td")
+    c.run_testdrive_files(
+        "wait-for-snapshot.td", "postgres-disable-select-permission.td"
+    )
 
     restart_mz(c)
 
-    c.run(
-        "testdrive",
+    c.run_testdrive_files(
         "delete-rows-t1.td",
         "delete-rows-t2.td",
         "alter-table.td",
@@ -215,8 +209,7 @@ def verify_no_snapshot_reingestion(c: Composition) -> None:
 
 
 def pg_out_of_disk_space(c: Composition) -> None:
-    c.run(
-        "testdrive",
+    c.run_testdrive_files(
         "wait-for-snapshot.td",
         "delete-rows-t1.td",
     )
@@ -232,7 +225,7 @@ def pg_out_of_disk_space(c: Composition) -> None:
     time.sleep(30)
     c.exec("postgres", "bash", "-c", f"rm {fill_file}")
 
-    c.run("testdrive", "delete-rows-t2.td", "alter-table.td", "alter-mz.td")
+    c.run_testdrive_files("delete-rows-t2.td", "alter-table.td", "alter-mz.td")
 
 
 def backup_restore_pg(c: Composition) -> None:
@@ -265,7 +258,7 @@ def backup_restore_pg(c: Composition) -> None:
         "-D",
         backup_dir,
     )
-    c.run("testdrive", "delete-rows-t1.td")
+    c.run_testdrive_files("delete-rows-t1.td")
 
     # Stop postgres service
     c.stop("postgres")
@@ -283,7 +276,7 @@ def backup_restore_pg(c: Composition) -> None:
 
     # Wait for postgres to become usable again
     c.up("postgres")
-    c.run("testdrive", "verify-postgres-select.td")
+    c.run_testdrive_files("verify-postgres-select.td")
 
     # Check state of the postgres source
-    c.run("testdrive", "verify-source-failed.td")
+    c.run_testdrive_files("verify-source-failed.td")

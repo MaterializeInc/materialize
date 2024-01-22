@@ -36,15 +36,14 @@ SERVICES = [
 def workflow_postgres(c: Composition) -> None:
     c.up(*prerequisites, "postgres")
 
-    c.run("testdrive", "postgres/debezium-postgres.td.initialize")
-    c.run("testdrive", "postgres/*.td")
+    c.run_testdrive_files("postgres/debezium-postgres.td.initialize")
+    c.run_testdrive_files("postgres/*.td")
 
 
 def workflow_sql_server(c: Composition) -> None:
     c.up(*prerequisites, "sql-server")
 
-    c.run(
-        "testdrive",
+    c.run_testdrive_files(
         f"--var=sa-password={SqlServer.DEFAULT_SA_PASSWORD}",
         "sql-server/*.td",
     )
@@ -53,8 +52,7 @@ def workflow_sql_server(c: Composition) -> None:
 def workflow_mysql(c: Composition) -> None:
     c.up(*prerequisites, "mysql")
 
-    c.run(
-        "testdrive",
+    c.run_testdrive_files(
         f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
         "mysql/*.td",
     )

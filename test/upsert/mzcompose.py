@@ -133,8 +133,7 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
         try:
             junit_report = ci_util.junit_report_filename(c.name)
             for file in args.files:
-                c.run(
-                    "testdrive",
+                c.run_testdrive_files(
                     f"--junit-report={junit_report}",
                     f"--var=replicas={args.replicas}",
                     f"--var=default-replica-size={materialized.default_replica_size}",
@@ -219,17 +218,17 @@ def workflow_rehydration(c: Composition) -> None:
             c.down(destroy_volumes=True)
 
             c.up(*dependencies)
-            c.run("testdrive", "rehydration/01-setup.td")
-            c.run("testdrive", "rehydration/02-source-setup.td")
+            c.run_testdrive_files("rehydration/01-setup.td")
+            c.run_testdrive_files("rehydration/02-source-setup.td")
 
             c.kill("materialized")
             c.kill("clusterd1")
             c.up("materialized")
             c.up("clusterd1")
 
-            c.run("testdrive", "rehydration/03-after-rehydration.td")
+            c.run_testdrive_files("rehydration/03-after-rehydration.td")
 
-        c.run("testdrive", "rehydration/04-reset.td")
+        c.run_testdrive_files("rehydration/04-reset.td")
 
 
 def workflow_failpoint(c: Composition) -> None:
@@ -258,13 +257,13 @@ def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> Non
     dependencies = ["zookeeper", "kafka", "materialized"]
     c.kill("clusterd1")
     c.up(*dependencies)
-    c.run("testdrive", "failpoint/00-reset.td")
+    c.run_testdrive_files("failpoint/00-reset.td")
     with c.override(
         Testdrive(no_reset=True, consistent_seed=True),
     ):
-        c.run("testdrive", "failpoint/01-setup.td")
+        c.run_testdrive_files("failpoint/01-setup.td")
         c.up("clusterd1")
-        c.run("testdrive", "failpoint/02-source.td")
+        c.run_testdrive_files("failpoint/02-source.td")
         c.kill("clusterd1")
 
         with c.override(
@@ -275,14 +274,14 @@ def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> Non
             ),
         ):
             c.up("clusterd1")
-            c.run(
-                "testdrive", f"--var=error={error_message}", "failpoint/03-failpoint.td"
+            c.run_testdrive_files(
+                f"--var=error={error_message}", "failpoint/03-failpoint.td"
             )
             c.kill("clusterd1")
 
         # Running without set failpoint
         c.up("clusterd1")
-        c.run("testdrive", "failpoint/04-recover.td")
+        c.run_testdrive_files("failpoint/04-recover.td")
 
 
 def workflow_incident_49(c: Composition) -> None:
@@ -327,14 +326,14 @@ def workflow_incident_49(c: Composition) -> None:
             c.down(destroy_volumes=True)
             c.up(*dependencies)
 
-            c.run("testdrive", "incident-49/01-setup.td")
+            c.run_testdrive_files("incident-49/01-setup.td")
 
             c.kill("materialized")
             c.up("materialized")
 
-            c.run("testdrive", "incident-49/02-after-rehydration.td")
+            c.run_testdrive_files("incident-49/02-after-rehydration.td")
 
-        c.run("testdrive", "incident-49/03-reset.td")
+        c.run_testdrive_files("incident-49/03-reset.td")
 
 
 def workflow_rocksdb_cleanup(c: Composition) -> None:
@@ -463,12 +462,12 @@ def workflow_autospill(c: Composition) -> None:
             return value
 
         c.up(*dependencies)
-        c.run("testdrive", "autospill/01-setup.td")
+        c.run_testdrive_files("autospill/01-setup.td")
 
-        c.run("testdrive", "autospill/02-memory.td")
+        c.run_testdrive_files("autospill/02-memory.td")
         assert fetch_auto_spill_metric() == 0
 
-        c.run("testdrive", "autospill/03-rocksdb.td")
+        c.run_testdrive_files("autospill/03-rocksdb.td")
         assert fetch_auto_spill_metric() == 1
 
 

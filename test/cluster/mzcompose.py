@@ -130,7 +130,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
         user="mz_system",
     )
 
-    c.run("testdrive", *args.glob)
+    c.run_testdrive_files(*args.glob)
 
     # Add a replica to that cluster and verify that tests still pass.
     c.up("clusterd3")
@@ -150,16 +150,16 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
         port=6877,
         user="mz_system",
     )
-    c.run("testdrive", *args.glob)
+    c.run_testdrive_files(*args.glob)
 
     # Kill one of the nodes in the first replica of the compute cluster and
     # verify that tests still pass.
     c.kill("clusterd1")
-    c.run("testdrive", *args.glob)
+    c.run_testdrive_files(*args.glob)
 
     # Leave only replica 2 up and verify that tests still pass.
     c.sql("DROP CLUSTER REPLICA cluster1.replica1", port=6877, user="mz_system")
-    c.run("testdrive", *args.glob)
+    c.run_testdrive_files(*args.glob)
 
     c.sql("DROP CLUSTER cluster1 CASCADE", port=6877, user="mz_system")
 
@@ -1342,7 +1342,7 @@ def workflow_test_upsert(c: Composition) -> None:
         c.down(destroy_volumes=True)
         c.up("materialized", "zookeeper", "kafka", "schema-registry")
 
-        c.run("testdrive", "upsert/01-create-sources.td")
+        c.run_testdrive_files("upsert/01-create-sources.td")
         # Sleep to make sure the errors have made it to persist.
         # This isn't necessary for correctness,
         # as we should be able to crash at any point and re-start.
@@ -1352,7 +1352,7 @@ def workflow_test_upsert(c: Composition) -> None:
         print("Sleeping for ten seconds")
         time.sleep(10)
         c.exec("materialized", "bash", "-c", "kill -9 `pidof clusterd`")
-        c.run("testdrive", "upsert/02-after-clusterd-restart.td")
+        c.run_testdrive_files("upsert/02-after-clusterd-restart.td")
 
 
 def workflow_test_remote_storage(c: Composition) -> None:
@@ -1373,24 +1373,24 @@ def workflow_test_remote_storage(c: Composition) -> None:
             "schema-registry",
         )
 
-        c.run("testdrive", "storage/01-create-sources.td")
+        c.run_testdrive_files("storage/01-create-sources.td")
 
         c.kill("materialized")
         c.up("materialized")
         c.kill("clusterd1")
         c.up("clusterd1")
         c.up("clusterd2")
-        c.run("testdrive", "storage/02-after-environmentd-restart.td")
+        c.run_testdrive_files("storage/02-after-environmentd-restart.td")
 
         # just kill one of the clusterd's and make sure we can recover.
         # `clusterd2` will die on its own.
         c.kill("clusterd1")
-        c.run("testdrive", "storage/03-while-clusterd-down.td")
+        c.run_testdrive_files("storage/03-while-clusterd-down.td")
 
         # Bring back both clusterd's
         c.up("clusterd1")
         c.up("clusterd2")
-        c.run("testdrive", "storage/04-after-clusterd-restart.td")
+        c.run_testdrive_files("storage/04-after-clusterd-restart.td")
 
 
 def workflow_test_drop_quickstart_cluster(c: Composition) -> None:
@@ -1419,7 +1419,7 @@ def workflow_test_resource_limits(c: Composition) -> None:
     ):
         c.up("materialized", "postgres")
 
-        c.run("testdrive", "resources/resource-limits.td")
+        c.run_testdrive_files("resources/resource-limits.td")
 
 
 def workflow_pg_snapshot_resumption(c: Composition) -> None:
@@ -1437,21 +1437,21 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
     ):
         c.up("materialized", "postgres", "storage")
 
-        c.run("testdrive", "pg-snapshot-resumption/01-configure-postgres.td")
-        c.run("testdrive", "pg-snapshot-resumption/02-create-sources.td")
-        c.run("testdrive", "pg-snapshot-resumption/03-ensure-source-down.td")
+        c.run_testdrive_files("pg-snapshot-resumption/01-configure-postgres.td")
+        c.run_testdrive_files("pg-snapshot-resumption/02-create-sources.td")
+        c.run_testdrive_files("pg-snapshot-resumption/03-ensure-source-down.td")
 
         # Temporarily disabled because it is timing out.
         # https://github.com/MaterializeInc/materialize/issues/14533
         # # clusterd should crash
-        # c.run("testdrive", "pg-snapshot-resumption/04-while-clusterd-down.td")
+        # c.run_testdrive_files("pg-snapshot-resumption/04-while-clusterd-down.td")
 
         with c.override(
             # turn off the failpoint
             Clusterd(name="storage")
         ):
             c.up("storage")
-            c.run("testdrive", "pg-snapshot-resumption/05-verify-data.td")
+            c.run_testdrive_files("pg-snapshot-resumption/05-verify-data.td")
 
 
 def workflow_sink_failure(c: Composition) -> None:
@@ -1469,15 +1469,15 @@ def workflow_sink_failure(c: Composition) -> None:
     ):
         c.up("materialized", "zookeeper", "kafka", "schema-registry", "storage")
 
-        c.run("testdrive", "sink-failure/01-configure-sinks.td")
-        c.run("testdrive", "sink-failure/02-ensure-sink-down.td")
+        c.run_testdrive_files("sink-failure/01-configure-sinks.td")
+        c.run_testdrive_files("sink-failure/02-ensure-sink-down.td")
 
         with c.override(
             # turn off the failpoint
             Clusterd(name="storage")
         ):
             c.up("storage")
-            c.run("testdrive", "sink-failure/03-verify-data.td")
+            c.run_testdrive_files("sink-failure/03-verify-data.td")
 
 
 def workflow_test_bootstrap_vars(c: Composition) -> None:
@@ -1495,7 +1495,7 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
     ):
         c.up("materialized")
 
-        c.run("testdrive", "resources/bootstrapped-system-vars.td")
+        c.run_testdrive_files("resources/bootstrapped-system-vars.td")
 
     with c.override(
         Testdrive(no_reset=True),
@@ -1506,7 +1506,7 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
         ),
     ):
         c.up("materialized")
-        c.run("testdrive", "resources/bootstrapped-system-vars.td")
+        c.run_testdrive_files("resources/bootstrapped-system-vars.td")
 
 
 def workflow_test_system_table_indexes(c: Composition) -> None:
@@ -1750,10 +1750,12 @@ def workflow_pg_snapshot_partial_failure(c: Composition) -> None:
     ):
         c.up("materialized", "postgres", "storage")
 
-        c.run("testdrive", "pg-snapshot-partial-failure/01-configure-postgres.td")
-        c.run("testdrive", "pg-snapshot-partial-failure/02-create-sources.td")
+        c.run_testdrive_files("pg-snapshot-partial-failure/01-configure-postgres.td")
+        c.run_testdrive_files("pg-snapshot-partial-failure/02-create-sources.td")
 
-        c.run("testdrive", "pg-snapshot-partial-failure/03-verify-good-sub-source.td")
+        c.run_testdrive_files(
+            "pg-snapshot-partial-failure/03-verify-good-sub-source.td"
+        )
 
         c.kill("storage")
         # Restart the storage instance with the failpoint off...
@@ -1761,9 +1763,9 @@ def workflow_pg_snapshot_partial_failure(c: Composition) -> None:
             # turn off the failpoint
             Clusterd(name="storage")
         ):
-            c.run("testdrive", "pg-snapshot-partial-failure/04-add-more-data.td")
+            c.run_testdrive_files("pg-snapshot-partial-failure/04-add-more-data.td")
             c.up("storage")
-            c.run("testdrive", "pg-snapshot-partial-failure/05-verify-data.td")
+            c.run_testdrive_files("pg-snapshot-partial-failure/05-verify-data.td")
 
 
 def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
@@ -2103,8 +2105,7 @@ def workflow_test_query_without_default_cluster(c: Composition) -> None:
     ):
         c.up("materialized", "postgres")
 
-        c.run(
-            "testdrive",
+        c.run_testdrive_files(
             "query-without-default-cluster/query-without-default-cluster.td",
         )
 
@@ -2871,7 +2872,7 @@ def workflow_test_index_source_stuck(
         c.up("materialized")
         c.up("clusterd1")
         c.up("clusterd2")
-        c.run("testdrive", "index-source-stuck/run.td")
+        c.run_testdrive_files("index-source-stuck/run.td")
 
 
 def workflow_test_github_cloud_7998(
@@ -2889,21 +2890,21 @@ def workflow_test_github_cloud_7998(
         c.up("materialized")
         c.up("clusterd1")
 
-        c.run("testdrive", "github-cloud-7998/setup.td")
+        c.run_testdrive_files("github-cloud-7998/setup.td")
 
         # Make the compute cluster unavailable.
         c.kill("clusterd1")
-        c.run("testdrive", "github-cloud-7998/check.td")
+        c.run_testdrive_files("github-cloud-7998/check.td")
 
         # Trigger an environment bootstrap.
         c.kill("materialized")
         c.up("materialized")
-        c.run("testdrive", "github-cloud-7998/check.td")
+        c.run_testdrive_files("github-cloud-7998/check.td")
 
         # Run a second bootstrap check, just to be sure.
         c.kill("materialized")
         c.up("materialized")
-        c.run("testdrive", "github-cloud-7998/check.td")
+        c.run_testdrive_files("github-cloud-7998/check.td")
 
 
 def workflow_test_github_23246(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -2973,7 +2974,7 @@ def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -
             user="mz_system",
         )
 
-        c.run("testdrive", "statement-logging/statement-logging.td")
+        c.run_testdrive_files("statement-logging/statement-logging.td")
 
 
 class PropagatingThread(Thread):
@@ -3060,14 +3061,14 @@ def workflow_blue_green_deployment(
         c.up("clusterd1")
         c.up("clusterd2")
         c.up("clusterd3")
-        c.run("testdrive", "blue-green-deployment/setup.td")
+        c.run_testdrive_files("blue-green-deployment/setup.td")
 
         threads = [PropagatingThread(target=fn) for fn in (selects, subscribe)]
         for thread in threads:
             thread.start()
         time.sleep(10)  # some time to make sure the queries run fine
         try:
-            c.run("testdrive", "blue-green-deployment/deploy.td")
+            c.run_testdrive_files("blue-green-deployment/deploy.td")
         finally:
             running = False
             for thread in threads:
