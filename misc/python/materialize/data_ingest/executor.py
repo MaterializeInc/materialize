@@ -459,6 +459,7 @@ class KafkaRoundtripExecutor(Executor):
                 required_error_message_substrs=[
                     "No value schema found",
                     "Key schema is required for ENVELOPE DEBEZIUM",
+                    "Topic does not exist",
                 ],
             )
         self.mz_conn.autocommit = False
