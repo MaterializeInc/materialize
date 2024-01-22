@@ -8,12 +8,15 @@
 # by the Apache License, Version 2.0.
 
 import os
+import subprocess
 from inspect import Traceback
 
 from kubernetes.client import V1Container, V1EnvVar, V1ObjectMeta, V1Pod, V1PodSpec
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_pod import K8sPod
+from materialize.mzcompose.test_result import extract_error_chunks_from_stderr
+from materialize.ui import CommandFailureCausedUIError
 
 
 class TestdriveBase:
@@ -126,6 +129,22 @@ class TestdrivePod(K8sPod, TestdriveBase):
 
     def _run_internal(self, command: list[str], input: str | None = None) -> None:
         self.wait(condition="condition=Ready", resource="pod/testdrive")
-        self.kubectl(
-            "exec", "-it", "testdrive", "--", *command, input=input, capture_output=True
-        )
+        try:
+            self.kubectl(
+                "exec",
+                "-it",
+                "testdrive",
+                "--",
+                *command,
+                input=input,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as e:
+            error_chunks = extract_error_chunks_from_stderr(e.stderr)
+            error_text = "\n".join(error_chunks)
+            raise CommandFailureCausedUIError(
+                f"Running {' '.join(command)} in testdrive failed with:\n{error_text}",
+                e.cmd,
+                e.stdout,
+                e.stderr,
+            )
