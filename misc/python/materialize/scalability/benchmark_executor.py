@@ -257,7 +257,7 @@ class BenchmarkExecutor:
         cursor = cursor_pool[local.worker_id]
 
         start = time.time()
-        operation.execute(cursor)
+        workload.execute_operation(operation, cursor)
         wallclock = time.time() - start
 
         return {

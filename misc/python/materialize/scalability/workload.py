@@ -7,12 +7,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from psycopg import Cursor
+
 from materialize.scalability.operation import Operation
 
 
 class Workload:
     def operations(self) -> list[Operation]:
         raise NotImplementedError
+
+    def execute_operation(self, operation: Operation, cursor: Cursor) -> None:
+        operation.execute(cursor)
 
     def name(self) -> str:
         return self.__class__.__name__
