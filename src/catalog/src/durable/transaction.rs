@@ -1477,39 +1477,28 @@ impl<'a> Transaction<'a> {
             storage_usage_updates,
             connection_timeout: _,
         } = &mut txn_batch;
-        consolidate_batch_part(databases);
-        consolidate_batch_part(schemas);
-        consolidate_batch_part(items);
-        consolidate_batch_part(comments);
-        consolidate_batch_part(roles);
-        consolidate_batch_part(clusters);
-        consolidate_batch_part(cluster_replicas);
-        consolidate_batch_part(introspection_sources);
-        consolidate_batch_part(id_allocator);
-        consolidate_batch_part(configs);
-        consolidate_batch_part(settings);
-        consolidate_batch_part(timestamps);
-        consolidate_batch_part(system_gid_mapping);
-        consolidate_batch_part(system_configurations);
-        consolidate_batch_part(default_privileges);
-        consolidate_batch_part(system_privileges);
-        consolidate_batch_part(audit_log_updates);
-        consolidate_batch_part(storage_usage_updates);
+        // Consolidate in memory becuase it will likely be faster than consolidating after the
+        // transaction has been made durable.
+        differential_dataflow::consolidation::consolidate_updates(databases);
+        differential_dataflow::consolidation::consolidate_updates(schemas);
+        differential_dataflow::consolidation::consolidate_updates(items);
+        differential_dataflow::consolidation::consolidate_updates(comments);
+        differential_dataflow::consolidation::consolidate_updates(roles);
+        differential_dataflow::consolidation::consolidate_updates(clusters);
+        differential_dataflow::consolidation::consolidate_updates(cluster_replicas);
+        differential_dataflow::consolidation::consolidate_updates(introspection_sources);
+        differential_dataflow::consolidation::consolidate_updates(id_allocator);
+        differential_dataflow::consolidation::consolidate_updates(configs);
+        differential_dataflow::consolidation::consolidate_updates(settings);
+        differential_dataflow::consolidation::consolidate_updates(timestamps);
+        differential_dataflow::consolidation::consolidate_updates(system_gid_mapping);
+        differential_dataflow::consolidation::consolidate_updates(system_configurations);
+        differential_dataflow::consolidation::consolidate_updates(default_privileges);
+        differential_dataflow::consolidation::consolidate_updates(system_privileges);
+        differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
+        differential_dataflow::consolidation::consolidate_updates(storage_usage_updates);
         durable_catalog.commit_transaction(txn_batch).await
     }
-}
-
-fn consolidate_batch_part<K, V>(batch_part: &mut Vec<(K, V, Diff)>)
-where
-    K: Ord,
-    V: Ord,
-{
-    let mut updates: Vec<_> = std::mem::take(batch_part)
-        .into_iter()
-        .map(|(k, v, d)| ((k, v), d))
-        .collect();
-    differential_dataflow::consolidation::consolidate(&mut updates);
-    *batch_part = updates.into_iter().map(|((k, v), d)| (k, v, d)).collect();
 }
 
 /// Describes a set of changes to apply as the result of a catalog transaction.
