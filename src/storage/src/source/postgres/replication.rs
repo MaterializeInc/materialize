@@ -188,6 +188,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let replication_client = connection_config.connect_replication(
                 &config.config.connection_context.ssh_tunnel_manager,
             ).await?;
+
+            tracing::info!(%id, "ensuring replication slot {slot} exists");
             super::ensure_replication_slot(&replication_client, slot).await?;
             let slot_lsn = super::fetch_slot_resume_lsn(&replication_client, slot).await?;
 
