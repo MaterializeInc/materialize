@@ -90,8 +90,6 @@ class PreExecutionInternalOutputInconsistencyIgnoreFilter(
         if db_function.function_name_in_lower_case in {
             "sum",
             "avg",
-            "stddev_samp",
-            "stddev_pop",
             "var_samp",
             "var_pop",
         }:
