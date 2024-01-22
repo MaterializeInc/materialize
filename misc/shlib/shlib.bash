@@ -195,23 +195,6 @@ arch_go() {
     esac
 }
 
-
-X86_64_TARGET_CPU="x86-64-v3"
-AARCH64_TARGET_CPU="neoverse-n1"
-
-# cpu_target
-#
-# Checks the host architecture and returns the CPU micro architecture we should use.
-cpu_target() {
-    local arch
-    arch=$(uname -m)
-    case "$arch" in
-        x86_64) echo "$X86_64_TARGET_CPU" ;;
-        aarch64|arm64) echo "$AARCH64_TARGET_CPU" ;;
-        *) die "unknown host architecture \"$arch\"" ;;
-    esac
-}
-
 # red [ARGS...]
 #
 # Prints the provided text in red.

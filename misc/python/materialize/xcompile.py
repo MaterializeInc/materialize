@@ -63,6 +63,21 @@ def target_cpu(arch: Arch) -> str:
         raise RuntimeError("unreachable")
 
 
+def target_features(arch: Arch) -> list[str]:
+    """
+    Returns a list of CPU features we should enable for Rust compilation.
+
+    Note: We also specify the CPU target when compiling Rust which should enable the majority of
+    available CPU features.
+    """
+    if arch == Arch.X86_64:
+        return ["+aes"]
+    elif arch == Arch.AARCH64:
+        return []
+    else:
+        raise RuntimeError("unreachable")
+
+
 def cargo(
     arch: Arch, subcommand: str, rustflags: list[str], channel: str | None = None
 ) -> list[str]:
@@ -81,11 +96,13 @@ def cargo(
     _target = target(arch)
     _target_env = _target.upper().replace("-", "_")
     _target_cpu = target_cpu(arch)
+    _target_features = ",".join(target_features(arch))
 
     rustflags += [
         "-Clink-arg=-Wl,--compress-debug-sections=zlib",
         "-Csymbol-mangling-version=v0",
         f"-Ctarget-cpu={_target_cpu}",
+        f"-Ctarget-features={_target_features}",
         "--cfg=tokio_unstable",
     ]
 
