@@ -145,6 +145,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     table_info: BTreeMap<u32, (usize, PostgresTableDesc, Vec<MirScalarExpr>)>,
     rewind_stream: &Stream<G, RewindRequest>,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+    metrics: PgSourceMetrics,
 ) -> (
     Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
     Stream<G, Infallible>,
@@ -164,7 +165,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         [&data_output, &upper_output],
     );
 
-    let metrics = config.metrics.get_postgres_metrics(config.id);
     metrics.tables.set(u64::cast_from(table_info.len()));
 
     let reader_table_info = table_info.clone();

@@ -159,12 +159,15 @@ impl SourceRender for PostgresSourceConnection {
             }
         }
 
+        let metrics = config.metrics.get_postgres_metrics(config.id);
+
         let (snapshot_updates, rewinds, snapshot_err, snapshot_token) = snapshot::render(
             scope.clone(),
             config.clone(),
             self.clone(),
             subsource_resume_uppers.clone(),
             table_info.clone(),
+            metrics.snapshot_metrics.clone(),
         );
 
         let (repl_updates, uppers, repl_err, repl_token) = replication::render(
@@ -175,6 +178,7 @@ impl SourceRender for PostgresSourceConnection {
             table_info,
             &rewinds,
             resume_uppers,
+            metrics,
         );
 
         let updates = snapshot_updates.concat(&repl_updates).map(|(output, res)| {

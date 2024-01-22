@@ -1113,6 +1113,34 @@ const PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
+/// Please see `PgSourceSnapshotConfig`.
+const PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("pg_source_snapshot_collect_strict_count"),
+    value: mz_storage_types::parameters::PgSourceSnapshotConfig::new().collect_strict_count,
+    description: "Please see <https://dev.materialize.com/api/rust-private\
+        /mz_storage_types/parameters\
+        /struct.PgSourceSnapshotConfig.html#structfield.collect_strict_count>",
+    internal: true,
+};
+/// Please see `PgSourceSnapshotConfig`.
+const PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("pg_source_snapshot_fallback_to_strict_count"),
+    value: mz_storage_types::parameters::PgSourceSnapshotConfig::new().fallback_to_strict_count,
+    description: "Please see <https://dev.materialize.com/api/rust-private\
+        /mz_storage_types/parameters\
+        /struct.PgSourceSnapshotConfig.html#structfield.fallback_to_strict_count>",
+    internal: true,
+};
+/// Please see `PgSourceSnapshotConfig`.
+const PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("pg_source_snapshot_wait_for_count"),
+    value: mz_storage_types::parameters::PgSourceSnapshotConfig::new().wait_for_count,
+    description: "Please see <https://dev.materialize.com/api/rust-private\
+        /mz_storage_types/parameters\
+        /struct.PgSourceSnapshotConfig.html#structfield.wait_for_count>",
+    internal: true,
+};
+
 /// Controls the check interval for connections to SSH bastions via `mz_ssh_util`.
 const SSH_CHECK_INTERVAL: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("ssh_check_interval"),
@@ -3092,6 +3120,9 @@ impl SystemVars {
             .with_var(&PG_SOURCE_KEEPALIVES_RETRIES)
             .with_var(&PG_SOURCE_TCP_USER_TIMEOUT)
             .with_var(&PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT)
+            .with_var(&PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT)
+            .with_var(&PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT)
+            .with_var(&PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT)
             .with_var(&SSH_CHECK_INTERVAL)
             .with_var(&SSH_CONNECT_TIMEOUT)
             .with_var(&SSH_KEEPALIVES_IDLE)
@@ -3702,6 +3733,19 @@ impl SystemVars {
     /// Returns the `pg_source_snapshot_statement_timeout` configuration parameter.
     pub fn pg_source_snapshot_statement_timeout(&self) -> Duration {
         *self.expect_value(&PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT)
+    }
+
+    /// Returns the `pg_source_snapshot_collect_strict_count` configuration parameter.
+    pub fn pg_source_snapshot_collect_strict_count(&self) -> bool {
+        *self.expect_value(&PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT)
+    }
+    /// Returns the `pg_source_snapshot_fallback_to_strict_count` configuration parameter.
+    pub fn pg_source_snapshot_fallback_to_strict_count(&self) -> bool {
+        *self.expect_value(&PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT)
+    }
+    /// Returns the `pg_source_snapshot_collect_strict_count` configuration parameter.
+    pub fn pg_source_snapshot_wait_for_count(&self) -> bool {
+        *self.expect_value(&PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT)
     }
 
     /// Returns the `ssh_check_interval` configuration parameter.
@@ -5731,6 +5775,9 @@ impl SystemVars {
             || name == PG_SOURCE_KEEPALIVES_RETRIES.name()
             || name == PG_SOURCE_TCP_USER_TIMEOUT.name()
             || name == PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT.name()
+            || name == PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT.name()
+            || name == PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT.name()
+            || name == PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT.name()
             || name == ENABLE_STORAGE_SHARD_FINALIZATION.name()
             || name == SSH_CHECK_INTERVAL.name()
             || name == SSH_CONNECT_TIMEOUT.name()
