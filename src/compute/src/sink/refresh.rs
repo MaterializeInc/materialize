@@ -112,10 +112,9 @@ where
                             // We are past the last refresh. Drop the capability to signal that we
                             // are done.
                             capability = None;
-                            // We can only get here if we see the frontier advancing to a time after
-                            // the last refresh, but not empty, which would be a bug somewhere in
-                            // the `until` handling.
-                            soft_panic_or_log!("frontier advancements after the `until` should be suppressed");
+                            // We can only get here if we see the frontier advancing to a time after the last refresh,
+                            // but not empty. This is ok, because even though we set the `until` to the last refresh,
+                            // frontier advancements might still happen past the `until`.
                         }
                     }
                 }
