@@ -19,12 +19,10 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
-use mz_adapter_types::connection::{
-    org_id_conn_bits, ConnectionId, ConnectionIdType, ORG_ID_OFFSET,
-};
+use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_build_info::BuildInfo;
 use mz_ore::collections::CollectionExt;
-use mz_ore::id_gen::{IdAllocator, IdAllocatorInnerBitSet};
+use mz_ore::id_gen::{org_id_conn_bits, IdAllocator, IdAllocatorInnerBitSet, MAX_ORG_ID};
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
@@ -124,7 +122,7 @@ impl Client {
         Client {
             build_info,
             inner_cmd_tx: cmd_tx,
-            id_alloc: IdAllocator::new(1, 1 << ORG_ID_OFFSET, env_lower),
+            id_alloc: IdAllocator::new(1, MAX_ORG_ID, env_lower),
             now,
             metrics,
             environment_id,
