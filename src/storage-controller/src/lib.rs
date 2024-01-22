@@ -50,7 +50,8 @@ use mz_storage_client::client::{
 };
 use mz_storage_client::controller::{
     CollectionDescription, CollectionState, DataSource, DataSourceOther, ExportDescription,
-    ExportState,IntrospectionManaged, IntrospectionType,IntrospectionUnmanaged, MonotonicAppender, Response, SnapshotCursor, StorageController,
+    ExportState, IntrospectionManaged, IntrospectionType, IntrospectionUnmanaged,
+    MonotonicAppender, Response, SnapshotCursor, StorageController,
 };
 use mz_storage_client::metrics::StorageControllerMetrics;
 use mz_storage_types::collections as proto;

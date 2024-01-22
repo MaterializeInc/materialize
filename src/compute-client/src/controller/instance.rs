@@ -236,7 +236,7 @@ impl<T: Timestamp> Instance<T> {
                 Datum::TimestampTz(time.try_into().expect("must fit")),
             ]);
             self.deliver_introspection_updates(
-                IntrospectionType::ComputeReplicaHeartbeats,
+                IntrospectionManaged::ComputeReplicaHeartbeats,
                 vec![(row, -1)],
             );
         }
@@ -1707,7 +1707,7 @@ impl HydrationFlag {
     fn send(&self, updates: Vec<(Row, Diff)>) {
         let result = self
             .introspection_tx
-            .send((IntrospectionType::ComputeHydrationStatus, updates));
+            .send((IntrospectionManaged::ComputeHydrationStatus, updates));
 
         if result.is_err() {
             // The global controller holds on to the `introspection_rx`. So when we get here that

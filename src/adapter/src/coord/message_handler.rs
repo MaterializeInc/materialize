@@ -197,7 +197,7 @@ impl Coordinator {
                     self.controller
                         .storage
                         .record_introspection_updates(
-                            mz_storage_client::controller::IntrospectionType::PrivatelinkConnectionStatusHistory,
+                            mz_storage_client::controller::IntrospectionManaged::PrivatelinkConnectionStatusHistory,
                             events
                                 .into_iter()
                                 .map(|e| (mz_repr::Row::from(e), 1))

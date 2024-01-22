@@ -1956,7 +1956,7 @@ pub static MZ_CATALOG_RAW: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     data_source: IntrospectionType::Unmanaged(IntrospectionUnmanaged::Catalog),
     desc: PersistCatalogState::desc(),
     is_retained_metrics_object: false,
-    sensitivity: DataSensitivity::Superuser,
+    access: Vec::new(),
 });
 
 pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -2485,7 +2485,9 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY: Lazy<BuiltinSource> =
     Lazy::new(|| BuiltinSource {
         name: "mz_aws_privatelink_connection_status_history",
         schema: MZ_INTERNAL_SCHEMA,
-        data_source: Some(IntrospectionType::PrivatelinkConnectionStatusHistory),
+        data_source: IntrospectionType::Managed(
+            IntrospectionManaged::PrivatelinkConnectionStatusHistory,
+        ),
         desc: MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC.clone(),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
@@ -2617,7 +2619,7 @@ pub static MZ_STATEMENT_LIFECYCLE_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| Bu
             "occurred_at",
             ScalarType::TimestampTz { precision: None }.nullable(false),
         ),
-    data_source: Some(IntrospectionType::StatementLifecycleHistory),
+    data_source: IntrospectionType::Managed(IntrospectionManaged::StatementLifecycleHistory),
     is_retained_metrics_object: false,
     // TODO[btv]: Maybe this should be public instead of
     // `MONITOR_REDACTED`, but since that would be a backwards-compatible
