@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ schema-registry-wait subject=mysql.test.t1-value
+$ schema-registry-wait topic=mysql.test.t1
 
 $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
 
@@ -16,7 +16,7 @@ USE test;
 INSERT INTO t1 VALUES (345, 345, 345);
 COMMIT;
 
-$ schema-registry-wait subject=mysql.transaction-value
+$ schema-registry-wait topic=mysql.transaction
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 

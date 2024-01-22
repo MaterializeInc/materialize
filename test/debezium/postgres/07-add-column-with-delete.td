@@ -18,7 +18,7 @@ CREATE TABLE alter_add_column_with_delete (f1 INTEGER, f2 INTEGER PRIMARY KEY);
 ALTER TABLE alter_add_column_with_delete REPLICA IDENTITY FULL;
 INSERT INTO alter_add_column_with_delete VALUES (123, 0),(123, 1),(123, 2),(123, 3);
 
-$ schema-registry-wait subject=postgres.public.alter_add_column_with_delete-value
+$ schema-registry-wait topic=postgres.public.alter_add_column_with_delete
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'

@@ -16,7 +16,7 @@ CREATE TABLE insert_same_table (f1 INTEGER, PRIMARY KEY (f1));
 ALTER TABLE insert_same_table REPLICA IDENTITY FULL;
 INSERT INTO insert_same_table VALUES (0);
 
-$ schema-registry-wait subject=postgres.public.insert_same_table-value
+$ schema-registry-wait topic=postgres.public.insert_same_table
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'

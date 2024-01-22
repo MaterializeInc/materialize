@@ -17,7 +17,7 @@ CREATE TABLE replica_identity_default (f1 INTEGER, f2 INTEGER, f3 INTEGER, PRIMA
 ALTER TABLE replica_identity_default REPLICA IDENTITY DEFAULT;
 INSERT INTO replica_identity_default VALUES (1,1,1), (2,2,2), (3,3,3), (4,4,4);
 
-$ schema-registry-wait subject=postgres.public.replica_identity_default-value
+$ schema-registry-wait topic=postgres.public.replica_identity_default
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'

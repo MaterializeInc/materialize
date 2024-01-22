@@ -123,7 +123,7 @@ class CreateDebeziumSource(Action):
                       }}
                     }}
 
-                    $ schema-registry-wait subject=postgres.public.{self.postgres_table.name}-value
+                    $ schema-registry-wait topic=postgres.public.{self.postgres_table.name}
 
                     > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 

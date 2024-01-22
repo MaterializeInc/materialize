@@ -25,24 +25,27 @@ pub async fn run_wait_topic(
         .initial_backoff(Duration::from_millis(50))
         .factor(1.5)
         .max_duration(state.timeout)
-        .retry_async_canceling(|_| async {
-            let metadata = state
-                .kafka_admin
-                .inner()
-                // N.B. It is extremely important not to ask specifically
-                // about the topic here, even though the API supports it!
-                // Asking about the topic will create it automatically...
-                // with the wrong number of partitions. Yes, this is
-                // unbelievably horrible.
-                .fetch_metadata(None, Some(Duration::from_secs(10)))?;
-
-            let topic_exists = metadata.topics().iter().any(|t| t.name() == topic);
-            if !topic_exists {
-                Err(anyhow::anyhow!("topic {} doesn't exist", topic))
-            } else {
-                Ok(())
-            }
-        })
+        .retry_async_canceling(|_| async { check_topic_exists(&topic, &*state).await })
         .await?;
+
     Ok(ControlFlow::Continue)
+}
+
+pub(crate) async fn check_topic_exists(topic: &str, state: &State) -> Result<(), anyhow::Error> {
+    let metadata = state
+        .kafka_admin
+        .inner()
+        // N.B. It is extremely important not to ask specifically
+        // about the topic here, even though the API supports it!
+        // Asking about the topic will create it automatically...
+        // with the wrong number of partitions. Yes, this is
+        // unbelievably horrible.
+        .fetch_metadata(None, Some(Duration::from_secs(10)))?;
+
+    let topic_exists = metadata.topics().iter().any(|t| t.name() == topic);
+    if !topic_exists {
+        Err(anyhow::anyhow!("topic {} doesn't exist", topic))
+    } else {
+        Ok(())
+    }
 }

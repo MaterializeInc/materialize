@@ -119,27 +119,52 @@ pub async fn run_wait(
     state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     // Parse arguments.
-    let subject = cmd.args.string("subject")?;
+    let topic = cmd.args.string("topic")?;
+    let subjects = [format!("{}-value", topic), format!("{}-key", topic)];
+
     cmd.args.done()?;
     cmd.assert_no_input()?;
 
     // Run action.
+
+    let mut waiting_for_kafka = false;
+
     println!(
-        "Waiting for schema for subject {} to become available in the schema registry...",
-        subject.quoted(),
+        "Waiting for schema for subjects {:?} to become available in the schema registry...",
+        subjects
     );
+
+    let topic = &topic;
+    let subjects = &subjects;
     Retry::default()
         .initial_backoff(Duration::from_millis(50))
         .factor(1.5)
         .max_duration(state.timeout)
-        .retry_async_canceling(|_| async {
-            state
-                .ccsr_client
-                .get_schema_by_subject(&subject)
-                .await
-                .context("fetching schema")
-                .and(Ok(()))
+        .retry_async_canceling(|_| async move {
+            if !waiting_for_kafka {
+                futures::future::try_join_all(subjects.iter().map(|subject| async move {
+                    state
+                        .ccsr_client
+                        // This doesn't take `ccsr_client` by `&mut self`, so it should be safe to cancel
+                        // by try-joining.
+                        .get_schema_by_subject(subject)
+                        .await
+                        .context("fetching schema")
+                        .and(Ok(()))
+                }))
+                .await?;
+
+                waiting_for_kafka = true;
+                println!("Waiting for Kafka topic {} to exist", topic);
+            }
+
+            if waiting_for_kafka {
+                super::kafka::check_topic_exists(topic, state).await?
+            }
+
+            Ok::<(), anyhow::Error>(())
         })
         .await?;
+
     Ok(ControlFlow::Continue)
 }
