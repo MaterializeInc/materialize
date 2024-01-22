@@ -484,8 +484,9 @@ pub fn plan_explain_timestamp(
     }))
 }
 
-/// Plans and decorrelates a `Query`. Like `query::plan_root_query`, but returns
-/// an `mz_expr::MirRelationExpr`, which cannot include correlated expressions.
+/// Plans and decorrelates a [`Query`]. Like [`query::plan_root_query`], but
+/// returns an [`MirRelationExpr`], which cannot include correlated expressions.
+#[deprecated = "Use `query::plan_root_query` and use `HirRelationExpr` in `~Plan` structs."]
 pub fn plan_query(
     scx: &StatementContext,
     query: Query<Aug>,
@@ -615,6 +616,7 @@ pub fn plan_subscribe(
             (SubscribeFrom::Id(entry.id()), desc.into_owned(), scope)
         }
         SubscribeRelation::Query(query) => {
+            #[allow(deprecated)] // TODO(aalexandrov): Use HirRelationExpr in Subscribe
             let query = plan_query(scx, query, params, QueryLifetime::Subscribe)?;
             // There's no way to apply finishing operations to a `SUBSCRIBE` directly, so the
             // finishing should have already been turned into a `TopK` by
@@ -962,6 +964,7 @@ pub fn plan_copy(
                     if !stmt.query.order_by.is_empty() {
                         sql_bail!("ORDER BY is not supported in SELECT query for COPY statements")
                     }
+                    #[allow(deprecated)] // TODO(aalexandrov): Use HirRelationExpr in CopyToFrom
                     let PlannedRootQuery {
                         expr,
                         finishing,
