@@ -202,7 +202,6 @@ impl SourceRender for PostgresSourceConnection {
             let update = HealthStatusUpdate::halting(err_string.clone(), None);
 
             let namespace = match err {
-                // Is there a better way to reach into an Rc?
                 ReplicationError::Transient(err)
                     if matches!(
                         &*err,
