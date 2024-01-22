@@ -95,7 +95,10 @@ pub use query::{ExprContext, QueryContext, QueryLifetime};
 pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
 pub use statement::ddl::{PlannedAlterRoleOption, PlannedRoleVariable};
-pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
+pub use statement::{
+    describe, plan, plan_copy_from, resolve_cluster_for_materialized_view, StatementContext,
+    StatementDesc,
+};
 
 /// Instructions for executing a SQL query.
 #[derive(Debug, EnumKind)]

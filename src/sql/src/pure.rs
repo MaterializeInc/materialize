@@ -1793,13 +1793,7 @@ const MZ_NOW_SCHEMA: &str = "mz_catalog";
 /// references to ids appear or disappear during the purification.
 ///
 /// Note that in contrast with [`purify_statement`], this doesn't need to be async, because
-/// this function is not making any network calls. Furthermore, there is a good reason for it
-/// to be sync: if this were async, then the `mz_now` that our caller selected could become
-/// invalid by the time the async result message is handled by the coordinator main loop, in
-/// the sense that we might no longer be able to read our inputs at the selected timestamp.
-/// If it is sync, then there is no gap between observing the oracle read timestamp and
-/// installing the materialized view in the catalog, at which point it will install its own
-/// read holds for the refresh at `mz_now`.
+/// this function is not making any network calls.
 pub fn purify_create_materialized_view_options(
     catalog: impl SessionCatalog,
     mz_now: Option<Timestamp>,

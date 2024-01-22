@@ -2137,10 +2137,8 @@ pub fn plan_create_materialized_view(
     mut stmt: CreateMaterializedViewStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
-    let cluster_id = match &stmt.in_cluster {
-        None => scx.resolve_cluster(None)?.id(),
-        Some(in_cluster) => in_cluster.id,
-    };
+    let cluster_id =
+        crate::plan::statement::resolve_cluster_for_materialized_view(scx.catalog, &stmt)?;
     stmt.in_cluster = Some(ResolvedClusterName {
         id: cluster_id,
         print_name: None,

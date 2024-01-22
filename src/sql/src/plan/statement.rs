@@ -16,8 +16,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    ColumnDef, RawItemName, ShowStatement, TableConstraint, UnresolvedDatabaseName,
-    UnresolvedSchemaName,
+    ColumnDef, CreateMaterializedViewStatement, RawItemName, ShowStatement, TableConstraint,
+    UnresolvedDatabaseName, UnresolvedSchemaName,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
@@ -49,6 +49,7 @@ mod validate;
 
 use crate::session::vars;
 pub(crate) use ddl::PgConfigOptionExtracted;
+use mz_controller_types::ClusterId;
 use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_USER_OID};
 use mz_repr::role_id::RoleId;
 
@@ -960,4 +961,14 @@ impl<'a> StatementContext<'a> {
             print_id: true,
         }
     }
+}
+
+pub fn resolve_cluster_for_materialized_view<'a>(
+    catalog: &'a dyn SessionCatalog,
+    stmt: &CreateMaterializedViewStatement<Aug>,
+) -> Result<ClusterId, PlanError> {
+    Ok(match &stmt.in_cluster {
+        None => catalog.resolve_cluster(None)?.id(),
+        Some(in_cluster) => in_cluster.id,
+    })
 }
