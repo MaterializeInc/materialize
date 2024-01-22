@@ -21,4 +21,4 @@ class EnumDataType(DataType):
         super().__init__("SPECIAL", "SQL", DataTypeCategory.ENUM)
 
     def value_to_sql(self, string_value: str, sql_adjuster: SqlDialectAdjuster) -> str:
-        return string_value
+        return sql_adjuster.adjust_enum_value(string_value)
