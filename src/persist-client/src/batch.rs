@@ -30,7 +30,7 @@ use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Atomicity, Blob};
 use mz_persist_types::stats::{trim_to_budget, truncate_bytes, TruncateBound, TRUNCATE_LEN};
 use mz_persist_types::{Codec, Codec64};
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use mz_proto::RustType;
 use mz_timely_util::order::Reverse;
 use proptest_derive::Arbitrary;
 use semver::Version;
@@ -39,7 +39,6 @@ use timely::PartialOrder;
 use tracing::{debug_span, error, instrument, trace_span, warn, Instrument};
 
 use crate::async_runtime::IsolatedRuntime;
-use crate::cfg::ProtoUntrimmableColumns;
 use crate::dyn_cfg::Config;
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{LazyPartStats, Schemas};
@@ -47,7 +46,7 @@ use crate::internal::machine::retry_external;
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartId, PartialBatchKey, WriterKey};
 use crate::internal::state::{HollowBatch, HollowBatchPart};
-use crate::stats::PartStats;
+use crate::stats::{untrimmable_columns, PartStats};
 use crate::write::WriterId;
 use crate::{PersistConfig, ShardId};
 
@@ -244,7 +243,7 @@ impl BatchBuilderConfig {
                 .batch_builder_max_outstanding_parts(),
             stats_collection_enabled: value.dynamic.stats_collection_enabled(),
             stats_budget: value.dynamic.stats_budget_bytes(),
-            stats_untrimmable_columns: Arc::new(value.dynamic.stats_untrimmable_columns()),
+            stats_untrimmable_columns: Arc::new(untrimmable_columns(&value.configs)),
         }
     }
 }
@@ -252,7 +251,7 @@ impl BatchBuilderConfig {
 /// A list of (lowercase) column names that persist will always retain
 /// stats for, even if it means going over the stats budget.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Arbitrary)]
-pub struct UntrimmableColumns {
+pub(crate) struct UntrimmableColumns {
     /// Always retain columns whose lowercased names exactly equal any of these strings.
     pub equals: Vec<Cow<'static, str>>,
     /// Always retain columns whose lowercased names start with any of these strings.
@@ -282,24 +281,6 @@ impl UntrimmableColumns {
             }
         }
         false
-    }
-}
-
-impl RustType<ProtoUntrimmableColumns> for UntrimmableColumns {
-    fn into_proto(&self) -> ProtoUntrimmableColumns {
-        ProtoUntrimmableColumns {
-            equals: self.equals.into_proto(),
-            prefixes: self.prefixes.into_proto(),
-            suffixes: self.suffixes.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoUntrimmableColumns) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            equals: proto.equals.into_rust()?,
-            prefixes: proto.prefixes.into_rust()?,
-            suffixes: proto.suffixes.into_rust()?,
-        })
     }
 }
 

@@ -9,6 +9,8 @@
 
 //! Aggregate statistics about data stored in persist.
 
+use std::borrow::Cow;
+
 use mz_persist::indexed::columnar::ColumnarRecords;
 use mz_persist_types::columnar::{PartEncoder, Schema};
 use mz_persist_types::part::{Part, PartBuilder};
@@ -17,8 +19,62 @@ use mz_persist_types::Codec;
 use proptest_derive::Arbitrary;
 use timely::progress::Antichain;
 
+use crate::batch::UntrimmableColumns;
+use crate::dyn_cfg::{Config, ConfigSet};
 use crate::internal::encoding::Schemas;
 use crate::ShardId;
+
+pub(crate) const STATS_UNTRIMMABLE_COLUMNS_EQUALS: Config<String> = Config::new(
+    "persist_stats_untrimmable_columns_equals",
+    concat!(
+        // If we trim the "err" column, then we can't ever use pushdown on a
+        // part (because it could have >0 errors).
+        "err,",
+        "ts,",
+        "receivedat,",
+        "createdat,",
+        // Fivetran created tables track deleted rows by setting this column.
+        //
+        // See <https://fivetran.com/docs/using-fivetran/features#capturedeletes>.
+        "_fivetran_deleted,",
+    ),
+    "\
+    Which columns to always retain during persist stats trimming. Any column \
+    with a name exactly equal (case-insensitive) to one of these will be kept. \
+    Comma separated list.",
+);
+
+pub(crate) const STATS_UNTRIMMABLE_COLUMNS_PREFIX: Config<String> = Config::new(
+    "persist_stats_untrimmable_columns_prefix",
+    concat!("last_,",),
+    "\
+    Which columns to always retain during persist stats trimming. Any column \
+    with a name starting with (case-insensitive) one of these will be kept. \
+    Comma separated list.",
+);
+
+pub(crate) const STATS_UNTRIMMABLE_COLUMNS_SUFFIX: Config<String> = Config::new(
+    "persist_stats_untrimmable_columns_suffix",
+    concat!("timestamp,", "time,", "_at,", "_tstamp,"),
+    "\
+    Which columns to always retain during persist stats trimming. Any column \
+    with a name ending with (case-insensitive) one of these will be kept. \
+    Comma separated list.",
+);
+
+pub(crate) fn untrimmable_columns(cfg: &ConfigSet) -> UntrimmableColumns {
+    fn split(x: String) -> Vec<Cow<'static, str>> {
+        x.split(',')
+            .filter(|x| !x.is_empty())
+            .map(|x| x.to_owned().into())
+            .collect()
+    }
+    UntrimmableColumns {
+        equals: split(STATS_UNTRIMMABLE_COLUMNS_EQUALS.get(cfg)),
+        prefixes: split(STATS_UNTRIMMABLE_COLUMNS_PREFIX.get(cfg)),
+        suffixes: split(STATS_UNTRIMMABLE_COLUMNS_SUFFIX.get(cfg)),
+    }
+}
 
 /// Aggregate statistics about data contained in a [Part].
 #[derive(Arbitrary, Debug)]

@@ -21,12 +21,10 @@ use mz_persist::cfg::BlobKnobs;
 use mz_persist::retry::Retry;
 use mz_postgres_client::PostgresClientKnobs;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
-use crate::batch::UntrimmableColumns;
 use crate::dyn_cfg::{Config, ConfigSet, ConfigType, ConfigUpdates};
 use crate::internal::compact::STREAMING_COMPACTION_ENABLED;
 use crate::read::STREAMING_SNAPSHOT_AND_FETCH_ENABLED;
@@ -190,9 +188,6 @@ impl PersistConfig {
                 stats_collection_enabled: AtomicBool::new(Self::DEFAULT_STATS_COLLECTION_ENABLED),
                 stats_filter_enabled: AtomicBool::new(Self::DEFAULT_STATS_FILTER_ENABLED),
                 stats_budget_bytes: AtomicUsize::new(Self::DEFAULT_STATS_BUDGET_BYTES),
-                stats_untrimmable_columns: RwLock::new(
-                    Self::DEFAULT_STATS_UNTRIMMABLE_COLUMNS.clone(),
-                ),
                 pubsub_client_enabled: AtomicBool::new(Self::DEFAULT_PUBSUB_CLIENT_ENABLED),
                 pubsub_push_diff_enabled: AtomicBool::new(Self::DEFAULT_PUBSUB_PUSH_DIFF_ENABLED),
                 rollup_threshold: AtomicUsize::new(Self::DEFAULT_ROLLUP_THRESHOLD),
@@ -278,6 +273,9 @@ pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::batch::BATCH_DELETE_ENABLED)
         .add(&crate::internal::compact::STREAMING_COMPACTION_ENABLED)
         .add(&crate::read::STREAMING_SNAPSHOT_AND_FETCH_ENABLED)
+        .add(&crate::stats::STATS_UNTRIMMABLE_COLUMNS_EQUALS)
+        .add(&crate::stats::STATS_UNTRIMMABLE_COLUMNS_PREFIX)
+        .add(&crate::stats::STATS_UNTRIMMABLE_COLUMNS_SUFFIX)
 }
 
 impl PersistConfig {
@@ -307,30 +305,6 @@ impl PersistConfig {
     pub const DEFAULT_PUBSUB_PUSH_DIFF_ENABLED: bool = true;
     /// Default value for [`DynamicConfig::rollup_threshold`].
     pub const DEFAULT_ROLLUP_THRESHOLD: usize = 128;
-
-    pub const DEFAULT_STATS_UNTRIMMABLE_COLUMNS: Lazy<UntrimmableColumns> = Lazy::new(|| {
-        UntrimmableColumns {
-            equals: vec![
-                // If we trim the "err" column, then we can't ever use pushdown on a part
-                // (because it could have >0 errors).
-                "err".into(),
-                "ts".into(),
-                "receivedat".into(),
-                "createdat".into(),
-                // Fivetran created tables track deleted rows by setting this column.
-                //
-                // See <https://fivetran.com/docs/using-fivetran/features#capturedeletes>.
-                "_fivetran_deleted".into(),
-            ],
-            prefixes: vec!["last_".into()],
-            suffixes: vec![
-                "timestamp".into(),
-                "time".into(),
-                "_at".into(),
-                "_tstamp".into(),
-            ],
-        }
-    });
 
     /// Default value for [`PersistConfig::sink_minimum_batch_updates`].
     pub const DEFAULT_SINK_MINIMUM_BATCH_UPDATES: usize = 0;
@@ -456,7 +430,6 @@ pub struct DynamicConfig {
     stats_collection_enabled: AtomicBool,
     stats_filter_enabled: AtomicBool,
     stats_budget_bytes: AtomicUsize,
-    stats_untrimmable_columns: RwLock<UntrimmableColumns>,
     pubsub_client_enabled: AtomicBool,
     pubsub_push_diff_enabled: AtomicBool,
     rollup_threshold: AtomicUsize,
@@ -682,14 +655,6 @@ impl DynamicConfig {
         self.stats_budget_bytes.load(Self::LOAD_ORDERING)
     }
 
-    /// The stats columns that will never be trimmed, even if they go over budget.
-    pub fn stats_untrimmable_columns(&self) -> UntrimmableColumns {
-        self.stats_untrimmable_columns
-            .read()
-            .expect("lock poisoned")
-            .clone()
-    }
-
     /// Determines whether PubSub clients should connect to the PubSub server.
     pub fn pubsub_client_enabled(&self) -> bool {
         self.pubsub_client_enabled.load(Self::LOAD_ORDERING)
@@ -816,8 +781,6 @@ pub struct PersistParameters {
     pub stats_filter_enabled: Option<bool>,
     /// Configures [`DynamicConfig::stats_budget_bytes`].
     pub stats_budget_bytes: Option<usize>,
-    /// Configures [`DynamicConfig::stats_untrimmable_columns`].
-    pub stats_untrimmable_columns: Option<UntrimmableColumns>,
     /// Configures [`DynamicConfig::pubsub_client_enabled`]
     pub pubsub_client_enabled: Option<bool>,
     /// Configures [`DynamicConfig::pubsub_push_diff_enabled`]
@@ -851,7 +814,6 @@ impl PersistParameters {
             stats_collection_enabled: self_stats_collection_enabled,
             stats_filter_enabled: self_stats_filter_enabled,
             stats_budget_bytes: self_stats_budget_bytes,
-            stats_untrimmable_columns: self_stats_untrimmable_columns,
             pubsub_client_enabled: self_pubsub_client_enabled,
             pubsub_push_diff_enabled: self_pubsub_push_diff_enabled,
             rollup_threshold: self_rollup_threshold,
@@ -875,7 +837,6 @@ impl PersistParameters {
             stats_collection_enabled: other_stats_collection_enabled,
             stats_filter_enabled: other_stats_filter_enabled,
             stats_budget_bytes: other_stats_budget_bytes,
-            stats_untrimmable_columns: other_stats_untrimmable_columns,
             pubsub_client_enabled: other_pubsub_client_enabled,
             pubsub_push_diff_enabled: other_pubsub_push_diff_enabled,
             rollup_threshold: other_rollup_threshold,
@@ -932,9 +893,6 @@ impl PersistParameters {
         if let Some(v) = other_stats_budget_bytes {
             *self_stats_budget_bytes = Some(v)
         }
-        if let Some(v) = other_stats_untrimmable_columns {
-            *self_stats_untrimmable_columns = Some(v)
-        }
         if let Some(v) = other_pubsub_client_enabled {
             *self_pubsub_client_enabled = Some(v)
         }
@@ -971,7 +929,6 @@ impl PersistParameters {
             stats_collection_enabled,
             stats_filter_enabled,
             stats_budget_bytes,
-            stats_untrimmable_columns,
             pubsub_client_enabled,
             pubsub_push_diff_enabled,
             rollup_threshold,
@@ -994,7 +951,6 @@ impl PersistParameters {
             && stats_collection_enabled.is_none()
             && stats_filter_enabled.is_none()
             && stats_budget_bytes.is_none()
-            && stats_untrimmable_columns.is_none()
             && pubsub_client_enabled.is_none()
             && pubsub_push_diff_enabled.is_none()
             && rollup_threshold.is_none()
@@ -1026,7 +982,6 @@ impl PersistParameters {
             stats_collection_enabled,
             stats_filter_enabled,
             stats_budget_bytes,
-            stats_untrimmable_columns,
             pubsub_client_enabled,
             pubsub_push_diff_enabled,
             rollup_threshold,
@@ -1138,14 +1093,6 @@ impl PersistParameters {
                 .stats_budget_bytes
                 .store(*stats_budget_bytes, DynamicConfig::STORE_ORDERING);
         }
-        if let Some(stats_untrimmable_columns) = stats_untrimmable_columns {
-            let mut columns = cfg
-                .dynamic
-                .stats_untrimmable_columns
-                .write()
-                .expect("lock poisoned");
-            *columns = stats_untrimmable_columns.clone();
-        }
         if let Some(pubsub_client_enabled) = pubsub_client_enabled {
             cfg.dynamic
                 .pubsub_client_enabled
@@ -1189,7 +1136,6 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             stats_collection_enabled: self.stats_collection_enabled.into_proto(),
             stats_filter_enabled: self.stats_filter_enabled.into_proto(),
             stats_budget_bytes: self.stats_budget_bytes.into_proto(),
-            stats_untrimmable_columns: self.stats_untrimmable_columns.into_proto(),
             pubsub_client_enabled: self.pubsub_client_enabled.into_proto(),
             pubsub_push_diff_enabled: self.pubsub_push_diff_enabled.into_proto(),
             rollup_threshold: self.rollup_threshold.into_proto(),
@@ -1221,7 +1167,6 @@ impl RustType<ProtoPersistParameters> for PersistParameters {
             stats_collection_enabled: proto.stats_collection_enabled.into_rust()?,
             stats_filter_enabled: proto.stats_filter_enabled.into_rust()?,
             stats_budget_bytes: proto.stats_budget_bytes.into_rust()?,
-            stats_untrimmable_columns: proto.stats_untrimmable_columns.into_rust()?,
             pubsub_client_enabled: proto.pubsub_client_enabled.into_rust()?,
             pubsub_push_diff_enabled: proto.pubsub_push_diff_enabled.into_rust()?,
             rollup_threshold: proto.rollup_threshold.into_rust()?,
