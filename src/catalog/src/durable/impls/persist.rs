@@ -382,15 +382,16 @@ impl UnopenedPersistCatalogState {
             if let Ok(kind) = kind.clone().try_into() {
                 match (kind, diff) {
                     (StateUpdateKind::Epoch(epoch), 1) => match self.epoch {
-                        PreOpenEpoch::Fenceable(Some(current_epoch)) if epoch > current_epoch => {
-                            self.epoch = PreOpenEpoch::Fenced {
-                                current_epoch,
-                                fence_epoch: epoch,
-                            };
-                            self.epoch.validate()?;
-                        }
-                        PreOpenEpoch::Fenceable(_) => {
-                            self.epoch = PreOpenEpoch::Fenceable(Some(epoch));
+                        PreOpenEpoch::Fenceable(Some(current_epoch)) => {
+                            if epoch > current_epoch {
+                                self.epoch = PreOpenEpoch::Fenced {
+                                    current_epoch,
+                                    fence_epoch: epoch,
+                                };
+                                self.epoch.validate()?;
+                            } else if epoch < current_epoch {
+                                panic!("Epoch went backwards from {current_epoch:?} to {epoch:?}");
+                            }
                         }
                         PreOpenEpoch::Unfenceable(_) => {
                             self.epoch = PreOpenEpoch::Unfenceable(Some(epoch));
