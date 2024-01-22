@@ -20,7 +20,7 @@ use mz_sql::catalog::CatalogCluster;
 use mz_catalog::memory::objects::CatalogItem;
 use mz_sql::plan;
 use mz_sql::plan::QueryWhen;
-use mz_transform::EmptyStatisticsOracle;
+use mz_transform::{EmptyStatisticsOracle, StatisticsOracle};
 use tracing::Instrument;
 use tracing::{event, warn, Level};
 
@@ -309,16 +309,7 @@ impl Coordinator {
         &mut self,
         ctx: ExecuteContext,
         root_otel_ctx: OpenTelemetryContext,
-        PeekStageOptimizeMir {
-            mut validity,
-            plan,
-            source_ids,
-            target_replica,
-            timeline_context,
-            oracle_read_ts,
-            in_immediate_multi_stmt_txn,
-            mut optimizer,
-        }: PeekStageOptimizeMir,
+        mut stage: PeekStageOptimizeMir,
     ) {
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
@@ -327,21 +318,21 @@ impl Coordinator {
         // TODO: Is there a way to avoid making two dataflow_builders (the second is in
         // optimize_peek)?
         let id_bundle = self
-            .dataflow_builder(optimizer.cluster_id())
-            .sufficient_collections(&source_ids);
+            .dataflow_builder(stage.optimizer.cluster_id())
+            .sufficient_collections(&stage.source_ids);
         // Although we have added `sources.depends_on()` to the validity already, also add the
         // sufficient collections for safety.
-        validity.dependency_ids.extend(id_bundle.iter());
+        stage.validity.dependency_ids.extend(id_bundle.iter());
 
         let stats = {
             match self
                 .determine_timestamp(
                     ctx.session(),
                     &id_bundle,
-                    &plan.when,
-                    optimizer.cluster_id(),
-                    &timeline_context,
-                    oracle_read_ts.clone(),
+                    &stage.plan.when,
+                    stage.optimizer.cluster_id(),
+                    &stage.timeline_context,
+                    stage.oracle_read_ts.clone(),
                     None,
                 )
                 .await
@@ -350,7 +341,7 @@ impl Coordinator {
                 Ok(query_as_of) => self
                     .statistics_oracle(
                         ctx.session(),
-                        &source_ids,
+                        &stage.source_ids,
                         query_as_of.timestamp_context.antichain(),
                         true,
                     )
@@ -359,45 +350,61 @@ impl Coordinator {
             }
         };
 
-        let span = tracing::debug_span!("optimize peek task (mir)");
+        let span = tracing::debug_span!("optimize peek task");
 
         mz_ore::task::spawn_blocking(
-            || "optimize peek (MIR)",
+            || "optimize peek",
             move || {
-                let pipeline = || -> Result<optimize::peek::GlobalMirPlan, AdapterError> {
-                    let local_mir_plan = optimizer.catch_unwind_optimize(plan.source.clone())?;
-                    let local_mir_plan = local_mir_plan.resolve(ctx.session(), stats);
-                    let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
-
-                    Ok(global_mir_plan)
-                };
                 let _guard = span.enter();
 
-                let stage = match pipeline() {
-                    Ok(global_mir_plan) => PeekStage::RealTimeRecency(PeekStageRealTimeRecency {
-                        validity,
-                        plan,
-                        source_ids,
-                        id_bundle,
-                        target_replica,
-                        timeline_context,
-                        oracle_read_ts,
-                        in_immediate_multi_stmt_txn,
-                        optimizer,
-                        global_mir_plan,
-                    }),
-                    Err(err) => {
-                        return ctx.retire(Err(err.into()));
+                match Self::optimize_peek(ctx.session(), stats, id_bundle, stage) {
+                    Ok(stage) => {
+                        let stage = PeekStage::RealTimeRecency(stage);
+                        // Ignore errors if the coordinator has shut down.
+                        let _ = internal_cmd_tx.send(Message::PeekStageReady {
+                            ctx,
+                            otel_ctx: root_otel_ctx,
+                            stage,
+                        });
                     }
-                };
-
-                let _ = internal_cmd_tx.send(Message::PeekStageReady {
-                    ctx,
-                    otel_ctx: root_otel_ctx,
-                    stage,
-                });
+                    Err(err) => ctx.retire(Err(err)),
+                }
             },
         );
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    fn optimize_peek(
+        session: &Session,
+        stats: Box<dyn StatisticsOracle>,
+        id_bundle: CollectionIdBundle,
+        PeekStageOptimizeMir {
+            validity,
+            plan,
+            source_ids,
+            target_replica,
+            timeline_context,
+            oracle_read_ts,
+            in_immediate_multi_stmt_txn,
+            mut optimizer,
+        }: PeekStageOptimizeMir,
+    ) -> Result<PeekStageRealTimeRecency, AdapterError> {
+        let local_mir_plan = optimizer.catch_unwind_optimize(plan.source.clone())?;
+        let local_mir_plan = local_mir_plan.resolve(session, stats);
+        let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
+
+        Ok(PeekStageRealTimeRecency {
+            validity,
+            plan,
+            source_ids,
+            id_bundle,
+            target_replica,
+            timeline_context,
+            oracle_read_ts,
+            in_immediate_multi_stmt_txn,
+            optimizer,
+            global_mir_plan,
+        })
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -512,10 +519,12 @@ impl Coordinator {
 
         let timestamp_context = determination.clone().timestamp_context;
 
+        let span = tracing::debug_span!("optimize peek task (lir)");
+
         mz_ore::task::spawn_blocking(
             || "optimize peek (lir)",
             move || {
-                let _span_guard = tracing::debug_span!(target: "optimizer", "optimize").entered();
+                let _guard = span.enter();
 
                 let global_mir_plan =
                     global_mir_plan.resolve(timestamp_context.clone(), ctx.session_mut());
