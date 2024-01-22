@@ -34,7 +34,7 @@ use crate::command::Command;
 use crate::coord::appends::Deferred;
 use crate::coord::statement_logging::StatementLoggingId;
 use crate::coord::{
-    Coordinator, CreateConnectionValidationReady, Message, PeekStage, PeekStageOptimizeLir,
+    Coordinator, CreateConnectionValidationReady, Message, PeekStage, PeekStageFinish,
     PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
 };
 use crate::session::Session;
@@ -861,7 +861,7 @@ impl Coordinator {
                 self.sequence_peek_stage(
                     ctx,
                     root_otel_ctx,
-                    PeekStage::OptimizeLir(PeekStageOptimizeLir {
+                    PeekStage::Finish(PeekStageFinish {
                         validity,
                         plan,
                         id_bundle: None,
