@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 pub use self::container::DatumContainer;
+pub use self::container::DatumSeq;
 pub use self::spines::{RowRowSpine, RowSpine, RowValSpine};
 
 /// Spines specialized to contain `Row` types in keys and values.

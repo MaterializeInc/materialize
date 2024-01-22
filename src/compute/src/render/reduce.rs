@@ -48,9 +48,9 @@ use crate::render::context::{CollectionBundle, Context, SpecializedArrangement};
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{get_monoid, ReductionMonoid};
 use crate::render::ArrangementFlavor;
+use crate::row_spine::DatumSeq;
 use crate::typedefs::{
-    KeyBatcher, KeySpine, KeyValSpine, RowErrSpine, RowRowArrangement, RowRowSpine, RowSpine,
-    RowValSpine,
+    KeyBatcher, RowErrSpine, RowRowArrangement, RowRowSpine, RowSpine, RowValSpine,
 };
 
 impl<G, T> Context<G, T>
@@ -213,7 +213,8 @@ where
                 arranged_output
             }
             ReducePlan::Accumulable(expr) => {
-                let (arranged_output, errs) = self.build_accumulable(collection, expr, mfp_after);
+                let (arranged_output, errs) =
+                    self.build_accumulable(collection, expr, key_arity, mfp_after);
                 errors.push(errs);
                 SpecializedArrangement::RowRow(arranged_output)
             }
@@ -228,13 +229,14 @@ where
                 SpecializedArrangement::RowRow(output)
             }
             ReducePlan::Basic(BasicPlan::Single(index, aggr)) => {
-                let (output, errs) =
-                    self.build_basic_aggregate(collection, index, &aggr, true, mfp_after);
+                let (output, errs) = self
+                    .build_basic_aggregate(collection, index, &aggr, true, key_arity, mfp_after);
                 errors.push(errs.expect("validation should have occurred as it was requested"));
                 SpecializedArrangement::RowRow(output)
             }
             ReducePlan::Basic(BasicPlan::Multiple(aggrs)) => {
-                let (output, errs) = self.build_basic_aggregates(collection, aggrs, mfp_after);
+                let (output, errs) =
+                    self.build_basic_aggregates(collection, aggrs, key_arity, mfp_after);
                 errors.push(errs);
                 SpecializedArrangement::RowRow(output)
             }
@@ -622,6 +624,7 @@ where
         &self,
         input: Collection<S, (Row, Row), Diff>,
         aggrs: Vec<(usize, AggregateExpr)>,
+        key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
     where
@@ -638,8 +641,14 @@ where
         let mut err_output = None;
         let mut to_collect = Vec::new();
         for (index, aggr) in aggrs {
-            let (result, errs) =
-                self.build_basic_aggregate(input.clone(), index, &aggr, err_output.is_none(), None);
+            let (result, errs) = self.build_basic_aggregate(
+                input.clone(),
+                index,
+                &aggr,
+                err_output.is_none(),
+                key_arity,
+                None,
+            );
             if errs.is_some() {
                 err_output = errs
             }
@@ -720,6 +729,7 @@ where
         index: usize,
         aggr: &AggregateExpr,
         validating: bool,
+        key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
         RowRowArrangement<S>,
@@ -747,23 +757,26 @@ where
 
         // If `distinct` is set, we restrict ourselves to the distinct `(key, val)`.
         if distinct {
+            // We map `(Row, Row)` to `Row` to take advantage of `Row*Spine` types.
+            let pairer = Pairer::new(key_arity);
+            let keyed = partial.map(move |(key, val)| pairer.merge(&key, &val));
             if validating {
                 let (oks, errs) = self
-                    .build_reduce_inaccumulable_distinct::<_, KeyValSpine<_, Result<(), String>, _, _>>(partial, None)
+                    .build_reduce_inaccumulable_distinct::<_, RowValSpine<Result<(), String>, _, _>>(keyed, None)
                     .as_collection(|k, v| (k.into_owned(), v.into_owned()))
-                    .map_fallible("Demux Errors", move |(key, result)| match result {
-                        Ok(()) => Ok(key),
+                    .map_fallible("Demux Errors", move |(key_val, result)| match result {
+                        Ok(()) => Ok(pairer.split(&key_val)),
                         Err(m) => Err(EvalError::Internal(m).into()),
                     });
                 err_output = Some(errs);
                 partial = oks;
             } else {
                 partial = self
-                    .build_reduce_inaccumulable_distinct::<_, KeySpine<_, _, _>>(
-                        partial,
+                    .build_reduce_inaccumulable_distinct::<_, RowSpine<_, _>>(
+                        keyed,
                         Some(" [val: empty]"),
                     )
-                    .as_collection(|k, _| k.into_owned());
+                    .as_collection(move |key_val_iter, _| pairer.split(key_val_iter));
             }
         }
 
@@ -874,21 +887,17 @@ where
 
     fn build_reduce_inaccumulable_distinct<S, Tr>(
         &self,
-        input: Collection<S, (Row, Row), Diff>,
+        input: Collection<S, Row, Diff>,
         name_tag: Option<&str>,
     ) -> Arranged<S, TraceAgent<Tr>>
     where
         S: Scope<Timestamp = G::Timestamp>,
         Tr::ValOwned: MaybeValidatingRow<(), String>,
         Tr: Trace
-            + for<'a> TraceReader<
-                Key<'a> = &'a (Row, Row),
-                KeyOwned = (Row, Row),
-                Time = G::Timestamp,
-                Diff = Diff,
-            > + 'static,
+            + for<'a> TraceReader<Key<'a> = DatumSeq<'a>, Time = G::Timestamp, Diff = Diff>
+            + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = (((Row, Row), Tr::ValOwned), G::Timestamp, Diff)>,
+        Tr::Batcher: Batcher<Item = ((Row, Tr::ValOwned), G::Timestamp, Diff)>,
         Arranged<S, TraceAgent<Tr>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
@@ -900,9 +909,7 @@ where
 
         let input: KeyCollection<_, _, _> = input.into();
         input
-            .mz_arrange::<KeySpine<(Row, Row), _, _>>(
-                "Arranged ReduceInaccumulable Distinct [val: empty]",
-            )
+            .mz_arrange::<RowSpine<_, _>>("Arranged ReduceInaccumulable Distinct [val: empty]")
             .mz_reduce_abelian::<_, Tr>(&output_name, move |_, source, t| {
                 if let Some(err) = Tr::ValOwned::into_error() {
                     for (value, count) in source.iter() {
@@ -1352,6 +1359,7 @@ where
             simple_aggrs,
             distinct_aggrs,
         }: AccumulablePlan,
+        key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
     where
@@ -1419,23 +1427,18 @@ where
 
         // Next, collect all aggregations that require distinctness.
         for (accumulable_index, datum_index, aggr) in distinct_aggrs.into_iter() {
+            let pairer = Pairer::new(key_arity);
             let collection = collection
                 .map(move |(key, row)| {
-                    let binding = SharedRow::get();
-                    let mut row_builder = binding.borrow_mut();
                     let value = row.iter().nth(datum_index).unwrap();
-                    row_builder.packer().push(value);
-                    (key, row_builder.clone())
+                    (pairer.merge(&key, std::iter::once(value)), ())
                 })
-                .map(|k| (k, ()))
-                .mz_arrange::<KeySpine<(Row, Row), _, _>>(
-                    "Arranged Accumulable Distinct [val: empty]",
-                )
-                .mz_reduce_abelian::<_, KeySpine<_, _, _>>(
+                .mz_arrange::<RowSpine<_, _>>("Arranged Accumulable Distinct [val: empty]")
+                .mz_reduce_abelian::<_, RowSpine<_, _>>(
                     "Reduced Accumulable Distinct [val: empty]",
                     move |_k, _s, t| t.push(((), 1)),
                 )
-                .as_collection(|k, _| k.clone())
+                .as_collection(move |key_val_iter, _| pairer.split(key_val_iter))
                 .explode_one({
                     let zero_diffs = zero_diffs.clone();
                     move |(key, row)| {
@@ -2169,6 +2172,47 @@ impl Multiply<Diff> for Accum {
 
 impl Columnation for Accum {
     type InnerRegion = CopyRegion<Self>;
+}
+
+/// Helper to merge pairs of datum iterators into a row or split a datum iterator
+/// into two rows, given the arity of the first component.
+#[derive(Clone, Copy, Debug)]
+struct Pairer {
+    split_arity: usize,
+}
+
+impl Pairer {
+    /// Creates a pairer with knowledge of the arity of first component in the pair.
+    fn new(split_arity: usize) -> Self {
+        Self { split_arity }
+    }
+
+    /// Merges a pair of datum iterators creating a `Row` instance.
+    fn merge<'a, I1, I2>(&self, first: I1, second: I2) -> Row
+    where
+        I1: IntoIterator<Item = Datum<'a>>,
+        I2: IntoIterator<Item = Datum<'a>>,
+    {
+        let binding = SharedRow::get();
+        let mut row_builder = binding.borrow_mut();
+        let mut row_packer = row_builder.packer();
+        row_packer.extend(first);
+        row_packer.extend(second);
+        row_builder.clone()
+    }
+
+    /// Splits a datum iterator into a pair of `Row` instances.
+    fn split<'a>(&self, datum_iter: impl IntoIterator<Item = Datum<'a>>) -> (Row, Row) {
+        let mut datum_iter = datum_iter.into_iter();
+        let binding = SharedRow::get();
+        let mut row_builder = binding.borrow_mut();
+        let mut row_packer = row_builder.packer();
+        row_packer.extend(datum_iter.by_ref().take(self.split_arity));
+        let first = row_builder.clone();
+        row_packer = row_builder.packer();
+        row_packer.extend(datum_iter);
+        (first, row_builder.clone())
+    }
 }
 
 /// Monoids for in-place compaction of monotonic streams.
