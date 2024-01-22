@@ -22,6 +22,7 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::{AddAssign, Sub};
 use std::sync::{Arc, Mutex};
+use uuid::Uuid;
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -132,7 +133,9 @@ impl IdAllocatorInner for IdAllocatorInnerBitSet {
             if !self.used.add(stored) {
                 assert!(
                     next & self.mask == 0,
-                    "chosen ID must not intersect with mask"
+                    "chosen ID must not intersect with mask:\n{:#034b}\n{:#034b}",
+                    next,
+                    self.mask
                 );
                 return Some(next | self.mask);
             }
@@ -159,8 +162,10 @@ impl<A: IdAllocatorInner> IdAllocator<A> {
     pub fn new(min: u32, max: u32, mask: u32) -> IdAllocator<A> {
         assert!(min <= max);
         if mask != 0 && max > 0 {
-            let mask_check = (1 << max.ilog2()) - 1;
-            assert_eq!(mask & mask_check, 0);
+            // mask_check is all 1s in any bit set by all numbers >= max. Assert that the mask
+            // doesn't share any bits with those.
+            let mask_check = (1 << (max.ilog2() + 1)) - 1;
+            assert_eq!(mask & mask_check, 0, "max and mask share bits");
         }
         let inner = A::new(min, max, mask);
         IdAllocator(Arc::new(Mutex::new(inner)))
@@ -310,6 +315,37 @@ mod internal {
     }
 }
 
+/// Number of bits the org id is offset into a connection id.
+pub const ORG_ID_OFFSET: usize = 19;
+
+/// Max (inclusive) connection id that can be produced.
+pub const MAX_ORG_ID: u32 = (1 << ORG_ID_OFFSET) - 1;
+
+/// Extracts the lower 12 bits from an org id. These are later used as the [31, 20] bits of a
+/// connection id to help route cancellation requests.
+pub fn org_id_conn_bits(uuid: &Uuid) -> u32 {
+    let lower = uuid.as_u128();
+    let lower = (lower & 0xFFF) << ORG_ID_OFFSET;
+    let lower: u32 = lower.try_into().expect("must fit");
+    lower
+}
+
+/// Returns the portion of the org's UUID present in connection id.
+pub fn conn_id_org_uuid(conn_id: u32) -> String {
+    const UPPER: [char; 16] = [
+        '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F',
+    ];
+
+    // Extract UUID from conn_id: upper 12 bits excluding the first.
+    let orgid = usize::try_from((conn_id >> ORG_ID_OFFSET) & 0xFFF).expect("must cast");
+    // Convert the bits into a 3 char string and inject into the resolver template.
+    let mut dst = String::with_capacity(3);
+    dst.push(UPPER[(orgid >> 8) & 0xf]);
+    dst.push(UPPER[(orgid >> 4) & 0xf]);
+    dst.push(UPPER[orgid & 0xf]);
+    dst
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -317,8 +353,30 @@ mod tests {
     use super::*;
 
     #[mz_test_macro::test]
+    fn test_conn_org() {
+        let uuid = Uuid::parse_str("9e37ec59-56f4-450a-acbd-18ff14f10ca8").unwrap();
+        let lower = org_id_conn_bits(&uuid);
+        let org_lower_uuid = conn_id_org_uuid(lower);
+        assert_eq!(org_lower_uuid, "CA8");
+    }
+
+    #[mz_test_macro::test]
     fn test_id_gen() {
         test_ad_allocator::<IdAllocatorInnerBitSet>();
+    }
+
+    // Test masks and maxs that intersect panic.
+    #[mz_test_macro::test]
+    #[should_panic]
+    fn test_mask_intersect<A: IdAllocatorInner>() {
+        let env_lower = org_id_conn_bits(&uuid::Uuid::from_u128(u128::MAX));
+        let ida = IdAllocator::<IdAllocatorInnerBitSet>::new(
+            1 << ORG_ID_OFFSET,
+            1 << ORG_ID_OFFSET,
+            env_lower,
+        );
+        let id = ida.alloc().unwrap();
+        assert_eq!(id.unhandled(), (0xfff << ORG_ID_OFFSET) | MAX_ORG_ID);
     }
 
     fn test_ad_allocator<A: IdAllocatorInner>() {
@@ -329,12 +387,21 @@ mod tests {
         test_map_lookup::<A>();
         test_serialization::<A>();
         test_mask::<A>();
+        test_mask_envd::<A>();
     }
 
     fn test_mask<A: IdAllocatorInner>() {
         let ida = IdAllocator::<A>::new(1, 1, 0xfff << 20);
         let id = ida.alloc().unwrap();
         assert_eq!(id.unhandled(), (0xfff << 20) | 1);
+    }
+
+    // Test that the random conn id and and uuid each with all bits set don't intersect.
+    fn test_mask_envd<A: IdAllocatorInner>() {
+        let env_lower = org_id_conn_bits(&uuid::Uuid::from_u128(u128::MAX));
+        let ida = IdAllocator::<A>::new(MAX_ORG_ID, MAX_ORG_ID, env_lower);
+        let id = ida.alloc().unwrap();
+        assert_eq!(id.unhandled(), (0xfff << ORG_ID_OFFSET) | MAX_ORG_ID);
     }
 
     fn test_id_alloc<A: IdAllocatorInner>() {
