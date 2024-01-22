@@ -21,7 +21,9 @@ class K8sResource:
     def __init__(self, namespace: str):
         self.selected_namespace = namespace
 
-    def kubectl(self, *args: str, input: str | None = None) -> None:
+    def kubectl(
+        self, *args: str, input: str | None = None, capture_output: bool = False
+    ) -> None:
         cmd = [
             "kubectl",
             "--context",
@@ -31,7 +33,7 @@ class K8sResource:
             *args,
         ]
 
-        run_process_with_error_information(cmd, input)
+        run_process_with_error_information(cmd, input, capture_output=capture_output)
 
     def api(self) -> CoreV1Api:
         api_client = new_client_from_config(context=self.context())

@@ -127,10 +127,5 @@ class TestdrivePod(K8sPod, TestdriveBase):
     def _run_internal(self, command: list[str], input: str | None = None) -> None:
         self.wait(condition="condition=Ready", resource="pod/testdrive")
         self.kubectl(
-            "exec",
-            "-it",
-            "testdrive",
-            "--",
-            *command,
-            input=input,
+            "exec", "-it", "testdrive", "--", *command, input=input, capture_output=True
         )
