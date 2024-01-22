@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroI64;
 use std::time::Instant;
 
-use chrono::{Duration, DurationRound, Utc};
+use chrono::{DateTime, Duration, DurationRound, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
 use futures::{future, StreamExt};
@@ -34,13 +34,13 @@ use timely::PartialOrder;
 use uuid::Uuid;
 
 use crate::controller::error::CollectionMissing;
-use crate::controller::replica::{Replica, ReplicaConfig};
+use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
     CollectionState, ComputeControllerResponse, IntrospectionUpdates, ReplicaId,
 };
 use crate::logging::LogVariant;
-use crate::metrics::InstanceMetrics;
-use crate::metrics::UIntGauge;
+use crate::metrics::{InstanceMetrics, ReplicaMetrics};
+use crate::metrics::{ReplicaCollectionMetrics, UIntGauge};
 use crate::protocol::command::{
     ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
 };
@@ -106,7 +106,7 @@ pub(super) struct Instance<T> {
     /// Whether instance initialization has been completed.
     initialized: bool,
     /// The replicas of this compute instance.
-    replicas: BTreeMap<ReplicaId, Replica<T>>,
+    replicas: BTreeMap<ReplicaId, ReplicaState<T>>,
     /// Currently installed compute collections.
     ///
     /// New entries are added for all collections exported from dataflows created through
@@ -142,8 +142,6 @@ pub(super) struct Instance<T> {
     subscribes: BTreeMap<GlobalId, ActiveSubscribe<T>>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
     history: ComputeCommandHistory<UIntGauge, T>,
-    /// IDs of replicas that have failed and require rehydration.
-    failed_replicas: BTreeSet<ReplicaId>,
     /// Sender for responses to be delivered.
     response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
     /// Sender for introspection updates to be recorded.
@@ -156,7 +154,7 @@ pub(super) struct Instance<T> {
     metrics: InstanceMetrics,
 }
 
-impl<T> Instance<T> {
+impl<T: Timestamp> Instance<T> {
     /// Acquire a handle to the collection state associated with `id`.
     pub fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, CollectionMissing> {
         self.collections.get(&id).ok_or(CollectionMissing(id))
@@ -174,14 +172,76 @@ impl<T> Instance<T> {
         self.collections.iter()
     }
 
-    fn add_collection(&mut self, id: GlobalId, state: CollectionState<T>) {
+    /// Add a collection to the instance state.
+    fn add_collection(
+        &mut self,
+        id: GlobalId,
+        as_of: Antichain<T>,
+        storage_dependencies: Vec<GlobalId>,
+        compute_dependencies: Vec<GlobalId>,
+    ) {
+        // Add global collection state.
+        let state = CollectionState::new(as_of.clone(), storage_dependencies, compute_dependencies);
         self.collections.insert(id, state);
+
+        // Add per-replica collection state.
+        for replica in self.replicas.values_mut() {
+            replica.add_collection(id, as_of.clone());
+        }
+
+        // Update introspection.
         self.report_dependency_updates(id, 1);
     }
 
     fn remove_collection(&mut self, id: GlobalId) {
+        // Update introspection.
         self.report_dependency_updates(id, -1);
+
+        // Remove per-replica collection state.
+        for replica in self.replicas.values_mut() {
+            replica.remove_collection(id);
+        }
+
+        // Remove global collection state.
         self.collections.remove(&id);
+    }
+
+    fn add_replica_state(
+        &mut self,
+        id: ReplicaId,
+        client: ReplicaClient<T>,
+        config: ReplicaConfig,
+    ) {
+        let metrics = self.metrics.for_replica(id);
+        let mut replica =
+            ReplicaState::new(id, client, config, metrics, self.introspection_tx.clone());
+
+        // Add per-replica collection state.
+        for (collection_id, collection) in &self.collections {
+            let as_of = collection.read_frontier().to_owned();
+            replica.add_collection(*collection_id, as_of);
+        }
+
+        self.replicas.insert(id, replica);
+    }
+
+    fn remove_replica_state(&mut self, id: ReplicaId) -> Option<ReplicaState<T>> {
+        let Some(replica) = self.replicas.remove(&id) else {
+            return None;
+        };
+
+        if let Some(time) = replica.last_heartbeat {
+            let row = Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::TimestampTz(time.try_into().expect("must fit")),
+            ]);
+            self.deliver_introspection_updates(
+                IntrospectionType::ComputeReplicaHeartbeats,
+                vec![(row, -1)],
+            );
+        }
+
+        Some(replica)
     }
 
     /// Enqueue the given response for delivery to the controller clients.
@@ -216,7 +276,7 @@ impl<T> Instance<T> {
     /// Return whether this instance has any processing work scheduled.
     pub fn wants_processing(&self) -> bool {
         // Do we need to rehydrate failed replicas?
-        !self.failed_replicas.is_empty()
+        self.replicas.values().any(|r| r.failed)
     }
 
     /// Returns whether the identified replica exists.
@@ -296,6 +356,51 @@ impl<T> Instance<T> {
         self.deliver_introspection_updates(IntrospectionType::ComputeDependencies, updates);
     }
 
+    /// Update the tracked hydration status for the given collection and replica according to an
+    /// observed frontier update.
+    fn update_hydration_status(
+        &mut self,
+        id: GlobalId,
+        replica_id: ReplicaId,
+        frontier: &Antichain<T>,
+    ) {
+        let Some(replica) = self.replicas.get_mut(&replica_id) else {
+            tracing::error!(
+                %id, %replica_id, frontier = ?frontier.elements(),
+                "frontier update for an unknown replica"
+            );
+            return;
+        };
+        let Some(collection) = replica.collections.get_mut(&id) else {
+            tracing::error!(
+                %id, %replica_id, frontier = ?frontier.elements(),
+                "frontier update for an unknown collection"
+            );
+            return;
+        };
+
+        // We may have already reported successful hydration before, in which case we have nothing
+        // left to do.
+        if collection.hydrated() {
+            return;
+        }
+
+        // If the observed frontier is not greater than the collection's as-of, the collection has
+        // not yet produced any output and is therefore not hydrated yet.
+        if !PartialOrder::less_than(&collection.as_of, frontier) {
+            return;
+        }
+
+        // Update metrics if we are maintaining them for this collection.
+        if let Some(metrics) = &collection.metrics {
+            let duration = collection.created_at.elapsed().as_secs_f64();
+            metrics.initial_output_duration_seconds.set(duration);
+        }
+
+        // Set the hydration flag.
+        collection.hydration_flag.set();
+    }
+
     /// Clean up collection state that is not needed anymore.
     ///
     /// Three conditions need to be true before we can remove state for a collection:
@@ -373,7 +478,6 @@ where
             peeks: Default::default(),
             subscribes: Default::default(),
             history,
-            failed_replicas: Default::default(),
             response_tx,
             introspection_tx,
             envd_epoch,
@@ -438,10 +542,10 @@ where
         self.history.push(cmd.clone());
 
         // Clone the command for each active replica.
-        for (id, replica) in self.replicas.iter_mut() {
+        for replica in self.replicas.values_mut() {
             // If sending the command fails, the replica requires rehydration.
-            if replica.send(cmd.clone()).is_err() {
-                self.failed_replicas.insert(*id);
+            if replica.client.send(cmd.clone()).is_err() {
+                replica.failed = true;
             }
         }
     }
@@ -458,7 +562,7 @@ where
         let response = self
             .replicas
             .iter_mut()
-            .map(|(id, replica)| async { (*id, replica.recv().await) })
+            .map(|(id, replica)| async { (*id, replica.client.recv().await) })
             .collect::<FuturesUnordered<_>>()
             .next()
             .await;
@@ -471,7 +575,8 @@ where
             }
             Some((replica_id, None)) => {
                 // A replica has failed and requires rehydration.
-                self.failed_replicas.insert(replica_id);
+                let replica = self.replicas.get_mut(&replica_id).unwrap();
+                replica.failed = true;
                 Err(replica_id)
             }
             Some((replica_id, Some(response))) => {
@@ -589,13 +694,13 @@ where
 
         let replica_epoch = self.compute.replica_epochs.entry(id).or_default();
         *replica_epoch += 1;
-        let replica = Replica::spawn(
+        let metrics = self.compute.metrics.for_replica(id);
+        let client = ReplicaClient::spawn(
             id,
             self.compute.build_info,
-            config,
+            config.clone(),
             ClusterStartupEpoch::new(self.compute.envd_epoch, *replica_epoch),
-            self.compute.metrics.for_replica(id),
-            self.compute.introspection_tx.clone(),
+            metrics.clone(),
         );
 
         // Take this opportunity to clean up the history we should present.
@@ -603,7 +708,7 @@ where
 
         // Replay the commands at the client, creating new dataflow identifiers.
         for command in self.compute.history.iter() {
-            if replica.send(command.clone()).is_err() {
+            if client.send(command.clone()).is_err() {
                 // We swallow the error here. On the next send, we will fail again, and
                 // restart the connection as well as this rehydration.
                 tracing::warn!("Replica {:?} connection terminated during hydration", id);
@@ -612,35 +717,19 @@ where
         }
 
         // Add replica to tracked state.
-        self.compute.replicas.insert(id, replica);
+        self.compute.add_replica_state(id, client, config);
 
         Ok(())
     }
 
     /// Remove an existing instance replica, by ID.
     pub fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ReplicaMissing> {
-        let replica = self
-            .compute
-            .replicas
-            .remove(&id)
+        self.compute
+            .remove_replica_state(id)
             .ok_or(ReplicaMissing(id))?;
-
-        self.compute.failed_replicas.remove(&id);
 
         // Remove frontier tracking for this replica.
         self.remove_write_frontiers(id);
-
-        // Remove introspection for this replica.
-        if let Some(time) = replica.last_heartbeat {
-            let row = Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::TimestampTz(time.try_into().expect("must fit")),
-            ]);
-            self.compute.deliver_introspection_updates(
-                IntrospectionType::ComputeReplicaHeartbeats,
-                vec![(row, -1)],
-            );
-        }
 
         // Subscribes targeting this replica either won't be served anymore (if the replica is
         // dropped) or might produce inconsistent output (if the target collection is an
@@ -699,10 +788,13 @@ where
 
     /// Rehydrate any failed replicas of this instance.
     fn rehydrate_failed_replicas(&mut self) {
-        let failed_replicas = self.compute.failed_replicas.clone();
+        let replicas = self.compute.replicas.iter();
+        let failed_replicas: Vec<_> = replicas
+            .filter_map(|(id, replica)| replica.failed.then_some(*id))
+            .collect();
+
         for replica_id in failed_replicas {
             self.rehydrate_replica(replica_id);
-            self.compute.failed_replicas.remove(&replica_id);
         }
     }
 
@@ -793,11 +885,9 @@ where
         for export_id in dataflow.export_ids() {
             self.compute.add_collection(
                 export_id,
-                CollectionState::new(
-                    as_of.clone(),
-                    storage_dependencies.clone(),
-                    compute_dependencies.clone(),
-                ),
+                as_of.clone(),
+                storage_dependencies.clone(),
+                compute_dependencies.clone(),
             );
             updates.push((export_id, replica_write_frontier.clone()));
         }
@@ -1321,6 +1411,8 @@ where
             }
         }
 
+        self.compute
+            .update_hydration_status(id, replica_id, &new_frontier);
         self.update_write_frontiers(replica_id, &[(id, new_frontier)]);
     }
 
@@ -1374,6 +1466,9 @@ where
             SubscribeResponse::Batch(batch) => batch.upper.clone(),
             SubscribeResponse::DroppedAt(_) => Antichain::new(),
         };
+
+        self.compute
+            .update_hydration_status(subscribe_id, replica_id, &write_frontier);
         self.update_write_frontiers(replica_id, &[(subscribe_id, write_frontier)]);
 
         // If the subscribe is not tracked, or targets a different replica, there is nothing to do.
@@ -1474,5 +1569,160 @@ impl<T: Timestamp> ActiveSubscribe<T> {
             frontier: Antichain::from_elem(Timestamp::minimum()),
             target_replica: None,
         }
+    }
+}
+
+/// State maintained about individual replicas.
+#[derive(Debug)]
+pub struct ReplicaState<T> {
+    /// The ID of the replica.
+    id: ReplicaId,
+    /// Client for the running replica task.
+    client: ReplicaClient<T>,
+    /// The replica configuration.
+    config: ReplicaConfig,
+    /// Replica metrics.
+    metrics: ReplicaMetrics,
+    /// A channel through which introspection updates are delivered.
+    introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+    /// Per-replica collection state.
+    collections: BTreeMap<GlobalId, ReplicaCollectionState<T>>,
+    /// Whether the replica has failed and requires rehydration.
+    failed: bool,
+    /// The time of the last reported heartbeat.
+    last_heartbeat: Option<DateTime<Utc>>,
+}
+
+impl<T> ReplicaState<T> {
+    fn new(
+        id: ReplicaId,
+        client: ReplicaClient<T>,
+        config: ReplicaConfig,
+        metrics: ReplicaMetrics,
+        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+    ) -> Self {
+        Self {
+            id,
+            client,
+            config,
+            metrics,
+            introspection_tx,
+            collections: Default::default(),
+            failed: false,
+            last_heartbeat: None,
+        }
+    }
+
+    /// Add a collection to the replica state.
+    fn add_collection(&mut self, id: GlobalId, as_of: Antichain<T>) {
+        let metrics = self.metrics.for_collection(id);
+        let hydration_flag = HydrationFlag::new(self.id, id, self.introspection_tx.clone());
+        let state = ReplicaCollectionState {
+            metrics,
+            created_at: Instant::now(),
+            as_of,
+            hydration_flag,
+        };
+        self.collections.insert(id, state);
+    }
+
+    /// Remove state for a collection.
+    fn remove_collection(&mut self, id: GlobalId) -> Option<ReplicaCollectionState<T>> {
+        self.collections.remove(&id)
+    }
+}
+
+#[derive(Debug)]
+struct ReplicaCollectionState<T> {
+    /// Metrics tracked for this collection.
+    ///
+    /// If this is `None`, no metrics are collected.
+    metrics: Option<ReplicaCollectionMetrics>,
+    /// Time at which this collection was installed.
+    created_at: Instant,
+    /// As-of frontier with which this collection was installed on the replica.
+    as_of: Antichain<T>,
+    /// Tracks whether this collection is hydrated, i.e., it has produced some initial output.
+    hydration_flag: HydrationFlag,
+}
+
+impl<T> ReplicaCollectionState<T> {
+    /// Returns whether this collection is hydrated.
+    fn hydrated(&self) -> bool {
+        self.hydration_flag.hydrated
+    }
+}
+
+/// A wrapper type that maintains hydration introspection for a given replica and collection, and
+/// ensures that reported introspection data is retracted when the flag is dropped.
+#[derive(Debug)]
+struct HydrationFlag {
+    replica_id: ReplicaId,
+    collection_id: GlobalId,
+    hydrated: bool,
+    introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+}
+
+impl HydrationFlag {
+    /// Create a new unset `HydrationFlag` and update introspection.
+    fn new(
+        replica_id: ReplicaId,
+        collection_id: GlobalId,
+        introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+    ) -> Self {
+        let self_ = Self {
+            replica_id,
+            collection_id,
+            hydrated: false,
+            introspection_tx,
+        };
+
+        let insertion = self_.row();
+        self_.send(vec![(insertion, 1)]);
+
+        self_
+    }
+
+    /// Mark the collection as hydrated and update introspection.
+    fn set(&mut self) {
+        if self.hydrated {
+            return; // nothing to do
+        }
+
+        let retraction = self.row();
+        self.hydrated = true;
+        let insertion = self.row();
+
+        self.send(vec![(retraction, -1), (insertion, 1)]);
+    }
+
+    fn row(&self) -> Row {
+        Row::pack_slice(&[
+            Datum::String(&self.collection_id.to_string()),
+            Datum::String(&self.replica_id.to_string()),
+            Datum::from(self.hydrated),
+        ])
+    }
+
+    fn send(&self, updates: Vec<(Row, Diff)>) {
+        let result = self
+            .introspection_tx
+            .send((IntrospectionType::ComputeHydrationStatus, updates));
+
+        if result.is_err() {
+            // The global controller holds on to the `introspection_rx`. So when we get here that
+            // probably means that the controller was dropped and the process is shutting down, in
+            // which case we don't care about introspection updates anymore.
+            tracing::info!(
+                "discarding `ComputeHydrationStatus` update because the receiver disconnected"
+            );
+        }
+    }
+}
+
+impl Drop for HydrationFlag {
+    fn drop(&mut self) {
+        let retraction = self.row();
+        self.send(vec![(retraction, -1)]);
     }
 }

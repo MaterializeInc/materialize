@@ -140,7 +140,7 @@ pub struct ComputeController<T> {
     response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
 }
 
-impl<T> ComputeController<T> {
+impl<T: Timestamp> ComputeController<T> {
     /// Construct a new [`ComputeController`].
     pub fn new(
         build_info: &'static BuildInfo,
@@ -240,12 +240,7 @@ impl<T> ComputeController<T> {
     pub fn set_default_arrangement_exert_proportionality(&mut self, value: u32) {
         self.default_arrangement_exert_proportionality = value;
     }
-}
 
-impl<T> ComputeController<T>
-where
-    T: Clone,
-{
     /// Returns the read and write frontiers for each collection.
     pub fn collection_frontiers(&self) -> BTreeMap<GlobalId, (Antichain<T>, Antichain<T>)> {
         let collections = self.instances.values().flat_map(|i| i.collections_iter());
@@ -415,7 +410,7 @@ pub struct ActiveComputeController<'a, T> {
     storage: &'a mut dyn StorageController<Timestamp = T>,
 }
 
-impl<T> ActiveComputeController<'_, T> {
+impl<T: Timestamp> ActiveComputeController<'_, T> {
     pub fn instance_exists(&self, id: ComputeInstanceId) -> bool {
         self.compute.instance_exists(id)
     }
@@ -637,7 +632,7 @@ pub struct ComputeInstanceRef<'a, T> {
     instance: &'a Instance<T>,
 }
 
-impl<T> ComputeInstanceRef<'_, T> {
+impl<T: Timestamp> ComputeInstanceRef<'_, T> {
     /// Return the ID of this compute instance.
     pub fn instance_id(&self) -> ComputeInstanceId {
         self.instance_id

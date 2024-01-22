@@ -169,7 +169,7 @@ pub struct Controller<T = mz_repr::Timestamp> {
     immediate_watch_sets: Vec<Box<dyn Any>>,
 }
 
-impl<T> Controller<T> {
+impl<T: Timestamp> Controller<T> {
     pub fn active_compute(&mut self) -> ActiveComputeController<T> {
         self.compute.activate(&mut *self.storage)
     }

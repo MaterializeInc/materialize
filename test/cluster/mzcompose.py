@@ -2407,6 +2407,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     c.up("materialized")
+    c.up("testdrive", persistent=True)
 
     def fetch_metrics() -> Metrics:
         resp = c.exec(
@@ -2543,6 +2544,20 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
         DROP INDEX idx;
         DROP MATERIALIZED VIEW mv;
         """
+    )
+
+    # Wait for the controller to asynchronously drop the dataflows and update
+    # metrics. We can inspect the controller's view of things in
+    # `mz_compute_hydration_statuses`, which is updated at the same time as
+    # these metrics are.
+    c.testdrive(
+        input=dedent(
+            """
+            > SELECT *
+              FROM mz_internal.mz_compute_hydration_statuses
+              WHERE object_id LIKE 'u%'
+            """
+        )
     )
 
     # Check that the per-collection metrics have been cleaned up.
@@ -3073,3 +3088,49 @@ def workflow_blue_green_deployment(
             running = False
             for thread in threads:
                 thread.join()
+
+
+def workflow_test_subscribe_hydration_status(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Test that hydration status tracking works for subscribe dataflows."""
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("testdrive", persistent=True)
+
+    # Start a subscribe.
+    cursor = c.sql_cursor()
+    cursor.execute("BEGIN")
+    cursor.execute("DECLARE c CURSOR FOR SUBSCRIBE mz_tables")
+    cursor.execute("FETCH 1 c")
+
+    # Verify that the subscribe dataflow eventually shows as hydrated.
+    c.testdrive(
+        input=dedent(
+            """
+            > SELECT h.hydrated
+              FROM mz_internal.mz_subscriptions s
+              JOIN mz_internal.mz_compute_hydration_statuses h ON (h.object_id = s.id)
+              JOIN mz_tables t ON (s.referenced_object_ids = list[t.id])
+              WHERE t.name = 'mz_tables'
+            true
+            """
+        )
+    )
+
+    # Cancel the subscribe.
+    cursor.execute("ROLLBACK")
+
+    # Verify that the subscribe's hydration status is removed.
+    c.testdrive(
+        input=dedent(
+            """
+            > SELECT h.hydrated
+              FROM mz_internal.mz_subscriptions s
+              JOIN mz_internal.mz_hydration_statuses h ON (h.object_id = s.id)
+              JOIN mz_tables t ON (s.referenced_object_ids = list[t.id])
+              WHERE t.name = 'mz_tables'
+            """
+        )
+    )

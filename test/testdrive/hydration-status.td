@@ -44,6 +44,7 @@ s true
 > CREATE TABLE t (a int)
 > CREATE INDEX idx ON t (a)
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM t
+> CREATE MATERIALIZED VIEW mv_const AS SELECT 1
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_compute_hydration_statuses h
@@ -52,8 +53,9 @@ s true
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
-idx hydrated_test_1 true
-mv  hydrated_test_1 true
+idx      hydrated_test_1 true
+mv       hydrated_test_1 true
+mv_const hydrated_test_1 true
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
@@ -62,8 +64,9 @@ mv  hydrated_test_1 true
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
-idx hydrated_test_1 true
-mv  hydrated_test_1 true
+idx      hydrated_test_1 true
+mv       hydrated_test_1 true
+mv_const hydrated_test_1 true
 
 # Test adding new replicas.
 
@@ -76,10 +79,12 @@ mv  hydrated_test_1 true
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
-idx hydrated_test_1 true
-idx hydrated_test_2 true
-mv  hydrated_test_1 true
-mv  hydrated_test_2 true
+idx      hydrated_test_1 true
+idx      hydrated_test_2 true
+mv       hydrated_test_1 true
+mv       hydrated_test_2 true
+mv_const hydrated_test_1 true
+mv_const hydrated_test_2 true
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
@@ -88,10 +93,12 @@ mv  hydrated_test_2 true
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
-idx hydrated_test_1 true
-idx hydrated_test_2 true
-mv  hydrated_test_1 true
-mv  hydrated_test_2 true
+idx      hydrated_test_1 true
+idx      hydrated_test_2 true
+mv       hydrated_test_1 true
+mv       hydrated_test_2 true
+mv_const hydrated_test_1 true
+mv_const hydrated_test_2 true
 
 # Test dropping replicas.
 
@@ -104,8 +111,9 @@ mv  hydrated_test_2 true
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
-idx hydrated_test_2 true
-mv  hydrated_test_2 true
+idx      hydrated_test_2 true
+mv       hydrated_test_2 true
+mv_const hydrated_test_2 true
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
@@ -114,8 +122,9 @@ mv  hydrated_test_2 true
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
-idx hydrated_test_2 true
-mv  hydrated_test_2 true
+idx      hydrated_test_2 true
+mv       hydrated_test_2 true
+mv_const hydrated_test_2 true
 
 > DROP CLUSTER REPLICA test.hydrated_test_2
 
@@ -146,8 +155,9 @@ mv  hydrated_test_2 true
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
-idx hydrated_test_3 true
-mv  hydrated_test_3 true
+idx      hydrated_test_3 true
+mv       hydrated_test_3 true
+mv_const hydrated_test_3 true
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
@@ -156,10 +166,12 @@ mv  hydrated_test_3 true
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
-idx hydrated_test_3 true
-mv  hydrated_test_3 true
+idx      hydrated_test_3 true
+mv       hydrated_test_3 true
+mv_const hydrated_test_3 true
 
 > DROP INDEX idx;
+> DROP MATERIALIZED VIEW mv_const;
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_compute_hydration_statuses h
