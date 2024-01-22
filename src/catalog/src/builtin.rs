@@ -1956,7 +1956,7 @@ pub static MZ_CATALOG_RAW: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     data_source: IntrospectionType::Unmanaged(IntrospectionUnmanaged::Catalog),
     desc: PersistCatalogState::desc(),
     is_retained_metrics_object: false,
-    access: Vec::new(),
+    access: vec![PUBLIC_SELECT],
 });
 
 pub static MZ_DATABASES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
