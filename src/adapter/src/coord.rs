@@ -147,7 +147,7 @@ use crate::coord::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::timeline::{TimelineContext, TimelineState};
-use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
+use crate::coord::timestamp_selection::TimestampContext;
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::metrics::Metrics;
@@ -384,9 +384,8 @@ impl RealTimeRecencyContext {
 pub enum PeekStage {
     Validate(PeekStageValidate),
     Timestamp(PeekStageTimestamp),
-    OptimizeMir(PeekStageOptimizeMir),
+    Optimize(PeekStageOptimize),
     RealTimeRecency(PeekStageRealTimeRecency),
-    OptimizeLir(PeekStageOptimizeLir),
     Finish(PeekStageFinish),
 }
 
@@ -395,9 +394,8 @@ impl PeekStage {
         match self {
             PeekStage::Validate(_) => None,
             PeekStage::Timestamp(PeekStageTimestamp { validity, .. })
-            | PeekStage::OptimizeMir(PeekStageOptimizeMir { validity, .. })
+            | PeekStage::Optimize(PeekStageOptimize { validity, .. })
             | PeekStage::RealTimeRecency(PeekStageRealTimeRecency { validity, .. })
-            | PeekStage::OptimizeLir(PeekStageOptimizeLir { validity, .. })
             | PeekStage::Finish(PeekStageFinish { validity, .. }) => Some(validity),
         }
     }
@@ -421,7 +419,7 @@ pub struct PeekStageTimestamp {
 }
 
 #[derive(Debug)]
-pub struct PeekStageOptimizeMir {
+pub struct PeekStageOptimize {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
     source_ids: BTreeSet<GlobalId>,
@@ -447,7 +445,7 @@ pub struct PeekStageRealTimeRecency {
 }
 
 #[derive(Debug)]
-pub struct PeekStageOptimizeLir {
+pub struct PeekStageFinish {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
     id_bundle: Option<CollectionIdBundle>,
@@ -458,19 +456,6 @@ pub struct PeekStageOptimizeLir {
     real_time_recency_ts: Option<mz_repr::Timestamp>,
     optimizer: optimize::peek::Optimizer,
     global_mir_plan: optimize::peek::GlobalMirPlan,
-}
-
-#[derive(Debug)]
-pub struct PeekStageFinish {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    id_bundle: CollectionIdBundle,
-    target_replica: Option<ReplicaId>,
-    source_ids: BTreeSet<GlobalId>,
-    determination: TimestampDetermination<mz_repr::Timestamp>,
-    timestamp_context: TimestampContext<mz_repr::Timestamp>,
-    optimizer: optimize::peek::Optimizer,
-    global_lir_plan: optimize::peek::GlobalLirPlan,
 }
 
 #[derive(Debug)]
