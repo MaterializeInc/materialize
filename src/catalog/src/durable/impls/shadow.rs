@@ -303,7 +303,8 @@ impl ShadowCatalogState {
                 .get_and_prune_storage_usage(None, Timestamp::minimum(), false)
                 .await?;
             let mut txn = self.persist.transaction().await?;
-            for event in &stash_storage_usage[u64_to_usize(persist_storage_usage_id)..] {
+            let start_idx = stash_storage_usage.len() - u64_to_usize(diff);
+            for event in &stash_storage_usage[start_idx..] {
                 txn.insert_storage_usage_event(event.clone());
             }
             txn.commit().await?;
@@ -318,7 +319,8 @@ impl ShadowCatalogState {
                 .get_and_prune_storage_usage(None, Timestamp::minimum(), false)
                 .await?;
             let mut txn = self.stash.transaction().await?;
-            for event in &persist_storage_usage[u64_to_usize(stash_storage_usage_id)..] {
+            let start_idx = persist_storage_usage.len() - u64_to_usize(diff);
+            for event in &persist_storage_usage[start_idx..] {
                 txn.insert_storage_usage_event(event.clone());
             }
             txn.commit().await?;
@@ -579,5 +581,247 @@ impl DurableCatalogState for ShadowCatalogState {
 
     async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, CatalogError> {
         compare_and_return_async!(self, allocate_id, id_type, amount)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_audit_log::{StorageUsageV1, VersionedStorageUsage};
+    use mz_ore::cast::u64_to_usize;
+    use mz_ore::now::SYSTEM_TIME;
+    use mz_persist_client::PersistClient;
+    use mz_repr::Timestamp;
+    use mz_storage_types::sources::Timeline;
+    use timely::progress::Timestamp as TimelyTimestamp;
+    use uuid::Uuid;
+
+    use crate::durable::{
+        shadow_catalog_state, test_bootstrap_args, test_persist_backed_catalog_state,
+        test_stash_backed_catalog_state, test_stash_config, OpenableDurableCatalogState,
+        TimelineTimestamp, STORAGE_USAGE_ID_ALLOC_KEY,
+    };
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn test_fix_storage_usage_persist() {
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
+        let (debug_factory, stash_config) = test_stash_config().await;
+
+        let openable_persist_state =
+            test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+        let openable_stash_state = test_stash_backed_catalog_state(&debug_factory);
+        let openable_shadow_state = shadow_catalog_state(
+            stash_config.clone(),
+            persist_client.clone(),
+            organization_id,
+        )
+        .await;
+
+        test_fix_storage_usage(
+            openable_persist_state,
+            openable_stash_state,
+            openable_shadow_state,
+        )
+        .await;
+
+        debug_factory.drop().await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn test_fix_storage_usage_stash() {
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
+        let (debug_factory, stash_config) = test_stash_config().await;
+
+        let openable_persist_state =
+            test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+        let openable_stash_state = test_stash_backed_catalog_state(&debug_factory);
+        let openable_shadow_state = shadow_catalog_state(
+            stash_config.clone(),
+            persist_client.clone(),
+            organization_id,
+        )
+        .await;
+
+        test_fix_storage_usage(
+            openable_stash_state,
+            openable_persist_state,
+            openable_shadow_state,
+        )
+        .await;
+
+        debug_factory.drop().await;
+    }
+
+    async fn test_fix_storage_usage(
+        ahead: impl OpenableDurableCatalogState,
+        behind: impl OpenableDurableCatalogState,
+        shadow: impl OpenableDurableCatalogState,
+    ) {
+        let ahead_id = 200;
+        let behind_id = 100;
+        assert!(ahead_id > behind_id);
+
+        let storage_usages: Vec<_> = (0..ahead_id)
+            .map(|i| {
+                VersionedStorageUsage::V1(StorageUsageV1 {
+                    id: i,
+                    shard_id: Some(format!("{i}")),
+                    size_bytes: i,
+                    collection_timestamp: Timestamp::minimum().into(),
+                })
+            })
+            .collect();
+
+        {
+            let mut ahead_state = Box::new(ahead)
+                .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+                .await
+                .expect("failed to open");
+            let _ = ahead_state
+                .allocate_id(STORAGE_USAGE_ID_ALLOC_KEY, ahead_id)
+                .await
+                .expect("failed to allocate");
+            let mut tx = ahead_state
+                .transaction()
+                .await
+                .expect("failed to open transaction");
+            tx.insert_storage_usage_events(storage_usages.clone());
+            tx.commit().await.expect("failed to commit transaction");
+        }
+
+        {
+            let mut behind_state = Box::new(behind)
+                .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+                .await
+                .expect("failed to open");
+            let _ = behind_state
+                .allocate_id(STORAGE_USAGE_ID_ALLOC_KEY, behind_id)
+                .await
+                .expect("failed to allocate");
+            let mut tx = behind_state
+                .transaction()
+                .await
+                .expect("failed to open transaction");
+            tx.insert_storage_usage_events(storage_usages[0..u64_to_usize(behind_id)].to_vec());
+            tx.commit().await.expect("failed to commit transaction");
+        }
+
+        {
+            let mut shadow_state = Box::new(shadow)
+                .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+                .await
+                .expect("failed to open");
+            let shadow_storage_usage = shadow_state
+                .get_and_prune_storage_usage(None, Timestamp::minimum(), false)
+                .await
+                .expect("failed to get storage usage");
+            assert_eq!(shadow_storage_usage, storage_usages)
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn test_fix_timestamps_persist() {
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
+        let (debug_factory, stash_config) = test_stash_config().await;
+
+        let openable_persist_state =
+            test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+        let openable_stash_state = test_stash_backed_catalog_state(&debug_factory);
+        let openable_shadow_state = shadow_catalog_state(
+            stash_config.clone(),
+            persist_client.clone(),
+            organization_id,
+        )
+        .await;
+
+        test_fix_timestamps(
+            openable_persist_state,
+            openable_stash_state,
+            openable_shadow_state,
+        )
+        .await;
+
+        debug_factory.drop().await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn test_fix_timestamps_stash() {
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
+        let (debug_factory, stash_config) = test_stash_config().await;
+
+        let openable_persist_state =
+            test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+        let openable_stash_state = test_stash_backed_catalog_state(&debug_factory);
+        let openable_shadow_state = shadow_catalog_state(
+            stash_config.clone(),
+            persist_client.clone(),
+            organization_id,
+        )
+        .await;
+
+        test_fix_timestamps(
+            openable_stash_state,
+            openable_persist_state,
+            openable_shadow_state,
+        )
+        .await;
+
+        debug_factory.drop().await;
+    }
+
+    async fn test_fix_timestamps(
+        ahead: impl OpenableDurableCatalogState,
+        behind: impl OpenableDurableCatalogState,
+        shadow: impl OpenableDurableCatalogState,
+    ) {
+        let ahead_ts = Timestamp::new(200);
+        let behind_ts = Timestamp::new(100);
+        assert!(ahead_ts > behind_ts);
+        let user_timeline = Timeline::User("test".to_string());
+
+        {
+            let mut ahead_state = Box::new(ahead)
+                .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+                .await
+                .expect("failed to open");
+            ahead_state
+                .set_timestamp(&user_timeline, ahead_ts)
+                .await
+                .expect("failed to set timestamp");
+        }
+
+        {
+            let mut behind_state = Box::new(behind)
+                .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+                .await
+                .expect("failed to open");
+            behind_state
+                .set_timestamp(&user_timeline, behind_ts)
+                .await
+                .expect("failed to set timestamp");
+        }
+
+        {
+            let mut shadow_state = Box::new(shadow)
+                .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+                .await
+                .expect("failed to open");
+            let ts = shadow_state
+                .get_timestamps()
+                .await
+                .expect("failed to get timestamp")
+                .iter()
+                .find(|TimelineTimestamp { timeline, ts: _ }| timeline == &user_timeline)
+                .expect("failed to find timestamp")
+                .ts;
+            assert_eq!(ts, ahead_ts)
+        }
     }
 }
