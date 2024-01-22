@@ -393,6 +393,9 @@ impl UnopenedPersistCatalogState {
                                 panic!("Epoch went backwards from {current_epoch:?} to {epoch:?}");
                             }
                         }
+                        PreOpenEpoch::Fenceable(None) => {
+                            self.epoch = PreOpenEpoch::Fenceable(Some(epoch));
+                        }
                         PreOpenEpoch::Unfenceable(_) => {
                             self.epoch = PreOpenEpoch::Unfenceable(Some(epoch));
                         }
