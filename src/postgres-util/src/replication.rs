@@ -124,7 +124,10 @@ pub async fn drop_replication_slots(
         match rows.len() {
             0 => {
                 // DROP_REPLICATION_SLOT will error if the slot does not exist
-                // todo@jldlaughlin: don't let invalid Postgres sources ship!
+                tracing::info!(
+                    "drop_replication_slots called on non-existent slot {}",
+                    slot
+                );
                 continue;
             }
             1 => {
