@@ -264,7 +264,7 @@ impl UnopenedPersistCatalogState {
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
         let read_only = matches!(mode, Mode::Readonly);
 
-        self.sync_to_current().await?;
+        self.sync_to_current_upper().await?;
         let prev_epoch = self.epoch.validate()?;
         // Fence out previous catalogs.
         let mut fence_updates = Vec::with_capacity(2);
@@ -437,7 +437,7 @@ impl UnopenedPersistCatalogState {
 
     /// Listen and apply all updates that are currently in persist.
     #[tracing::instrument(level = "info", skip(self))]
-    pub(crate) async fn sync_to_current(&mut self) -> Result<(), DurableCatalogError> {
+    pub(crate) async fn sync_to_current_upper(&mut self) -> Result<(), DurableCatalogError> {
         let upper = self.current_upper().await;
         self.sync(upper).await
     }
@@ -505,7 +505,7 @@ impl UnopenedPersistCatalogState {
 
     /// Reports if the catalog state has been initialized.
     ///
-    /// NOTE: This is the answer as of the last call to [`Self::sync`] or [`Self::sync_to_current`],
+    /// NOTE: This is the answer as of the last call to [`Self::sync`] or [`Self::sync_to_current_upper`],
     /// not necessarily what is currently in persist.
     #[tracing::instrument(level = "info", skip(self))]
     fn is_initialized_inner(&self) -> bool {
@@ -522,7 +522,7 @@ impl UnopenedPersistCatalogState {
     /// Some configs need to be read before the catalog is opened for bootstrapping.
     #[tracing::instrument(level = "info", skip(self))]
     async fn get_current_config(&mut self, key: &str) -> Result<Option<u64>, CatalogError> {
-        self.sync_to_current().await?;
+        self.sync_to_current_upper().await?;
         Ok(self.configs.get(key).cloned())
     }
 
@@ -621,13 +621,13 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
 
     #[tracing::instrument(level = "info", skip(self))]
     async fn is_initialized(&mut self) -> Result<bool, CatalogError> {
-        self.sync_to_current().await?;
+        self.sync_to_current_upper().await?;
         Ok(!self.configs.is_empty())
     }
 
     #[tracing::instrument(level = "info", skip(self))]
     async fn epoch(&mut self) -> Result<Epoch, CatalogError> {
-        self.sync_to_current().await?;
+        self.sync_to_current_upper().await?;
         self.epoch
             .validate()?
             .ok_or(CatalogError::Durable(DurableCatalogError::Uninitialized))
@@ -659,7 +659,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
 
     #[tracing::instrument(level = "info", skip_all)]
     async fn trace(&mut self) -> Result<Trace, CatalogError> {
-        self.sync_to_current().await?;
+        self.sync_to_current_upper().await?;
         if self.is_initialized_inner() {
             let snapshot = self.snapshot_unconsolidated().await;
             Ok(Trace::from_snapshot(snapshot))
@@ -1592,7 +1592,7 @@ impl UnopenedPersistCatalogState {
     async fn current_snapshot(
         &mut self,
     ) -> Result<impl IntoIterator<Item = StateUpdate> + '_, CatalogError> {
-        self.sync_to_current().await?;
+        self.sync_to_current_upper().await?;
         self.consolidate();
         Ok(self
             .snapshot
