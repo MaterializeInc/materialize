@@ -3073,3 +3073,49 @@ def workflow_blue_green_deployment(
             running = False
             for thread in threads:
                 thread.join()
+
+
+def workflow_test_subscribe_hydration_status(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Test that hydration status tracking works for subscribe dataflows."""
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("testdrive", persistent=True)
+
+    # Start a subscribe.
+    cursor = c.sql_cursor()
+    cursor.execute("BEGIN")
+    cursor.execute("DECLARE c CURSOR FOR SUBSCRIBE mz_tables")
+    cursor.execute("FETCH 1 c")
+
+    # Verify that the subscribe dataflow eventually shows as hydrated.
+    c.testdrive(
+        input=dedent(
+            """
+            > SELECT h.hydrated
+              FROM mz_internal.mz_subscriptions s
+              JOIN mz_internal.mz_compute_hydration_statuses h ON (h.object_id = s.id)
+              JOIN mz_tables t ON (s.referenced_object_ids = list[t.id])
+              WHERE t.name = 'mz_tables'
+            true
+            """
+        )
+    )
+
+    # Cancel the subscribe.
+    cursor.execute("ROLLBACK")
+
+    # Verify that the subscribe's hydration status is removed.
+    c.testdrive(
+        input=dedent(
+            """
+            > SELECT h.hydrated
+              FROM mz_internal.mz_subscriptions s
+              JOIN mz_internal.mz_hydration_statuses h ON (h.object_id = s.id)
+              JOIN mz_tables t ON (s.referenced_object_ids = list[t.id])
+              WHERE t.name = 'mz_tables'
+            """
+        )
+    )
