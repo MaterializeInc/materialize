@@ -15,7 +15,6 @@ mz-repr = { path = "../repr" }
 mz-storage-types = { path = "../storage-types" }
 serde = "1.0.152"
 timely = { version = "0.12.0", default-features = false }
-uuid = "1.2.2"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [package.metadata.cargo-udeps.ignore]

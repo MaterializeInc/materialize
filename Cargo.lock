@@ -3619,7 +3619,6 @@ dependencies = [
  "mz-storage-types",
  "serde",
  "timely",
- "uuid",
  "workspace-hack",
 ]
 
@@ -4817,6 +4816,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "uuid",
  "workspace-hack",
  "yansi",
 ]

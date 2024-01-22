@@ -66,6 +66,7 @@ tracing-subscriber = { version = "0.3.16", default-features = false, features = 
   "json",
   "tracing-log",
 ], optional = true }
+uuid = { version = "1.2.2", optional = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 # For the `tracing` feature
@@ -136,7 +137,7 @@ cli = ["clap"]
 stack = ["stacker"]
 test = ["anyhow", "ctor", "tracing-subscriber"]
 metrics = ["prometheus"]
-id_gen = ["hibitset", "rand"]
+id_gen = ["hibitset", "rand", "uuid"]
 
 [[test]]
 name = "future"
