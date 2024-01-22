@@ -54,7 +54,11 @@ def target(arch: Arch) -> str:
 
 
 def target_cpu(arch: Arch) -> str:
-    """Return the CPU micro architecture, assuming a Linux target, we should use for Rust compilation."""
+    """
+    Return the CPU micro architecture, assuming a Linux target, we should use for Rust compilation.
+
+    Sync: This target-cpu should be kept in sync with the one in ci-builder and .cargo/config.
+    """
     if arch == Arch.X86_64:
         return "x86-64-v3"
     elif arch == Arch.AARCH64:
@@ -69,6 +73,8 @@ def target_features(arch: Arch) -> list[str]:
 
     Note: We also specify the CPU target when compiling Rust which should enable the majority of
     available CPU features.
+
+    Sync: This list of features should be kept in sync with the one in ci-builder and .cargo/config.
     """
     if arch == Arch.X86_64:
         return ["+aes"]
@@ -102,7 +108,7 @@ def cargo(
         "-Clink-arg=-Wl,--compress-debug-sections=zlib",
         "-Csymbol-mangling-version=v0",
         f"-Ctarget-cpu={_target_cpu}",
-        f"-Ctarget-features={_target_features}",
+        f"-Ctarget-feature={_target_features}",
         "--cfg=tokio_unstable",
     ]
 

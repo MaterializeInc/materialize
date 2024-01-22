@@ -71,13 +71,15 @@ fi
 #
 # All of the x86-64 and ARM hardware we run in production support the v3 and neoverse-n1 micro
 # architectures, respectively.
-X86_64_TARGET_CPU="x86-64-v3"
-AARCH64_TARGET_CPU="neoverse-n1"
+#
+# Sync: This target-cpu should be kept in sync with the one in ci-builder and .cargo/config.
+x86_64_target_cpu="x86-64-v3"
+aarch64_target_cpu="neoverse-n1"
 
 rust_cpu_target=""
 case "$arch_gcc" in
-    x86_64) rust_cpu_target="$X86_64_TARGET_CPU" ;;
-    aarch64) rust_cpu_target="$AARCH64_TARGET_CPU" ;;
+    x86_64) rust_cpu_target="$x86_64_target_cpu" ;;
+    aarch64) rust_cpu_target="$aarch64_target_cpu" ;;
     *) die "unknown host architecture \"$arch\"" ;;
 esac
 
@@ -85,13 +87,15 @@ esac
 #
 # Note: specifying a target_cpu enables many features, these are specific ones that target_cpu
 # might miss.
-X86_64_TARGET_FEATURES="+aes"
-AAARCH64_TARGET_FEATURES="+aes,+sha2"
+#
+# Sync: This list of features should be kept in sync with the one in xcompile and .cargo/config.
+x86_64_target_features="+aes"
+aaarch64_target_features="+aes,+sha2"
 
 rust_target_features=""
 case "$arch_gcc" in
-    x86_64) rust_target_features="$X86_64_TARGET_FEATURES" ;;
-    aarch64) rust_target_features="$AAARCH64_TARGET_FEATURES" ;;
+    x86_64) rust_target_features="$x86_64_target_features" ;;
+    aarch64) rust_target_features="$aaarch64_target_features" ;;
     *) die "unknown host architecture \"$arch\"" ;;
 esac
 
