@@ -260,3 +260,35 @@ DATE_TIME_OPERATION_TYPES.append(
         DateTimeReturnTypeSpec(TIMESTAMPTZ_TYPE_IDENTIFIER),
     )
 )
+
+# with time interval as second operator
+DATE_TIME_OPERATION_TYPES.append(
+    DbOperation(
+        "$ + $",
+        [DateTimeOperationParam(), TimeIntervalOperationParam()],
+        DateTimeReturnTypeSpec(TIMESTAMPTZ_TYPE_IDENTIFIER),
+    )
+)
+DATE_TIME_OPERATION_TYPES.append(
+    DbOperation(
+        "$ - $",
+        [DateTimeOperationParam(), TimeIntervalOperationParam()],
+        DateTimeReturnTypeSpec(TIMESTAMPTZ_TYPE_IDENTIFIER),
+    )
+)
+
+# with date-time type as second operator
+DATE_TIME_OPERATION_TYPES.append(
+    DbOperation(
+        "$ + $",
+        [DateTimeOperationParam(), DateTimeOperationParam()],
+        DateTimeReturnTypeSpec(TIMESTAMPTZ_TYPE_IDENTIFIER),
+    )
+)
+DATE_TIME_OPERATION_TYPES.append(
+    DbOperation(
+        "$ - $",
+        [DateTimeOperationParam(), DateTimeOperationParam()],
+        DateTimeReturnTypeSpec(TIMESTAMPTZ_TYPE_IDENTIFIER),
+    )
+)
