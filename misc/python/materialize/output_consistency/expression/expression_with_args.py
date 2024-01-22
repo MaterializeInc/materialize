@@ -10,6 +10,9 @@ from collections.abc import Callable
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.execution.sql_dialect_adjuster import (
+    SqlDialectAdjuster,
+)
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
@@ -52,11 +55,13 @@ class ExpressionWithArgs(Expression):
     def has_args(self) -> bool:
         return len(self.args) > 0
 
-    def to_sql(self, is_root_level: bool) -> str:
+    def to_sql(self, sql_adjuster: SqlDialectAdjuster, is_root_level: bool) -> str:
         sql: str = self.pattern
 
         for arg in self.args:
-            sql = sql.replace(EXPRESSION_PLACEHOLDER, arg.to_sql(False), 1)
+            sql = sql.replace(
+                EXPRESSION_PLACEHOLDER, arg.to_sql(sql_adjuster, False), 1
+            )
 
         if len(self.args) != self.pattern.count(EXPRESSION_PLACEHOLDER):
             raise RuntimeError(

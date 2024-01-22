@@ -11,6 +11,9 @@
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.data_value.data_value import DataValue
+from materialize.output_consistency.execution.sql_dialect_adjuster import (
+    SqlDialectAdjuster,
+)
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
@@ -96,4 +99,7 @@ class DataColumn(LeafExpression):
         return self.values[value_index]
 
     def __str__(self) -> str:
-        return self.to_sql(False)
+        return self.to_sql(
+            SqlDialectAdjuster(),
+            False,
+        )

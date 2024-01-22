@@ -11,6 +11,9 @@ from __future__ import annotations
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.enum.enum_data_type import EnumDataType
+from materialize.output_consistency.execution.sql_dialect_adjuster import (
+    SqlDialectAdjuster,
+)
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
@@ -61,9 +64,9 @@ class EnumConstant(Expression):
         return self.own_characteristics
 
     def __str__(self) -> str:
-        return self.to_sql(False)
+        return self.to_sql(SqlDialectAdjuster(), False)
 
-    def to_sql(self, is_root_level: bool) -> str:
+    def to_sql(self, sql_adjuster: SqlDialectAdjuster, is_root_level: bool) -> str:
         if self.add_quotes:
             return f"'{self.value}'"
 
