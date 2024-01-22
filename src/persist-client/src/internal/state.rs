@@ -450,7 +450,7 @@ where
                 purpose: purpose.to_owned(),
             },
             seqno,
-            since: self.trace.since().clone(),
+            since: self.held_since(),
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
             lease_duration_ms: u64::try_from(lease_duration.as_millis())
                 .expect("lease duration as millis should fit within u64"),
@@ -866,6 +866,26 @@ where
                     id
                 )
             })
+    }
+
+    fn held_since(&self) -> Antichain<T> {
+        // To avoid having leases push the since around before the critical handle's registered,
+        // always hold the since back to the initial value.
+        if self.critical_readers.is_empty() {
+            return Antichain::from_elem(T::minimum());
+        }
+
+        let mut since = Antichain::new();
+
+        for reader in self.critical_readers.values() {
+            since.meet_assign(&reader.since);
+        }
+
+        for reader in self.leased_readers.values() {
+            since.meet_assign(&reader.since);
+        }
+
+        since
     }
 
     fn update_since(&mut self) {
