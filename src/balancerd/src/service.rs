@@ -50,6 +50,11 @@ pub struct Args {
     /// destinaiton.
     #[clap(long, value_name = "HOST.{}.NAME:PORT")]
     https_resolver_template: String,
+    /// Cancellation DNS resolver address. `{}` is replaced with the org id part of the incoming
+    /// connection id (the 12 bits after (and excluding) the first bit) converted to a 3-char UUID
+    /// string. The cancellation request will be mirrored to all IPs this address resolves to.
+    #[clap(long, value_name = "HOST.{}.NAME:PORT")]
+    cancellation_resolver_template: Option<String>,
 
     /// JWK used to validate JWTs during Frontegg authentication as a PEM public
     /// key. Can optionally be base64 encoded with the URL-safe alphabet.
@@ -133,6 +138,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         args.internal_http_listen_addr,
         args.pgwire_listen_addr,
         args.https_listen_addr,
+        args.cancellation_resolver_template,
         resolver,
         args.https_resolver_template,
         args.tls.into_config()?,

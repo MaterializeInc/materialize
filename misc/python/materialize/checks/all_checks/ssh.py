@@ -137,6 +137,10 @@ class SshKafka(Check):
                 """
                 $ kafka-create-topic topic=ssh1
 
+                $ kafka-create-topic topic=ssh2
+
+                $ kafka-create-topic topic=ssh3
+
                 $ kafka-ingest topic=ssh1 format=bytes
                 one
 

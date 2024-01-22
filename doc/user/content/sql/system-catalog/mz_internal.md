@@ -48,8 +48,8 @@ logging entirely for a session, execute `SET
 statement_logging_sample_rate TO 0`. Materialize may apply a lower
 sampling rate than the one set in this variable.
 
-Only superusers or users that have been granted the `mz_monitor` role can access
-this view.
+The view can be accessed by Materialize _superusers_ or users that have been
+granted the `mz_monitor` role.
 
 <!-- RELATION_SPEC mz_internal.mz_activity_log -->
 | Field                     | Type                         | Meaning                                                                                                                                                                                                                                                                       |
@@ -425,7 +425,7 @@ The view is defined as the transitive closure of [`mz_object_dependencies`](#mz_
 {{< public-preview />}}
 
 The `mz_notices` view contains a list of currently active notices emitted by the
-system. The view can be accessed by Materialize superusers.
+system. The view can be accessed by Materialize _superusers_.
 
 <!-- RELATION_SPEC mz_internal.mz_notices -->
 | Field                   | Type                         | Meaning                                                                                                                                           |
@@ -450,7 +450,7 @@ system. The view can be accessed by Materialize superusers.
 
 The `mz_notices_redacted` view contains a redacted list of currently active
 optimizer notices emitted by the system. The view can be accessed by Materialize
-superusers and Materialize support.
+_superusers_ and Materialize support.
 
 <!-- RELATION_SPEC mz_internal.mz_notices_redacted -->
 | Field                   | Type                         | Meaning                                                                                                                                           |

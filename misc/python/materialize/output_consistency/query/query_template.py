@@ -11,6 +11,9 @@ from collections.abc import Callable
 from materialize.output_consistency.execution.evaluation_strategy import (
     EvaluationStrategy,
 )
+from materialize.output_consistency.execution.sql_dialect_adjuster import (
+    SqlDialectAdjuster,
+)
 from materialize.output_consistency.execution.value_storage_layout import (
     ROW_INDEX_COL_NAME,
     ValueStorageLayout,
@@ -62,8 +65,10 @@ class QueryTemplate:
         )
         space_separator = self._get_space_separator(output_format)
 
-        column_sql = self._create_column_sql(query_column_selection, space_separator)
-        where_clause = self._create_where_clause()
+        column_sql = self._create_column_sql(
+            query_column_selection, space_separator, strategy.sql_adjuster
+        )
+        where_clause = self._create_where_clause(strategy.sql_adjuster)
         order_by_clause = self._create_order_by_clause()
 
         sql = f"""
@@ -78,16 +83,19 @@ FROM{space_separator}{db_object_name}
         return "\n  " if output_format == QueryOutputFormat.MULTI_LINE else " "
 
     def _create_column_sql(
-        self, query_column_selection: QueryColumnByIndexSelection, space_separator: str
+        self,
+        query_column_selection: QueryColumnByIndexSelection,
+        space_separator: str,
+        sql_adjuster: SqlDialectAdjuster,
     ) -> str:
         expressions_as_sql = []
         for index, expression in enumerate(self.select_expressions):
             if query_column_selection.is_included(index):
-                expressions_as_sql.append(expression.to_sql(True))
+                expressions_as_sql.append(expression.to_sql(sql_adjuster, True))
 
         return f",{space_separator}".join(expressions_as_sql)
 
-    def _create_where_clause(self) -> str:
+    def _create_where_clause(self, sql_adjuster: SqlDialectAdjuster) -> str:
         where_conditions = []
 
         row_filter_clause = self._create_row_filter_clause()
@@ -95,7 +103,7 @@ FROM{space_separator}{db_object_name}
             where_conditions.append(row_filter_clause)
 
         if self.where_expression:
-            where_conditions.append(self.where_expression.to_sql(True))
+            where_conditions.append(self.where_expression.to_sql(sql_adjuster, True))
 
         if len(where_conditions) == 0:
             return ""

@@ -33,8 +33,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     c.up("zookeeper", "kafka", "schema-registry", "materialized")
-    c.run(
-        "testdrive",
+    c.run_testdrive_files(
         f"--seed={args.seed}",
         "--kafka-option=group.id=group1",
         "--no-reset",
@@ -42,8 +41,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     c.kill("materialized")
     c.up("materialized")
-    c.run(
-        "testdrive",
+    c.run_testdrive_files(
         f"--seed={args.seed}",
         "--no-reset",
         "--kafka-option=group.id=group2",

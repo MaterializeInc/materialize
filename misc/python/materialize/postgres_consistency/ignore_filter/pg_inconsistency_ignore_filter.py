@@ -193,6 +193,15 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#22014: timestamp precision with null")
 
+        if (
+            db_operation.pattern in {"$ + $", "$ - $"}
+            and db_operation.params[0].get_declared_type_category()
+            == DataTypeCategory.DATE_TIME
+            and db_operation.params[1].get_declared_type_category()
+            == DataTypeCategory.DATE_TIME
+        ):
+            return YesIgnore("#24578: different representation")
+
         if db_operation.pattern in {"$ ~ $", "$ ~* $", "$ !~ $", "$ !~* $"}:
             return YesIgnore(
                 "Materialize regular expressions are similar to, but not identical to, PostgreSQL regular expressions."

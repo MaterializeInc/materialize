@@ -18,7 +18,7 @@ use mz_persist_client::cfg::{PersistParameters, RetryParameters};
 use mz_service::params::GrpcClientParameters;
 use mz_sql::session::vars::{SystemVars, DEFAULT_LINEAR_JOIN_YIELDING};
 use mz_storage_types::parameters::{
-    StorageMaxInflightBytesConfig, StorageParameters, UpsertAutoSpillConfig,
+    PgSourceSnapshotConfig, StorageMaxInflightBytesConfig, StorageParameters, UpsertAutoSpillConfig,
 };
 use mz_tracing::params::TracingParameters;
 
@@ -176,6 +176,11 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
         ),
         statistics_interval: config.storage_statistics_interval(),
         statistics_collection_interval: config.storage_statistics_collection_interval(),
+        pg_snapshot_config: PgSourceSnapshotConfig {
+            collect_strict_count: config.pg_source_snapshot_collect_strict_count(),
+            fallback_to_strict_count: config.pg_source_snapshot_fallback_to_strict_count(),
+            wait_for_count: config.pg_source_snapshot_wait_for_count(),
+        },
     }
 }
 
@@ -232,7 +237,7 @@ fn persist_config(config: &SystemVars) -> PersistParameters {
         pubsub_client_enabled: Some(config.persist_pubsub_client_enabled()),
         pubsub_push_diff_enabled: Some(config.persist_pubsub_push_diff_enabled()),
         rollup_threshold: Some(config.persist_rollup_threshold()),
-        feature_flags: config.persist_flags(),
+        config_updates: config.persist_configs(),
     }
 }
 

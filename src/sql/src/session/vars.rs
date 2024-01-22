@@ -87,10 +87,14 @@ use mz_ore::cast;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_persist_client::batch::UntrimmableColumns;
-use mz_persist_client::cfg::{PersistConfig, PersistFeatureFlag};
+use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::dyn_cfg::{
+    ConfigSet, ConfigType, ConfigUpdates as PersistConfigUpdates, ConfigVal,
+};
 use mz_pgwire_common::Severity;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
+use mz_repr::bytes::ByteSize;
 use mz_repr::strconv;
 use mz_repr::user::ExternalUserMetadata;
 use mz_sql_parser::ast::TransactionIsolationLevel;
@@ -522,18 +526,16 @@ pub const MAX_ROLES: ServerVar<u32> = ServerVar {
 // Cloud environmentd is configured with 4 GiB of RAM, so 1 GiB is a good heuristic for a single
 // query.
 // TODO(jkosh44) Eventually we want to be able to return arbitrary sized results.
-pub const MAX_RESULT_SIZE: ServerVar<u32> = ServerVar {
+pub const MAX_RESULT_SIZE: ServerVar<ByteSize> = ServerVar {
     name: UncasedStr::new("max_result_size"),
-    // 1 GiB
-    value: 1_073_741_824,
+    value: ByteSize::gb(1),
     description: "The maximum size in bytes for an internal query result (Materialize).",
     internal: false,
 };
 
-pub const MAX_QUERY_RESULT_SIZE: ServerVar<u32> = ServerVar {
+pub const MAX_QUERY_RESULT_SIZE: ServerVar<ByteSize> = ServerVar {
     name: UncasedStr::new("max_query_result_size"),
-    // 1 GiB
-    value: 1_073_741_824,
+    value: ByteSize::gb(1),
     description: "The maximum size in bytes for a single query's result (Materialize).",
     internal: false,
 };
@@ -1108,6 +1110,34 @@ const PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_source_snapshot_statement_timeout"),
     value: mz_postgres_util::DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT,
     description: "Sets the `statement_timeout` value to use during the snapshotting phase of PG sources (Materialize)",
+    internal: true,
+};
+
+/// Please see `PgSourceSnapshotConfig`.
+const PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("pg_source_snapshot_collect_strict_count"),
+    value: mz_storage_types::parameters::PgSourceSnapshotConfig::new().collect_strict_count,
+    description: "Please see <https://dev.materialize.com/api/rust-private\
+        /mz_storage_types/parameters\
+        /struct.PgSourceSnapshotConfig.html#structfield.collect_strict_count>",
+    internal: true,
+};
+/// Please see `PgSourceSnapshotConfig`.
+const PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("pg_source_snapshot_fallback_to_strict_count"),
+    value: mz_storage_types::parameters::PgSourceSnapshotConfig::new().fallback_to_strict_count,
+    description: "Please see <https://dev.materialize.com/api/rust-private\
+        /mz_storage_types/parameters\
+        /struct.PgSourceSnapshotConfig.html#structfield.fallback_to_strict_count>",
+    internal: true,
+};
+/// Please see `PgSourceSnapshotConfig`.
+const PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("pg_source_snapshot_wait_for_count"),
+    value: mz_storage_types::parameters::PgSourceSnapshotConfig::new().wait_for_count,
+    description: "Please see <https://dev.materialize.com/api/rust-private\
+        /mz_storage_types/parameters\
+        /struct.PgSourceSnapshotConfig.html#structfield.wait_for_count>",
     internal: true,
 };
 
@@ -2325,6 +2355,19 @@ feature_flags!(
     },
 );
 
+/// Returns a new ConfigSet containing every `Config` in Materialize.
+///
+/// Each time this is called, it returns a new ConfigSet disconnected from any
+/// others. It may be cloned and passed around, and updates to any of these
+/// copies will be reflected in the clones. Values from a `ConfigSet` may be
+/// copied to a disconnected `ConfigSet` via `ConfigUpdates`, which can be
+/// passed over the network to do the same across processes.
+pub fn all_dyn_configs() -> ConfigSet {
+    let mut configs = ConfigSet::default();
+    configs = mz_persist_client::cfg::all_dyn_configs(configs);
+    configs
+}
+
 /// Represents the input to a variable.
 ///
 /// Each variable has different rules for how it handles each style of input.
@@ -2820,8 +2863,8 @@ impl SessionVars {
     }
 
     /// Returns the value of the `max_query_result_size` configuration parameter.
-    pub fn max_query_result_size(&self) -> u32 {
-        *self.expect_value(&MAX_QUERY_RESULT_SIZE)
+    pub fn max_query_result_size(&self) -> u64 {
+        self.expect_value(&MAX_QUERY_RESULT_SIZE).as_bytes()
     }
 
     /// Sets the external metadata associated with the user.
@@ -2919,6 +2962,14 @@ pub struct SystemVars {
     allow_unsafe: bool,
     vars: BTreeMap<&'static UncasedStr, Box<dyn SystemVarMut>>,
     active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    /// NB: This is intentionally disconnected from the one that is plumbed
+    /// around to various components (initially, just persist). This is so we
+    /// can explictly control and reason about when changes to config values are
+    /// propagated to the rest of the system.
+    ///
+    /// TODO(cfg): Rename this when components other than persist are pulled
+    /// into it.
+    persist_configs: ConfigSet,
 }
 
 impl Clone for SystemVars {
@@ -2927,6 +2978,7 @@ impl Clone for SystemVars {
             allow_unsafe: self.allow_unsafe,
             vars: self.vars.iter().map(|(k, v)| (*k, v.clone_var())).collect(),
             active_connection_count: Arc::clone(&self.active_connection_count),
+            persist_configs: self.persist_configs.clone(),
         }
     }
 }
@@ -2976,6 +3028,7 @@ impl SystemVars {
             vars: Default::default(),
             active_connection_count,
             allow_unsafe: false,
+            persist_configs: all_dyn_configs(),
         };
 
         let mut vars = vars
@@ -3067,6 +3120,9 @@ impl SystemVars {
             .with_var(&PG_SOURCE_KEEPALIVES_RETRIES)
             .with_var(&PG_SOURCE_TCP_USER_TIMEOUT)
             .with_var(&PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT)
+            .with_var(&PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT)
+            .with_var(&PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT)
+            .with_var(&PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT)
             .with_var(&SSH_CHECK_INTERVAL)
             .with_var(&SSH_CONNECT_TIMEOUT)
             .with_var(&SSH_KEEPALIVES_IDLE)
@@ -3132,8 +3188,29 @@ impl SystemVars {
             .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL)
             .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER);
 
-        for flag in PersistFeatureFlag::ALL {
-            vars = vars.with_var(&flag.into())
+        for cfg in vars.persist_configs.entries() {
+            let name = UncasedStr::new(cfg.name());
+            let var: Box<dyn SystemVarMut> = match cfg.default() {
+                ConfigVal::Bool(default) => Box::new(SystemVar::new(&ServerVar {
+                    name,
+                    value: <bool as ConfigType>::get(default),
+                    description: cfg.desc(),
+                    internal: true,
+                })),
+                ConfigVal::Usize(default) => Box::new(SystemVar::new(&ServerVar {
+                    name,
+                    value: <usize as ConfigType>::get(default),
+                    description: cfg.desc(),
+                    internal: true,
+                })),
+                ConfigVal::String(default) => Box::new(SystemVar::new(&ServerVar {
+                    name,
+                    value: <String as ConfigType>::get(default),
+                    description: cfg.desc(),
+                    internal: true,
+                })),
+            };
+            vars.vars.insert(name, var);
         }
 
         vars.refresh_internal_state();
@@ -3459,8 +3536,8 @@ impl SystemVars {
     }
 
     /// Returns the value of the `max_result_size` configuration parameter.
-    pub fn max_result_size(&self) -> u32 {
-        *self.expect_value(&MAX_RESULT_SIZE)
+    pub fn max_result_size(&self) -> u64 {
+        self.expect_value(&MAX_RESULT_SIZE).as_bytes()
     }
 
     /// Returns the value of the `max_copy_from_size` configuration parameter.
@@ -3658,6 +3735,19 @@ impl SystemVars {
         *self.expect_value(&PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT)
     }
 
+    /// Returns the `pg_source_snapshot_collect_strict_count` configuration parameter.
+    pub fn pg_source_snapshot_collect_strict_count(&self) -> bool {
+        *self.expect_value(&PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT)
+    }
+    /// Returns the `pg_source_snapshot_fallback_to_strict_count` configuration parameter.
+    pub fn pg_source_snapshot_fallback_to_strict_count(&self) -> bool {
+        *self.expect_value(&PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT)
+    }
+    /// Returns the `pg_source_snapshot_collect_strict_count` configuration parameter.
+    pub fn pg_source_snapshot_wait_for_count(&self) -> bool {
+        *self.expect_value(&PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT)
+    }
+
     /// Returns the `ssh_check_interval` configuration parameter.
     pub fn ssh_check_interval(&self) -> Duration {
         *self.expect_value(&SSH_CHECK_INTERVAL)
@@ -3813,11 +3903,38 @@ impl SystemVars {
         *self.expect_value(&PERSIST_ROLLUP_THRESHOLD)
     }
 
-    pub fn persist_flags(&self) -> BTreeMap<String, bool> {
-        PersistFeatureFlag::ALL
-            .iter()
-            .map(|f| (f.name.to_owned(), *self.expect_value(&f.into())))
-            .collect()
+    pub fn persist_configs(&self) -> PersistConfigUpdates {
+        let mut updates = PersistConfigUpdates::default();
+        for entry in self.persist_configs.entries() {
+            let value_any = self
+                .vars
+                .get(UncasedStr::new(entry.name()))
+                .expect("var should exist")
+                .value_any();
+            match entry.val() {
+                ConfigVal::Bool(x) => <bool as ConfigType>::set(
+                    x,
+                    *value_any
+                        .downcast_ref::<bool>()
+                        .expect("var type should match"),
+                ),
+                ConfigVal::Usize(x) => <usize as ConfigType>::set(
+                    x,
+                    *value_any
+                        .downcast_ref::<usize>()
+                        .expect("var type should match"),
+                ),
+                ConfigVal::String(x) => <String as ConfigType>::set(
+                    x,
+                    value_any
+                        .downcast_ref::<String>()
+                        .expect("var type should match")
+                        .clone(),
+                ),
+            };
+            updates.add(entry);
+        }
+        updates
     }
 
     /// Returns the `metrics_retention` configuration parameter.
@@ -4155,17 +4272,6 @@ where
             Err(VarError::RequiresUnsafeMode(self.name()))
         } else {
             Ok(())
-        }
-    }
-}
-
-impl From<&'static PersistFeatureFlag> for ServerVar<bool> {
-    fn from(value: &'static PersistFeatureFlag) -> Self {
-        Self {
-            name: UncasedStr::new(value.name),
-            value: value.default,
-            description: value.description,
-            internal: true,
         }
     }
 }
@@ -4898,6 +5004,24 @@ impl Value for Numeric {
     }
 }
 
+impl Value for ByteSize {
+    fn type_name() -> String {
+        "bytes".to_string()
+    }
+    fn parse<'a>(
+        param: &'a (dyn Var + Send + Sync),
+        input: VarInput,
+    ) -> Result<ByteSize, VarError> {
+        let s = extract_single_value(param, input)?;
+        s.parse::<ByteSize>()
+            .map_err(|_| VarError::InvalidParameterType(param.into()))
+    }
+
+    fn format(&self) -> String {
+        self.to_string()
+    }
+}
+
 const SEC_TO_MIN: u64 = 60u64;
 const SEC_TO_HOUR: u64 = 60u64 * 60;
 const SEC_TO_DAY: u64 = 60u64 * 60 * 24;
@@ -5627,48 +5751,53 @@ pub fn is_tracing_var(name: &str) -> bool {
         || name == SENTRY_FILTERS.name()
 }
 
-/// Returns whether the named variable is a compute configuration parameter
-/// (things that go in `ComputeParameters` and are sent to replicas via `UpdateConfiguration`
-/// commands).
-pub fn is_compute_config_var(name: &str) -> bool {
-    name == MAX_RESULT_SIZE.name()
-        || name == COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
-        || name == LINEAR_JOIN_YIELDING.name()
-        || name == ENABLE_MZ_JOIN_CORE.name()
-        || name == ENABLE_JEMALLOC_PROFILING.name()
-        || name == ENABLE_SPECIALIZED_ARRANGEMENTS.name()
-        || name == ENABLE_COLUMNATION_LGALLOC.name()
-        || is_persist_config_var(name)
-        || is_tracing_var(name)
-}
+impl SystemVars {
+    /// Returns whether the named variable is a compute configuration parameter
+    /// (things that go in `ComputeParameters` and are sent to replicas via `UpdateConfiguration`
+    /// commands).
+    pub fn is_compute_config_var(&self, name: &str) -> bool {
+        name == MAX_RESULT_SIZE.name()
+            || name == COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
+            || name == LINEAR_JOIN_YIELDING.name()
+            || name == ENABLE_MZ_JOIN_CORE.name()
+            || name == ENABLE_JEMALLOC_PROFILING.name()
+            || name == ENABLE_SPECIALIZED_ARRANGEMENTS.name()
+            || name == ENABLE_COLUMNATION_LGALLOC.name()
+            || self.is_persist_config_var(name)
+            || is_tracing_var(name)
+    }
 
-/// Returns whether the named variable is a storage configuration parameter.
-pub fn is_storage_config_var(name: &str) -> bool {
-    name == PG_SOURCE_CONNECT_TIMEOUT.name()
-        || name == PG_SOURCE_KEEPALIVES_IDLE.name()
-        || name == PG_SOURCE_KEEPALIVES_INTERVAL.name()
-        || name == PG_SOURCE_KEEPALIVES_RETRIES.name()
-        || name == PG_SOURCE_TCP_USER_TIMEOUT.name()
-        || name == PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT.name()
-        || name == ENABLE_STORAGE_SHARD_FINALIZATION.name()
-        || name == SSH_CHECK_INTERVAL.name()
-        || name == SSH_CONNECT_TIMEOUT.name()
-        || name == SSH_KEEPALIVES_IDLE.name()
-        || name == KAFKA_SOCKET_KEEPALIVE.name()
-        || name == KAFKA_SOCKET_TIMEOUT.name()
-        || name == KAFKA_TRANSACTION_TIMEOUT.name()
-        || name == KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT.name()
-        || name == KAFKA_FETCH_METADATA_TIMEOUT.name()
-        || name == KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT.name()
-        || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
-        || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
-        || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
-        || name == STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION.name()
-        || name == STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO.name()
-        || name == STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS.name()
-        || is_upsert_rocksdb_config_var(name)
-        || is_persist_config_var(name)
-        || is_tracing_var(name)
+    /// Returns whether the named variable is a storage configuration parameter.
+    pub fn is_storage_config_var(&self, name: &str) -> bool {
+        name == PG_SOURCE_CONNECT_TIMEOUT.name()
+            || name == PG_SOURCE_KEEPALIVES_IDLE.name()
+            || name == PG_SOURCE_KEEPALIVES_INTERVAL.name()
+            || name == PG_SOURCE_KEEPALIVES_RETRIES.name()
+            || name == PG_SOURCE_TCP_USER_TIMEOUT.name()
+            || name == PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT.name()
+            || name == PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT.name()
+            || name == PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT.name()
+            || name == PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT.name()
+            || name == ENABLE_STORAGE_SHARD_FINALIZATION.name()
+            || name == SSH_CHECK_INTERVAL.name()
+            || name == SSH_CONNECT_TIMEOUT.name()
+            || name == SSH_KEEPALIVES_IDLE.name()
+            || name == KAFKA_SOCKET_KEEPALIVE.name()
+            || name == KAFKA_SOCKET_TIMEOUT.name()
+            || name == KAFKA_TRANSACTION_TIMEOUT.name()
+            || name == KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT.name()
+            || name == KAFKA_FETCH_METADATA_TIMEOUT.name()
+            || name == KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT.name()
+            || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
+            || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
+            || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
+            || name == STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION.name()
+            || name == STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO.name()
+            || name == STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS.name()
+            || is_upsert_rocksdb_config_var(name)
+            || self.is_persist_config_var(name)
+            || is_tracing_var(name)
+    }
 }
 
 /// Returns whether the named variable is a caching configuration parameter.
@@ -5691,35 +5820,37 @@ fn is_upsert_rocksdb_config_var(name: &str) -> bool {
         || name == upsert_rocksdb::UPSERT_ROCKSDB_SHRINK_ALLOCATED_BUFFERS_BY_RATIO.name()
 }
 
-/// Returns whether the named variable is a persist configuration parameter.
-fn is_persist_config_var(name: &str) -> bool {
-    name == PERSIST_BLOB_TARGET_SIZE.name()
-        || name == PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES.name()
-        || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
-        || name == PERSIST_CONSENSUS_CONNECTION_POOL_TTL.name()
-        || name == PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER.name()
-        || name == PERSIST_READER_LEASE_DURATION.name()
-        || name == CRDB_CONNECT_TIMEOUT.name()
-        || name == CRDB_TCP_USER_TIMEOUT.name()
-        || name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
-        || name == STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
-        || name == STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
-        || name == STORAGE_SOURCE_DECODE_FUEL.name()
-        || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name()
-        || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name()
-        || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name()
-        || name == PERSIST_TXNS_DATA_SHARD_RETRYER_INITIAL_BACKOFF.name()
-        || name == PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER.name()
-        || name == PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP.name()
-        || name == PERSIST_FAST_PATH_LIMIT.name()
-        || name == PERSIST_STATS_AUDIT_PERCENT.name()
-        || name == PERSIST_STATS_COLLECTION_ENABLED.name()
-        || name == PERSIST_STATS_FILTER_ENABLED.name()
-        || name == PERSIST_STATS_BUDGET_BYTES.name()
-        || name == PERSIST_STATS_UNTRIMMABLE_COLUMNS.name()
-        || name == PERSIST_PUBSUB_CLIENT_ENABLED.name()
-        || name == PERSIST_PUBSUB_PUSH_DIFF_ENABLED.name()
-        || PersistFeatureFlag::ALL.iter().any(|f| f.name == name)
+impl SystemVars {
+    /// Returns whether the named variable is a persist configuration parameter.
+    fn is_persist_config_var(&self, name: &str) -> bool {
+        name == PERSIST_BLOB_TARGET_SIZE.name()
+            || name == PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES.name()
+            || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
+            || name == PERSIST_CONSENSUS_CONNECTION_POOL_TTL.name()
+            || name == PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER.name()
+            || name == PERSIST_READER_LEASE_DURATION.name()
+            || name == CRDB_CONNECT_TIMEOUT.name()
+            || name == CRDB_TCP_USER_TIMEOUT.name()
+            || name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
+            || name == STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
+            || name == STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
+            || name == STORAGE_SOURCE_DECODE_FUEL.name()
+            || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name()
+            || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name()
+            || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name()
+            || name == PERSIST_TXNS_DATA_SHARD_RETRYER_INITIAL_BACKOFF.name()
+            || name == PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER.name()
+            || name == PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP.name()
+            || name == PERSIST_FAST_PATH_LIMIT.name()
+            || name == PERSIST_STATS_AUDIT_PERCENT.name()
+            || name == PERSIST_STATS_COLLECTION_ENABLED.name()
+            || name == PERSIST_STATS_FILTER_ENABLED.name()
+            || name == PERSIST_STATS_BUDGET_BYTES.name()
+            || name == PERSIST_STATS_UNTRIMMABLE_COLUMNS.name()
+            || name == PERSIST_PUBSUB_CLIENT_ENABLED.name()
+            || name == PERSIST_PUBSUB_PUSH_DIFF_ENABLED.name()
+            || self.persist_configs.entries().any(|e| name == e.name())
+    }
 }
 
 /// Returns whether the named variable is a Postgres/CRDB timestamp oracle

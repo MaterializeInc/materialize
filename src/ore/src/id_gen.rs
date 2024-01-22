@@ -49,17 +49,7 @@ pub type IdGen = Gen<u64>;
 
 /// IdAllocator common traits.
 pub trait IdGenerator:
-    From<u8>
-    + AddAssign
-    + Sub
-    + PartialOrd
-    + Copy
-    + Eq
-    + Hash
-    + Ord
-   // + rand::distributions::uniform::SampleUniform
-    + serde::Serialize
-    + fmt::Display
+    From<u8> + AddAssign + Sub + PartialOrd + Copy + Eq + Hash + Ord + serde::Serialize + fmt::Display
 {
 }
 
@@ -72,7 +62,6 @@ impl<T> IdGenerator for T where
         + Eq
         + Hash
         + Ord
-        //  + rand::distributions::uniform::SampleUniform
         + serde::Serialize
         + fmt::Display
 {

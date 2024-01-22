@@ -216,7 +216,7 @@ class KafkaExecutor(Executor):
 
         self.mz_conn.autocommit = True
         with self.mz_conn.cursor() as cur:
-            self.execute(
+            self.execute_with_retry_on_error(
                 cur,
                 f"""CREATE SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table)}
                     {f"IN CLUSTER {identifier(self.cluster)}" if self.cluster else ""}
@@ -224,6 +224,9 @@ class KafkaExecutor(Executor):
                     FORMAT AVRO
                     USING CONFLUENT SCHEMA REGISTRY CONNECTION materialize.public.csr_conn
                     ENVELOPE UPSERT""",
+                required_error_message_substrs=[
+                    "Topic does not exist",
+                ],
             )
         self.mz_conn.autocommit = False
 
@@ -456,6 +459,7 @@ class KafkaRoundtripExecutor(Executor):
                 required_error_message_substrs=[
                     "No value schema found",
                     "Key schema is required for ENVELOPE DEBEZIUM",
+                    "Topic does not exist",
                 ],
             )
         self.mz_conn.autocommit = False

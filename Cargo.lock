@@ -2415,9 +2415,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.3.18"
+version = "0.3.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17f8a914c2987b688368b5138aa05321db91f4090cf26118185672ad588bce21"
+checksum = "bb2c4422095b67ee78da96fbb51a4cc413b3b25883c7717ff7ca1ab31022c9c9"
 dependencies = [
  "bytes",
  "fnv",
@@ -2425,7 +2425,7 @@ dependencies = [
  "futures-sink",
  "futures-util",
  "http",
- "indexmap 1.9.1",
+ "indexmap 2.0.0",
  "slab",
  "tokio",
  "tokio-util",
@@ -3619,6 +3619,7 @@ dependencies = [
  "mz-storage-types",
  "serde",
  "timely",
+ "uuid",
  "workspace-hack",
 ]
 
@@ -3726,6 +3727,7 @@ dependencies = [
  "hyper",
  "hyper-openssl",
  "jsonwebtoken",
+ "mz-adapter-types",
  "mz-build-info",
  "mz-environmentd",
  "mz-frontegg-auth",
@@ -4260,6 +4262,7 @@ dependencies = [
  "prometheus",
  "proptest",
  "rand",
+ "rdkafka",
  "rdkafka-sys",
  "regex",
  "reqwest",
@@ -8196,9 +8199,9 @@ checksum = "24188a676b6ae68c3b2cb3a01be17fbf7240ce009799bb56d5b1409051e78fde"
 
 [[package]]
 name = "shlex"
-version = "1.1.0"
+version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43b2853a4d09f215c24cc5489c992ce46052d359b5109343cbafbf26bc62f8a3"
+checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "signal-hook-registry"

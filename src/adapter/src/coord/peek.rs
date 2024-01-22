@@ -443,7 +443,7 @@ impl crate::coord::Coordinator {
         finishing: RowSetFinishing,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
-        max_result_size: u32,
+        max_result_size: u64,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         let PlannedPeek {
             plan: fast_path,

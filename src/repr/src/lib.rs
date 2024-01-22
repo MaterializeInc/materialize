@@ -31,6 +31,7 @@ mod scalar;
 
 pub mod adt;
 pub mod antichain;
+pub mod bytes;
 pub mod explain;
 pub mod fixed_length;
 pub mod global_id;

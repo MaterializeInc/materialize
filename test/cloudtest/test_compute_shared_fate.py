@@ -37,12 +37,12 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
 
             > CREATE CONNECTION kafka TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT)
 
+            $ kafka-create-topic topic=shared-fate partitions={CLUSTER_SIZE}
+
             > CREATE SOURCE s1
               FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-shared-fate-${{testdrive.seed}}')
               FORMAT BYTES
               ENVELOPE NONE;
-
-            $ kafka-create-topic topic=shared-fate partitions={CLUSTER_SIZE}
 
             $ kafka-ingest format=bytes topic=shared-fate repeat=1000
             CDE${{kafka-ingest.iteration}}

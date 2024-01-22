@@ -28,6 +28,9 @@
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
 
+# Wait for the sink to create the topic
+$ kafka-wait-topic topic=testdrive-supplier-${testdrive.seed} partitions=1
+
 > CREATE SOURCE progress_check
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_fixed (TOPIC 'testdrive-progress-fixed-${testdrive.seed}')

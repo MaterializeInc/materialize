@@ -44,3 +44,8 @@ JSONB_DATA_TYPE_WITH_VALUES.add_raw_value(
 JSONB_DATA_TYPE_WITH_VALUES.add_raw_value(
     '\'{"a": "2", "b": ["1", "2"]}\'', "VAL_4", set()
 )
+JSONB_DATA_TYPE_WITH_VALUES.add_raw_value(
+    '\'{"a": "2", "b": { "b1": "1", "b2": { "b20": "2", "b21": "2" }}}\'',
+    "VAL_5",
+    set(),
+)

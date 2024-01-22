@@ -33,13 +33,13 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
 
             > CREATE CONNECTION kafka TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
+            $ kafka-create-topic topic=crash
+
             > CREATE SOURCE s1
               FROM KAFKA CONNECTION kafka
               (TOPIC 'testdrive-crash-${testdrive.seed}')
               FORMAT BYTES
               ENVELOPE NONE;
-
-            $ kafka-create-topic topic=crash
 
             $ kafka-ingest format=bytes topic=crash
             CDE

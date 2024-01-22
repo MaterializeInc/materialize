@@ -40,7 +40,7 @@ use crate::session::{EndTransactionAction, RowBatchStream, Session};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::util::Transmittable;
 use crate::webhook::AppendWebhookResponse;
-use crate::AdapterNotice;
+use crate::{AdapterNotice, AppendWebhookError};
 
 #[derive(Debug)]
 pub struct CatalogSnapshot {
@@ -90,7 +90,7 @@ pub enum Command {
         database: String,
         schema: String,
         name: String,
-        tx: oneshot::Sender<Result<AppendWebhookResponse, AdapterError>>,
+        tx: oneshot::Sender<Result<AppendWebhookResponse, AppendWebhookError>>,
     },
 
     GetSystemVars {

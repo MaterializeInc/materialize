@@ -70,7 +70,7 @@ test_source = """
 }}
 
 CREATE SOURCE {{ this }}
-FROM KAFKA CONNECTION kafka_connection (TOPIC 'test-source')
+FROM KAFKA CONNECTION kafka_connection (TOPIC 'testdrive-test-source-1')
 FORMAT BYTES
 """
 
@@ -81,7 +81,7 @@ test_source_index = """
 ) }}
 
 CREATE SOURCE {{ this }}
-FROM KAFKA CONNECTION kafka_connection (TOPIC 'test-source')
+FROM KAFKA CONNECTION kafka_connection (TOPIC 'testdrive-test-source-1')
 FORMAT BYTES
 """
 

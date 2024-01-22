@@ -213,6 +213,7 @@ impl Coordinator {
         let mut vpc_endpoints_to_drop = vec![];
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
+        let mut subscribe_sinks_to_drop = vec![];
         let mut peeks_to_drop = vec![];
         let mut update_tracing_config = false;
         let mut update_compute_config = false;
@@ -312,8 +313,16 @@ impl Coordinator {
                 catalog::Op::ResetSystemConfiguration { name }
                 | catalog::Op::UpdateSystemConfiguration { name, .. } => {
                     update_tracing_config |= vars::is_tracing_var(name);
-                    update_compute_config |= vars::is_compute_config_var(name);
-                    update_storage_config |= vars::is_storage_config_var(name);
+                    update_compute_config |= self
+                        .catalog
+                        .state()
+                        .system_config()
+                        .is_compute_config_var(name);
+                    update_storage_config |= self
+                        .catalog
+                        .state()
+                        .system_config()
+                        .is_storage_config_var(name);
                     update_pg_timestamp_oracle_config |=
                         vars::is_pg_timestamp_oracle_config_var(name);
                     update_metrics_retention |= name == vars::METRICS_RETENTION.name();
@@ -383,35 +392,43 @@ impl Coordinator {
             .chain(views_to_drop.iter())
             .collect();
 
-        // Clean up any active subscribes that rely on dropped relations.
-        let subscribe_sinks_to_drop: Vec<_> = self
-            .active_subscribes
-            .iter()
-            .filter(|(_id, sub)| !sub.dropping)
-            .filter_map(|(sink_id, sub)| {
-                sub.depends_on
-                    .iter()
-                    .find(|id| relations_to_drop.contains(id))
-                    .map(|dependent_id| (dependent_id, sink_id, sub))
-            })
-            .map(|(dependent_id, sink_id, active_subscribe)| {
-                let conn_id = &active_subscribe.conn_id;
-                let entry = self.catalog().get_entry(dependent_id);
+        // Clean up any active subscribes that rely on dropped relations or clusters.
+        for (&global_id, subscribe) in &self.active_subscribes {
+            if subscribe.dropping {
+                continue; // don't drop subscribes twice
+            }
+            let cluster_id = subscribe.cluster_id;
+            let sink_id = ComputeSinkId {
+                cluster_id,
+                global_id,
+            };
+            let conn_id = &subscribe.conn_id;
+            if let Some(id) = subscribe
+                .depends_on
+                .iter()
+                .find(|id| relations_to_drop.contains(id))
+            {
+                let entry = self.catalog().get_entry(id);
                 let name = self
                     .catalog()
-                    .resolve_full_name(entry.name(), Some(conn_id));
+                    .resolve_full_name(entry.name(), Some(conn_id))
+                    .to_string();
+                subscribe_sinks_to_drop.push((
+                    conn_id.clone(),
+                    format!("relation {}", name.quoted()),
+                    sink_id,
+                ));
+            } else if clusters_to_drop.contains(&cluster_id) {
+                let name = self.catalog().get_cluster(cluster_id).name();
+                subscribe_sinks_to_drop.push((
+                    conn_id.clone(),
+                    format!("cluster {}", name.quoted()),
+                    sink_id,
+                ));
+            }
+        }
 
-                (
-                    (conn_id.clone(), name.to_string()),
-                    ComputeSinkId {
-                        cluster_id: active_subscribe.cluster_id,
-                        global_id: *sink_id,
-                    },
-                )
-            })
-            .collect();
-
-        // Clean up any pending peeks that rely on dropped relations.
+        // Clean up any pending peeks that rely on dropped relations or clusters.
         for (uuid, pending_peek) in &self.pending_peeks {
             if let Some(id) = pending_peek
                 .depends_on
@@ -532,20 +549,18 @@ impl Coordinator {
                 self.drop_storage_sinks(storage_sinks_to_drop);
             }
             if !subscribe_sinks_to_drop.is_empty() {
-                let (dropped_metadata, subscribe_sinks_to_drop): (Vec<_>, BTreeSet<_>) =
-                    subscribe_sinks_to_drop.into_iter().unzip();
-                for (conn_id, dropped_name) in dropped_metadata {
+                let mut sink_ids = Vec::new();
+                for (conn_id, dropped_name, sink_id) in subscribe_sinks_to_drop {
                     if let Some(conn_meta) = self.active_conns.get_mut(&conn_id) {
-                        conn_meta
-                            .drop_sinks
-                            .retain(|sink| !subscribe_sinks_to_drop.contains(sink));
+                        conn_meta.drop_sinks.retain(|id| *id != sink_id);
                         // Send notice on a best effort basis.
                         let _ = conn_meta
                             .notice_tx
                             .send(AdapterNotice::DroppedSubscribe { dropped_name });
                     }
+                    sink_ids.push(sink_id);
                 }
-                self.drop_compute_sinks(subscribe_sinks_to_drop);
+                self.drop_compute_sinks(sink_ids);
             }
             if !peeks_to_drop.is_empty() {
                 for (dropped_name, uuid) in peeks_to_drop {

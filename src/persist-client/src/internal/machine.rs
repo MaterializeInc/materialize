@@ -1203,15 +1203,16 @@ pub mod datadriven {
     use crate::batch::{
         validate_truncate_batch, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
     };
-    use crate::cfg::PersistFeatureFlag;
     use crate::fetch::{fetch_batch_part, Cursor};
-    use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
+    use crate::internal::compact::{
+        CompactConfig, CompactReq, Compactor, STREAMING_COMPACTION_ENABLED,
+    };
     use crate::internal::datadriven::DirectiveArgs;
     use crate::internal::encoding::Schemas;
     use crate::internal::gc::GcReq;
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
     use crate::internal::state_versions::EncodedRollup;
-    use crate::read::{Listen, ListenEvent};
+    use crate::read::{Listen, ListenEvent, STREAMING_SNAPSHOT_AND_FETCH_ENABLED};
     use crate::rpc::NoopPubSubSender;
     use crate::tests::new_test_client;
     use crate::{GarbageCollector, PersistClient};
@@ -1242,14 +1243,10 @@ pub mod datadriven {
                 .cfg
                 .dynamic
                 .set_blob_target_size(PersistConfig::DEFAULT_BLOB_TARGET_SIZE);
+            client.cfg.set_config(&STREAMING_COMPACTION_ENABLED, true);
             client
                 .cfg
-                .dynamic
-                .set_feature_flag(PersistFeatureFlag::STREAMING_COMPACTION, true);
-            client
-                .cfg
-                .dynamic
-                .set_feature_flag(PersistFeatureFlag::STREAMING_SNAPSHOT_AND_FETCH, true);
+                .set_config(&STREAMING_SNAPSHOT_AND_FETCH_ENABLED, true);
             let state_versions = Arc::new(StateVersions::new(
                 client.cfg.clone(),
                 Arc::clone(&client.consensus),

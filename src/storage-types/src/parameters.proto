@@ -39,6 +39,7 @@ message ProtoStorageParameters {
     ProtoKafkaTimeouts kafka_timeout_config = 21;
     mz_proto.ProtoDuration statistics_interval = 22;
     mz_proto.ProtoDuration statistics_collection_interval = 23;
+    ProtoPgSourceSnapshotConfig pg_snapshot_config = 24;
 }
 
 
@@ -48,6 +49,12 @@ message ProtoPgSourceTcpTimeouts {
     optional mz_proto.ProtoDuration keepalives_idle = 3;
     optional mz_proto.ProtoDuration keepalives_interval = 4;
     optional mz_proto.ProtoDuration tcp_user_timeout = 5;
+}
+
+message ProtoPgSourceSnapshotConfig {
+    bool collect_strict_count = 1;
+    bool fallback_to_strict_count = 2;
+    bool wait_for_count = 3;
 }
 
 message ProtoKafkaTimeouts {

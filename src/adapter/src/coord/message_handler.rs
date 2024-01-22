@@ -849,8 +849,7 @@ impl Coordinator {
             RealTimeRecencyContext::Peek {
                 ctx,
                 root_otel_ctx,
-                copy_to,
-                when,
+                plan,
                 target_replica,
                 timeline_context,
                 oracle_read_ts,
@@ -864,9 +863,8 @@ impl Coordinator {
                     root_otel_ctx,
                     PeekStage::Finish(PeekStageFinish {
                         validity,
-                        copy_to,
+                        plan,
                         id_bundle: None,
-                        when,
                         target_replica,
                         timeline_context,
                         oracle_read_ts,

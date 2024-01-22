@@ -480,7 +480,7 @@ class Composition:
             def workflow_default(c: Composition):
                 for tc in test_cases:
                     with c.test_case(tc.name):
-                        c.run("testdrive", *tc.files)
+                        c.run_testdrive_files(*tc.files)
             ```
 
         Args:
@@ -643,6 +643,17 @@ class Composition:
             capture_stderr=capture_stderr,
             stdin=stdin,
             check=check,
+        )
+
+    def run_testdrive_files(
+        self,
+        *args: str,
+        rm: bool = False,
+    ) -> subprocess.CompletedProcess:
+        return self.run(
+            "testdrive",
+            *args,
+            rm=rm,
         )
 
     def exec(

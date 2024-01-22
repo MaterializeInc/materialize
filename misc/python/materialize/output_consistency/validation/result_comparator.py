@@ -10,6 +10,9 @@ import math
 from decimal import Decimal
 from typing import Any, cast
 
+from materialize.output_consistency.execution.sql_dialect_adjuster import (
+    SqlDialectAdjuster,
+)
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
     GenericInconsistencyIgnoreFilter,
 )
@@ -298,7 +301,7 @@ class ResultComparator:
             result_value2 = result2.result_rows[row_index][col_index]
             expression = query_execution.query_template.select_expressions[
                 col_index
-            ].to_sql(True)
+            ].to_sql(SqlDialectAdjuster(), True)
 
             if not self.is_value_equal(result_value1, result_value2):
                 validation_outcome.add_error(

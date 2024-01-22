@@ -156,8 +156,7 @@ def test_upgrade_from_version(
         created_cluster = "default"
     temp_dir = f"--temp-dir=/share/tmp/upgrade-from-{from_version}"
     seed = f"--seed={random.getrandbits(32)}"
-    c.run(
-        "testdrive",
+    c.run_testdrive_files(
         "--no-reset",
         f"--var=upgrade-from-version={from_version}",
         f"--var=created-cluster={created_cluster}",
@@ -183,8 +182,7 @@ def test_upgrade_from_version(
             volumes_extra=["secrets:/share/secrets"],
         )
     ):
-        c.run(
-            "testdrive",
+        c.run_testdrive_files(
             "--no-reset",
             f"--var=upgrade-from-version={from_version}",
             f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",

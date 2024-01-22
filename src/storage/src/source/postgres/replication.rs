@@ -145,6 +145,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     table_info: BTreeMap<u32, (usize, PostgresTableDesc, Vec<MirScalarExpr>)>,
     rewind_stream: &Stream<G, RewindRequest>,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+    metrics: PgSourceMetrics,
 ) -> (
     Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
     Stream<G, Infallible>,
@@ -164,7 +165,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         [&data_output, &upper_output],
     );
 
-    let metrics = config.metrics.get_postgres_metrics(config.id);
     metrics.tables.set(u64::cast_from(table_info.len()));
 
     let reader_table_info = table_info.clone();
@@ -188,6 +188,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let replication_client = connection_config.connect_replication(
                 &config.config.connection_context.ssh_tunnel_manager,
             ).await?;
+
+            tracing::info!(%id, "ensuring replication slot {slot} exists");
             super::ensure_replication_slot(&replication_client, slot).await?;
             let slot_lsn = super::fetch_slot_resume_lsn(&replication_client, slot).await?;
 

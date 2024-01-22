@@ -33,7 +33,8 @@ use tracing::{debug, debug_span, trace, warn, Instrument, Span};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BatchBuilderConfig, BatchBuilderInternal};
-use crate::cfg::{MiB, PersistFeatureFlag};
+use crate::cfg::MiB;
+use crate::dyn_cfg::Config;
 use crate::fetch::{fetch_batch_part, Cursor, EncodedPart, FetchBatchFilter};
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
@@ -68,6 +69,12 @@ pub struct CompactRes<T> {
     pub output: HollowBatch<T>,
 }
 
+pub(crate) const STREAMING_COMPACTION_ENABLED: Config<bool> = Config::new(
+    "persist_streaming_compaction_enabled",
+    false,
+    "use the new streaming consolidate during compaction",
+);
+
 /// A snapshot of dynamic configs to make it easier to reason about an
 /// individual run of compaction.
 #[derive(Debug, Clone)]
@@ -87,9 +94,7 @@ impl CompactConfig {
             compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
             version: value.build_version.clone(),
             batch: BatchBuilderConfig::new(value, writer_id),
-            streaming_compact: value
-                .dynamic
-                .enabled(PersistFeatureFlag::STREAMING_COMPACTION),
+            streaming_compact: STREAMING_COMPACTION_ENABLED.get(&value.configs),
         }
     }
 }

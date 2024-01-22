@@ -60,6 +60,9 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     /// Frontier beyond which the dataflow should not execute.
     /// Specifically, updates at times greater or equal to this frontier are suppressed.
     /// This is often set to `as_of + 1` to enable "batch" computations.
+    /// Note that frontier advancements might still happen to times that are after the `until`,
+    /// only data is suppressed. (This is consistent with how frontier advancements can also
+    /// happen before the `as_of`.)
     pub until: Antichain<T>,
     /// Human readable name
     pub debug_name: String,

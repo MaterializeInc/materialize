@@ -20,6 +20,7 @@ use itertools::Itertools;
 use mz_expr::MirRelationExpr;
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
+use mz_repr::bytes::ByteSize;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
@@ -896,8 +897,7 @@ generate_extracted_config!(
     (Quote, String),
     (Header, bool),
     (AwsConnection, with_options::Object),
-    // TODO(mouli): Use ByteSize after https://github.com/MaterializeInc/materialize/pull/24252 is merged
-    (MaxFileSize, String)
+    (MaxFileSize, ByteSize)
 );
 
 pub fn plan_copy(
