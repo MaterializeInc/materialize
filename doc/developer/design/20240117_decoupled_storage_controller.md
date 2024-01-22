@@ -42,18 +42,19 @@ work well for that, because they're coupled together inside one process.
   - TablesController: facilitates writes to tables. Could also be called
     TxnController.
   - StorageController: manages storage-flavored computation running on a
-    cluster. Think sources and sinks.
+    cluster. Think sources and sinks. This is the same as ComputeController,
+    but for running storage-flavoured computation on a cluster.
 
 Sketch of what I think we need:
 
-- The compute controller really only needs a CollectionController. It would
-  have a much reduced interface, compared to current StorageController. Greatly
-  reducing surface area/coupling between the two.
-- We can revive an old idea where we use persist directly to learn about the
-  upper of collections: the CollectionController would not rely on feedback
-  from the cluster to learn about uppers. It would use persist, and drive it's
-  since handles forward based on that.
-- Each compute controller can be given their own "instance" of a
+- The compute controller only needs a CollectionController. It has a much
+  reduced interface, compared to current StorageController. Greatly reducing
+  surface area/coupling between the two.
+- We will revive an old idea where we use persist directly to learn about the
+  upper of collections: the CollectionController does not rely on feedback from
+  the cluster to learn about uppers. It uses persist, and drives its since
+  handles forward based on that.
+- Each compute controller is given their own "instance" of a
   CollectionController, that they own.
 - A CollectionController would not initially acquire since handles for _all_
   collections but only for those in which the compute controller expresses an
