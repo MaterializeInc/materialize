@@ -86,7 +86,7 @@ esac
 # Note: specifying a target_cpu enables many features, these are specific ones that target_cpu
 # might miss.
 X86_64_TARGET_FEATURES="+aes"
-AAARCH64_TARGET_FEATURES=""
+AAARCH64_TARGET_FEATURES="+aes,+sha1,+sha2"
 
 rust_target_features=""
 case "$arch_gcc" in

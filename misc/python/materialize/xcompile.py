@@ -73,7 +73,7 @@ def target_features(arch: Arch) -> list[str]:
     if arch == Arch.X86_64:
         return ["+aes"]
     elif arch == Arch.AARCH64:
-        return []
+        return ["+aes", "+sha2"]
     else:
         raise RuntimeError("unreachable")
 
