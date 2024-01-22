@@ -2407,6 +2407,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     c.up("materialized")
+    c.up("testdrive", persistent=True)
 
     def fetch_metrics() -> Metrics:
         resp = c.exec(
@@ -2543,6 +2544,20 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
         DROP INDEX idx;
         DROP MATERIALIZED VIEW mv;
         """
+    )
+
+    # Wait for the controller to asynchronously drop the dataflows and update
+    # metrics. We can inspect the controller's view of things in
+    # `mz_compute_hydration_statuses`, which is updated at the same time as
+    # these metrics are.
+    c.testdrive(
+        input=dedent(
+            """
+            > SELECT *
+              FROM mz_internal.mz_compute_hydration_statuses
+              WHERE object_id LIKE 'u%'
+            """
+        )
     )
 
     # Check that the per-collection metrics have been cleaned up.
