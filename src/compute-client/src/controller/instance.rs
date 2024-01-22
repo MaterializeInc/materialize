@@ -425,20 +425,11 @@ impl<T: Timestamp> Instance<T> {
             return;
         }
 
-        // If the observed frontier is not greater than the collection's as-of, the collection has
-        // not yet produced any output and is therefore not hydrated yet.
-        if !PartialOrder::less_than(&collection.as_of, frontier) {
-            return;
+        // If the observed frontier is greater than the collection's as-of, the collection has
+        // produced some output and is therefore hydrated now.
+        if PartialOrder::less_than(&collection.as_of, frontier) {
+            collection.set_hydrated();
         }
-
-        // Update metrics if we are maintaining them for this collection.
-        if let Some(metrics) = &collection.metrics {
-            let duration = collection.created_at.elapsed().as_secs_f64();
-            metrics.initial_output_duration_seconds.set(duration);
-        }
-
-        // Set the hydration flag.
-        collection.hydration_flag.set();
     }
 
     /// Clean up collection state that is not needed anymore.
@@ -1700,12 +1691,29 @@ impl<T> ReplicaState<T> {
     fn add_collection(&mut self, id: GlobalId, as_of: Antichain<T>) {
         let metrics = self.metrics.for_collection(id);
         let hydration_flag = HydrationFlag::new(self.id, id, self.introspection_tx.clone());
-        let state = ReplicaCollectionState {
+        let mut state = ReplicaCollectionState {
             metrics,
             created_at: Instant::now(),
             as_of,
             hydration_flag,
         };
+
+        // We need to consider the edge case where the as-of is the empty frontier. Such an as-of
+        // is not useful for indexes, because they wouldn't be readable. For write-only
+        // collections, an empty as-of means that the collection has been fully written and no new
+        // dataflow needs to be created for it. Consequently, no hydration will happen either.
+        //
+        // Based on this, we could set the hydration flag in two ways:
+        //  * `false`, as in "the dataflow was never created"
+        //  * `true`, as in "the dataflow completed immediately"
+        //
+        // Since hydration is often used as a measure of dataflow progress and we don't want to
+        // give the impression that certain dataflows are somehow stuck when they are not, we go
+        // go with the second interpretation here.
+        if state.as_of.is_empty() {
+            state.set_hydrated();
+        }
+
         self.collections.insert(id, state);
     }
 
@@ -1733,6 +1741,16 @@ impl<T> ReplicaCollectionState<T> {
     /// Returns whether this collection is hydrated.
     fn hydrated(&self) -> bool {
         self.hydration_flag.hydrated
+    }
+
+    /// Marks the collection as hydrated and updates metrics and introspection accordingly.
+    fn set_hydrated(&mut self) {
+        if let Some(metrics) = &self.metrics {
+            let duration = self.created_at.elapsed().as_secs_f64();
+            metrics.initial_output_duration_seconds.set(duration);
+        }
+
+        self.hydration_flag.set();
     }
 }
 
