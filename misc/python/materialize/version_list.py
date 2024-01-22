@@ -71,6 +71,8 @@ _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_CORRECTNESS_REGRESSIONS: dict
     str, MzVersion
 ] = {
     # insert newer commits at the top
+    # PR#24497 (Make sure variance never returns a negative number) changes DFR or CTF handling compared to v0.84.0
+    "82a5130a8466525c5b3bdb3eff845c7c34585774": MzVersion.parse_mz("v0.85.0"),
 }
 
 ANCESTOR_OVERRIDES_FOR_PERFORMANCE_REGRESSIONS = _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_PERFORMANCE_AND_SCALABILITY_REGRESSIONS
