@@ -36,3 +36,9 @@ class PgSqlDialectAdjuster(SqlDialectAdjuster):
             string_value = f"({string_value})"
 
         return string_value
+
+    def adjust_enum_value(self, string_value: str) -> str:
+        if string_value == "DOUBLE":
+            return "DOUBLE PRECISION"
+
+        return string_value
