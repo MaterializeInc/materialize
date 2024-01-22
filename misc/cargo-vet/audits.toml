@@ -40,6 +40,21 @@ who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
 version = "0.12.0@git:c5b9baca0283f4d96f7e6f914de8578fb5c521de"
 
+[[audits.dynfmt]]
+who = "Sean Loiselle <sean@materialize.io>"
+criteria = "safe-to-deploy"
+version = "0.1.5"
+notes = """
+The proposed usage of this crate's unsafe code is limited to inlining string
+literals from the Materialize source code. No proposed usage of this crate allows
+user input to be inlined (i.e. allowing injection attacks).
+"""
+
+[[audits.erased-serde]]
+who = "Sean Loiselle <sean@materialize.io>"
+criteria = "safe-to-deploy"
+version = "0.3.26"
+
 [[audits.funty]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
