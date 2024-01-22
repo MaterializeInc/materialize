@@ -451,9 +451,10 @@ impl PersistClient {
     ///
     /// In contrast to the time-leased [ReadHandle] returned by [Self::open] and
     /// [Self::open_leased_reader], this handle and its associated capability
-    /// are not leased. A [SinceHandle] only releases its since capability when
-    /// [SinceHandle::expire] is called. Also unlike `ReadHandle`, expire is not
-    /// called on drop. This is less ergonomic, but useful for "critical" since
+    /// are not leased. A [SinceHandle] does not release its since capability;
+    /// downgrade to the empty antichain to hold back the since.
+    /// Also unlike `ReadHandle`, the handle is not expired on drop.
+    /// This is less ergonomic, but useful for "critical" since
     /// holds which must survive even lease timeouts.
     ///
     /// **IMPORTANT**: The above means that if a SinceHandle is registered and

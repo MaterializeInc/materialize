@@ -648,6 +648,7 @@ where
         (seqno, maintenance)
     }
 
+    #[allow(dead_code)] // TODO(bkirwi): remove this when since behaviour on expiry has settled
     pub async fn expire_critical_reader(
         &mut self,
         reader_id: &CriticalReaderId,
