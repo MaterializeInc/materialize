@@ -51,3 +51,21 @@ class SqlOperation(Operation):
 
     def sql_statement(self) -> str:
         raise NotImplementedError
+
+
+class OperationChainWithDataExchange(Operation):
+    def __init__(self, operations: list[Operation]):
+        assert len(operations) > 0, "requires at least one operation"
+        self.ops = operations
+
+    def required_keys(self) -> set[str]:
+        return self.operations()[0].required_keys()
+
+    def operations(self) -> list[Operation]:
+        return self.ops
+
+    def _execute(self, data: OperationData) -> OperationData:
+        for operation in self.operations():
+            data = operation.execute(data)
+
+        return data
