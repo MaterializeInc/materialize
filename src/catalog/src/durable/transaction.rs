@@ -277,7 +277,7 @@ impl<'a> Transaction<'a> {
         Ok(id)
     }
 
-    pub(crate) fn insert_role(
+    pub fn insert_role(
         &mut self,
         id: RoleId,
         name: String,
