@@ -1213,7 +1213,7 @@ impl DurableCatalogState for PersistCatalogState {
         let storage_usage = match self.storage_usage_events.take() {
             Some(storage_usage) => storage_usage,
             None => {
-                error!("storage usage events were not found in cache, so they were retrieved from persist, this unexpected and bad for performance");
+                error!("storage usage events were not found in cache, so they were retrieved from persist, this is unexpected and bad for performance");
                 self.persist_snapshot()
                     .await
                     .filter_map(
