@@ -594,11 +594,6 @@ impl Catalog {
                         }
 
                         Builtin::Source(coll) => {
-                            let introspection_type = match &coll.data_source {
-                                Some(i) => i.clone(),
-                                None => continue,
-                            };
-
                             let oid = state.allocate_oid()?;
                             let mut acl_items = vec![rbac::owner_privilege(
                                 mz_sql::catalog::ObjectType::Source,
@@ -612,7 +607,7 @@ impl Catalog {
                                 name.clone(),
                                 CatalogItem::Source(Source {
                                     create_sql: None,
-                                    data_source: DataSourceDesc::Introspection(introspection_type),
+                                    data_source: DataSourceDesc::Introspection(coll.data_source),
                                     desc: coll.desc.clone(),
                                     timeline: Timeline::EpochMilliseconds,
                                     resolved_ids: ResolvedIds(BTreeSet::new()),
