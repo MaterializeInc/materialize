@@ -27,7 +27,7 @@ from materialize.scalability.io import paths
 from materialize.scalability.operation import Operation
 from materialize.scalability.result_analyzer import ResultAnalyzer
 from materialize.scalability.schema import Schema
-from materialize.scalability.workload import Workload
+from materialize.scalability.workload import Workload, WorkloadWithContext
 from materialize.scalability.workload_result import WorkloadResult
 from materialize.scalability.workloads import *  # noqa: F401 F403
 from materialize.scalability.workloads_test import *  # noqa: F401 F403
@@ -72,7 +72,10 @@ class BenchmarkExecutor:
     ):
         if self.baseline_endpoint is not None:
             baseline_result = self.run_workload_for_endpoint(
-                self.baseline_endpoint, workload_cls()
+                self.baseline_endpoint,
+                self.create_workload_instance(
+                    workload_cls, endpoint=self.baseline_endpoint
+                ),
             )
         else:
             baseline_result = None
@@ -93,7 +96,8 @@ class BenchmarkExecutor:
     ) -> ComparisonOutcome | None:
         workload_name = workload_cls.__name__
         other_endpoint_result = self.run_workload_for_endpoint(
-            other_endpoint, workload_cls()
+            other_endpoint,
+            self.create_workload_instance(workload_cls, endpoint=other_endpoint),
         )
 
         if self.baseline_endpoint is None or baseline_result is None:
@@ -267,6 +271,16 @@ class BenchmarkExecutor:
             df_details_cols.WORKLOAD: workload.name(),
             df_details_cols.TRANSACTION_INDEX: transaction_index,
         }
+
+    def create_workload_instance(
+        self, workload_cls: type[Workload], endpoint: Endpoint
+    ) -> Workload:
+        workload = workload_cls()
+
+        if isinstance(workload, WorkloadWithContext):
+            workload.set_endpoint(endpoint)
+
+        return workload
 
     def initialize_worker(self, local: threading.local, lock: threading.Lock):
         """Give each other worker thread a unique ID"""

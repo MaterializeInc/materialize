@@ -9,6 +9,7 @@
 
 from psycopg import Cursor
 
+from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.operation import Operation
 
 
@@ -21,6 +22,13 @@ class Workload:
 
     def name(self) -> str:
         return self.__class__.__name__
+
+
+class WorkloadWithContext(Workload):
+    endpoint: Endpoint
+
+    def set_endpoint(self, endpoint: Endpoint) -> None:
+        self.endpoint = endpoint
 
 
 class WorkloadSelfTest(Workload):
