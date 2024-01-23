@@ -279,6 +279,7 @@ class BenchmarkExecutor:
 
         if isinstance(workload, WorkloadWithContext):
             workload.set_endpoint(endpoint)
+            workload.set_schema(self.schema)
 
         return workload
 

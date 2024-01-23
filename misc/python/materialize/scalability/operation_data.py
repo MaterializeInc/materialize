@@ -23,6 +23,9 @@ class OperationData:
     def push(self, key: str, value: Any) -> None:
         self._data[key] = value
 
+    def remove(self, key: str) -> None:
+        self._data.pop(key, None)
+
     def get(self, key: str) -> Any:
         if key not in self._data.keys():
             raise RuntimeError(f"Key does not exist: {key}")

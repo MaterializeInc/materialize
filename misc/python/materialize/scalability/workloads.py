@@ -7,8 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.scalability.operation import Operation
+
+from materialize.scalability.operation import Operation, OperationChainWithDataExchange
+from materialize.scalability.operation_data import OperationData
 from materialize.scalability.operations import (
+    Connect,
+    Disconnect,
     InsertDefaultValues,
     SelectCount,
     SelectCountInMv,
@@ -18,7 +22,7 @@ from materialize.scalability.operations import (
     SelectUnionAll,
     Update,
 )
-from materialize.scalability.workload import Workload
+from materialize.scalability.workload import Workload, WorkloadWithContext
 
 
 class InsertWorkload(Workload):
@@ -64,3 +68,13 @@ class InsertAndSelectLimitWorkload(Workload):
 class UpdateWorkload(Workload):
     def operations(self) -> list["Operation"]:
         return [Update()]
+
+
+class EstablishConnectionWorkload(WorkloadWithContext):
+    def amend_data_before_execution(self, data: OperationData) -> None:
+        data.push("endpoint", self.endpoint)
+        data.push("schema", self.schema)
+        data.remove("cursor")
+
+    def operations(self) -> list["Operation"]:
+        return [OperationChainWithDataExchange([Connect(), SelectOne(), Disconnect()])]

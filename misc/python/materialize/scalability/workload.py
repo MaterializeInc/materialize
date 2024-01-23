@@ -21,7 +21,11 @@ class Workload:
 
     def execute_operation(self, operation: Operation, cursor: Cursor) -> None:
         data = OperationData(cursor)
+        self.amend_data_before_execution(data)
         operation.execute(data)
+
+    def amend_data_before_execution(self, data: OperationData) -> None:
+        pass
 
     def name(self) -> str:
         return self.__class__.__name__
