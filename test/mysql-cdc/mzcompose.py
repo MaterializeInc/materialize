@@ -86,6 +86,8 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
         "test-certs", "cat", "/secrets/certuser.key", capture=True
     ).stdout
 
+    c.sources_and_sinks_ignored_from_validation.add("drop_table")
+
     c.run_testdrive_files(
         f"--var=ssl-ca={ssl_ca}",
         f"--var=ssl-client-cert={ssl_client_cert}",
@@ -95,6 +97,8 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"--var=ssl-wrong-client-key={ssl_wrong_client_key}",
         f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
         "--var=mysql-user-password=us3rp4ssw0rd",
+        f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+        f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
         *args.filter,
     )
 

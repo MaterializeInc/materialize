@@ -14,8 +14,7 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET enable_mysql_source = true
 
 #
-# Test the temporal data types (DATE, DATETIME, TIME, TIMESTAMP)
-#
+# Test various variants of integer types
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
 > CREATE CONNECTION mysql_conn TO MYSQL (
@@ -31,24 +30,28 @@ DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
 
-CREATE TABLE t1 (date_col DATE, time_col TIME(6), time_trunc_col TIME, datetime_col DATETIME(6), datetime_trunc_col DATETIME, timestamp_col TIMESTAMP(6), timestamp_trunc_col TIMESTAMP);
+# Insert data pre-snapshot
+CREATE TABLE t1 (f1 SMALLINT, f2 INTEGER, f3 BIGINT);
 
-INSERT INTO t1 VALUES ('2011-11-11', '11:11:11.123456', '11:11:11.123456', '2011-11-11 11:11:11.123456', '2011-11-11 11:11:11.123456', '2011-11-11 11:11:11.123456', '2011-11-11 11:11:11.123456');
+INSERT INTO t1 VALUES (-32768, -2147483648, -9223372036854775808);
+INSERT INTO t1 VALUES (32767, 2147483647, 9223372036854775807);
 
 > CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_conn
   FOR ALL TABLES;
 
-> SELECT * FROM t1;
-2011-11-11 11:11:11.123456 11:11:11 "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11" "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11"
+> SELECT COUNT(*) > 0 FROM t1;
+true
 
 # Insert the same data post-snapshot
 $ mysql-execute name=mysql
 INSERT INTO t1 SELECT * FROM t1;
 
-> SELECT pg_typeof(date_col), pg_typeof(datetime_col), pg_typeof(time_col), pg_typeof(timestamp_col) FROM t1 LIMIT 1;
-date "timestamp without time zone" time "timestamp without time zone"
+> SELECT pg_typeof(f1), pg_typeof(f2), pg_typeof(f3) FROM t1 LIMIT 1;
+smallint integer bigint
 
 > SELECT * FROM t1;
-2011-11-11 11:11:11.123456 11:11:11 "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11" "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11"
-2011-11-11 11:11:11.123456 11:11:11 "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11" "2011-11-11 11:11:11.123456" "2011-11-11 11:11:11"
+-32768 -2147483648 -9223372036854775808
+32767 2147483647 9223372036854775807
+-32768 -2147483648 -9223372036854775808
+32767 2147483647 9223372036854775807
