@@ -10,6 +10,8 @@
 //! Functionality for manually modifying and displaying the catalog contents. This is helpful for
 //! fixing a corrupt catalog.
 
+use std::fmt::Debug;
+
 use mz_repr::Diff;
 use mz_stash::{Stash, TypedCollection};
 use serde::{Deserialize, Serialize};
@@ -29,7 +31,7 @@ use crate::durable::{
 
 /// The contents of the catalog are logically separated into separate [`Collection`]s, which
 /// describe the category of data that the content belongs to.
-pub trait Collection {
+pub trait Collection: Debug {
     /// Type used to stores keys for [`Collection`].
     type Key;
     /// Type used to stores values for [`Collection`].
