@@ -683,13 +683,10 @@ impl<T> LargeCollectionStartupCache<T> {
     /// If the cache is open, then return all the cached values and close the cache, otherwise
     /// return `None`.
     fn take(&mut self) -> Option<Vec<T>> {
-        match self {
-            LargeCollectionStartupCache::Open(cache) => {
-                let cache = Some(std::mem::take(cache));
-                *self = LargeCollectionStartupCache::Closed;
-                cache
-            }
-            LargeCollectionStartupCache::Closed => None,
+        if let Self::Open(cache) = std::mem::replace(self, Self::Closed) {
+            Some(cache)
+        } else {
+            None
         }
     }
 }
