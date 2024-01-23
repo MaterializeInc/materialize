@@ -42,6 +42,7 @@ mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore", features = ["chrono", "async"] }
 mz-mysql-util = { path = "../mysql-util" }
 mz-persist-client = { path = "../persist-client" }
+mz-persist-txn = { path = "../persist-txn" }
 mz-pgcopy = { path = "../pgcopy" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-pgwire-common = { path = "../pgwire-common" }

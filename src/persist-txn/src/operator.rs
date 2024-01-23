@@ -421,19 +421,19 @@ where
     (passthrough_stream, shutdown_button.press_on_drop())
 }
 
-const DATA_SHARD_RETRYER_INITIAL_BACKOFF: Config<Duration> = Config::new(
+pub(crate) const DATA_SHARD_RETRYER_INITIAL_BACKOFF: Config<Duration> = Config::new(
     "persist_txns_data_shard_retryer_initial_backoff",
     Duration::from_millis(1024),
     "The initial backoff when polling for new batches from a txns data shard persist_source.",
 );
 
-const DATA_SHARD_RETRYER_MULTIPLIER: Config<u32> = Config::new(
+pub(crate) const DATA_SHARD_RETRYER_MULTIPLIER: Config<u32> = Config::new(
     "persist_txns_data_shard_retryer_multiplier",
     2,
     "The backoff multiplier when polling for new batches from a txns data shard persist_source.",
 );
 
-const DATA_SHARD_RETRYER_CLAMP: Config<Duration> = Config::new(
+pub(crate) const DATA_SHARD_RETRYER_CLAMP: Config<Duration> = Config::new(
     "persist_txns_data_shard_retryer_clamp",
     Duration::from_secs(16),
     "The backoff clamp duration when polling for new batches from a txns data shard persist_source.",

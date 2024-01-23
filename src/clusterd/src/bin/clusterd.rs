@@ -29,6 +29,7 @@ use mz_ore::netio::{Listener, SocketAddr};
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::dyn_cfg::ConfigSet;
 use mz_persist_client::rpc::{GrpcPubSubClient, PersistPubSubClient, PersistPubSubClientConfig};
 use mz_pid_file::PidFile;
 use mz_service::emit_boot_diagnostics;
@@ -253,8 +254,18 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .ok()
         .or_else(|| args.tracing.log_prefix.clone())
         .unwrap_or_default();
+    // Unfortunately, we can't use the `all_dyn_configs` method in mz_sql for
+    // dependency reasons, so we have to duplicate it here.
+    fn all_dyn_configs() -> ConfigSet {
+        let mut configs = ConfigSet::default();
+        configs = mz_persist_client::cfg::all_dyn_configs(configs);
+        configs = mz_persist_txn::all_dyn_configs(configs);
+        configs
+    }
+    let persist_cfg =
+        PersistConfig::new_with_configs(&BUILD_INFO, SYSTEM_TIME.clone(), all_dyn_configs());
     let persist_clients = Arc::new(PersistClientCache::new(
-        PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone()),
+        persist_cfg,
         &metrics_registry,
         |persist_cfg, metrics| {
             let cfg = PersistPubSubClientConfig {
