@@ -171,7 +171,7 @@ impl<T: TimestampManipulation> Session<T> {
     ) -> Session<T> {
         let (notices_tx, notices_rx) = mpsc::unbounded_channel();
         let default_cluster = INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER.get(&user.name);
-        let mut vars = SessionVars::new(build_info, user);
+        let mut vars = SessionVars::new_unchecked(build_info, user);
         if let Some(default_cluster) = default_cluster {
             vars.set_cluster(default_cluster.clone());
         }
@@ -659,7 +659,7 @@ impl<T: TimestampManipulation> Session<T> {
     pub fn reset(&mut self) {
         let _ = self.clear_transaction();
         self.prepared_statements.clear();
-        self.vars = SessionVars::new(self.vars.build_info(), self.vars.user().clone());
+        self.vars.reset_all();
     }
 
     /// Returns the user who owns this session.

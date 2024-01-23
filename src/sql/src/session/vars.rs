@@ -2424,7 +2424,8 @@ pub struct SessionVars {
 }
 
 impl SessionVars {
-    pub fn new(build_info: &'static BuildInfo, user: User) -> SessionVars {
+    /// Creates a new [`SessionVars`] without considering the System or Role defaults.
+    pub fn new_unchecked(build_info: &'static BuildInfo, user: User) -> SessionVars {
         let s = SessionVars {
             vars: BTreeMap::new(),
             build_info,
@@ -2568,6 +2569,13 @@ impl SessionVars {
         // has an analogous extension [0].
         // [0]: https://github.com/cockroachdb/cockroach/blob/369c4057a/pkg/sql/pgwire/conn.go#L1840
         .chain(std::iter::once(self.build_info as &dyn Var))
+    }
+
+    /// Resets all variables to their default value.
+    pub fn reset_all(&mut self) {
+        for (_name, var) in &mut self.vars {
+            var.reset(false);
+        }
     }
 
     /// Returns a [`Var`] representing the configuration parameter with the
