@@ -2177,7 +2177,6 @@ impl Coordinator {
     // would be very hard to read. Additionally, once the issues with `broken` are resolved
     // (as discussed in <https://github.com/MaterializeInc/materialize/pull/21809>), this
     // can be simplified, as only a _singular_ `Registry` will be in use.
-    #[tracing::instrument(target = "optimizer", level = "debug", name = "optimize", skip_all)]
     async fn explain_query_optimizer_pipeline(
         &mut self,
         raw_plan: mz_sql::plan::HirRelationExpr,
@@ -2243,13 +2242,22 @@ impl Coordinator {
         // Execute the various stages of the optimization pipeline
         // -------------------------------------------------------
 
-        // Trace the pipeline input under `optimize/raw`.
-        tracing::span!(target: "optimizer", Level::DEBUG, "raw").in_scope(|| {
-            trace_plan(&raw_plan);
-        });
+        let local_mir_plan = catch_unwind(broken, "optimize", || {
+            // Create a top-level `optimize` span required for `PlanTrace`
+            // collection and enter it immediately.
+            //
+            // We are doing this explicitly here because annotating this method
+            // with a `#[tracing::instrument(...)]` call is currently broken.
+            let _span = tracing::debug_span!(target: "optimizer", "optimize").entered();
 
-        // MIR ⇒ MIR optimization (local)
-        let local_mir_plan = catch_unwind(broken, "optimize", || optimizer.optimize(raw_plan))?;
+            // Trace the pipeline input under `optimize/raw`.
+            tracing::span!(target: "optimizer", Level::DEBUG, "raw").in_scope(|| {
+                trace_plan(&raw_plan);
+            });
+
+            // MIR ⇒ MIR optimization (local)
+            optimizer.optimize(raw_plan)
+        })?;
 
         // Resolve timestamp statistics catalog
         // ------------------------------------
@@ -2305,6 +2313,13 @@ impl Coordinator {
         };
 
         let (used_indexes, fast_path_plan, df_meta) = catch_unwind(broken, "optimize", || {
+            // Create a top-level `optimize` span required for `PlanTrace`
+            // collection and enter it immediately.
+            //
+            // We are doing this explicitly here because annotating this method
+            // with a `#[tracing::instrument(...)]` call is currently broken.
+            let _span = tracing::debug_span!(target: "optimizer", "optimize").entered();
+
             // MIR ⇒ MIR optimization (global)
             let local_mir_plan = local_mir_plan.resolve(session, stats);
             let global_mir_plan = optimizer.optimize(local_mir_plan)?;
