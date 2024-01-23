@@ -57,7 +57,7 @@
       {% set ns.c_constraints = True %}
     {%- endfor %}
 
-    {# Model-level contraints #}
+    {# Model-level constraints #}
 
     -- NOTE(morsapaes): not_null constraints are not originally supported in
     -- dbt-core at model-level, since model-level constraints are intended for
@@ -175,6 +175,9 @@
       {% if refresh_interval.aligned_to -%}
         aligned to '{{ refresh_interval.aligned_to }}'
       {%- endif %}
+    {%- endif %}
+    {% if refresh_interval.on_commit -%}
+      refresh on commit
     {%- endif %}
 {%- endmacro %}
 

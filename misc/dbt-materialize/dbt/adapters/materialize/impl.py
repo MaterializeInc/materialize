@@ -70,7 +70,7 @@ class MaterializeIndexConfig(dbtClassMixin):
 
 # NOTE(morsapaes): Materialize allows configuring a refresh interval for the
 # materialized view materialization. If no config option is specified, the
-# default is REFRESH ON COMMIT. We add an explicity attribute for the special
+# default is REFRESH ON COMMIT. We add an explicitly attribute for the special
 # case of parametrizing the configuration option e.g. in macros.
 @dataclass
 class MaterializeRefreshIntervalConfig(dbtClassMixin):
