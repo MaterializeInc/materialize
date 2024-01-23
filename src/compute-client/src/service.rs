@@ -15,10 +15,13 @@
 
 use std::collections::BTreeMap;
 use std::iter;
+use std::num::NonZeroUsize;
 
 use async_trait::async_trait;
+use bytesize::ByteSize;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
+use mz_ore::cast::CastFrom;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
@@ -108,6 +111,11 @@ where
 pub struct PartitionedComputeState<T> {
     /// Number of partitions the state machine represents.
     parts: usize,
+    /// The maximum result size this state machine can return.
+    ///
+    /// This isn't set when creating a [`PartitionedComputeState`], rather we listen for
+    /// [`ComputeCommand::UpdateConfiguration`] and update it then.
+    max_result_size: Option<u64>,
     /// Upper frontiers for indexes and sinks, both collected as a `MutableAntichain` across all
     /// partitions and individually listed for each partition.
     ///
@@ -168,6 +176,7 @@ where
     fn new(parts: usize) -> PartitionedComputeState<T> {
         PartitionedComputeState {
             parts,
+            max_result_size: None,
             uppers: BTreeMap::new(),
             peek_responses: BTreeMap::new(),
             pending_subscribes: BTreeMap::new(),
@@ -182,6 +191,7 @@ where
     fn reset(&mut self) {
         let PartitionedComputeState {
             parts: _,
+            max_result_size: _,
             uppers,
             peek_responses,
             pending_subscribes,
@@ -243,6 +253,10 @@ where
                     .collect()
             }
             command => {
+                if let ComputeCommand::UpdateConfiguration(config) = &command {
+                    self.max_result_size = config.max_result_size;
+                }
+
                 let mut r = vec![None; self.parts];
                 r[0] = Some(command);
                 r
@@ -311,7 +325,29 @@ where
                             (PeekResponse::Error(e), _) => PeekResponse::Error(e),
                             (PeekResponse::Rows(mut rows), PeekResponse::Rows(r)) => {
                                 rows.extend(r.into_iter());
-                                PeekResponse::Rows(rows)
+
+                                let total_size = rows
+                                    .iter()
+                                    // Note: if the type of count changes in the future to be a
+                                    // signed integer, then we'll need to consolidate rows before
+                                    // taking this summation.
+                                    .map(|(row, count): &(Row, NonZeroUsize)| {
+                                        let size = row
+                                            .byte_len()
+                                            .saturating_add(std::mem::size_of_val(count));
+                                        u64::cast_from(size)
+                                    })
+                                    .fold(0u64, |total, x| total.saturating_add(x));
+                                match self.max_result_size {
+                                    Some(max_size) if total_size > max_size => {
+                                        let err = format!(
+                                            "result exceeds max size of {}",
+                                            ByteSize::b(max_size)
+                                        );
+                                        PeekResponse::Error(err)
+                                    }
+                                    _ => PeekResponse::Rows(rows),
+                                }
                             }
                         };
                     }
