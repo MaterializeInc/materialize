@@ -340,8 +340,11 @@ where
                                     .fold(0u64, |total, x| total.saturating_add(x));
                                 match self.max_result_size {
                                     Some(max_size) if total_size > max_size => {
+                                        // Note: We match on this specific error message in tests
+                                        // so it's important that nothing else returns the same
+                                        // string.
                                         let err = format!(
-                                            "result exceeds max size of {}",
+                                            "total result exceeds max size of {}",
                                             ByteSize::b(max_size)
                                         );
                                         PeekResponse::Error(err)
