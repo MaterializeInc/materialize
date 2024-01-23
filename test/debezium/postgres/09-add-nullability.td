@@ -16,7 +16,7 @@ CREATE TABLE alter_allow_nullability (f1 INTEGER NOT NULL, f2 INTEGER PRIMARY KE
 ALTER TABLE alter_allow_nullability REPLICA IDENTITY FULL;
 INSERT INTO alter_allow_nullability VALUES (123, 0),(234, 1);
 
-$ schema-registry-wait subject=postgres.public.alter_allow_nullability-value
+$ schema-registry-wait topic=postgres.public.alter_allow_nullability
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'

@@ -852,10 +852,10 @@ The required `schema-type` argument indicates the type of the schema. At
 present, only Avro schemas are supported. Feel free to adjust the action to
 support additional schema types.
 
-#### `$ schema-registry-wait subject=...`
+#### `$ schema-registry-wait topic=...`
 
-Block the test until schema with the specified subject has been defined at the
-schema registry.
+Block the test until schema with the specified subject (both value and key) has been
+defined at the schema registry. Also waits for the kafka topic to exist.
 
 This action is useful to fortify tests that expect an external party, e.g.
 Debezium, to upload a particular schema.

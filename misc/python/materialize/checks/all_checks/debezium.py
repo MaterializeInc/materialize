@@ -48,7 +48,7 @@ class DebeziumPostgres(Check):
                   }
                 }
 
-                $ schema-registry-wait subject=postgres.public.debezium_table-value
+                $ schema-registry-wait topic=postgres.public.debezium_table
 
                 $ kafka-wait-topic topic=postgres.public.debezium_table
 

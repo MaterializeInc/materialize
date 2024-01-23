@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ schema-registry-wait subject=sql-server.test.dbo.t1-value
+$ schema-registry-wait topic=sql-server.test.dbo.t1
 
 $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=sa;Password=${arg.sa-password}
@@ -16,7 +16,7 @@ $ sql-server-execute name=sql-server
 USE test;
 INSERT INTO t1 VALUES (345);
 
-$ schema-registry-wait subject=sql-server.transaction-value
+$ schema-registry-wait topic=sql-server.transaction
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'

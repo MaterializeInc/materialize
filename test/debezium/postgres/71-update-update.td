@@ -18,7 +18,7 @@ ALTER TABLE update_update REPLICA IDENTITY FULL;
 INSERT INTO update_update VALUES (1);
 INSERT INTO update_update VALUES (10);
 
-$ schema-registry-wait subject=postgres.public.update_update-value
+$ schema-registry-wait topic=postgres.public.update_update
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'

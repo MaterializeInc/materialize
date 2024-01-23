@@ -10,7 +10,7 @@
 $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=sa;Password=${arg.sa-password}
 
-$ schema-registry-wait subject=sql-server.test.dbo.types_table-value
+$ schema-registry-wait topic=sql-server.test.dbo.types_table
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'

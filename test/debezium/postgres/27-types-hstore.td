@@ -17,7 +17,7 @@ CREATE TABLE hstore_type (f1 hstore, f2 INTEGER PRIMARY KEY);
 ALTER TABLE hstore_type REPLICA IDENTITY FULL;
 INSERT INTO hstore_type VALUES (NULL, 0), ('a=>1'::hstore, 1);
 
-$ schema-registry-wait subject=postgres.public.hstore_type-value
+$ schema-registry-wait topic=postgres.public.hstore_type
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
