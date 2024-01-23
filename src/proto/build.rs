@@ -14,6 +14,10 @@ fn main() {
 
     prost_build::Config::new()
         .btree_map(["."])
+        .type_attribute(
+            ".mz_proto.ProtoDuration",
+            "#[derive(Eq, serde::Serialize, serde::Deserialize, proptest_derive::Arbitrary)]",
+        )
         .compile_protos(
             &[
                 "proto/src/chrono.proto",

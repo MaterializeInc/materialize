@@ -47,7 +47,7 @@ use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{retry_external, Machine};
 use crate::internal::state_versions::StateVersions;
 use crate::metrics::Metrics;
-use crate::read::{LeasedReaderId, ReadHandle};
+use crate::read::{LeasedReaderId, ReadHandle, READER_LEASE_DURATION};
 use crate::rpc::PubSubSender;
 use crate::write::{WriteHandle, WriterId};
 
@@ -74,7 +74,42 @@ pub mod metrics {
 }
 pub mod operators {
     //! [timely] operators for reading and writing persist Shards.
+
+    use crate::dyn_cfg::Config;
+
     pub mod shard_source;
+
+    // TODO(cfg): Move this next to the use.
+    pub(crate) const PERSIST_SINK_MINIMUM_BATCH_UPDATES: Config<usize> = Config::new(
+        "persist_sink_minimum_batch_updates",
+        0,
+        "\
+    In the compute persist sink, workers with less than the minimum number of \
+    updates will flush their records to single downstream worker to be batched \
+    up there... in the hopes of grouping our updates into fewer, larger \
+    batches.",
+    );
+
+    // TODO(cfg): Move this next to the use.
+    pub(crate) const STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES: Config<usize> = Config::new(
+        "storage_persist_sink_minimum_batch_updates",
+        // Reasonable default based on our experience in production.
+        1024,
+        "\
+    In the storage persist sink, workers with less than the minimum number of \
+    updates will flush their records to single downstream worker to be batched \
+    up there... in the hopes of grouping our updates into fewer, larger \
+    batches.",
+    );
+
+    // TODO(cfg): Move this next to the use.
+    pub(crate) const STORAGE_SOURCE_DECODE_FUEL: Config<usize> = Config::new(
+        "storage_source_decode_fuel",
+        1_000_000,
+        "\
+        The maximum amount of work to do in the persist_source mfp_and_decode \
+        operator before yielding.",
+    );
 }
 pub mod iter;
 pub mod read;
@@ -386,7 +421,7 @@ impl PersistClient {
             .register_leased_reader(
                 &reader_id,
                 &diagnostics.handle_purpose,
-                self.cfg.dynamic.reader_lease_duration(),
+                READER_LEASE_DURATION.get(&self.cfg),
                 heartbeat_ts,
             )
             .await;
@@ -758,6 +793,7 @@ mod tests {
     use timely::progress::timestamp::PathSummary;
     use timely::progress::Antichain;
 
+    use crate::batch::BLOB_TARGET_SIZE;
     use crate::cache::PersistClientCache;
     use crate::error::{CodecConcreteType, CodecMismatch, UpperMismatch};
     use crate::internal::paths::BlobKey;
@@ -831,7 +867,7 @@ mod tests {
         // Configure an aggressively small blob_target_size so we get some
         // amount of coverage of that in tests. Similarly, for max_outstanding.
         let mut cache = PersistClientCache::new_no_metrics();
-        cache.cfg.dynamic.set_blob_target_size(10);
+        cache.cfg.set_config(&BLOB_TARGET_SIZE, 10);
         cache.cfg.dynamic.set_batch_builder_max_outstanding_parts(1);
 
         // Enable compaction in tests to ensure we get coverage.
@@ -1934,8 +1970,7 @@ mod tests {
         let mut cache = new_test_client_cache();
         cache
             .cfg
-            .dynamic
-            .set_reader_lease_duration(Duration::from_millis(1));
+            .set_config(&READER_LEASE_DURATION, Duration::from_millis(1));
         cache.cfg.writer_lease_duration = Duration::from_millis(1);
         let (_write, mut read) = cache
             .open(PersistLocation::new_in_mem())

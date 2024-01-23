@@ -728,7 +728,7 @@ impl std::fmt::Display for HumanBytes {
 
 #[cfg(test)]
 mod tests {
-    use crate::cfg::PersistParameters;
+    use crate::batch::BLOB_TARGET_SIZE;
     use bytes::Bytes;
     use mz_persist::location::{Atomicity, SeqNo};
     use semver::Version;
@@ -928,9 +928,7 @@ mod tests {
         // make our bookkeeping simple by skipping compaction blobs writes
         client.cfg.compaction_enabled = false;
         // make things interesting and create multiple parts per batch
-        let mut params = PersistParameters::default();
-        params.blob_target_size = Some(0);
-        params.apply(&client.cfg);
+        client.cfg.set_config(&BLOB_TARGET_SIZE, 0);
 
         let (mut write, _read) = client
             .expect_open::<String, String, u64, i64>(shard_id)

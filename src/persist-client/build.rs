@@ -68,7 +68,6 @@ fn main() {
             config,
             &[
                 "persist-client/src/batch.proto",
-                "persist-client/src/cfg.proto",
                 "persist-client/src/dyn_cfg.proto",
                 "persist-client/src/internal/service.proto",
                 "persist-client/src/internal/state.proto",

@@ -754,7 +754,7 @@ mod tests {
     use mz_ore::cast::CastFrom;
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist_client::cache::PersistClientCache;
-    use mz_persist_client::cfg::{PersistParameters, RetryParameters};
+    use mz_persist_client::cfg::RetryParameters;
     use mz_persist_client::PersistLocation;
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
     use rand::rngs::SmallRng;
@@ -1297,15 +1297,13 @@ mod tests {
         let mut clients = PersistClientCache::new_no_metrics();
         // We disable pubsub below, so retune the listen retries (pubsub
         // fallback) to keep the test speedy.
-        PersistParameters {
-            next_listen_batch_retryer: Some(RetryParameters {
+        clients
+            .cfg()
+            .set_next_listen_batch_retryer(RetryParameters {
                 initial_backoff: Duration::from_millis(1),
                 multiplier: 1,
                 clamp: Duration::from_millis(1),
-            }),
-            ..Default::default()
-        }
-        .apply(clients.cfg());
+            });
         let client = clients.open(PersistLocation::new_in_mem()).await.unwrap();
         let mut txns = TxnsHandle::expect_open(client.clone()).await;
         let log = txns.new_log();
