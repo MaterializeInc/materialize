@@ -252,11 +252,15 @@ where
                     .map(|config| Some(ComputeCommand::CreateTimely { config, epoch }))
                     .collect()
             }
-            command => {
-                if let ComputeCommand::UpdateConfiguration(config) = &command {
-                    self.max_result_size = config.max_result_size;
-                }
+            ComputeCommand::UpdateConfiguration(config) => {
+                self.max_result_size = config.max_result_size;
 
+                // Forward the command on to the first shard.
+                let mut r = vec![None; self.parts];
+                r[0] = Some(ComputeCommand::UpdateConfiguration(config));
+                r
+            }
+            command => {
                 let mut r = vec![None; self.parts];
                 r[0] = Some(command);
                 r
@@ -326,7 +330,7 @@ where
                             (PeekResponse::Rows(mut rows), PeekResponse::Rows(r)) => {
                                 rows.extend(r.into_iter());
 
-                                let total_size = rows
+                                let total_size: u64 = rows
                                     .iter()
                                     // Note: if the type of count changes in the future to be a
                                     // signed integer, then we'll need to consolidate rows before
@@ -337,7 +341,8 @@ where
                                             .saturating_add(std::mem::size_of_val(count));
                                         u64::cast_from(size)
                                     })
-                                    .fold(0u64, |total, x| total.saturating_add(x));
+                                    .sum();
+
                                 match self.max_result_size {
                                     Some(max_size) if total_size > max_size => {
                                         // Note: We match on this specific error message in tests
