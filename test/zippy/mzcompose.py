@@ -165,6 +165,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             external_minio="toxiproxy",
             external_cockroach="toxiproxy",
             sanity_restart=False,
+            volumes_extra=[".:/workdir"],
         ),
         # Override so seed gets respected
         Toxiproxy(seed=random.randrange(2**63)),

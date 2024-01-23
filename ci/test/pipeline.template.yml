@@ -427,7 +427,7 @@ steps:
     depends_on: build-x86_64
     inputs: [misc/python/materialize/zippy]
     timeout_in_minutes: 30
-    artifact_paths: junit_*.xml
+    artifact_paths: ["junit_*.xml", "*.mzfg"]
     agents:
       queue: linux-x86_64-small
     plugins:

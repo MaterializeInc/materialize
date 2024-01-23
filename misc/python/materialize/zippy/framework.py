@@ -207,6 +207,14 @@ class Test:
         for action in self._actions:
             print(action)
             action.run(c)
+
+            run_always_actions = []
+            for action_or_factory in self._scenario.run_always():
+                run_always_actions.extend(self.generate_actions(action_or_factory))
+
+            for run_always_action in run_always_actions:
+                run_always_action.run(c)
+
             if datetime.now() > max_time:
                 print(
                     f"--- Desired execution time of {self._max_execution_time} has been reached."

@@ -23,6 +23,7 @@ node_modules
 /coverage
 /test/feature-benchmark/tmp/*.td
 /test/zippy/tmp/*.td
+/test/zippy/*.mzfg
 /test/**/tmp_*.toml
 junit_*.xml
 parallel-workload-queries.log

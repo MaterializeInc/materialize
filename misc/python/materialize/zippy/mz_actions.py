@@ -77,6 +77,15 @@ class MzStart(Action):
         ):
             c.up("materialized")
 
+        c.exec(
+            "materialized",
+            "curl",
+            "http://127.0.0.1:6878/prof/",
+            "--data-raw",
+            "action=activate",
+            respect_entrypoint=False,
+        )
+
         for config_param in [
             "max_tables",
             "max_sources",
@@ -126,6 +135,31 @@ class MzStop(Action):
 
     def withholds(self) -> set[type[Capability]]:
         return {MzIsRunning}
+
+
+class MzDumpMemory(Action):
+    """Creates a jemalloc memory dump"""
+
+    @classmethod
+    def requires(cls) -> set[type[Capability]]:
+        return {MzIsRunning}
+
+    def run(self, c: Composition) -> None:
+        try:
+            memory_dump = c.exec(
+                "materialized",
+                "curl",
+                "http://127.0.0.1:6878/prof/",
+                "--data-raw",
+                "action=dump_sym_mzfg",
+                respect_entrypoint=False,
+                capture=True,
+            )
+            with open("environmentd.mzfg", "w") as f:
+                f.write(memory_dump.stdout)
+        except Exception as e:
+            print(e)
+            pass
 
 
 class MzRestart(Action):

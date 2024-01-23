@@ -294,7 +294,7 @@ steps:
         timeout_in_minutes: 120
         agents:
           queue: linux-x86_64
-        artifact_paths: junit_*.xml
+        artifact_paths: ["junit_*.xml", "*.mzfg"]
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -305,7 +305,7 @@ steps:
         timeout_in_minutes: 120
         agents:
           queue: linux-x86_64
-        artifact_paths: junit_*.xml
+        artifact_paths: ["junit_*.xml", "*.mzfg"]
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -316,7 +316,7 @@ steps:
         timeout_in_minutes: 180
         agents:
           queue: linux-x86_64
-        artifact_paths: junit_*.xml
+        artifact_paths: ["junit_*.xml", "*.mzfg"]
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -327,7 +327,7 @@ steps:
         timeout_in_minutes: 180
         agents:
           queue: linux-x86_64
-        artifact_paths: junit_*.xml
+        artifact_paths: ["junit_*.xml", "*.mzfg"]
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -338,7 +338,7 @@ steps:
         timeout_in_minutes: 120
         agents:
           queue: linux-x86_64
-        artifact_paths: junit_*.xml
+        artifact_paths: ["junit_*.xml", "*.mzfg"]
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -349,7 +349,7 @@ steps:
         timeout_in_minutes: 120
         agents:
           queue: linux-x86_64
-        artifact_paths: junit_*.xml
+        artifact_paths: ["junit_*.xml", "*.mzfg"]
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -360,7 +360,7 @@ steps:
         timeout_in_minutes: 120
         agents:
           queue: linux-x86_64
-        artifact_paths: junit_*.xml
+        artifact_paths: ["junit_*.xml", "*.mzfg"]
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -371,7 +371,7 @@ steps:
         timeout_in_minutes: 120
         agents:
           queue: linux-x86_64
-        artifact_paths: junit_*.xml
+        artifact_paths: ["junit_*.xml", "*.mzfg"]
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -382,7 +382,7 @@ steps:
         timeout_in_minutes: 120
         agents:
           queue: linux-x86_64
-        artifact_paths: junit_*.xml
+        artifact_paths: ["junit_*.xml", "*.mzfg"]
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
