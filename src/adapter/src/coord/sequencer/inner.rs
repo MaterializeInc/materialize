@@ -2819,11 +2819,7 @@ impl Coordinator {
         Ok(Self::send_immediate_rows(rows))
     }
 
-    pub(super) async fn sequence_insert(
-        &mut self,
-        mut ctx: ExecuteContext,
-        plan: plan::InsertPlan,
-    ) {
+    pub(super) async fn sequence_insert(&mut self, ctx: ExecuteContext, plan: plan::InsertPlan) {
         // The structure of this code originates from a time where
         // `ReadThenWritePlan` was carrying an `MirRelationExpr` instead of an
         // optimized `MirRelationExpr`.
@@ -2857,6 +2853,7 @@ impl Coordinator {
         };
 
         match optimized_mir.into_inner() {
+            /*
             selection if selection.as_const().is_some() && plan.returning.is_empty() => {
                 let catalog = self.owned_catalog();
                 mz_ore::task::spawn(|| "coord::sequence_inner", async move {
@@ -2865,6 +2862,7 @@ impl Coordinator {
                     ctx.retire(result);
                 });
             }
+            */
             // All non-constant values must be planned as read-then-writes.
             _ => {
                 let desc_arity = match self.catalog().try_get_entry(&plan.id) {
