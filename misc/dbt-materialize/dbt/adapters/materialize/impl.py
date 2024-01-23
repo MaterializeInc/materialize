@@ -27,7 +27,10 @@ from dbt.adapters.capability import (
     Support,
 )
 from dbt.adapters.materialize.connections import MaterializeConnectionManager
-from dbt.adapters.materialize.exceptions import RefreshIntervalConfigError, RefreshIntervalConfigNotDictError
+from dbt.adapters.materialize.exceptions import (
+    RefreshIntervalConfigError,
+    RefreshIntervalConfigNotDictError,
+)
 from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres import PostgresAdapter
 from dbt.adapters.postgres.column import PostgresColumn
@@ -64,6 +67,7 @@ class MaterializeIndexConfig(dbtClassMixin):
                 '  Expected a dictionary with at minimum a "columns" key'
             )
 
+
 # NOTE(morsapaes): Materialize allows configuring a refresh interval for the
 # materialized view materialization. If no config option is specified, the
 # default is REFRESH ON COMMIT. We add an explicity attribute for the special
@@ -77,7 +81,9 @@ class MaterializeRefreshIntervalConfig(dbtClassMixin):
     on_commit: Optional[bool] = False
 
     @classmethod
-    def parse(cls, raw_refresh_interval) -> Optional["MaterializeRefreshIntervalConfig"]:
+    def parse(
+        cls, raw_refresh_interval
+    ) -> Optional["MaterializeRefreshIntervalConfig"]:
         if raw_refresh_interval is None:
             return None
         try:
@@ -145,7 +151,9 @@ class MaterializeAdapter(PostgresAdapter):
         return MaterializeIndexConfig.parse(raw_index)
 
     @available
-    def parse_refresh_interval(self, raw_refresh_interval: Any) -> Optional[MaterializeRefreshIntervalConfig]:
+    def parse_refresh_interval(
+        self, raw_refresh_interval: Any
+    ) -> Optional[MaterializeRefreshIntervalConfig]:
         return MaterializeRefreshIntervalConfig.parse(raw_refresh_interval)
 
     def list_relations_without_caching(
