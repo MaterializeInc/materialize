@@ -62,7 +62,7 @@ COPY crosstool-$ARCH_GCC.defconfig ./
 RUN DEFCONFIG=crosstool-$ARCH_GCC.defconfig ct-ng defconfig \
     && rm crosstool-$ARCH_GCC.defconfig \
     # https://github.com/crosstool-ng/crosstool-ng/issues/1832 \
-    && sed -i 's/CT_ZLIB_VERSION="1.2.12"/CT_ZLIB_VERSION="1.3"/g' .config \
+    && sed -i 's/CT_ZLIB_VERSION="1.2.12"/CT_ZLIB_VERSION="1.3.1"/g' .config \
     && ct-ng build
 
 # Import the cross-compiling toolchain into a fresh image, omitting the
@@ -262,9 +262,6 @@ RUN curl -fsSL https://dl.k8s.io/release/v1.24.3/bin/linux/$ARCH_GO/kubectl > /u
 
 RUN if [ $ARCH_GO = amd64 ]; then echo '8a45348bdaf81d46caf1706c8bf95b3f431150554f47d444ffde89e8cdd712c1 /usr/local/bin/kubectl' | sha256sum --check; fi
 RUN if [ $ARCH_GO = arm64 ]; then echo 'bdad4d3063ddb7bfa5ecf17fb8b029d5d81d7d4ea1650e4369aafa13ed97149a /usr/local/bin/kubectl' | sha256sum --check; fi
-
-# Allow running containers using qemu
-RUN docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
 
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
 # trustworthy on the first connection.
