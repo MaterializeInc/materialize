@@ -239,6 +239,9 @@ pub(crate) struct SourceMetricDefs {
     pub(crate) upsert_backpressure_defs: UpsertBackpressureMetricDefs,
     /// A cluster-wide counter shared across all sources.
     pub(crate) bytes_read: IntCounter,
+
+    // Additional metrics definitions;
+    pub(crate) channel_metric_defs: super::channel::ChannelMetricDefs,
 }
 
 impl SourceMetricDefs {
@@ -253,6 +256,7 @@ impl SourceMetricDefs {
                 name: "mz_bytes_read_total",
                 help: "Count of bytes read from sources",
             )),
+            channel_metric_defs: super::channel::ChannelMetricDefs::register_with(registry),
         }
     }
 }

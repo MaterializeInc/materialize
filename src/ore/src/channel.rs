@@ -16,6 +16,10 @@
 //! Channel utilities and extensions.
 
 use async_trait::async_trait;
+use prometheus::core::Atomic;
+use tokio::sync::mpsc::{error, unbounded_channel, UnboundedReceiver, UnboundedSender};
+
+use crate::metrics::PromLabelsExt;
 
 /// Extensions for the receiving end of asynchronous channels.
 #[async_trait]
@@ -91,6 +95,100 @@ impl<T: Send> ReceiverExt<T> for tokio::sync::mpsc::UnboundedReceiver<T> {
         }
 
         Some(buffer)
+    }
+}
+
+/// A trait describing a metric that can be used with an `instrumented_unbounded_channel`.
+pub trait InstrumentedChannelMetric {
+    /// Bump the metric, increasing the count of operators (send or receives) that occurred.
+    fn bump(&self);
+}
+
+impl<'a, P, L> InstrumentedChannelMetric for crate::metrics::DeleteOnDropCounter<'a, P, L>
+where
+    P: Atomic,
+    L: PromLabelsExt<'a>,
+{
+    fn bump(&self) {
+        self.inc()
+    }
+}
+
+/// A wrapper around tokio's mpsc unbounded channels that connects
+/// metrics that are incremented when sends or receives happen.
+pub fn instrumented_unbounded_channel<T, M>(
+    sender_metric: M,
+    receiver_metric: M,
+) -> (
+    InstrumentedUnboundedSender<T, M>,
+    InstrumentedUnboundedReceiver<T, M>,
+)
+where
+    M: InstrumentedChannelMetric,
+{
+    let (tx, rx) = unbounded_channel();
+
+    (
+        InstrumentedUnboundedSender {
+            tx,
+            metric: sender_metric,
+        },
+        InstrumentedUnboundedReceiver {
+            rx,
+            metric: receiver_metric,
+        },
+    )
+}
+
+/// A wrapper around tokio's `UnboundedSender` that increments a metric when a send occurs.
+///
+/// The metric is not dropped until this sender is dropped.
+#[derive(Debug)]
+pub struct InstrumentedUnboundedSender<T, M> {
+    tx: UnboundedSender<T>,
+    metric: M,
+}
+
+impl<T, M> InstrumentedUnboundedSender<T, M>
+where
+    M: InstrumentedChannelMetric,
+{
+    /// The same as `UnboundedSender::send`.
+    pub fn send(&self, message: T) -> Result<(), error::SendError<T>> {
+        let res = self.tx.send(message);
+        self.metric.bump();
+        res
+    }
+}
+
+/// A wrapper around tokio's `UnboundedReceiver` that increments a metric when a recv _finishes_.
+///
+/// The metric is not dropped until this receiver is dropped.
+#[derive(Debug)]
+pub struct InstrumentedUnboundedReceiver<T, M> {
+    rx: UnboundedReceiver<T>,
+    metric: M,
+}
+
+impl<T, M> InstrumentedUnboundedReceiver<T, M>
+where
+    M: InstrumentedChannelMetric,
+{
+    /// The same as `UnboundedSender::recv`.
+    pub async fn recv(&mut self) -> Option<T> {
+        let res = self.rx.recv().await;
+        self.metric.bump();
+        res
+    }
+
+    /// The same as `UnboundedSender::try_recv`.
+    pub fn try_recv(&mut self) -> Result<T, error::TryRecvError> {
+        let res = self.rx.try_recv();
+
+        if res.is_ok() {
+            self.metric.bump();
+        }
+        res
     }
 }
 
