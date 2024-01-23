@@ -12,6 +12,7 @@ from psycopg import Cursor
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.operation import Operation
 from materialize.scalability.operation_data import OperationData
+from materialize.scalability.schema import Schema
 
 
 class Workload:
@@ -28,9 +29,13 @@ class Workload:
 
 class WorkloadWithContext(Workload):
     endpoint: Endpoint
+    schema: Schema
 
     def set_endpoint(self, endpoint: Endpoint) -> None:
         self.endpoint = endpoint
+
+    def set_schema(self, schema: Schema) -> None:
+        self.schema = schema
 
 
 class WorkloadSelfTest(Workload):
