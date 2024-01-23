@@ -56,6 +56,7 @@ from materialize.ui import (
     CommandFailureCausedUIError,
     UIError,
 )
+from materialize.xcompile import Arch
 
 
 class UnknownCompositionError(UIError):
@@ -184,6 +185,14 @@ class Composition:
                 if image_name not in self.repo.images:
                     raise UIError(f"mzcompose: unknown image {image_name}")
                 image = self.repo.images[image_name]
+                if "platform" in config:
+                    image.rd = copy.deepcopy(image.rd)
+                    if config["platform"] == "linux/amd64":
+                        image.rd.arch = Arch.X86_64
+                    elif config["platform"] == "linux/arm64/v8":
+                        image.rd.arch = Arch.AARCH64
+                    else:
+                        raise ValueError(f"Unknown platform {self.image.platform}")
                 images.append(image)
 
             if "propagate_uid_gid" in config:
