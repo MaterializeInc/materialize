@@ -162,6 +162,9 @@ class ServiceConfig(TypedDict, total=False):
     labels: dict[str, Any]
     """Container labels."""
 
+    platform: str
+    """Target platform for service to run on. Syntax: os[/arch[/variant]]"""
+
 
 class Service:
     """A Docker Compose service in a `Composition`.

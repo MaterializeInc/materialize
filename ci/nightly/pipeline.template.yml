@@ -768,6 +768,28 @@ steps:
               composition: platform-checks
               args: [--scenario=TimestampOracleToggle, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-migrate-x86-64-aarch64
+        label: "Checks migrate from x86-64 to aarch64"
+        timeout_in_minutes: 60
+        agents:
+          queue: builder-linux-x86_64
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=MigrateX86Aarch64]
+
+      - id: checks-migrate-aarch64-x86-64
+        label: "Checks migrate from aarch64 to x86-64"
+        timeout_in_minutes: 60
+        agents:
+          queue: builder-linux-aarch64
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=MigrateAarch64X68]
+
       - id: checks-upgrade-matrix
         label: "Random upgrades over the entire matrix %N"
         timeout_in_minutes: 150
