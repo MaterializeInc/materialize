@@ -91,13 +91,13 @@ tests_without_views=(
     test/sqllogictest/joins.slt
     test/sqllogictest/jsonb.slt
     test/sqllogictest/keys.slt
+    test/sqllogictest/like.slt
     test/sqllogictest/list.slt
     test/sqllogictest/list_subquery.slt
     test/sqllogictest/managed_cluster.slt
     test/sqllogictest/map.slt
     test/sqllogictest/materialized_views.slt
     test/sqllogictest/mz_introspection_index_accounting.slt
-    test/sqllogictest/mz-resolve-object-name.slt
     test/sqllogictest/mztimestamp.slt
     test/sqllogictest/name_resolution.slt
     test/sqllogictest/not-null-propagation.slt
@@ -133,9 +133,11 @@ tests_without_views=(
     test/sqllogictest/record.slt
     test/sqllogictest/recursion_limit.slt
     test/sqllogictest/recursive_type_unioning.slt
+    test/sqllogictest/regclass.slt
     test/sqllogictest/regex.slt
-    test/sqllogictest/like.slt
+    test/sqllogictest/regproc.slt
     test/sqllogictest/regressions.slt
+    test/sqllogictest/regtype.slt
     test/sqllogictest/returning.slt
     test/sqllogictest/role.slt
     test/sqllogictest/role_create.slt

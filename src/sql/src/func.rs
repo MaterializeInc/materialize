@@ -3532,9 +3532,9 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(String, String) => sql_impl_func("has_cluster_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_CLUSTER_PRIVILEGE_TEXT_TEXT_OID;
         },
         "has_connection_privilege" => Scalar {
-            params!(String, String, String) => sql_impl_func("has_connection_privilege(mz_internal.mz_role_oid($1), $2::regclass::oid, $3)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_TEXT_TEXT_TEXT_OID;
+            params!(String, String, String) => sql_impl_func("has_connection_privilege(mz_internal.mz_role_oid($1), mz_internal.mz_connection_oid($2), $3)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_TEXT_TEXT_TEXT_OID;
             params!(String, Oid, String) => sql_impl_func("has_connection_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_TEXT_OID_TEXT_OID;
-            params!(Oid, String, String) => sql_impl_func("has_connection_privilege($1, $2::regclass::oid, $3)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_OID_TEXT_TEXT_OID;
+            params!(Oid, String, String) => sql_impl_func("has_connection_privilege($1, mz_internal.mz_connection_oid($2), $3)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_OID_TEXT_TEXT_OID;
             params!(Oid, Oid, String) => sql_impl_func(privilege_fn!("has_connection_privilege", "mz_connections")) => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_OID_OID_TEXT_OID;
             params!(String, String) => sql_impl_func("has_connection_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_TEXT_TEXT_OID;
             params!(Oid, String) => sql_impl_func("has_connection_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_CONNECTION_PRIVILEGE_OID_TEXT_OID;
@@ -3548,9 +3548,9 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(Oid, String) => sql_impl_func("pg_has_role($1, $2)") => Bool, oid::FUNC_HAS_ROLE_OID_TEXT_OID;
         },
         "has_secret_privilege" => Scalar {
-            params!(String, String, String) => sql_impl_func("has_secret_privilege(mz_internal.mz_role_oid($1), $2::regclass::oid, $3)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_TEXT_TEXT_TEXT_OID;
+            params!(String, String, String) => sql_impl_func("has_secret_privilege(mz_internal.mz_role_oid($1), mz_internal.mz_secret_oid($2), $3)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_TEXT_TEXT_TEXT_OID;
             params!(String, Oid, String) => sql_impl_func("has_secret_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_TEXT_OID_TEXT_OID;
-            params!(Oid, String, String) => sql_impl_func("has_secret_privilege($1, $2::regclass::oid, $3)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_OID_TEXT_TEXT_OID;
+            params!(Oid, String, String) => sql_impl_func("has_secret_privilege($1, mz_internal.mz_secret_oid($2), $3)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_OID_TEXT_TEXT_OID;
             params!(Oid, Oid, String) => sql_impl_func(privilege_fn!("has_secret_privilege", "mz_secrets")) => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_OID_OID_TEXT_OID;
             params!(String, String) => sql_impl_func("has_secret_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_TEXT_TEXT_OID;
             params!(Oid, String) => sql_impl_func("has_secret_privilege(current_user, $1, $2)") => Bool, oid::FUNC_HAS_SECRET_PRIVILEGE_OID_TEXT_OID;
@@ -3586,9 +3586,9 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             params!(String) => sql_impl_func("has_system_privilege(current_user, $1)") => Bool, oid::FUNC_HAS_SYSTEM_PRIVILEGE_TEXT_OID;
         },
         "has_type_privilege" => Scalar {
-            params!(String, String, String) => sql_impl_func("has_type_privilege(mz_internal.mz_role_oid($1), $2::regclass::oid, $3)") => Bool, 3138;
+            params!(String, String, String) => sql_impl_func("has_type_privilege(mz_internal.mz_role_oid($1), $2::regtype::oid, $3)") => Bool, 3138;
             params!(String, Oid, String) => sql_impl_func("has_type_privilege(mz_internal.mz_role_oid($1), $2, $3)") => Bool, 3139;
-            params!(Oid, String, String) => sql_impl_func("has_type_privilege($1, $2::regclass::oid, $3)") => Bool, 3140;
+            params!(Oid, String, String) => sql_impl_func("has_type_privilege($1, $2::regtype::oid, $3)") => Bool, 3140;
             params!(Oid, Oid, String) => sql_impl_func(privilege_fn!("has_type_privilege", "mz_types")) => Bool, 3141;
             params!(String, String) => sql_impl_func("has_type_privilege(current_user, $1, $2)") => Bool, 3142;
             params!(Oid, String) => sql_impl_func("has_type_privilege(current_user, $1, $2)") => Bool, 3143;
@@ -3787,12 +3787,29 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
         "mz_aclitem_privileges" => Scalar {
             params!(MzAclItem) => UnaryFunc::MzAclItemPrivileges(func::MzAclItemPrivileges) => String, oid::FUNC_MZ_ACL_ITEM_PRIVILEGES_OID;
         },
+        // There is no regclass equivalent for roles to look up connections, so we
+        // have this helper function instead.
+        //
+        // TODO: invent an OID alias for connections
+        "mz_connection_oid" => Scalar {
+            params!(String) => sql_impl_func("
+                CASE
+                WHEN $1 IS NULL THEN NULL
+                ELSE (
+                    mz_unsafe.mz_error_if_null(
+                        (SELECT oid FROM mz_catalog.mz_objects WHERE name = $1 AND type = 'connection'),
+                        'connection \"' || $1 || '\" does not exist'
+                    )
+                )
+                END
+            ") => Oid, oid::FUNC_CONNECTION_OID_OID;
+        },
         "mz_format_privileges" => Scalar {
             params!(String) => UnaryFunc::MzFormatPrivileges(func::MzFormatPrivileges) => ScalarType::Array(Box::new(ScalarType::String)), oid::FUNC_MZ_FORMAT_PRIVILEGES_OID;
         },
-        "mz_resolve_object_name" => Table {
-            // This implementation is available primarily to drive the other, single-param
-            // implementation.
+        "mz_name_rank" => Table {
+            // Determines the id, rank of all objects that can be matched using
+            // the provided args.
             params!(
                 // Database
                 String,
@@ -3803,35 +3820,52 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
             ) =>
             // credit for using rank() to @def-
             sql_impl_table_func("
-                SELECT id, oid, schema_id, name, type, owner_id, privileges
-                FROM (
-                    SELECT o.*, rank() OVER (ORDER BY pg_catalog.array_position($2, search_schema.name))
-                    FROM
-                        mz_catalog.mz_objects AS o
-                        JOIN mz_catalog.mz_schemas AS s
-                            ON o.schema_id = s.id
-                        JOIN unnest($2::text[]) AS search_schema (name)
-                            ON search_schema.name = s.name
-                        JOIN mz_catalog.mz_databases AS d
-                            -- Schemas without database IDs are present in every
-                            -- database that exists.
-                            ON d.id = COALESCE(s.database_id, d.id)
-                    WHERE
-                        o.name = $3::pg_catalog.text
-                        AND d.name = $1::pg_catalog.text
+            SELECT DISTINCT
+                oid_alias AS reg,
+                o.id,
+                ARRAY[CASE WHEN s.database_id IS NULL THEN NULL ELSE d.name END, s.name, o.name]
+                AS name,
+                o.count,
+                rank() OVER (
+                    PARTITION BY oid_alias
+                    ORDER BY pg_catalog.array_position($2, search_schema.name)
                 )
-                WHERE rank = 1;
-            ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_RESOLVE_OBJECT_NAME_FULL;
-            params!(String) =>
+            FROM
+                (
+                    SELECT
+                        a.oid_alias,
+                        o.id,
+                        o.schema_id,
+                        o.name,
+                        count(*)
+                    FROM mz_catalog.mz_objects AS o
+                    JOIN mz_internal.mz_object_oid_alias AS a
+                        ON o.type = a.object_type
+                    WHERE o.name = CAST($3 AS pg_catalog.text)
+                    GROUP BY 1, 2, 3, 4
+                )
+                    AS o
+                JOIN mz_catalog.mz_schemas AS s ON o.schema_id = s.id
+                JOIN
+                    unnest($2) AS search_schema (name)
+                    ON search_schema.name = s.name
+                JOIN
+                    mz_catalog.mz_databases AS d
+                    ON d.id = COALESCE(s.database_id, d.id)
+            WHERE d.name = CAST($1 AS pg_catalog.text);
+            ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_NAME_RANK;
+        },
+        "mz_resolve_object_name" => Table {
+            params!(String, String) =>
             // Normalize the input name, and for any NULL values (e.g. not database qualified), use
             // the defaults used during name resolution.
             sql_impl_table_func("
                 SELECT
                     o.id, o.oid, o.schema_id, o.name, o.type, o.owner_id, o.privileges
                 FROM
-                    (SELECT mz_internal.mz_normalize_object_name($1))
+                    (SELECT mz_internal.mz_normalize_object_name($2))
                             AS normalized (n),
-                    mz_internal.mz_resolve_object_name(
+                    mz_internal.mz_name_rank(
                         COALESCE(n[1], pg_catalog.current_database()),
                         CASE
                             WHEN n[2] IS NULL
@@ -3840,43 +3874,102 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                                 ARRAY[n[2]]
                         END,
                         n[3]
-                    ) AS o
+                    ) AS r,
+                    mz_catalog.mz_objects AS o
+                WHERE r.id = o.id AND r.rank = 1 AND r.reg = $1;
             ") => ReturnType::set_of(RecordAny), oid::FUNC_MZ_RESOLVE_OBJECT_NAME;
+        },
+        // Returns the an array representing the minimal namespace a user must
+        // provide to refer to an item whose name is the first argument.
+        //
+        // The first argument must be a fully qualified name (i.e. contain
+        // database.schema.object), with each level of the namespace being an
+        // element.
+        //
+        // The second argument represents the `GlobalId` of the resolved object.
+        // This is a safeguard to ensure that the name we are resolving refers
+        // to the expected entry. For example, this helps us disambiguate cases
+        // where e.g. types and functions have the same name.
+        "mz_minimal_name_qualification" => Scalar {
+            params!(ScalarType::Array(Box::new(ScalarType::String)), String) => {
+                sql_impl_func("(
+                    SELECT
+                    CASE
+                        WHEN $1::pg_catalog.text[] IS NULL
+                            THEN NULL
+                    -- If DB doesn't match, requires full qual
+                        WHEN $1[1] != pg_catalog.current_database()
+                            THEN $1
+                    -- If not in currently searchable schema, must be schema qualified
+                        WHEN NOT $1[2] = ANY(pg_catalog.current_schemas(true))
+                            THEN ARRAY[$1[2], $1[3]]
+                    ELSE
+                        minimal_name
+                    END
+                FROM (
+                    -- Subquery so we return one null row in the cases where
+                    -- there are no matches.
+                    SELECT (
+                        SELECT DISTINCT
+                        CASE
+                            -- If there is only one item with this name and it's rank 1,
+                            -- it is uniquely nameable with just the final element
+                            WHEN rank = 1 AND count = 1
+                                THEN ARRAY[name[3]]
+                            -- Otherwise, it is findable in the search path, so does not
+                            -- need database qualification
+                            ELSE
+                                ARRAY[name[2], name[3]]
+                        END AS minimal_name
+                        FROM mz_internal.mz_name_rank(
+                            pg_catalog.current_database(),
+                            pg_catalog.current_schemas(true),
+                            $1[3]
+                        )
+                        WHERE
+                            -- Ensure name and ID matches
+                            name = $1 AND id = $2
+                    )
+                )
+            )")
+            } => ScalarType::Array(Box::new(ScalarType::String)), oid::FUNC_MZ_MINIMINAL_NAME_QUALIFICATION;
         },
         "mz_global_id_to_name" => Scalar {
             params!(String) => sql_impl_func("
             CASE
                 WHEN $1 IS NULL THEN NULL
                 ELSE (
-                    SELECT mz_unsafe.mz_error_if_null(
-                        (
-                            SELECT DISTINCT
-                                concat_ws(
-                                    '.',
-                                    qual.d,
-                                    qual.s,
-                                    pg_catalog.quote_ident(item.name)
-                                )
-                            FROM
-                                mz_objects AS item
-                            JOIN
+                    SELECT array_to_string(minimal_name, '.')
+                    FROM (
+                        SELECT mz_unsafe.mz_error_if_null(
                             (
-                                SELECT
-                                    pg_catalog.quote_ident(d.name) AS d,
-                                    pg_catalog.quote_ident(s.name) AS s,
-                                    s.id AS schema_id
+                                -- Return the fully-qualified name
+                                SELECT DISTINCT ARRAY[qual.d, qual.s, item.name]
                                 FROM
-                                    mz_schemas AS s
-                                    LEFT JOIN
-                                        (SELECT id, name FROM mz_databases)
-                                        AS d
-                                        ON s.database_id = d.id
-                            ) AS qual
-                            ON qual.schema_id = item.schema_id
-                            WHERE item.id = CAST($1 AS text)
-                        ),
-                        'global ID ' || $1 || ' does not exist'
-                    )
+                                    mz_objects AS item
+                                JOIN
+                                (
+                                    SELECT
+                                        d.name AS d,
+                                        s.name AS s,
+                                        s.id AS schema_id
+                                    FROM
+                                        mz_schemas AS s
+                                        LEFT JOIN
+                                            (SELECT id, name FROM mz_databases)
+                                            AS d
+                                            ON s.database_id = d.id
+                                ) AS qual
+                                ON qual.schema_id = item.schema_id
+                                WHERE item.id = CAST($1 AS text)
+                            ),
+                            'global ID ' || $1 || ' does not exist'
+                        )
+                    ) AS n (fqn),
+                    LATERAL (
+                        -- Get the minimal qualification of the fully qualified name
+                        SELECT mz_internal.mz_minimal_name_qualification(fqn, $1)
+                    ) AS m (minimal_name)
                 )
                 END
             ") => String, oid::FUNC_MZ_GLOBAL_ID_TO_NAME;
@@ -3954,6 +4047,23 @@ pub static MZ_INTERNAL_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(
                 )
                 END
             ") => Oid, oid::FUNC_ROLE_OID_OID;
+        },
+        // There is no regclass equivalent for roles to look up secrets, so we
+        // have this helper function instead.
+        //
+        // TODO: invent an OID alias for secrets
+        "mz_secret_oid" => Scalar {
+            params!(String) => sql_impl_func("
+                CASE
+                WHEN $1 IS NULL THEN NULL
+                ELSE (
+                    mz_unsafe.mz_error_if_null(
+                        (SELECT oid FROM mz_catalog.mz_objects WHERE name = $1 AND type = 'secret'),
+                        'secret \"' || $1 || '\" does not exist'
+                    )
+                )
+                END
+            ") => Oid, oid::FUNC_SECRET_OID_OID;
         },
         // This ought to be exposed in `mz_catalog`, but its name is rather
         // confusing. It does not identify the SQL session, but the

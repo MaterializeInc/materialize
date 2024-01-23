@@ -1656,10 +1656,10 @@ statement ok
 DROP TABLE dangerous_table
 
 statement ok
-SELECT * FROM mz_internal.mz_resolve_object_name('t');
+SELECT * FROM mz_internal.mz_resolve_object_name('regclass', 't');
 
 statement ok
-SELECT mz_internal.mz_resolve_object_name('t');
+SELECT mz_internal.mz_resolve_object_name('regclass', 't');
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_unsafe_functions = true

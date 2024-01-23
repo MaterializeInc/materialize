@@ -2725,85 +2725,85 @@ NULL
 
 ### System
 
-query error role "fake-role" does not exist
-SELECT has_system_privilege('fake-role', 'CREATEDB')
+query error role "fake_role" does not exist
+SELECT has_system_privilege('fake_role', 'CREATEDB')
 
 query error unrecognized privilege type: "fake privilege"
 SELECT has_system_privilege('joe', 'fake privilege')
 
 ### Cluster
 
-query error role "fake-role" does not exist
-SELECT has_cluster_privilege('fake-role', 'c', 'USAGE')
+query error role "fake_role" does not exist
+SELECT has_cluster_privilege('fake_role', 'c', 'USAGE')
 
-query error cluster "fake-cluster" does not exist
-SELECT has_cluster_privilege('joe', 'fake-cluster', 'USAGE')
+query error cluster "fake_cluster" does not exist
+SELECT has_cluster_privilege('joe', 'fake_cluster', 'USAGE')
 
 query error unrecognized privilege type: "fake privilege"
 SELECT has_cluster_privilege('joe', 'c', 'fake privilege')
 
 ### Connection
 
-query error role "fake-role" does not exist
-SELECT has_connection_privilege('fake-role', 'conn', 'USAGE')
+query error role "fake_role" does not exist
+SELECT has_connection_privilege('fake_role', 'conn', 'USAGE')
 
-query error object "fake-connection" does not exist
-SELECT has_connection_privilege('joe', 'fake-connection', 'USAGE')
+query error db error: ERROR: connection "fake_connection" does not exist
+SELECT has_connection_privilege('joe', 'fake_connection', 'USAGE')
 
 query error unrecognized privilege type: "fake privilege"
 SELECT has_connection_privilege('joe', 'conn', 'fake privilege')
 
 ### Database
 
-query error role "fake-role" does not exist
-SELECT has_database_privilege('fake-role', 'd', 'USAGE')
+query error role "fake_role" does not exist
+SELECT has_database_privilege('fake_role', 'd', 'USAGE')
 
-query error database "fake-database" does not exist
-SELECT has_database_privilege('joe', 'fake-database', 'USAGE')
+query error database "fake_database" does not exist
+SELECT has_database_privilege('joe', 'fake_database', 'USAGE')
 
 query error unrecognized privilege type: "fake privilege"
 SELECT has_database_privilege('joe', 'd', 'fake privilege')
 
 ### Schema
 
-query error role "fake-role" does not exist
-SELECT has_schema_privilege('fake-role', 'sch', 'USAGE')
+query error role "fake_role" does not exist
+SELECT has_schema_privilege('fake_role', 'sch', 'USAGE')
 
-query error schema "fake-schema" does not exist
-SELECT has_schema_privilege('joe', 'fake-schema', 'USAGE')
+query error schema "fake_schema" does not exist
+SELECT has_schema_privilege('joe', 'fake_schema', 'USAGE')
 
 query error unrecognized privilege type: "fake privilege"
 SELECT has_schema_privilege('joe', 'sch', 'fake privilege')
 
 ### Secret
 
-query error role "fake-role" does not exist
-SELECT has_secret_privilege('fake-role', 'se', 'USAGE')
+query error role "fake_role" does not exist
+SELECT has_secret_privilege('fake_role', 'se', 'USAGE')
 
-query error object "fake-secret" does not exist
-SELECT has_secret_privilege('joe', 'fake-secret', 'USAGE')
+query error db error: ERROR: secret "fake_secret" does not exist
+SELECT has_secret_privilege('joe', 'fake_secret', 'USAGE')
 
 query error unrecognized privilege type: "fake privilege"
 SELECT has_secret_privilege('joe', 'se', 'fake privilege')
 
 ### Table
 
-query error role "fake-role" does not exist
-SELECT has_table_privilege('fake-role', 't', 'SELECT')
+query error role "fake_role" does not exist
+SELECT has_table_privilege('fake_role', 't', 'SELECT')
 
-query error object "fake-table" does not exist
-SELECT has_table_privilege('joe', 'fake-table', 'SELECT')
+query error db error: ERROR: relation "fake_table" does not exist
+SELECT has_table_privilege('joe', 'fake_table', 'SELECT')
 
 query error unrecognized privilege type: "fake privilege"
 SELECT has_table_privilege('joe', 't', 'fake privilege')
 
 ### Type
 
-query error role "fake-role" does not exist
-SELECT has_type_privilege('fake-role', 'ty', 'USAGE')
+query error role "fake_role" does not exist
+SELECT has_type_privilege('fake_role', 'ty', 'USAGE')
 
-query error object "fake-type" does not exist
-SELECT has_type_privilege('joe', 'fake-type', 'USAGE')
+query error db error: ERROR: type "fake_type" does not exist
+SELECT has_type_privilege('joe', 'fake_type', 'USAGE')
 
 query error unrecognized privilege type: "fake privilege"
 SELECT has_type_privilege('joe', 'ty', 'fake privilege')
@@ -3548,23 +3548,26 @@ COMPLETE 0
 
 ## Tables
 
-query B
+query error db error: ERROR: relation "t3" does not exist
 SELECT has_table_privilege('t3', 'SELECT')
+
+query B
+SELECT has_table_privilege('d1.s1.t3', 'SELECT')
 ----
 false
 
 query B
-SELECT has_table_privilege('t4', 'SELECT')
+SELECT has_table_privilege('d1.s1.t4', 'SELECT')
 ----
 false
 
 query B
-SELECT has_table_privilege('t5', 'SELECT')
+SELECT has_table_privilege('d2.s2.t5', 'SELECT')
 ----
 false
 
 query B
-SELECT has_table_privilege('t6', 'SELECT')
+SELECT has_table_privilege('d2.s2.t6', 'SELECT')
 ----
 false
 
@@ -3574,22 +3577,22 @@ GRANT SELECT ON ALL TABLES IN SCHEMA d1.s1, d2.s2 TO materialize;
 COMPLETE 0
 
 query B
-SELECT has_table_privilege('t3', 'SELECT')
+SELECT has_table_privilege('d1.s1.t3', 'SELECT')
 ----
 true
 
 query B
-SELECT has_table_privilege('t4', 'SELECT')
+SELECT has_table_privilege('d1.s1.t4', 'SELECT')
 ----
 true
 
 query B
-SELECT has_table_privilege('t5', 'SELECT')
+SELECT has_table_privilege('d2.s2.t5', 'SELECT')
 ----
 true
 
 query B
-SELECT has_table_privilege('t6', 'SELECT')
+SELECT has_table_privilege('d2.s2.t6', 'SELECT')
 ----
 true
 
@@ -3599,22 +3602,22 @@ REVOKE SELECT ON ALL TABLES IN SCHEMA d1.s1, d2.s2 FROM materialize;
 COMPLETE 0
 
 query B
-SELECT has_table_privilege('t3', 'SELECT')
+SELECT has_table_privilege('d1.s1.t3', 'SELECT')
 ----
 false
 
 query B
-SELECT has_table_privilege('t4', 'SELECT')
+SELECT has_table_privilege('d1.s1.t4', 'SELECT')
 ----
 false
 
 query B
-SELECT has_table_privilege('t5', 'SELECT')
+SELECT has_table_privilege('d2.s2.t5', 'SELECT')
 ----
 false
 
 query B
-SELECT has_table_privilege('t6', 'SELECT')
+SELECT has_table_privilege('d2.s2.t6', 'SELECT')
 ----
 false
 
@@ -3625,23 +3628,26 @@ REVOKE USAGE ON ALL TYPES FROM PUBLIC
 ----
 COMPLETE 0
 
-query B
+query error db error: ERROR: type "ty1" does not exist
 SELECT has_type_privilege('ty1', 'USAGE')
+
+query B
+SELECT has_type_privilege('d1.s1.ty1', 'USAGE')
 ----
 false
 
 query B
-SELECT has_type_privilege('ty2', 'USAGE')
+SELECT has_type_privilege('d1.s1.ty2', 'USAGE')
 ----
 false
 
 query B
-SELECT has_type_privilege('ty3', 'USAGE')
+SELECT has_type_privilege('d2.s2.ty3', 'USAGE')
 ----
 false
 
 query B
-SELECT has_type_privilege('ty4', 'USAGE')
+SELECT has_type_privilege('d2.s2.ty4', 'USAGE')
 ----
 false
 
@@ -3651,22 +3657,22 @@ GRANT USAGE ON ALL TYPES IN SCHEMA d1.s1, d2.s2 TO materialize;
 COMPLETE 0
 
 query B
-SELECT has_type_privilege('ty1', 'USAGE')
+SELECT has_type_privilege('d1.s1.ty1', 'USAGE')
 ----
 true
 
 query B
-SELECT has_type_privilege('ty2', 'USAGE')
+SELECT has_type_privilege('d1.s1.ty2', 'USAGE')
 ----
 true
 
 query B
-SELECT has_type_privilege('ty3', 'USAGE')
+SELECT has_type_privilege('d2.s2.ty3', 'USAGE')
 ----
 true
 
 query B
-SELECT has_type_privilege('ty4', 'USAGE')
+SELECT has_type_privilege('d2.s2.ty4', 'USAGE')
 ----
 true
 
@@ -3676,22 +3682,22 @@ REVOKE USAGE ON ALL TYPES IN SCHEMA d1.s1, d2.s2 FROM materialize;
 COMPLETE 0
 
 query B
-SELECT has_type_privilege('ty1', 'USAGE')
+SELECT has_type_privilege('d1.s1.ty1', 'USAGE')
 ----
 false
 
 query B
-SELECT has_type_privilege('ty2', 'USAGE')
+SELECT has_type_privilege('d1.s1.ty2', 'USAGE')
 ----
 false
 
 query B
-SELECT has_type_privilege('ty3', 'USAGE')
+SELECT has_type_privilege('d2.s2.ty3', 'USAGE')
 ----
 false
 
 query B
-SELECT has_type_privilege('ty4', 'USAGE')
+SELECT has_type_privilege('d2.s2.ty4', 'USAGE')
 ----
 false
 
@@ -3849,22 +3855,22 @@ false
 ## Tables
 
 query B
-SELECT has_table_privilege('t3', 'SELECT')
+SELECT has_table_privilege('d1.s1.t3', 'SELECT')
 ----
 false
 
 query B
-SELECT has_table_privilege('t4', 'SELECT')
+SELECT has_table_privilege('d1.s1.t4', 'SELECT')
 ----
 false
 
 query B
-SELECT has_table_privilege('t5', 'SELECT')
+SELECT has_table_privilege('d2.s2.t5', 'SELECT')
 ----
 false
 
 query B
-SELECT has_table_privilege('t6', 'SELECT')
+SELECT has_table_privilege('d2.s2.t6', 'SELECT')
 ----
 false
 
@@ -3874,22 +3880,22 @@ GRANT SELECT ON ALL TABLES IN DATABASE d1, d2 TO materialize;
 COMPLETE 0
 
 query B
-SELECT has_table_privilege('t3', 'SELECT')
+SELECT has_table_privilege('d1.s1.t3', 'SELECT')
 ----
 true
 
 query B
-SELECT has_table_privilege('t4', 'SELECT')
+SELECT has_table_privilege('d1.s1.t4', 'SELECT')
 ----
 true
 
 query B
-SELECT has_table_privilege('t5', 'SELECT')
+SELECT has_table_privilege('d2.s2.t5', 'SELECT')
 ----
 true
 
 query B
-SELECT has_table_privilege('t6', 'SELECT')
+SELECT has_table_privilege('d2.s2.t6', 'SELECT')
 ----
 true
 
@@ -3899,22 +3905,22 @@ REVOKE SELECT ON ALL TABLES IN DATABASE d1, d2 FROM materialize;
 COMPLETE 0
 
 query B
-SELECT has_table_privilege('t3', 'SELECT')
+SELECT has_table_privilege('d1.s1.t3', 'SELECT')
 ----
 false
 
 query B
-SELECT has_table_privilege('t4', 'SELECT')
+SELECT has_table_privilege('d1.s1.t4', 'SELECT')
 ----
 false
 
 query B
-SELECT has_table_privilege('t5', 'SELECT')
+SELECT has_table_privilege('d2.s2.t5', 'SELECT')
 ----
 false
 
 query B
-SELECT has_table_privilege('t6', 'SELECT')
+SELECT has_table_privilege('d2.s2.t6', 'SELECT')
 ----
 false
 
@@ -3926,22 +3932,22 @@ REVOKE USAGE ON ALL TYPES FROM PUBLIC
 COMPLETE 0
 
 query B
-SELECT has_type_privilege('ty1', 'USAGE')
+SELECT has_type_privilege('d1.s1.ty1', 'USAGE')
 ----
 false
 
 query B
-SELECT has_type_privilege('ty2', 'USAGE')
+SELECT has_type_privilege('d1.s1.ty2', 'USAGE')
 ----
 false
 
 query B
-SELECT has_type_privilege('ty3', 'USAGE')
+SELECT has_type_privilege('d2.s2.ty3', 'USAGE')
 ----
 false
 
 query B
-SELECT has_type_privilege('ty4', 'USAGE')
+SELECT has_type_privilege('d2.s2.ty4', 'USAGE')
 ----
 false
 
@@ -3951,22 +3957,22 @@ GRANT USAGE ON ALL TYPES IN DATABASE d1, d2 TO materialize;
 COMPLETE 0
 
 query B
-SELECT has_type_privilege('ty1', 'USAGE')
+SELECT has_type_privilege('d1.s1.ty1', 'USAGE')
 ----
 true
 
 query B
-SELECT has_type_privilege('ty2', 'USAGE')
+SELECT has_type_privilege('d1.s1.ty2', 'USAGE')
 ----
 true
 
 query B
-SELECT has_type_privilege('ty3', 'USAGE')
+SELECT has_type_privilege('d2.s2.ty3', 'USAGE')
 ----
 true
 
 query B
-SELECT has_type_privilege('ty4', 'USAGE')
+SELECT has_type_privilege('d2.s2.ty4', 'USAGE')
 ----
 true
 
@@ -3976,22 +3982,22 @@ REVOKE USAGE ON ALL TYPES IN DATABASE d1, d2 FROM materialize;
 COMPLETE 0
 
 query B
-SELECT has_type_privilege('ty1', 'USAGE')
+SELECT has_type_privilege('d1.s1.ty1', 'USAGE')
 ----
 false
 
 query B
-SELECT has_type_privilege('ty2', 'USAGE')
+SELECT has_type_privilege('d1.s1.ty2', 'USAGE')
 ----
 false
 
 query B
-SELECT has_type_privilege('ty3', 'USAGE')
+SELECT has_type_privilege('d2.s2.ty3', 'USAGE')
 ----
 false
 
 query B
-SELECT has_type_privilege('ty4', 'USAGE')
+SELECT has_type_privilege('d2.s2.ty4', 'USAGE')
 ----
 false
 
@@ -4191,22 +4197,22 @@ false
 ## Tables
 
 query B
-SELECT has_table_privilege('t3', 'SELECT')
+SELECT has_table_privilege('d1.s1.t3', 'SELECT')
 ----
 false
 
 query B
-SELECT has_table_privilege('t4', 'SELECT')
+SELECT has_table_privilege('d1.s1.t4', 'SELECT')
 ----
 false
 
 query B
-SELECT has_table_privilege('t5', 'SELECT')
+SELECT has_table_privilege('d2.s2.t5', 'SELECT')
 ----
 false
 
 query B
-SELECT has_table_privilege('t6', 'SELECT')
+SELECT has_table_privilege('d2.s2.t6', 'SELECT')
 ----
 false
 
@@ -4216,22 +4222,22 @@ GRANT SELECT ON ALL TABLES TO materialize;
 COMPLETE 0
 
 query B
-SELECT has_table_privilege('t3', 'SELECT')
+SELECT has_table_privilege('d1.s1.t3', 'SELECT')
 ----
 true
 
 query B
-SELECT has_table_privilege('t4', 'SELECT')
+SELECT has_table_privilege('d1.s1.t4', 'SELECT')
 ----
 true
 
 query B
-SELECT has_table_privilege('t5', 'SELECT')
+SELECT has_table_privilege('d2.s2.t5', 'SELECT')
 ----
 true
 
 query B
-SELECT has_table_privilege('t6', 'SELECT')
+SELECT has_table_privilege('d2.s2.t6', 'SELECT')
 ----
 true
 
@@ -4241,22 +4247,22 @@ REVOKE SELECT ON ALL TABLES FROM materialize;
 COMPLETE 0
 
 query B
-SELECT has_table_privilege('t3', 'SELECT')
+SELECT has_table_privilege('d1.s1.t3', 'SELECT')
 ----
 false
 
 query B
-SELECT has_table_privilege('t4', 'SELECT')
+SELECT has_table_privilege('d1.s1.t4', 'SELECT')
 ----
 false
 
 query B
-SELECT has_table_privilege('t5', 'SELECT')
+SELECT has_table_privilege('d2.s2.t5', 'SELECT')
 ----
 false
 
 query B
-SELECT has_table_privilege('t6', 'SELECT')
+SELECT has_table_privilege('d2.s2.t6', 'SELECT')
 ----
 false
 
@@ -4268,22 +4274,22 @@ REVOKE USAGE ON ALL TYPES FROM PUBLIC
 COMPLETE 0
 
 query B
-SELECT has_type_privilege('ty1', 'USAGE')
+SELECT has_type_privilege('d1.s1.ty1', 'USAGE')
 ----
 false
 
 query B
-SELECT has_type_privilege('ty2', 'USAGE')
+SELECT has_type_privilege('d1.s1.ty2', 'USAGE')
 ----
 false
 
 query B
-SELECT has_type_privilege('ty3', 'USAGE')
+SELECT has_type_privilege('d2.s2.ty3', 'USAGE')
 ----
 false
 
 query B
-SELECT has_type_privilege('ty4', 'USAGE')
+SELECT has_type_privilege('d2.s2.ty4', 'USAGE')
 ----
 false
 
@@ -4293,22 +4299,22 @@ GRANT USAGE ON ALL TYPES TO materialize;
 COMPLETE 0
 
 query B
-SELECT has_type_privilege('ty1', 'USAGE')
+SELECT has_type_privilege('d1.s1.ty1', 'USAGE')
 ----
 true
 
 query B
-SELECT has_type_privilege('ty2', 'USAGE')
+SELECT has_type_privilege('d1.s1.ty2', 'USAGE')
 ----
 true
 
 query B
-SELECT has_type_privilege('ty3', 'USAGE')
+SELECT has_type_privilege('d2.s2.ty3', 'USAGE')
 ----
 true
 
 query B
-SELECT has_type_privilege('ty4', 'USAGE')
+SELECT has_type_privilege('d2.s2.ty4', 'USAGE')
 ----
 true
 
@@ -4318,22 +4324,22 @@ REVOKE USAGE ON ALL TYPES FROM materialize;
 COMPLETE 0
 
 query B
-SELECT has_type_privilege('ty1', 'USAGE')
+SELECT has_type_privilege('d1.s1.ty1', 'USAGE')
 ----
 false
 
 query B
-SELECT has_type_privilege('ty2', 'USAGE')
+SELECT has_type_privilege('d1.s1.ty2', 'USAGE')
 ----
 false
 
 query B
-SELECT has_type_privilege('ty3', 'USAGE')
+SELECT has_type_privilege('d2.s2.ty3', 'USAGE')
 ----
 false
 
 query B
-SELECT has_type_privilege('ty4', 'USAGE')
+SELECT has_type_privilege('d2.s2.ty4', 'USAGE')
 ----
 false
 
