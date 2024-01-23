@@ -2140,6 +2140,7 @@ feature_flags!(
 pub fn all_dyn_configs() -> ConfigSet {
     let mut configs = ConfigSet::default();
     configs = mz_persist_client::cfg::all_dyn_configs(configs);
+    configs = mz_persist_txn::all_dyn_configs(configs);
     configs
 }
 
