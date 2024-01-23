@@ -209,11 +209,10 @@ steps:
           queue: builder-linux-x86_64
 
       - id: miri-test
-        label: Miri test (fast) %N
+        label: Miri test (fast)
         inputs: [src]
         depends_on: []
-        parallelism: 2
-        timeout_in_minutes: 30
+        timeout_in_minutes: 45
         artifact_paths: [junit_*.xml, target/nextest/ci/junit_cargo-test.xml]
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
