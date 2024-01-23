@@ -1241,7 +1241,7 @@ where
         &self,
         id: GlobalId,
         as_of: Antichain<Self::Timestamp>,
-    ) -> Result<SnapshotStats<Self::Timestamp>, StorageError> {
+    ) -> Result<SnapshotStats, StorageError> {
         let metadata = &self.collection(id)?.collection_metadata;
         // See the comments in Self::snapshot for what's going on here.
         let as_of = match metadata.txns_shard.as_ref() {

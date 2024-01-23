@@ -307,22 +307,25 @@ where
     ///
     /// This command returns the contents of this shard as of `as_of` once they
     /// are known. This may "block" (in an async-friendly way) if `as_of` is
-    /// greater or equal to the current `upper` of the shard.
+    /// greater or equal to the current `upper` of the shard. If `None` is given
+    /// for `as_of`, then the latest stats known by this process are used.
     ///
     /// The `Since` error indicates that the requested `as_of` cannot be served
     /// (the caller has out of date information) and includes the smallest
     /// `as_of` that would have been accepted.
     pub fn snapshot_stats(
         &self,
-        as_of: Antichain<T>,
-    ) -> impl Future<Output = Result<SnapshotStats<T>, Since<T>>> + Send + 'static {
+        as_of: Option<Antichain<T>>,
+    ) -> impl Future<Output = Result<SnapshotStats, Since<T>>> + Send + 'static {
         let mut machine = self.machine.clone();
         async move {
-            let batches = machine.snapshot(&as_of).await?;
+            let batches = match as_of {
+                Some(as_of) => machine.snapshot(&as_of).await?,
+                None => machine.applier.all_batches(),
+            };
             let num_updates = batches.iter().map(|b| b.len).sum();
             Ok(SnapshotStats {
                 shard_id: machine.shard_id(),
-                as_of,
                 num_updates,
             })
         }

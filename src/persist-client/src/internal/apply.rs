@@ -252,6 +252,20 @@ where
             })
     }
 
+    pub fn all_batches(&self) -> Vec<HollowBatch<T>> {
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {
+                state
+                    .state
+                    .collections
+                    .trace
+                    .batches()
+                    .into_iter()
+                    .cloned()
+                    .collect()
+            })
+    }
+
     pub fn verify_listen(&self, as_of: &Antichain<T>) -> Result<Result<(), Upper<T>>, Since<T>> {
         self.state
             .read_lock(&self.metrics.locks.applier_read_noncacheable, |state| {

@@ -409,7 +409,7 @@ pub trait StorageController: Debug {
         &self,
         id: GlobalId,
         as_of: Antichain<Self::Timestamp>,
-    ) -> Result<SnapshotStats<Self::Timestamp>, StorageError>;
+    ) -> Result<SnapshotStats, StorageError>;
 
     /// Assigns a read policy to specific identifiers.
     ///

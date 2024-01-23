@@ -4844,13 +4844,6 @@ impl CachedStatisticsOracle {
 
             match stats {
                 Ok(stats) => {
-                    if timely::PartialOrder::less_than(&stats.as_of, as_of) {
-                        ::tracing::warn!(
-                            "stale statistics: statistics from {:?} are earlier than query at {as_of:?}",
-                            stats.as_of
-                        );
-                    }
-
                     cache.insert(*id, stats.num_updates);
                 }
                 Err(StorageError::IdentifierMissing(id)) => {
