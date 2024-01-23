@@ -64,6 +64,8 @@ INSERT INTO decimal_handling_mode_double VALUES (2234567.890);
 
 $ schema-registry-wait subject=postgres.public.decimal_handling_mode_double-value
 
+$ kafka-wait-topic topic=postgres.public.decimal_handling_mode_double
+
 > CREATE SOURCE decimal_handling_mode_double
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.decimal_handling_mode_double')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
