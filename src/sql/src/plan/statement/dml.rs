@@ -118,7 +118,7 @@ pub fn plan_delete(
     params: &Params,
 ) -> Result<Plan, PlanError> {
     let rtw_plan = query::plan_delete_query(scx, stmt)?;
-    plan_read_then_write(MutationKind::Delete, scx, params, rtw_plan)
+    plan_read_then_write(MutationKind::Delete, params, rtw_plan)
 }
 
 pub fn describe_update(
@@ -135,12 +135,11 @@ pub fn plan_update(
     params: &Params,
 ) -> Result<Plan, PlanError> {
     let rtw_plan = query::plan_update_query(scx, stmt)?;
-    plan_read_then_write(MutationKind::Update, scx, params, rtw_plan)
+    plan_read_then_write(MutationKind::Update, params, rtw_plan)
 }
 
 pub fn plan_read_then_write(
     kind: MutationKind,
-    scx: &StatementContext,
     params: &Params,
     query::ReadThenWritePlan {
         id,
@@ -150,7 +149,6 @@ pub fn plan_read_then_write(
     }: query::ReadThenWritePlan,
 ) -> Result<Plan, PlanError> {
     selection.bind_parameters(params)?;
-    let selection = selection.lower(scx.catalog.system_vars())?;
     let mut assignments_outer = BTreeMap::new();
     for (idx, mut set) in assignments {
         set.bind_parameters(params)?;
@@ -191,10 +189,15 @@ pub fn plan_select(
         return Ok(Plan::SideEffectingFunc(f));
     }
 
-    let query::PlannedRootQuery {
-        expr, finishing, ..
-    } = plan_query(scx, select.query, params, QueryLifetime::OneShot)?;
     let when = query::plan_as_of(scx, select.as_of)?;
+    let query::PlannedRootQuery {
+        mut expr,
+        desc: _,
+        finishing,
+        scope: _,
+    } = query::plan_root_query(scx, select.query, QueryLifetime::OneShot)?;
+    expr.bind_parameters(params)?;
+
     Ok(Plan::Select(SelectPlan {
         source: expr,
         when,
@@ -324,26 +327,28 @@ pub fn plan_explain_plan(
             crate::plan::Explainee::Index(item.id())
         }
         Explainee::Select(select, broken) => {
+            // The following code should align with `dml::plan_select`.
+            let when = query::plan_as_of(scx, select.as_of)?;
             let query::PlannedRootQuery {
-                expr: mut raw_plan,
+                mut expr,
                 desc,
-                finishing: row_set_finishing,
+                finishing,
                 scope: _,
             } = query::plan_root_query(scx, select.query, QueryLifetime::OneShot)?;
-            let when = query::plan_as_of(scx, select.as_of)?;
-            raw_plan.bind_parameters(params)?;
+            expr.bind_parameters(params)?;
+
+            let plan = SelectPlan {
+                source: expr,
+                when,
+                finishing,
+                copy_to: None,
+            };
 
             if broken {
                 scx.require_feature_flag(&vars::ENABLE_EXPLAIN_BROKEN)?;
             }
 
-            crate::plan::Explainee::Statement(ExplaineeStatement::Select {
-                raw_plan,
-                row_set_finishing,
-                when,
-                desc,
-                broken,
-            })
+            crate::plan::Explainee::Statement(ExplaineeStatement::Select { broken, plan, desc })
         }
         Explainee::CreateMaterializedView(mut stmt, broken) => {
             if stmt.if_exists != IfExistsBehavior::Skip {
@@ -479,8 +484,9 @@ pub fn plan_explain_timestamp(
     }))
 }
 
-/// Plans and decorrelates a `Query`. Like `query::plan_root_query`, but returns
-/// an `mz_expr::MirRelationExpr`, which cannot include correlated expressions.
+/// Plans and decorrelates a [`Query`]. Like [`query::plan_root_query`], but
+/// returns an [`MirRelationExpr`], which cannot include correlated expressions.
+#[deprecated = "Use `query::plan_root_query` and use `HirRelationExpr` in `~Plan` structs."]
 pub fn plan_query(
     scx: &StatementContext,
     query: Query<Aug>,
@@ -610,6 +616,7 @@ pub fn plan_subscribe(
             (SubscribeFrom::Id(entry.id()), desc.into_owned(), scope)
         }
         SubscribeRelation::Query(query) => {
+            #[allow(deprecated)] // TODO(aalexandrov): Use HirRelationExpr in Subscribe
             let query = plan_query(scx, query, params, QueryLifetime::Subscribe)?;
             // There's no way to apply finishing operations to a `SUBSCRIBE` directly, so the
             // finishing should have already been turned into a `TopK` by
@@ -957,6 +964,7 @@ pub fn plan_copy(
                     if !stmt.query.order_by.is_empty() {
                         sql_bail!("ORDER BY is not supported in SELECT query for COPY statements")
                     }
+                    #[allow(deprecated)] // TODO(aalexandrov): Use HirRelationExpr in CopyToFrom
                     let PlannedRootQuery {
                         expr,
                         finishing,

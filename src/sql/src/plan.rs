@@ -712,7 +712,7 @@ pub struct SetTransactionPlan {
 
 #[derive(Clone, Debug)]
 pub struct SelectPlan {
-    pub source: MirRelationExpr,
+    pub source: HirRelationExpr,
     pub when: QueryWhen,
     pub finishing: RowSetFinishing,
     pub copy_to: Option<CopyFormat>,
@@ -845,12 +845,10 @@ pub enum Explainee {
 pub enum ExplaineeStatement {
     /// The object to be explained is a SELECT statement.
     Select {
-        raw_plan: HirRelationExpr,
-        row_set_finishing: RowSetFinishing,
-        desc: RelationDesc,
-        when: QueryWhen,
         /// Broken flag (see [`ExplaineeStatement::broken()`]).
         broken: bool,
+        plan: plan::SelectPlan,
+        desc: RelationDesc,
     },
     /// The object to be explained is a CREATE MATERIALIZED VIEW.
     CreateMaterializedView {
@@ -869,7 +867,7 @@ pub enum ExplaineeStatement {
 impl ExplaineeStatement {
     pub fn depends_on(&self) -> BTreeSet<GlobalId> {
         match self {
-            Self::Select { raw_plan, .. } => raw_plan.depends_on(),
+            Self::Select { plan, .. } => plan.source.depends_on(),
             Self::CreateMaterializedView { plan, .. } => plan.materialized_view.expr.depends_on(),
             Self::CreateIndex { plan, .. } => btreeset! {plan.index.on},
         }
@@ -895,14 +893,10 @@ impl ExplaineeStatement {
 
     pub fn row_set_finishing(&self) -> Option<RowSetFinishing> {
         match self {
-            Self::Select {
-                row_set_finishing,
-                desc,
-                ..
-            } => {
-                if !row_set_finishing.is_trivial(desc.arity()) {
+            Self::Select { plan, desc, .. } => {
+                if !plan.finishing.is_trivial(desc.arity()) {
                     // Use the optional finishing extracted in the plan_query call.
-                    Some(row_set_finishing.clone())
+                    Some(plan.finishing.clone())
                 } else {
                     None
                 }
@@ -972,7 +966,7 @@ pub struct InsertPlan {
 #[derive(Debug)]
 pub struct ReadThenWritePlan {
     pub id: GlobalId,
-    pub selection: mz_expr::MirRelationExpr,
+    pub selection: HirRelationExpr,
     pub finishing: RowSetFinishing,
     pub assignments: BTreeMap<usize, mz_expr::MirScalarExpr>,
     pub kind: MutationKind,

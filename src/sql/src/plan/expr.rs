@@ -1905,6 +1905,13 @@ impl HirRelationExpr {
 
         result
     }
+
+    /// Whether the expression contains an [`UnmaterializableFunc::MzNow`] call.
+    pub fn contains_temporal(&self) -> bool {
+        let mut contains = false;
+        self.visit_children(|expr: &HirScalarExpr| contains = contains || expr.contains_temporal());
+        contains
+    }
 }
 
 impl CollectionPlan for HirRelationExpr {
@@ -2618,6 +2625,18 @@ impl HirScalarExpr {
             }
             Ok(())
         });
+    }
+
+    /// Whether the expression contains an [`UnmaterializableFunc::MzNow`] call.
+    pub fn contains_temporal(&self) -> bool {
+        let mut contains = false;
+        #[allow(deprecated)]
+        self.visit_post_nolimit(&mut |e| {
+            if let Self::CallUnmaterializable(UnmaterializableFunc::MzNow) = e {
+                contains = true;
+            }
+        });
+        contains
     }
 
     /// Constructs a column reference in the current scope.
