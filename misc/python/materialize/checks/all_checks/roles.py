@@ -130,3 +130,25 @@ class DropRole(CreateRole):
                 )
             )
         )
+
+
+class BuiltinRoles(CreateRole):
+    def manipulate(self) -> list[Testdrive]:
+        return [Testdrive(TESTDRIVE_NOP), Testdrive(TESTDRIVE_NOP)]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+            $ skip-if
+            SELECT mz_version_num() < 8300
+
+            > SELECT name FROM mz_roles
+            mz_system
+            mz_support
+            mz_monitor
+            materialize
+            mz_monitor_redacted
+            """
+            )
+        )
