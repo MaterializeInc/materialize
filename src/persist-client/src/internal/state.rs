@@ -444,13 +444,15 @@ where
         NoOpStateTransition<(LeasedReaderState<T>, SeqNo)>,
         (LeasedReaderState<T>, SeqNo),
     > {
+        let mut since = self.held_since();
+        since.join_assign(self.trace.since());
         let reader_state = LeasedReaderState {
             debug: HandleDebugState {
                 hostname: hostname.to_owned(),
                 purpose: purpose.to_owned(),
             },
             seqno,
-            since: self.held_since(),
+            since,
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
             lease_duration_ms: u64::try_from(lease_duration.as_millis())
                 .expect("lease duration as millis should fit within u64"),
@@ -888,7 +890,7 @@ where
         since
     }
 
-    fn update_since(&mut self) {
+    fn classic_since(&self) -> Antichain<T> {
         let mut sinces_iter = self
             .leased_readers
             .values()
@@ -899,13 +901,23 @@ where
             None => {
                 // If there are no current readers, leave `since` unchanged so
                 // it doesn't regress.
-                return;
+                return self.trace.since().clone();
             }
         };
         while let Some(s) = sinces_iter.next() {
             since.meet_assign(s);
         }
-        self.trace.downgrade_since(&since);
+        since
+    }
+
+    fn update_since(&mut self) {
+        let mut since = self.classic_since();
+        since.meet_assign(&self.held_since());
+        // update_since should never cause the since to regress!
+        since.join_assign(self.trace.since());
+        if &since != self.trace.since() {
+            self.trace.downgrade_since(&since);
+        }
     }
 
     fn seqno_since(&self, seqno: SeqNo) -> SeqNo {
