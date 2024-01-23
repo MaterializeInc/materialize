@@ -81,6 +81,7 @@ COPY --from=crosstool /opt/x-tools /opt/x-tools
 # Install dependencies needed by any CI job. Not all of these are available in
 # the Ubuntu repositories.
 RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    binfmt-support \
     bsdmainutils \
     ca-certificates \
     cmake \
@@ -106,6 +107,8 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     python3-dev \
     python3-pip \
     python3-setuptools \
+    qemu-system \
+    qemu-user-static \
     rsync \
     ruby \
     unzip \
@@ -259,6 +262,9 @@ RUN curl -fsSL https://dl.k8s.io/release/v1.24.3/bin/linux/$ARCH_GO/kubectl > /u
 
 RUN if [ $ARCH_GO = amd64 ]; then echo '8a45348bdaf81d46caf1706c8bf95b3f431150554f47d444ffde89e8cdd712c1 /usr/local/bin/kubectl' | sha256sum --check; fi
 RUN if [ $ARCH_GO = arm64 ]; then echo 'bdad4d3063ddb7bfa5ecf17fb8b029d5d81d7d4ea1650e4369aafa13ed97149a /usr/local/bin/kubectl' | sha256sum --check; fi
+
+# Allow running containers using qemu
+RUN docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
 
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
 # trustworthy on the first connection.

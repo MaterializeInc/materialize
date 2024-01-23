@@ -80,4 +80,7 @@ fi
 
 ci_uncollapsed_heading ":docker: Running \`bin/mzcompose --find \"$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION\" run ${run_args[*]}\`"
 
+docker run --rm -t amd64/ubuntu uname -m
+docker run --rm -t arm64v8/ubuntu uname -m
+
 mzcompose run "${run_args[@]}" |& tee run.log
