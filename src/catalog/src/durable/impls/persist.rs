@@ -1007,7 +1007,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         let audit_logs = match self.audit_logs.take() {
             Some(audit_logs) => audit_logs,
             None => {
-                error!("audit logs were not found in cache, so they were retrieved from persist, this unexpected and bad for performance");
+                error!("audit logs were not found in cache, so they were retrieved from persist, this is unexpected and bad for performance");
                 self.persist_snapshot()
                     .await
                     .filter_map(
