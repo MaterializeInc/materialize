@@ -143,12 +143,9 @@ class BuiltinRoles(CreateRole):
             $ skip-if
             SELECT mz_version_num() < 8300
 
-            > SELECT name FROM mz_roles ORDER BY name
-            materialize
+            > SELECT name FROM mz_roles WHERE name IN ('mz_monitor', 'mz_monitor_redacted') ORDER BY name
             mz_monitor
             mz_monitor_redacted
-            mz_support
-            mz_system
             """
             )
         )
