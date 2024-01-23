@@ -11,6 +11,7 @@ from psycopg import Cursor
 
 from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.operation import Operation
+from materialize.scalability.operation_data import OperationData
 
 
 class Workload:
@@ -18,7 +19,8 @@ class Workload:
         raise NotImplementedError
 
     def execute_operation(self, operation: Operation, cursor: Cursor) -> None:
-        operation.execute(cursor)
+        data = OperationData(cursor)
+        operation.execute(data)
 
     def name(self) -> str:
         return self.__class__.__name__
