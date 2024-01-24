@@ -20,13 +20,12 @@ from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.debezium import Debezium
 from materialize.mzcompose.services.grafana import Grafana
-from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.persistcli import Persistcli
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.prometheus import Prometheus
-from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.ssh_bastion_host import (
     SshBastionHost,
     setup_default_ssh_test_connection,
@@ -40,9 +39,8 @@ from materialize.zippy.scenarios import UserTables
 
 SERVICES = [
     Zookeeper(),
-    Kafka(auto_create_topics=True),
-    SchemaRegistry(),
-    Debezium(),
+    Redpanda(auto_create_topics=True),
+    Debezium(redpanda=True),
     Postgres(),
     Cockroach(),
     Minio(setup_materialize=True),
@@ -134,7 +132,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
     scenario_class = globals()[args.scenario]
 
-    c.up("zookeeper", "kafka", "schema-registry", "ssh-bastion-host")
+    c.up("zookeeper", "redpanda", "ssh-bastion-host")
     c.enable_minio_versioning()
 
     if args.observability:

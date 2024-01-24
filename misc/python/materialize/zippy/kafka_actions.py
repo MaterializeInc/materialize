@@ -46,7 +46,7 @@ class KafkaStart(Action):
         return [KafkaRunning()]
 
     def run(self, c: Composition) -> None:
-        c.up("kafka")
+        c.up("redpanda")
 
 
 class KafkaStop(Action):
@@ -60,7 +60,7 @@ class KafkaStop(Action):
         return {KafkaRunning}
 
     def run(self, c: Composition) -> None:
-        c.kill("kafka")
+        c.kill("redpanda")
 
 
 class CreateTopicParameterized(ActionFactory):
