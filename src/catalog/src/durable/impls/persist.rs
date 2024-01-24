@@ -730,6 +730,26 @@ impl<T: Ord> LargeCollectionStartupCache<T> {
     }
 }
 
+impl<T: Ord + Clone> LargeCollectionStartupCache<T> {
+    /// If the cache is open, then return clones of the cached values without closing the cache,
+    /// otherwise return `None`.
+    fn cloned(&mut self) -> Option<Vec<T>> {
+        if let Self::Open(cache) = self {
+            differential_dataflow::consolidation::consolidate(cache);
+            let cache = cache
+                .into_iter()
+                .map(|(v, diff)| {
+                    assert_eq!(1, *diff, "consolidated cache should have no retraction");
+                    v.clone()
+                })
+                .collect();
+            Some(cache)
+        } else {
+            None
+        }
+    }
+}
+
 /// A durable store of the catalog state using Persist as an implementation.
 #[derive(Debug)]
 pub struct PersistCatalogState {
@@ -1079,25 +1099,47 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     ) -> Result<(Snapshot, Vec<VersionedEvent>, Vec<VersionedStorageUsage>), CatalogError> {
         self.sync_to_current_upper().await?;
         let snapshot = self.snapshot.clone();
-        let mut audit_events = Vec::new();
-        let mut storage_usages = Vec::new();
-        for StateUpdate { kind, ts: _, diff } in self.persist_snapshot().await {
-            soft_assert_eq_or_log!(1, diff, "updates should be consolidated");
-            match kind {
-                StateUpdateKind::AuditLog(audit_event, ()) => {
-                    let audit_event = AuditLogKey::from_proto(audit_event)?.event;
-                    audit_events.push(audit_event);
-                }
-                StateUpdateKind::StorageUsage(storage_usage, ()) => {
-                    let storage_usage = StorageUsageKey::from_proto(storage_usage)?.metric;
-                    storage_usages.push(storage_usage);
-                }
-                _ => {
-                    // Everything else is already cached in `self.snapshot`.
-                }
+        let (audit_events, storage_usage_events) = match (
+            self.audit_logs.cloned(),
+            self.storage_usage_events.cloned(),
+        ) {
+            (Some(audit_events), Some(storage_usage_events)) => {
+                (audit_events, storage_usage_events)
             }
-        }
-        Ok((snapshot, audit_events, storage_usages))
+            // We could check if each individual cache is populated, but this is unexpected and we
+            // need a full snapshot anyway. So we might as well compute both from a full snapshot.
+            _ => {
+                error!("audit events and storage usage events were not found in cache, so they were retrieved from persist, this is unexpected and bad for performance");
+                let mut audit_events = Vec::new();
+                let mut storage_usage_events = Vec::new();
+                for StateUpdate { kind, ts: _, diff } in self.persist_snapshot().await {
+                    soft_assert_eq_or_log!(1, diff, "updates should be consolidated");
+                    match kind {
+                        StateUpdateKind::AuditLog(audit_event, ()) => {
+                            audit_events.push(audit_event);
+                        }
+                        StateUpdateKind::StorageUsage(storage_usage, ()) => {
+                            storage_usage_events.push(storage_usage);
+                        }
+                        _ => {
+                            // Everything else is already cached in `self.snapshot`.
+                        }
+                    }
+                }
+                (audit_events, storage_usage_events)
+            }
+        };
+        let audit_events = audit_events
+            .into_iter()
+            .map(AuditLogKey::from_proto)
+            .map_ok(|audit_event| audit_event.event)
+            .collect::<Result<Vec<_>, _>>()?;
+        let storage_usage_events = storage_usage_events
+            .into_iter()
+            .map(StorageUsageKey::from_proto)
+            .map_ok(|storage_usage| storage_usage.metric)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((snapshot, audit_events, storage_usage_events))
     }
 }
 
