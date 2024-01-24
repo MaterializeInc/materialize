@@ -34,6 +34,22 @@ pub trait CastFrom<T> {
     fn cast_from(from: T) -> Self;
 }
 
+/// The inverse of [`CastFrom`].
+/// Implemented automatically, just like [`std::convert::Into`].
+pub trait CastInto<T> {
+    /// Performs the cast.
+    fn cast_into(self) -> T;
+}
+
+impl<T, U> CastInto<U> for T
+where
+    U: CastFrom<T>,
+{
+    fn cast_into(self) -> U {
+        U::cast_from(self)
+    }
+}
+
 macro_rules! cast_from {
     ($from:ty, $to:ty) => {
         paste::paste! {

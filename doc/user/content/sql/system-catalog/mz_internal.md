@@ -77,6 +77,8 @@ granted the `mz_monitor` role.
 | `redacted_sql`            | [`text`]                     | The SQL text of the statement, in a normalized form, with all string and numeric literals hidden.                                                                                                                                                                             |
 | `prepared_at`             | [`timestamp with time zone`] | The time at which the statement was prepared.                                                                                                                                                                                                                                 |
 | `statement_type`          | [`text`]                     | The _type_ of the statement, e.g. `select` for a `SELECT` query, or `NULL` if the statement was empty.                                                                                                                                                                        |
+| `n_throttled`             | [`uint8`]                    | The number of statements that were dropped due to throttling before this one was seen. If you have a very high volume of queries and need to log them without throttling, please contact support.                                                                             |
+
 
 ### `mz_aws_connections`
 

@@ -2867,7 +2867,7 @@ pub fn serve(
                     segment_client,
                     metrics,
                     tracing_handle,
-                    statement_logging: StatementLogging::new(),
+                    statement_logging: StatementLogging::new(coord_now.clone()),
                     webhook_concurrency_limit,
                     timestamp_oracle_impl,
                     pg_timestamp_oracle_config,

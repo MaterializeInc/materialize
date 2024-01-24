@@ -47,8 +47,6 @@ pub struct NowFn(Arc<dyn Fn() -> EpochMillis + Send + Sync>);
 
 impl NowFn {
     /// Returns now in seconds.
-    // TODO(benesch): rewrite to avoid dangerous use of `as`.
-    #[allow(clippy::as_conversions)]
     pub fn as_secs(&self) -> i64 {
         let millis: u64 = (self)();
         // Justification for `unwrap`:

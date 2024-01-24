@@ -12,9 +12,9 @@ use std::sync::Arc;
 
 use bytes::BytesMut;
 use mz_controller_types::ClusterId;
-use mz_ore::now::to_datetime;
+use mz_ore::now::{to_datetime, NowFn};
 use mz_ore::task::spawn;
-use mz_ore::{cast::CastFrom, now::EpochMillis};
+use mz_ore::{cast::CastFrom, cast::CastInto, now::EpochMillis};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_sql::plan::Params;
@@ -24,6 +24,7 @@ use qcell::QCell;
 use rand::SeedableRng;
 use rand::{distributions::Bernoulli, prelude::Distribution, thread_rng};
 use tokio::time::MissedTickBehavior;
+use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::coord::{ConnMeta, Coordinator};
@@ -90,10 +91,22 @@ pub(crate) struct StatementLogging {
     pending_prepared_statement_events: Vec<Row>,
     pending_session_events: Vec<Row>,
     pending_statement_lifecycle_events: Vec<Row>,
+
+    now: NowFn,
+
+    /// The number of bytes that we are allowed to emit for statement logging without being throttled.
+    /// Increases at a rate of [`mz_sql::session::vars::STATEMENT_LOGGING_TARGET_DATA_RATE`] per second,
+    /// up to a max value of [`mz_sql::session::vars::STATEMENT_LOGGING_MAX_DATA_CREDIT`].
+    tokens: u64,
+    /// The last time at which a statement was logged.
+    last_logged_ts_seconds: u64,
+    /// The number of statements that have been throttled since the last successfully logged statement.
+    n_throttled: usize,
 }
 
 impl StatementLogging {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(now: NowFn) -> Self {
+        let last_logged_ts_seconds = (now)() / 1000;
         Self {
             executions_begun: BTreeMap::new(),
             unlogged_sessions: BTreeMap::new(),
@@ -102,6 +115,44 @@ impl StatementLogging {
             pending_prepared_statement_events: Vec::new(),
             pending_session_events: Vec::new(),
             pending_statement_lifecycle_events: Vec::new(),
+            tokens: 0,
+            last_logged_ts_seconds,
+            now: now.clone(),
+            n_throttled: 0,
+        }
+    }
+
+    /// Check if we need to drop a statement
+    /// due to throttling, and update internal data structures appropriately.
+    ///
+    /// Returns `None` if we must throttle this statement, and `Some(n)` otherwise, where `n`
+    /// is the number of statements that were dropped due to throttling before this one.
+    fn throttling_check(
+        &mut self,
+        cost: u64,
+        target_data_rate: u64,
+        max_data_credit: Option<u64>,
+    ) -> Option<usize> {
+        let ts = (self.now)() / 1000;
+        let elapsed = ts - self.last_logged_ts_seconds;
+        self.last_logged_ts_seconds = ts;
+        self.tokens = self
+            .tokens
+            .saturating_add(target_data_rate.saturating_mul(elapsed));
+        if let Some(max_data_credit) = max_data_credit {
+            self.tokens = self.tokens.min(max_data_credit);
+        }
+        if let Some(remaining) = self.tokens.checked_sub(cost) {
+            debug!("throttling check passed. tokens remaining: {remaining}; cost: {cost}");
+            self.tokens = remaining;
+            Some(std::mem::take(&mut self.n_throttled))
+        } else {
+            info!(
+                "throttling check failed. tokens available: {}; cost: {cost}",
+                self.tokens
+            );
+            self.n_throttled += 1;
+            None
         }
     }
 }
@@ -156,15 +207,41 @@ impl Coordinator {
         }
     }
 
+    /// Check whether we need to do throttling (i.e., whether `STATEMENT_LOGGING_TARGET_DATA_RATE` is set).
+    /// If so, actually do the check.
+    ///
+    /// Returns `None` if we must throttle this statement, and `Some(n)` otherwise, where `n`
+    /// is the number of statements that were dropped due to throttling before this one.
+    fn statement_logging_throttling_check(&mut self, cost: usize) -> Option<usize> {
+        let Some(target_data_rate) = self
+            .catalog
+            .system_config()
+            .statement_logging_target_data_rate()
+        else {
+            return Some(std::mem::take(&mut self.statement_logging.n_throttled));
+        };
+        let max_data_credit = self
+            .catalog
+            .system_config()
+            .statement_logging_max_data_credit();
+        self.statement_logging.throttling_check(
+            cost.cast_into(),
+            target_data_rate.cast_into(),
+            max_data_credit.map(CastInto::cast_into),
+        )
+    }
+
     /// Returns any statement logging events needed for a particular
     /// prepared statement. Possibly mutates the `PreparedStatementLoggingInfo` metadata.
     ///
     /// This function does not do a sampling check, and assumes we did so in a higher layer.
+    ///
+    /// It _does_ do a throttling check, and returns `None` if we must not log due to throttling.
     pub(crate) fn log_prepared_statement(
         &mut self,
         session: &mut Session,
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
-    ) -> (Option<StatementPreparedRecord>, Uuid) {
+    ) -> Option<(Option<(StatementPreparedRecord, Row)>, Uuid)> {
         let logging = session.qcell_rw(&*logging);
         let mut out = None;
 
@@ -184,7 +261,7 @@ impl Coordinator {
                     "accounting for logging should be done in `begin_statement_execution`"
                 );
                 let uuid = Uuid::new_v4();
-                out = Some(StatementPreparedRecord {
+                let record = StatementPreparedRecord {
                     id: uuid,
                     sql: std::mem::take(sql),
                     redacted_sql: std::mem::take(redacted_sql),
@@ -192,13 +269,20 @@ impl Coordinator {
                     session_id: *session_id,
                     prepared_at: *prepared_at,
                     kind: *kind,
-                });
+                };
+                let mut row = Row::default();
+                let mut packer = row.packer();
+                Self::pack_statement_prepared_update(&record, &mut packer);
+                let cost = packer.byte_len();
+                let n_throttled = self.statement_logging_throttling_check(cost)?;
+                packer.push(Datum::UInt64(n_throttled.try_into().expect("must fit")));
+                out = Some((record, row));
 
                 *logging = PreparedStatementLoggingInfo::AlreadyLogged { uuid };
                 uuid
             }
         };
-        (out, uuid)
+        Some((out, uuid))
     }
     /// The rate at which statement execution should be sampled.
     /// This is the value of the session var `statement_logging_sample_rate`,
@@ -328,7 +412,7 @@ impl Coordinator {
         row
     }
 
-    fn pack_statement_prepared_update(record: &StatementPreparedRecord) -> Row {
+    fn pack_statement_prepared_update(record: &StatementPreparedRecord, packer: &mut RowPacker) {
         let StatementPreparedRecord {
             id,
             session_id,
@@ -338,7 +422,7 @@ impl Coordinator {
             prepared_at,
             kind,
         } = record;
-        let row = Row::pack_slice(&[
+        packer.extend([
             Datum::Uuid(*id),
             Datum::Uuid(*session_id),
             Datum::String(name.as_str()),
@@ -347,7 +431,6 @@ impl Coordinator {
             Datum::TimestampTz(to_datetime(*prepared_at).try_into().expect("must fit")),
             kind.map(statement_kind_label_value).into(),
         ]);
-        row
     }
 
     fn pack_session_history_update(event: &SessionHistoryEvent) -> Row {
@@ -527,7 +610,7 @@ impl Coordinator {
         if !sample {
             return None;
         }
-        let (ps_record, ps_uuid) = self.log_prepared_statement(session, logging);
+        let (ps_record, ps_uuid) = self.log_prepared_statement(session, logging)?;
 
         let ev_id = Uuid::new_v4();
         self.record_statement_lifecycle_event(
@@ -571,8 +654,7 @@ impl Coordinator {
         self.statement_logging
             .executions_begun
             .insert(ev_id, record);
-        if let Some(ps_record) = ps_record {
-            let ps_update = Self::pack_statement_prepared_update(&ps_record);
+        if let Some((ps_record, ps_update)) = ps_record {
             self.statement_logging
                 .pending_prepared_statement_events
                 .push(ps_update);
