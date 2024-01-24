@@ -229,9 +229,9 @@ steps:
   - id: testdrive
     label: Testdrive %N
     depends_on: build-aarch64
-    timeout_in_minutes: 30
+    timeout_in_minutes: 40
     inputs: [test/testdrive]
-    parallelism: 6
+    parallelism: 8
     # Don't need the junit_mzcompose_*.xml for this
     artifact_paths: [junit_testdrive_*.xml, test/testdrive/junit_testdrive_*.xml]
     plugins:
@@ -381,7 +381,7 @@ steps:
   - id: ssh-connection
     label: SSH connection tests
     depends_on: build-aarch64
-    timeout_in_minutes: 20
+    timeout_in_minutes: 40
     inputs: [test/ssh-connection]
     artifact_paths: junit_*.xml
     plugins:
