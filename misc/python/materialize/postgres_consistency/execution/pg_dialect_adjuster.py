@@ -11,6 +11,9 @@ import re
 from materialize.output_consistency.execution.sql_dialect_adjuster import (
     SqlDialectAdjuster,
 )
+from materialize.output_consistency.input_data.types.date_time_types_provider import (
+    INTERVAL_TYPE_IDENTIFIER,
+)
 
 
 class PgSqlDialectAdjuster(SqlDialectAdjuster):
@@ -20,8 +23,10 @@ class PgSqlDialectAdjuster(SqlDialectAdjuster):
 
         return type_name
 
-    def adjust_value(self, string_value: str, type_name: str) -> str:
-        if type_name == "INTERVAL":
+    def adjust_value(
+        self, string_value: str, internal_type_identifier: str, type_name: str
+    ) -> str:
+        if internal_type_identifier == INTERVAL_TYPE_IDENTIFIER:
             # cut milliseconds away
             string_value = re.sub("\\.\\d+'$", "'", string_value)
 
@@ -29,5 +34,11 @@ class PgSqlDialectAdjuster(SqlDialectAdjuster):
             # wrap negative numbers in parentheses
             # see: https://github.com/MaterializeInc/materialize/issues/21993
             string_value = f"({string_value})"
+
+        return string_value
+
+    def adjust_enum_value(self, string_value: str) -> str:
+        if string_value == "DOUBLE":
+            return "DOUBLE PRECISION"
 
         return string_value

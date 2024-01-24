@@ -12,7 +12,12 @@ class SqlDialectAdjuster:
     def adjust_type(self, type_name: str) -> str:
         return type_name
 
-    def adjust_value(self, string_value: str, type_name: str) -> str:
+    def adjust_value(
+        self, string_value: str, internal_type_identifier: str, type_name: str
+    ) -> str:
+        return string_value
+
+    def adjust_enum_value(self, string_value: str) -> str:
         return string_value
 
 

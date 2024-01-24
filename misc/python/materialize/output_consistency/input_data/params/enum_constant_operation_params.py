@@ -12,6 +12,9 @@ from materialize.output_consistency.enum.enum_operation_param import (
 from materialize.output_consistency.expression.expression_characteristics import (
     ExpressionCharacteristics,
 )
+from materialize.output_consistency.input_data.types.all_types_provider import (
+    DATA_TYPES,
+)
 
 TIME_ZONE_PARAM = EnumConstantOperationParam(
     ["UTC", "CET", "+8", "America/New_York"], add_quotes=True
@@ -90,3 +93,16 @@ JSON_PATH_PARAM = EnumConstantOperationParam(
 HASH_ALGORITHM_PARAM = EnumConstantOperationParam(
     ["md5", "sha1", "sha224", "sha256", "sha384", "sha512"], add_quotes=True
 )
+
+
+def all_data_types_enum_constant_operation_param(
+    must_be_pg_compatible: bool,
+) -> EnumConstantOperationParam:
+    all_type_names = [
+        data_type.type_name
+        for data_type in DATA_TYPES
+        if data_type.is_pg_compatible or not must_be_pg_compatible
+    ]
+    return EnumConstantOperationParam(
+        all_type_names, add_quotes=False, add_invalid_value=False
+    )
