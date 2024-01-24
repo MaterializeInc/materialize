@@ -327,7 +327,7 @@ pub async fn blob_batch_part(
     partial_key: String,
     limit: usize,
 ) -> Result<impl serde::Serialize, anyhow::Error> {
-    let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
+    let cfg = PersistConfig::new_default_configs(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let blob = make_blob(&cfg, blob_uri, NO_COMMIT, metrics).await?;
 
@@ -383,7 +383,7 @@ struct BlobCounts {
 
 /// Fetches the blob count for given path
 pub async fn blob_counts(blob_uri: &str) -> Result<impl serde::Serialize, anyhow::Error> {
-    let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
+    let cfg = PersistConfig::new_default_configs(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let blob = make_blob(&cfg, blob_uri, NO_COMMIT, metrics).await?;
 
@@ -413,7 +413,7 @@ pub async fn blob_counts(blob_uri: &str) -> Result<impl serde::Serialize, anyhow
 
 /// Rummages through S3 to find the latest rollup for each shard, then calculates summary stats.
 pub async fn shard_stats(blob_uri: &str) -> anyhow::Result<()> {
-    let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
+    let cfg = PersistConfig::new_default_configs(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
     let blob = make_blob(&cfg, blob_uri, NO_COMMIT, metrics).await?;
 
@@ -566,7 +566,7 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
     } else {
         Some(args.shard_id())
     };
-    let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
+    let cfg = PersistConfig::new_default_configs(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
     let metrics_registry = MetricsRegistry::new();
     let metrics = Arc::new(Metrics::new(&cfg, &metrics_registry));
     let consensus =

@@ -47,7 +47,8 @@ pub struct Args {
 
 pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     let shard_id = ShardId::from_str("s00000000-0000-0000-0000-000000000000").expect("shard id");
-    let config = PersistConfig::new(&mz_persist_client::BUILD_INFO, SYSTEM_TIME.clone());
+    let config =
+        PersistConfig::new_default_configs(&mz_persist_client::BUILD_INFO, SYSTEM_TIME.clone());
     match args.role {
         Role::Server => {
             info!("listening on {}", args.listen_addr);

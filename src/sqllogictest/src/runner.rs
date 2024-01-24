@@ -972,11 +972,8 @@ impl<'a> RunnerInner<'a> {
         let now = SYSTEM_TIME.clone();
         let metrics_registry = MetricsRegistry::new();
 
-        let persist_config = PersistConfig::new_with_configs(
-            &mz_environmentd::BUILD_INFO,
-            now.clone(),
-            all_dyn_configs(),
-        );
+        let persist_config =
+            PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone(), all_dyn_configs());
         let persist_pubsub_server =
             PersistGrpcPubSubServer::new(&persist_config, &metrics_registry);
         let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();

@@ -1110,7 +1110,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr`
     async fn snapshot_stats(&self) {
         let client = PersistClientCache::new(
-            PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
+            PersistConfig::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
             &MetricsRegistry::new(),
             |_, _| PubSubClientConnection::noop(),
         )

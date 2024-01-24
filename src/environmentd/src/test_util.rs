@@ -337,7 +337,7 @@ impl Listeners {
         // Messing with the clock causes persist to expire leases, causing hangs and
         // panics. Is it possible/desirable to put this back somehow?
         let persist_now = SYSTEM_TIME.clone();
-        let mut persist_cfg = PersistConfig::new(&crate::BUILD_INFO, persist_now);
+        let mut persist_cfg = PersistConfig::new_default_configs(&crate::BUILD_INFO, persist_now);
         // Tune down the number of connections to make this all work a little easier
         // with local postgres.
         persist_cfg.consensus_connection_pool_max_size = 1;
