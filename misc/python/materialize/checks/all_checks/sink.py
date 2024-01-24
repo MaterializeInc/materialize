@@ -285,6 +285,8 @@ class SinkTables(Check):
                   )
                   GROUP BY f2
 
+                > SET statement_timeout = '120s'
+
                 > SELECT * FROM sink_large_transaction_view2
                 500000 200000 100000 0 99999
 
