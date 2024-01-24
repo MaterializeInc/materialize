@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+from materialize.mzcompose.test_result import TestFailureDetails
 
 
 class ConsistencyTestLogger:
@@ -35,13 +36,20 @@ class ConsistencyTestSummary(ConsistencyTestLogger):
         self.count_successful_query_templates = count_successful_query_templates
         self.count_ignored_error_query_templates = count_ignored_error_query_templates
         self.count_with_warning_query_templates = count_with_warning_query_templates
+        self.failures: list[TestFailureDetails] = []
+
+    def add_failures(self, failures: list[TestFailureDetails]):
+        self.failures.extend(failures)
 
     def all_passed(self) -> bool:
-        return (
+        all_passed = (
             self.count_executed_query_templates
             == self.count_successful_query_templates
             + self.count_ignored_error_query_templates
         )
+
+        assert all_passed == (len(self.failures) == 0)
+        return all_passed
 
     def __str__(self) -> str:
         count_accepted_queries = (

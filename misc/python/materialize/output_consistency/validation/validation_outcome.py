@@ -9,6 +9,7 @@
 from collections.abc import Sequence
 from enum import Enum
 
+from materialize.mzcompose.test_result import TestFailureDetails
 from materialize.output_consistency.ignore_filter.inconsistency_ignore_filter import (
     GenericInconsistencyIgnoreFilter,
 )
@@ -111,3 +112,21 @@ class ValidationOutcome:
             return ""
 
         return "\n".join(f"{LI_PREFIX}{str(entry)}" for entry in entries)
+
+    def to_failure_details(self) -> list[TestFailureDetails]:
+        failures = []
+
+        for error in self.errors:
+            test_case_name = f"Query {error.query_execution.query_id}"
+            if error.concerned_expression is not None:
+                test_case_name = f"{test_case_name} ('{error.concerned_expression}')"
+
+            failures.append(
+                TestFailureDetails(
+                    test_case_name_override=test_case_name,
+                    message=error.message,
+                    details=str(error),
+                )
+            )
+
+        return failures

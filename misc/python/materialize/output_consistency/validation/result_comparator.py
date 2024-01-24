@@ -317,6 +317,7 @@ class ResultComparator:
                         sql1=result1.sql,
                         sql2=result2.sql,
                         col_index=col_index,
+                        concerned_expression=expression,
                         location=f"row index {row_index}, column index {col_index} ('{expression}')",
                     ),
                 )
