@@ -120,12 +120,6 @@ pub struct LocalMirPlan<T = Unresolved> {
     context: T,
 }
 
-impl<T> LocalMirPlan<T> {
-    pub fn expr(&self) -> &MirRelationExpr {
-        &self.expr
-    }
-}
-
 /// Marker type for [`LocalMirPlan`] structs representing an optimization result
 /// with attached environment context required for the next optimization stage.
 pub struct ResolvedLocal<'s> {
