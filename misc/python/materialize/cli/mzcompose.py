@@ -20,7 +20,7 @@ just the right way. This stretches the limit of argparse, but that complexity
 has been carefully managed. If you are tempted to refactor the argument parsing
 code, please talk to me first!
 """
-
+from __future__ import annotations
 
 import argparse
 import inspect
@@ -38,6 +38,7 @@ from semver.version import Version
 
 from materialize import MZ_ROOT, ci_util, mzbuild, spawn, ui
 from materialize.mzcompose.composition import Composition, UnknownCompositionError
+from materialize.mzcompose.test_result import TestResult
 from materialize.ui import UIError
 
 RECOMMENDED_MIN_MEM = 7 * 1024**3  # 7GiB
@@ -617,35 +618,63 @@ To see the available workflows, run:
             with composition.test_case(f"workflow-{args.workflow}"):
                 composition.workflow(args.workflow, *args.unknown_subargs[1:])
 
-            buildkite_step_name = os.getenv("BUILDKITE_LABEL")
-            test_suite_name = buildkite_step_name or composition.name
-            test_class_name = test_suite_name
+            junit_suite = self.generate_junit_suite(composition)
+            junit_xml_file_path = self.write_junit_report_to_file(junit_suite)
+            ci_util.upload_junit_report("mzcompose", junit_xml_file_path)
 
-            # Upload test report to Buildkite Test Analytics.
-            junit_suite = junit_xml.TestSuite(test_suite_name)
+            if any(
+                not result.is_successful()
+                for result in composition.test_results.values()
+            ):
+                raise UIError("at least one test case failed")
 
-            for test_case_key, result in composition.test_results.items():
-                test_case_name = result.get_error_file() or test_case_key
+    def generate_junit_suite(self, composition: Composition) -> junit_xml.TestSuite:
+        buildkite_step_name = os.getenv("BUILDKITE_LABEL")
+        test_suite_name = buildkite_step_name or composition.name
+        test_class_name = test_suite_name
+
+        # Upload test report to Buildkite Test Analytics.
+        junit_suite = junit_xml.TestSuite(test_suite_name)
+
+        for test_case_key, result in composition.test_results.items():
+            self.append_to_junit_suite(
+                junit_suite, test_class_name, test_case_key, result
+            )
+
+        return junit_suite
+
+    def append_to_junit_suite(
+        self,
+        junit_suite: junit_xml.TestSuite,
+        test_class_name: str,
+        test_case_key: str,
+        result: TestResult,
+    ):
+        if result.is_successful():
+            test_case_name = test_case_key
+            test_case = junit_xml.TestCase(
+                test_case_name,
+                test_class_name,
+                result.duration,
+            )
+            junit_suite.test_cases.append(test_case)
+        else:
+            for error in result.errors:
+                test_case_name = error.location_as_file_name() or test_case_key
                 test_case = junit_xml.TestCase(
                     test_case_name,
                     test_class_name,
                     result.duration,
                 )
-                if result.is_failure():
-                    assert result.error is not None
-                    test_case.add_error_info(
-                        message=result.error, output=result.error_details
-                    )
+                test_case.add_error_info(message=error.message, output=error.details)
                 junit_suite.test_cases.append(test_case)
-            junit_report = ci_util.junit_report_filename("mzcompose")
-            with junit_report.open("w") as f:
-                junit_xml.to_xml_report_file(f, [junit_suite])
-            ci_util.upload_junit_report("mzcompose", junit_report)
 
-            if any(
-                result.error is not None for result in composition.test_results.values()
-            ):
-                raise UIError("at least one test case failed")
+    def write_junit_report_to_file(self, junit_suite: junit_xml.TestSuite) -> Path:
+        junit_report = ci_util.junit_report_filename("mzcompose")
+        with junit_report.open("w") as f:
+            junit_xml.to_xml_report_file(f, [junit_suite])
+
+        return junit_report
 
 
 BuildCommand = DockerComposeCommand("build", "build or rebuild services")

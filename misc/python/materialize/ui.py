@@ -189,11 +189,13 @@ class CommandFailureCausedUIError(UIError):
         self,
         message: str,
         cmd: list[str],
+        stdout: str | None = None,
         stderr: str | None = None,
         hint: str | None = None,
     ):
         super().__init__(message, hint)
         self.cmd = cmd
+        self.stdout = stdout
         self.stderr = stderr
 
 

@@ -33,7 +33,6 @@ import urllib.parse
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
 from inspect import Traceback, getframeinfo, getmembers, isfunction, stack
 from tempfile import TemporaryFile
 from typing import Any, TextIO, cast
@@ -47,6 +46,7 @@ from materialize import MZ_ROOT, mzbuild, spawn, ui
 from materialize.mzcompose import loader
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.minio import minio_blob_uri
+from materialize.mzcompose.test_result import TestFailureDetails, TestResult
 from materialize.ui import CommandFailureCausedUIError, UIError
 
 
@@ -83,28 +83,6 @@ class WorkflowArgumentParser(argparse.ArgumentParser):
 class Composition:
     """A loaded mzcompose.py file."""
 
-    @dataclass
-    class TestResult:
-        duration: float
-        error: str | None
-        error_details: str | None
-        error_location: str | None
-
-        def is_failure(self) -> bool:
-            return self.error is not None
-
-        def get_error_file(self) -> str | None:
-            if self.error_location is None:
-                return None
-
-            file_name = self.error_location
-            file_name = re.sub(r":\d+", "", file_name)
-
-            if "/" in file_name:
-                file_name = file_name[file_name.rindex("/") + 1 :]
-
-            return file_name
-
     def __init__(
         self,
         repo: mzbuild.Repository,
@@ -121,7 +99,7 @@ class Composition:
         self.project_name = project_name
         self.silent = silent
         self.workflows: dict[str, Callable[..., None]] = {}
-        self.test_results: OrderedDict[str, Composition.TestResult] = OrderedDict()
+        self.test_results: OrderedDict[str, TestResult] = OrderedDict()
         self.files = {}
 
         if name in self.repo.compositions:
@@ -279,6 +257,10 @@ class Composition:
         stdout = None
         if capture:
             stdout = subprocess.PIPE if capture == True else capture
+        elif capture_stderr:
+            # this is necessary for the stderr to work
+            stdout = subprocess.PIPE
+
         stderr = None
         if capture_stderr:
             stderr = subprocess.PIPE if capture_stderr == True else capture_stderr
@@ -330,7 +312,8 @@ class Composition:
                     raise CommandFailureCausedUIError(
                         f"running docker compose failed (exit status {e.returncode})",
                         cmd=e.cmd,
-                        stderr=e.stderr if capture_stderr == True else None,
+                        stdout=e.stdout,
+                        stderr=e.stderr,
                     )
             break
 
@@ -490,31 +473,82 @@ class Composition:
         if name in self.test_results:
             raise UIError(f"test case {name} executed twice")
         ui.header(f"Running test case {name}")
-        error = None
-        error_details = None
-        error_location = None
+        errors = []
         start_time = time.time()
         try:
             yield
+            end_time = time.time()
             ui.header(f"mzcompose: test case {name} succeeded")
         except Exception as e:
-            error = f"{str(type(e))}: {e}"
-            ui.header(f"mzcompose: test case {name} failed: {error}")
+            end_time = time.time()
+            error_message = f"{str(type(e))}: {e}"
+            ui.header(f"mzcompose: test case {name} failed: {error_message}")
+            errors = [
+                TestFailureDetails(
+                    error_message, details=None, location=None, line_number=None
+                )
+            ]
 
             if isinstance(e, CommandFailureCausedUIError):
-                error_details = e.stderr
-                error_location = self.try_determine_error_location_from_cmd(e.cmd)
+                if e.stderr is not None:
+                    # This is to avoid that captured stderr is missing in the logs.
+                    print(e.stderr, file=sys.stderr, flush=True)
 
-                if error_location is not None:
-                    error = f"Executing {error_location} failed"
+                try:
+                    extracted_errors = self.try_determine_errors_from_cmd_execution(e)
+                except:
+                    extracted_errors = []
+                errors = extracted_errors if len(extracted_errors) > 0 else errors
 
             if not isinstance(e, UIError):
                 traceback.print_exc()
 
-        duration = time.time() - start_time
-        self.test_results[name] = Composition.TestResult(
-            duration, error, error_details, error_location
-        )
+        duration = end_time - start_time
+        self.test_results[name] = TestResult(duration, errors)
+
+    def try_determine_errors_from_cmd_execution(
+        self, e: CommandFailureCausedUIError
+    ) -> list[TestFailureDetails]:
+        error_output = e.stderr
+
+        if error_output is None or "+++ !!! Error Report" not in error_output:
+            return []
+
+        error_output = error_output[: error_output.index("+++ !!! Error Report") - 1]
+        error_chunks = error_output.split("^^^ +++")
+
+        collected_errors = []
+        for chunk in error_chunks:
+            chunk = chunk.strip()
+            if len(chunk) == 0:
+                continue
+
+            match = re.search(r"([^.]+\.td):(\d+):\d+:", chunk)
+            if match is not None:
+                # for .td files like Postgres CDC, file_path will just contain the file name
+                file_path = match.group(1)
+                line_number = int(match.group(2))
+            else:
+                # for .py files like platform checks, file_path will be a path
+                file_path = self.try_determine_error_location_from_cmd(e.cmd)
+                if file_path is None or ":" not in file_path:
+                    line_number = None
+                else:
+                    parts = file_path.split(":")
+                    file_path = parts[0]
+                    line_number = int(parts[1])
+
+            message = f"Executing {file_path} failed!"
+            collected_errors.append(
+                TestFailureDetails(
+                    message,
+                    details=chunk,
+                    location=f"{file_path}",
+                    line_number=line_number,
+                )
+            )
+
+        return collected_errors
 
     def try_determine_error_location_from_cmd(self, cmd: list[str]) -> str | None:
         root_path_as_string = f"{MZ_ROOT}/"
@@ -654,6 +688,8 @@ class Composition:
             "testdrive",
             *args,
             rm=rm,
+            # needed for sufficient error information in the junit.xml
+            capture_stderr=True,
         )
 
     def exec(
