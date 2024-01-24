@@ -274,7 +274,7 @@ class Composition:
         """
 
         if not self.silent and not silent:
-            print(f"--- docker compose {' '.join(args)}", file=sys.stderr)
+            print(f"$ docker compose {' '.join(args)}", file=sys.stderr)
 
         stdout = None
         if capture:
