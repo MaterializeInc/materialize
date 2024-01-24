@@ -189,11 +189,11 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
 /// Checks if we're currently running on the [`MZ_INTROSPECTION_CLUSTER`], and if so, do
 /// we depend on any objects that we're not allowed to query from the cluster.
 pub fn check_cluster_restrictions(
+    cluster: &str,
     catalog: &impl SessionCatalog,
     plan: &Plan,
 ) -> Result<(), AdapterError> {
     // We only impose restrictions if the current cluster is the introspection cluster.
-    let cluster = catalog.active_cluster();
     if cluster != MZ_INTROSPECTION_CLUSTER.name {
         return Ok(());
     }
