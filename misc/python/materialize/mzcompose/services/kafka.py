@@ -42,6 +42,7 @@ class Kafka(Service):
         environment_extra: list[str] = [],
         depends_on_extra: list[str] = [],
         volumes: list[str] = [],
+        platform: str | None = None,
     ) -> None:
         if not advertised_listeners:
             advertised_listeners = [f"PLAINTEXT://{name}:9092"]
@@ -73,4 +74,6 @@ class Kafka(Service):
             },
             "volumes": volumes,
         }
+        if platform:
+            config["platform"] = platform
         super().__init__(name=name, config=config)
