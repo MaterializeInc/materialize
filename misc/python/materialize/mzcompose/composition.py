@@ -46,8 +46,15 @@ from materialize import MZ_ROOT, mzbuild, spawn, ui
 from materialize.mzcompose import loader
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.minio import minio_blob_uri
-from materialize.mzcompose.test_result import TestFailureDetails, TestResult
-from materialize.ui import CommandFailureCausedUIError, UIError
+from materialize.mzcompose.test_result import (
+    FailedTestExecutionError,
+    TestFailureDetails,
+    TestResult,
+)
+from materialize.ui import (
+    CommandFailureCausedUIError,
+    UIError,
+)
 
 
 class UnknownCompositionError(UIError):
@@ -499,6 +506,11 @@ class Composition:
                 except:
                     extracted_errors = []
                 errors = extracted_errors if len(extracted_errors) > 0 else errors
+            elif isinstance(e, FailedTestExecutionError):
+                errors = e.errors
+                assert (
+                    len(errors) > 0
+                ), "Failed test execution does not contain any errors"
 
             if not isinstance(e, UIError):
                 traceback.print_exc()
