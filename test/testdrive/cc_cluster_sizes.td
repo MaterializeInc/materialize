@@ -10,10 +10,6 @@
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_cc_cluster_sizes = false
 
-# Clean up cluster manually, since testdrive does not automatically clean up
-# clusters.
-> DROP CLUSTER IF EXISTS c;
-
 # Cannot create clusters with cc cluster size naming schemes
 ! CREATE CLUSTER c SIZE '1cc';
 contains:use of 'cc' cluster sizes is not supported
@@ -35,18 +31,71 @@ contains:use of 'cc' cluster sizes is not supported
 ! ALTER CLUSTER c SET (SIZE '1cc');
 contains:use of 'cc' cluster sizes is not supported
 
-> DROP CLUSTER IF EXISTS c;
+> DROP CLUSTER c
 
 # Now flip the flag and test that we can create clusters
-# with this naming scheme. Note that here the commands
-# still fail (haven't hooked up any of these size names
-# for testing), but crucially the error isn't due to the
-# feature flag gating
+# with this naming scheme.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_cc_cluster_sizes = true
 
-! CREATE CLUSTER c SIZE '1cc';
-contains:unknown cluster replica size 1cc
+> CREATE CLUSTER c SIZE '1cc';
+> DROP CLUSTER c
 
-! CREATE CLUSTER c SIZE '1C';
-contains:unknown cluster replica size 1C
+> CREATE CLUSTER c SIZE '1C';
+> DROP CLUSTER c
+
+# Create a cluster with a legacy size with disk enabled.
+> CREATE CLUSTER c SIZE '1', DISK = true
+
+# Altering to a cc size with disk explicitly toggled is not allowed.
+! ALTER CLUSTER c SET (SIZE = '1cc', DISK = true)
+contains:DISK option not supported for cluster sizes ending in cc or C
+! ALTER CLUSTER c SET (SIZE = '1cc', DISK = false)
+contains:DISK option not supported for cluster sizes ending in cc or C
+
+# But it's fine as long as the ALTER command doesn't mention disk explicitly,
+# even though the cluster's initial creation specified disk explicitly. The
+# DISK value is just forced to true.
+> ALTER CLUSTER c SET (SIZE = '1cc')
+> DROP CLUSTER c
+
+# Same test as before, except the legacy size cluster has disk explicitly
+# disabled.
+> CREATE CLUSTER c SIZE '1', DISK = false
+> ALTER CLUSTER c SET (SIZE = '1cc')
+> DROP CLUSTER c
+
+# Same test as before, except the legacy size cluster has no disk explicitly
+# configured.
+> CREATE CLUSTER c SIZE = '1'
+> ALTER CLUSTER c SET (SIZE = '1cc')
+
+# Cannot explicitly alter DISK option for new sizes.
+! ALTER CLUSTER c SET (DISK = false)
+contains:DISK option not supported for cluster sizes ending in cc or C
+! ALTER CLUSTER c SET (DISK = true)
+contains:DISK option not supported for cluster sizes ending in cc or C
+
+# But it's okay if you're going back to a legacy size.
+> ALTER CLUSTER c SET (DISK = true, SIZE = '1')
+> DROP CLUSTER c
+
+# Ensure that disk isn't configurable for the new sizes (as it's force enabled).
+
+! CREATE CLUSTER c SIZE '1cc', DISK = true;
+contains:DISK option not supported for cluster sizes ending in cc or C
+
+! CREATE CLUSTER c SIZE '1cc', DISK = false;
+contains:DISK option not supported for cluster sizes ending in cc or C
+
+> CREATE CLUSTER c REPLICAS (r1 (SIZE '1cc'))
+> CREATE CLUSTER REPLICA c.r2 SIZE '1cc';
+> CREATE CLUSTER REPLICA c.r3 SIZE '1C';
+
+! CREATE CLUSTER REPLICA c.r SIZE '1cc', DISK = true;
+contains:DISK option not supported for cluster sizes ending in cc or C
+
+! CREATE CLUSTER REPLICA c.r SIZE '1cc', DISK = false;
+contains:DISK option not supported for cluster sizes ending in cc or C
+
+> DROP CLUSTER c

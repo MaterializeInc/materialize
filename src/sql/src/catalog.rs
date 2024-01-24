@@ -537,6 +537,9 @@ pub trait CatalogCluster<'a> {
 
     /// Returns true if this cluster is a managed cluster.
     fn is_managed(&self) -> bool;
+
+    /// Returns the size of the cluster, if the cluster is a managed cluster.
+    fn managed_size(&self) -> Option<&str>;
 }
 
 /// A cluster replica in a [`SessionCatalog`]

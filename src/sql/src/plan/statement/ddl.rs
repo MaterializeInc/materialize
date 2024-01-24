@@ -3294,7 +3294,7 @@ pub fn plan_create_cluster(
         replication_factor,
         seen: _,
         size,
-        disk,
+        disk: disk_in,
     }: ClusterOptionExtracted = options.try_into()?;
 
     let managed = managed.unwrap_or_else(|| replicas.is_none());
@@ -3306,6 +3306,9 @@ pub fn plan_create_cluster(
         let Some(size) = size else {
             sql_bail!("SIZE must be specified for managed clusters");
         };
+        if disk_in.is_some() {
+            scx.require_feature_flag(&vars::ENABLE_DISK_CLUSTER_REPLICAS)?;
+        }
         ensure_cluster_size_allowed(scx, &size)?;
 
         let compute = plan_compute_replica_config(
@@ -3322,9 +3325,19 @@ pub fn plan_create_cluster(
         }
 
         let disk_default = scx.catalog.system_vars().disk_cluster_replicas_default();
-        let disk = disk.unwrap_or(disk_default);
-        if disk {
-            scx.require_feature_flag(&vars::ENABLE_DISK_CLUSTER_REPLICAS)?;
+        let mut disk = disk_in.unwrap_or(disk_default);
+
+        // HACK(benesch): disk is always enabled for v2 cluster sizes, and it
+        // is an error to specify `DISK = FALSE` or `DISK = TRUE` explicitly.
+        //
+        // The long term plan is to phase out the v1 cluster sizes, at which
+        // point we'll be able to remove the `DISK` option entirely and simply
+        // always enable disk.
+        if is_cluster_size_v2(&size) {
+            if disk_in.is_some() {
+                sql_bail!("DISK option not supported for cluster sizes ending in cc or C because disk is always enabled");
+            }
+            disk = true;
         }
 
         Ok(Plan::CreateCluster(CreateClusterPlan {
@@ -3359,7 +3372,7 @@ pub fn plan_create_cluster(
         if size.is_some() {
             sql_bail!("SIZE not supported for unmanaged clusters");
         }
-        if disk.is_some() {
+        if disk_in.is_some() {
             sql_bail!("DISK not supported for unmanaged clusters");
         }
         let mut replicas = vec![];
@@ -3400,7 +3413,7 @@ fn plan_replica_config(
         billed_as,
         compute_addresses,
         computectl_addresses,
-        disk,
+        disk: disk_in,
         idle_arrangement_merge_effort,
         internal,
         introspection_debugging,
@@ -3418,7 +3431,7 @@ fn plan_replica_config(
         idle_arrangement_merge_effort,
     )?;
 
-    if disk.is_some() {
+    if disk_in.is_some() {
         scx.require_feature_flag(&vars::ENABLE_DISK_CLUSTER_REPLICAS)?;
     }
 
@@ -3440,8 +3453,22 @@ fn plan_replica_config(
         }
         (Some(size), availability_zone, billed_as, None, None, None, None, None) => {
             let disk_default = scx.catalog.system_vars().disk_cluster_replicas_default();
-            let disk = disk.unwrap_or(disk_default);
+            let mut disk = disk_in.unwrap_or(disk_default);
             ensure_cluster_size_allowed(scx, &size)?;
+
+            // HACK(benesch): disk is always enabled for v2 cluster sizes, and
+            // it is an error to specify `DISK = FALSE` or `DISK = TRUE`
+            // explicitly.
+            //
+            // The long term plan is to phase out the v1 cluster sizes, at which
+            // point we'll be able to remove the `DISK` option entirely and
+            // simply always enable disk.
+            if is_cluster_size_v2(&size) {
+                if disk_in.is_some() {
+                    sql_bail!("DISK option not supported for cluster sizes ending in cc or C because disk is always enabled");
+                }
+                disk = true;
+            }
 
             Ok(ReplicaConfig::Managed {
                 size,
@@ -3498,7 +3525,7 @@ fn plan_replica_config(
                 sql_bail!("WORKERS must be greater than 0");
             }
 
-            if disk.is_some() {
+            if disk_in.is_some() {
                 sql_bail!("DISK can't be specified for unmanaged clusters");
             }
 
@@ -4478,9 +4505,20 @@ pub fn plan_alter_cluster(
             if let Some(replication_factor) = replication_factor {
                 options.replication_factor = AlterOptionParameter::Set(replication_factor);
             }
-            if let Some(size) = size {
-                ensure_cluster_size_allowed(scx, &size)?;
-                options.size = AlterOptionParameter::Set(size);
+            if let Some(size) = &size {
+                ensure_cluster_size_allowed(scx, size)?;
+                // HACK(benesch): disk is always enabled for v2 cluster sizes,
+                // and it is an error to specify `DISK = FALSE` or `DISK = TRUE`
+                // explicitly.
+                //
+                // The long term plan is to phase out the v1 cluster sizes, at
+                // which point we'll be able to remove the `DISK` option
+                // entirely and simply always enable disk.
+                if is_cluster_size_v2(size) && disk.is_some() {
+                    sql_bail!("DISK option not supported for cluster sizes ending in cc or C because disk is always enabled");
+                }
+                options.size = AlterOptionParameter::Set(size.clone());
+                options.disk = AlterOptionParameter::Set(true);
             }
             if let Some(availability_zones) = availability_zones {
                 options.availability_zones = AlterOptionParameter::Set(availability_zones);
@@ -4497,6 +4535,20 @@ pub fn plan_alter_cluster(
                 options.introspection_interval = AlterOptionParameter::Set(introspection_interval);
             }
             if let Some(disk) = disk {
+                // HACK(benesch): disk is always enabled for v2 cluster sizes,
+                // and it is an error to specify `DISK = FALSE` or `DISK = TRUE`
+                // explicitly.
+                //
+                // The long term plan is to phase out the v1 cluster sizes, at
+                // which point we'll be able to remove the `DISK` option
+                // entirely and simply always enable disk.
+                let size = size.as_deref().unwrap_or_else(|| {
+                    cluster.managed_size().expect("cluster known to be managed")
+                });
+                if is_cluster_size_v2(size) {
+                    sql_bail!("DISK option not supported for cluster sizes ending in cc or C because disk is always enabled");
+                }
+
                 if disk {
                     scx.require_feature_flag(&vars::ENABLE_DISK_CLUSTER_REPLICAS)?;
                 }
@@ -5715,9 +5767,13 @@ fn ensure_cluster_size_allowed(scx: &StatementContext, size: &str) -> Result<(),
     // cluster size names. This feature flag can be removed upon
     // completion of https://github.com/MaterializeInc/cloud/issues/5343
     // and https://github.com/MaterializeInc/cloud/issues/7013
-    if size.ends_with("cc") || size.ends_with('C') {
+    if is_cluster_size_v2(size) {
         scx.require_feature_flag(&vars::ENABLE_CC_CLUSTER_SIZES)
     } else {
         Ok(())
     }
+}
+
+fn is_cluster_size_v2(size: &str) -> bool {
+    size.ends_with("cc") || size.ends_with('C')
 }
