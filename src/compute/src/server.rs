@@ -363,7 +363,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                             loop {
                                 match command_rx.try_recv() {
                                     Ok(cmd) => {
-                                        // Commands must never be sent to another worker. This
+                                        // Commands must never be accepted from another worker. This
                                         // implementation does not guarantee an ordering of events
                                         // sent to different workers.
                                         assert_eq!(worker_id, 0);
@@ -381,6 +381,13 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                                 };
                             }
                             cap.downgrade(&(time + 1));
+                        } else {
+                            // Non-leader workers will still receive `UpdateConfiguration` commands
+                            // and we must drain those to not leak memory.
+                            if let Ok(cmd) = command_rx.try_recv() {
+                                assert_ne!(worker_id, 0);
+                                assert!(matches!(cmd, ComputeCommand::UpdateConfiguration(_)));
+                            }
                         }
 
                         if disconnected {
