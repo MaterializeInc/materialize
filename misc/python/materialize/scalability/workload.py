@@ -19,8 +19,10 @@ class Workload:
     def operations(self) -> list[Operation]:
         raise NotImplementedError
 
-    def execute_operation(self, operation: Operation, cursor: Cursor) -> None:
-        data = OperationData(cursor)
+    def execute_operation(
+        self, operation: Operation, cursor: Cursor, worker_id: int
+    ) -> None:
+        data = OperationData(cursor, worker_id)
         self.amend_data_before_execution(data)
         operation.execute(data)
 

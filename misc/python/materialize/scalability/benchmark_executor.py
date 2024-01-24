@@ -255,13 +255,14 @@ class BenchmarkExecutor:
         self, args: tuple[Workload, int, threading.local, list[Cursor], Operation, int]
     ) -> dict[str, Any]:
         workload, concurrency, local, cursor_pool, operation, transaction_index = args
+        worker_id = local.worker_id
         assert (
-            len(cursor_pool) >= local.worker_id + 1
-        ), f"len(cursor_pool) is {len(cursor_pool)} but local.worker_id is {local.worker_id}"
-        cursor = cursor_pool[local.worker_id]
+            len(cursor_pool) >= worker_id + 1
+        ), f"len(cursor_pool) is {len(cursor_pool)} but local.worker_id is {worker_id}"
+        cursor = cursor_pool[worker_id]
 
         start = time.time()
-        workload.execute_operation(operation, cursor)
+        workload.execute_operation(operation, cursor, worker_id)
         wallclock = time.time() - start
 
         return {
