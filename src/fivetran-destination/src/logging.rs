@@ -48,7 +48,8 @@ where
         ctx.format_fields(Writer::new(&mut message), event)?;
 
         let level = match *event.metadata().level() {
-            // Mapping TRACE and DEBUG isn't the best, but Fivetran has no other severity level.
+            // Mapping TRACE and DEBUG to the same level isn't the best, but Fivetran has no other
+            // severity level.
             Level::TRACE | Level::DEBUG => FivetranEventLevel::Notice,
             Level::INFO => FivetranEventLevel::Info,
             Level::WARN => FivetranEventLevel::Warning,
@@ -85,7 +86,6 @@ struct FivetranEvent {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "UPPERCASE")]
 enum FivetranEventLevel {
-    // TODO(parkmycar): Check with Emrah to make sure NOTICE is a supported level.
     Notice,
     Info,
     Warning,
@@ -185,13 +185,41 @@ mod tests {
 
         let _guard = subscriber.set_default();
 
+        tracing::info!("hello world!");
+        let msg = String::from_utf8(writer.drain()).unwrap();
+        assert_eq!(
+            msg,
+            r#"{"level":"INFO","message":"hello world!","message-origin":"sdk_destination"}"#
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: `open` not available when isolation is enabled
+    fn test_tracing_logging_levels() {
+        let writer = TestWriter::default();
+
+        let subscriber = tracing_subscriber::fmt::fmt()
+            .with_writer(writer.clone())
+            .with_ansi(false)
+            .with_max_level(tracing_core::Level::TRACE)
+            .event_format(FivetranLoggingFormat::destination())
+            .finish();
+
+        let _guard = subscriber.set_default();
+
         tracing::trace!("this is a low priority trace");
         let msg = String::from_utf8(writer.drain()).unwrap();
-        insta::assert_snapshot!(msg, @r###"{"level":"NOTICE","message":"this is a low priority trace","message-origin":"sdk_destination"}"###);
+        insta::assert_snapshot!(
+            msg,
+            @r###"{"level":"NOTICE","message":"this is a low priority trace","message-origin":"sdk_destination"}"###
+        );
 
         tracing::debug!(alert_count = 42, "good level for debug printing");
         let msg = String::from_utf8(writer.drain()).unwrap();
-        insta::assert_snapshot!(msg, @r###"{"level":"NOTICE","message":"good level for debug printing alert_count=42","message-origin":"sdk_destination"}"###);
+        insta::assert_snapshot!(
+            msg,
+            @r###"{"level":"NOTICE","message":"good level for debug printing alert_count=42","message-origin":"sdk_destination"}"###
+        );
 
         #[derive(Debug)]
         #[allow(unused)]
@@ -206,14 +234,23 @@ mod tests {
 
         tracing::info!(?data, "hello world!");
         let msg = String::from_utf8(writer.drain()).unwrap();
-        insta::assert_snapshot!(msg, @r###"{"level":"INFO","message":"hello world! data=ComplexData { level: 101, msg: \"this is a nested message\" }","message-origin":"sdk_destination"}"###);
+        insta::assert_snapshot!(
+            msg,
+            @r###"{"level":"INFO","message":"hello world! data=ComplexData { level: 101, msg: \"this is a nested message\" }","message-origin":"sdk_destination"}"###
+        );
 
         tracing::warn!("oh no something went wrong but we can try to recover");
         let msg = String::from_utf8(writer.drain()).unwrap();
-        insta::assert_snapshot!(msg, @r###"{"level":"WARNING","message":"oh no something went wrong but we can try to recover","message-origin":"sdk_destination"}"###);
+        insta::assert_snapshot!(
+            msg,
+            @r###"{"level":"WARNING","message":"oh no something went wrong but we can try to recover","message-origin":"sdk_destination"}"###
+        );
 
         tracing::error!("EEK! hopefully we never hit this");
         let msg = String::from_utf8(writer.drain()).unwrap();
-        insta::assert_snapshot!(msg, @r###"{"level":"SEVERE","message":"EEK! hopefully we never hit this","message-origin":"sdk_destination"}"###);
+        insta::assert_snapshot!(
+            msg,
+            @r###"{"level":"SEVERE","message":"EEK! hopefully we never hit this","message-origin":"sdk_destination"}"###
+        );
     }
 }
