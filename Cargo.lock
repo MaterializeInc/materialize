@@ -4414,6 +4414,7 @@ dependencies = [
  "clap",
  "csv-async",
  "futures",
+ "insta",
  "itertools",
  "mz-ore",
  "mz-pgrepr",
@@ -4424,10 +4425,15 @@ dependencies = [
  "prost-build",
  "prost-types",
  "protobuf-src",
+ "serde",
+ "serde_json",
  "tokio",
  "tokio-postgres",
  "tonic",
  "tonic-build",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
  "workspace-hack",
 ]
 

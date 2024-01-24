@@ -9,6 +9,7 @@
 
 //! Fivetran destination for Materialize.
 
+use mz_fivetran_destination::logging::FivetranLoggingFormat;
 use mz_fivetran_destination::{DestinationServer, MaterializeDestination};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
@@ -27,6 +28,13 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
+    // Start our tracing as early as possible so we can capture any issues with startup.
+    tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(tracing_core::Level::TRACE)
+        .event_format(FivetranLoggingFormat::destination())
+        .init();
+
     let args = cli::parse_args(CliConfig {
         env_prefix: Some("MZ_FIVETRAN_DESTINATION_"),
         enable_version_flag: false,
