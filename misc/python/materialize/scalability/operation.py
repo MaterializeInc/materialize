@@ -56,6 +56,37 @@ class SqlOperationWithInput(Operation):
         raise NotImplementedError
 
 
+class SqlOperationWithSeed(SqlOperationWithInput):
+    def __init__(self, seed_key: str):
+        self.seed_key = seed_key
+
+    def required_input_keys(self) -> set[str]:
+        return {self.seed_key}
+
+    def sql_statement_based_on_input(self, input: OperationData) -> str:
+        return self.sql_statement(str(input.get(self.seed_key)))
+
+    def sql_statement(self, seed: str) -> str:
+        raise NotImplementedError
+
+
+class SqlOperationWithTwoSeeds(SqlOperationWithInput):
+    def __init__(self, seed_key1: str, seed_key2: str):
+        self.seed_key1 = seed_key1
+        self.seed_key2 = seed_key2
+
+    def required_input_keys(self) -> set[str]:
+        return {self.seed_key1, self.seed_key2}
+
+    def sql_statement_based_on_input(self, input: OperationData) -> str:
+        return self.sql_statement(
+            str(input.get(self.seed_key1)), str(input.get(self.seed_key2))
+        )
+
+    def sql_statement(self, seed1: str, seed2: str) -> str:
+        raise NotImplementedError
+
+
 class SimpleSqlOperation(SqlOperationWithInput):
     def required_input_keys(self) -> set[str]:
         return set()
