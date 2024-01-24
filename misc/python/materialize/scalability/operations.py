@@ -9,47 +9,47 @@
 from psycopg import Connection
 
 from materialize.scalability.endpoint import Endpoint
-from materialize.scalability.operation import Operation, SqlOperation
+from materialize.scalability.operation import Operation, SimpleSqlOperation
 from materialize.scalability.operation_data import OperationData
 from materialize.scalability.schema import Schema
 
 
-class InsertDefaultValues(SqlOperation):
+class InsertDefaultValues(SimpleSqlOperation):
     def sql_statement(self) -> str:
         return "INSERT INTO t1 DEFAULT VALUES;"
 
 
-class SelectOne(SqlOperation):
+class SelectOne(SimpleSqlOperation):
     def sql_statement(self) -> str:
         return "SELECT 1;"
 
 
-class SelectStar(SqlOperation):
+class SelectStar(SimpleSqlOperation):
     def sql_statement(self) -> str:
         return "SELECT * FROM t1;"
 
 
-class SelectLimit(SqlOperation):
+class SelectLimit(SimpleSqlOperation):
     def sql_statement(self) -> str:
         return "SELECT * FROM t1 LIMIT 1;"
 
 
-class SelectCount(SqlOperation):
+class SelectCount(SimpleSqlOperation):
     def sql_statement(self) -> str:
         return "SELECT COUNT(*) FROM t1;"
 
 
-class SelectCountInMv(SqlOperation):
+class SelectCountInMv(SimpleSqlOperation):
     def sql_statement(self) -> str:
         return "SELECT count FROM mv1;"
 
 
-class SelectUnionAll(SqlOperation):
+class SelectUnionAll(SimpleSqlOperation):
     def sql_statement(self) -> str:
         return "SELECT * FROM t1 UNION ALL SELECT * FROM t1;"
 
 
-class Update(SqlOperation):
+class Update(SimpleSqlOperation):
     def sql_statement(self) -> str:
         return "UPDATE t1 SET f1 = f1 + 1;"
 

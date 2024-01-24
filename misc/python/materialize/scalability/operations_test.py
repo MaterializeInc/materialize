@@ -10,17 +10,16 @@
 
 import time
 
-from psycopg import Cursor
-
-from materialize.scalability.operation import Operation, SqlOperation
+from materialize.scalability.operation import Operation, SimpleSqlOperation
+from materialize.scalability.operation_data import OperationData
 
 
 class EmptyOperation(Operation):
-    def _execute(self, cursor: Cursor) -> None:
-        pass
+    def _execute(self, data: OperationData) -> OperationData:
+        return data
 
 
-class EmptySqlStatement(SqlOperation):
+class EmptySqlStatement(SimpleSqlOperation):
     def sql_statement(self) -> str:
         return ""
 
@@ -29,11 +28,12 @@ class SleepInPython(Operation):
     def __init__(self, duration_in_sec: float) -> None:
         self.duration_in_sec = duration_in_sec
 
-    def _execute(self, cursor: Cursor) -> None:
+    def _execute(self, data: OperationData) -> OperationData:
         time.sleep(self.duration_in_sec)
+        return data
 
 
-class SleepInEnvironmentd(SqlOperation):
+class SleepInEnvironmentd(SimpleSqlOperation):
     """Run mz_sleep() in a constant query so that the sleep actually happens in environmentd."""
 
     def __init__(self, duration_in_sec: float) -> None:
@@ -43,7 +43,7 @@ class SleepInEnvironmentd(SqlOperation):
         return f"SELECT mz_unsafe.mz_sleep({self.duration_in_sec});"
 
 
-class SleepInClusterd(SqlOperation):
+class SleepInClusterd(SimpleSqlOperation):
     """Run mz_sleep() in a manner that it will be run in clusterd.
     The first part of the UNION is what makes this query non-constant,
     but at the same time it matches no rows, so mz_sleep will only run once,

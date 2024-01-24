@@ -35,19 +35,33 @@ class Operation:
         raise NotImplementedError
 
 
-class SqlOperation(Operation):
+class SqlOperationWithInput(Operation):
     def required_keys(self) -> set[str]:
-        return {"cursor"}
+        return {"cursor"}.union(self.required_input_keys())
+
+    def required_input_keys(self) -> set[str]:
+        raise NotImplementedError
 
     def _execute(self, data: OperationData) -> OperationData:
         try:
             cursor: Cursor = data.cursor()
-            cursor.execute(self.sql_statement().encode("utf8"))
+            cursor.execute(self.sql_statement_based_on_input(data).encode("utf8"))
             cursor.fetchall()
         except ProgrammingError as e:
             assert "the last operation didn't produce a result" in str(e)
 
         return data
+
+    def sql_statement_based_on_input(self, input: OperationData) -> str:
+        raise NotImplementedError
+
+
+class SimpleSqlOperation(SqlOperationWithInput):
+    def required_input_keys(self) -> set[str]:
+        return set()
+
+    def sql_statement_based_on_input(self, _input: OperationData) -> str:
+        return self.sql_statement()
 
     def sql_statement(self) -> str:
         raise NotImplementedError
