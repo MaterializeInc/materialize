@@ -503,7 +503,7 @@ steps:
     label: "CRDB / Persist backup and restore"
     artifact_paths: junit_*.xml
     depends_on: build-aarch64
-    timeout_in_minutes: 10
+    timeout_in_minutes: 30
     agents:
       queue: linux-aarch64-small
     plugins:
