@@ -11,14 +11,11 @@
 from materialize.scalability.operation import Operation, OperationChainWithDataExchange
 from materialize.scalability.operation_data import OperationData
 from materialize.scalability.operations import (
-    AddColumnToTableX,
     Connect,
     CreateMvOnTableX,
     CreateTableX,
     Disconnect,
-    DropColumnFromTableX,
     DropTableX,
-    FillColumnInTableX,
     InsertDefaultValues,
     PopulateTableX,
     SelectCount,
@@ -120,34 +117,6 @@ class CreateAndDropTableWithMvWorkload(WorkloadWithContext):
                     CreateMvOnTableX(),
                     SelectStarFromMvOnTableX(),
                     DropTableX(),
-                ]
-            )
-        ]
-
-
-class AlterTableColumnsWorkload(WorkloadWithContext):
-    def init_operations(self) -> list["Operation"]:
-        return [CreateTableX(), PopulateTableX()]
-
-    def amend_data_before_execution(self, data: OperationData) -> None:
-        data.push("table_seed", "fixed")
-        data.push("column_seed_a", f"{data.get('worker_id')}_a")
-        data.push("column_seed_b", f"{data.get('worker_id')}_b")
-        data.push("column_seed_c", f"{data.get('worker_id')}_c")
-
-    def operations(self) -> list["Operation"]:
-        return [
-            OperationChainWithDataExchange(
-                [
-                    AddColumnToTableX(column_seed_key="column_seed_a"),
-                    FillColumnInTableX(column_seed_key="column_seed_a"),
-                    AddColumnToTableX(column_seed_key="column_seed_b"),
-                    FillColumnInTableX(column_seed_key="column_seed_b"),
-                    AddColumnToTableX(column_seed_key="column_seed_c"),
-                    FillColumnInTableX(column_seed_key="column_seed_c"),
-                    DropColumnFromTableX(column_seed_key="column_seed_a"),
-                    DropColumnFromTableX(column_seed_key="column_seed_b"),
-                    DropColumnFromTableX(column_seed_key="column_seed_c"),
                 ]
             )
         ]

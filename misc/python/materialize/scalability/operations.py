@@ -91,22 +91,6 @@ class PopulateTableX(SqlOperationWithSeed):
         return f"INSERT INTO x_{table_seed} SELECT generate_series(1, 100), 200, 300, 400, 500;"
 
 
-class AddColumnToTableX(SqlOperationWithTwoSeeds):
-    def __init__(self, column_seed_key: str = "column_seed") -> None:
-        super().__init__("table_seed", column_seed_key)
-
-    def sql_statement(self, table_seed: str, column_seed: str) -> str:
-        return f"ALTER TABLE x_{table_seed} ADD COLUMN c_{column_seed} INT;"
-
-
-class DropColumnFromTableX(SqlOperationWithTwoSeeds):
-    def __init__(self, column_seed_key: str = "column_seed") -> None:
-        super().__init__("table_seed", column_seed_key)
-
-    def sql_statement(self, table_seed: str, column_seed: str) -> str:
-        return f"ALTER TABLE x_{table_seed} DROP COLUMN c_{column_seed};"
-
-
 class FillColumnInTableX(SqlOperationWithTwoSeeds):
     def __init__(self, column_seed_key: str = "column_seed") -> None:
         super().__init__("table_seed", column_seed_key)
