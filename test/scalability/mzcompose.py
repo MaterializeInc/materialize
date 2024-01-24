@@ -172,6 +172,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Whether to communicate through balancerd (only applicable to Materialize containers)",
     )
 
+    parser.add_argument(
+        "--verbose",
+        default=False,
+        type=bool,
+        action=argparse.BooleanOptionalAction,
+    )
+
     parser.add_argument("--cluster-name", type=str, help="Cluster to SET CLUSTER to")
 
     args = parser.parse_args()
@@ -217,6 +224,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         min_concurrency=args.min_concurrency,
         max_concurrency=args.max_concurrency,
         count=args.count,
+        verbose=args.verbose,
     )
 
     executor = BenchmarkExecutor(

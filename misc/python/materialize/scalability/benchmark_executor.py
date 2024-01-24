@@ -183,7 +183,9 @@ class BenchmarkExecutor:
             init_cursor.execute(init_sql.encode("utf8"))
 
         for init_operation in workload.init_operations():
-            workload.execute_operation(init_operation, init_cursor, -1)
+            workload.execute_operation(
+                init_operation, init_cursor, -1, -1, self.config.verbose
+            )
 
         print(
             f"Creating a cursor pool with {concurrency} entries against endpoint: {endpoint.url()}"
@@ -265,7 +267,9 @@ class BenchmarkExecutor:
         cursor = cursor_pool[worker_id]
 
         start = time.time()
-        workload.execute_operation(operation, cursor, worker_id)
+        workload.execute_operation(
+            operation, cursor, worker_id, transaction_index, self.config.verbose
+        )
         wallclock = time.time() - start
 
         return {
