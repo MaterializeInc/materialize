@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cell::RefCell;
-use std::cmp::Reverse;
+use std::cmp::{Ordering, Reverse};
 use std::convert::AsRef;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
@@ -363,6 +363,14 @@ fn stage_input<T, FromTime>(
     }
 }
 
+#[derive(Debug)]
+/// The style of drain we are performing on the stash. `AtTime`-drains cannot
+/// assume that all values have been seen, and must leave tombstones behind for deleted values.
+enum DrainStyle<'a, T> {
+    ToUpper(&'a Antichain<T>),
+    AtTime(T),
+}
+
 /// Helper method for `upsert_inner` used to stage `data` updates
 /// from the input timely edge.
 async fn drain_staged_input<S, G, T, FromTime, E>(
@@ -370,7 +378,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     commands_state: &mut indexmap::IndexMap<UpsertKey, types::UpsertValueAndSize<Option<FromTime>>>,
     output_updates: &mut Vec<(Result<Row, UpsertError>, T, Diff)>,
     multi_get_scratch: &mut Vec<UpsertKey>,
-    upper: &Antichain<T>,
+    drain_style: DrainStyle<'_, T>,
     error_emitter: &mut E,
     state: &mut UpsertState<'_, S, Option<FromTime>>,
 ) where
@@ -383,7 +391,12 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     stash.sort_unstable();
 
     // Find the prefix that we can emit
-    let idx = stash.partition_point(|(ts, _, _, _)| !upper.less_equal(ts));
+    let idx = stash.partition_point(|(ts, _, _, _)| match &drain_style {
+        DrainStyle::ToUpper(upper) => !upper.less_equal(ts),
+        DrainStyle::AtTime(time) => ts.cmp(time) <= Ordering::Equal,
+    });
+
+    tracing::trace!(?drain_style, updates = idx, "draining stash in upsert");
 
     // Read the previous values _per key_ out of `state`, recording it
     // along with the value with the _latest timestamp for that key_.
@@ -473,6 +486,11 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
                         output_updates.push((old_value, ts, -1));
                     }
                 }
+
+                // If we aren't sure that we have seen all values, instead, record a tombstone.
+                if matches!(drain_style, DrainStyle::AtTime(_)) {
+                    *existing_value = Some(StateValue::tombstone(Some(from_time.0.clone())));
+                }
             }
         }
     }
@@ -526,7 +544,7 @@ fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
     PressOnDropButton,
 )
 where
-    G::Timestamp: TotalOrder,
+    G::Timestamp: TotalOrder + Debug,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
     US: UpsertStateBackend<Option<FromTime>>,
@@ -758,7 +776,8 @@ where
             }
         } {
             match event {
-                AsyncEvent::Data(cap, mut data) if output_cap.time().less_equal(cap.time()) => {
+                AsyncEvent::Data(cap, mut data) => {
+                    tracing::trace!(time=?cap.time(), updates=%data.len(), "received data in upsert");
                     stage_input(
                         &mut stash,
                         &mut data,
@@ -766,17 +785,25 @@ where
                         &resume_upper,
                         upsert_config.shrink_upsert_unused_buffers_by_ratio,
                     );
-                }
-                AsyncEvent::Data(_cap, mut data) => {
-                    stage_input(
-                        &mut stash,
-                        &mut data,
-                        &input_upper,
-                        &resume_upper,
-                        upsert_config.shrink_upsert_unused_buffers_by_ratio,
-                    );
+
+                    // If the data is at _exactly_ the output frontier, we can preemptively drain it into the state.
+                    // This is a load-bearing optimization, as it is required to avoid buffering
+                    // the entire source snapshot in the `stash`.
+                    if output_cap.time().cmp(cap.time()) == Ordering::Equal {
+                        drain_staged_input::<_, G, _, _, _>(
+                            &mut stash,
+                            &mut commands_state,
+                            &mut output_updates,
+                            &mut multi_get_scratch,
+                            DrainStyle::AtTime(output_cap.time().clone()),
+                            &mut error_emitter,
+                            &mut state,
+                        )
+                        .await;
+                    }
                 }
                 AsyncEvent::Progress(upper) => {
+                    tracing::trace!(?upper, "received progress in upsert");
                     // Ignore progress updates before the `resume_upper`, which is our initial
                     // capability post-snapshotting.
                     if PartialOrder::less_than(&upper, &resume_upper) {
@@ -788,7 +815,7 @@ where
                         &mut commands_state,
                         &mut output_updates,
                         &mut multi_get_scratch,
-                        &upper,
+                        DrainStyle::ToUpper(&upper),
                         &mut error_emitter,
                         &mut state,
                     )
