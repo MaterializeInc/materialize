@@ -662,6 +662,7 @@ where
         outstanding_seqno: Option<SeqNo>,
         new_since: &Antichain<T>,
         heartbeat_timestamp_ms: u64,
+        use_held_since: bool,
     ) -> ControlFlow<NoOpStateTransition<Since<T>>, Since<T>> {
         // We expire all readers if the upper and since both advance to the
         // empty antichain. Gracefully handle this. At the same time,
@@ -698,7 +699,7 @@ where
 
         let reader_current_since = if PartialOrder::less_than(&reader_state.since, new_since) {
             reader_state.since.clone_from(new_since);
-            self.update_since();
+            self.update_since(use_held_since);
             new_since.clone()
         } else {
             // No-op, but still commit the state change so that this gets
@@ -714,6 +715,7 @@ where
         reader_id: &CriticalReaderId,
         expected_opaque: &O,
         (new_opaque, new_since): (&O, &Antichain<T>),
+        use_held_since: bool,
     ) -> ControlFlow<
         NoOpStateTransition<Result<Since<T>, (O, Since<T>)>>,
         Result<Since<T>, (O, Since<T>)>,
@@ -744,7 +746,7 @@ where
         if PartialOrder::less_equal(&reader_state.since, new_since) {
             reader_state.since = new_since.clone();
             reader_state.opaque = OpaqueState(Codec64::encode(new_opaque));
-            self.update_since();
+            self.update_since(use_held_since);
             Continue(Ok(Since(new_since.clone())))
         } else {
             // no work to be done -- the reader state's `since` is already sufficiently
@@ -784,6 +786,7 @@ where
     pub fn expire_leased_reader(
         &mut self,
         reader_id: &LeasedReaderId,
+        use_held_since: bool,
     ) -> ControlFlow<NoOpStateTransition<bool>, bool> {
         // We expire all readers if the upper and since both advance to the
         // empty antichain. Gracefully handle this. At the same time,
@@ -794,20 +797,8 @@ where
         }
 
         let existed = self.leased_readers.remove(reader_id).is_some();
-        if existed {
-            // TODO(#22789): Re-enable this
-            //
-            // Temporarily disabling this because we think it might be the cause
-            // of the remap since bug. Specifically, a clusterd process has a
-            // ReadHandle for maintaining the once and one inside a Listen. If
-            // we crash and stay down for longer than the read lease duration,
-            // it's possible that an expiry of them both in quick succession
-            // jumps the since forward to the Listen one.
-            //
-            // Don't forget to update the downgrade_since when this gets
-            // switched back on.
-            //
-            // self.update_since();
+        if existed && use_held_since {
+            self.update_since(true);
         }
         // No-op if existed is false, but still commit the state change so that
         // this gets linearized.
@@ -817,6 +808,7 @@ where
     pub fn expire_critical_reader(
         &mut self,
         reader_id: &CriticalReaderId,
+        use_held_since: bool,
     ) -> ControlFlow<NoOpStateTransition<bool>, bool> {
         // We expire all readers if the upper and since both advance to the
         // empty antichain. Gracefully handle this. At the same time,
@@ -826,22 +818,17 @@ where
             return Break(NoOpStateTransition(false));
         }
 
-        let existed = self.critical_readers.remove(reader_id).is_some();
-        if existed {
-            // TODO(#22789): Re-enable this
-            //
-            // Temporarily disabling this because we think it might be the cause
-            // of the remap since bug. Specifically, a clusterd process has a
-            // ReadHandle for maintaining the once and one inside a Listen. If
-            // we crash and stay down for longer than the read lease duration,
-            // it's possible that an expiry of them both in quick succession
-            // jumps the since forward to the Listen one.
-            //
-            // Don't forget to update the downgrade_since when this gets
-            // switched back on.
-            //
-            // self.update_since();
+        if use_held_since {
+            // Normally, we won't advance the trace's since when there are no critical readers...
+            // but we do want to advance the since when a critical reader is explicitly expired.
+            // So: advance to the empty antichain, update the since, then remove the reader.
+            if let Some(reader) = self.critical_readers.get_mut(reader_id) {
+                reader.since.clear();
+            }
+            self.update_since(true)
         }
+        let existed = self.critical_readers.remove(reader_id).is_some();
+
         // This state transition is a no-op if existed is false, but we still
         // commit the state change so that this gets linearized (maybe we're
         // looking at old state).
@@ -919,7 +906,11 @@ where
         since
     }
 
-    fn update_since(&mut self) {
+    fn update_since(&mut self, use_held_since: bool) {
+        if use_held_since {
+            self.trace.downgrade_since(&self.held_since());
+            return;
+        }
         let mut sinces_iter = self
             .leased_readers
             .values()
@@ -1324,7 +1315,7 @@ where
     }
 
     /// Expire all readers and writers up to the given walltime_ms.
-    pub fn expire_at(&mut self, walltime_ms: EpochMillis) -> ExpiryMetrics {
+    pub fn expire_at(&mut self, walltime_ms: EpochMillis, use_held_since: bool) -> ExpiryMetrics {
         let mut metrics = ExpiryMetrics::default();
         let shard_id = self.shard_id();
         self.collections.leased_readers.retain(|k, v| {
@@ -1344,6 +1335,9 @@ where
             }
             retain
         });
+        if use_held_since {
+            self.collections.update_since(true);
+        }
         metrics
     }
 
@@ -1904,7 +1898,8 @@ pub(crate) mod tests {
                 SeqNo::minimum(),
                 None,
                 &Antichain::from_elem(2),
-                now()
+                now(),
+                false,
             ),
             Continue(Since(Antichain::from_elem(2)))
         );

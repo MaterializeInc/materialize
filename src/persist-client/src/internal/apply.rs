@@ -25,6 +25,7 @@ use tracing::debug;
 use crate::cache::{LockingTypedState, StateCache};
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::gc::GcReq;
+use crate::internal::machine::DOWNGRADE_HELD_SINCE;
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{CmdMetrics, Metrics, ShardMetrics};
 use crate::internal::paths::{PartialRollupKey, RollupId};
@@ -440,7 +441,8 @@ where
                 return Err((expected, err));
             }
         };
-        let expiry_metrics = new_state.expire_at((cfg.now)());
+        let use_held_since = DOWNGRADE_HELD_SINCE.get(&cfg.configs);
+        let expiry_metrics = new_state.expire_at((cfg.now)(), use_held_since);
 
         // Sanity check that all state transitions have special case for
         // being a tombstone. The ones that do will return a Break and
