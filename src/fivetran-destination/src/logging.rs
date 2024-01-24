@@ -48,10 +48,12 @@ where
         ctx.format_fields(Writer::new(&mut message), event)?;
 
         let level = match *event.metadata().level() {
-            // Mapping TRACE and DEBUG to the same level isn't the best, but Fivetran has no other
-            // severity level.
-            Level::TRACE | Level::DEBUG => FivetranEventLevel::Notice,
-            Level::INFO => FivetranEventLevel::Info,
+            // Mapping TRACE and DEBUG to "Info" isn't great, but Fivetran doesn't support any
+            // other logging level.
+            //
+            // TODO(parkmycar): When we support pushing traces to our own logging infra, we should
+            // filter out `TRACE` and `DEBUG` at this level.
+            Level::TRACE | Level::DEBUG | Level::INFO => FivetranEventLevel::Info,
             Level::WARN => FivetranEventLevel::Warning,
             Level::ERROR => FivetranEventLevel::Severe,
         };
@@ -86,7 +88,6 @@ struct FivetranEvent {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "UPPERCASE")]
 enum FivetranEventLevel {
-    Notice,
     Info,
     Warning,
     Severe,
