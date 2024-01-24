@@ -72,6 +72,7 @@ pub enum IntrospectionType {
     ComputeDependencies,
     ComputeReplicaHeartbeats,
     ComputeHydrationStatus,
+    ComputeOperatorHydrationStatus,
 
     // Written by the Adapter for tracking AWS PrivateLink Connection Status History
     PrivatelinkConnectionStatusHistory,

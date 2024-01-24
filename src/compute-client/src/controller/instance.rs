@@ -1449,19 +1449,51 @@ where
     }
 
     fn handle_operator_hydration(
-        &self,
+        &mut self,
         id: GlobalId,
         worker_id: usize,
         node_id: u64,
         hydrated: bool,
         replica_id: ReplicaId,
     ) {
-        // TODO
-        if hydrated {
-            println!("operator hydrated: collection={id}, replica={replica_id}, worker={worker_id}, LIR={node_id}");
-        } else {
-            println!("operator created: collection={id}, replica={replica_id}, worker={worker_id}, LIR={node_id}");
+        // TODO: This is one big hack. We _should_ keep around per-collection, per-replica state to
+        // ensure that we properly retract any old hydration values, and that we retract hydration
+        // values when a collection or replica is dropped. Since this is a prototype we take a
+        // shortcut and (a) assume that we always receive `hydrated = false` followed by `hydrated
+        // = true` for any operator and (b) skip the cleanup.
+        //
+        // We also ignore transient dataflows here, to not litter the introspection data
+        // needlessly.
+        if id.is_transient() {
+            return;
         }
+
+        let mut updates = vec![(
+            Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::String(&replica_id.to_string()),
+                Datum::UInt64(u64::cast_from(worker_id)),
+                Datum::UInt64(node_id),
+                Datum::from(hydrated),
+            ]),
+            1,
+        )];
+        if hydrated {
+            updates.push((
+                Row::pack_slice(&[
+                    Datum::String(&id.to_string()),
+                    Datum::String(&replica_id.to_string()),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                    Datum::UInt64(node_id),
+                    Datum::False,
+                ]),
+                -1,
+            ));
+        }
+        self.compute.deliver_introspection_updates(
+            IntrospectionType::ComputeOperatorHydrationStatus,
+            updates,
+        );
     }
 }
 
