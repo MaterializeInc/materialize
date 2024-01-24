@@ -23,7 +23,6 @@
 
 use std::i64;
 use std::io::Read;
-use std::sync::Once;
 
 use serde_json::{Map, Value};
 
@@ -32,9 +31,7 @@ use crate::error::{DecodeError, Error as AvroError};
 /// Maximum number of bytes that can be allocated when decoding
 /// Avro-encoded values. This is a protection against ill-formed
 /// data, whose length field might be interpreted as enormous.
-/// See max_allocation_bytes to change this limit.
-pub static mut MAX_ALLOCATION_BYTES: usize = 512 * 1024 * 1024;
-static MAX_ALLOCATION_BYTES_ONCE: Once = Once::new();
+pub const MAX_ALLOCATION_BYTES: usize = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum TsUnit {
@@ -126,31 +123,13 @@ fn decode_variable<R: Read>(reader: &mut R) -> Result<u64, AvroError> {
     Ok(i)
 }
 
-/// Set a new maximum number of bytes that can be allocated when decoding data.
-/// Once called, the limit cannot be changed.
-///
-/// **NOTE** This function must be called before decoding **any** data. The
-/// library leverages [`std::sync::Once`](https://doc.rust-lang.org/std/sync/struct.Once.html)
-/// to set the limit either when calling this method, or when decoding for
-/// the first time.
-pub fn max_allocation_bytes(num_bytes: usize) -> usize {
-    unsafe {
-        MAX_ALLOCATION_BYTES_ONCE.call_once(|| {
-            MAX_ALLOCATION_BYTES = num_bytes;
-        });
-        MAX_ALLOCATION_BYTES
-    }
-}
-
 pub fn safe_len(len: usize) -> Result<usize, AvroError> {
-    let max_bytes = max_allocation_bytes(512 * 1024 * 1024);
-
-    if len <= max_bytes {
+    if len <= MAX_ALLOCATION_BYTES {
         Ok(len)
     } else {
         Err(AvroError::Allocation {
             attempted: len,
-            allowed: max_bytes,
+            allowed: MAX_ALLOCATION_BYTES,
         })
     }
 }
