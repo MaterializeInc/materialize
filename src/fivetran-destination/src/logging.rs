@@ -212,14 +212,14 @@ mod tests {
         let msg = String::from_utf8(writer.drain()).unwrap();
         insta::assert_snapshot!(
             msg,
-            @r###"{"level":"NOTICE","message":"this is a low priority trace","message-origin":"sdk_destination"}"###
+            @r###"{"level":"INFO","message":"this is a low priority trace","message-origin":"sdk_destination"}"###
         );
 
         tracing::debug!(alert_count = 42, "good level for debug printing");
         let msg = String::from_utf8(writer.drain()).unwrap();
         insta::assert_snapshot!(
             msg,
-            @r###"{"level":"NOTICE","message":"good level for debug printing alert_count=42","message-origin":"sdk_destination"}"###
+            @r###"{"level":"INFO","message":"good level for debug printing alert_count=42","message-origin":"sdk_destination"}"###
         );
 
         #[derive(Debug)]
