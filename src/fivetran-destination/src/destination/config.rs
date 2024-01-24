@@ -72,6 +72,7 @@ pub async fn handle_test_request(request: TestRequest) -> Result<TestResponse, a
     let result = match request.name.as_str() {
         "connect" => test_connect(request.configuration).await,
         "permissions" => test_permissions(request.configuration).await,
+        "ping" => Ok(()),
         name => bail!("unknown test {}", name.quoted()),
     };
     let response = match result {

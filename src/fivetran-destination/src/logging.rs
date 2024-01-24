@@ -65,15 +65,15 @@ where
         };
         let write_adapter = WriteAdapter::new(&mut writer);
 
-        match serde_json::to_writer(write_adapter, &event) {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                // Last ditch effort to figure out why we failed to serialize, it's not guaranteed
-                // we'll be able to see this.
-                eprintln!("Failed to serialize logging event! err: {e}");
-                Err(std::fmt::Error)
-            }
-        }
+        serde_json::to_writer(write_adapter, &event).map_err(|e| {
+            // Last ditch effort to figure out why we failed to serialize, it's not guaranteed
+            // we'll be able to see this.
+            eprintln!("Failed to serialize logging event! err: {e}");
+            std::fmt::Error
+        })?;
+        writer.write_char('\n')?;
+
+        Ok(())
     }
 }
 
