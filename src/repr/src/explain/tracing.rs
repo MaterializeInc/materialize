@@ -24,7 +24,7 @@ pub struct PlanTrace<T> {
     /// A specific concrete path to find in this trace. If present,
     /// [`PlanTrace::push`] will only collect traces if the current path is a
     /// prefix of find.
-    find: Option<&'static str>,
+    filter: Option<&'static str>,
     /// A path of segments identifying the spans in the current ancestor-or-self
     /// chain. The current path is used when accumulating new `entries`.
     path: Mutex<String>,
@@ -228,9 +228,9 @@ where
 impl<T: 'static> PlanTrace<T> {
     /// Create a new trace for plans of type `T` that will only accumulate
     /// [`TraceEntry`] instances along the prefix of the given `path`.
-    pub fn new(path: Option<&'static str>) -> Self {
+    pub fn new(filter: Option<&'static str>) -> Self {
         Self {
-            find: path,
+            filter,
             path: Mutex::new(String::with_capacity(256)),
             start: Mutex::new(None),
             times: Mutex::new(Default::default()),
@@ -261,7 +261,7 @@ impl<T: 'static> PlanTrace<T> {
     ///
     /// This is a noop if
     /// 1. the call is within a context without an enclosing span, or if
-    /// 2. [`PlanTrace::find`] is set not equal to [`PlanTrace::current_path`].
+    /// 2. [`PlanTrace::filter`] is set not equal to [`PlanTrace::current_path`].
     fn push(&self, plan: &T)
     where
         T: Clone,
@@ -285,14 +285,14 @@ impl<T: 'static> PlanTrace<T> {
 
     /// Helper method: get a copy of the current path.
     ///
-    /// If [`PlanTrace::find`] is set, this will also check the current path
+    /// If [`PlanTrace::filter`] is set, this will also check the current path
     /// against the `find` entry and return `None` if the two differ.
     fn current_path(&self) -> Option<String> {
         let path = self.path.lock().expect("path shouldn't be poisoned");
         let path = path.as_str();
-        match self.find {
+        match self.filter {
             Some(find) => {
-                if find == path {
+                if path == find {
                     Some(path.to_owned())
                 } else {
                     None

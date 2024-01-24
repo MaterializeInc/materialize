@@ -489,7 +489,6 @@ impl Coordinator {
             &expr_humanizer,
             None,
             used_indexes,
-            None,
             df_meta,
         )?;
 
