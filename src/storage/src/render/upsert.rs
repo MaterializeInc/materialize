@@ -775,61 +775,99 @@ where
                 input.next().await
             }
         } {
-            match event {
-                AsyncEvent::Data(cap, mut data) => {
-                    tracing::trace!(time=?cap.time(), updates=%data.len(), "received data in upsert");
-                    stage_input(
-                        &mut stash,
-                        &mut data,
-                        &input_upper,
-                        &resume_upper,
-                        upsert_config.shrink_upsert_unused_buffers_by_ratio,
-                    );
+            // Buffer as many events as possible. This should be bounded, as new data can't be
+            // produced in this worker until we yield to timely.
+            let events = [event]
+                .into_iter()
+                .chain(itertools::unfold(&mut input, |input| {
+                    input.next().now_or_never().flatten()
+                }));
 
-                    // If the data is at _exactly_ the output frontier, we can preemptively drain it into the state.
-                    // This is a load-bearing optimization, as it is required to avoid buffering
-                    // the entire source snapshot in the `stash`.
-                    if output_cap.time().cmp(cap.time()) == Ordering::Equal {
+            let mut drain_at_output = false;
+            for event in events {
+                match event {
+                    AsyncEvent::Data(cap, mut data) => {
+                        tracing::trace!(
+                            time=?cap.time(),
+                            updates=%data.len(),
+                            "received data in upsert"
+                        );
+                        stage_input(
+                            &mut stash,
+                            &mut data,
+                            &input_upper,
+                            &resume_upper,
+                            upsert_config.shrink_upsert_unused_buffers_by_ratio,
+                        );
+
+                        // If the data is at _exactly_ the output frontier, we can preemptively drain it into the state.
+                        // This is a load-bearing optimization, as it is required to avoid buffering
+                        // the entire source snapshot in the `stash`.
+                        if output_cap.time().cmp(cap.time()) == Ordering::Equal {
+                            drain_at_output = true;
+                        } else if drain_at_output {
+                            drain_at_output = false;
+
+                            // TODO(guswynn): there is one additional optimization we could make
+                            // here: avoid emitting intermediate updates from `drain_staged_input`
+                            // until the entire snapshot is processed. This requires an additional
+                            // _iteration_ api in `UpsertStateBackend`, and also requires some
+                            // careful state management in this operator.
+                            drain_staged_input::<_, G, _, _, _>(
+                                &mut stash,
+                                &mut commands_state,
+                                &mut output_updates,
+                                &mut multi_get_scratch,
+                                DrainStyle::AtTime(output_cap.time().clone()),
+                                &mut error_emitter,
+                                &mut state,
+                            )
+                            .await;
+                        }
+                    }
+                    AsyncEvent::Progress(upper) => {
+                        tracing::trace!(?upper, "received progress in upsert");
+                        // Ignore progress updates before the `resume_upper`, which is our initial
+                        // capability post-snapshotting.
+                        if PartialOrder::less_than(&upper, &resume_upper) {
+                            continue;
+                        }
+
                         drain_staged_input::<_, G, _, _, _>(
                             &mut stash,
                             &mut commands_state,
                             &mut output_updates,
                             &mut multi_get_scratch,
-                            DrainStyle::AtTime(output_cap.time().clone()),
+                            DrainStyle::ToUpper(&upper),
                             &mut error_emitter,
                             &mut state,
                         )
                         .await;
+
+                        // Emit the _consolidated_ changes to the output.
+                        output_handle
+                            .give_container(&output_cap, &mut output_updates)
+                            .await;
+                        if let Some(ts) = upper.as_option() {
+                            output_cap.downgrade(ts);
+                        }
+                        input_upper = upper;
                     }
                 }
-                AsyncEvent::Progress(upper) => {
-                    tracing::trace!(?upper, "received progress in upsert");
-                    // Ignore progress updates before the `resume_upper`, which is our initial
-                    // capability post-snapshotting.
-                    if PartialOrder::less_than(&upper, &resume_upper) {
-                        continue;
-                    }
-
-                    drain_staged_input::<_, G, _, _, _>(
-                        &mut stash,
-                        &mut commands_state,
-                        &mut output_updates,
-                        &mut multi_get_scratch,
-                        DrainStyle::ToUpper(&upper),
-                        &mut error_emitter,
-                        &mut state,
-                    )
-                    .await;
-
-                    // Emit the _consolidated_ changes to the output.
-                    output_handle
-                        .give_container(&output_cap, &mut output_updates)
-                        .await;
-                    if let Some(ts) = upper.as_option() {
-                        output_cap.downgrade(ts);
-                    }
-                    input_upper = upper;
-                }
+            }
+            if drain_at_output {
+                // This may occur after a drain to a `Progress` frontier, which is fine as it uses
+                // a weaker `DrainStyle`.
+                drain_staged_input::<_, G, _, _, _>(
+                    &mut stash,
+                    &mut commands_state,
+                    &mut output_updates,
+                    &mut multi_get_scratch,
+                    DrainStyle::AtTime(output_cap.time().clone()),
+                    &mut error_emitter,
+                    &mut state,
+                )
+                .await;
             }
         }
     });
