@@ -686,7 +686,7 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
 #[derive(Debug)]
 enum LargeCollectionStartupCache<T> {
     /// Actively caching any new value that is seen.
-    Open(Vec<T>),
+    Open(Vec<(T, Diff)>),
     /// Ignoring any new value that is seen.
     Closed,
 }
@@ -698,7 +698,7 @@ impl<T> LargeCollectionStartupCache<T> {
     }
 
     /// Add value to cache if open, otherwise ignore.
-    fn push(&mut self, value: T) {
+    fn push(&mut self, value: (T, Diff)) {
         match self {
             LargeCollectionStartupCache::Open(cache) => {
                 cache.push(value);
@@ -708,11 +708,21 @@ impl<T> LargeCollectionStartupCache<T> {
             }
         }
     }
+}
 
+impl<T: Ord> LargeCollectionStartupCache<T> {
     /// If the cache is open, then return all the cached values and close the cache, otherwise
     /// return `None`.
     fn take(&mut self) -> Option<Vec<T>> {
-        if let Self::Open(cache) = std::mem::replace(self, Self::Closed) {
+        if let Self::Open(mut cache) = std::mem::replace(self, Self::Closed) {
+            differential_dataflow::consolidation::consolidate(&mut cache);
+            let cache = cache
+                .into_iter()
+                .map(|(v, diff)| {
+                    assert_eq!(1, diff, "consolidated cache should have no retraction");
+                    v
+                })
+                .collect();
             Some(cache)
         } else {
             None
@@ -867,7 +877,7 @@ impl PersistCatalogState {
             debug!("applying catalog update: ({kind:?}, {ts:?}, {diff:?})");
             match kind {
                 StateUpdateKind::AuditLog(key, ()) => {
-                    self.audit_logs.push(key);
+                    self.audit_logs.push((key, diff));
                 }
                 StateUpdateKind::Cluster(key, value) => {
                     apply(&mut self.snapshot.clusters, key, value, diff);
@@ -915,7 +925,7 @@ impl PersistCatalogState {
                     apply(&mut self.snapshot.settings, key, value, diff);
                 }
                 StateUpdateKind::StorageUsage(key, ()) => {
-                    self.storage_usage_events.push(key);
+                    self.storage_usage_events.push((key, diff));
                 }
                 StateUpdateKind::SystemConfiguration(key, value) => {
                     apply(&mut self.snapshot.system_configurations, key, value, diff);
