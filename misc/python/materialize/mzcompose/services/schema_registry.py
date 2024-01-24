@@ -9,7 +9,7 @@
 
 
 from materialize.mzcompose import DEFAULT_CONFLUENT_PLATFORM_VERSION
-from materialize.mzcompose.service import Service
+from materialize.mzcompose.service import Service, ServiceConfig
 
 
 class SchemaRegistry(Service):
@@ -24,6 +24,7 @@ class SchemaRegistry(Service):
         environment_extra: list[str] = [],
         depends_on_extra: list[str] = [],
         volumes: list[str] = [],
+        platform: str | None = None,
     ) -> None:
         bootstrap_servers = ",".join(
             f"PLAINTEXT://{host}:{port}" for host, port in kafka_servers
@@ -36,37 +37,37 @@ class SchemaRegistry(Service):
             f"SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS={bootstrap_servers}",
             *environment_extra,
         ]
+        config: ServiceConfig = {
+            "image": f"{image}:{tag}",
+            "ports": [port],
+            "networks": {"default": {"aliases": aliases}},
+            "environment": environment,
+            "depends_on": {
+                **{host: {"condition": "service_healthy"} for host, _ in kafka_servers},
+                **{s: {"condition": "service_started"} for s in depends_on_extra},
+            },
+            "healthcheck": {
+                "test": [
+                    "CMD",
+                    "curl",
+                    # We provide credentials in case the schema registry is
+                    # configured to require HTTP authentication, as there's
+                    # no health check endpoint that's excluded from
+                    # authentication requirements. The credentials are
+                    # safely ignored if the schema registry is not
+                    # configured to require them.
+                    "-fu",
+                    "materialize:sekurity",
+                    "localhost:8081",
+                ],
+                "interval": "1s",
+                "start_period": "120s",
+            },
+            "volumes": volumes,
+        }
+        if platform:
+            config["platform"] = platform
         super().__init__(
             name=name,
-            config={
-                "image": f"{image}:{tag}",
-                "ports": [port],
-                "networks": {"default": {"aliases": aliases}},
-                "environment": environment,
-                "depends_on": {
-                    **{
-                        host: {"condition": "service_healthy"}
-                        for host, _ in kafka_servers
-                    },
-                    **{s: {"condition": "service_started"} for s in depends_on_extra},
-                },
-                "healthcheck": {
-                    "test": [
-                        "CMD",
-                        "curl",
-                        # We provide credentials in case the schema registry is
-                        # configured to require HTTP authentication, as there's
-                        # no health check endpoint that's excluded from
-                        # authentication requirements. The credentials are
-                        # safely ignored if the schema registry is not
-                        # configured to require them.
-                        "-fu",
-                        "materialize:sekurity",
-                        "localhost:8081",
-                    ],
-                    "interval": "1s",
-                    "start_period": "120s",
-                },
-                "volumes": volumes,
-            },
+            config=config,
         )

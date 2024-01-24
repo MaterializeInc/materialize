@@ -29,7 +29,7 @@ class MigrateX86Aarch64(Scenario):
 
 
 class MigrateAarch64X86(Scenario):
-    """Migrate from aarch64 to aarch64 before the validation, Linux specific since e don't have x86-64 macOS images on Dockerhub"""
+    """Migrate from aarch64 to x86-64 before the validation, Linux specific since we don't have x86-64 macOS images on Dockerhub"""
 
     def actions(self) -> list[Action]:
         return [

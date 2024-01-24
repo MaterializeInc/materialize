@@ -13,7 +13,6 @@ steps:
     command: bin/ci-builder run stable bin/pyactivate -m ci.test.build x86_64
     timeout_in_minutes: 60
     # For releases we trigger nightly from the test job directly, no need to build again
-    # TODO(def-) Get rid of this for PRs once we don't have any x86-64 tests remaining
     branches: "!v*.*"
     agents:
       queue: builder-linux-x86_64
@@ -134,8 +133,7 @@ steps:
       label: Kafka smoke test against previous Kafka versions
       timeout_in_minutes: 60
       agents:
-        # no matching manifest for linux/arm64/v8 in the manifest list entries
-        queue: linux-x86_64-small
+        queue: linux-aarch64-small
       artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
@@ -751,7 +749,7 @@ steps:
         timeout_in_minutes: 45
         artifact_paths: junit_*.xml
         agents:
-          queue: builder-linux-x86_64
+          queue: builder-linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -762,7 +760,7 @@ steps:
         timeout_in_minutes: 45
         artifact_paths: junit_*.xml
         agents:
-          queue: builder-linux-x86_64
+          queue: builder-linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -788,7 +786,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=MigrateAarch64X68]
+              args: [--scenario=MigrateAarch64X86]
 
       - id: checks-upgrade-matrix
         label: "Random upgrades over the entire matrix %N"
@@ -932,7 +930,7 @@ steps:
           composition: canary-load
           args: ["--runtime=18000"]
     agents:
-      queue: linux-x86_64-small
+      queue: linux-aarch64-small
     branches: "main"
 
   - group: "Output consistency"
@@ -964,8 +962,7 @@ steps:
         label: "Output consistency (version)"
         timeout_in_minutes: 58
         agents:
-          # no matching manifest for linux/arm64/v8 in the manifest list entries
-          queue: linux-x86_64-small
+          queue: linux-aarch64-small
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:
