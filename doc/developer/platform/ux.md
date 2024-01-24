@@ -209,7 +209,7 @@ either.
 
 ### Global API
 
-The global API is a REST API hosted at <https://cloud.materialize.com/api>. It
+The global API is a REST API hosted at <https://api.cloud.materialize.com>. It
 handles operations that apply globally to an account rather than to a single
 region within an account.
 

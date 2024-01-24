@@ -59,7 +59,7 @@ def make_jwt(tenant_id: str) -> str:
             "materialize.environment.write",
         ],
         "tenantId": tenant_id,
-        "iss": "https://cloud.materialize.com",
+        "iss": "https://admin.cloud.materialize.com",
         "iat": now,
         "exp": now + 3600,
     }
