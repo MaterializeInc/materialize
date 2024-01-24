@@ -49,9 +49,8 @@ from materialize.scalability.result_analyzers import DefaultResultAnalyzer
 from materialize.scalability.schema import Schema, TransactionIsolation
 from materialize.scalability.workload import (
     Workload,
-    WorkloadSelfTest,
-    WorkloadWithContext,
 )
+from materialize.scalability.workload_markers import WorkloadMarker
 from materialize.scalability.workloads import *  # noqa: F401 F403
 from materialize.scalability.workloads_test import *  # noqa: F401 F403
 from materialize.util import YesNoOnce, all_subclasses
@@ -120,6 +119,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         metavar="WORKLOAD",
         action="append",
         help="Workloads(s) to run.",
+    )
+
+    parser.add_argument(
+        "--workload-group-marker",
+        type=str,
+        help="Workload group to run. Required if --workload is not set.",
     )
 
     parser.add_argument(
@@ -306,17 +311,22 @@ def get_baseline_and_other_endpoints(
 
 
 def get_workload_classes(args: argparse.Namespace) -> list[type[Workload]]:
-    workload_classes = (
-        [globals()[workload] for workload in args.workload]
-        if args.workload
-        else [
-            workload_cls
-            for workload_cls in all_subclasses(Workload)
-            if not issubclass(workload_cls, WorkloadSelfTest)
-            # abstract base class
-            and not workload_cls == WorkloadWithContext
+    if args.workload:
+        workload_classes = [globals()[workload] for workload in args.workload]
+    else:
+        assert (
+            args.workload_group_marker is not None
+        ), "--workload-group-marker must be set"
+
+        workload_group_marker_class: type[WorkloadMarker] = globals()[
+            args.workload_group_marker
         ]
-    )
+
+        workload_classes: list[type[Workload]] = [
+            workload_cls for workload_cls in all_subclasses(workload_group_marker_class)
+        ]
+
+    assert len(workload_classes) > 0, "No workload class matched"
 
     # sort classes to ensure a stable order
     workload_classes.sort(key=lambda cls: cls.__name__)

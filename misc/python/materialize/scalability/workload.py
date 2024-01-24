@@ -40,9 +40,3 @@ class WorkloadWithContext(Workload):
 
     def set_schema(self, schema: Schema) -> None:
         self.schema = schema
-
-
-class WorkloadSelfTest(Workload):
-    """Used to self-test the framework, so need to be excluded from regular benchmark runs."""
-
-    pass
