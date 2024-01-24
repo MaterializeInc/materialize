@@ -9,9 +9,11 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
-from materialize.ui import UIError
+from materialize import MZ_ROOT
+from materialize.ui import CommandFailureCausedUIError, UIError
 
 
 @dataclass
@@ -56,3 +58,60 @@ class FailedTestExecutionError(UIError):
     ):
         super().__init__(message, hint)
         self.errors = errors
+
+
+def try_determine_errors_from_cmd_execution(
+    e: CommandFailureCausedUIError,
+) -> list[TestFailureDetails]:
+    if e.stderr is None:
+        return []
+
+    error_chunks = extract_error_chunks_from_stderr(e.stderr)
+
+    collected_errors = []
+    for chunk in error_chunks:
+        match = re.search(r"([^.]+\.td):(\d+):\d+:", chunk)
+        if match is not None:
+            # for .td files like Postgres CDC, file_path will just contain the file name
+            file_path = match.group(1)
+            line_number = int(match.group(2))
+        else:
+            # for .py files like platform checks, file_path will be a path
+            file_path = try_determine_error_location_from_cmd(e.cmd)
+            if file_path is None or ":" not in file_path:
+                line_number = None
+            else:
+                parts = file_path.split(":")
+                file_path = parts[0]
+                line_number = int(parts[1])
+
+        message = f"Executing {file_path} failed!"
+        collected_errors.append(
+            TestFailureDetails(
+                message,
+                details=chunk,
+                location=f"{file_path}",
+                line_number=line_number,
+            )
+        )
+
+    return collected_errors
+
+
+def try_determine_error_location_from_cmd(cmd: list[str]) -> str | None:
+    root_path_as_string = f"{MZ_ROOT}/"
+    for cmd_part in cmd:
+        if type(cmd_part) == str and cmd_part.startswith("--source="):
+            return cmd_part.removeprefix("--source=").replace(root_path_as_string, "")
+
+    return None
+
+
+def extract_error_chunks_from_stderr(stderr: str) -> list[str]:
+    if "+++ !!! Error Report" not in stderr:
+        return []
+
+    error_output = stderr[: stderr.index("+++ !!! Error Report") - 1]
+    error_chunks = error_output.split("^^^ +++")
+
+    return [chunk.strip() for chunk in error_chunks if len(chunk.strip()) > 0]

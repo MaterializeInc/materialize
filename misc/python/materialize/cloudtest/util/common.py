@@ -107,10 +107,12 @@ def is_subdict(
 
 
 def run_process_with_error_information(
-    cmd: list[str], input: str | None = None
+    cmd: list[str], input: str | None = None, capture_output: bool = False
 ) -> None:
     try:
-        subprocess.run(cmd, text=True, input=input, check=True)
+        subprocess.run(
+            cmd, text=True, input=input, check=True, capture_output=capture_output
+        )
     except subprocess.CalledProcessError as e:
         log_subprocess_error(e)
         raise e
