@@ -1384,7 +1384,7 @@ pub static STATEMENT_LOGGING_MAX_DATA_CREDIT: Lazy<ServerVar<Option<usize>>> = L
     // The idea is that during periods of low logging, tokens can accumulate up to this value,
     // and then be depleted during periods of high logging.
     description: "The maximum number of bytes that can be logged for statement logging in short burts, or NULL if unlimited (Materialize).",
-    internal: false,
+    internal: true,
 }
 });
 
@@ -1393,7 +1393,7 @@ pub static STATEMENT_LOGGING_TARGET_DATA_RATE: Lazy<ServerVar<Option<usize>>> = 
     name: UncasedStr::new("statement_logging_target_data_rate"),
     value: None,
     description: "The maximum sustained data rate of statement logging, in bytes per second, or NULL if unlimited (Materialize).",
-    internal: false,
+    internal: true,
 }
 });
 
