@@ -2072,7 +2072,6 @@ impl RowPacker<'_> {
 
     /// Returns the total amount of bytes used by the underlying row.
     pub fn byte_len(&self) -> usize {
-        self.row.len
         self.row.byte_len()
     }
 }
