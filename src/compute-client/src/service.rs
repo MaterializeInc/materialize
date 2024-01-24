@@ -113,9 +113,10 @@ pub struct PartitionedComputeState<T> {
     parts: usize,
     /// The maximum result size this state machine can return.
     ///
-    /// This isn't set when creating a [`PartitionedComputeState`], rather we listen for
-    /// [`ComputeCommand::UpdateConfiguration`] and update it then.
-    max_result_size: Option<u64>,
+    /// This is updated upon receiving [`ComputeCommand::UpdateConfiguration`]s. Note that not all
+    /// `PartitionedComputeState` instances receive `UpdateConfiguration` commands, so the size
+    /// limit is currently ineffective in some cases (#24629).
+    max_result_size: u64,
     /// Upper frontiers for indexes and sinks, both collected as a `MutableAntichain` across all
     /// partitions and individually listed for each partition.
     ///
@@ -176,7 +177,7 @@ where
     fn new(parts: usize) -> PartitionedComputeState<T> {
         PartitionedComputeState {
             parts,
-            max_result_size: None,
+            max_result_size: u64::MAX,
             uppers: BTreeMap::new(),
             peek_responses: BTreeMap::new(),
             pending_subscribes: BTreeMap::new(),
@@ -203,11 +204,19 @@ where
 
     /// Observes commands that move past, and prepares state for responses.
     pub fn observe_command(&mut self, command: &ComputeCommand<T>) {
-        if let ComputeCommand::CreateTimely { .. } = command {
-            self.reset();
-        } else {
-            // We are not guaranteed to observe other compute commands than `CreateTimely`. We must
-            // therefore not add any logic here that relies on doing so.
+        match command {
+            ComputeCommand::CreateTimely { .. } => self.reset(),
+            ComputeCommand::UpdateConfiguration(config) => {
+                // Note that not all instances of `PartitionedComputeState` are guaranteed to
+                // observe this command, so we shouldn't rely on it for correctness.
+                if let Some(max_result_size) = config.max_result_size {
+                    self.max_result_size = max_result_size;
+                }
+            }
+            _ => {
+                // We are not guaranteed to observe other compute commands than `CreateTimely`. We
+                // must therefore not add any logic here that relies on doing so.
+            }
         }
     }
 
@@ -251,14 +260,6 @@ where
                     .into_iter()
                     .map(|config| Some(ComputeCommand::CreateTimely { config, epoch }))
                     .collect()
-            }
-            ComputeCommand::UpdateConfiguration(config) => {
-                self.max_result_size = config.max_result_size;
-
-                // Forward the command on to the first shard.
-                let mut r = vec![None; self.parts];
-                r[0] = Some(ComputeCommand::UpdateConfiguration(config));
-                r
             }
             command => {
                 let mut r = vec![None; self.parts];
@@ -343,18 +344,17 @@ where
                                     })
                                     .sum();
 
-                                match self.max_result_size {
-                                    Some(max_size) if total_size > max_size => {
-                                        // Note: We match on this specific error message in tests
-                                        // so it's important that nothing else returns the same
-                                        // string.
-                                        let err = format!(
-                                            "total result exceeds max size of {}",
-                                            ByteSize::b(max_size)
-                                        );
-                                        PeekResponse::Error(err)
-                                    }
-                                    _ => PeekResponse::Rows(rows),
+                                if total_size > self.max_result_size {
+                                    // Note: We match on this specific error message in tests
+                                    // so it's important that nothing else returns the same
+                                    // string.
+                                    let err = format!(
+                                        "total result exceeds max size of {}",
+                                        ByteSize::b(self.max_result_size)
+                                    );
+                                    PeekResponse::Error(err)
+                                } else {
+                                    PeekResponse::Rows(rows)
                                 }
                             }
                         };
