@@ -15,4 +15,4 @@
 # limitations under the License.
 
 # If you bump this version, bump it in setup.py too.
-version = "1.7.2"
+version = "1.7.3"
