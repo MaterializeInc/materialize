@@ -82,6 +82,7 @@ use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
 use futures::future::{BoxFuture, FutureExt, LocalBoxFuture};
 use futures::StreamExt;
+use http::Uri;
 use itertools::Itertools;
 use mz_adapter_types::compaction::{
     CompactionWindow, ReadCapability, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
@@ -107,6 +108,7 @@ use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::{soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
+use mz_pgcopy::CopyFormatParams;
 use mz_repr::explain::{ExplainConfig, ExplainFormat, UsedIndexes};
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
@@ -122,7 +124,7 @@ use mz_sql::session::vars::{self, ConnectionCounter, OwnedVarInput, SystemVars};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ExplainStage;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
-use mz_storage_types::connections::inline::IntoInlineConnection;
+use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::Timeline;
@@ -387,6 +389,25 @@ pub enum PeekContext {
     Select,
     /// Peek was initiated with an EXPLAIN stmt.
     Explain(ExplainContext),
+    /// Peek was initiated with a COPY TO stmt.
+    CopyTo(CopyToContext),
+}
+
+impl PeekContext {
+    fn copy_to_context(&self) -> Option<&CopyToContext> {
+        match &self {
+            Self::CopyTo(context) => Some(context),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CopyToContext {
+    pub desc: RelationDesc,
+    pub to: Uri,
+    pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
+    pub format_params: CopyFormatParams<'static>,
 }
 
 #[derive(Debug)]
@@ -398,6 +419,7 @@ pub enum PeekStage {
     OptimizeLir(PeekStageOptimizeLir),
     Finish(PeekStageFinish),
     Explain(PeekStageExplain),
+    CopyToFinish(PeekStageCopyToFinish),
 }
 
 impl PeekStage {
@@ -408,7 +430,8 @@ impl PeekStage {
             | PeekStage::OptimizeMir(PeekStageOptimizeMir { validity, .. })
             | PeekStage::RealTimeRecency(PeekStageRealTimeRecency { validity, .. })
             | PeekStage::OptimizeLir(PeekStageOptimizeLir { validity, .. })
-            | PeekStage::Finish(PeekStageFinish { validity, .. }) => Some(validity),
+            | PeekStage::Finish(PeekStageFinish { validity, .. })
+            | PeekStage::CopyToFinish(PeekStageCopyToFinish { validity, .. }) => Some(validity),
             PeekStage::Explain(PeekStageExplain { validity, .. }) => Some(validity),
         }
     }
@@ -492,6 +515,14 @@ pub struct PeekStageFinish {
     timestamp_context: TimestampContext<mz_repr::Timestamp>,
     optimizer: optimize::peek::Optimizer,
     global_lir_plan: optimize::peek::GlobalLirPlan,
+}
+
+#[derive(Debug)]
+pub struct PeekStageCopyToFinish {
+    validity: PlanValidity,
+    optimizer: optimize::peek::Optimizer,
+    global_lir_plan: optimize::peek::GlobalLirPlan,
+    copy_to_context: CopyToContext,
 }
 
 #[derive(Debug)]
@@ -2432,6 +2463,10 @@ impl Coordinator {
                 .catalog
                 .system_config()
                 .coord_slow_message_reporting_threshold();
+            let warn_threshold = self
+                .catalog()
+                .system_config()
+                .coord_slow_message_warn_threshold();
 
             loop {
                 // Before adding a branch to this select loop, please ensure that the branch is
@@ -2554,9 +2589,8 @@ impl Coordinator {
                 }
 
                 // If something is _really_ slow, print a trace id for debugging, if OTEL is enabled.
-                let trace_id_threshold = Duration::from_secs(5).min(prometheus_threshold * 25);
-                if duration > trace_id_threshold && otel_context.is_valid() {
-                    let trace_id = otel_context.trace_id();
+                if duration > warn_threshold {
+                    let trace_id = otel_context.is_valid().then(|| otel_context.trace_id());
                     tracing::warn!(
                         ?msg_kind,
                         ?trace_id,

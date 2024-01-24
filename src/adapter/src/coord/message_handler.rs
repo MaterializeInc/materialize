@@ -34,15 +34,14 @@ use crate::command::Command;
 use crate::coord::appends::Deferred;
 use crate::coord::statement_logging::StatementLoggingId;
 use crate::coord::{
-    Coordinator, CreateConnectionValidationReady, Message, PeekStage, PeekStageOptimizeLir,
-    PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
+    AlterConnectionValidationReady, Coordinator, CreateConnectionValidationReady, Message,
+    PeekStage, PeekStageOptimizeLir, PendingReadTxn, PlanValidity, PurifiedStatementReady,
+    RealTimeRecencyContext,
 };
 use crate::session::Session;
 use crate::statement_logging::StatementLifecycleEvent;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterNotice, TimestampContext};
-
-use super::AlterConnectionValidationReady;
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 74KB. This would

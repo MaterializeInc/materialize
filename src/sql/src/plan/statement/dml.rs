@@ -24,8 +24,8 @@ use mz_repr::bytes::ByteSize;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
-    IfExistsBehavior, OrderByExpr, SubscribeOutput, UnresolvedItemName,
+    CteBlock, ExplainSinkSchemaFor, ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr,
+    IfExistsBehavior, OrderByExpr, SetExpr, SubscribeOutput, UnresolvedItemName,
 };
 use mz_sql_parser::ident;
 use mz_storage_types::sinks::{KafkaSinkConnection, KafkaSinkFormat, StorageSinkConnection};
@@ -40,13 +40,13 @@ use crate::ast::{
 use crate::catalog::CatalogItemType;
 use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
-use crate::plan::query::{plan_expr, plan_up_to, ExprContext, PlannedRootQuery, QueryLifetime};
+use crate::plan::query::{plan_expr, plan_up_to, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::{ddl, StatementContext, StatementDesc};
 use crate::plan::with_options::{self, TryFromValue};
 use crate::plan::{
-    self, side_effecting_func, transform_ast, CopyToFrom, CopyToPlan, CreateSinkPlan,
-    ExplainSinkSchemaPlan, ExplainTimestampPlan,
+    self, side_effecting_func, transform_ast, CopyToPlan, CreateSinkPlan, ExplainSinkSchemaPlan,
+    ExplainTimestampPlan,
 };
 use crate::plan::{
     query, CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan,
@@ -773,7 +773,8 @@ pub fn describe_copy(
 
 fn plan_copy_to(
     scx: &StatementContext,
-    from: CopyToFrom,
+    select_plan: SelectPlan,
+    desc: RelationDesc,
     to: &Expr<Aug>,
     format: CopyFormat,
     options: CopyOptionExtracted,
@@ -799,7 +800,7 @@ fn plan_copy_to(
             .map_err(|e| sql_err!("{}", e))?,
     );
 
-    // Converting the to expr to a MirScalarExpr
+    // Converting the to expr to a HirScalarExpr
     let mut to_expr = to.clone();
     transform_ast::transform(scx, &mut to_expr)?;
     let relation_type = RelationDesc::empty();
@@ -814,12 +815,11 @@ fn plan_copy_to(
         allow_windows: false,
     };
 
-    let to = plan_expr(ecx, &to_expr)?
-        .type_as(ecx, &ScalarType::String)?
-        .lower_uncorrelated()?;
+    let to = plan_expr(ecx, &to_expr)?.type_as(ecx, &ScalarType::String)?;
 
     Ok(Plan::CopyTo(CopyToPlan {
-        from,
+        select_plan,
+        desc,
         to,
         connection: connection.to_owned(),
         format_params,
@@ -950,37 +950,53 @@ pub fn plan_copy(
         (CopyDirection::To, CopyTarget::Expr(to_expr)) => {
             scx.require_feature_flag(&vars::ENABLE_COPY_TO_EXPR)?;
 
-            let from = match relation {
+            let stmt = match relation {
                 CopyRelation::Table { name, columns } => {
                     if !columns.is_empty() {
                         // TODO(mouli): Add support for this
                         sql_bail!("specifying columns for COPY <table_name> TO commands not yet supported; use COPY (SELECT...) TO ... instead");
                     }
-                    CopyToFrom::Id {
-                        id: *name.item_id(),
-                    }
+                    // Generate a synthetic SELECT query that just gets the table
+                    let query = Query {
+                        ctes: CteBlock::empty(),
+                        body: SetExpr::Table(name),
+                        order_by: vec![],
+                        limit: None,
+                        offset: None,
+                    };
+                    SelectStatement { query, as_of: None }
                 }
                 CopyRelation::Select(stmt) => {
                     if !stmt.query.order_by.is_empty() {
                         sql_bail!("ORDER BY is not supported in SELECT query for COPY statements")
                     }
-                    #[allow(deprecated)] // TODO(aalexandrov): Use HirRelationExpr in CopyToFrom
-                    let PlannedRootQuery {
-                        expr,
-                        finishing,
-                        desc,
-                        scope: _,
-                    } = plan_query(scx, stmt.query, &Params::empty(), QueryLifetime::OneShot)?;
-                    CopyToFrom::Query {
-                        expr,
-                        desc,
-                        finishing,
-                    }
+                    stmt
                 }
                 _ => sql_bail!("COPY {} {} not supported", direction, target),
             };
 
-            plan_copy_to(scx, from, to_expr, format, options)
+            // slightly different than plan_select, we need the `desc` as well for copy to
+            let when = query::plan_as_of(scx, stmt.as_of)?;
+            let query::PlannedRootQuery {
+                expr,
+                desc,
+                finishing,
+                scope: _,
+            } = query::plan_root_query(scx, stmt.query, QueryLifetime::OneShot)?;
+
+            plan_copy_to(
+                scx,
+                SelectPlan {
+                    source: expr,
+                    when,
+                    finishing,
+                    copy_to: None,
+                },
+                desc,
+                to_expr,
+                format,
+                options,
+            )
         }
         _ => sql_bail!("COPY {} {} not supported", direction, target),
     }

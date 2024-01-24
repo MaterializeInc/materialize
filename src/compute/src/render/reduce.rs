@@ -47,7 +47,7 @@ use crate::extensions::reduce::{MzReduce, ReduceExt};
 use crate::render::context::{CollectionBundle, Context, SpecializedArrangement};
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{get_monoid, ReductionMonoid};
-use crate::render::ArrangementFlavor;
+use crate::render::{ArrangementFlavor, Pairer};
 use crate::row_spine::DatumSeq;
 use crate::typedefs::{
     KeyBatcher, RowErrSpine, RowRowArrangement, RowRowSpine, RowSpine, RowValSpine,
@@ -2188,47 +2188,6 @@ impl Multiply<Diff> for Accum {
 
 impl Columnation for Accum {
     type InnerRegion = CopyRegion<Self>;
-}
-
-/// Helper to merge pairs of datum iterators into a row or split a datum iterator
-/// into two rows, given the arity of the first component.
-#[derive(Clone, Copy, Debug)]
-struct Pairer {
-    split_arity: usize,
-}
-
-impl Pairer {
-    /// Creates a pairer with knowledge of the arity of first component in the pair.
-    fn new(split_arity: usize) -> Self {
-        Self { split_arity }
-    }
-
-    /// Merges a pair of datum iterators creating a `Row` instance.
-    fn merge<'a, I1, I2>(&self, first: I1, second: I2) -> Row
-    where
-        I1: IntoIterator<Item = Datum<'a>>,
-        I2: IntoIterator<Item = Datum<'a>>,
-    {
-        let binding = SharedRow::get();
-        let mut row_builder = binding.borrow_mut();
-        let mut row_packer = row_builder.packer();
-        row_packer.extend(first);
-        row_packer.extend(second);
-        row_builder.clone()
-    }
-
-    /// Splits a datum iterator into a pair of `Row` instances.
-    fn split<'a>(&self, datum_iter: impl IntoIterator<Item = Datum<'a>>) -> (Row, Row) {
-        let mut datum_iter = datum_iter.into_iter();
-        let binding = SharedRow::get();
-        let mut row_builder = binding.borrow_mut();
-        let mut row_packer = row_builder.packer();
-        row_packer.extend(datum_iter.by_ref().take(self.split_arity));
-        let first = row_builder.clone();
-        row_packer = row_builder.packer();
-        row_packer.extend(datum_iter);
-        (first, row_builder.clone())
-    }
 }
 
 /// Monoids for in-place compaction of monotonic streams.

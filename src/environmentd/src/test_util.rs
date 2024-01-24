@@ -104,6 +104,7 @@ pub struct TestHarness {
     system_parameter_defaults: BTreeMap<String, String>,
     internal_console_redirect_url: Option<String>,
     metrics_registry: Option<MetricsRegistry>,
+    code_version: semver::Version,
     pub environment_id: EnvironmentId,
 }
 
@@ -137,6 +138,7 @@ impl Default for TestHarness {
                 startup_log_filter: CloneableEnvFilter::from_str("error").expect("must parse"),
                 ..Default::default()
             },
+            code_version: crate::BUILD_INFO.semver_version(),
             environment_id: EnvironmentId::for_tests(),
         }
     }
@@ -267,6 +269,11 @@ impl TestHarness {
         self.metrics_registry = Some(registry);
         self
     }
+
+    pub fn with_code_version(mut self, version: semver::Version) -> Self {
+        self.code_version = version;
+        self
+    }
 }
 
 pub struct Listeners {
@@ -340,6 +347,7 @@ impl Listeners {
         let persist_now = SYSTEM_TIME.clone();
         let mut persist_cfg =
             PersistConfig::new(&crate::BUILD_INFO, persist_now.clone(), all_dyn_configs());
+        persist_cfg.build_version = config.code_version;
         // Tune down the number of connections to make this all work a little easier
         // with local postgres.
         persist_cfg.consensus_connection_pool_max_size = 1;

@@ -97,7 +97,6 @@ use crate::session::{
 use crate::util::{viewable_variables, ClientTransmitter, ResultExt};
 use crate::{guard_write_critical_section, PeekResponseUnary, TimestampExplanation};
 
-mod copy_to;
 mod create_index;
 mod create_materialized_view;
 mod create_view;

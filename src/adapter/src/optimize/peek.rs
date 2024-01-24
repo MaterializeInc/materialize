@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use mz_compute_types::dataflows::IndexDesc;
 use mz_compute_types::plan::Plan;
+use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, S3OneshotSinkConnection};
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::{
     permutation_for_arrangement, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
@@ -31,6 +32,7 @@ use tracing::{span, warn, Level};
 
 use crate::catalog::Catalog;
 use crate::coord::peek::{create_fast_path_plan, PeekDataflowPlan, PeekPlan};
+use crate::coord::CopyToContext;
 use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, EvalTime,
     ExprPrepStyle,
@@ -122,9 +124,10 @@ pub struct LocalMirPlan<T = Unresolved> {
 
 /// Marker type for [`LocalMirPlan`] structs representing an optimization result
 /// with attached environment context required for the next optimization stage.
-pub struct ResolvedLocal<'s> {
+pub struct ResolvedLocal<'a> {
     stats: Box<dyn StatisticsOracle>,
-    session: &'s Session,
+    session: &'a Session,
+    copy_to_context: Option<&'a CopyToContext>,
 }
 
 /// The (sealed intermediate) result after:
@@ -167,8 +170,9 @@ impl Debug for GlobalMirPlan<Unresolved> {
 /// The actual timestamp value is set in the [`MirDataflowDescription`] of the
 /// surrounding [`GlobalMirPlan`] when we call `resolve()`.
 #[derive(Clone)]
-pub struct ResolvedGlobal<'s> {
-    session: &'s Session,
+pub struct ResolvedGlobal<'a> {
+    session: &'a Session,
+    copy_to_context: Option<&'a CopyToContext>,
 }
 
 /// The (final) result after MIR ⇒ LIR lowering and optimizing the resulting
@@ -230,28 +234,38 @@ impl Optimize<MirRelationExpr> for Optimizer {
 impl LocalMirPlan<Unresolved> {
     /// Produces the [`LocalMirPlan`] with [`ResolvedLocal`] contextual
     /// information required for the next stage.
-    pub fn resolve(
+    pub fn resolve<'a>(
         self,
-        session: &Session,
+        session: &'a Session,
         stats: Box<dyn StatisticsOracle>,
-    ) -> LocalMirPlan<ResolvedLocal> {
+        copy_to_context: Option<&'a CopyToContext>,
+    ) -> LocalMirPlan<ResolvedLocal<'a>> {
         LocalMirPlan {
             expr: self.expr,
-            context: ResolvedLocal { session, stats },
+            context: ResolvedLocal {
+                session,
+                stats,
+                copy_to_context,
+            },
         }
     }
 }
 
-impl<'s> Optimize<LocalMirPlan<ResolvedLocal<'s>>> for Optimizer {
+impl<'a> Optimize<LocalMirPlan<ResolvedLocal<'a>>> for Optimizer {
     type To = GlobalMirPlan<Unresolved>;
 
     fn optimize(
         &mut self,
-        plan: LocalMirPlan<ResolvedLocal<'s>>,
+        plan: LocalMirPlan<ResolvedLocal<'a>>,
     ) -> Result<Self::To, OptimizerError> {
         let LocalMirPlan {
             expr,
-            context: ResolvedLocal { stats, session },
+            context:
+                ResolvedLocal {
+                    stats,
+                    session,
+                    copy_to_context,
+                },
         } = plan;
 
         let expr = OptimizedMirRelationExpr(expr);
@@ -302,6 +316,35 @@ impl<'s> Optimize<LocalMirPlan<ResolvedLocal<'s>>> for Optimizer {
             );
         }
 
+        // Adding s3 sink if initiated from copy to.
+        if let Some(copy_to_context) = copy_to_context {
+            let mz_storage_types::connections::Connection::Aws(aws_connection) =
+                &copy_to_context.connection
+            else {
+                // Currently only s3 sinks are supported. It was already validated in planning that this
+                // is an aws connection.
+                panic!("only aws connection is supported in COPY TO");
+            };
+            // Creating an S3 sink as currently only s3 sinks are supported. It might be possible in the future
+            // for COPY TO to write to different sinks, which should be set here depending upon the
+            // url scheme.
+            let sink_desc = ComputeSinkDesc {
+                from_desc: copy_to_context.desc.clone(),
+                from: self.select_id,
+                connection: ComputeSinkConnection::S3Oneshot(S3OneshotSinkConnection {
+                    aws_connection: aws_connection.clone(),
+                    prefix: copy_to_context.to.to_string(),
+                }),
+                with_snapshot: true,
+                up_to: Default::default(), // this will get updated  when the GlobalMirPlan is resolved with as_of below
+                // No `FORCE NOT NULL` for copy_to
+                non_null_assertions: vec![],
+                // No `REFRESH` for copy_to
+                refresh_schedule: None,
+            };
+            df_desc.export_sink(self.select_id, sink_desc);
+        }
+
         let df_meta = mz_transform::optimize_dataflow(
             &mut df_desc,
             &df_builder,
@@ -326,11 +369,12 @@ impl GlobalMirPlan<Unresolved> {
     /// We need to resolve timestamps before the `GlobalMirPlan ⇒ GlobalLirPlan`
     /// optimization stage in order to profit from possible single-time
     /// optimizations in the `Plan::finalize_dataflow` call.
-    pub fn resolve(
+    pub fn resolve<'a>(
         mut self,
         timestamp_ctx: TimestampContext<Timestamp>,
-        session: &Session,
-    ) -> GlobalMirPlan<ResolvedGlobal> {
+        session: &'a Session,
+        copy_to_context: Option<&'a CopyToContext>,
+    ) -> GlobalMirPlan<ResolvedGlobal<'a>> {
         // Set the `as_of` and `until` timestamps for the dataflow.
         self.df_desc.set_as_of(timestamp_ctx.antichain());
 
@@ -343,7 +387,12 @@ impl GlobalMirPlan<Unresolved> {
         // we expect to be able to set `until = as_of + 1` without an overflow.
         if let Some(as_of) = timestamp_ctx.timestamp() {
             if let Some(until) = as_of.checked_add(1) {
-                self.df_desc.until = Antichain::from_elem(until);
+                let until = Antichain::from_elem(until);
+                self.df_desc.until = until.clone();
+                for (_, sink) in &mut self.df_desc.sink_exports {
+                    // Also updating the sink up_to
+                    sink.up_to = until.clone();
+                }
             } else {
                 warn!(as_of = %as_of, "as_of + 1 overflow");
             }
@@ -353,24 +402,31 @@ impl GlobalMirPlan<Unresolved> {
             df_desc: self.df_desc,
             df_meta: self.df_meta,
             typ: self.typ,
-            context: ResolvedGlobal { session },
+            context: ResolvedGlobal {
+                session,
+                copy_to_context,
+            },
         }
     }
 }
 
-impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
+impl<'a> Optimize<GlobalMirPlan<ResolvedGlobal<'a>>> for Optimizer {
     type To = GlobalLirPlan;
 
     // TODO: make Coordinator::plan_peek part of this `optimize` call.
     fn optimize(
         &mut self,
-        plan: GlobalMirPlan<ResolvedGlobal<'s>>,
+        plan: GlobalMirPlan<ResolvedGlobal<'a>>,
     ) -> Result<Self::To, OptimizerError> {
         let GlobalMirPlan {
             mut df_desc,
             df_meta,
             typ,
-            context: ResolvedGlobal { session },
+            context:
+                ResolvedGlobal {
+                    session,
+                    copy_to_context,
+                },
         } = plan;
 
         // Get the single timestamp representing the `as_of` time.
@@ -401,13 +457,16 @@ impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
         //     .map(|(_key, (_desc, typ))| typ.clone())
         //     .expect("GlobalMirPlan type");
 
-        let peek_plan = match create_fast_path_plan(
-            &mut df_desc,
-            self.select_id,
-            Some(&self.finishing),
-            self.config.persist_fast_path_limit,
-        )? {
-            Some(plan) => {
+        let peek_plan = match (
+            create_fast_path_plan(
+                &mut df_desc,
+                self.select_id,
+                Some(&self.finishing),
+                self.config.persist_fast_path_limit,
+            )?,
+            copy_to_context,
+        ) {
+            (Some(plan), None) => {
                 // An ugly way to prevent panics when explaining the physical
                 // plan of a fast-path query.
                 //
@@ -430,7 +489,8 @@ impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
 
                 peek_plan
             }
-            None => {
+            // Should be slow path for copy to
+            (_, Some(_)) | (None, _) => {
                 // Ensure all expressions are normalized before finalizing.
                 for build in df_desc.objects_to_build.iter_mut() {
                     normalize_lets(&mut build.plan.0)?

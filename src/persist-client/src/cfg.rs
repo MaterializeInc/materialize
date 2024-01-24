@@ -92,7 +92,7 @@ use crate::read::{READER_LEASE_DURATION, STREAMING_SNAPSHOT_AND_FETCH_ENABLED};
 #[derive(Debug, Clone)]
 pub struct PersistConfig {
     /// Info about which version of the code is running.
-    pub(crate) build_version: Version,
+    pub build_version: Version,
     /// Hostname of this persist user. Stored in state and used for debugging.
     pub hostname: String,
     /// A clock to use for all leasing and other non-debugging use.

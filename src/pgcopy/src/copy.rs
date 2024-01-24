@@ -368,7 +368,7 @@ impl<'a> RawIterator<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CopyFormatParams<'a> {
     Text(CopyTextFormatParams<'a>),
     Csv(CopyCsvFormatParams<'a>),
@@ -385,7 +385,7 @@ pub fn decode_copy_format<'a>(
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CopyTextFormatParams<'a> {
     pub null: Cow<'a, str>,
     pub delimiter: Cow<'a, str>,
@@ -427,7 +427,7 @@ pub fn decode_copy_format_text(
     Ok(rows)
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct CopyCsvFormatParams<'a> {
     pub delimiter: u8,
     pub quote: u8,

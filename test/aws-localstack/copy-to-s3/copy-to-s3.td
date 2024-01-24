@@ -16,6 +16,7 @@ ALTER SYSTEM SET enable_copy_to_expr = true;
 # Prepare table data
 > CREATE TABLE t (a int);
 > INSERT INTO t VALUES (1);
+> INSERT INTO t VALUES (2);
 
 > CREATE CONNECTION aws_conn
   TO AWS (ASSUME ROLE ARN 'assume-role', ASSUME ROLE SESSION NAME 'session-name');
@@ -69,6 +70,14 @@ $ set-from-sql var=now_date
 SELECT TO_CHAR(now(), 'YYYY-MM-DD');
 
 ! COPY t TO 's3://path/to/' || TO_CHAR(now(), 'YYYY-MM-DD')
+  WITH (
+    AWS CONNECTION = aws_conn,
+    MAX FILE SIZE = "100MB",
+    FORMAT = 'csv'
+  );
+contains:internal error: COPY TO 's3://path/to/${now_date}' is not yet implemented
+
+! COPY (SELECT a FROM t) TO 's3://path/to/' || TO_CHAR(now(), 'YYYY-MM-DD')
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
