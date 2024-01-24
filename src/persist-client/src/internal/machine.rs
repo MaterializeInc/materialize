@@ -71,6 +71,13 @@ impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
     }
 }
 
+pub(crate) const REGISTER_HELD_SINCE: Config<bool> = Config::new(
+    "persist_register_held_since",
+    false,
+    "If set, default new handles to using the meet of all existing handles. \
+    (Instead of the trace's since, which may lag behind.)",
+);
+
 impl<K, V, T, D> Machine<K, V, T, D>
 where
     K: Debug + Codec,
@@ -171,6 +178,7 @@ where
         heartbeat_timestamp_ms: u64,
     ) -> (LeasedReaderState<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
+        let use_held_since = REGISTER_HELD_SINCE.get(&self.applier.cfg.configs);
         let (_seqno, (reader_state, seqno_since), maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, cfg, state| {
                 state.register_leased_reader(
@@ -180,6 +188,7 @@ where
                     seqno,
                     lease_duration,
                     heartbeat_timestamp_ms,
+                    use_held_since,
                 )
             })
             .await;
@@ -206,9 +215,15 @@ where
         purpose: &str,
     ) -> (CriticalReaderState<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
+        let use_held_since = REGISTER_HELD_SINCE.get(&self.applier.cfg.configs);
         let (_seqno, state, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |_seqno, cfg, state| {
-                state.register_critical_reader::<O>(&cfg.hostname, reader_id, purpose)
+                state.register_critical_reader::<O>(
+                    &cfg.hostname,
+                    reader_id,
+                    purpose,
+                    use_held_since,
+                )
             })
             .await;
         (state, maintenance)

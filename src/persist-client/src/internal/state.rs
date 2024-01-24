@@ -454,17 +454,23 @@ where
         seqno: SeqNo,
         lease_duration: Duration,
         heartbeat_timestamp_ms: u64,
+        use_held_since: bool,
     ) -> ControlFlow<
         NoOpStateTransition<(LeasedReaderState<T>, SeqNo)>,
         (LeasedReaderState<T>, SeqNo),
     > {
+        let since = if use_held_since {
+            self.held_since()
+        } else {
+            self.trace.since().clone()
+        };
         let reader_state = LeasedReaderState {
             debug: HandleDebugState {
                 hostname: hostname.to_owned(),
                 purpose: purpose.to_owned(),
             },
             seqno,
-            since: self.trace.since().clone(),
+            since,
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
             lease_duration_ms: u64::try_from(lease_duration.as_millis())
                 .expect("lease duration as millis should fit within u64"),
@@ -489,13 +495,19 @@ where
         hostname: &str,
         reader_id: &CriticalReaderId,
         purpose: &str,
+        use_held_since: bool,
     ) -> ControlFlow<NoOpStateTransition<CriticalReaderState<T>>, CriticalReaderState<T>> {
+        let since = if use_held_since {
+            self.held_since()
+        } else {
+            self.trace.since().clone()
+        };
         let state = CriticalReaderState {
             debug: HandleDebugState {
                 hostname: hostname.to_owned(),
                 purpose: purpose.to_owned(),
             },
-            since: self.trace.since().clone(),
+            since,
             opaque: OpaqueState(Codec64::encode(&O::initial())),
             opaque_codec: O::codec_name(),
         };
@@ -880,6 +892,31 @@ where
                     id
                 )
             })
+    }
+
+    fn held_since(&self) -> Antichain<T> {
+        // To avoid having leases push the since around before the critical handle's registered,
+        // always hold the since back to the initial value.
+        if self.critical_readers.is_empty() {
+            return Antichain::from_elem(T::minimum());
+        }
+
+        let mut since = Antichain::new();
+
+        for reader in self.critical_readers.values() {
+            since.meet_assign(&reader.since);
+        }
+
+        for reader in self.leased_readers.values() {
+            since.meet_assign(&reader.since);
+        }
+
+        // A since hold can't be earlier than the actual since.
+        // Normally these will track closely, but this is relevant
+        // when how we choose the since changes...
+        since.join_assign(self.trace.since());
+
+        since
     }
 
     fn update_since(&mut self) {
@@ -2009,6 +2046,7 @@ pub(crate) mod tests {
             SeqNo::minimum(),
             Duration::from_secs(10),
             now(),
+            false,
         );
         assert_eq!(
             state.collections.downgrade_since(
