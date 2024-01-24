@@ -2333,6 +2333,51 @@ async fn test_leader_promotion_always_using_deploy_generation() {
     }
 }
 
+#[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_leader_promotion_mixed_code_version() {
+    let tmpdir = TempDir::new().unwrap();
+    let harness = test_util::TestHarness::default()
+        .unsafe_mode()
+        .data_directory(tmpdir.path())
+        .with_deploy_generation(Some(1))
+        .with_code_version("0.10.0");
+
+    // Query a v0.10.0 server before we start a second server.
+    let server_10 = harness.clone().start().await;
+    let client_10 = server_10.connect().await.unwrap();
+    client_10.simple_query("SELECT 1").await.unwrap();
+
+    // Start a v0.11.0 to simulate a rolling upgrade and wait for the
+    // preflight checks.
+    let listeners_11 = test_util::Listeners::new().await.unwrap();
+    let internal_http_addr_11 = listeners_11.inner.internal_http_local_addr();
+    let config_11 = harness
+        .clone()
+        .with_deploy_generation(Some(2))
+        .with_code_version("0.11.0");
+    let _server_11 = mz_ore::task::spawn(|| "v0.11.0", async move {
+        listeners_11.serve(config_11).await.unwrap()
+    })
+    .abort_on_drop();
+
+    let res = reqwest::Client::new()
+        .get(
+            Url::parse(&format!(
+                "http://{}/api/leader/status",
+                internal_http_addr_11
+            ))
+            .unwrap(),
+        )
+        .send()
+        .await
+        .unwrap();
+    tracing::info!("response: {res:?}");
+    assert_eq!(res.status(), StatusCode::OK);
+    // The v0.11.0 preflight checks shouldn't fence out the v0.10.0 server.
+    client_10.simple_query("SELECT 1").await.unwrap();
+}
+
 // Test that websockets observe cancellation.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`

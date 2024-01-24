@@ -189,19 +189,23 @@ pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<
 // decode time, we're able to compare the current version against any we receive
 // and assert as necessary.
 //
-// Initially we reject any version from the future (no forward compatibility,
-// most conservative but easiest to reason about) but allow any from the past
-// (permanent backward compatibility). If/when we support deploy rollbacks and
-// rolling upgrades, we can adjust this assert as necessary to reflect the
-// policy (e.g. by adding some window of X allowed versions of forward
-// compatibility, computed by comparing semvers).
+// Initially we allow any from the past (permanent backward compatibility) and
+// one minor version into the future (forward compatibility). This allows us to
+// run two versions concurrently for rolling upgrades. We'll have to revisit
+// this logic if/when we start using major versions other than 0.
 //
 // We could do the same for blob data, but it shouldn't be necessary. Any blob
 // data we read is going to be because we fetched it using a pointer stored in
 // some persist state. If we can handle the state, we can handle the blobs it
 // references, too.
 pub(crate) fn check_data_version(code_version: &Version, data_version: &Version) {
-    if code_version < data_version {
+    // Allow one minor version of forward compatibility. We could avoid the
+    // clone with some nested comparisons of the semver fields, but this code
+    // isn't particularly performance sensitive and I find this impl easier to
+    // reason about.
+    let mut max_allowed_data_version = code_version.clone();
+    max_allowed_data_version.minor = max_allowed_data_version.minor.saturating_add(1);
+    if &max_allowed_data_version < data_version {
         // We can't catch halts, so panic in test, so we can get unit test
         // coverage.
         if cfg!(test) {
@@ -1606,5 +1610,36 @@ mod tests {
         }
 
         proptest!(|(state in any_state::<u64>(0..3))| testcase(state));
+    }
+
+    #[mz_ore::test]
+    fn check_data_versions() {
+        #[track_caller]
+        fn testcase(code: &str, data: &str, expected: Result<(), ()>) {
+            let code = Version::parse(code).unwrap();
+            let data = Version::parse(data).unwrap();
+            let actual =
+                std::panic::catch_unwind(|| check_data_version(&code, &data)).map_err(|_| ());
+            assert_eq!(actual, expected);
+        }
+
+        testcase("0.10.0-dev", "0.10.0-dev", Ok(()));
+        testcase("0.10.0-dev", "0.10.0", Ok(()));
+        testcase("0.10.0-dev", "0.11.0-dev", Ok(()));
+        testcase("0.10.0-dev", "0.11.0", Err(()));
+        testcase("0.10.0-dev", "0.12.0-dev", Err(()));
+        testcase("0.10.0-dev", "0.12.0", Err(()));
+        testcase("0.10.0-dev", "0.13.0-dev", Err(()));
+        testcase("0.10.0", "0.8.0-dev", Ok(()));
+        testcase("0.10.0", "0.8.0", Ok(()));
+        testcase("0.10.0", "0.9.0-dev", Ok(()));
+        testcase("0.10.0", "0.9.0", Ok(()));
+        testcase("0.10.0", "0.10.0-dev", Ok(()));
+        testcase("0.10.0", "0.10.0", Ok(()));
+        testcase("0.10.0", "0.11.0-dev", Ok(()));
+        testcase("0.10.0", "0.11.0", Ok(()));
+        testcase("0.10.0", "0.12.0-dev", Err(()));
+        testcase("0.10.0", "0.12.0", Err(()));
+        testcase("0.10.0", "0.13.0-dev", Err(()));
     }
 }

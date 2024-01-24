@@ -4309,6 +4309,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rlimit",
+ "semver",
  "sentry",
  "sentry-tracing",
  "serde",

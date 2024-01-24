@@ -104,6 +104,7 @@ pub struct TestHarness {
     system_parameter_defaults: BTreeMap<String, String>,
     internal_console_redirect_url: Option<String>,
     metrics_registry: Option<MetricsRegistry>,
+    build_info: mz_build_info::BuildInfo,
     pub environment_id: EnvironmentId,
 }
 
@@ -137,6 +138,7 @@ impl Default for TestHarness {
                 startup_log_filter: CloneableEnvFilter::from_str("error").expect("must parse"),
                 ..Default::default()
             },
+            build_info: crate::BUILD_INFO.clone(),
             environment_id: EnvironmentId::for_tests(),
         }
     }
@@ -267,6 +269,11 @@ impl TestHarness {
         self.metrics_registry = Some(registry);
         self
     }
+
+    pub fn with_code_version(mut self, version: &'static str) -> Self {
+        self.build_info.version = version;
+        self
+    }
 }
 
 pub struct Listeners {
@@ -339,7 +346,7 @@ impl Listeners {
         // panics. Is it possible/desirable to put this back somehow?
         let persist_now = SYSTEM_TIME.clone();
         let mut persist_cfg =
-            PersistConfig::new(&crate::BUILD_INFO, persist_now.clone(), all_dyn_configs());
+            PersistConfig::new(&config.build_info, persist_now.clone(), all_dyn_configs());
         // Tune down the number of connections to make this all work a little easier
         // with local postgres.
         persist_cfg.consensus_connection_pool_max_size = 1;
