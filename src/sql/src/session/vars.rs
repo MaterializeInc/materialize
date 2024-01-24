@@ -1377,20 +1377,24 @@ pub const ENABLE_DEFAULT_CONNECTION_VALIDATION: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
-pub static STATEMENT_LOGGING_MAX_DATA_CREDIT: Lazy<ServerVar<Option<usize>>> = Lazy::new(|| ServerVar {
+pub static STATEMENT_LOGGING_MAX_DATA_CREDIT: Lazy<ServerVar<Option<usize>>> = Lazy::new(|| {
+    ServerVar {
     name: UncasedStr::new("statement_logging_max_data_credit"),
     value: None,
     // The idea is that during periods of low logging, tokens can accumulate up to this value,
     // and then be depleted during periods of high logging.
     description: "The maximum number of bytes that can be logged for statement logging in short burts, or NULL if unlimited (Materialize).",
     internal: false,
+}
 });
 
-pub static STATEMENT_LOGGING_TARGET_DATA_RATE: Lazy<ServerVar<Option<usize>>> = Lazy::new(|| ServerVar {
+pub static STATEMENT_LOGGING_TARGET_DATA_RATE: Lazy<ServerVar<Option<usize>>> = Lazy::new(|| {
+    ServerVar {
     name: UncasedStr::new("statement_logging_target_data_rate"),
     value: None,
     description: "The maximum sustained data rate of statement logging, in bytes per second, or NULL if unlimited (Materialize).",
     internal: false,
+}
 });
 
 pub static STATEMENT_LOGGING_MAX_SAMPLE_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| ServerVar {
