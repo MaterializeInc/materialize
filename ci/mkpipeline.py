@@ -225,7 +225,7 @@ def set_default_agents_queue(pipeline: Any) -> None:
             and "group" not in step
             and "trigger" not in step
         ):
-            step["agents"] = {"queue": "linux-x86_64"}
+            step["agents"] = {"queue": "linux-aarch64"}
 
     for step in pipeline["steps"]:
         visit(step)
