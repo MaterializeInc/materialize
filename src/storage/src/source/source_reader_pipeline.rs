@@ -41,6 +41,7 @@ use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::stream::StreamExt;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
+use mz_ore::channel::{InstrumentedChannelMetric, InstrumentedUnboundedReceiver};
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::now::NowFn;
@@ -67,7 +68,6 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{info, trace};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
@@ -179,9 +179,24 @@ where
 
     let reclock_follower = ReclockFollower::new(config.as_of.clone());
 
-    let (resume_tx, resume_rx) = tokio::sync::mpsc::unbounded_channel();
-    let (source_tx, source_rx) = tokio::sync::mpsc::unbounded_channel();
-    let (source_upper_tx, source_upper_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (resume_tx, resume_rx) = config.metrics.get_instrumented_source_channel(
+        config.id,
+        config.worker_id,
+        config.worker_count,
+        "resume_upper_reclocking",
+    );
+    let (source_tx, source_rx) = config.metrics.get_instrumented_source_channel(
+        config.id,
+        config.worker_id,
+        config.worker_count,
+        "source_data",
+    );
+    let (source_upper_tx, source_upper_rx) = config.metrics.get_instrumented_source_channel(
+        config.id,
+        config.worker_id,
+        config.worker_count,
+        "source_upper",
+    );
 
     // The use of an _unbounded_ queue here is justified as it matches the unbounded buffers that
     // lie between ordinary timely operators.
@@ -378,15 +393,16 @@ impl futures::Stream for RemapClock {
 ///
 /// Only one worker will be active and write to the remap shard. All source
 /// upper summaries will be exchanged to it.
-fn remap_operator<G, FromTime>(
+fn remap_operator<G, FromTime, M>(
     scope: &G,
     config: RawSourceCreationConfig,
-    mut source_upper_rx: UnboundedReceiver<Event<FromTime, Infallible>>,
+    mut source_upper_rx: InstrumentedUnboundedReceiver<Event<FromTime, Infallible>, M>,
     remap_relation_desc: RelationDesc,
 ) -> (Collection<G, FromTime, Diff>, PressOnDropButton)
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     FromTime: SourceTimestamp,
+    M: InstrumentedChannelMetric + 'static,
 {
     let RawSourceCreationConfig {
         name,
@@ -521,11 +537,11 @@ where
 /// Receives un-timestamped batches from the source reader and updates to the
 /// remap trace on a second input. This operator takes the remap information,
 /// reclocks incoming batches and sends them forward.
-fn reclock_operator<G, FromTime, D>(
+fn reclock_operator<G, FromTime, D, M>(
     scope: &G,
     config: RawSourceCreationConfig,
     mut timestamper: ReclockFollower<FromTime, mz_repr::Timestamp>,
-    mut source_rx: UnboundedReceiver<
+    mut source_rx: InstrumentedUnboundedReceiver<
         Event<
             FromTime,
             (
@@ -534,6 +550,7 @@ fn reclock_operator<G, FromTime, D>(
                 D,
             ),
         >,
+        M,
     >,
     remap_trace_updates: Collection<G, FromTime, Diff>,
 ) -> Vec<(
@@ -544,6 +561,7 @@ where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     FromTime: SourceTimestamp,
     D: Semigroup + Into<Diff>,
+    M: InstrumentedChannelMetric + 'static,
 {
     let RawSourceCreationConfig {
         name,
@@ -808,8 +826,8 @@ where
 ///
 /// Note that we also use this async-`Stream` converter as a convenient place to compact the
 /// `ReclockFollower` trace that is currently shared between this and the `reclock_operator`.
-fn reclock_resume_upper<FromTime, IntoTime>(
-    mut resume_rx: UnboundedReceiver<Event<IntoTime, ()>>,
+fn reclock_resume_upper<FromTime, IntoTime, M>(
+    mut resume_rx: InstrumentedUnboundedReceiver<Event<IntoTime, ()>, M>,
     mut reclock_follower: ReclockFollower<FromTime, IntoTime>,
     worker_id: usize,
     id: GlobalId,
@@ -817,6 +835,7 @@ fn reclock_resume_upper<FromTime, IntoTime>(
 where
     FromTime: SourceTimestamp,
     IntoTime: Timestamp + Lattice + Display,
+    M: InstrumentedChannelMetric,
 {
     async_stream::stream!({
         let mut resume_upper = MutableAntichain::new_bottom(Timestamp::minimum());

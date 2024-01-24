@@ -103,6 +103,7 @@ default = ["tokio-console", "workspace-hack"]
 async = [
   "async-trait",
   "futures",
+  "metrics",
   "openssl",
   "tokio-openssl",
   "tokio",
