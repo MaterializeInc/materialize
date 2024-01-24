@@ -48,6 +48,7 @@
 /src/environmentd                   @MaterializeInc/adapter
 /src/expr                           @MaterializeInc/compute
 /src/expr-test-util                 @MaterializeInc/compute
+/src/fivetran-destination           @MaterializeInc/adapter
 /src/frontegg-auth                  @MaterializeInc/adapter
 /src/http-util                      @MaterializeInc/adapter
 /src/interchange                    @MaterializeInc/storage
