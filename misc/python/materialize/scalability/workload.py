@@ -16,6 +16,9 @@ from materialize.scalability.schema import Schema
 
 
 class Workload:
+    def init_operations(self) -> list[Operation]:
+        return []
+
     def operations(self) -> list[Operation]:
         raise NotImplementedError
 

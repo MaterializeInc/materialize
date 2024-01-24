@@ -182,6 +182,9 @@ class BenchmarkExecutor:
             print(init_sql)
             init_cursor.execute(init_sql.encode("utf8"))
 
+        for init_operation in workload.init_operations():
+            workload.execute_operation(init_operation, init_cursor, -1)
+
         print(
             f"Creating a cursor pool with {concurrency} entries against endpoint: {endpoint.url()}"
         )
