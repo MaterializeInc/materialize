@@ -86,6 +86,10 @@ impl Optimizer {
         &self.finishing
     }
 
+    pub fn select_id(&self) -> GlobalId {
+        self.select_id
+    }
+
     pub fn index_id(&self) -> GlobalId {
         self.index_id
     }
@@ -175,13 +179,18 @@ pub struct ResolvedGlobal<'s> {
 
 /// The (final) result after MIR ⇒ LIR lowering and optimizing the resulting
 /// `DataflowDescription` with `LIR` plans.
+#[derive(Debug)]
 pub struct GlobalLirPlan {
-    plan: PeekPlan,
+    peek_plan: PeekPlan,
     df_meta: DataflowMetainfo,
     typ: RelationType,
 }
 
 impl GlobalLirPlan {
+    pub fn peek_plan(&self) -> &PeekPlan {
+        &self.peek_plan
+    }
+
     /// Return the output type for this [`GlobalLirPlan`].
     pub fn typ(&self) -> &RelationType {
         &self.typ
@@ -398,7 +407,7 @@ impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
         //     .map(|(_key, (_desc, typ))| typ.clone())
         //     .expect("GlobalMirPlan type");
 
-        let plan = match create_fast_path_plan(
+        let peek_plan = match create_fast_path_plan(
             &mut df_desc,
             self.select_id,
             Some(&self.finishing),
@@ -466,13 +475,17 @@ impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
             }
         };
 
-        Ok(GlobalLirPlan { plan, df_meta, typ })
+        Ok(GlobalLirPlan {
+            peek_plan,
+            df_meta,
+            typ,
+        })
     }
 }
 
 impl GlobalLirPlan {
     /// Unwraps the parts of the final result of the optimization pipeline.
     pub fn unapply(self) -> (PeekPlan, DataflowMetainfo) {
-        (self.plan, self.df_meta)
+        (self.peek_plan, self.df_meta)
     }
 }

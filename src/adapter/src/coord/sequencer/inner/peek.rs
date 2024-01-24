@@ -10,17 +10,19 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use maplit::btreemap;
 use mz_controller_types::ClusterId;
 use mz_expr::CollectionPlan;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::explain::{trace_plan, ExprHumanizerExt, TransientItem, UsedIndexes};
+use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_sql::catalog::CatalogCluster;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_catalog::memory::objects::CatalogItem;
 use mz_sql::plan;
 use mz_sql::plan::QueryWhen;
-use mz_transform::{EmptyStatisticsOracle, StatisticsOracle};
+use mz_transform::EmptyStatisticsOracle;
 use tracing::Instrument;
 use tracing::{event, warn, Level};
 
@@ -34,13 +36,14 @@ use crate::coord::timestamp_selection::{
     TimestampContext, TimestampDetermination, TimestampProvider,
 };
 use crate::coord::{
-    Coordinator, ExecuteContext, Message, PeekStage, PeekStageFinish, PeekStageOptimize,
-    PeekStageRealTimeRecency, PeekStageTimestamp, PeekStageValidate, PlanValidity,
-    RealTimeRecencyContext, TargetCluster,
+    Coordinator, ExecuteContext, ExplainContext, Message, PeekStage, PeekStageExplain,
+    PeekStageFinish, PeekStageOptimizeLir, PeekStageOptimizeMir, PeekStageRealTimeRecency,
+    PeekStageTimestamp, PeekStageValidate, PlanValidity, RealTimeRecencyContext, TargetCluster,
 };
 use crate::error::AdapterError;
+use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
-use crate::optimize::{self, Optimize, OptimizerConfig};
+use crate::optimize::{self, Optimize};
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
 
@@ -60,12 +63,59 @@ impl Coordinator {
     ) {
         event!(Level::TRACE, plan = format!("{:?}", plan));
 
-        self.sequence_peek_stage(
+        self.execute_peek_stage(
             ctx,
             OpenTelemetryContext::obtain(),
             PeekStage::Validate(PeekStageValidate {
                 plan,
                 target_cluster,
+                explain_ctx: None,
+            }),
+        )
+        .await;
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(crate) async fn explain_peek(
+        &mut self,
+        ctx: ExecuteContext,
+        plan::ExplainPlanPlan {
+            stage,
+            format,
+            config,
+            explainee,
+        }: plan::ExplainPlanPlan,
+        target_cluster: TargetCluster,
+    ) {
+        let plan::Explainee::Statement(stmt) = explainee else {
+            // This is currently asserted in the `sequence_explain_plan` code that
+            // calls this method.
+            unreachable!()
+        };
+        let plan::ExplaineeStatement::Select { broken, plan, desc } = stmt else {
+            // This is currently asserted in the `sequence_explain_plan` code that
+            // calls this method.
+            unreachable!()
+        };
+
+        // Create an OptimizerTrace instance to collect plans emitted when
+        // executing the optimizer pipeline.
+        let optimizer_trace = OptimizerTrace::new(broken, stage.path());
+
+        self.execute_peek_stage(
+            ctx,
+            OpenTelemetryContext::obtain(),
+            PeekStage::Validate(PeekStageValidate {
+                plan,
+                target_cluster,
+                explain_ctx: Some(ExplainContext {
+                    broken,
+                    config,
+                    format,
+                    stage,
+                    desc: Some(desc),
+                    optimizer_trace,
+                }),
             }),
         )
         .await;
@@ -73,12 +123,14 @@ impl Coordinator {
 
     /// Processes as many `peek` stages as possible.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn sequence_peek_stage(
+    pub(crate) async fn execute_peek_stage(
         &mut self,
         mut ctx: ExecuteContext,
         root_otel_ctx: OpenTelemetryContext,
         mut stage: PeekStage,
     ) {
+        use PeekStage::*;
+
         // Process the current stage and allow for processing the next.
         loop {
             event!(Level::TRACE, stage = format!("{:?}", stage));
@@ -93,31 +145,41 @@ impl Coordinator {
             }
 
             (ctx, stage) = match stage {
-                PeekStage::Validate(stage) => {
+                Validate(stage) => {
                     let next =
                         return_if_err!(self.peek_stage_validate(ctx.session_mut(), stage), ctx);
 
                     (ctx, PeekStage::Timestamp(next))
                 }
-                PeekStage::Timestamp(stage) => {
+                Timestamp(stage) => {
                     self.peek_stage_timestamp(ctx, root_otel_ctx.clone(), stage)
                         .await;
                     return;
                 }
-                PeekStage::Optimize(stage) => {
-                    self.peek_stage_optimize(ctx, root_otel_ctx.clone(), stage)
+                OptimizeMir(stage) => {
+                    self.peek_stage_optimize_mir(ctx, root_otel_ctx.clone(), stage)
                         .await;
                     return;
                 }
-                PeekStage::RealTimeRecency(stage) => {
+                RealTimeRecency(stage) => {
                     match self.peek_stage_real_time_recency(ctx, root_otel_ctx.clone(), stage) {
-                        Some((ctx, next)) => (ctx, PeekStage::Finish(next)),
+                        Some((ctx, next)) => (ctx, PeekStage::OptimizeLir(next)),
                         None => return,
                     }
                 }
-                PeekStage::Finish(stage) => {
+                OptimizeLir(stage) => {
+                    self.peek_stage_optimize_lir(ctx, root_otel_ctx.clone(), stage)
+                        .await;
+                    return;
+                }
+                Finish(stage) => {
                     let res = self.peek_stage_finish(&mut ctx, stage).await;
                     ctx.retire(res);
+                    return;
+                }
+                Explain(stage) => {
+                    let result = self.peek_stage_explain(&mut ctx, stage);
+                    ctx.retire(result);
                     return;
                 }
             }
@@ -132,6 +194,7 @@ impl Coordinator {
         PeekStageValidate {
             plan,
             target_cluster,
+            explain_ctx,
         }: PeekStageValidate,
     ) -> Result<PeekStageTimestamp, AdapterError> {
         // Collect optimizer parameters.
@@ -142,7 +205,11 @@ impl Coordinator {
             .expect("compute instance does not exist");
         let view_id = self.allocate_transient_id()?;
         let index_id = self.allocate_transient_id()?;
-        let optimizer_config = OptimizerConfig::from(self.catalog().system_config());
+        let optimizer_config = if let Some(explain_ctx) = explain_ctx.as_ref() {
+            optimize::OptimizerConfig::from((self.catalog().system_config(), &explain_ctx.config))
+        } else {
+            optimize::OptimizerConfig::from(self.catalog().system_config())
+        };
 
         // Build an optimizer for this SELECT.
         let optimizer = optimize::peek::Optimizer::new(
@@ -210,6 +277,7 @@ impl Coordinator {
             timeline_context,
             in_immediate_multi_stmt_txn,
             optimizer,
+            explain_ctx,
         })
     }
 
@@ -228,6 +296,7 @@ impl Coordinator {
             timeline_context,
             in_immediate_multi_stmt_txn,
             optimizer,
+            explain_ctx,
         }: PeekStageTimestamp,
     ) {
         let isolation_level = ctx.session.vars().transaction_isolation().clone();
@@ -236,18 +305,20 @@ impl Coordinator {
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
 
-        let build_optimize_stage = move |oracle_read_ts: Option<Timestamp>| -> PeekStageOptimize {
-            PeekStageOptimize {
-                validity,
-                plan,
-                source_ids,
-                target_replica,
-                timeline_context,
-                oracle_read_ts,
-                in_immediate_multi_stmt_txn,
-                optimizer,
-            }
-        };
+        let build_optimize_stage =
+            move |oracle_read_ts: Option<Timestamp>| -> PeekStageOptimizeMir {
+                PeekStageOptimizeMir {
+                    validity,
+                    plan,
+                    source_ids,
+                    target_replica,
+                    timeline_context,
+                    oracle_read_ts,
+                    in_immediate_multi_stmt_txn,
+                    optimizer,
+                    explain_ctx,
+                }
+            };
 
         match linearized_timeline {
             Some(timeline) => {
@@ -262,7 +333,7 @@ impl Coordinator {
                         let oracle_read_ts = shared_oracle.read_ts().instrument(span).await;
                         let stage = build_optimize_stage(Some(oracle_read_ts));
 
-                        let stage = PeekStage::Optimize(stage);
+                        let stage = PeekStage::OptimizeMir(stage);
                         // Ignore errors if the coordinator has shut down.
                         let _ = internal_cmd_tx.send(Message::PeekStageReady {
                             ctx,
@@ -277,7 +348,7 @@ impl Coordinator {
                     let oracle_read_ts = oracle.read_ts().await;
                     let stage = build_optimize_stage(Some(oracle_read_ts));
 
-                    let stage = PeekStage::Optimize(stage);
+                    let stage = PeekStage::OptimizeMir(stage);
                     // Ignore errors if the coordinator has shut down.
                     let _ = internal_cmd_tx.send(Message::PeekStageReady {
                         ctx,
@@ -288,7 +359,7 @@ impl Coordinator {
             }
             None => {
                 let stage = build_optimize_stage(None);
-                let stage = PeekStage::Optimize(stage);
+                let stage = PeekStage::OptimizeMir(stage);
                 // Ignore errors if the coordinator has shut down.
                 let _ = internal_cmd_tx.send(Message::PeekStageReady {
                     ctx,
@@ -300,11 +371,21 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn peek_stage_optimize(
+    async fn peek_stage_optimize_mir(
         &mut self,
         ctx: ExecuteContext,
         root_otel_ctx: OpenTelemetryContext,
-        mut stage: PeekStageOptimize,
+        PeekStageOptimizeMir {
+            mut validity,
+            plan,
+            source_ids,
+            target_replica,
+            timeline_context,
+            oracle_read_ts,
+            in_immediate_multi_stmt_txn,
+            mut optimizer,
+            explain_ctx,
+        }: PeekStageOptimizeMir,
     ) {
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
@@ -313,21 +394,21 @@ impl Coordinator {
         // TODO: Is there a way to avoid making two dataflow_builders (the second is in
         // optimize_peek)?
         let id_bundle = self
-            .dataflow_builder(stage.optimizer.cluster_id())
-            .sufficient_collections(&stage.source_ids);
+            .dataflow_builder(optimizer.cluster_id())
+            .sufficient_collections(&source_ids);
         // Although we have added `sources.depends_on()` to the validity already, also add the
         // sufficient collections for safety.
-        stage.validity.dependency_ids.extend(id_bundle.iter());
+        validity.dependency_ids.extend(id_bundle.iter());
 
         let stats = {
             match self
                 .determine_timestamp(
                     ctx.session(),
                     &id_bundle,
-                    &stage.plan.when,
-                    stage.optimizer.cluster_id(),
-                    &stage.timeline_context,
-                    stage.oracle_read_ts.clone(),
+                    &plan.when,
+                    optimizer.cluster_id(),
+                    &timeline_context,
+                    oracle_read_ts.clone(),
                     None,
                 )
                 .await
@@ -336,7 +417,7 @@ impl Coordinator {
                 Ok(query_as_of) => self
                     .statistics_oracle(
                         ctx.session(),
-                        &stage.source_ids,
+                        &source_ids,
                         query_as_of.timestamp_context.antichain(),
                         true,
                     )
@@ -345,61 +426,89 @@ impl Coordinator {
             }
         };
 
-        let span = tracing::debug_span!("optimize peek task");
-
         mz_ore::task::spawn_blocking(
-            || "optimize peek",
+            || "optimize peek (MIR)",
             move || {
-                let _guard = span.enter();
+                let pipeline = || -> Result<optimize::peek::GlobalMirPlan, AdapterError> {
+                    // In `explain_~` contexts, set the trace-derived dispatch
+                    // as default while optimizing.
+                    let _dispatch_guard = if let Some(explain_ctx) = explain_ctx.as_ref() {
+                        let dispatch = tracing::Dispatch::from(&explain_ctx.optimizer_trace);
+                        Some(tracing::dispatcher::set_default(&dispatch))
+                    } else {
+                        None
+                    };
 
-                match Self::optimize_peek(ctx.session(), stats, id_bundle, stage) {
-                    Ok(stage) => {
-                        let stage = PeekStage::RealTimeRecency(stage);
-                        // Ignore errors if the coordinator has shut down.
-                        let _ = internal_cmd_tx.send(Message::PeekStageReady {
-                            ctx,
-                            otel_ctx: root_otel_ctx,
-                            stage,
-                        });
+                    let _span_guard =
+                        tracing::debug_span!(target: "optimizer", "optimize").entered();
+
+                    let raw_expr = plan.source.clone();
+
+                    // Trace the pipeline input under `optimize/raw`.
+                    tracing::debug_span!(target: "optimizer", "raw").in_scope(|| {
+                        trace_plan(&raw_expr);
+                    });
+
+                    // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
+                    let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
+                    let local_mir_plan = local_mir_plan.resolve(ctx.session(), stats);
+                    let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
+
+                    Ok(global_mir_plan)
+                };
+
+                let stage = match pipeline() {
+                    Ok(global_mir_plan) => PeekStage::RealTimeRecency(PeekStageRealTimeRecency {
+                        validity,
+                        plan,
+                        source_ids,
+                        id_bundle,
+                        target_replica,
+                        timeline_context,
+                        oracle_read_ts,
+                        in_immediate_multi_stmt_txn,
+                        optimizer,
+                        global_mir_plan,
+                        explain_ctx,
+                    }),
+                    // Internal optimizer errors are handled differently
+                    // depending on the caller.
+                    Err(err) => {
+                        let Some(explain_ctx) = explain_ctx else {
+                            // In `sequence_~` contexts, immediately retire the
+                            // execution with the error.
+                            return ctx.retire(Err(err.into()));
+                        };
+
+                        if explain_ctx.broken {
+                            // In `EXPLAIN BROKEN` contexts, just log the error
+                            // and move to the next stage with default
+                            // parameters.
+                            tracing::error!("error while handling EXPLAIN statement: {}", err);
+                            PeekStage::Explain(PeekStageExplain {
+                                validity,
+                                select_id: optimizer.select_id(),
+                                finishing: optimizer.finishing().clone(),
+                                fast_path_plan: Default::default(),
+                                df_meta: Default::default(),
+                                used_indexes: Default::default(),
+                                explain_ctx,
+                            })
+                        } else {
+                            // In regular `EXPLAIN` contexts, immediately retire
+                            // the execution with the error.
+                            return ctx.retire(Err(err.into()));
+                        }
                     }
-                    Err(err) => ctx.retire(Err(err)),
-                }
+                };
+
+                let _ = internal_cmd_tx.send(Message::PeekStageReady {
+                    ctx,
+                    otel_ctx: root_otel_ctx,
+                    stage,
+                });
             },
         );
-    }
-
-    #[tracing::instrument(level = "debug", skip_all)]
-    fn optimize_peek(
-        session: &Session,
-        stats: Box<dyn StatisticsOracle>,
-        id_bundle: CollectionIdBundle,
-        PeekStageOptimize {
-            validity,
-            plan,
-            source_ids,
-            target_replica,
-            timeline_context,
-            oracle_read_ts,
-            in_immediate_multi_stmt_txn,
-            mut optimizer,
-        }: PeekStageOptimize,
-    ) -> Result<PeekStageRealTimeRecency, AdapterError> {
-        let local_mir_plan = optimizer.catch_unwind_optimize(plan.source.clone())?;
-        let local_mir_plan = local_mir_plan.resolve(session, stats);
-        let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
-
-        Ok(PeekStageRealTimeRecency {
-            validity,
-            plan,
-            source_ids,
-            id_bundle,
-            target_replica,
-            timeline_context,
-            oracle_read_ts,
-            in_immediate_multi_stmt_txn,
-            optimizer,
-            global_mir_plan,
-        })
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -418,8 +527,9 @@ impl Coordinator {
             in_immediate_multi_stmt_txn,
             optimizer,
             global_mir_plan,
+            explain_ctx,
         }: PeekStageRealTimeRecency,
-    ) -> Option<(ExecuteContext, PeekStageFinish)> {
+    ) -> Option<(ExecuteContext, PeekStageOptimizeLir)> {
         match self.recent_timestamp(ctx.session(), source_ids.iter().cloned()) {
             Some(fut) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
@@ -437,6 +547,7 @@ impl Coordinator {
                         in_immediate_multi_stmt_txn,
                         optimizer,
                         global_mir_plan,
+                        explain_ctx,
                     },
                 );
                 task::spawn(|| "real_time_recency_peek", async move {
@@ -455,7 +566,7 @@ impl Coordinator {
             }
             None => Some((
                 ctx,
-                PeekStageFinish {
+                PeekStageOptimizeLir {
                     validity,
                     plan,
                     id_bundle: Some(id_bundle),
@@ -466,9 +577,184 @@ impl Coordinator {
                     real_time_recency_ts: None,
                     optimizer,
                     global_mir_plan,
+                    explain_ctx,
                 },
             )),
         }
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn peek_stage_optimize_lir(
+        &mut self,
+        mut ctx: ExecuteContext,
+        root_otel_ctx: OpenTelemetryContext,
+        PeekStageOptimizeLir {
+            validity,
+            plan,
+            id_bundle,
+            target_replica,
+            timeline_context,
+            oracle_read_ts,
+            source_ids,
+            real_time_recency_ts,
+            mut optimizer,
+            global_mir_plan,
+            explain_ctx,
+        }: PeekStageOptimizeLir,
+    ) {
+        // Generate data structures that can be moved to another task where we will perform possibly
+        // expensive optimizations.
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+
+        let id_bundle = id_bundle.unwrap_or_else(|| {
+            self.index_oracle(optimizer.cluster_id())
+                .sufficient_collections(&source_ids)
+        });
+
+        let determination = self
+            .sequence_peek_timestamp(
+                ctx.session_mut(),
+                &plan.when,
+                optimizer.cluster_id(),
+                timeline_context,
+                oracle_read_ts,
+                &id_bundle,
+                &source_ids,
+                real_time_recency_ts,
+            )
+            .await;
+
+        let determination = return_if_err!(determination, ctx);
+        let timestamp_context = determination.clone().timestamp_context;
+
+        mz_ore::task::spawn_blocking(
+            || "optimize peek (LIR)",
+            move || {
+                let pipeline =
+                    || -> Result<(optimize::peek::GlobalLirPlan, UsedIndexes), AdapterError> {
+                        // In `explain_~` contexts, set the trace-derived dispatch
+                        // as default while optimizing.
+                        let _dispatch_guard = if let Some(explain_ctx) = explain_ctx.as_ref() {
+                            let dispatch = tracing::Dispatch::from(&explain_ctx.optimizer_trace);
+                            Some(tracing::dispatcher::set_default(&dispatch))
+                        } else {
+                            None
+                        };
+
+                        let _span_guard =
+                            tracing::debug_span!(target: "optimizer", "optimize").entered();
+
+                        // Collect the list of indexes used by the dataflow at this point
+                        let mut used_indexes = {
+                            let df_desc = global_mir_plan.df_desc();
+                            let df_meta = global_mir_plan.df_meta();
+                            UsedIndexes::new(
+                                df_desc
+                                    .index_imports
+                                    .iter()
+                                    .map(|(id, _index_import)| {
+                                        (*id, df_meta.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
+                                    })
+                                    .collect(),
+                            )
+                        };
+
+                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                        let global_mir_plan =
+                            global_mir_plan.resolve(timestamp_context.clone(), ctx.session_mut());
+                        let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
+
+                        // Trace the resulting plan for the top-level `optimize` path.
+                        match global_lir_plan.peek_plan() {
+                            peek::PeekPlan::FastPath(plan) => {
+                                let arity = global_lir_plan.typ().arity();
+                                let finishing = if !optimizer.finishing().is_trivial(arity) {
+                                    Some(optimizer.finishing().clone())
+                                } else {
+                                    None
+                                };
+                                used_indexes = plan.used_indexes(&finishing);
+
+                                // TODO(aalexandrov): rework `OptimizerTrace` with support
+                                // for diverging plan types towards the end and add a
+                                // `PlanTrace` for the `FastPathPlan` type.
+                                trace_plan(&"fast_path_plan (missing)".to_string());
+                            }
+                            peek::PeekPlan::SlowPath(plan) => trace_plan(&plan.desc),
+                        }
+
+                        Ok((global_lir_plan, used_indexes))
+                    };
+
+                let stage = match pipeline() {
+                    Ok((global_lir_plan, used_indexes)) => {
+                        if let Some(explain_ctx) = explain_ctx {
+                            let (peek_plan, df_meta) = global_lir_plan.unapply();
+                            PeekStage::Explain(PeekStageExplain {
+                                validity,
+                                select_id: optimizer.select_id(),
+                                finishing: optimizer.finishing().clone(),
+                                fast_path_plan: match peek_plan {
+                                    peek::PeekPlan::FastPath(plan) => Some(plan),
+                                    peek::PeekPlan::SlowPath(_) => None,
+                                },
+                                df_meta,
+                                used_indexes,
+                                explain_ctx,
+                            })
+                        } else {
+                            PeekStage::Finish(PeekStageFinish {
+                                validity,
+                                plan,
+                                id_bundle,
+                                target_replica,
+                                source_ids,
+                                determination,
+                                timestamp_context,
+                                optimizer,
+                                global_lir_plan,
+                            })
+                        }
+                    }
+                    // Internal optimizer errors are handled differently
+                    // depending on the caller.
+                    Err(err) => {
+                        let Some(explain_ctx) = explain_ctx else {
+                            // In `sequence_~` contexts, immediately retire the
+                            // execution with the error.
+                            return ctx.retire(Err(err.into()));
+                        };
+
+                        if explain_ctx.broken {
+                            // In `EXPLAIN BROKEN` contexts, just log the error
+                            // and move to the next stage with default
+                            // parameters.
+                            tracing::error!("error while handling EXPLAIN statement: {}", err);
+                            PeekStage::Explain(PeekStageExplain {
+                                validity,
+                                select_id: optimizer.select_id(),
+                                finishing: optimizer.finishing().clone(),
+                                fast_path_plan: Default::default(),
+                                df_meta: Default::default(),
+                                used_indexes: Default::default(),
+                                explain_ctx,
+                            })
+                        } else {
+                            // In regular `EXPLAIN` contexts, immediately retire
+                            // the execution with the error.
+                            return ctx.retire(Err(err.into()));
+                        }
+                    }
+                };
+
+                // Ignore errors if the coordinator has shut down.
+                let _ = internal_cmd_tx.send(Message::PeekStageReady {
+                    ctx,
+                    otel_ctx: root_otel_ctx,
+                    stage,
+                });
+            },
+        );
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -480,39 +766,15 @@ impl Coordinator {
             plan,
             id_bundle,
             target_replica,
-            timeline_context,
-            oracle_read_ts,
             source_ids,
-            real_time_recency_ts,
-            mut optimizer,
-            global_mir_plan,
+            determination,
+            timestamp_context,
+            optimizer,
+            global_lir_plan,
         }: PeekStageFinish,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let id_bundle = id_bundle.unwrap_or_else(|| {
-            self.index_oracle(optimizer.cluster_id())
-                .sufficient_collections(&source_ids)
-        });
-
         let session = ctx.session_mut();
         let conn_id = session.conn_id().clone();
-        let determination = self
-            .sequence_peek_timestamp(
-                session,
-                &plan.when,
-                optimizer.cluster_id(),
-                timeline_context,
-                oracle_read_ts,
-                &id_bundle,
-                &source_ids,
-                real_time_recency_ts,
-            )
-            .await?;
-
-        let timestamp_context = determination.clone().timestamp_context;
-        let ts = timestamp_context.clone().timestamp_or_default();
-
-        let global_mir_plan = global_mir_plan.resolve(timestamp_context, session);
-        let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
 
         let source_arity = global_lir_plan.typ().arity();
         let (peek_plan, df_meta) = global_lir_plan.unapply();
@@ -537,6 +799,7 @@ impl Coordinator {
         }
 
         if let Some(uuid) = ctx.extra().contents() {
+            let ts = timestamp_context.timestamp_or_default();
             let mut transitive_storage_deps = BTreeSet::new();
             let mut transitive_compute_deps = BTreeSet::new();
             for id in id_bundle
@@ -598,6 +861,107 @@ impl Coordinator {
                 resp: Box::new(resp),
             }),
         }
+    }
+
+    fn peek_stage_explain(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        PeekStageExplain {
+            df_meta,
+            select_id,
+            finishing,
+            fast_path_plan,
+            used_indexes,
+            explain_ctx:
+                ExplainContext {
+                    broken,
+                    config,
+                    format,
+                    stage,
+                    desc,
+                    optimizer_trace,
+                },
+            ..
+        }: PeekStageExplain,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let desc = desc.expect("RelationDesc for SelectPlan in EXPLAIN mode");
+
+        let session_catalog = self.catalog().for_session(ctx.session());
+        let expr_humanizer = {
+            let transient_items = btreemap! {
+                select_id => TransientItem::new(
+                    Some(GlobalId::Explain.to_string()),
+                    Some(GlobalId::Explain.to_string()),
+                    Some(desc.iter_names().map(|c| c.to_string()).collect()),
+                )
+            };
+            ExprHumanizerExt::new(transient_items, &session_catalog)
+        };
+
+        let finishing = if finishing.is_trivial(desc.arity()) {
+            None
+        } else {
+            Some(finishing)
+        };
+
+        let trace = optimizer_trace.drain_all(
+            format,
+            &config,
+            &expr_humanizer,
+            finishing,
+            used_indexes,
+            fast_path_plan,
+            df_meta,
+        )?;
+
+        let rows = match stage.path() {
+            None => {
+                // For the `Trace` (pseudo-)stage, return the entire trace as
+                // triples of (time, path, plan) values.
+                let rows = trace
+                    .into_iter()
+                    .map(|entry| {
+                        // The trace would have to take over 584 years to overflow a u64.
+                        let span_duration = u64::try_from(entry.span_duration.as_nanos());
+                        Row::pack_slice(&[
+                            Datum::from(span_duration.unwrap_or(u64::MAX)),
+                            Datum::from(entry.path.as_str()),
+                            Datum::from(entry.plan.as_str()),
+                        ])
+                    })
+                    .collect();
+                rows
+            }
+            Some(path) => {
+                // For everything else, return the plan for the stage identified
+                // by the corresponding path.
+                let row = trace
+                    .into_iter()
+                    .find(|entry| entry.path == path)
+                    .map(|entry| Row::pack_slice(&[Datum::from(entry.plan.as_str())]))
+                    .ok_or_else(|| {
+                        let stmt_kind = plan::ExplaineeStatementKind::CreateMaterializedView;
+                        if !stmt_kind.supports(&stage) {
+                            // Print a nicer error for unsupported stages.
+                            AdapterError::Unstructured(anyhow::anyhow!(format!(
+                                "cannot EXPLAIN {stage} FOR {stmt_kind}"
+                            )))
+                        } else {
+                            // We don't expect this stage to be missing.
+                            AdapterError::Internal(format!(
+                                "stage `{path}` not present in the collected optimizer trace",
+                            ))
+                        }
+                    })?;
+                vec![row]
+            }
+        };
+
+        if broken {
+            tracing_core::callsite::rebuild_interest_cache();
+        }
+
+        Ok(Self::send_immediate_rows(rows))
     }
 
     /// Determines the query timestamp and acquires read holds on dependent sources

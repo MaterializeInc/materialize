@@ -98,7 +98,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_controller::clusters::{ClusterConfig, ClusterEvent, CreateReplicaConfig};
 use mz_controller::ControllerConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::OptimizedMirRelationExpr;
+use mz_expr::{OptimizedMirRelationExpr, RowSetFinishing};
 use mz_orchestrator::ServiceProcessMetrics;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
@@ -109,7 +109,7 @@ use mz_ore::{soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::explain::{ExplainConfig, ExplainFormat, UsedIndexes};
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{CreateSubsourceStatement, Raw, Statement};
@@ -145,9 +145,9 @@ use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParam
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
 use crate::coord::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::peek::PendingPeek;
+use crate::coord::peek::{FastPathPlan, PendingPeek};
 use crate::coord::timeline::{TimelineContext, TimelineState};
-use crate::coord::timestamp_selection::TimestampContext;
+use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::metrics::Metrics;
@@ -368,6 +368,7 @@ pub enum RealTimeRecencyContext {
         in_immediate_multi_stmt_txn: bool,
         optimizer: optimize::peek::Optimizer,
         global_mir_plan: optimize::peek::GlobalMirPlan,
+        explain_ctx: Option<ExplainContext>,
     },
 }
 
@@ -384,9 +385,11 @@ impl RealTimeRecencyContext {
 pub enum PeekStage {
     Validate(PeekStageValidate),
     Timestamp(PeekStageTimestamp),
-    Optimize(PeekStageOptimize),
+    OptimizeMir(PeekStageOptimizeMir),
     RealTimeRecency(PeekStageRealTimeRecency),
+    OptimizeLir(PeekStageOptimizeLir),
     Finish(PeekStageFinish),
+    Explain(PeekStageExplain),
 }
 
 impl PeekStage {
@@ -394,9 +397,11 @@ impl PeekStage {
         match self {
             PeekStage::Validate(_) => None,
             PeekStage::Timestamp(PeekStageTimestamp { validity, .. })
-            | PeekStage::Optimize(PeekStageOptimize { validity, .. })
+            | PeekStage::OptimizeMir(PeekStageOptimizeMir { validity, .. })
             | PeekStage::RealTimeRecency(PeekStageRealTimeRecency { validity, .. })
+            | PeekStage::OptimizeLir(PeekStageOptimizeLir { validity, .. })
             | PeekStage::Finish(PeekStageFinish { validity, .. }) => Some(validity),
+            PeekStage::Explain(PeekStageExplain { validity, .. }) => Some(validity),
         }
     }
 }
@@ -405,6 +410,9 @@ impl PeekStage {
 pub struct PeekStageValidate {
     plan: mz_sql::plan::SelectPlan,
     target_cluster: TargetCluster,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
@@ -416,10 +424,13 @@ pub struct PeekStageTimestamp {
     timeline_context: TimelineContext,
     in_immediate_multi_stmt_txn: bool,
     optimizer: optimize::peek::Optimizer,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
-pub struct PeekStageOptimize {
+pub struct PeekStageOptimizeMir {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
     source_ids: BTreeSet<GlobalId>,
@@ -428,6 +439,9 @@ pub struct PeekStageOptimize {
     oracle_read_ts: Option<Timestamp>,
     in_immediate_multi_stmt_txn: bool,
     optimizer: optimize::peek::Optimizer,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
@@ -442,10 +456,13 @@ pub struct PeekStageRealTimeRecency {
     in_immediate_multi_stmt_txn: bool,
     optimizer: optimize::peek::Optimizer,
     global_mir_plan: optimize::peek::GlobalMirPlan,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
-pub struct PeekStageFinish {
+pub struct PeekStageOptimizeLir {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
     id_bundle: Option<CollectionIdBundle>,
@@ -456,6 +473,33 @@ pub struct PeekStageFinish {
     real_time_recency_ts: Option<mz_repr::Timestamp>,
     optimizer: optimize::peek::Optimizer,
     global_mir_plan: optimize::peek::GlobalMirPlan,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
+}
+
+#[derive(Debug)]
+pub struct PeekStageFinish {
+    validity: PlanValidity,
+    plan: mz_sql::plan::SelectPlan,
+    id_bundle: CollectionIdBundle,
+    target_replica: Option<ReplicaId>,
+    source_ids: BTreeSet<GlobalId>,
+    determination: TimestampDetermination<mz_repr::Timestamp>,
+    timestamp_context: TimestampContext<mz_repr::Timestamp>,
+    optimizer: optimize::peek::Optimizer,
+    global_lir_plan: optimize::peek::GlobalLirPlan,
+}
+
+#[derive(Debug)]
+pub struct PeekStageExplain {
+    validity: PlanValidity,
+    select_id: GlobalId,
+    finishing: RowSetFinishing,
+    fast_path_plan: Option<FastPathPlan>,
+    df_meta: DataflowMetainfo,
+    used_indexes: UsedIndexes,
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -561,6 +605,7 @@ pub struct ExplainContext {
     pub config: ExplainConfig,
     pub format: ExplainFormat,
     pub stage: ExplainStage,
+    pub desc: Option<RelationDesc>,
     pub optimizer_trace: OptimizerTrace,
 }
 
