@@ -27,6 +27,10 @@ from dbt.adapters.capability import (
     Support,
 )
 from dbt.adapters.materialize.connections import MaterializeConnectionManager
+from dbt.adapters.materialize.exceptions import (
+    RefreshIntervalConfigError,
+    RefreshIntervalConfigNotDictError,
+)
 from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres import PostgresAdapter
 from dbt.adapters.postgres.column import PostgresColumn
@@ -64,9 +68,37 @@ class MaterializeIndexConfig(dbtClassMixin):
             )
 
 
+# NOTE(morsapaes): Materialize allows configuring a refresh interval for the
+# materialized view materialization. If no config option is specified, the
+# default is REFRESH ON COMMIT. We add an explicitly attribute for the special
+# case of parametrizing the configuration option e.g. in macros.
+@dataclass
+class MaterializeRefreshIntervalConfig(dbtClassMixin):
+    at: Optional[str] = None
+    at_creation: Optional[bool] = False
+    every: Optional[str] = None
+    aligned_to: Optional[str] = None
+    on_commit: Optional[bool] = False
+
+    @classmethod
+    def parse(
+        cls, raw_refresh_interval
+    ) -> Optional["MaterializeRefreshIntervalConfig"]:
+        if raw_refresh_interval is None:
+            return None
+        try:
+            cls.validate(raw_refresh_interval)
+            return cls.from_dict(raw_refresh_interval)
+        except ValidationError as exc:
+            raise RefreshIntervalConfigError(exc)
+        except TypeError:
+            raise RefreshIntervalConfigNotDictError(raw_refresh_interval)
+
+
 @dataclass
 class MaterializeConfig(AdapterConfig):
     cluster: Optional[str] = None
+    refresh_interval: Optional[MaterializeRefreshIntervalConfig] = None
 
 
 class MaterializeAdapter(PostgresAdapter):
@@ -117,6 +149,12 @@ class MaterializeAdapter(PostgresAdapter):
 
     def parse_index(self, raw_index: Any) -> Optional[MaterializeIndexConfig]:
         return MaterializeIndexConfig.parse(raw_index)
+
+    @available
+    def parse_refresh_interval(
+        self, raw_refresh_interval: Any
+    ) -> Optional[MaterializeRefreshIntervalConfig]:
+        return MaterializeRefreshIntervalConfig.parse(raw_refresh_interval)
 
     def list_relations_without_caching(
         self, schema_relation: MaterializeRelation
