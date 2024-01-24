@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cell::RefCell;
-use std::cmp::Reverse;
+use std::cmp::{Ordering, Reverse};
 use std::convert::AsRef;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
@@ -206,8 +206,8 @@ pub(crate) fn upsert<G: Scope, FromTime>(
     PressOnDropButton,
 )
 where
-    G::Timestamp: TotalOrder + Debug,
-    FromTime: timely::ExchangeData + Ord + Debug,
+    G::Timestamp: TotalOrder,
+    FromTime: timely::ExchangeData + Ord,
 {
     let upsert_metrics = source_config.metrics.get_upsert_metrics(
         source_config.id,
@@ -363,6 +363,14 @@ fn stage_input<T, FromTime>(
     }
 }
 
+/// The style of drain we are performing on the stash. `AtTime`-drains cannot
+/// assume that all values have been seen, and must leave tombstones behind for deleted values.
+#[derive(Debug)]
+enum DrainStyle<'a, T> {
+    ToUpper(&'a Antichain<T>),
+    AtTime(T),
+}
+
 /// Helper method for `upsert_inner` used to stage `data` updates
 /// from the input timely edge.
 async fn drain_staged_input<S, G, T, FromTime, E>(
@@ -370,20 +378,25 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     commands_state: &mut indexmap::IndexMap<UpsertKey, types::UpsertValueAndSize<Option<FromTime>>>,
     output_updates: &mut Vec<(Result<Row, UpsertError>, T, Diff)>,
     multi_get_scratch: &mut Vec<UpsertKey>,
-    upper: &Antichain<T>,
+    drain_style: DrainStyle<'_, T>,
     error_emitter: &mut E,
     state: &mut UpsertState<'_, S, Option<FromTime>>,
 ) where
     S: UpsertStateBackend<Option<FromTime>>,
     G: Scope,
     T: PartialOrder + Ord + Clone + Debug,
-    FromTime: timely::ExchangeData + Ord + Debug,
+    FromTime: timely::ExchangeData + Ord,
     E: UpsertErrorEmitter<G>,
 {
     stash.sort_unstable();
 
     // Find the prefix that we can emit
-    let idx = stash.partition_point(|(ts, _, _, _)| !upper.less_equal(ts));
+    let idx = stash.partition_point(|(ts, _, _, _)| match &drain_style {
+        DrainStyle::ToUpper(upper) => !upper.less_equal(ts),
+        DrainStyle::AtTime(time) => ts.cmp(time) <= Ordering::Equal,
+    });
+
+    tracing::trace!(?drain_style, updates = idx, "draining stash in upsert");
 
     // Read the previous values _per key_ out of `state`, recording it
     // along with the value with the _latest timestamp for that key_.
@@ -456,8 +469,6 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
                 if let Some(old_value) = existing_value
                     .replace(StateValue::value(value.clone(), Some(from_time.0.clone())))
                 {
-                    // Because we currently only drain the staged input at progress boundaries, we
-                    // don't yet need to record a tombstone.
                     if let Value::Value(old_value, _) = old_value.into_decoded() {
                         output_updates.push((old_value, ts.clone(), -1));
                     }
@@ -466,12 +477,13 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
             }
             None => {
                 if let Some(old_value) = existing_value.take() {
-                    // Because we currently only drain the staged input at progress boundaries, we
-                    // don't yet need to record a tombstone.
                     if let Value::Value(old_value, _) = old_value.into_decoded() {
                         output_updates.push((old_value, ts, -1));
                     }
                 }
+
+                // Record a tombstone for deletes.
+                *existing_value = Some(StateValue::tombstone(Some(from_time.0.clone())));
             }
         }
     }
@@ -529,7 +541,7 @@ where
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
     US: UpsertStateBackend<Option<FromTime>>,
-    FromTime: timely::ExchangeData + Ord + Debug,
+    FromTime: timely::ExchangeData + Ord,
 {
     // Sort key indices to ensure we can construct the key by iterating over the datums of the row
     key_indices.sort_unstable();
@@ -765,52 +777,95 @@ where
                 input.next().await
             }
         } {
-            match event {
-                AsyncEvent::Data(cap, mut data) if output_cap.time().less_equal(cap.time()) => {
-                    stage_input(
-                        &mut stash,
-                        &mut data,
-                        &input_upper,
-                        &resume_upper,
-                        upsert_config.shrink_upsert_unused_buffers_by_ratio,
-                    );
-                }
-                AsyncEvent::Data(_cap, mut data) => {
-                    stage_input(
-                        &mut stash,
-                        &mut data,
-                        &input_upper,
-                        &resume_upper,
-                        upsert_config.shrink_upsert_unused_buffers_by_ratio,
-                    );
-                }
-                AsyncEvent::Progress(upper) => {
-                    // Ignore progress updates before the `resume_upper`, which is our initial
-                    // capability post-snapshotting.
-                    if PartialOrder::less_than(&upper, &resume_upper) {
-                        continue;
+            // Buffer as many events as possible. This should be bounded, as new data can't be
+            // produced in this worker until we yield to timely.
+            let events = [event]
+                .into_iter()
+                .chain(itertools::unfold(&mut input, |input| {
+                    input.next().now_or_never().flatten()
+                }));
+
+            let mut partial_drain_time = None;
+            for event in events {
+                match event {
+                    AsyncEvent::Data(cap, mut data) => {
+                        tracing::trace!(
+                            time=?cap.time(),
+                            updates=%data.len(),
+                            "received data in upsert"
+                        );
+                        stage_input(
+                            &mut stash,
+                            &mut data,
+                            &input_upper,
+                            &resume_upper,
+                            upsert_config.shrink_upsert_unused_buffers_by_ratio,
+                        );
+
+                        let event_time = cap.time();
+                        // If the data is at _exactly_ the output frontier, we can preemptively drain it into the state.
+                        // Data within this set events strictly beyond this time are staged as
+                        // normal.
+                        //
+                        // This is a load-bearing optimization, as it is required to avoid buffering
+                        // the entire source snapshot in the `stash`.
+                        if output_cap.time().cmp(event_time) == Ordering::Equal {
+                            partial_drain_time = Some(event_time.clone());
+                        }
                     }
+                    AsyncEvent::Progress(upper) => {
+                        tracing::trace!(?upper, "received progress in upsert");
+                        // Ignore progress updates before the `resume_upper`, which is our initial
+                        // capability post-snapshotting.
+                        if PartialOrder::less_than(&upper, &resume_upper) {
+                            continue;
+                        }
 
-                    drain_staged_input::<_, G, _, _, _>(
-                        &mut stash,
-                        &mut commands_state,
-                        &mut output_updates,
-                        &mut multi_get_scratch,
-                        &upper,
-                        &mut error_emitter,
-                        &mut state,
-                    )
-                    .await;
-
-                    // Emit the _consolidated_ changes to the output.
-                    output_handle
-                        .give_container(&output_cap, &mut output_updates)
+                        // Disable the partial drain as this progress event covers
+                        // the `output_cap` time.
+                        partial_drain_time = None;
+                        drain_staged_input::<_, G, _, _, _>(
+                            &mut stash,
+                            &mut commands_state,
+                            &mut output_updates,
+                            &mut multi_get_scratch,
+                            DrainStyle::ToUpper(&upper),
+                            &mut error_emitter,
+                            &mut state,
+                        )
                         .await;
-                    if let Some(ts) = upper.as_option() {
-                        output_cap.downgrade(ts);
+
+                        // Emit the _consolidated_ changes to the output.
+                        output_handle
+                            .give_container(&output_cap, &mut output_updates)
+                            .await;
+                        if let Some(ts) = upper.as_option() {
+                            output_cap.downgrade(ts);
+                        }
+                        input_upper = upper;
                     }
-                    input_upper = upper;
                 }
+            }
+
+            // If there were staged events that occurred at the capability time, drain
+            // them. This is safe because out-of-order updates to the same key that are
+            // drained in separate calls to `drain_staged_input` are correctly ordered by
+            // their `FromTime` in `drain_staged_input`.
+            //
+            // Note also that this may result in more updates in the output collection than
+            // the minimum. However, because the frontier only advances on `Progress` updates,
+            // the collection always accumulates correctly for all keys.
+            if let Some(partial_drain_time) = partial_drain_time {
+                drain_staged_input::<_, G, _, _, _>(
+                    &mut stash,
+                    &mut commands_state,
+                    &mut output_updates,
+                    &mut multi_get_scratch,
+                    DrainStyle::AtTime(partial_drain_time),
+                    &mut error_emitter,
+                    &mut state,
+                )
+                .await;
             }
         }
     });

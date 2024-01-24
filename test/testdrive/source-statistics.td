@@ -9,6 +9,11 @@
 
 $ set-arg-default single-replica-cluster=quickstart
 
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 1000
+ALTER SYSTEM SET storage_statistics_collection_interval = 1000
+ALTER SYSTEM SET storage_statistics_interval = 2000
+
 $ set keyschema={
     "type": "record",
     "name": "Key",
@@ -28,6 +33,8 @@ $ set schema={
 
 $ kafka-create-topic topic=upsert partitions=1
 
+# The length of `moosemooose` must be longer than `moose` to ensure a tombstone doesn't HAPPEN
+# to have the same size.
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "fish"} {"f1": "fish", "f2": 1000}
 {"key": "bird1"} {"f1":"goose", "f2": 1}
@@ -37,7 +44,7 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
 {"key": "birdmore"} {"f1":"geese", "f2": 56}
 {"key": "mammalmore"} {"f1": "moose", "f2": 42}
 {"key": "mammal1"}
-{"key": "mammalmore"} {"f1":"moose", "f2": 2}
+{"key": "mammalmore"} {"f1":"moosemoose", "f2": 2}
 
 $ kafka-create-topic topic=metrics-test partitions=1
 $ kafka-ingest topic=metrics-test format=bytes
@@ -73,7 +80,7 @@ key           f1      f2
 ------------------------
 fish          fish    1000
 birdmore      geese   56
-mammalmore    moose   2
+mammalmore    moosemoose   2
 
 # statistics are only populated every minute by default
 $ set-sql-timeout duration=2minutes
