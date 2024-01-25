@@ -47,7 +47,11 @@ from materialize.scalability.regression_assessment import RegressionAssessment
 from materialize.scalability.result_analyzer import ResultAnalyzer
 from materialize.scalability.result_analyzers import DefaultResultAnalyzer
 from materialize.scalability.schema import Schema, TransactionIsolation
-from materialize.scalability.workload import Workload, WorkloadSelfTest
+from materialize.scalability.workload import (
+    Workload,
+    WorkloadSelfTest,
+    WorkloadWithContext,
+)
 from materialize.scalability.workloads import *  # noqa: F401 F403
 from materialize.scalability.workloads_test import *  # noqa: F401 F403
 from materialize.util import YesNoOnce, all_subclasses
@@ -299,6 +303,8 @@ def get_workload_classes(args: argparse.Namespace) -> list[type[Workload]]:
             workload_cls
             for workload_cls in all_subclasses(Workload)
             if not issubclass(workload_cls, WorkloadSelfTest)
+            # abstract base class
+            and not workload_cls == WorkloadWithContext
         ]
     )
 

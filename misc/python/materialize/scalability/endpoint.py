@@ -19,8 +19,12 @@ class Endpoint:
     def __init__(self, specified_target: str):
         self._specified_target = specified_target
 
-    def sql_connection(self) -> psycopg.connection.Connection[tuple[Any, ...]]:
-        print(f"Connecting to URL: {self.url()}")
+    def sql_connection(
+        self, quiet: bool = False
+    ) -> psycopg.connection.Connection[tuple[Any, ...]]:
+        if not quiet:
+            print(f"Connecting to URL: {self.url()}")
+
         conn = psycopg.connect(self.url())
         conn.autocommit = True
         return conn
