@@ -29,7 +29,7 @@ pub async fn run_force_compaction(
     cmd.args.done()?;
 
     let shard_id = ShardId::from_str(&shard_id).expect("invalid shard id");
-    let cfg = PersistConfig::new(state.build_info, SYSTEM_TIME.clone());
+    let cfg = PersistConfig::new_default_configs(state.build_info, SYSTEM_TIME.clone());
 
     let metrics_registry = MetricsRegistry::new();
 

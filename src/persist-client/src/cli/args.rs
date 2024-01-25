@@ -111,7 +111,7 @@ impl StateArgs {
     }
 
     pub(crate) async fn open(&self) -> Result<StateVersions, anyhow::Error> {
-        let cfg = PersistConfig::new(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
+        let cfg = PersistConfig::new_default_configs(&READ_ALL_BUILD_INFO, SYSTEM_TIME.clone());
         let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
         let consensus =
             make_consensus(&cfg, &self.consensus_uri, NO_COMMIT, Arc::clone(&metrics)).await?;

@@ -1254,10 +1254,8 @@ mod tests {
     use std::pin;
     use std::str::FromStr;
 
-    use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::cast::CastFrom;
     use mz_ore::metrics::MetricsRegistry;
-    use mz_ore::now::SYSTEM_TIME;
     use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
     use mz_persist::unreliable::{UnreliableConsensus, UnreliableHandle};
     use serde::{Deserialize, Serialize};
@@ -1603,7 +1601,7 @@ mod tests {
             (("2".to_owned(), "two".to_owned()), 2, 1),
         ];
 
-        let cfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+        let cfg = PersistConfig::new_for_tests();
         let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
         let consensus = Arc::new(MemConsensus::default());
         let unreliable = UnreliableHandle::default();

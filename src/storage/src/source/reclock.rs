@@ -646,7 +646,7 @@ mod tests {
     static PERSIST_READER_LEASE_TIMEOUT_MS: Duration = Duration::from_secs(60 * 15);
 
     static PERSIST_CACHE: Lazy<Arc<PersistClientCache>> = Lazy::new(|| {
-        let persistcfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+        let persistcfg = PersistConfig::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         persistcfg.set_reader_lease_duration(PERSIST_READER_LEASE_TIMEOUT_MS);
         Arc::new(PersistClientCache::new(
             persistcfg,

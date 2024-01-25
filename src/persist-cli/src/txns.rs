@@ -56,7 +56,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         consensus_uri: args.consensus_uri.clone(),
     };
     let persist = PersistClientCache::new(
-        PersistConfig::new(&mz_persist_client::BUILD_INFO, SYSTEM_TIME.clone()),
+        PersistConfig::new_default_configs(&mz_persist_client::BUILD_INFO, SYSTEM_TIME.clone()),
         &metrics_registry,
         |_, _| PubSubClientConnection::noop(),
     )

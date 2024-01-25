@@ -788,7 +788,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let secrets_reader = secrets_controller.reader();
     let now = SYSTEM_TIME.clone();
 
-    let persist_config = PersistConfig::new_with_configs(
+    let persist_config = PersistConfig::new(
         &mz_environmentd::BUILD_INFO,
         now.clone(),
         mz_sql::session::vars::all_dyn_configs(),

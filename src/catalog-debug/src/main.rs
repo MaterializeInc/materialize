@@ -164,7 +164,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         CatalogKind::Persist => {
             // It's important that the version in this `BUILD_INFO` is kept in sync with the build
             // info used to write data to the persist catalog.
-            let persist_config = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
+            let persist_config =
+                PersistConfig::new_default_configs(&BUILD_INFO, SYSTEM_TIME.clone());
             let persist_clients =
                 PersistClientCache::new(persist_config, &metrics_registry, |_, _| {
                     PubSubClientConnection::noop()

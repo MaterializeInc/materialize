@@ -1056,7 +1056,7 @@ pub async fn create_state(
         persist_blob_url: config.persist_blob_url.clone(),
         build_info: config.build_info,
         persist_clients: PersistClientCache::new(
-            PersistConfig::new(config.build_info, SYSTEM_TIME.clone()),
+            PersistConfig::new_default_configs(config.build_info, SYSTEM_TIME.clone()),
             &MetricsRegistry::new(),
             |_, _| PubSubClientConnection::noop(),
         ),

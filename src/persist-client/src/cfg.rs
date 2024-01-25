@@ -152,14 +152,15 @@ impl std::ops::Deref for PersistConfig {
 }
 
 impl PersistConfig {
-    /// Returns a new instance of [PersistConfig] with default tuning.
-    pub fn new(build_info: &BuildInfo, now: NowFn) -> Self {
-        Self::new_with_configs(build_info, now, all_dyn_configs(ConfigSet::default()))
+    /// Returns a new instance of [PersistConfig] with default tuning and
+    /// default ConfigSet.
+    pub fn new_default_configs(build_info: &BuildInfo, now: NowFn) -> Self {
+        Self::new(build_info, now, all_dyn_configs(ConfigSet::default()))
     }
 
     /// Returns a new instance of [PersistConfig] with default tuning and the
     /// specified ConfigSet.
-    pub fn new_with_configs(build_info: &BuildInfo, now: NowFn, configs: ConfigSet) -> Self {
+    pub fn new(build_info: &BuildInfo, now: NowFn, configs: ConfigSet) -> Self {
         // Escape hatch in case we need to disable compaction.
         let compaction_disabled = mz_ore::env::is_var_truthy("MZ_PERSIST_COMPACTION_DISABLED");
         Self {
@@ -252,7 +253,7 @@ impl PersistConfig {
         use mz_build_info::DUMMY_BUILD_INFO;
         use mz_ore::now::SYSTEM_TIME;
 
-        let mut cfg = Self::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+        let mut cfg = Self::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         cfg.hostname = "tests".into();
         cfg.set_config(&STREAMING_COMPACTION_ENABLED, true);
         cfg.set_config(&STREAMING_SNAPSHOT_AND_FETCH_ENABLED, true);

@@ -262,8 +262,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         configs = mz_persist_txn::all_dyn_configs(configs);
         configs
     }
-    let persist_cfg =
-        PersistConfig::new_with_configs(&BUILD_INFO, SYSTEM_TIME.clone(), all_dyn_configs());
+    let persist_cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone(), all_dyn_configs());
     let persist_clients = Arc::new(PersistClientCache::new(
         persist_cfg,
         &metrics_registry,
