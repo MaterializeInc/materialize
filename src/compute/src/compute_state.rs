@@ -423,10 +423,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             panic!("dataflow server has already initialized logging");
         }
 
-        let worker_id = self.timely_worker.index();
-        let metrics = self.compute_state.metrics.for_logging(worker_id);
-
-        let (logger, traces) = logging::initialize(self.timely_worker, config, metrics);
+        let (logger, traces) = logging::initialize(self.timely_worker, config);
 
         // Install traces as maintained indexes
         for (log, trace) in traces {

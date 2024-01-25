@@ -23,7 +23,6 @@ use differential_dataflow::Collection;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, GlobalId, Timestamp};
 use mz_timely_util::replay::MzReplay;
-use prometheus::core::{AtomicF64, GenericCounter};
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::buffer::Session;
@@ -41,7 +40,6 @@ use uuid::Uuid;
 
 use crate::extensions::arrange::MzArrange;
 use crate::logging::{ComputeLog, EventQueue, LogVariant, PermutedRowPacker, SharedLoggingState};
-use crate::metrics::LoggingMetrics;
 use crate::typedefs::{RowRowAgent, RowRowSpine};
 
 /// Type alias for a logger of compute events.
@@ -176,7 +174,6 @@ impl Peek {
 pub(super) fn construct<A: Allocate + 'static>(
     worker: &mut timely::worker::Worker<A>,
     config: &mz_compute_client::logging::LoggingConfig,
-    metrics: LoggingMetrics,
     event_queue: EventQueue<ComputeEvent>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
 ) -> BTreeMap<LogVariant, (RowRowAgent<Timestamp, Diff>, Rc<dyn Any>)> {
@@ -215,7 +212,7 @@ pub(super) fn construct<A: Allocate + 'static>(
             demux.new_output();
         let (mut error_count_out, error_count) = demux.new_output();
 
-        let mut demux_state = DemuxState::new(worker2, metrics);
+        let mut demux_state = DemuxState::new(worker2);
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
             move |_frontiers| {
@@ -444,12 +441,10 @@ struct DemuxState<A: Allocate> {
     peek_stash: BTreeMap<Uuid, Duration>,
     /// Arrangement size stash
     arrangement_size: BTreeMap<usize, ArrangementSizeState>,
-    /// State maintained in support of the `delayed_time_seconds_total` metric.
-    delayed_time: DelayedTimeState,
 }
 
 impl<A: Allocate> DemuxState<A> {
-    fn new(worker: Worker<A>, metrics: LoggingMetrics) -> Self {
+    fn new(worker: Worker<A>) -> Self {
         Self {
             worker,
             exports: Default::default(),
@@ -458,7 +453,6 @@ impl<A: Allocate> DemuxState<A> {
             shutdown_dataflows: Default::default(),
             peek_stash: Default::default(),
             arrangement_size: Default::default(),
-            delayed_time: DelayedTimeState::new(metrics.delayed_time_seconds_total),
         }
     }
 }
@@ -476,9 +470,6 @@ struct ExportState {
     /// This must be a signed integer, since per-worker error counts can be negative, only the
     /// cross-worker total has to sum up to a non-negative value.
     error_count: i64,
-    /// Whether this export is currently delayed, i.e., it's frontier is less than the least of the
-    /// frontiers of its inputs.
-    delayed: bool,
 }
 
 impl ExportState {
@@ -488,7 +479,6 @@ impl ExportState {
             reported_frontier: MutableAntichain::new(),
             imports: Default::default(),
             error_count: 0,
-            delayed: false,
         }
     }
 }
@@ -510,56 +500,6 @@ struct ArrangementSizeState {
     size: isize,
     capacity: isize,
     count: isize,
-}
-
-/// State maintained in support of the `delayed_time_seconds_total` metric.
-struct DelayedTimeState {
-    /// The `delayed_time_seconds_total` metric.
-    metric: GenericCounter<AtomicF64>,
-    /// The time since when at least one export has been delayed.
-    delayed_since: Option<Duration>,
-    /// The number of exports that are currently delayed.
-    delayed_count: u64,
-}
-
-impl DelayedTimeState {
-    fn new(metric: GenericCounter<AtomicF64>) -> Self {
-        Self {
-            metric,
-            delayed_since: None,
-            delayed_count: 0,
-        }
-    }
-
-    /// Updates the state in response to a delayed export.
-    fn register_delayed_export(&mut self, when: Duration) {
-        self.delayed_count += 1;
-        if self.delayed_since.is_none() {
-            self.delayed_since = Some(when);
-        }
-    }
-
-    /// Updates the state in response to a caught-up export.
-    fn register_caught_up_export(&mut self, when: Duration) {
-        if self.delayed_count > 0 {
-            self.delayed_count -= 1;
-        } else {
-            error!("caught-up export reported even though none was delayed");
-            return;
-        }
-
-        if self.delayed_count > 0 {
-            return; // some exports are still delayed
-        }
-
-        let Some(since) = self.delayed_since.take() else {
-            error!("missing `delayed_since` value");
-            return;
-        };
-
-        let duration = (when - since).as_secs_f64();
-        self.metric.inc_by(duration);
-    }
 }
 
 type Update<D> = (D, Timestamp, Diff);
@@ -764,11 +704,6 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             };
             self.output.error_count.give((datum, ts, -1));
         }
-
-        // If the export was delayed, we need to remove it from delayed-time tracking.
-        if export.delayed {
-            self.state.delayed_time.register_caught_up_export(self.time);
-        }
     }
 
     fn handle_dataflow_dropped(&mut self, id: usize) {
@@ -918,13 +853,6 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
                     break;
                 }
             }
-
-            // If any of the imports has no pending frontiers that means the export has caught
-            // up with its inputs.
-            if export.delayed && time_deque.is_empty() {
-                export.delayed = false;
-                self.state.delayed_time.register_caught_up_export(self.time);
-            }
         }
     }
 
@@ -962,16 +890,6 @@ impl<A: Allocate> DemuxHandler<'_, '_, A> {
             if PartialOrder::less_than(&export_frontier, &AntichainRef::new(&import_frontier)) {
                 let delay_state = export.imports.entry(import_id).or_default();
                 delay_state.time_deque.push_back((frontier, self.time));
-
-                // If all of the imports have pending frontiers that means the export has become
-                // delayed.
-                if !export.delayed
-                    && delay_state.time_deque.len() == 1
-                    && export.imports.values().all(|i| !i.time_deque.is_empty())
-                {
-                    export.delayed = true;
-                    self.state.delayed_time.register_delayed_export(self.time);
-                }
             }
         }
     }
