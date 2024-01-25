@@ -24,7 +24,7 @@ use qcell::QCell;
 use rand::SeedableRng;
 use rand::{distributions::Bernoulli, prelude::Distribution, thread_rng};
 use tokio::time::MissedTickBehavior;
-use tracing::{debug, info};
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::coord::{ConnMeta, Coordinator};
@@ -147,7 +147,7 @@ impl StatementLogging {
             self.tokens = remaining;
             Some(std::mem::take(&mut self.throttled_count))
         } else {
-            info!(
+            debug!(
                 "throttling check failed. tokens available: {}; cost: {cost}",
                 self.tokens
             );
