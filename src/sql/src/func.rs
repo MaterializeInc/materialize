@@ -307,6 +307,9 @@ impl<R> Operation<R> {
     }
 
     /// Builds an operation that takes two arguments and an order_by.
+    ///
+    /// If returning an aggregate function, it should return `true` for
+    /// [`AggregateFunc::is_order_sensitive`].
     fn binary_ordered<F>(f: F) -> Operation<R>
     where
         F: Fn(&ExprContext, HirScalarExpr, HirScalarExpr, Vec<ColumnOrder>) -> Result<R, PlanError>
@@ -3642,6 +3645,24 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 ecx.require_feature_flag(&crate::session::vars::ENABLE_LIST_REMOVE)?;
                 Ok(lhs.call_binary(rhs, BinaryFunc::ListRemove))
             }) => ListAnyCompatible, oid::FUNC_LIST_REMOVE_OID;
+        },
+        "map_agg" => Aggregate {
+            params!(String, Any) => Operation::binary_ordered(|ecx, key, val, order_by| {
+                let (value_type, val) = match ecx.scalar_type(&val) {
+                    // TODO(#7572): remove this
+                    ScalarType::Char { length } => (ScalarType::Char { length }, val.call_unary(UnaryFunc::PadChar(func::PadChar { length }))),
+                    typ => (typ, val),
+                };
+
+                let e = HirScalarExpr::CallVariadic {
+                    func: VariadicFunc::RecordCreate {
+                        field_names: vec![ColumnName::from("key"), ColumnName::from("val")],
+                    },
+                    exprs: vec![key, val],
+                };
+
+                Ok((e, AggregateFunc::MapAgg { order_by, value_type }))
+            }) => MapAny, oid::FUNC_MAP_AGG;
         },
         "map_build" => Scalar {
             params!(ListAny) => Operation::unary(|ecx, expr| {

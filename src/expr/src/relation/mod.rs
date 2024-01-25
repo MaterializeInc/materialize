@@ -2742,7 +2742,9 @@ impl AggregateExpr {
             | AggregateFunc::SumNumeric
             | AggregateFunc::Any
             | AggregateFunc::All
-            | AggregateFunc::Dummy => self.expr.clone(),
+            | AggregateFunc::Dummy
+            // TODO: this could be rewritten if we had `MAP[foo=>bar]`.
+            | AggregateFunc::MapAgg { .. } => self.expr.clone(),
         }
     }
 
