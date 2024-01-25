@@ -1025,7 +1025,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         let audit_logs = match self.audit_logs.take() {
             Some(audit_logs) => audit_logs,
             None => {
-                error!("audit logs were not found in cache, so they were retrieved from persist, this is unexpected and bad for performance");
+                soft_panic_or_log!("audit logs were not found in cache, so they were retrieved from persist, this is unexpected and bad for performance");
                 self.persist_snapshot()
                     .await
                     .filter_map(
@@ -1109,7 +1109,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
             // We could check if each individual cache is populated, but this is unexpected and we
             // need a full snapshot anyway. So we might as well compute both from a full snapshot.
             _ => {
-                error!("audit events and storage usage events were not found in cache, so they were retrieved from persist, this is unexpected and bad for performance");
+                soft_panic_or_log!("audit events and storage usage events were not found in cache, so they were retrieved from persist, this is unexpected and bad for performance");
                 let mut audit_events = Vec::new();
                 let mut storage_usage_events = Vec::new();
                 for StateUpdate { kind, ts: _, diff } in self.persist_snapshot().await {
@@ -1253,7 +1253,7 @@ impl DurableCatalogState for PersistCatalogState {
         let storage_usage = match self.storage_usage_events.take() {
             Some(storage_usage) => storage_usage,
             None => {
-                error!("storage usage events were not found in cache, so they were retrieved from persist, this is unexpected and bad for performance");
+                soft_panic_or_log!("storage usage events were not found in cache, so they were retrieved from persist, this is unexpected and bad for performance");
                 self.persist_snapshot()
                     .await
                     .filter_map(
