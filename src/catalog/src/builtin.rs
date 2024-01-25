@@ -2598,8 +2598,8 @@ pub static MZ_RECENT_ACTIVITY_LOG: Lazy<BuiltinView> = Lazy::new(|| BuiltinView 
     name: "mz_recent_activity_log",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: "SELECT * FROM mz_internal.mz_activity_log WHERE prepared_at > now() - INTERVAL '3 days'
-AND began_at > now() - INTERVAL '3 days'",
+    sql: "SELECT * FROM mz_internal.mz_activity_log WHERE prepared_at + INTERVAL '3 days' > mz_now()
+AND began_at + INTERVAL '3 days' > mz_now()",
     access: vec![MONITOR_SELECT],
 });
 
@@ -6315,7 +6315,7 @@ pub const MZ_RECENT_ACTIVITY_LOG_IND: BuiltinIndex = BuiltinIndex {
     sql: "IN CLUSTER mz_introspection
 -- session_id because we plan to join
 -- this against mz_internal.mz_session_history
-ON mz_internal.mz_activity_log (session_id)",
+ON mz_internal.mz_recent_activity_log (session_id)",
     is_retained_metrics_object: false,
 };
 
