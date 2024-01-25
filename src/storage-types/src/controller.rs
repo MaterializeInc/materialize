@@ -304,10 +304,9 @@ impl From<DataflowError> for StorageError {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, num_enum::TryFromPrimitive, num_enum::IntoPrimitive)]
+#[derive(Clone, Copy, Debug, PartialEq, num_enum::IntoPrimitive)]
 #[repr(u64)]
 pub enum PersistTxnTablesImpl {
-    Off = 0,
     Eager = 1,
     Lazy = 2,
 }
@@ -315,7 +314,6 @@ pub enum PersistTxnTablesImpl {
 impl std::fmt::Display for PersistTxnTablesImpl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PersistTxnTablesImpl::Off => f.write_str("off"),
             PersistTxnTablesImpl::Eager => f.write_str("eager"),
             PersistTxnTablesImpl::Lazy => f.write_str("lazy"),
         }
@@ -327,10 +325,21 @@ impl std::str::FromStr for PersistTxnTablesImpl {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "off" => Ok(PersistTxnTablesImpl::Off),
-            "eager" => Ok(PersistTxnTablesImpl::Eager),
+            "off" | "eager" => Ok(PersistTxnTablesImpl::Eager),
             "lazy" => Ok(PersistTxnTablesImpl::Lazy),
             _ => Err(s.into()),
+        }
+    }
+}
+
+impl TryFrom<u64> for PersistTxnTablesImpl {
+    type Error = u64;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        match value {
+            0 | 1 => Ok(PersistTxnTablesImpl::Eager),
+            2 => Ok(PersistTxnTablesImpl::Lazy),
+            _ => Err(value),
         }
     }
 }

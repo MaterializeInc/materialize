@@ -30,7 +30,7 @@ use mz_persist_txn::txns::{Tidy, TxnsHandle};
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, TimestampManipulation};
 use mz_storage_client::client::{StorageResponse, TimestamplessUpdate, Update};
-use mz_storage_types::controller::TxnsCodecRow;
+use mz_storage_types::controller::{PersistTxnTablesImpl, TxnsCodecRow};
 use mz_storage_types::sources::SourceData;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -328,30 +328,16 @@ async fn append_work<T2: Timestamp + Lattice + Codec64>(
 }
 
 impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWriteWorker<T> {
-    pub(crate) fn new_legacy(
-        frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
-    ) -> Self {
-        let (tx, rx) =
-            tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd<T>)>();
-        mz_ore::task::spawn(
-            || "PersistTableWriteWorker",
-            legacy_table_worker(rx, frontier_responses),
-        );
-        Self {
-            inner: Arc::new(PersistTableWriteWorkerInner::new(tx)),
-        }
-    }
-
     pub(crate) fn new_txns(
         frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
         txns: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>,
-        lazy_persist_txn_tables: bool,
+        persist_txn_tables: PersistTxnTablesImpl,
     ) -> Self {
         let (tx, rx) =
             tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd<T>)>();
         mz_ore::task::spawn(|| "PersistTableWriteWorker", async move {
             let mut worker = TxnsTableWorker {
-                lazy_persist_txn_tables,
+                persist_txn_tables,
                 frontier_responses,
                 txns,
                 write_handles: BTreeMap::new(),
@@ -419,129 +405,8 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
     }
 }
 
-async fn legacy_table_worker<T: Timestamp + Lattice + Codec64 + TimestampManipulation>(
-    mut rx: tokio::sync::mpsc::UnboundedReceiver<(Span, PersistTableWriteCmd<T>)>,
-    frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
-) {
-    let mut write_handles = BTreeMap::<GlobalId, WriteHandle<SourceData, (), T, Diff>>::new();
-
-    let mut shutdown = false;
-    while let Some(cmd) = rx.recv().await {
-        // Peel off all available commands.
-        // We do this in case we can consolidate commands.
-        // It would be surprising to receive multiple concurrent `Append` commands,
-        // but we might receive multiple *empty* `Append` commands.
-        let mut commands = VecDeque::new();
-        commands.push_back(cmd);
-        while let Ok(cmd) = rx.try_recv() {
-            commands.push_back(cmd);
-        }
-
-        // Accumulated updates and upper frontier.
-        let mut all_updates = BTreeMap::default();
-        let mut all_responses = Vec::default();
-
-        while let Some((span, command)) = commands.pop_front() {
-            match command {
-                PersistTableWriteCmd::Register(_register_ts, ids_handles) => {
-                    // register_ts will be used by the upcoming txns impl of the table
-                    // worker.
-                    for (id, write_handle) in ids_handles {
-                        let previous = write_handles.insert(id, write_handle);
-                        if previous.is_some() {
-                            panic!("already registered a WriteHandle for collection {:?}", id);
-                        }
-                    }
-                }
-                PersistTableWriteCmd::Update(id, write_handle) => {
-                    write_handles.insert(id, write_handle).expect(
-                        "PersistTableWriteCmd::Update only valid for updating extant write handles",
-                    );
-                }
-                PersistTableWriteCmd::DropHandle(id) => {
-                    // n.b. this should only remove the
-                    // handle from the persist worker and
-                    // not take any additional action such
-                    // as closing the shard it's connected
-                    // to because dataflows might still be
-                    // using it.
-                    write_handles.remove(&id);
-                }
-                PersistTableWriteCmd::Append {
-                    write_ts,
-                    advance_to,
-                    updates,
-                    tx,
-                } => {
-                    let mut ids = BTreeSet::new();
-                    for (id, updates_no_ts) in updates {
-                        ids.insert(id);
-                        let (old_span, updates, old_upper) =
-                            all_updates.entry(id).or_insert_with(|| {
-                                (
-                                    span.clone(),
-                                    Vec::default(),
-                                    Antichain::from_elem(T::minimum()),
-                                )
-                            });
-
-                        if old_span.id() != span.id() {
-                            // Link in any spans for `Append`
-                            // operations that we lump together by
-                            // doing this. This is not ideal,
-                            // because we only have a true tracing
-                            // history for the "first" span that we
-                            // process, but it's better than
-                            // nothing.
-                            old_span.follows_from(span.id());
-                        }
-                        let updates_with_ts = updates_no_ts.into_iter().map(|x| Update {
-                            row: x.row,
-                            timestamp: write_ts.clone(),
-                            diff: x.diff,
-                        });
-                        updates.extend(updates_with_ts);
-                        old_upper.join_assign(&Antichain::from_elem(advance_to.clone()));
-                    }
-                    all_responses.push((ids, tx));
-                }
-                PersistTableWriteCmd::Shutdown => shutdown = true,
-            }
-        }
-
-        let result = append_work(&frontier_responses, &mut write_handles, all_updates).await;
-
-        for (ids, response) in all_responses {
-            let result = match &result {
-                Err(bad_ids) => {
-                    let filtered: Vec<_> = bad_ids
-                        .iter()
-                        .filter(|id| ids.contains(id))
-                        .copied()
-                        .collect();
-                    if filtered.is_empty() {
-                        Ok(())
-                    } else {
-                        Err(StorageError::InvalidUppers(filtered))
-                    }
-                }
-                Ok(()) => Ok(()),
-            };
-            // It is not an error for the other end to hang up.
-            let _ = response.send(result);
-        }
-
-        if shutdown {
-            tracing::trace!("shutting down persist write append task");
-            break;
-        }
-    }
-
-    tracing::info!("PersistTableWriteWorker shutting down");
-}
-
 struct TxnsTableWorker<T: Timestamp + Lattice + TotalOrder + Codec64> {
-    lazy_persist_txn_tables: bool,
+    persist_txn_tables: PersistTxnTablesImpl,
     frontier_responses: tokio::sync::mpsc::UnboundedSender<StorageResponse<T>>,
     txns: TxnsHandle<SourceData, (), T, i64, PersistEpoch, TxnsCodecRow>,
     write_handles: BTreeMap<GlobalId, ShardId>,
@@ -624,10 +489,13 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                 // - Crash.
                 // - Reboot.
                 // - Try and read s at 10.
-                if !self.lazy_persist_txn_tables {
-                    self.tidy
-                        .merge(self.txns.apply_eager_le(&register_ts).await);
-                }
+                match self.persist_txn_tables {
+                    PersistTxnTablesImpl::Eager => {
+                        self.tidy
+                            .merge(self.txns.apply_eager_le(&register_ts).await);
+                    }
+                    PersistTxnTablesImpl::Lazy => {}
+                };
                 self.send_new_uppers(new_uppers);
             }
             Err(current) => {
@@ -720,10 +588,9 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                 // TODO: Do the applying in a background task. This will be a
                 // significant INSERT latency performance win.
                 debug!("applying {:?}", apply);
-                let tidy = if self.lazy_persist_txn_tables {
-                    apply.apply(&mut self.txns).await
-                } else {
-                    apply.apply_eager(&mut self.txns).await
+                let tidy = match self.persist_txn_tables {
+                    PersistTxnTablesImpl::Lazy => apply.apply(&mut self.txns).await,
+                    PersistTxnTablesImpl::Eager => apply.apply_eager(&mut self.txns).await,
                 };
                 self.tidy.merge(tidy);
                 // Committing a txn advances the logical upper of _every_ data
