@@ -101,7 +101,7 @@ pub(crate) struct StatementLogging {
     /// The last time at which a statement was logged.
     last_logged_ts_seconds: u64,
     /// The number of statements that have been throttled since the last successfully logged statement.
-    n_throttled: usize,
+    throttled_count: usize,
 }
 
 impl StatementLogging {
@@ -118,7 +118,7 @@ impl StatementLogging {
             tokens: 0,
             last_logged_ts_seconds,
             now: now.clone(),
-            n_throttled: 0,
+            throttled_count: 0,
         }
     }
 
@@ -145,13 +145,13 @@ impl StatementLogging {
         if let Some(remaining) = self.tokens.checked_sub(cost) {
             debug!("throttling check passed. tokens remaining: {remaining}; cost: {cost}");
             self.tokens = remaining;
-            Some(std::mem::take(&mut self.n_throttled))
+            Some(std::mem::take(&mut self.throttled_count))
         } else {
             info!(
                 "throttling check failed. tokens available: {}; cost: {cost}",
                 self.tokens
             );
-            self.n_throttled += 1;
+            self.throttled_count += 1;
             None
         }
     }
@@ -218,7 +218,7 @@ impl Coordinator {
             .system_config()
             .statement_logging_target_data_rate()
         else {
-            return Some(std::mem::take(&mut self.statement_logging.n_throttled));
+            return Some(std::mem::take(&mut self.statement_logging.throttled_count));
         };
         let max_data_credit = self
             .catalog
@@ -274,8 +274,8 @@ impl Coordinator {
                 let mut packer = row.packer();
                 Self::pack_statement_prepared_update(&record, &mut packer);
                 let cost = packer.byte_len();
-                let n_throttled = self.statement_logging_throttling_check(cost)?;
-                packer.push(Datum::UInt64(n_throttled.try_into().expect("must fit")));
+                let throttled_count = self.statement_logging_throttling_check(cost)?;
+                packer.push(Datum::UInt64(throttled_count.try_into().expect("must fit")));
                 out = Some((record, row));
 
                 *logging = PreparedStatementLoggingInfo::AlreadyLogged { uuid };
