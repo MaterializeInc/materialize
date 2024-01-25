@@ -1712,7 +1712,8 @@ async fn get_schema_with_strategy(
         ReaderSchemaSelectionStrategy::Latest => {
             match client.get_schema_by_subject(subject).await {
                 Ok(CcsrSchema { raw, .. }) => Ok(Some(raw)),
-                Err(GetBySubjectError::SubjectNotFound) => Ok(None),
+                Err(GetBySubjectError::SubjectNotFound)
+                | Err(GetBySubjectError::VersionNotFound(_)) => Ok(None),
                 Err(e) => Err(PlanError::FetchingCsrSchemaFailed {
                     schema_lookup: format!("subject {}", subject.quoted()),
                     cause: Arc::new(e),
