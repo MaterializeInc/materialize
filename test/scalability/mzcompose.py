@@ -160,6 +160,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         action="append",
     )
 
+    parser.add_argument(
+        "--use-balancerd",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Whether to communicate through balancerd (only applicable to Materialize containers)",
+    )
+
     parser.add_argument("--cluster-name", type=str, help="Cluster to SET CLUSTER to")
 
     args = parser.parse_args()
@@ -255,6 +262,7 @@ def validate_and_adjust_targets(
 def get_baseline_and_other_endpoints(
     c: Composition, args: argparse.Namespace, regression_against_target: str
 ) -> tuple[Endpoint | None, list[Endpoint]]:
+    use_balancerd = args.use_balancerd
     baseline_endpoint: Endpoint | None = None
     other_endpoints: list[Endpoint] = []
     for i, specified_target in enumerate(args.target):
@@ -271,6 +279,7 @@ def get_baseline_and_other_endpoints(
                 composition=c,
                 specified_target=specified_target,
                 resolved_target=specified_target,
+                use_balancerd=use_balancerd,
             )
         else:
             resolved_target = specified_target
@@ -282,6 +291,7 @@ def get_baseline_and_other_endpoints(
                 composition=c,
                 specified_target=specified_target,
                 resolved_target=resolved_target,
+                use_balancerd=use_balancerd,
                 image=f"materialize/materialized:{resolved_target}",
                 alternative_image="materialize/materialized:latest",
             )
