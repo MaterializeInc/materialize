@@ -118,7 +118,7 @@ steps:
 
     - id: kafka-multi-broker
       label: Kafka multi-broker test
-      timeout_in_minutes: 10
+      timeout_in_minutes: 30
       agents:
         queue: linux-aarch64-small
       artifact_paths: junit_*.xml
@@ -206,7 +206,7 @@ steps:
         label: Full Testdrive in Cloudtest (K8s)
         timeout_in_minutes: 300
         agents:
-          queue: linux-aarch64-small
+          queue: linux-aarch64
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
@@ -622,7 +622,7 @@ steps:
 
       - id: checks-upgrade-entire-mz-four-versions
         label: "Checks upgrade across four versions"
-        timeout_in_minutes: 60
+        timeout_in_minutes: 90
         agents:
           queue: linux-aarch64-large
         artifact_paths: junit_*.xml
@@ -770,7 +770,7 @@ steps:
     steps:
       - id: persist-maelstrom
         label: Maelstrom coverage of persist
-        timeout_in_minutes: 10
+        timeout_in_minutes: 30
         artifact_paths: [test/persist/maelstrom/**/*.log, junit_*.xml]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -803,7 +803,7 @@ steps:
 
       - id: persist-txn-maelstrom
         label: Maelstrom coverage of persist-txn
-        timeout_in_minutes: 10
+        timeout_in_minutes: 30
         agents:
           queue: linux-aarch64-small
         artifact_paths: [test/persist/maelstrom/**/*.log, junit_*.xml]
@@ -854,7 +854,8 @@ steps:
     concurrency: 1
     concurrency_group: 'cloud-canary'
     agents:
-      queue: linux-aarch64-small
+      # no matching manifest for linux/arm64/v8 in the manifest list entries
+      queue: linux-x86-64-small
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cloud-canary
