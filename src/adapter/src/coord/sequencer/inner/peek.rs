@@ -698,6 +698,22 @@ impl Coordinator {
                         explain_ctx,
                     })
                 } else {
+                    // If our timestamp determination relies on a timestamp, and we're not already in a
+                    // transaction, then we need to acquire read holds.
+                    if let Some(read_ts) = timestamp_context.timestamp() {
+                        if !ctx
+                            .session()
+                            .transaction()
+                            .is_in_multi_statement_transaction()
+                        {
+                            self.acquire_read_holds_auto_cleanup(
+                                ctx.session_mut(),
+                                *read_ts,
+                                &id_bundle,
+                            );
+                        }
+                    }
+
                     PeekStage::Finish(PeekStageFinish {
                         validity,
                         plan,
