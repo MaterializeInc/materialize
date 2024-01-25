@@ -219,13 +219,6 @@ Clusters have several known limitations:
 * Clusters containing sources and sinks can only have a replication factor of
   `0` or `1`.
 
-* A given cluster may contain any number of indexes and materialized views *or*
-  any number of sources and sinks, but not both types of objects. For example,
-  you may not create a cluster with a source and an index.
-
-* You cannot run `SELECT` or `SUBSCRIBE` statements on a cluster containing
-  sources or sinks.
-
 * When a cluster of size `2xlarge` or larger uses multiple replicas, those
   replicas are not guaranteed to be spread evenly across the underlying
   cloud provider's availability zones.

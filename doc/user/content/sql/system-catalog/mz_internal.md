@@ -186,25 +186,6 @@ any kind of capacity planning.
 | `disk_bytes`           | [`uint8`]   | The disk allocation per process, if the replica has a [disk](/sql/create-cluster#disk) attached. `NULL` otherwise. |
 | `credits_per_hour`     | [`numeric`] | The number of compute credits consumed per hour.                                                                                                             |
 
-### `mz_cluster_links`
-
-The `mz_cluster_links` table contains a row for each cluster that is linked to a
-source or sink. When present, the lifetime of the specified cluster is tied to
-the lifetime of the specified source or sink: the cluster cannot be dropped
-without dropping the linked source or sink, and dropping the linked source or
-sink will also drop the cluster. There is at most one row per cluster.
-
-{{< note >}}
-The concept of a linked cluster is not user-facing, and is intentionally undocumented. Linked clusters are meant to preserve the soon-to-be legacy interface for sizing sources and sinks.
-{{< /note >}}
-
-<!-- RELATION_SPEC mz_internal.mz_cluster_links -->
-| Field        | Type     | Meaning                                                                                                      |
-|--------------|----------|--------------------------------------------------------------------------------------------------------------|
-| `cluster_id` | [`text`] | The ID of the cluster. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).       |
-| `object_id`  | [`text`] | The ID of the source or sink. Corresponds to [`mz_objects.id`](/sql/system-catalog/mz_catalog/#mz_clusters). |
-
-
 
 ### `mz_cluster_replica_statuses`
 
@@ -1373,6 +1354,7 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_links -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability_raw -->

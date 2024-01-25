@@ -28,7 +28,7 @@ Field | Use
 ------|-----
 _src_name_  | The name for the source.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
-**IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source. If not specified, the `SIZE` option must be specified.
+**IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source.
 **CONNECTION** _connection_name_ | The name of the PostgreSQL connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgresql) documentation page.
 **FOR ALL TABLES** | Create subsources for all tables in the publication.
 **FOR SCHEMAS (** _schema_list_ **)** | Create subsources for specific schemas in the publication.
@@ -41,12 +41,6 @@ Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
 `PUBLICATION`                        | `text`    | **Required.** The PostgreSQL [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) (the replication data set containing the tables to be streamed to Materialize).
 `TEXT COLUMNS`                       | A list of names | Decode data as `text` for specific columns that contain PostgreSQL types that are unsupported in Materialize.
-
-### `WITH` options
-
-Field                                | Value     | Description
--------------------------------------|-----------|-------------------------------------
-`SIZE`                               | `text`    | The [size](../#sizing-a-source) for the source. Accepts values: `3xsmall`, `2xsmall`, `xsmall`, `small`, `medium`, `large`, `xlarge`. Required if the `IN CLUSTER` option is not specified.
 
 ## Features
 
@@ -65,8 +59,7 @@ stream data for some specific set of tables in your publication.
 ```sql
 CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
-  FOR ALL TABLES
-  WITH (SIZE = '3xsmall');
+  FOR ALL TABLES;
 ```
 
 When you define a source, Materialize will automatically:
@@ -124,8 +117,7 @@ For PostgreSQL 13+, it is recommended that you set a reasonable value for [`max_
 ```sql
 CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
-  FOR TABLES (schema1.table_1 AS s1_table_1, schema2_table_1 AS s2_table_1)
-  WITH (SIZE = '3xsmall');
+  FOR TABLES (schema1.table_1 AS s1_table_1, schema2_table_1 AS s2_table_1);
 ```
 
 ### Monitoring source progress
@@ -278,8 +270,7 @@ _Create subsources for all tables included in the PostgreSQL publication_
 ```sql
 CREATE SOURCE mz_source
     FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
-    FOR ALL TABLES
-    WITH (SIZE = '3xsmall');
+    FOR ALL TABLES;
 ```
 
 _Create subsources for all tables from specific schemas included in the PostgreSQL publication_
@@ -287,8 +278,7 @@ _Create subsources for all tables from specific schemas included in the PostgreS
 ```sql
 CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
-  FOR SCHEMAS (public, project)
-  WITH (SIZE = '3xsmall');
+  FOR SCHEMAS (public, project);
 ```
 
 _Create subsources for specific tables included in the PostgreSQL publication_
@@ -296,8 +286,7 @@ _Create subsources for specific tables included in the PostgreSQL publication_
 ```sql
 CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
-  FOR TABLES (table_1, table_2 AS alias_table_2)
-  WITH (SIZE = '3xsmall');
+  FOR TABLES (table_1, table_2 AS alias_table_2);
 ```
 
 #### Handling unsupported types
@@ -309,8 +298,7 @@ CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg_connection (
     PUBLICATION 'mz_source',
     TEXT COLUMNS (table.column_of_unsupported_type)
-  ) FOR ALL TABLES
-  WITH (SIZE = '3xsmall');
+  ) FOR ALL TABLES;
 ```
 
 ### Adding/dropping tables to/from a source
@@ -327,24 +315,6 @@ ALTER SOURCE mz_source DROP SUBSOURCE table_1;
 -- Start ingesting the table with the updated schema or fix
 ALTER SOURCE mz_source ADD SUBSOURCE table_1;
 ```
-
-### Sizing a source
-
-To provision a specific amount of CPU and memory to a source on creation, use the `SIZE` option:
-
-```sql
-CREATE SOURCE mz_source
-  FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
-  WITH (SIZE = '3xsmall');
-```
-
-To resize the source after creation:
-
-```sql
-ALTER SOURCE mz_source SET (SIZE = 'large');
-```
-
-The smallest source size (`3xsmall`) is a resonable default to get started. For more details on sizing sources, check the [`CREATE SOURCE`](../#sizing-a-source) documentation page.
 
 ## Related pages
 

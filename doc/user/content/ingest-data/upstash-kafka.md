@@ -90,8 +90,7 @@ The process to connect Materialize to Upstash Kafka consists of the following st
 
       CREATE SOURCE <source-name>
         FROM KAFKA CONNECTION upstash_kafka (TOPIC '<topic-name>')
-        FORMAT JSON
-        WITH (SIZE = '3xsmall');
+        FORMAT JSON;
     ```
 
     e. If the command executes without an error and outputs _CREATE SOURCE_, it
@@ -118,8 +117,7 @@ The process to connect Materialize to Upstash Kafka consists of the following st
         FROM <source, table or mview>
         INTO KAFKA CONNECTION <upstash_kafka> (TOPIC '<sink-topic-name>')
         FORMAT JSON
-        ENVELOPE DEBEZIUM
-        WITH (SIZE = '3xsmall');
+        ENVELOPE DEBEZIUM;
     ```
 
     The generated schema will have a Debezium-style diff envelope to capture changes in the input view or source as we defined in the `ENVELOPE` clause. You can find more details about the various different supported formats and possible configurations [here](/sql/create-sink/kafka/).

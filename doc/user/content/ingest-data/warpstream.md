@@ -97,8 +97,7 @@ Ensure you have the following:
     ```sql
     CREATE SOURCE warpstream_click_stream_source
         FROM KAFKA CONNECTION warpstream_kafka (TOPIC 'materialize_click_streams')
-        FORMAT JSON
-        WITH (SIZE = '3xsmall');
+        FORMAT JSON;
     ```
 
     d. Verify the ingestion and query the data in Materialize:

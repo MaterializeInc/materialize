@@ -103,6 +103,5 @@ This PostgreSQL connection can then be reused across multiple [CREATE SOURCE](ht
 ```sql
 CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
-  FOR ALL TABLES
-  WITH (SIZE = '3xsmall');
+  FOR ALL TABLES;
 ```

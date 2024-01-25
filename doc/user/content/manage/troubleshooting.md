@@ -28,8 +28,7 @@ To make these concepts a bit more tangible, let's look at the example from the [
 CREATE SOURCE auction_house
   FROM LOAD GENERATOR AUCTION
   (TICK INTERVAL '100ms')
-  FOR ALL TABLES
-  WITH (SIZE = '3xsmall');
+  FOR ALL TABLES;
 
 CREATE MATERIALIZED VIEW num_bids AS
   SELECT auctions.item, count(bids.id) AS number_of_bids

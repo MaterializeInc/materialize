@@ -101,7 +101,7 @@ conn = PG.connect(host:"MATERIALIZE_HOST", port: 6875, user: "MATERIALIZE_USERNA
 
 # Create a source
 src = conn.exec(
-    "CREATE SOURCE IF NOT EXISTS counter FROM LOAD GENERATOR counter WITH (SIZE = '3xsmall');"
+    "CREATE SOURCE IF NOT EXISTS counter FROM LOAD GENERATOR counter;"
 );
 
 puts src.inspect

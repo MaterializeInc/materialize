@@ -243,8 +243,7 @@ Debezium emits change events using an envelope that contains detailed informatio
 CREATE SOURCE kafka_repl
     FROM KAFKA CONNECTION kafka_connection (TOPIC 'pg_repl.public.table1')
     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-    ENVELOPE DEBEZIUM
-    WITH (SIZE = '3xsmall');
+    ENVELOPE DEBEZIUM;
 ```
 
 This allows you to replicate tables with `REPLICA IDENTITY DEFAULT`, `INDEX`, or `FULL`.
