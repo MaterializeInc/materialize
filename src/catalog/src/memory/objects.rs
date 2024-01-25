@@ -1955,6 +1955,13 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
     fn is_managed(&self) -> bool {
         self.is_managed()
     }
+
+    fn managed_size(&self) -> Option<&str> {
+        match &self.config.variant {
+            ClusterVariant::Managed(ClusterVariantManaged { size, .. }) => Some(size),
+            _ => None,
+        }
+    }
 }
 
 impl mz_sql::catalog::CatalogClusterReplica<'_> for ClusterReplica {
