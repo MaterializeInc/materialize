@@ -225,6 +225,15 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("Consequence of #23571")
 
+        if db_operation.pattern == "CAST ($ AS $)":
+            casting_target = expression.args[1]
+            assert isinstance(casting_target, EnumConstant)
+
+            if casting_target.value == "DECIMAL(39)":
+                return YesIgnore(
+                    "#24678: different specification of default DECIMAL type"
+                )
+
         return NoIgnore()
 
 
