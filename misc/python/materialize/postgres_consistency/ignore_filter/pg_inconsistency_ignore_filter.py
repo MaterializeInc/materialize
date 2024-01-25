@@ -299,6 +299,9 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("Not supported by pg")
 
+        if "cannot cast type boolean to bigint" in pg_error_msg:
+            return YesIgnore("Not supported by pg")
+
         return NoIgnore()
 
     def _shall_ignore_mz_failure_where_pg_succeeds(
