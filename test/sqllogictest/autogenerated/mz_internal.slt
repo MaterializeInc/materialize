@@ -116,12 +116,6 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 7  credits_per_hour  numeric
 
 query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_links' ORDER BY position
-----
-1  cluster_id  text
-2  object_id  text
-
-query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_statuses' ORDER BY position
 ----
 1  replica_id  text
