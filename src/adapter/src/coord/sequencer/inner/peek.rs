@@ -16,13 +16,12 @@ use mz_expr::CollectionPlan;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem, UsedIndexes};
-use mz_repr::{Datum, GlobalId, Row, Timestamp};
+use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::CatalogCluster;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_catalog::memory::objects::CatalogItem;
 use mz_sql::plan;
 use mz_sql::plan::QueryWhen;
-use mz_sql_parser::ast::NamedPlan;
 use mz_transform::EmptyStatisticsOracle;
 use tracing::Instrument;
 use tracing::{event, warn, Level};
@@ -884,72 +883,16 @@ impl Coordinator {
             Some(finishing)
         };
 
-        let mut trace = optimizer_trace.drain_all(
+        let rows = optimizer_trace.into_rows(
             format,
             &config,
             &expr_humanizer,
             finishing,
             used_indexes,
             df_meta,
+            stage,
+            plan::ExplaineeStatementKind::Select,
         )?;
-
-        let rows = match stage.path() {
-            None => {
-                // For the `Trace` (pseudo-)stage, return the entire trace as
-                // triples of (time, path, plan) values.
-                let rows = trace
-                    .into_iter()
-                    .map(|entry| {
-                        // The trace would have to take over 584 years to overflow a u64.
-                        let span_duration = u64::try_from(entry.span_duration.as_nanos());
-                        Row::pack_slice(&[
-                            Datum::from(span_duration.unwrap_or(u64::MAX)),
-                            Datum::from(entry.path.as_str()),
-                            Datum::from(entry.plan.as_str()),
-                        ])
-                    })
-                    .collect();
-                rows
-            }
-            Some(path) => {
-                // For everything else, return the plan for the stage identified
-                // by the corresponding path.
-
-                // A helper struct hat removes the first (and by assumption -
-                // only) plan that matches the given path from the collected
-                // trace.
-                let mut remove_plan = |path: &'static str| {
-                    let index = trace.iter().position(|entry| entry.path == path);
-                    index.map(|index| trace.remove(index))
-                };
-
-                // For certain stages we want to return the resulting fast path
-                // plan instead of the selected stage if it is present.
-                let plan = if stage.show_fast_path() && !config.no_fast_path {
-                    remove_plan(NamedPlan::FastPath.path()).or_else(|| remove_plan(path))
-                } else {
-                    remove_plan(path)
-                };
-
-                let row = plan
-                    .map(|entry| Row::pack_slice(&[Datum::from(entry.plan.as_str())]))
-                    .ok_or_else(|| {
-                        let stmt_kind = plan::ExplaineeStatementKind::Select;
-                        if !stmt_kind.supports(&stage) {
-                            // Print a nicer error for unsupported stages.
-                            AdapterError::Unstructured(anyhow::anyhow!(format!(
-                                "cannot EXPLAIN {stage} FOR {stmt_kind}"
-                            )))
-                        } else {
-                            // We don't expect this stage to be missing.
-                            AdapterError::Internal(format!(
-                                "stage `{path}` not present in the collected optimizer trace",
-                            ))
-                        }
-                    })?;
-                vec![row]
-            }
-        };
 
         if broken {
             tracing_core::callsite::rebuild_interest_cache();
