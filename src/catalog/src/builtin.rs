@@ -2598,7 +2598,8 @@ pub static MZ_RECENT_ACTIVITY_LOG: Lazy<BuiltinView> = Lazy::new(|| BuiltinView 
     name: "mz_recent_activity_log",
     schema: MZ_INTERNAL_SCHEMA,
     column_defs: None,
-    sql: "SELECT * FROM mz_internal.mz_activity_log WHERE prepared_at + INTERVAL '3 days' > mz_now()
+    sql:
+        "SELECT * FROM mz_internal.mz_activity_log WHERE prepared_at + INTERVAL '3 days' > mz_now()
 AND began_at + INTERVAL '3 days' > mz_now()",
     access: vec![MONITOR_SELECT],
 });
