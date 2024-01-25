@@ -8,29 +8,33 @@
 // by the Apache License, Version 2.0.
 
 use mz_rocksdb::RocksDBInstance;
+use serde::{de::DeserializeOwned, Serialize};
 
 use crate::render::upsert::types::{
-    GetStats, PutStats, PutValue, StateValue, UpsertStateBackend, UpsertValueAndSize,
+    GetStats, PutStats, PutValue, StateValue, UpsertStateBackend, UpsertValueAndSize, ValueMetadata,
 };
 use crate::render::upsert::UpsertKey;
 
 /// A `UpsertStateBackend` implementation backed by RocksDB.
 /// This is currently untested, and simply compiles.
-pub struct RocksDB {
-    rocksdb: RocksDBInstance<UpsertKey, StateValue>,
+pub struct RocksDB<O> {
+    rocksdb: RocksDBInstance<UpsertKey, StateValue<O>>,
 }
 
-impl RocksDB {
-    pub fn new(rocksdb: RocksDBInstance<UpsertKey, StateValue>) -> Self {
+impl<O> RocksDB<O> {
+    pub fn new(rocksdb: RocksDBInstance<UpsertKey, StateValue<O>>) -> Self {
         Self { rocksdb }
     }
 }
 
 #[async_trait::async_trait(?Send)]
-impl UpsertStateBackend for RocksDB {
+impl<O> UpsertStateBackend<O> for RocksDB<O>
+where
+    O: Send + Sync + Serialize + DeserializeOwned + 'static,
+{
     async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
     where
-        P: IntoIterator<Item = (UpsertKey, PutValue<StateValue>)>,
+        P: IntoIterator<Item = (UpsertKey, PutValue<StateValue<O>>)>,
     {
         let mut p_stats = PutStats::default();
         let stats = self
@@ -40,25 +44,10 @@ impl UpsertStateBackend for RocksDB {
                     k,
                     PutValue {
                         value,
-                        previous_persisted_size,
+                        previous_value_metadata,
                     },
                 )| {
-                    match (&value, previous_persisted_size) {
-                        (Some(_), Some(ps)) => {
-                            p_stats.size_diff -= ps;
-                            p_stats.updates += 1;
-                        }
-                        (None, Some(ps)) => {
-                            p_stats.size_diff -= ps;
-                            p_stats.values_diff -= 1;
-                            p_stats.deletes += 1;
-                        }
-                        (Some(_), None) => {
-                            p_stats.values_diff += 1;
-                            p_stats.inserts += 1;
-                        }
-                        (None, None) => {}
-                    }
+                    p_stats.adjust(value.as_ref(), None, &previous_value_metadata);
                     (k, value)
                 },
             ))
@@ -77,7 +66,7 @@ impl UpsertStateBackend for RocksDB {
     ) -> Result<GetStats, anyhow::Error>
     where
         G: IntoIterator<Item = UpsertKey>,
-        R: IntoIterator<Item = &'r mut UpsertValueAndSize>,
+        R: IntoIterator<Item = &'r mut UpsertValueAndSize<O>>,
     {
         let mut g_stats = GetStats::default();
         let stats = self
@@ -86,11 +75,17 @@ impl UpsertStateBackend for RocksDB {
                 value.map_or(
                     UpsertValueAndSize {
                         value: None,
-                        size: None,
+                        metadata: None,
                     },
-                    |v| UpsertValueAndSize {
-                        value: Some(v.value),
-                        size: Some(v.size),
+                    |v| {
+                        let is_tombstone = v.value.is_tombstone();
+                        UpsertValueAndSize {
+                            value: Some(v.value),
+                            metadata: Some(ValueMetadata {
+                                size: v.size,
+                                is_tombstone,
+                            }),
+                        }
                     },
                 )
             })
