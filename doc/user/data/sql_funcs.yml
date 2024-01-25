@@ -903,7 +903,7 @@
 - type: Access privilege inquiry
   description: |
     Functions that allow querying object access privileges. None of the following functions consider
-    whether the provided role is a superuser or not.
+    whether the provided role is a _superuser_ or not.
   functions:
     - signature: 'has_cluster_privilege([role: text or oid,] cluster: text, privilege: text) -> bool'
       description: >-
