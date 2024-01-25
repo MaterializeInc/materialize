@@ -955,16 +955,24 @@ SELECT * FROM const_mv
 ----
 1
 
-## We should be able to immediately query a constant MV even if the first refresh is in the future
+## We should be able to immediately query a constant MV under serializable isolation even if the
+## first refresh is in the future. The since will be advanced to [3000-01-01 23:59] and the upper
+## will be advanced to [].
 statement ok
 CREATE MATERIALIZED VIEW const_mv2
 WITH (REFRESH AT '3000-01-01 23:59')
 AS SELECT 2;
 
+statement ok
+SET transaction_isolation = 'serializable'
+
 query I
 SELECT * FROM const_mv2
 ----
 2
+
+statement ok
+SET transaction_isolation = 'strict serializable'
 
 ## MV that has refreshes only in the past
 query error db error: ERROR: all the specified refreshes of the materialized view would be too far in the past, and thus they would never happen

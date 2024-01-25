@@ -510,8 +510,7 @@ impl Coordinator {
                     CatalogItem::Index(index) => {
                         ids.push(index.on);
                     }
-                    CatalogItem::View(View { optimized_expr, .. })
-                    | CatalogItem::MaterializedView(MaterializedView { optimized_expr, .. }) => {
+                    CatalogItem::View(View { optimized_expr, .. }) => {
                         // If the definition contains a temporal function, the timeline must
                         // be timestamp dependent.
                         if optimized_expr.contains_temporal() {
@@ -519,6 +518,16 @@ impl Coordinator {
                         } else {
                             timelines.insert(TimelineContext::TimestampIndependent);
                         }
+                        ids.extend(optimized_expr.depends_on());
+                    }
+                    CatalogItem::MaterializedView(MaterializedView { optimized_expr, .. }) => {
+                        // In some cases the timestamp selected may not affect the answer to a
+                        // query, but it may affect our ability to query the materialized view.
+                        // Materialized views must durably materialize the result of a query, even
+                        // for constant queries. If we choose a timestamps larger than the upper,
+                        // which represents the current progress of the view, then the query will
+                        // need to block and wait for the materialized view to advance.
+                        timelines.insert(TimelineContext::TimestampDependent);
                         ids.extend(optimized_expr.depends_on());
                     }
                     CatalogItem::Table(table) => {
