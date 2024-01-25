@@ -639,6 +639,7 @@ async fn test_large_collection_retractions(openable_state: impl OpenableDurableC
         .unwrap();
     let (mut txn, old_audit_logs, old_storage_usages) =
         state.whole_migration_transaction().await.unwrap();
+    // This will issue retractions for everything in the catalog.
     txn.set_catalog(
         Snapshot::empty(),
         old_audit_logs,
