@@ -21,6 +21,7 @@ use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::read::Since;
 use mz_persist_client::stats::SnapshotStats;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::ShardId;
@@ -72,14 +73,14 @@ enum PersistReadWorkerCmd<T: Timestamp + Lattice + Codec64> {
     SnapshotStats(
         GlobalId,
         SnapshotStatsAsOf<T>,
-        oneshot::Sender<SnapshotStatsRes<T>>,
+        oneshot::Sender<SnapshotStatsRes>,
     ),
 }
 
 /// A newtype wrapper to hang a Debug impl off of.
-pub(crate) struct SnapshotStatsRes<T>(BoxFuture<'static, Result<SnapshotStats<T>, StorageError>>);
+pub(crate) struct SnapshotStatsRes(BoxFuture<'static, Result<SnapshotStats, StorageError>>);
 
-impl<T: Debug> Debug for SnapshotStatsRes<T> {
+impl Debug for SnapshotStatsRes {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SnapshotStatsRes").finish_non_exhaustive()
     }
@@ -127,11 +128,13 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> PersistReadWorker<T> {
                                 Some(x) => {
                                     let fut: BoxFuture<
                                         'static,
-                                        Result<SnapshotStats<T>, StorageError>,
+                                        Result<SnapshotStats, StorageError>,
                                     > = match as_of {
                                         SnapshotStatsAsOf::Direct(as_of) => {
-                                            Box::pin(x.snapshot_stats(as_of).map(move |x| {
-                                                x.map_err(|_| StorageError::ReadBeforeSince(id))
+                                            Box::pin(x.snapshot_stats(Some(as_of)).map(move |x| {
+                                                x.map_err(|_: Since<T>| {
+                                                    StorageError::ReadBeforeSince(id)
+                                                })
                                             }))
                                         }
                                         SnapshotStatsAsOf::Txns(data_snapshot) => Box::pin(
@@ -234,7 +237,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> PersistReadWorker<T> {
         &self,
         id: GlobalId,
         as_of: SnapshotStatsAsOf<T>,
-    ) -> Result<SnapshotStats<T>, StorageError> {
+    ) -> Result<SnapshotStats, StorageError> {
         // TODO: Pull this out of PersistReadWorker. Unlike the other methods,
         // the caller of this one drives it to completion.
         //

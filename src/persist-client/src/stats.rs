@@ -17,7 +17,6 @@ use mz_persist_types::part::{Part, PartBuilder};
 use mz_persist_types::stats::StructStats;
 use mz_persist_types::Codec;
 use proptest_derive::Arbitrary;
-use timely::progress::Antichain;
 
 use crate::batch::UntrimmableColumns;
 use crate::dyn_cfg::{Config, ConfigSet};
@@ -169,11 +168,9 @@ impl PartStats {
 ///
 /// TODO: Add more stats here as they become necessary.
 #[derive(Debug)]
-pub struct SnapshotStats<T> {
+pub struct SnapshotStats {
     /// The shard these statistics are for.
     pub shard_id: ShardId,
-    /// The frontier at which these statistics are valid.
-    pub as_of: Antichain<T>,
     /// An estimate of the count of updates in the shard.
     ///
     /// This is an upper bound on the number of updates that persist_source

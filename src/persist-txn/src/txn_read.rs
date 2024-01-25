@@ -193,7 +193,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
     pub fn snapshot_stats<K, V, D, O>(
         &self,
         data_since: &SinceHandle<K, V, T, D, O>,
-    ) -> impl Future<Output = Result<SnapshotStats<T>, Since<T>>> + Send + 'static
+    ) -> impl Future<Output = Result<SnapshotStats, Since<T>>> + Send + 'static
     where
         K: Debug + Codec + Ord,
         V: Debug + Codec + Ord,
@@ -206,16 +206,18 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         // contents. The reason we didn't use it for that was because we'd have
         // to deal with advancing timestamps of the updates we read, but the
         // stats we return here don't have that issue.
-        let as_of = if let Some(latest_write) = self.latest_write.as_ref() {
-            latest_write
-        } else {
-            let since = data_since
-                .since()
-                .as_option()
-                .expect("cannot read at empty antichain");
-            std::cmp::min(since, &self.as_of)
-        };
-        data_since.snapshot_stats(Antichain::from_elem(as_of.clone()))
+        //
+        // TODO: If we don't have a `latest_write`, then the `None` option to
+        // `snapshot_stats` is not quite correct because of pubsub races
+        // (probably marginal) and historical `as_of`s (probably less marginal
+        // but not common in mz right now). Fixing this more precisely in a
+        // performant way (i.e. no crdb queries involved) seems to require that
+        // persist-txn always keep track of the latest write, even when it's
+        // known to have been applied. `snapshot_stats` is an estimate anyway,
+        // it doesn't even attempt to account for things like consolidation, so
+        // this seems fine for now.
+        let as_of = self.latest_write.clone().map(Antichain::from_elem);
+        data_since.snapshot_stats(as_of)
     }
 
     pub(crate) fn validate(&self) -> Result<(), String> {
