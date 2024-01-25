@@ -2931,6 +2931,7 @@ pub static MZ_SOURCE_STATISTICS_PER_WORKER: Lazy<BuiltinSource> = Lazy::new(|| B
         .with_column("updates_committed", ScalarType::UInt64.nullable(false))
         .with_column("envelope_state_bytes", ScalarType::UInt64.nullable(false))
         .with_column("envelope_state_records", ScalarType::UInt64.nullable(false))
+        .with_column("errors", ScalarType::UInt64.nullable(false))
         .with_column("rehydration_latency", ScalarType::Interval.nullable(true)),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
@@ -6164,6 +6165,7 @@ SELECT
     SUM(updates_committed)::uint8 AS updates_committed,
     SUM(envelope_state_bytes)::uint8 AS envelope_state_bytes,
     SUM(envelope_state_records)::uint8 AS envelope_state_records,
+    SUM(errors)::uint8 AS errors,
     -- Ensure we aggregate to NULL when not all workers are done rehydrating.
     CASE
         WHEN bool_or(rehydration_latency IS NULL) THEN NULL

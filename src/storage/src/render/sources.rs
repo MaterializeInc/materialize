@@ -506,6 +506,10 @@ where
         _ => collection::concatenate(scope, error_collections),
     };
 
+    // Maintain error count for the source statistics.
+    let stats = base_source_config.source_statistics.clone();
+    let err_collection = err_collection.inspect(move |(_, _, diff)| stats.update_errors_by(*diff));
+
     // Return the collections and any needed tokens.
     (collection, err_collection, needed_tokens, health)
 }

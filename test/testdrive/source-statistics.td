@@ -83,35 +83,47 @@ $ set-sql-timeout duration=2minutes
 
 # NOTE: These queries are slow to succeed because the default metrics scraping
 # interval is 30 seconds.
-> SELECT s.name,
-  bool_and(u.snapshot_committed),
-  SUM(u.messages_received), SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency IS NOT NULL)
+> SELECT
+    s.name,
+    bool_and(u.snapshot_committed),
+    SUM(u.messages_received),
+    SUM(u.updates_staged),
+    SUM(u.updates_committed),
+    SUM(u.bytes_received) > 0,
+    SUM(u.errors),
+    bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_per_worker u ON s.id = u.id
   WHERE s.name IN ('metrics_test_source')
   GROUP BY s.name
   ORDER BY s.name
-metrics_test_source true 2 2 2 true true
+metrics_test_source true 2 2 2 true 0 true
 
 > DROP SOURCE metrics_test_source
 
 # Note that only the base-source has `messages_received`, but the sub-sources have `messages_committed`.
 # Committed will usually, for auction sources, add up to received, but we don't test this (right now) because of
 # jitter on when metrics are produced for each sub-source.
-> SELECT s.name,
-  bool_and(u.snapshot_committed),
-  SUM(u.messages_received) > 0, SUM(u.updates_staged) > 0, SUM(u.updates_committed) > 0, SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency IS NOT NULL)
+> SELECT
+    s.name,
+    bool_and(u.snapshot_committed),
+    SUM(u.messages_received) > 0,
+    SUM(u.updates_staged) > 0,
+    SUM(u.updates_committed) > 0,
+    SUM(u.bytes_received) > 0,
+    SUM(u.errors)
+    bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_per_worker u ON s.id = u.id
   WHERE s.name IN ('accounts', 'auction_house', 'auctions', 'bids', 'organizations', 'users')
   GROUP BY s.name
   ORDER BY s.name
-accounts       true      false   true  true  false   true
-auction_house  true      true    false false true    true
-auctions       true      false   true  true  false   true
-bids           true      false   true  true  false   true
-organizations  true      false   true  true  false   true
-users          true      false   true  true  false   true
+accounts       true      false   true  true  false  0  true
+auction_house  true      true    false false true   0  true
+auctions       true      false   true  true  false  0  true
+bids           true      false   true  true  false  0  true
+organizations  true      false   true  true  false  0  true
+users          true      false   true  true  false  0  true
 
 > DROP SOURCE auction_house
 
@@ -131,13 +143,14 @@ users          true      false   true  true  false   true
     SUM(u.bytes_received) > 0,
     SUM(u.envelope_state_bytes) > 0,
     SUM(u.envelope_state_records),
+    SUM(u.errors),
     bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_per_worker u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert true 9 true true true true 3 true
+upsert true 9 true true true true 3 0 true
 
 # While we can't control how batching works above, we can ensure that this new, later update
 # causes 1 more messages to be received, which is 1 update, a delete.
@@ -160,23 +173,27 @@ SELECT
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "mammalmore"}
 
-> SELECT s.name,
+> SELECT
+    s.name,
     bool_and(u.snapshot_committed),
     SUM(u.messages_received),
     SUM(u.updates_staged),
     SUM(u.updates_committed),
     SUM(u.bytes_received) > 0,
     SUM(u.envelope_state_bytes) < ${state-bytes},
-    SUM(u.envelope_state_records)
+    SUM(u.envelope_state_records),
+    SUM(u.errors),
+    bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_per_worker u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
-upsert true 10 "${updates-committed}" "${updates-committed}" true true 2
+upsert true 10 "${updates-committed}" "${updates-committed}" true true 2 0 true
 
 # check pre-aggregated view
-> SELECT s.name,
+> SELECT
+    s.name,
     u.snapshot_committed,
     u.messages_received,
     u.updates_staged,
@@ -184,10 +201,11 @@ upsert true 10 "${updates-committed}" "${updates-committed}" true true 2
     u.bytes_received > 0,
     u.envelope_state_bytes < ${state-bytes},
     u.envelope_state_records,
+    u.errors,
     u.rehydration_latency IS NOT NULL
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
-upsert true 10 "${updates-committed}" "${updates-committed}" true true 2 true
+upsert true 10 "${updates-committed}" "${updates-committed}" true true 2 0 true
 
 > DROP SOURCE upsert

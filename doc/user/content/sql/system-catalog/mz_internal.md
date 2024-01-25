@@ -838,6 +838,7 @@ the system are restarted.
 | `updates_committed`      | [`uint8`]    | The number of updates (insertions plus deletions) the worker has committed to the storage layer.                                                                                                                                                                                    |
 | `envelope_state_bytes`   | [`uint8`]    | The number of bytes stored in the source envelope state.                                                                       |
 | `envelope_state_records` | [`uint8`]    | The number of individual records stored in the source envelope state.                                                                                                                                                                                                               |
+| `errors`                 | [`uint8`]    | The number of errors in the source.                                                                                                                                                                                                                                                 |
 | `rehydration_latency`    | [`interval`] | The amount of time it took for the worker to rehydrate the source envelope state. |
 
 ### `mz_source_statistics`
@@ -865,6 +866,7 @@ Note that:
 | `updates_committed`      | [`uint8`]    | The number of updates (insertions plus deletions) the source has committed to the storage layer.                                                                                                                                                                                    |
 | `envelope_state_bytes`   | [`uint8`]    | The number of bytes stored in the source envelope state.                                                                       |
 | `envelope_state_records` | [`uint8`]    | The number of individual records stored in the source envelope state.                                                                                                                                                                                                               |
+| `errors`                 | [`uint8`]    | The number of errors in the source.                                                                                                                                                                                                                                                 |
 | `rehydration_latency`    | [`interval`] | The amount of time it took for the worker to rehydrate the source envelope state. |
 
 ### `mz_source_statuses`

@@ -427,6 +427,7 @@ mz_sinks  type
 mz_source_statistics  bytes_received
 mz_source_statistics  envelope_state_bytes
 mz_source_statistics  envelope_state_records
+mz_source_statistics  errors
 mz_source_statistics  id
 mz_source_statistics  messages_received
 mz_source_statistics  rehydration_latency
@@ -436,6 +437,7 @@ mz_source_statistics  updates_staged
 mz_source_statistics_per_worker  bytes_received
 mz_source_statistics_per_worker  envelope_state_bytes
 mz_source_statistics_per_worker  envelope_state_records
+mz_source_statistics_per_worker  errors
 mz_source_statistics_per_worker  id
 mz_source_statistics_per_worker  messages_received
 mz_source_statistics_per_worker  rehydration_latency

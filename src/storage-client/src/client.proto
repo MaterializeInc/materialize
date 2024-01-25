@@ -98,6 +98,7 @@ message ProtoStorageResponse {
         uint64 envelope_state_bytes = 8;
         uint64 envelope_state_records = 9;
         optional int64 rehydration_latency_ms = 10;
+        uint64 errors = 11;
     }
     message ProtoSinkStatisticsUpdate {
         mz_repr.global_id.ProtoGlobalId id = 1;

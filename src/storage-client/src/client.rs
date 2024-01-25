@@ -305,6 +305,7 @@ pub struct SourceStatisticsUpdate {
     pub updates_committed: u64,
     pub envelope_state_bytes: u64,
     pub envelope_state_records: u64,
+    pub errors: u64,
     pub rehydration_latency_ms: Option<i64>,
 }
 
@@ -336,6 +337,7 @@ impl PackableStats for SourceStatisticsUpdate {
         packer.push(Datum::from(self.updates_committed));
         packer.push(Datum::from(self.envelope_state_bytes));
         packer.push(Datum::from(self.envelope_state_records));
+        packer.push(Datum::from(self.errors));
         packer.push(Datum::from(
             self.rehydration_latency_ms
                 .map(chrono::Duration::milliseconds),
@@ -442,6 +444,7 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                                 updates_committed: update.updates_committed,
                                 envelope_state_bytes: update.envelope_state_bytes,
                                 envelope_state_records: update.envelope_state_records,
+                                errors: update.errors,
                                 rehydration_latency_ms: update.rehydration_latency_ms,
                             })
                             .collect(),
@@ -492,6 +495,7 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
                             bytes_received: update.bytes_received,
                             envelope_state_bytes: update.envelope_state_bytes,
                             envelope_state_records: update.envelope_state_records,
+                            errors: update.errors,
                             rehydration_latency_ms: update.rehydration_latency_ms,
                         })
                     })
