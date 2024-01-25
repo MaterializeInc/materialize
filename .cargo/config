@@ -21,15 +21,6 @@ rustflags = [
     "--cfg=tokio_unstable",
 ]
 
-[target."x86_64-apple-darwin"]
-# Duplicate the "rustflags" for x86 Linux for x86 macOS.
-rustflags = [
-    "-Csymbol-mangling-version=v0",
-    "-Ctarget-cpu=x86-64-v3",
-    "-Ctarget-feature=+aes",
-    "--cfg=tokio_unstable",
-]
-
 # As of Jan 2024 all of the Linux based aarch64 hardware we run on supports the Neoverse N1 micro
 # architecture.
 #
