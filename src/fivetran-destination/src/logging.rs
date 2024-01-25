@@ -189,7 +189,7 @@ mod tests {
         tracing::info!("hello world!");
         let msg = String::from_utf8(writer.drain()).unwrap();
         assert_eq!(
-            msg,
+            msg.trim(),
             r#"{"level":"INFO","message":"hello world!","message-origin":"sdk_destination"}"#
         );
     }
