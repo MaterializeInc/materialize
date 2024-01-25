@@ -335,6 +335,7 @@ impl StashFactory {
             schema,
             tls,
             epoch_lower_bound,
+            true,
         )
         .await
     }
@@ -347,7 +348,7 @@ impl StashFactory {
         schema: Option<String>,
         tls: MakeTlsConnector,
     ) -> Result<Stash, StashError> {
-        self.open_inner(TransactionMode::Readonly, url, schema, tls, None)
+        self.open_inner(TransactionMode::Readonly, url, schema, tls, None, true)
             .await
     }
 
@@ -368,6 +369,7 @@ impl StashFactory {
             schema,
             tls,
             epoch_lower_bound,
+            true,
         )
         .await
     }
@@ -379,6 +381,7 @@ impl StashFactory {
         schema: Option<String>,
         tls: MakeTlsConnector,
         epoch_lower_bound: Option<NonZeroI64>,
+        run_consolidation: bool,
     ) -> Result<Stash, StashError> {
         if let Some(epoch_lower_bound) = &epoch_lower_bound {
             info!(?epoch_lower_bound);
@@ -434,7 +437,8 @@ impl StashFactory {
             }
         }
 
-        if matches!(conn.txn_mode, TransactionMode::Savepoint) {
+        if matches!(conn.txn_mode, TransactionMode::Savepoint) || !run_consolidation {
+            tracing::warn!("Not running the Stash Consolidator!");
             // In savepoint mode, pretend that we're consolidating things.
             mz_ore::task::spawn(|| "stash consolidation dropper", async move {
                 while let Some(_) = sinces_rx.recv().await {}
@@ -1381,6 +1385,7 @@ impl DebugStashFactory {
                 Some(self.schema.clone()),
                 self.tls.clone(),
                 None,
+                false,
             )
             .await
     }
@@ -1396,6 +1401,21 @@ impl DebugStashFactory {
     /// Panics if it is unable to create a new stash.
     pub async fn open(&self) -> Stash {
         self.try_open().await.expect("unable to open debug stash")
+    }
+
+    /// Returns the factory's Stash, with the Consolidator enabled.
+    pub async fn open_with_consolidation(&self) -> Stash {
+        self.stash_factory
+            .open_inner(
+                TransactionMode::Writeable,
+                self.url.clone(),
+                Some(self.schema.clone()),
+                self.tls.clone(),
+                None,
+                true,
+            )
+            .await
+            .expect("unable to open debug Stash")
     }
 
     /// Returns the factory's Stash in readonly mode.

@@ -583,7 +583,7 @@ async fn test_stash_batch_large_number_updates() {
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_stash_readonly() {
     let factory = DebugStashFactory::try_new().await.expect("must succeed");
-    let mut stash_rw = factory.open().await;
+    let mut stash_rw = factory.open_with_consolidation().await;
     let col_rw = collection::<i64, i64>(&mut stash_rw, "c1").await.unwrap();
     let mut batch = make_batch(&col_rw, &mut stash_rw).await.unwrap();
     col_rw.append_to_batch(&mut batch, &1, &2, 1);
@@ -612,7 +612,7 @@ async fn test_stash_readonly() {
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_stash_savepoint() {
     let factory = DebugStashFactory::try_new().await.expect("must succeed");
-    let mut stash_rw = factory.open().await;
+    let mut stash_rw = factory.open_with_consolidation().await;
     // Data still present from previous test.
 
     // Now make a savepoint stash. We should be allowed to create anything
@@ -683,8 +683,8 @@ async fn test_stash_fence() {
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_stash_append() {
     let factory = DebugStashFactory::try_new().await.expect("must succeed");
-    test_append(|| async { factory.open().await }).await;
-    factory.open().await.verify().await.unwrap();
+    test_append(|| async { factory.open_with_consolidation().await }).await;
+    factory.open_with_consolidation().await.verify().await.unwrap();
     factory.drop().await;
 }
 
@@ -692,8 +692,8 @@ async fn test_stash_append() {
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_stash_stash() {
     let factory = DebugStashFactory::try_new().await.expect("must succeed");
-    test_stash(|| async { factory.open().await }).await;
-    factory.open().await.verify().await.unwrap();
+    test_stash(|| async { factory.open_with_consolidation().await }).await;
+    factory.open_with_consolidation().await.verify().await.unwrap();
     factory.drop().await;
 }
 
