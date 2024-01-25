@@ -37,7 +37,6 @@ mz_arrangement_heap_capacity_raw_s2_primary_idx  CREATE␠INDEX␠"mz_arrangemen
 mz_arrangement_heap_size_raw_s2_primary_idx  CREATE␠INDEX␠"mz_arrangement_heap_size_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_arrangement_heap_size_raw"␠("operator_id",␠"worker_id")
 mz_arrangement_records_raw_s2_primary_idx  CREATE␠INDEX␠"mz_arrangement_records_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_arrangement_records_raw"␠("operator_id",␠"worker_id")
 mz_arrangement_sharing_raw_s2_primary_idx  CREATE␠INDEX␠"mz_arrangement_sharing_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_arrangement_sharing_raw"␠("operator_id",␠"worker_id")
-mz_cluster_links_ind  CREATE␠INDEX␠"mz_cluster_links_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_cluster_links"␠("cluster_id")
 mz_cluster_replica_history_ind  CREATE␠INDEX␠"mz_cluster_replica_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_cluster_replica_history"␠("dropped_at")
 mz_cluster_replica_metrics_ind  CREATE␠INDEX␠"mz_cluster_replica_metrics_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_cluster_replica_metrics"␠("replica_id")
 mz_cluster_replica_sizes_ind  CREATE␠INDEX␠"mz_cluster_replica_sizes_ind"␠IN␠CLUSTER␠[s2]␠ON␠"mz_internal"."mz_cluster_replica_sizes"␠("size")
@@ -140,8 +139,6 @@ mz_audit_events  id
 mz_audit_events  object_type
 mz_audit_events  occurred_at
 mz_audit_events  user
-mz_cluster_links  cluster_id
-mz_cluster_links  object_id
 mz_cluster_replica_history  cluster_name
 mz_cluster_replica_history  created_at
 mz_cluster_replica_history  credits_per_hour
