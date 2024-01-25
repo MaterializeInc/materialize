@@ -492,6 +492,17 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         if query_template.matches_any_expression(matches_nullif, True):
             return YesIgnore("#22267: nullif")
 
+        if query_template.matches_any_expression(
+            partial(matches_op_by_pattern, pattern="CAST ($ AS $)"),
+            True,
+        ):
+            # cut ".000" endings
+            value1_str = re.sub(r"\.0+$", "", str(error.value1))
+            value2_str = re.sub(r"\.0+$", "", str(error.value2))
+
+            if value1_str == value2_str:
+                return YesIgnore("#24687: different representation of DECIMAL type")
+
         return NoIgnore()
 
     def _shall_ignore_row_count_mismatch(
