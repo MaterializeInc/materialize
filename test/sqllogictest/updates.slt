@@ -104,3 +104,12 @@ SELECT * FROM t1
 
 statement error db error: ERROR: column "t1\.x" does not exist
 UPDATE t1 AS m SET x = 5 WHERE t1.x < 10
+
+# Regression for #24612
+simple
+BEGIN;
+SELECT 1;
+INSERT INTO t VALUES (1) RETURNING 0;
+COMMIT;
+----
+db error: ERROR: INSERT INTO t VALUES (1) RETURNING 0 cannot be run inside a transaction block

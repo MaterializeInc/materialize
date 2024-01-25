@@ -20,7 +20,7 @@ use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::ExplainFormat;
 use mz_repr::{Diff, GlobalId, Timestamp};
-use mz_sql::catalog::{CatalogCluster, CatalogError};
+use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
     self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlans,
@@ -79,27 +79,23 @@ impl Coordinator {
             ctx.tx_mut().set_allowed(responses);
 
             // Scope the borrow of the Catalog because we need to mutate the Coordinator state below.
-            let (target_cluster_id, target_cluster) = {
-                let target_cluster = match ctx.session().transaction().cluster() {
-                    // Use the current transaction's cluster.
-                    Some(cluster_id) => TargetCluster::Transaction(cluster_id),
-                    // If there isn't a current cluster set for a transaction, then try to auto route.
-                    None => {
-                        let session_catalog = self.catalog.for_session(ctx.session());
-                        introspection::auto_run_on_introspection(
-                            &session_catalog,
-                            ctx.session(),
-                            &plan,
-                        )
-                    }
-                };
-                let target_cluster_id = self
-                    .catalog()
-                    .resolve_target_cluster(target_cluster, ctx.session())
-                    .ok()
-                    .map(|cluster| cluster.id());
-                (target_cluster_id, target_cluster)
+            let target_cluster = match ctx.session().transaction().cluster() {
+                // Use the current transaction's cluster.
+                Some(cluster_id) => TargetCluster::Transaction(cluster_id),
+                // If there isn't a current cluster set for a transaction, then try to auto route.
+                None => {
+                    let session_catalog = self.catalog.for_session(ctx.session());
+                    introspection::auto_run_on_introspection(&session_catalog, ctx.session(), &plan)
+                }
             };
+            let (target_cluster_id, target_cluster_name) = match self
+                .catalog()
+                .resolve_target_cluster(target_cluster, ctx.session())
+            {
+                Ok(cluster) => (Some(cluster.id), Some(cluster.name.clone())),
+                Err(_) => (None, None),
+            };
+
             if let (Some(cluster_id), Some(statement_id)) =
                 (target_cluster_id, ctx.extra().contents())
             {
@@ -108,8 +104,12 @@ impl Coordinator {
 
             let session_catalog = self.catalog.for_session(ctx.session());
 
-            if let Err(e) = introspection::check_cluster_restrictions(&session_catalog, &plan) {
-                return ctx.retire(Err(e));
+            if let Some(cluster_name) = &target_cluster_name {
+                if let Err(e) =
+                    introspection::check_cluster_restrictions(cluster_name, &session_catalog, &plan)
+                {
+                    return ctx.retire(Err(e));
+                }
             }
 
             if let Err(e) = rbac::check_plan(

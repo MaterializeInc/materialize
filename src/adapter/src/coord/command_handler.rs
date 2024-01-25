@@ -40,7 +40,9 @@ use mz_sql::session::user::User;
 use mz_sql::session::vars::{
     EndTransactionAction, OwnedVarInput, Value, Var, STATEMENT_LOGGING_SAMPLE_RATE,
 };
-use mz_sql_parser::ast::{CreateMaterializedViewStatement, ExplainPlanStatement, Explainee};
+use mz_sql_parser::ast::{
+    CreateMaterializedViewStatement, ExplainPlanStatement, Explainee, InsertStatement,
+};
 use mz_storage_types::sources::Timeline;
 use opentelemetry::trace::TraceContextExt;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -517,17 +519,18 @@ impl Coordinator {
                         // Always safe.
                     }
 
-                    Statement::Insert(ref insert_statement)
-                        if matches!(
-                            insert_statement.source,
+                    Statement::Insert(InsertStatement {
+                        source:
                             InsertSource::Query(Query {
                                 body: SetExpr::Values(..),
                                 ..
-                            }) | InsertSource::DefaultValues
-                        ) =>
-                    {
-                        // Inserting from default? values statements
-                        // is always safe.
+                            })
+                            | InsertSource::DefaultValues,
+                        returning,
+                        ..
+                    }) if returning.is_empty() => {
+                        // Inserting from constant values statements that do not need to execute on
+                        // any cluster (no RETURNING) is always safe.
                     }
 
                     Statement::AlterObjectRename(_) | Statement::AlterObjectSwap(_) => {
