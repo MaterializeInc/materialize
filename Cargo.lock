@@ -6527,8 +6527,7 @@ dependencies = [
 [[package]]
 name = "opentelemetry"
 version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e32339a5dc40459130b3bd269e9892439f55b33e772d2a9d402a789baaf4e8a"
+source = "git+https://github.com/MaterializeInc/opentelemetry-rust?rev=9d300167e728983f3d655cf20782fc832d31ceac#9d300167e728983f3d655cf20782fc832d31ceac"
 dependencies = [
  "futures-core",
  "futures-sink",
@@ -6543,8 +6542,7 @@ dependencies = [
 [[package]]
 name = "opentelemetry-otlp"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f24cda83b20ed2433c68241f918d0f6fdec8b1d43b7a9590ab4420c5095ca930"
+source = "git+https://github.com/MaterializeInc/opentelemetry-rust?rev=9d300167e728983f3d655cf20782fc832d31ceac#9d300167e728983f3d655cf20782fc832d31ceac"
 dependencies = [
  "async-trait",
  "futures-core",
@@ -6562,8 +6560,7 @@ dependencies = [
 [[package]]
 name = "opentelemetry-proto"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2e155ce5cc812ea3d1dffbd1539aed653de4bf4882d60e6e04dcf0901d674e1"
+source = "git+https://github.com/MaterializeInc/opentelemetry-rust?rev=9d300167e728983f3d655cf20782fc832d31ceac#9d300167e728983f3d655cf20782fc832d31ceac"
 dependencies = [
  "opentelemetry",
  "opentelemetry_sdk",
@@ -6574,8 +6571,7 @@ dependencies = [
 [[package]]
 name = "opentelemetry-semantic-conventions"
 version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5774f1ef1f982ef2a447f6ee04ec383981a3ab99c8e77a1a7b30182e65bbc84"
+source = "git+https://github.com/MaterializeInc/opentelemetry-rust?rev=9d300167e728983f3d655cf20782fc832d31ceac#9d300167e728983f3d655cf20782fc832d31ceac"
 dependencies = [
  "opentelemetry",
 ]
@@ -6583,8 +6579,7 @@ dependencies = [
 [[package]]
 name = "opentelemetry_sdk"
 version = "0.21.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f16aec8a98a457a52664d69e0091bac3a0abd18ead9b641cb00202ba4e0efe4"
+source = "git+https://github.com/MaterializeInc/opentelemetry-rust?rev=9d300167e728983f3d655cf20782fc832d31ceac#9d300167e728983f3d655cf20782fc832d31ceac"
 dependencies = [
  "async-trait",
  "crossbeam-channel",
