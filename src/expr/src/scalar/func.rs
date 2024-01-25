@@ -4669,6 +4669,7 @@ derive_unary!(
     RecordGet,
     ListLength,
     MapLength,
+    MapBuildFromRecordList,
     Upper,
     Lower,
     Cos,
@@ -5074,6 +5075,11 @@ impl Arbitrary for UnaryFunc {
             TrimTrailingWhitespace::arbitrary().prop_map_into().boxed(),
             RecordGet::arbitrary().prop_map_into().boxed(),
             ListLength::arbitrary().prop_map_into().boxed(),
+            (any::<ScalarType>())
+                .prop_map(|value_type| {
+                    UnaryFunc::MapBuildFromRecordList(MapBuildFromRecordList { value_type })
+                })
+                .boxed(),
             MapLength::arbitrary().prop_map_into().boxed(),
             Upper::arbitrary().prop_map_into().boxed(),
             Lower::arbitrary().prop_map_into().boxed(),
@@ -5449,6 +5455,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::TrimTrailingWhitespace(_) => TrimTrailingWhitespace(()),
             UnaryFunc::RecordGet(func) => RecordGet(func.0.into_proto()),
             UnaryFunc::ListLength(_) => ListLength(()),
+            UnaryFunc::MapBuildFromRecordList(inner) => {
+                MapBuildFromRecordList(inner.value_type.into_proto())
+            }
             UnaryFunc::MapLength(_) => MapLength(()),
             UnaryFunc::Upper(_) => Upper(()),
             UnaryFunc::Lower(_) => Lower(()),
@@ -5906,6 +5915,10 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 TrimTrailingWhitespace(()) => Ok(impls::TrimTrailingWhitespace.into()),
                 RecordGet(field) => Ok(impls::RecordGet(field.into_rust()?).into()),
                 ListLength(()) => Ok(impls::ListLength.into()),
+                MapBuildFromRecordList(value_type) => Ok(impls::MapBuildFromRecordList {
+                    value_type: value_type.into_rust()?,
+                }
+                .into()),
                 MapLength(()) => Ok(impls::MapLength.into()),
                 Upper(()) => Ok(impls::Upper.into()),
                 Lower(()) => Ok(impls::Lower.into()),

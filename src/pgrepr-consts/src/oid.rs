@@ -371,3 +371,4 @@ pub const FUNC_PRETTY_SQL_NOWIDTH: u32 = 16_648;
 pub const FUNC_MZ_NAME_RANK: u32 = 16_649;
 pub const FUNC_CONNECTION_OID_OID: u32 = 16_650;
 pub const FUNC_SECRET_OID_OID: u32 = 16_651;
+pub const FUNC_MAP_BUILD: u32 = 16_652;

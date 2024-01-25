@@ -59,6 +59,13 @@ key     f1       f2     gus
 fish    fishval  1000   gusfive
 fish2   fishval  1000   <null>
 
+# map_build lets you get the headers as a map
+> SELECT key, f1, f2, map_build(headers)->'gus' as gus, map_build(headers)->'gus2' AS gus2 from headers_src;
+key     f1       f2     gus       gus2
+-------------------------------------------
+fish    fishval  1000   gusfive   gus3
+fish2   fishval  1000   <null>    <null>
+
 # selecting by key works
 > SELECT key, f1, f2, thekey, value FROM (SELECT i.key, i.f1, i.f2, unnest(headers).key as thekey, unnest(headers).value as value from headers_src as I) i WHERE thekey = 'gus'
 key     f1       f2     thekey  value

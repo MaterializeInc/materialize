@@ -3643,6 +3643,40 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
                 Ok(lhs.call_binary(rhs, BinaryFunc::ListRemove))
             }) => ListAnyCompatible, oid::FUNC_LIST_REMOVE_OID;
         },
+        "map_build" => Scalar {
+            params!(ListAny) => Operation::unary(|ecx, expr| {
+                let ty = ecx.scalar_type(&expr);
+
+                // This is a fake error but should suffice given how exotic the
+                // function is.
+                let err = || {
+                    Err(sql_err!(
+                        "function map_build({}) does not exist",
+                        ecx.humanize_scalar_type(&ty.clone())
+                    ))
+                };
+
+                // This function only accepts lists of records whose schema is
+                // (text, T).
+                let value_type = match &ty {
+                    ScalarType::List { element_type, .. } => match &**element_type {
+                        ScalarType::Record { fields, .. } if fields.len() == 2 => {
+                            if fields[0].1.scalar_type != ScalarType::String {
+                                return err();
+                            }
+
+                            fields[1].1.scalar_type.clone()
+                        }
+                        _ => return err(),
+                    },
+                    _ => unreachable!("input guaranteed to be list"),
+                };
+
+                Ok(expr.call_unary(UnaryFunc::MapBuildFromRecordList(
+                    func::MapBuildFromRecordList { value_type },
+                )))
+            }) => MapAny, oid::FUNC_MAP_BUILD;
+        },
         "map_length" => Scalar {
             params![MapAny] => UnaryFunc::MapLength(func::MapLength) => Int32, oid::FUNC_MAP_LENGTH_OID;
         },

@@ -611,3 +611,88 @@ query T
 SELECT map_length(NULL::map[text=>int])
 ----
 NULL
+
+# map_build
+
+statement ok
+CREATE TYPE r AS (f1 TEXT, f2 INT);
+
+query T
+SELECT map_build(LIST[ROW('a', 1), ROW('b', 2)]::r list)::TEXT;
+----
+{a=>1,b=>2}
+
+query T
+SELECT map_build(LIST[ROW('a', 1), ROW('a', 2)]::r list)::TEXT;
+----
+{a=>2}
+
+query T
+SELECT map_build(LIST[ROW('a', 2), ROW('a', 1)]::r list)::TEXT;
+----
+{a=>1}
+
+# skip null keys
+query T
+SELECT map_build(LIST[ROW('a', 1), ROW(NULL, 2)]::r list)::TEXT;
+----
+{a=>1}
+
+query T
+SELECT map_build(LIST[NULL]::r list)::TEXT;
+----
+{}
+
+query T
+SELECT map_build(LIST[ROW('a', 1), NULL]::r list)::TEXT;
+----
+{a=>1}
+
+query T
+SELECT map_build(LIST[NULL, ROW('a', 1)]::r list)::TEXT;
+----
+{a=>1}
+
+query T
+SELECT map_build(LIST[ROW('a', 9), NULL, ROW('a', 1)]::r list)::TEXT;
+----
+{a=>1}
+
+query error could not determine polymorphic type because input has type unknown
+SELECT map_build(NULL)::TEXT;
+
+query T
+SELECT map_build(NULL::r list)::TEXT;
+----
+NULL
+
+statement ok
+CREATE TYPE int_list AS LIST (ELEMENT TYPE = int4);
+
+statement ok
+CREATE TYPE l AS (f1 TEXT, f2 int_list);
+
+query T
+SELECT map_build(LIST[ROW('a', LIST[1]), ROW('a', LIST[2])]::l list)::TEXT;
+----
+{a=>{2}}
+
+query T
+SELECT map_build(LIST[ROW('a', LIST[2]), ROW('a', LIST[1])]::l list)::TEXT;
+----
+{a=>{1}}
+
+statement ok
+CREATE TYPE int_key AS (f1 INT, f2 INT);
+
+query error db error: ERROR: function map_build\(int_key list\) does not exist
+SELECT map_build(LIST[ROW(1, 1), ROW(1, 2)]::int_key list)::TEXT;
+
+statement ok
+CREATE TYPE missing_value AS (f1 TEXT);
+
+query error db error: ERROR: function map_build\(missing_value list\) does not exist
+SELECT map_build(LIST[ROW('a'), ROW('a')]::missing_value list)::TEXT;
+
+query error function map_build(integer) does not exist
+SELECT map_build(1);
