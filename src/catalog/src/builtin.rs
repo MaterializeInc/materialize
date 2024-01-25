@@ -2594,6 +2594,29 @@ FROM mz_internal.mz_activity_log",
     }
 });
 
+pub static MZ_RECENT_ACTIVITY_LOG: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "mz_recent_activity_log",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: None,
+    sql: "SELECT * FROM mz_internal.mz_activity_log WHERE prepared_at > now() - INTERVAL '3 days'
+AND began_at > now() - INTERVAL '3 days'",
+    access: vec![MONITOR_SELECT],
+});
+
+pub static MZ_RECENT_ACTIVITY_LOG_REDACTED: Lazy<BuiltinView> = Lazy::new(|| {
+    BuiltinView {
+        name: "mz_recent_activity_log_redacted",
+        schema: MZ_INTERNAL_SCHEMA,
+        column_defs: None,
+        sql: "SELECT execution_id, sample_rate, cluster_id, application_name, cluster_name,
+transaction_isolation, execution_timestamp, transient_index_id, began_at, finished_at, finished_status,
+error_message, rows_returned, execution_strategy, transaction_id, prepared_statement_id,
+prepared_statement_name, session_id, redacted_sql, prepared_at, statement_type
+FROM mz_internal.mz_recent_activity_log",
+        access: vec![SUPPORT_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
+    }
+});
+
 pub static MZ_STATEMENT_LIFECYCLE_HISTORY: Lazy<BuiltinSource> = Lazy::new(|| BuiltinSource {
     name: "mz_statement_lifecycle_history",
     schema: MZ_INTERNAL_SCHEMA,
@@ -6286,6 +6309,16 @@ ON mz_internal.mz_frontiers (object_id)",
     is_retained_metrics_object: false,
 };
 
+pub const MZ_RECENT_ACTIVITY_LOG_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_recent_activity_log_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "IN CLUSTER mz_introspection
+-- session_id because we plan to join
+-- this against mz_internal.mz_session_history
+ON mz_internal.mz_activity_log (session_id)",
+    is_retained_metrics_object: false,
+};
+
 pub const MZ_SYSTEM_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_SYSTEM_ROLE_ID,
     name: SYSTEM_USER_NAME,
@@ -6678,6 +6711,9 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_SESSION_HISTORY),
         Builtin::View(&MZ_ACTIVITY_LOG),
         Builtin::View(&MZ_ACTIVITY_LOG_REDACTED),
+        Builtin::View(&MZ_RECENT_ACTIVITY_LOG),
+        Builtin::View(&MZ_RECENT_ACTIVITY_LOG_REDACTED),
+        Builtin::Index(&MZ_RECENT_ACTIVITY_LOG_IND),
         Builtin::View(&MZ_SOURCE_STATUSES),
         Builtin::Source(&MZ_STATEMENT_LIFECYCLE_HISTORY),
         Builtin::Source(&MZ_STORAGE_SHARDS),
