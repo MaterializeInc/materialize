@@ -81,16 +81,12 @@ use std::sync::Arc;
 use std::thread;
 
 use crossbeam_channel::TryRecvError;
-use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::read::ReadHandle;
-use mz_persist_client::{Diagnostics, ShardId};
-use mz_persist_types::codec_impls::UnitSchema;
-use mz_repr::{Diff, GlobalId, Timestamp};
+use mz_repr::{GlobalId, Timestamp};
 use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_client::client::{
     RunIngestionCommand, StatusUpdate, StorageCommand, StorageResponse,
@@ -99,7 +95,7 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sinks::{MetadataFilled, StorageSinkDesc};
-use mz_storage_types::sources::{IngestionDescription, SourceData};
+use mz_storage_types::sources::IngestionDescription;
 use mz_storage_types::AlterCompatible;
 use mz_timely_util::builder_async::PressOnDropButton;
 use timely::communication::Allocate;
@@ -107,8 +103,8 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::Timestamp as _;
 use timely::worker::Worker as TimelyWorker;
-use tokio::sync::{mpsc, watch};
-use tokio::time::{sleep, Duration, Instant};
+use tokio::sync::mpsc;
+use tokio::time::Instant;
 use tracing::{info, trace, warn};
 
 use crate::internal_control::{
@@ -215,7 +211,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
             persist_clients,
             sink_tokens: BTreeMap::new(),
             sink_write_frontiers: BTreeMap::new(),
-            sink_handles: BTreeMap::new(),
             dropped_ids: BTreeSet::new(),
             aggregated_statistics: AggregatedStatistics::new(
                 timely_worker.index(),
@@ -289,8 +284,6 @@ pub struct StorageState {
     /// Frontier of sink writes (all subsequent writes will be at times at or
     /// equal to this frontier)
     pub sink_write_frontiers: BTreeMap<GlobalId, Rc<RefCell<Antichain<Timestamp>>>>,
-    /// See: [SinkHandle]
-    pub sink_handles: BTreeMap<GlobalId, SinkHandle>,
     /// Collection ids that have been dropped but not yet reported as dropped
     pub dropped_ids: BTreeSet<GlobalId>,
 
@@ -359,102 +352,6 @@ impl StorageInstanceContext {
             rocksdb_env,
             cluster_memory_limit: None,
         }
-    }
-}
-
-/// This maintains an additional read hold on the source data for a sink, alongside
-/// the controller's hold and the handle used to read the shard internally.
-/// This is useful because environmentd's hold might expire, and the handle we use
-/// to read advances ahead of what we've successfully committed.
-/// In theory this could be stored alongside the other sink data, but this isn't
-/// intended to be a long term solution; either this should become a "critical" handle
-/// or environmentd will learn to hold its handles across restarts and this won't be
-/// needed.
-pub struct SinkHandle {
-    downgrade_tx: watch::Sender<Antichain<Timestamp>>,
-    _handle: mz_ore::task::JoinHandle<()>,
-}
-
-impl SinkHandle {
-    /// A new handle.
-    pub fn new(
-        sink_id: GlobalId,
-        from_metadata: &CollectionMetadata,
-        shard_id: ShardId,
-        initial_since: Antichain<Timestamp>,
-        persist_clients: Arc<PersistClientCache>,
-    ) -> SinkHandle {
-        let (downgrade_tx, mut rx) = watch::channel(Antichain::from_elem(Timestamp::minimum()));
-
-        let persist_location = from_metadata.persist_location.clone();
-        let from_relation_desc = from_metadata.relation_desc.clone();
-
-        let _handle = mz_ore::task::spawn(|| "Sink handle advancement", async move {
-            let client = persist_clients
-                .open(persist_location)
-                .await
-                .expect("opening persist client");
-
-            let mut read_handle: ReadHandle<SourceData, (), Timestamp, Diff> = client
-                .open_leased_reader(
-                    shard_id,
-                    Arc::new(from_relation_desc),
-                    Arc::new(UnitSchema),
-                    Diagnostics {
-                        shard_name: sink_id.to_string(),
-                        handle_purpose: format!("sink::since {}", sink_id),
-                    },
-                    false,
-                )
-                .await
-                .expect("opening reader for shard");
-
-            assert!(
-                !PartialOrder::less_than(&initial_since, read_handle.since()),
-                "could not acquire a SinkHandle that can hold the \
-                initial since {:?}, the since is already at {:?}",
-                initial_since,
-                read_handle.since()
-            );
-
-            let mut downgrade_to = read_handle.since().clone();
-            'downgrading: loop {
-                // NB: all branches of the select are cancellation safe.
-                tokio::select! {
-                    result = rx.changed() => {
-                        match result {
-                            Err(_) => {
-                                // The sending end of this channel has been dropped, which means
-                                // we're no longer interested in this handle.
-                                break 'downgrading;
-                            }
-                            Ok(()) => {
-                                // Join to avoid attempting to rewind the handle
-                                downgrade_to.join_assign(&rx.borrow_and_update());
-                            }
-                        }
-                    }
-                    _ = sleep(Duration::from_secs(60)) => {}
-                };
-                read_handle.maybe_downgrade_since(&downgrade_to).await
-            }
-
-            // Proactively drop our read hold.
-            read_handle.expire().await;
-        });
-
-        SinkHandle {
-            downgrade_tx,
-            _handle,
-        }
-    }
-
-    /// Request a downgrade of the since. This should be called regularly;
-    /// the internal task will debounce.
-    pub fn downgrade_since(&self, to: Antichain<Timestamp>) {
-        self.downgrade_tx
-            .send(to)
-            .expect("sending to downgrade task")
     }
 }
 
@@ -1273,17 +1170,6 @@ impl StorageState {
                             export.id,
                             Antichain::from_elem(mz_repr::Timestamp::minimum()),
                         );
-
-                        self.sink_handles.insert(
-                            export.id,
-                            SinkHandle::new(
-                                export.id,
-                                &export.description.from_storage_metadata,
-                                export.description.from_storage_metadata.data_shard,
-                                export.description.as_of.clone(),
-                                Arc::clone(&self.persist_clients),
-                            ),
-                        );
                     }
 
                     // This needs to be broadcast by one worker and go through the internal command
@@ -1305,21 +1191,6 @@ impl StorageState {
                             // Update our knowledge of the `as_of`, in case we need to internally
                             // restart a sink in the future.
                             export_description.as_of.clone_from(&frontier);
-
-                            // Sinks maintain a read handle over their input data to ensure that we
-                            // can restart at the `as_of` that we store and update in the export
-                            // description.
-                            //
-                            // Communication between the storage controller and this here worker is
-                            // asynchronous, so we might learn that the controller downgraded a
-                            // since after it has downgraded it's handle. Keeping a handle here
-                            // ensures that we can restart based on our local state.
-                            //
-                            // NOTE: It's important that we only downgrade `SinkHandle` after
-                            // updating the sink `as_of`.
-                            let sink_handle =
-                                self.sink_handles.get(&id).expect("missing SinkHandle");
-                            sink_handle.downgrade_since(frontier.clone());
                         }
                         None if self.ingestions.contains_key(&id) => (),
                         None => panic!("AllowCompaction command for non-existent {id}"),
@@ -1331,7 +1202,6 @@ impl StorageState {
                         // Indicates that we may drop `id`, as there are no more valid times to read.
                         self.ingestions.remove(&id);
                         self.exports.remove(&id);
-                        self.sink_handles.remove(&id);
                         drop_ids.push(id);
 
                         // This will stop reporting of frontiers.
