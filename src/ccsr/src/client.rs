@@ -368,6 +368,8 @@ struct GetBySubjectResponse {
 pub enum GetBySubjectError {
     /// The requested subject does not exist.
     SubjectNotFound,
+    /// The requested version does not exist.
+    VersionNotFound(String),
     /// The underlying HTTP transport failed.
     Transport(reqwest::Error),
     /// An internal server error occurred.
@@ -380,6 +382,7 @@ impl From<UnhandledError> for GetBySubjectError {
             UnhandledError::Transport(err) => GetBySubjectError::Transport(err),
             UnhandledError::Api { code, message } => match code {
                 40401 => GetBySubjectError::SubjectNotFound,
+                40402 => GetBySubjectError::VersionNotFound(message),
                 _ => GetBySubjectError::Server { code, message },
             },
         }
@@ -389,7 +392,9 @@ impl From<UnhandledError> for GetBySubjectError {
 impl Error for GetBySubjectError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            GetBySubjectError::SubjectNotFound | GetBySubjectError::Server { .. } => None,
+            GetBySubjectError::SubjectNotFound
+            | GetBySubjectError::VersionNotFound(_)
+            | GetBySubjectError::Server { .. } => None,
             GetBySubjectError::Transport(err) => Some(err),
         }
     }
@@ -399,6 +404,9 @@ impl fmt::Display for GetBySubjectError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             GetBySubjectError::SubjectNotFound => write!(f, "subject not found"),
+            GetBySubjectError::VersionNotFound(message) => {
+                write!(f, "version not found: {}", message)
+            }
             GetBySubjectError::Transport(err) => write!(f, "transport: {}", err),
             GetBySubjectError::Server { code, message } => {
                 write!(f, "server error {}: {}", code, message)

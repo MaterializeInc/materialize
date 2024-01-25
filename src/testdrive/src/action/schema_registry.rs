@@ -94,9 +94,10 @@ pub async fn run_verify(
         .retry_async(|_| async {
             match state.ccsr_client.get_schema_by_subject(&subject).await {
                 Ok(s) => mz_ore::retry::RetryResult::Ok(s.raw),
-                Err(e @ mz_ccsr::GetBySubjectError::SubjectNotFound) => {
-                    mz_ore::retry::RetryResult::RetryableErr(e)
-                }
+                Err(
+                    e @ mz_ccsr::GetBySubjectError::SubjectNotFound
+                    | e @ mz_ccsr::GetBySubjectError::VersionNotFound(_),
+                ) => mz_ore::retry::RetryResult::RetryableErr(e),
                 Err(e) => mz_ore::retry::RetryResult::FatalErr(e),
             }
         })
