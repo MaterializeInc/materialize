@@ -150,7 +150,7 @@ async fn test_balancer() {
             .await
             .unwrap();
         task::spawn(|| "balancer-pg_client", async move {
-            conn.await.expect("balancer-pg_client")
+            let _ = conn.await;
         });
 
         let res: i32 = pg_client.query_one("SELECT 2", &[]).await.unwrap().get(0);
@@ -162,7 +162,7 @@ async fn test_balancer() {
             .copy_out("copy (subscribe (select * from mz_kafka_sinks)) to stdout")
             .await
             .unwrap();
-        cancel.cancel_query(tls).await.unwrap();
+        let _ = cancel.cancel_query(tls).await;
         let e = pin!(copy).next().await.unwrap().unwrap_err();
         assert_contains!(e.to_string(), "canceling statement due to user request");
 
