@@ -42,9 +42,7 @@ contains:column "i" is of type integer but expression is of type text
 
 > INSERT INTO t VALUES (11, 12, 'f')
 
-! INSERT INTO t SELECT * FROM (
-    VALUES (13, 14, 'g')
-  );
+! INSERT INTO t SELECT * FROM t;
 contains:cannot be run inside a transaction block
 
 > COMMIT
@@ -58,10 +56,9 @@ contains:cannot be run inside a transaction block
 
 > BEGIN
 
-! INSERT INTO t SELECT * FROM (
-    VALUES (11, 12, 'f')
+> INSERT INTO t SELECT * FROM (
+    VALUES (17, 18, 'i')
   );
-contains:cannot be run inside a transaction block
 
 > COMMIT
 
@@ -114,6 +111,7 @@ contains:invalid selection
 9 10 e
 11 12 f
 13 14 g
+17 18 i
 
 # Multiple connections
 
