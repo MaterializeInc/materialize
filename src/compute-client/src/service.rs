@@ -100,22 +100,20 @@ where
 ///   * One instance on the controller side, dispatching between cluster processes.
 ///   * One instance in each cluster process, dispatching between timely worker threads.
 ///
-/// Note that because compute commands, except `CreateTimely`, are only sent to the first process,
-/// the cluster-side instances of `PartitionedComputeState` are not guaranteed to see all compute
-/// commands. Or more specifically: The instance running inside process 0 sees all commands,
-/// whereas the instances running inside the other processes only see `CreateTimely`. The
-/// `PartitionedComputeState` implementation must be able to cope with this limited visiblity. It
-/// does so by performing most of its state management based on observed compute responses rather
-/// than commands.
+/// Note that because compute commands, except `CreateTimely` and `UpdateConfiguration`, are only
+/// sent to the first process, the cluster-side instances of `PartitionedComputeState` are not
+/// guaranteed to see all compute commands. Or more specifically: The instance running inside
+/// process 0 sees all commands, whereas the instances running inside the other processes only see
+/// `CreateTimely` and `UpdateConfiguration`. The `PartitionedComputeState` implementation must be
+/// able to cope with this limited visiblity. It does so by performing most of its state management
+/// based on observed compute responses rather than commands.
 #[derive(Debug)]
 pub struct PartitionedComputeState<T> {
     /// Number of partitions the state machine represents.
     parts: usize,
     /// The maximum result size this state machine can return.
     ///
-    /// This is updated upon receiving [`ComputeCommand::UpdateConfiguration`]s. Note that not all
-    /// `PartitionedComputeState` instances receive `UpdateConfiguration` commands, so the size
-    /// limit is currently ineffective in some cases (#24629).
+    /// This is updated upon receiving [`ComputeCommand::UpdateConfiguration`]s.
     max_result_size: u64,
     /// Upper frontiers for indexes and sinks, both collected as a `MutableAntichain` across all
     /// partitions and individually listed for each partition.
@@ -207,14 +205,12 @@ where
         match command {
             ComputeCommand::CreateTimely { .. } => self.reset(),
             ComputeCommand::UpdateConfiguration(config) => {
-                // Note that not all instances of `PartitionedComputeState` are guaranteed to
-                // observe this command, so we shouldn't rely on it for correctness.
                 if let Some(max_result_size) = config.max_result_size {
                     self.max_result_size = max_result_size;
                 }
             }
             _ => {
-                // We are not guaranteed to observe other compute commands than `CreateTimely`. We
+                // We are not guaranteed to observe other compute commands. We
                 // must therefore not add any logic here that relies on doing so.
             }
         }
@@ -250,7 +246,7 @@ where
         self.observe_command(&command);
 
         // As specified by the compute protocol:
-        //  * Forward `CreateTimely` commands to all shards.
+        //  * Forward `CreateTimely` and `UpdateConfiguration` commands to all shards.
         //  * Forward all other commands to the first shard only.
         match command {
             ComputeCommand::CreateTimely { config, epoch } => {
@@ -260,6 +256,9 @@ where
                     .into_iter()
                     .map(|config| Some(ComputeCommand::CreateTimely { config, epoch }))
                     .collect()
+            }
+            command @ ComputeCommand::UpdateConfiguration(_) => {
+                vec![Some(command); self.parts]
             }
             command => {
                 let mut r = vec![None; self.parts];
