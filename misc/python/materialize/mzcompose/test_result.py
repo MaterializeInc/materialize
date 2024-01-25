@@ -85,15 +85,22 @@ def try_determine_errors_from_cmd_execution(
                 file_path = parts[0]
                 line_number = int(parts[1])
 
-        message = f"Executing {file_path} failed!"
-        collected_errors.append(
-            TestFailureDetails(
-                message,
-                details=chunk,
-                location=f"{file_path}",
-                line_number=line_number,
-            )
+        message = (
+            f"Executing {file_path if file_path is not None else 'command'} failed!"
         )
+
+        failure_details = TestFailureDetails(
+            message,
+            details=chunk,
+            location=file_path,
+            line_number=line_number,
+        )
+
+        if failure_details in collected_errors:
+            # do not add an identical error again
+            pass
+        else:
+            collected_errors.append(failure_details)
 
     return collected_errors
 
