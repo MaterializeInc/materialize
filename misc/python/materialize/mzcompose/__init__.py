@@ -51,6 +51,8 @@ DEFAULT_SYSTEM_PARAMETERS = {
     # Persist internals changes: advance coverage
     "persist_streaming_compaction_enabled": "true",
     "persist_streaming_snapshot_and_fetch_enabled": "true",
+    "persist_register_held_since": "true",
+    "persist_downgrade_held_since": "true",
     # -----
     # Others (ordered by name)
     "cluster_always_use_disk": "true",
