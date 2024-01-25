@@ -902,11 +902,8 @@
 
 - type: Access privilege inquiry
   description: |
-    Functions that allow querying object access privileges. All of the following functions have
-    limitations involved in resolving the text names passed in. None of the object names can have
-    any schema or database qualifiers. For example, `has_table_privilege('public.t', 'SELECT')`
-    will not work properly. Additionally, the name lookup does not consider the current search path
-    or active database.
+    Functions that allow querying object access privileges. None of the following functions consider
+    whether the provided role is a _superuser_ or not.
   functions:
     - signature: 'has_cluster_privilege([role: text or oid,] cluster: text, privilege: text) -> bool'
       description: >-
@@ -927,7 +924,11 @@
       description: >-
         Reports whether the role with the specified role name or OID has the privilege on
         the schema with the specified schema name or OID. If the role is omitted then
-        the `current_role` is assumed.
+        the `current_role` is assumed. This function has the following
+        limitations around schema resolution: 1) none of the schema names can have
+        database qualifiers (e.g., `has_schema_privilege('materialize.public', 'SELECT')`
+        will not work properly); 2) the name lookup does not consider the
+        active database.
     - signature: 'has_role([user: name or oid,] role: text or oid, privilege: text) -> bool'
       description: >-
         Reports whether the `user` has the privilege for `role`. `privilege` can either be `MEMBER`
