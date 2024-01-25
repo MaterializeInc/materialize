@@ -443,6 +443,62 @@ ORDER BY mseh.began_at",
 }
 
 #[mz_ore::test]
+fn test_statement_logging_throttling() {
+    let (server, mut client) = setup_statement_logging_core(
+        1.0,
+        1.0,
+        test_util::TestHarness::default().with_system_parameter_default(
+            "statement_logging_target_data_rate".to_string(),
+            "100".to_string(),
+        ),
+    );
+    thread::sleep(Duration::from_secs(1));
+    for _ in 0..100 {
+        client.execute("SELECT 1", &[]).unwrap();
+    }
+    thread::sleep(Duration::from_secs(2));
+    client.execute("SELECT 2", &[]).unwrap();
+    let mut client = server.connect_internal(postgres::NoTls).unwrap();
+    let logs = Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry(|_| {
+            let sl_results = client
+                .query(
+                    "SELECT
+    sql,
+    throttled_count
+FROM mz_internal.mz_prepared_statement_history
+WHERE sql IN ('SELECT 1', 'SELECT 2')",
+                    &[],
+                )
+                .unwrap();
+
+            if sl_results.iter().any(|stmt| {
+                let sql: String = stmt.get(0);
+                sql == "SELECT 2"
+            }) {
+                Ok(sl_results)
+            } else {
+                Err(())
+            }
+        })
+        .expect("Never saw last statement (`SELECT 2`)");
+    let throttled_count = logs
+        .iter()
+        .map(|log| {
+            let UInt8(throttled_count) = log.get(1);
+            throttled_count
+        })
+        .sum::<u64>();
+    assert!(
+        throttled_count > 0,
+        "at least some statements should have been throttled"
+    );
+
+    assert_eq!(logs.len() + usize::cast_from(throttled_count), 101);
+}
+
+#[mz_ore::test]
 fn test_statement_logging_subscribes() {
     let (server, mut client) = setup_statement_logging(1.0, 1.0);
     let cancel_token = client.cancel_token();
