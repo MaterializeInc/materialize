@@ -803,7 +803,13 @@ where
                         // If the data is at _exactly_ the output frontier, we can preemptively drain it into the state.
                         // This is a load-bearing optimization, as it is required to avoid buffering
                         // the entire source snapshot in the `stash`.
-                        if output_cap.time().cmp(cap.time()) == Ordering::Equal {
+                        if output_cap.time().cmp(cap.time()) == Ordering::Equal
+                        // The above condition is entirely sufficient as an optimization, but we
+                        // add this additional one to ensure that we ONLY perform this optimization
+                        // during snapshotting. We do this to avoid producing needless tombstones
+                        // in `drain_staged_input`, which waste space in the steady-state.
+                            && output_cap.time().cmp(&G::Timestamp::minimum()) <= Ordering::Equal
+                        {
                             drain_at_output = true;
                         } else if drain_at_output {
                             drain_at_output = false;
