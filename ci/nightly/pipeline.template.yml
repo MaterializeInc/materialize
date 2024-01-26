@@ -855,7 +855,7 @@ steps:
     concurrency_group: 'cloud-canary'
     agents:
       # no matching manifest for linux/arm64/v8 in the manifest list entries
-      queue: linux-x86-64-small
+      queue: linux-x86_64-small
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cloud-canary
