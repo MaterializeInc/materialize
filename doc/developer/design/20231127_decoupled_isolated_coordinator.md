@@ -348,29 +348,29 @@ The controllers can be seen as consuming a stream of deterministic controller
 commands, in the newly introduced `"catalog"` timeline, and
 `AdvanceCatalogFrontier` is downgrading its frontier.
 
-Ephemeral/query-like commands gain a new `catalog_as_of` parameter that tells
-the controller that it can only process them once its input frontier has
-sufficiently advanced.
+Ephemeral/query-like commands gain a new `catalog_ts` parameter which tells the
+controller that it can only process them once the input frontier (of catalog
+updates) has sufficiently advanced.
 
 These changes make it so that the controller knows up to which CATALOG
 timestamp it has received commands and to ensure that peeks (or other
 query-like operations) are only served once we know that controller state is
 _at least_ up to date with the catalog state as of which the peek was
 processed. Note that we say the Controller has to be _at least_ up to date with
-the `catalog_as_of`, it is okay for its catalog frontier to be beyond that.
-This has the effect that in-flight peeks can end up in a situation where a
-Controller doesn't have the collection that we are trying to query, and we
-therefore have to report back an error. This is in line with current
-Materialize behavior.
+the `catalog_ts`, it is okay for its catalog frontier to be beyond that. This
+has the effect that in-flight peeks can end up in a situation where a
+collection that we are trying to query doesn't exist anymore, and we therefore
+have to report back an error. This is in line with current Materialize
+behavior.
 
 As we see below in the section on ADAPTER. We replace explicit sequencing by
 decoupling using pTVCs and timestamps.
 
-- `Peek(global_id, catalog_as_of, ..)`: performs the peek, but _only_ once the
-  catalog frontier has been downgraded far enough.
+- `Peek(global_id, catalog_ts, ..)`: performs the peek, but _only_ once the catalog
+  frontier has advanced far enough.
 
-  It is important to note that the new `catalog_as_of` parameter is different
-  from an `as_of`, which latter refers to the timeline/timestamp of the object
+  It is important to note that the new `catalog_ts` parameter is different from
+  an `as_of`/`ts`, which latter refers to the timeline/timestamp of the object
   being queried.
 
 - `AdvanceCatalogFrontier(timestamp): tells the controller that it has seen
