@@ -245,6 +245,33 @@ key          duplicates                 headers
 -------------------------------------------------
 message_3    message_3_header_3_third   "{\"(duplicates,\\\\x6d6573736167655f335f6865616465725f335f6669727374)\",\"(duplicates,\\\\x6d6573736167655f335f6865616465725f335f7365636f6e64)\",\"(duplicates,\\\\x6d6573736167655f335f6865616465725f335f7468697264)\"}"
 
+# We can control the header map more granularly with `map_agg`.
+> SELECT
+    key,
+    map_agg((headers).key, convert_from((headers).value, 'utf-8') ORDER BY (headers).value ASC)::TEXT AS headers_map
+  FROM (
+    SELECT
+      key, unnest(headers) AS headers
+    FROM duplicate_individual_headers
+  )
+  GROUP BY key;
+key       headers_map
+---------------------
+message_3 "{duplicates=>message_3_header_3_third}"
+
+# Reverse order of aggregating values.
+> SELECT
+    key,
+    map_agg((headers).key, convert_from((headers).value, 'utf-8') ORDER BY (headers).value DESC)::TEXT AS headers_map
+  FROM (
+    SELECT
+      key, unnest(headers) AS headers
+    FROM duplicate_individual_headers
+  )
+  GROUP BY key;
+key       headers_map
+---------------------
+message_3 "{duplicates=>message_3_header_3_first}"
 
 # Verify that the source is bricked when there are headers that cannot be parsed as utf-8
 $ kafka-create-topic topic=ill_formed_header
