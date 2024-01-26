@@ -168,9 +168,12 @@ impl Coordinator {
                     }
                 }
                 OptimizeLir(stage) => {
-                    self.peek_stage_optimize_lir(ctx, root_otel_ctx.clone(), stage)
-                        .await;
-                    return;
+                    let next = return_if_err!(
+                        self.peek_stage_optimize_lir(ctx.session_mut(), stage).await,
+                        ctx
+                    );
+
+                    (ctx, next)
                 }
                 Finish(stage) => {
                     let res = self.peek_stage_finish(&mut ctx, stage).await;
@@ -586,8 +589,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
     async fn peek_stage_optimize_lir(
         &mut self,
-        mut ctx: ExecuteContext,
-        root_otel_ctx: OpenTelemetryContext,
+        session: &mut Session,
         PeekStageOptimizeLir {
             validity,
             plan,
@@ -601,11 +603,7 @@ impl Coordinator {
             global_mir_plan,
             explain_ctx,
         }: PeekStageOptimizeLir,
-    ) {
-        // Generate data structures that can be moved to another task where we will perform possibly
-        // expensive optimizations.
-        let internal_cmd_tx = self.internal_cmd_tx.clone();
-
+    ) -> Result<PeekStage, AdapterError> {
         let id_bundle = id_bundle.unwrap_or_else(|| {
             self.index_oracle(optimizer.cluster_id())
                 .sufficient_collections(&source_ids)
@@ -613,7 +611,7 @@ impl Coordinator {
 
         let determination = self
             .sequence_peek_timestamp(
-                ctx.session_mut(),
+                session,
                 &plan.when,
                 optimizer.cluster_id(),
                 timeline_context,
@@ -622,9 +620,7 @@ impl Coordinator {
                 &source_ids,
                 real_time_recency_ts,
             )
-            .await;
-
-        let determination = return_if_err!(determination, ctx);
+            .await?;
         let timestamp_context = determination.clone().timestamp_context;
 
         let pipeline = || -> Result<(optimize::peek::GlobalLirPlan, UsedIndexes), AdapterError> {
@@ -655,8 +651,7 @@ impl Coordinator {
             };
 
             // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-            let global_mir_plan =
-                global_mir_plan.resolve(timestamp_context.clone(), ctx.session_mut());
+            let global_mir_plan = global_mir_plan.resolve(timestamp_context.clone(), session);
             let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
 
             // Trace the resulting plan for the top-level `optimize` path.
@@ -717,7 +712,7 @@ impl Coordinator {
                 let Some(explain_ctx) = explain_ctx else {
                     // In `sequence_~` contexts, immediately retire the
                     // execution with the error.
-                    return ctx.retire(Err(err.into()));
+                    return Err(err.into());
                 };
 
                 if explain_ctx.broken {
@@ -737,17 +732,12 @@ impl Coordinator {
                 } else {
                     // In regular `EXPLAIN` contexts, immediately retire
                     // the execution with the error.
-                    return ctx.retire(Err(err.into()));
+                    return Err(err.into());
                 }
             }
         };
 
-        // Ignore errors if the coordinator has shut down.
-        let _ = internal_cmd_tx.send(Message::PeekStageReady {
-            ctx,
-            otel_ctx: root_otel_ctx,
-            stage,
-        });
+        Ok(stage)
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
