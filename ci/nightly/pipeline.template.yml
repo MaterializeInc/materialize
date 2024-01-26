@@ -124,7 +124,7 @@ steps:
               - --exponent-base
               - "2.5"
               - --max-concurrency
-              - "4096"
+              - "2048"
 
   - group: Kafka
     key: kafka
