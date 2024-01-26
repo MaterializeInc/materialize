@@ -10,6 +10,7 @@
 .content-wrapper {
     display: flex;
     justify-content: center;
+    padding-top: var(--nav-height);
 }
 
 .content {
@@ -104,7 +105,7 @@
         position: fixed;
         background: var(--bg);
         z-index: 100;
-        top: 0;
+        top: var(--nav-height);
         left: 0;
         border-right: 1px solid var(--divider-light);
         transform: translateX(-100%);
@@ -131,7 +132,7 @@
 .sidebar {
     margin-left: auto;
     position: sticky;
-    top: 0;
+    top: var(--nav-height);
     padding: var(--x-small) var(--nano);
     overflow-y: auto;
     height: 100vh;
@@ -396,6 +397,13 @@
         column-gap: var(--small);
         row-gap: var(--milli);
         font-size: var(--sm);
+    }
+
+    .buttons-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: var(--milli);
     }
 
     button {
