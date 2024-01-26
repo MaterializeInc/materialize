@@ -461,7 +461,9 @@ where
         let (oks, errs2) = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
             &updates,
             trace,
-            |time| time.step_back(),
+            |time, antichain| {
+                antichain.insert(time.step_back());
+            },
             comparison,
             // TODO(mcsherry): investigate/establish trade-offs here; time based had problems,
             // in that we seem to yield too much and do too little work when we do.
@@ -508,7 +510,9 @@ where
         let oks = dogsdogsdogs::operators::half_join::half_join_internal_unsafe(
             &updates,
             trace,
-            |time| time.step_back(),
+            |time, antichain| {
+                antichain.insert(time.step_back());
+            },
             comparison,
             // TODO(mcsherry): investigate/establish trade-offs here; time based had problems,
             // in that we seem to yield too much and do too little work when we do.
