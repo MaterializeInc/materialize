@@ -13,25 +13,26 @@ use mz_sql_parser::ast::visit::Visit;
 pub use mz_sql_parser::ast::*;
 pub mod transform;
 
-/// A visitor that determines if object references are present.
+/// A visitor that determines if a node is constant (does not contain references to external
+/// objects).
 #[derive(Debug)]
-pub struct ObjectReferences {
-    pub references: bool,
+pub struct ConstantVisitor {
+    pub constant: bool,
 }
 
-impl ObjectReferences {
-    /// Returns the referenced objects.
+impl ConstantVisitor {
+    /// Whether the insert source is constant.
     pub fn insert_source<T: AstInfo>(node: &InsertSource<T>) -> bool {
-        let mut visitor = Self { references: false };
+        let mut visitor = Self { constant: true };
         visitor.visit_insert_source(node);
-        visitor.references
+        visitor.constant
     }
 }
 
-impl<'ast, T: AstInfo> Visit<'ast, T> for ObjectReferences {
+impl<'ast, T: AstInfo> Visit<'ast, T> for ConstantVisitor {
     fn visit_set_expr(&mut self, node: &'ast SetExpr<T>) {
         if matches!(node, SetExpr::Show(_) | SetExpr::Table(_)) {
-            self.references = true;
+            self.constant = false;
         }
         visit::visit_set_expr(self, node);
     }
@@ -41,7 +42,7 @@ impl<'ast, T: AstInfo> Visit<'ast, T> for ObjectReferences {
         // query, but we don't want the AST to have to figure that out yet. If that's required, the
         // statement must be planned instead.
         if matches!(node, TableFactor::Table { .. }) {
-            self.references = true;
+            self.constant = false;
         }
     }
 }

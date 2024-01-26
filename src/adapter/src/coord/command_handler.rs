@@ -24,7 +24,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::role_id::RoleId;
 use mz_repr::Timestamp;
 use mz_sql::ast::{
-    CopyRelation, CopyStatement, ObjectReferences, Raw, Statement, SubscribeStatement,
+    ConstantVisitor, CopyRelation, CopyStatement, Raw, Statement, SubscribeStatement,
 };
 use mz_sql::catalog::RoleAttributes;
 use mz_sql::names::{Aug, PartialItemName, ResolvedIds};
@@ -521,7 +521,7 @@ impl Coordinator {
 
                     Statement::Insert(InsertStatement {
                         source, returning, ..
-                    }) if returning.is_empty() && !ObjectReferences::insert_source(source) => {
+                    }) if returning.is_empty() && ConstantVisitor::insert_source(source) => {
                         // Inserting from constant values statements that do not need to execute on
                         // any cluster (no RETURNING) is always safe.
                     }
