@@ -88,8 +88,6 @@ IGNORE_RE = re.compile(
     | restart-materialized-1\ .*relation\ \\"fence\\"\ does\ not\ exist
     # Expected when CRDB is corrupted
     | restart-materialized-1\ .*relation\ "consensus"\ does\ not\ exist
-    # Will print a separate panic line which will be handled and contains the relevant information (old style) TODO(#24260): remove this
-    | internal\ error:\ panic\ at\ the\ `.*`\ optimization\ stage
     # Will print a separate panic line which will be handled and contains the relevant information (new style)
     | internal\ error:\ unexpected\ panic\ during\ query\ optimization
     # redpanda INFO logging
