@@ -31,7 +31,8 @@ use crate::plan::{
     FetchPlan, InspectShardPlan, Params, Plan, PlanError, PreparePlan, ResetVariablePlan,
     SetVariablePlan, ShowVariablePlan, VariableValue,
 };
-use crate::session::vars::SCHEMA_ALIAS;
+use crate::session::vars;
+use crate::session::vars::{IsolationLevel, SCHEMA_ALIAS, TRANSACTION_ISOLATION_VAR_NAME};
 
 pub fn describe_set_variable(
     _: &StatementContext,
@@ -41,7 +42,7 @@ pub fn describe_set_variable(
 }
 
 pub fn plan_set_variable(
-    _: &StatementContext,
+    scx: &StatementContext,
     SetVariableStatement {
         local,
         variable,
@@ -49,11 +50,19 @@ pub fn plan_set_variable(
     }: SetVariableStatement,
 ) -> Result<Plan, PlanError> {
     let value = plan_set_variable_to(to)?;
-    Ok(Plan::SetVariable(SetVariablePlan {
-        name: variable.into_string(),
-        value,
-        local,
-    }))
+    let name = variable.into_string();
+
+    if let VariableValue::Values(values) = &value {
+        if let Some(value) = values.first() {
+            if name.as_str() == TRANSACTION_ISOLATION_VAR_NAME
+                && value == IsolationLevel::StrongSessionSerializable.as_str()
+            {
+                scx.require_feature_flag(&vars::ENABLE_SESSION_TIMELINES)?;
+            }
+        }
+    }
+
+    Ok(Plan::SetVariable(SetVariablePlan { name, value, local }))
 }
 
 pub fn plan_set_variable_to(to: SetVariableTo) -> Result<VariableValue, PlanError> {

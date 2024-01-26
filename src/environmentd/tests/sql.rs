@@ -1817,6 +1817,16 @@ async fn test_timeline_read_holds() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn test_linearizability() {
+    // TODO(jkosh44) This doesn't actually test linearizability across sessions which would be nice.
+    test_session_linearizability("strict serializable").await;
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn test_strong_session_serializability() {
+    test_session_linearizability("strong session serializable").await;
+}
+
+async fn test_session_linearizability(isolation_level: &str) {
     // Set the timestamp to zero for deterministic initial timestamps.
     let now = Arc::new(Mutex::new(0));
     let now_fn = {
@@ -1827,6 +1837,9 @@ async fn test_linearizability() {
         .with_now(now_fn)
         .unsafe_mode()
         .start()
+        .await;
+    server
+        .enable_feature_flags(&["enable_session_timelines"])
         .await;
     let mz_client = server.connect().await.unwrap();
 
@@ -1873,7 +1886,7 @@ async fn test_linearizability() {
     assert!(join_ts < view_ts);
 
     mz_client
-        .batch_execute("SET transaction_isolation = 'strict serializable'")
+        .batch_execute(&format!("SET transaction_isolation = '{isolation_level}'"))
         .await
         .unwrap();
 

@@ -20,6 +20,7 @@ use mz_ore::task;
 use mz_ore::vec::VecExt;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_sql::plan::Plan;
+use mz_sql::session::vars::IsolationLevel;
 use mz_storage_client::client::TimestamplessUpdate;
 use mz_timestamp_oracle::WriteTimestamp;
 use tokio::sync::{oneshot, Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
@@ -390,7 +391,14 @@ impl Coordinator {
 
                         // Notify the external clients of the result.
                         for response in responses {
-                            let (ctx, result) = response.finalize();
+                            let (mut ctx, result) = response.finalize();
+                            if ctx.session().vars().transaction_isolation()
+                                == &IsolationLevel::StrongSessionSerializable
+                            {
+                                ctx.session_mut()
+                                    .local_timestamp_oracle()
+                                    .apply_write(timestamp);
+                            }
                             ctx.retire(result);
                         }
 
@@ -447,7 +455,14 @@ impl Coordinator {
     ) {
         self.apply_local_write(timestamp).await;
         for response in responses {
-            let (ctx, result) = response.finalize();
+            let (mut ctx, result) = response.finalize();
+            if ctx.session().vars().transaction_isolation()
+                == &IsolationLevel::StrongSessionSerializable
+            {
+                ctx.session_mut()
+                    .local_timestamp_oracle()
+                    .apply_write(timestamp);
+            }
             ctx.retire(result);
         }
 

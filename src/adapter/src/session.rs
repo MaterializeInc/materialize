@@ -13,6 +13,7 @@
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Debug;
 use std::mem;
 use std::sync::Arc;
 
@@ -21,7 +22,7 @@ use derivative::Derivative;
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_controller_types::ClusterId;
-use mz_ore::now::EpochMillis;
+use mz_ore::now::{EpochMillis, NowFn};
 use mz_pgwire_common::Format;
 use mz_repr::role_id::RoleId;
 use mz_repr::user::ExternalUserMetadata;
@@ -48,6 +49,7 @@ use uuid::Uuid;
 
 use crate::catalog::CatalogState;
 use crate::client::RecordFirstRowStream;
+use crate::coord::catalog_oracle::InMemoryTimestampOracle;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::statement_logging::PreparedStatementLoggingInfo;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
@@ -59,7 +61,10 @@ const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
 /// A session holds per-connection state.
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct Session<T = mz_repr::Timestamp> {
+pub struct Session<T = mz_repr::Timestamp>
+where
+    T: Debug + Clone + Send + Sync,
+{
     conn_id: ConnectionId,
     /// A globally unique identifier for the session. Not to be confused
     /// with `conn_id`, which may be reused.
@@ -100,6 +105,7 @@ pub struct Session<T = mz_repr::Timestamp> {
     // on. We express this by gating access with this token.
     #[derivative(Debug = "ignore")]
     qcell_owner: QCellOwner,
+    pub(crate) session_oracles: BTreeMap<Timeline, InMemoryTimestampOracle<T, NowFn<T>>>,
 }
 
 impl<T: TimestampManipulation> Session<T> {
@@ -190,6 +196,7 @@ impl<T: TimestampManipulation> Session<T> {
             secret_key: rand::thread_rng().gen(),
             external_metadata_rx: None,
             qcell_owner: QCellOwner::new(),
+            session_oracles: BTreeMap::new(),
         }
     }
 
@@ -781,6 +788,23 @@ impl<T: TimestampManipulation> Session<T> {
             .as_ref()
             .expect("role_metadata invariant violated")
             .current_role
+    }
+
+    /// Ensures that a timestamp oracle exists for `timeline` and returns a mutable reference to
+    /// the timestamp oracle.
+    pub fn ensure_timestamp_oracle(
+        &mut self,
+        timeline: Timeline,
+    ) -> &mut InMemoryTimestampOracle<T, NowFn<T>> {
+        self.session_oracles
+            .entry(timeline)
+            .or_insert_with(|| InMemoryTimestampOracle::new(T::minimum(), NowFn::from(T::minimum)))
+    }
+
+    /// Returns a reference to the timestamp oracle used for reads and writes
+    /// from/to a local input.
+    pub fn local_timestamp_oracle(&mut self) -> &mut InMemoryTimestampOracle<T, NowFn<T>> {
+        self.ensure_timestamp_oracle(Timeline::EpochMilliseconds)
     }
 }
 

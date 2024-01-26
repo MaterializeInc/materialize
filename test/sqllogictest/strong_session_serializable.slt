@@ -1,0 +1,88 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_session_timelines = true
+----
+COMPLETE 0
+
+# Use explicit conn names to guarantee that the same session is used for all queries.
+
+simple conn=materialize,user=materialize
+SET TRANSACTION_ISOLATION TO "strong session serializable";
+----
+COMPLETE 0
+
+simple conn=materialize,user=materialize
+CREATE CLUSTER stuck SIZE '1';
+----
+COMPLETE 0
+
+simple conn=materialize,user=materialize
+CREATE TABLE t (a INT);
+----
+COMPLETE 0
+
+simple conn=materialize,user=materialize
+CREATE MATERIALIZED VIEW mv IN CLUSTER stuck AS SELECT SUM(a) FROM t;
+----
+COMPLETE 0
+
+simple conn=materialize,user=materialize
+INSERT INTO t VALUES (1);
+----
+COMPLETE 1
+
+simple conn=materialize,user=materialize
+SELECT * FROM mv
+----
+1
+COMPLETE 1
+
+simple conn=materialize,user=materialize
+INSERT INTO t VALUES (1);
+----
+COMPLETE 1
+
+simple conn=materialize,user=materialize
+SELECT * FROM mv
+----
+2
+COMPLETE 1
+
+simple conn=materialize,user=materialize
+ALTER CLUSTER stuck SET (REPLICATION FACTOR = 0);
+----
+COMPLETE 0
+
+simple conn=materialize,user=materialize
+SELECT * FROM mv
+----
+2
+COMPLETE 1
+
+simple conn=materialize,user=materialize
+INSERT INTO t VALUES (1);
+----
+COMPLETE 1
+
+# TODO(jkosh44) It would be nice to assert that a SELECT would block indefinitely.
+
+simple conn=materialize,user=materialize
+ALTER CLUSTER stuck SET (REPLICATION FACTOR = 1);
+----
+COMPLETE 0
+
+simple conn=materialize,user=materialize
+SELECT * FROM mv
+----
+3
+COMPLETE 1

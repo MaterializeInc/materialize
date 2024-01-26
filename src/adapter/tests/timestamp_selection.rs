@@ -221,6 +221,10 @@ fn test_timestamp_selection() {
                     isolation =
                         if level == TransactionIsolationLevel::StrictSerializable.to_string() {
                             TransactionIsolationLevel::StrictSerializable
+                        } else if level
+                            == TransactionIsolationLevel::StrongSessionSerializable.to_string()
+                        {
+                            TransactionIsolationLevel::StrongSessionSerializable
                         } else if level == TransactionIsolationLevel::Serializable.to_string() {
                             TransactionIsolationLevel::Serializable
                         } else {
@@ -260,7 +264,7 @@ fn test_timestamp_selection() {
 
                     let ts = block_on(f.determine_timestamp_for(
                         &catalog,
-                        &session,
+                        &mut session,
                         &det.id_bundle.into(),
                         &parse_query_when(&det.when),
                         det.instance.parse().unwrap(),

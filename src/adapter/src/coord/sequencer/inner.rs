@@ -1544,6 +1544,8 @@ impl Coordinator {
                         session.add_notice(AdapterNotice::UnimplementedIsolationLevel {
                             isolation_level: v,
                         });
+                    } else if v == IsolationLevel::StrongSessionSerializable.as_str() {
+                        session.add_notice(AdapterNotice::StrongSessionSerializable);
                     }
                 }
             }

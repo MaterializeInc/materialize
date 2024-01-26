@@ -269,7 +269,7 @@ pub trait TimestampProvider {
     async fn determine_timestamp_for(
         &self,
         catalog: &CatalogState,
-        session: &Session,
+        session: &mut Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
@@ -333,15 +333,18 @@ pub trait TimestampProvider {
         }
 
         // We advance to the upper in the following scenarios:
-        // - The isolation level is Serializable and the `when` allows us to advance to upper (ex:
-        //   queries with no AS OF). We avoid using the upper in Strict Serializable to prevent
-        //   reading source data that is being written to in the future.
+        // - The isolation level is Serializable or Strong Session Serializable and the `when`
+        //   allows us to advance to upper (ex: queries with no AS OF). We avoid using the upper in
+        //   Strict Serializable to prevent reading source data that is being written to in the
+        //   future.
         // - The isolation level is Strict Serializable but there is no timelines and the `when`
         //   allows us to advance to upper.
         // - The `when` requires us to advance to the upper (ex: read-then-write queries).
         if when.must_advance_to_upper()
             || (when.can_advance_to_upper()
-                && (isolation_level == &IsolationLevel::Serializable || timeline.is_none()))
+                && (isolation_level == &IsolationLevel::Serializable
+                    || isolation_level == &IsolationLevel::StrongSessionSerializable
+                    || timeline.is_none()))
         {
             candidate.join_assign(&largest_not_in_advance_of_upper);
         }
@@ -354,6 +357,15 @@ pub trait TimestampProvider {
                             is enabled and the isolation level is strict serializable"
             );
             candidate.join_assign(&real_time_recency_ts);
+        }
+
+        let mut session_oracle_read_ts = None;
+        if isolation_level == &IsolationLevel::StrongSessionSerializable {
+            if let Some(timeline) = &timeline {
+                let session_ts = session.ensure_timestamp_oracle(timeline.clone()).read_ts();
+                candidate.join_assign(&session_ts);
+                session_oracle_read_ts = Some(session_ts);
+            }
         }
 
         // If the timestamp is greater or equal to some element in `since` we are
@@ -371,6 +383,13 @@ pub trait TimestampProvider {
                 largest_not_in_advance_of_upper = format!("{largest_not_in_advance_of_upper}"),
                 timestamp = format!("{candidate}")
             );
+            if isolation_level == &IsolationLevel::StrongSessionSerializable {
+                if let Some(timeline) = &timeline {
+                    session
+                        .ensure_timestamp_oracle(timeline.clone())
+                        .apply_write(candidate.clone());
+                }
+            }
             candidate
         } else {
             coord_bail!(self.generate_timestamp_not_valid_error_msg(
@@ -393,6 +412,7 @@ pub trait TimestampProvider {
             upper,
             largest_not_in_advance_of_upper,
             oracle_read_ts,
+            session_oracle_read_ts,
         })
     }
 
@@ -501,7 +521,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn determine_timestamp(
         &self,
-        session: &Session,
+        session: &mut Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
@@ -509,7 +529,7 @@ impl Coordinator {
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<mz_repr::Timestamp>,
     ) -> Result<TimestampDetermination<mz_repr::Timestamp>, AdapterError> {
-        let isolation_level = session.vars().transaction_isolation();
+        let isolation_level = session.vars().transaction_isolation().clone();
         let det = self
             .determine_timestamp_for(
                 self.catalog().state(),
@@ -520,7 +540,7 @@ impl Coordinator {
                 timeline_context,
                 oracle_read_ts,
                 real_time_recency_ts,
-                isolation_level,
+                &isolation_level,
             )
             .await?;
         self.metrics
@@ -535,7 +555,7 @@ impl Coordinator {
             ])
             .inc();
         if !det.respond_immediately()
-            && isolation_level == &IsolationLevel::StrictSerializable
+            && isolation_level == IsolationLevel::StrictSerializable
             && real_time_recency_ts.is_none()
         {
             if let Some(strict) = det.timestamp_context.timestamp() {
@@ -638,6 +658,8 @@ pub struct TimestampDetermination<T> {
     pub largest_not_in_advance_of_upper: T,
     /// The value of the timeline's oracle timestamp, if used.
     pub oracle_read_ts: Option<T>,
+    /// The value of the session local timestamp's oracle timestamp, if used.
+    pub session_oracle_read_ts: Option<T>,
 }
 
 impl<T: TimestampManipulation> TimestampDetermination<T> {
@@ -732,6 +754,13 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
                 f,
                 "          oracle read timestamp: {}",
                 oracle_read_ts.display(timeline)
+            )?;
+        }
+        if let Some(session_oracle_read_ts) = &self.determination.session_oracle_read_ts {
+            writeln!(
+                f,
+                "  session oracle read timestamp: {}",
+                session_oracle_read_ts.display(timeline)
             )?;
         }
         writeln!(

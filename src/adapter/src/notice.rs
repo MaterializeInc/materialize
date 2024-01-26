@@ -85,6 +85,7 @@ pub enum AdapterNotice {
     UnimplementedIsolationLevel {
         isolation_level: String,
     },
+    StrongSessionSerializable,
     DroppedSubscribe {
         dropped_name: String,
     },
@@ -171,6 +172,7 @@ impl AdapterNotice {
             AdapterNotice::EqualSubscribeBounds { .. } => Severity::Notice,
             AdapterNotice::QueryTrace { .. } => Severity::Notice,
             AdapterNotice::UnimplementedIsolationLevel { .. } => Severity::Notice,
+            AdapterNotice::StrongSessionSerializable => Severity::Notice,
             AdapterNotice::DroppedSubscribe { .. } => Severity::Notice,
             AdapterNotice::BadStartupSetting { .. } => Severity::Notice,
             AdapterNotice::RbacUserDisabled => Severity::Notice,
@@ -261,6 +263,7 @@ impl AdapterNotice {
             AdapterNotice::EqualSubscribeBounds { .. } => SqlState::WARNING,
             AdapterNotice::QueryTrace { .. } => SqlState::WARNING,
             AdapterNotice::UnimplementedIsolationLevel { .. } => SqlState::WARNING,
+            AdapterNotice::StrongSessionSerializable => SqlState::WARNING,
             AdapterNotice::DroppedSubscribe { .. } => SqlState::WARNING,
             AdapterNotice::BadStartupSetting { .. } => SqlState::WARNING,
             AdapterNotice::RbacUserDisabled => SqlState::WARNING,
@@ -361,6 +364,12 @@ impl fmt::Display for AdapterNotice {
                     f,
                     "transaction isolation level {isolation_level} is unimplemented, the session will be upgraded to {}",
                     IsolationLevel::Serializable.as_str()
+                )
+            }
+            AdapterNotice::StrongSessionSerializable => {
+                write!(
+                    f,
+                    "The Strong Session Serializable isolation level may exhibit consistency violations when reading from catalog objects",
                 )
             }
             AdapterNotice::DroppedSubscribe { dropped_name } => {

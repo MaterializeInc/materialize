@@ -7028,6 +7028,8 @@ impl<'a> Parser<'a> {
                     TransactionIsolationLevel::RepeatableRead
                 } else if self.parse_keyword(SERIALIZABLE) {
                     TransactionIsolationLevel::Serializable
+                } else if self.parse_keywords(&[STRONG, SESSION, SERIALIZABLE]) {
+                    TransactionIsolationLevel::StrongSessionSerializable
                 } else if self.parse_keywords(&[STRICT, SERIALIZABLE]) {
                     TransactionIsolationLevel::StrictSerializable
                 } else {

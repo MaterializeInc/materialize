@@ -10,11 +10,13 @@
 //! A timestamp oracle that relies on the [`Catalog`] for persistence/durability
 //! and reserves ranges of timestamps.
 
+use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{cmp, thread};
 
 use async_trait::async_trait;
+use derivative::Derivative;
 use mz_catalog::memory::error::Error;
 use mz_ore::now::NowFn;
 use mz_repr::{Timestamp, TimestampManipulation};
@@ -40,12 +42,16 @@ use crate::util::ResultExt;
 /// and writes happen at the write timestamp. After the write has completed, but
 /// before a response is sent, the read timestamp must be updated to a value
 /// greater than or equal to `self.write_ts`.
-struct InMemoryTimestampOracle<T, N>
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct InMemoryTimestampOracle<T, N>
 where
+    T: Debug,
     N: GenericNowFn<T>,
 {
     read_ts: T,
     write_ts: T,
+    #[derivative(Debug = "ignore")]
     next: N,
 }
 
@@ -97,7 +103,7 @@ where
     /// This timestamp will be greater or equal to all prior values of
     /// `self.apply_write(write_ts)`, and strictly less than all subsequent
     /// values of `self.write_ts()`.
-    fn read_ts(&self) -> T {
+    pub(crate) fn read_ts(&self) -> T {
         self.read_ts.clone()
     }
 
@@ -105,7 +111,7 @@ where
     ///
     /// All subsequent values of `self.read_ts()` will be greater or equal to
     /// `write_ts`.
-    fn apply_write(&mut self, write_ts: T) {
+    pub(crate) fn apply_write(&mut self, write_ts: T) {
         if self.read_ts.less_than(&write_ts) {
             self.read_ts = write_ts;
 
@@ -144,6 +150,7 @@ pub const TIMESTAMP_INTERVAL_UPPER_BOUND: u64 = 2;
 /// timestamps.
 pub struct CatalogTimestampOracle<T, N>
 where
+    T: Debug,
     N: GenericNowFn<T>,
 {
     timestamp_oracle: InMemoryTimestampOracle<T, N>,
