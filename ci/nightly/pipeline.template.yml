@@ -122,7 +122,7 @@ steps:
               - --workload-group-marker
               - "ConnectionWorkload"
               - --exponent-base
-              - "4"
+              - "2.5"
               - --max-concurrency
               - "4096"
 
