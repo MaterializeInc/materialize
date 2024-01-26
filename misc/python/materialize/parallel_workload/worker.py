@@ -65,6 +65,7 @@ class Worker:
         cur = self.conn.cursor()
         self.exe = Executor(self.rng, cur, database)
         self.exe.set_isolation("SERIALIZABLE")
+        cur.execute("SET auto_route_introspection_queries TO false")
         cur.execute("SELECT pg_backend_pid()")
         self.exe.pg_pid = cur.fetchall()[0][0]
 
