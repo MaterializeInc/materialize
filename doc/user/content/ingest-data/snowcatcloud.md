@@ -283,7 +283,7 @@ efficiently remove duplicates. For more details, refer to the webhook source
 
 ## Next steps
 
-With Materialize ingesting your Rudderstack data, you can start exploring it,
+With Materialize ingesting your SnowcatCloud data, you can start exploring it,
 computing real-time results that stay up-to-date as new data arrives, and
 serving results efficiently. For more details, check out the
 [SnowcatCloud documentation](https://docs.snowcatcloud.com/) and the
