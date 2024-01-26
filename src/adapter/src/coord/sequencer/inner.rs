@@ -4967,6 +4967,9 @@ impl Coordinator {
         for notice in notices {
             let kind = OptimizerNoticeKind::from(notice);
             let notice_enabled = match kind {
+                OptimizerNoticeKind::IndexAlreadyExists => {
+                    system_vars.enable_notices_for_index_already_exists()
+                }
                 OptimizerNoticeKind::IndexTooWideForLiteralConstraints => {
                     system_vars.enable_notices_for_index_too_wide_for_literal_constraints()
                 }

@@ -1,0 +1,177 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_table_keys TO true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_mz_notices TO true
+----
+COMPLETE 0
+
+# Disable rbac checks in order to select from mz_notices.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE t (
+  a int,
+  b int
+);
+
+# Create an index on t(a + 7).
+statement ok
+CREATE INDEX t_idx1 ON t(a + 7);
+
+# EXPLAIN CREATE INDEX for an identical index that emits the optimizer notice.
+query T multiline
+EXPLAIN WITH(humanized_exprs) CREATE INDEX t_idx2 ON t(a + 7);
+----
+materialize.public.t_idx2:
+  ArrangeBy keys=[[(#0{a} + 7)]]
+    ReadIndex on=t t_idx1=[plan root (no new arrangement)]
+
+Used Indexes:
+  - materialize.public.t_idx1 (plan root (no new arrangement), index export)
+
+Notices:
+  - Notice: The current index is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
+    Hint: Please drop all indexes except the first index created on t((a + 7)) and recreate all dependent objects.
+
+EOF
+
+# CREATE INDEX for an identical index that emits the optimizer notice.
+statement ok
+CREATE INDEX t_idx2 ON t(a + 7);
+
+# Verify that the notice is shown in EXPLAIN.
+query T multiline
+EXPLAIN WITH(humanized_exprs) INDEX t_idx2;
+----
+materialize.public.t_idx2:
+  ArrangeBy keys=[[(#0{a} + 7)]]
+    ReadIndex on=t t_idx1=[plan root (no new arrangement)]
+
+Used Indexes:
+  - materialize.public.t_idx1 (plan root (no new arrangement), index export)
+
+Notices:
+  - Notice: The current index is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
+    Hint: Please drop all indexes except the first index created on t((a + 7)) and recreate all dependent objects.
+
+EOF
+
+# Verify that the same notice can be found in the catalog.
+query TTTTTTTT
+SELECT
+  n.notice_type, n.message, n.redacted_message, n.hint, n.redacted_hint, n.action, n.redacted_action, n.action_type
+FROM
+  mz_internal.mz_notices n JOIN
+  mz_catalog.mz_indexes idx ON(n.object_id = idx.id)
+WHERE
+  idx.name LIKE 't_idx%'
+----
+An identical index already exists
+The current index is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
+The current index is identical to materialize.public.t_idx1, which is also defined on t((a + █)).
+Please drop all indexes except the first index created on t((a + 7)) and recreate all dependent objects.
+Please drop all indexes except the first index created on t((a + █)) and recreate all dependent objects.
+NULL
+NULL
+NULL
+
+
+# Drop the catalog item associated with the notice.
+statement ok
+DROP INDEX t_idx2;
+
+# Verify that the notice is no longer in the catalog.
+query TTTTTTTT
+SELECT
+  n.notice_type, n.message, n.redacted_message, n.hint, n.redacted_hint, n.action, n.redacted_action, n.action_type
+FROM
+  mz_internal.mz_notices n JOIN
+  mz_catalog.mz_indexes idx ON(n.object_id = idx.id)
+----
+
+
+# CREATE INDEX for an identical index that emits the optimizer notice.
+statement ok
+CREATE INDEX t_idx3 ON t(a + 7);
+
+# Verify that the notice is shown in EXPLAIN.
+query T multiline
+EXPLAIN WITH(humanized_exprs) INDEX t_idx3;
+----
+materialize.public.t_idx3:
+  ArrangeBy keys=[[(#0{a} + 7)]]
+    ReadIndex on=t t_idx1=[plan root (no new arrangement)]
+
+Used Indexes:
+  - materialize.public.t_idx1 (plan root (no new arrangement), index export)
+
+Notices:
+  - Notice: The current index is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
+    Hint: Please drop all indexes except the first index created on t((a + 7)) and recreate all dependent objects.
+
+EOF
+
+# Verify that the same notice can be found in the catalog.
+query TTTTTTTT
+SELECT
+  n.notice_type, n.message, n.redacted_message, n.hint, n.redacted_hint, n.action, n.redacted_action, n.action_type
+FROM
+  mz_internal.mz_notices n JOIN
+  mz_catalog.mz_indexes idx ON(n.object_id = idx.id)
+WHERE
+  idx.name = 't_idx3'
+----
+An identical index already exists
+The current index is identical to materialize.public.t_idx1, which is also defined on t((a + 7)).
+The current index is identical to materialize.public.t_idx1, which is also defined on t((a + █)).
+Please drop all indexes except the first index created on t((a + 7)) and recreate all dependent objects.
+Please drop all indexes except the first index created on t((a + █)) and recreate all dependent objects.
+NULL
+NULL
+NULL
+
+
+# Drop the catalog item associated with the notice.
+statement ok
+DROP INDEX t_idx1;
+
+
+# Verify that the notice is no longer shown in EXPLAIN.
+query T multiline
+EXPLAIN WITH(humanized_exprs) INDEX t_idx3;
+----
+materialize.public.t_idx3:
+  ArrangeBy keys=[[(#0{a} + 7)]]
+    ReadIndex on=t [DELETED INDEX]=[plan root (no new arrangement)]
+
+Used Indexes:
+  - [DELETED INDEX] (plan root (no new arrangement), index export)
+
+EOF
+
+
+# Verify that the notice is no longer in the catalog.
+query TTTTTTTT
+SELECT
+  n.notice_type, n.message, n.redacted_message, n.hint, n.redacted_hint, n.action, n.redacted_action, n.action_type
+FROM
+  mz_internal.mz_notices n JOIN
+  mz_catalog.mz_indexes idx ON(n.object_id = idx.id)
+WHERE
+  idx.name = 't_idx3'
+----

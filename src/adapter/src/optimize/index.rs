@@ -33,7 +33,7 @@ use mz_repr::GlobalId;
 use mz_sql::names::QualifiedItemName;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
-use mz_transform::notice::IndexKeyEmpty;
+use mz_transform::notice::{IndexAlreadyExists, IndexKeyEmpty};
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
 
 use crate::catalog::Catalog;
@@ -174,8 +174,22 @@ impl Optimize<Index> for Optimizer {
             self.config.enable_eager_delta_joins,
         )?;
 
+        // Emit a notice if we are trying to create an empty index.
         if index.keys.is_empty() {
             df_meta.push_optimizer_notice_dedup(IndexKeyEmpty);
+        }
+
+        // Emit a notice for each available index identical to the one we are
+        // currently optimizing.
+        for (index_id, idx) in df_builder
+            .indexes_on(index.on)
+            .filter(|(_id, idx)| idx.keys == index.keys)
+        {
+            df_meta.push_optimizer_notice_dedup(IndexAlreadyExists {
+                index_id,
+                index_key: idx.keys.clone(),
+                index_on_id: idx.on,
+            });
         }
 
         // Return the (sealed) plan at the end of this optimization step.
