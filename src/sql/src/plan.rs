@@ -891,27 +891,6 @@ impl ExplaineeStatement {
             Self::CreateIndex { broken, .. } => *broken,
         }
     }
-
-    pub fn row_set_finishing(&self) -> Option<RowSetFinishing> {
-        match self {
-            Self::Select { plan, desc, .. } => {
-                if !plan.finishing.is_trivial(desc.arity()) {
-                    // Use the optional finishing extracted in the plan_query call.
-                    Some(plan.finishing.clone())
-                } else {
-                    None
-                }
-            }
-            Self::CreateMaterializedView { .. } => {
-                // Trivial finishing asserted in plan_create_materialized_view.
-                None
-            }
-            Self::CreateIndex { .. } => {
-                // Trivial finishing for indexes on views asserted in plan_view.
-                None
-            }
-        }
-    }
 }
 
 impl ExplaineeStatementKind {
