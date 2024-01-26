@@ -1355,6 +1355,8 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [query hints]: /sql/select/#query-hints
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_redacted -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_links -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability -->
