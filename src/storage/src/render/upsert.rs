@@ -41,12 +41,13 @@ use timely::progress::{Antichain, Timestamp};
 use crate::healthcheck::HealthStatusUpdate;
 use crate::metrics::upsert::UpsertMetrics;
 use crate::render::sources::OutputIndex;
-use crate::render::upsert::types::{
-    upsert_bincode_opts, AutoSpillBackend, InMemoryHashMap, RocksDBParams, UpsertState,
-    UpsertStateBackend,
-};
+use crate::render::upsert::autospill::{AutoSpillBackend, RocksDBParams};
+use crate::render::upsert::memory::InMemoryHashMap;
+use crate::render::upsert::types::{upsert_bincode_opts, UpsertState, UpsertStateBackend};
 use crate::storage_state::StorageInstanceContext;
 
+mod autospill;
+mod memory;
 mod rocksdb;
 mod types;
 
