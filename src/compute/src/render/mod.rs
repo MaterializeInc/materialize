@@ -997,7 +997,7 @@ impl RenderTimestamp for Product<mz_repr::Timestamp, PointStamp<u64>> {
         Product::new(delay, Default::default())
     }
     fn step_back(&self) -> Self {
-        // It is necessary to step back both coordinates of a product, 
+        // It is necessary to step back both coordinates of a product,
         // and when one is a `PointStamp` that also means all coordinates
         // of the pointstamp.
         let mut inner = self.inner.clone();
