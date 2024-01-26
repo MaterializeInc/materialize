@@ -78,6 +78,28 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
     mzcompose cp balancerd:/usr/local/bin/balancerd coverage/ || true
 fi
 
+# TODO: Go through Python and check the image type in "ps --format json" to figure out the command, then pprof diff
+(while true; do
+        sleep 10
+        for service in $(mzcompose ps --services); do
+          artifact=$(date "+$service-%Y-%m-%d_%H:%M:%S.pb.gz")
+          # For materialized
+          if mzcompose exec "$service" curl --silent http://127.0.0.1:6878/prof/heap > "$artifact"; then
+              if [ -s "$artifact" ]; then
+                buildkite-agent artifact upload "$artifact"
+              else
+                # For clusterd
+                if mzcompose exec "$service" curl --silent http://127.0.0.1:6878/heap > "$artifact"; then
+                  if [ -s "$artifact" ]; then
+                    buildkite-agent artifact upload "$artifact"
+                  fi
+                fi
+              fi
+          fi
+        done
+    done
+) &
+
 ci_uncollapsed_heading ":docker: Running \`bin/mzcompose --find \"$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION\" run ${run_args[*]}\`"
 
 mzcompose run "${run_args[@]}" |& tee run.log
