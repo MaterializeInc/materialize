@@ -1129,6 +1129,7 @@ pub enum LoadGenerator {
     Auction,
     Datums,
     Tpch,
+    Upsert,
 }
 
 impl AstDisplay for LoadGenerator {
@@ -1139,6 +1140,7 @@ impl AstDisplay for LoadGenerator {
             Self::Auction => f.write_str("AUCTION"),
             Self::Datums => f.write_str("DATUMS"),
             Self::Tpch => f.write_str("TPCH"),
+            Self::Upsert => f.write_str("UPSERT"),
         }
     }
 }
@@ -1149,6 +1151,14 @@ pub enum LoadGeneratorOptionName {
     ScaleFactor,
     TickInterval,
     MaxCardinality,
+    Keys,
+    SnapshotRounds,
+    QuickRounds,
+    ValueSize,
+    UpdateRate,
+    Seed,
+    Partitions,
+    BatchSize,
 }
 
 impl AstDisplay for LoadGeneratorOptionName {
@@ -1157,6 +1167,14 @@ impl AstDisplay for LoadGeneratorOptionName {
             LoadGeneratorOptionName::ScaleFactor => "SCALE FACTOR",
             LoadGeneratorOptionName::TickInterval => "TICK INTERVAL",
             LoadGeneratorOptionName::MaxCardinality => "MAX CARDINALITY",
+            LoadGeneratorOptionName::Keys => "KEYS",
+            LoadGeneratorOptionName::SnapshotRounds => "SNAPSHOT ROUNDS",
+            LoadGeneratorOptionName::QuickRounds => "QUICK ROUNDS",
+            LoadGeneratorOptionName::ValueSize => "VALUE SIZE",
+            LoadGeneratorOptionName::UpdateRate => "UPDATE RATE",
+            LoadGeneratorOptionName::Seed => "SEED",
+            LoadGeneratorOptionName::Partitions => "PARTITIONS",
+            LoadGeneratorOptionName::BatchSize => "BATCH SIZE",
         })
     }
 }

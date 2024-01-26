@@ -9,8 +9,10 @@
 
 //! Types related to load generator sources
 
+use std::time::Duration;
+
 use mz_ore::now::NowFn;
-use mz_proto::{RustType, TryFromProtoError};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::{ColumnType, GlobalId, RelationDesc, Row, ScalarType};
 use once_cell::sync::Lazy;
@@ -24,6 +26,8 @@ include!(concat!(
     env!("OUT_DIR"),
     "/mz_storage_types.sources.load_generator.rs"
 ));
+
+pub const LOAD_GENERATOR_KEY_VALUE_KEY_NAME: &str = "key";
 
 /// Data and progress events of the native stream.
 pub enum Event<F: IntoIterator, D> {
@@ -52,7 +56,14 @@ impl SourceConnection for LoadGeneratorSourceConnection {
     }
 
     fn key_desc(&self) -> RelationDesc {
-        RelationDesc::empty()
+        if let LoadGenerator::Upsert(_) = &self.load_generator {
+            RelationDesc::empty().with_column(
+                LOAD_GENERATOR_KEY_VALUE_KEY_NAME,
+                ScalarType::UInt64.nullable(false),
+            )
+        } else {
+            RelationDesc::empty()
+        }
     }
 
     fn value_desc(&self) -> RelationDesc {
@@ -85,6 +96,9 @@ impl SourceConnection for LoadGeneratorSourceConnection {
             }
             LoadGenerator::Marketing => RelationDesc::empty(),
             LoadGenerator::Tpch { .. } => RelationDesc::empty(),
+            LoadGenerator::Upsert(_) => RelationDesc::empty()
+                .with_column("partition", ScalarType::UInt64.nullable(false))
+                .with_column("value", ScalarType::Bytes.nullable(false)),
         }
     }
 
@@ -121,6 +135,7 @@ pub enum LoadGenerator {
         count_orders: i64,
         count_clerk: i64,
     },
+    Upsert(UpsertLoadGenerator),
 }
 
 impl LoadGenerator {
@@ -363,6 +378,7 @@ impl LoadGenerator {
                     ),
                 ]
             }
+            LoadGenerator::Upsert(_) => vec![],
         }
     }
 
@@ -376,6 +392,7 @@ impl LoadGenerator {
             LoadGenerator::Marketing => false,
             LoadGenerator::Datums => true,
             LoadGenerator::Tpch { .. } => false,
+            LoadGenerator::Upsert(_) => false,
         }
     }
 }
@@ -416,6 +433,7 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
                     count_clerk: *count_clerk,
                 }),
                 LoadGenerator::Datums => Kind::Datums(()),
+                LoadGenerator::Upsert(u) => Kind::Upsert(u.into_proto()),
             }),
             tick_micros: self.tick_micros,
         }
@@ -447,8 +465,64 @@ impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnect
                     count_clerk,
                 },
                 Kind::Datums(()) => LoadGenerator::Datums,
+                Kind::Upsert(u) => LoadGenerator::Upsert(u.into_rust()?),
             },
             tick_micros: proto.tick_micros,
+        })
+    }
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
+pub struct UpsertLoadGenerator {
+    // The keyspace of the source.
+    pub keys: u64,
+    // The number of rounds to emit values for each key in the snapshot.
+    // This lets users scale the snapshot size independent of the keyspace.
+    pub snapshot_rounds: u64,
+    // The number of rounds to emit values for each key, after the snapshot, before
+    // respecting the `update_rate`.
+    //
+    // This lets us quickly produce updates, as opposed to a single-value per key during
+    // snapshotting.
+    pub quick_rounds: u64,
+    // The number of random bytes for each value.
+    pub value_size: u64,
+    // The number of partitions. The keyspace is spread evenly across the partitions.
+    // This lets users scale the concurrency of the source independently of the replica size.
+    pub partitions: u64,
+    // If provided, the maximum rate at which new batches of updates, per-partition will be
+    // produced after the snapshot.
+    pub update_rate: Option<Duration>,
+    // The number of keys in each update batch.
+    pub batch_size: u64,
+    // A per-source seed.
+    pub seed: u64,
+}
+
+impl RustType<ProtoUpsertLoadGenerator> for UpsertLoadGenerator {
+    fn into_proto(&self) -> ProtoUpsertLoadGenerator {
+        ProtoUpsertLoadGenerator {
+            keys: self.keys,
+            snapshot_rounds: self.snapshot_rounds,
+            quick_rounds: self.quick_rounds,
+            value_size: self.value_size,
+            partitions: self.partitions,
+            update_rate: self.update_rate.as_ref().map(|ur| ur.into_proto()),
+            batch_size: self.batch_size,
+            seed: self.seed,
+        }
+    }
+
+    fn from_proto(proto: ProtoUpsertLoadGenerator) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            keys: proto.keys,
+            snapshot_rounds: proto.snapshot_rounds,
+            quick_rounds: proto.quick_rounds,
+            value_size: proto.value_size,
+            partitions: proto.partitions,
+            update_rate: proto.update_rate.map(|ur| ur.into_rust()).transpose()?,
+            batch_size: proto.batch_size,
+            seed: proto.seed,
         })
     }
 }

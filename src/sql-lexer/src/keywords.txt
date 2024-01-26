@@ -46,6 +46,7 @@ Authority
 Availability
 Avro
 Aws
+Batch
 Begin
 Between
 Bigint
@@ -296,6 +297,7 @@ Over
 Owned
 Owner
 Partition
+Partitions
 Password
 Path
 Physical
@@ -318,9 +320,11 @@ Protocol
 Publication
 Pushdown
 Query
+Quick
 Quote
 Raise
 Range
+Rate
 Raw
 Read
 Real
@@ -353,6 +357,7 @@ Role
 Roles
 Rollback
 Rotate
+Rounds
 Row
 Rows
 Sasl

@@ -84,7 +84,10 @@ use mz_storage_types::sources::envelope::{
     KeyEnvelope, SourceEnvelope, UnplannedSourceEnvelope, UpsertStyle,
 };
 use mz_storage_types::sources::kafka::{KafkaMetadataKind, KafkaSourceConnection};
-use mz_storage_types::sources::load_generator::{LoadGenerator, LoadGeneratorSourceConnection};
+use mz_storage_types::sources::load_generator::{
+    LoadGenerator, LoadGeneratorSourceConnection, UpsertLoadGenerator,
+    LOAD_GENERATOR_KEY_VALUE_KEY_NAME,
+};
 use mz_storage_types::sources::mysql::{
     MySqlSourceConnection, MySqlSourceDetails, ProtoMySqlSourceDetails,
 };
@@ -1079,7 +1082,7 @@ pub fn plan_create_source(
         }
         CreateSourceConnection::LoadGenerator { generator, options } => {
             let (load_generator, available_subsources) =
-                load_generator_ast_to_generator(generator, options)?;
+                load_generator_ast_to_generator(scx, generator, options)?;
             let available_subsources = available_subsources
                 .map(|a| BTreeMap::from_iter(a.into_iter().map(|(k, v)| (k, v.0))));
 
@@ -1224,10 +1227,24 @@ pub fn plan_create_source(
             });
             (key_desc, value_desc)
         }
-        None => (None, external_connection.value_desc()),
+        None => (
+            // `UPSERT` load generators do not have an encoding so must be special-cased.
+            if let GenericSourceConnection::LoadGenerator(
+                lg @ LoadGeneratorSourceConnection {
+                    load_generator: LoadGenerator::Upsert(_),
+                    ..
+                },
+            ) = &external_connection
+            {
+                Some(lg.key_desc())
+            } else {
+                None
+            },
+            external_connection.value_desc(),
+        ),
     };
 
-    let mut key_envelope = get_key_envelope(include_metadata, encoding.as_ref())?;
+    let key_envelope = get_key_envelope(include_metadata, encoding.as_ref())?;
 
     match (&envelope, &key_envelope) {
         (ast::SourceEnvelope::Debezium, KeyEnvelope::None) => {}
@@ -1245,6 +1262,17 @@ pub fn plan_create_source(
     // compatible in typechecking
     //
     // TODO: remove bails as more support for upsert is added.
+
+    let envelope = if let GenericSourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
+        load_generator: LoadGenerator::Upsert(_),
+        ..
+    }) = &external_connection
+    {
+        ast::SourceEnvelope::Upsert
+    } else {
+        envelope
+    };
+
     let envelope = match &envelope {
         // TODO: fixup key envelope
         ast::SourceEnvelope::None => UnplannedSourceEnvelope::None(key_envelope),
@@ -1265,17 +1293,33 @@ pub fn plan_create_source(
             }
         }
         ast::SourceEnvelope::Upsert => {
-            let key_encoding = match encoding.as_ref().and_then(|e| e.key.as_ref()) {
-                None => {
-                    bail_unsupported!(format!("upsert requires a key/value format: {:?}", format))
-                }
-                Some(key_encoding) => key_encoding,
-            };
             // `ENVELOPE UPSERT` implies `INCLUDE KEY`, if it is not explicitly
             // specified.
-            if key_envelope == KeyEnvelope::None {
-                key_envelope = get_unnamed_key_envelope(key_encoding)?;
-            }
+            let key_envelope =
+                // `UPSERT` load generators do not have an encoding so must be special-cased.
+                if let GenericSourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
+                    load_generator: LoadGenerator::Upsert(_),
+                    ..
+                }) = &external_connection
+                {
+                    KeyEnvelope::Named(LOAD_GENERATOR_KEY_VALUE_KEY_NAME.to_string())
+                } else {
+                    let key_encoding = match encoding.as_ref().and_then(|e| e.key.as_ref()) {
+                        None => {
+                            bail_unsupported!(format!(
+                                "upsert requires a key/value format: {:?}",
+                                format
+                            ))
+                        }
+                        Some(key_encoding) => key_encoding,
+                    };
+                    if key_envelope == KeyEnvelope::None {
+                        get_unnamed_key_envelope(key_encoding)?
+                    } else {
+                        key_envelope
+                    }
+                };
+
             UnplannedSourceEnvelope::Upsert {
                 style: UpsertStyle::Default(key_envelope),
             }
@@ -1617,7 +1661,15 @@ generate_extracted_config!(
     LoadGeneratorOption,
     (TickInterval, Duration),
     (ScaleFactor, f64),
-    (MaxCardinality, u64)
+    (MaxCardinality, u64),
+    (Keys, u64),
+    (SnapshotRounds, u64),
+    (QuickRounds, u64),
+    (ValueSize, u64),
+    (UpdateRate, Duration),
+    (Seed, u64),
+    (Partitions, u64),
+    (BatchSize, u64)
 );
 
 impl LoadGeneratorOptionExtracted {
@@ -1635,6 +1687,16 @@ impl LoadGeneratorOptionExtracted {
             ast::LoadGenerator::Marketing => &[TickInterval],
             ast::LoadGenerator::Datums => &[TickInterval],
             ast::LoadGenerator::Tpch => &[TickInterval, ScaleFactor],
+            ast::LoadGenerator::Upsert => &[
+                Keys,
+                SnapshotRounds,
+                QuickRounds,
+                ValueSize,
+                UpdateRate,
+                Seed,
+                Partitions,
+                BatchSize,
+            ],
         };
 
         for o in permitted_options {
@@ -1654,6 +1716,7 @@ impl LoadGeneratorOptionExtracted {
 }
 
 pub(crate) fn load_generator_ast_to_generator(
+    scx: &StatementContext,
     loadgen: &ast::LoadGenerator,
     options: &[LoadGeneratorOption<Aug>],
 ) -> Result<
@@ -1711,6 +1774,55 @@ pub(crate) fn load_generator_ast_to_generator(
                 count_clerk,
             }
         }
+        mz_sql_parser::ast::LoadGenerator::Upsert => {
+            scx.require_feature_flag(&vars::ENABLE_LOAD_GENERATOR_UPSERT)?;
+            let LoadGeneratorOptionExtracted {
+                keys,
+                snapshot_rounds,
+                quick_rounds,
+                value_size,
+                update_rate,
+                seed,
+                partitions,
+                batch_size,
+                ..
+            } = options.to_vec().try_into()?;
+
+            let lgu = UpsertLoadGenerator {
+                keys: keys.ok_or_else(|| sql_err!("LOADGEN UPSERT requires KEYS"))?,
+                snapshot_rounds: snapshot_rounds
+                    .ok_or_else(|| sql_err!("LOADGEN UPSERT requires SNAPSHOT ROUNDS"))?,
+                quick_rounds: quick_rounds.unwrap_or(0),
+                value_size: value_size
+                    .ok_or_else(|| sql_err!("LOADGEN UPSERT requires VALUE SIZE"))?,
+                partitions: partitions
+                    .ok_or_else(|| sql_err!("LOADGEN UPSERT requires PARTITIONS"))?,
+                update_rate,
+                batch_size: batch_size
+                    .ok_or_else(|| sql_err!("LOADGEN UPSERT requires BATCH SIZE"))?,
+                seed: seed.ok_or_else(|| sql_err!("LOADGEN UPSERT requires SEED"))?,
+            };
+
+            if lgu.keys == 0 || lgu.partitions == 0 || lgu.value_size == 0 || lgu.batch_size == 0 {
+                sql_bail!("LOAD GENERATOR UPSERT options must be non-zero")
+            }
+
+            if lgu.keys % lgu.partitions != 0 {
+                sql_bail!("KEYS must be a multiple of PARTITIONS")
+            }
+
+            if lgu.batch_size > lgu.keys {
+                sql_bail!("KEYS must be larger than BATCH SIZE")
+            }
+
+            // This constraints simplifies the source implementation.
+            // We can lift it later.
+            if (lgu.keys / lgu.partitions) % lgu.batch_size != 0 {
+                sql_bail!("PARTITIONS * BATCH SIZE must be a divisor of KEYS")
+            }
+
+            LoadGenerator::Upsert(lgu)
+        }
     };
 
     let mut available_subsources = BTreeMap::new();
@@ -1723,6 +1835,7 @@ pub(crate) fn load_generator_ast_to_generator(
                 LoadGenerator::Auction => "auction".into(),
                 LoadGenerator::Datums => "datums".into(),
                 LoadGenerator::Tpch { .. } => "tpch".into(),
+                LoadGenerator::Upsert { .. } => "upsert".into(),
                 // Please use `snake_case` for any multi-word load generators
                 // that you add.
             },

@@ -3087,13 +3087,14 @@ impl<'a> Parser<'a> {
             LOAD => {
                 self.expect_keyword(GENERATOR)?;
                 let generator = match self
-                    .expect_one_of_keywords(&[COUNTER, MARKETING, AUCTION, TPCH, DATUMS])?
+                    .expect_one_of_keywords(&[COUNTER, MARKETING, AUCTION, TPCH, DATUMS, UPSERT])?
                 {
                     COUNTER => LoadGenerator::Counter,
                     AUCTION => LoadGenerator::Auction,
                     TPCH => LoadGenerator::Tpch,
                     DATUMS => LoadGenerator::Datums,
                     MARKETING => LoadGenerator::Marketing,
+                    UPSERT => LoadGenerator::Upsert,
                     _ => unreachable!(),
                 };
                 let options = if self.consume_token(&Token::LParen) {
@@ -3196,7 +3197,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_load_generator_option(&mut self) -> Result<LoadGeneratorOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[SCALE, TICK, MAX])? {
+        let name = match self.expect_one_of_keywords(&[
+            SCALE, TICK, MAX, KEYS, SNAPSHOT, QUICK, VALUE, UPDATE, SEED, PARTITIONS, BATCH,
+        ])? {
             SCALE => {
                 self.expect_keyword(FACTOR)?;
                 LoadGeneratorOptionName::ScaleFactor
@@ -3208,6 +3211,29 @@ impl<'a> Parser<'a> {
             MAX => {
                 self.expect_keyword(CARDINALITY)?;
                 LoadGeneratorOptionName::MaxCardinality
+            }
+            KEYS => LoadGeneratorOptionName::Keys,
+            SNAPSHOT => {
+                self.expect_keyword(ROUNDS)?;
+                LoadGeneratorOptionName::SnapshotRounds
+            }
+            QUICK => {
+                self.expect_keyword(ROUNDS)?;
+                LoadGeneratorOptionName::QuickRounds
+            }
+            VALUE => {
+                self.expect_keyword(SIZE)?;
+                LoadGeneratorOptionName::ValueSize
+            }
+            UPDATE => {
+                self.expect_keyword(RATE)?;
+                LoadGeneratorOptionName::UpdateRate
+            }
+            SEED => LoadGeneratorOptionName::Seed,
+            PARTITIONS => LoadGeneratorOptionName::Partitions,
+            BATCH => {
+                self.expect_keyword(SIZE)?;
+                LoadGeneratorOptionName::BatchSize
             }
             _ => unreachable!(),
         };

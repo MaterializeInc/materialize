@@ -203,7 +203,7 @@ where
     let (decoded_stream, decode_health) = match encoding {
         None => (
             ok_source.map(|r| DecodeResult {
-                key: None,
+                key: Some(Ok(r.key)),
                 value: Some(Ok(r.value)),
                 metadata: Row::default(),
                 from_time: r.from_time,

@@ -2376,6 +2376,13 @@ CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("lg")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Counter, options: [] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
 
 parse-statement
+CREATE SOURCE lg FROM LOAD GENERATOR UPSERT (KEYS 1, PARTITIONS 2, UPDATE RATE '1m', BATCH SIZE 100, SEED 200, VALUE SIZE 150, SNAPSHOT ROUNDS 3, QUICK ROUNDS 4)
+----
+CREATE SOURCE lg FROM LOAD GENERATOR UPSERT (KEYS = 1, PARTITIONS = 2, UPDATE RATE = '1m', BATCH SIZE = 100, SEED = 200, VALUE SIZE = 150, SNAPSHOT ROUNDS = 3, QUICK ROUNDS = 4)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("lg")]), in_cluster: None, col_names: [], connection: LoadGenerator { generator: Upsert, options: [LoadGeneratorOption { name: Keys, value: Some(Value(Number("1"))) }, LoadGeneratorOption { name: Partitions, value: Some(Value(Number("2"))) }, LoadGeneratorOption { name: UpdateRate, value: Some(Value(String("1m"))) }, LoadGeneratorOption { name: BatchSize, value: Some(Value(Number("100"))) }, LoadGeneratorOption { name: Seed, value: Some(Value(Number("200"))) }, LoadGeneratorOption { name: ValueSize, value: Some(Value(Number("150"))) }, LoadGeneratorOption { name: SnapshotRounds, value: Some(Value(Number("3"))) }, LoadGeneratorOption { name: QuickRounds, value: Some(Value(Number("4"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], referenced_subsources: None, progress_subsource: None })
+
+parse-statement
 CREATE SOURCE lg FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1s', SCALE FACTOR 1, MAX CARDINALITY 100)
 ----
 CREATE SOURCE lg FROM LOAD GENERATOR COUNTER (TICK INTERVAL = '1s', SCALE FACTOR = 1, MAX CARDINALITY = 100)

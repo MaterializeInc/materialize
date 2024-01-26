@@ -258,7 +258,7 @@ fn source_render_operator<G, C>(
     scope: &mut G,
     config: RawSourceCreationConfig,
     source_connection: C,
-    resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
+    resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + Send + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,

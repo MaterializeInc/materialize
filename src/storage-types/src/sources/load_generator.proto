@@ -11,6 +11,8 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
+import "proto/src/proto.proto";
+
 package mz_storage_types.sources.load_generator;
 
 message ProtoLoadGeneratorSourceConnection {
@@ -21,6 +23,7 @@ message ProtoLoadGeneratorSourceConnection {
         ProtoTpchLoadGenerator tpch = 4;
         google.protobuf.Empty datums = 5;
         google.protobuf.Empty marketing = 7;
+        ProtoUpsertLoadGenerator upsert = 8;
     }
     optional uint64 tick_micros = 2;
 }
@@ -35,4 +38,15 @@ message ProtoTpchLoadGenerator {
     int64 count_customer = 3;
     int64 count_orders = 4;
     int64 count_clerk = 5;
+}
+
+message ProtoUpsertLoadGenerator {
+    uint64 keys = 1;
+    uint64 snapshot_rounds = 2;
+    uint64 quick_rounds = 3;
+    uint64 value_size= 4;
+    uint64 partitions = 5;
+    optional mz_proto.ProtoDuration update_rate = 6;
+    uint64 batch_size = 7;
+    uint64 seed = 8;
 }

@@ -1139,7 +1139,7 @@ async fn purify_create_source(
             let scx = StatementContext::new(None, &catalog);
 
             let (_load_generator, available_subsources) =
-                load_generator_ast_to_generator(generator, options)?;
+                load_generator_ast_to_generator(&scx, generator, options)?;
 
             let mut targeted_subsources = vec![];
 

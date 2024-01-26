@@ -12,9 +12,9 @@ use std::time::Duration;
 
 use differential_dataflow::{AsCollection, Collection};
 use futures::StreamExt;
-use mz_repr::{Diff, Row};
+use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::sources::load_generator::{
-    Event, Generator, LoadGenerator, LoadGeneratorSourceConnection,
+    Event, Generator, LoadGenerator, LoadGeneratorSourceConnection, UpsertLoadGenerator,
 };
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
@@ -31,6 +31,7 @@ mod counter;
 mod datums;
 mod marketing;
 mod tpch;
+mod upsert;
 
 pub use auction::Auction;
 pub use counter::Counter;
@@ -63,6 +64,7 @@ pub fn as_generator(g: &LoadGenerator, tick_micros: Option<u64>) -> Box<dyn Gene
             // completely.
             tick: Duration::from_micros(tick_micros.unwrap_or(0)),
         }),
+        LoadGenerator::Upsert(UpsertLoadGenerator { .. }) => panic!("not a basic generator"),
     }
 }
 
@@ -76,7 +78,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
         scope: &mut G,
         config: RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
-        _start_signal: impl std::future::Future<Output = ()> + 'static,
+        start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
@@ -84,6 +86,12 @@ impl SourceRender for LoadGeneratorSourceConnection {
         Stream<G, ProgressStatisticsUpdate>,
         Vec<PressOnDropButton>,
     ) {
+        // Currently `UPSERT` loadgen renders its own operator, and is not a single-worker
+        // basic generator like the rest.
+        if let LoadGenerator::Upsert(upsert) = self.load_generator.clone() {
+            return upsert::render(upsert, scope, config, resume_uppers, start_signal);
+        }
+
         let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
         let (mut data_output, stream) = builder.new_output();
@@ -139,7 +147,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
                         let message = (
                             output,
                             Ok(SourceMessage {
-                                key: Row::default(),
+                                key: Row::pack_slice(&[Datum::UInt64(1)]),
                                 value,
                                 metadata: Row::default(),
                             }),
