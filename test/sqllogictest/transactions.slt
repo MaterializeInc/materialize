@@ -278,7 +278,7 @@ SELECT 1;
 SELECT * FROM t;
 ----
 db error: ERROR: querying the following items "materialize.public.t" is not allowed from the "mz_introspection" cluster
-HINT: Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query.
+DETAIL: The transaction is executing on the mz_introspection cluster, maybe having been routed there by the first statement in the transaction.
 
 statement ok
 CREATE SCHEMA other

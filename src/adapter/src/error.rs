@@ -14,6 +14,7 @@ use std::num::TryFromIntError;
 
 use dec::TryFromDecimalError;
 use itertools::Itertools;
+use mz_catalog::builtin::MZ_INTROSPECTION_CLUSTER;
 use mz_compute_client::controller::error as compute_error;
 use mz_expr::EvalError;
 use mz_ore::error::ErrorExt;
@@ -302,6 +303,9 @@ impl AdapterError {
                     earliest_possible,
                 ))
             }
+            AdapterError::UnallowedOnCluster { cluster, .. } => (cluster == MZ_INTROSPECTION_CLUSTER.name).then(||
+                format!("The transaction is executing on the {cluster} cluster, maybe having been routed there by the first statement in the transaction.")
+            ),
             _ => None,
         }
     }
@@ -350,10 +354,12 @@ impl AdapterError {
                     .into(),
             ),
             AdapterError::PlanError(e) => e.hint(),
-            AdapterError::UnallowedOnCluster { .. } => Some(
-                "Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query."
-                    .into(),
-            ),
+            AdapterError::UnallowedOnCluster { cluster, .. } => {
+                (cluster != MZ_INTROSPECTION_CLUSTER.name).then(||
+                    "Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query."
+                    .to_string()
+                )
+            }
             AdapterError::InvalidAlter(_, e) => e.hint(),
             AdapterError::Optimizer(e) => e.hint(),
             AdapterError::ConnectionValidation(e) => e.hint(),

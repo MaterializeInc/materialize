@@ -480,7 +480,7 @@ CREATE TABLE bar ( key text, val bigint );
 statement ok
 SET CLUSTER TO mz_introspection;
 
-statement error querying the following items "materialize\.public\.bar" is not allowed from the "mz_introspection" cluster\nHINT: Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query.
+statement error db error: ERROR: querying the following items "materialize\.public\.bar" is not allowed from the "mz_introspection" cluster
 SELECT key FROM bar;
 
 # But inspecting those objects, e.g. checking what indexes exist, should be allowed.
