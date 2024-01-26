@@ -859,6 +859,8 @@ where
 
         self.stats.update_bytes_indexed_by(stats.size_diff);
         self.stats.update_records_indexed_by(stats.values_diff);
+        self.stats
+            .update_envelope_state_tombstones_by(stats.tombstones_diff);
 
         Ok(())
     }
