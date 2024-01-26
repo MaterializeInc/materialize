@@ -3142,7 +3142,7 @@ dependencies = [
 [[package]]
 name = "librocksdb-sys"
 version = "0.11.0+8.3.2"
-source = "git+https://github.com/MaterializeInc/rust-rocksdb?branch=master#3305d514d509c6b95b0c925c78157e5e4ae4b7ba"
+source = "git+https://github.com/MaterializeInc/rust-rocksdb?branch=master#ab3684f999a5586d7a5e94bd65defd78af15d40f"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -3151,6 +3151,7 @@ dependencies = [
  "libc",
  "libz-sys",
  "lz4-sys",
+ "rustflags",
  "zstd-sys",
 ]
 
@@ -7647,7 +7648,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.21.0"
-source = "git+https://github.com/MaterializeInc/rust-rocksdb?branch=master#3305d514d509c6b95b0c925c78157e5e4ae4b7ba"
+source = "git+https://github.com/MaterializeInc/rust-rocksdb?branch=master#ab3684f999a5586d7a5e94bd65defd78af15d40f"
 dependencies = [
  "libc",
  "librocksdb-sys",
@@ -7704,6 +7705,12 @@ checksum = "bfa0f585226d2e68097d4f95d113b15b83a82e819ab25717ec0590d9584ef366"
 dependencies = [
  "semver",
 ]
+
+[[package]]
+name = "rustflags"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e74f1ec0cda1aea3a3a6c0df066cd67acac62e24064532b871e8eafb0ec6c126"
 
 [[package]]
 name = "rustix"
