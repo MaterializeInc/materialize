@@ -210,7 +210,7 @@ where
                 // Note that not all instances of `PartitionedComputeState` are guaranteed to
                 // observe this command, so we shouldn't rely on it for correctness.
                 if let Some(max_result_size) = config.max_result_size {
-                    self.max_result_size = max_result_size;
+                    self.max_result_size = u64::cast_from(max_result_size);
                 }
             }
             _ => {
