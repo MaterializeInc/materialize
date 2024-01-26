@@ -29,7 +29,6 @@ use tracing::{event, warn, Level};
 use crate::command::ExecuteResponse;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{self, PeekDataflowPlan, PlannedPeek};
-use crate::coord::read_policy::ReadHolds;
 use crate::coord::sequencer::inner::{check_log_reads, return_if_err};
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{
@@ -1030,38 +1029,31 @@ impl Coordinator {
                 }
             };
 
-        // If we're in a multi-statement transaction and the query does not use `AS OF`,
-        // acquire read holds on any sources in the current time-domain if they have not
-        // already been acquired. If the query does use `AS OF`, it is not necessary to
-        // acquire read holds.
-        if in_immediate_multi_stmt_txn {
-            // Either set the valid read ids for this transaction (if it's the first statement in a
-            // transaction) otherwise verify the ids referenced in this query are in the timedomain.
-            if let Some(txn_reads) = self.txn_read_holds.get(session.conn_id()) {
-                // Find referenced ids not in the read hold. A reference could be caused by a
-                // user specifying an object in a different schema than the first query. An
-                // index could be caused by a CREATE INDEX after the transaction started.
-                let allowed_id_bundle = txn_reads.id_bundle();
-                let outside = source_bundle.difference(&allowed_id_bundle);
-                // Queries without a timestamp and timeline can belong to any existing timedomain.
-                if determination.timestamp_context.contains_timestamp() && !outside.is_empty() {
-                    let valid_names =
-                        self.resolve_collection_id_bundle_names(session, &allowed_id_bundle);
-                    let invalid_names = self.resolve_collection_id_bundle_names(session, &outside);
-                    return Err(AdapterError::RelationOutsideTimeDomain {
-                        relations: invalid_names,
-                        names: valid_names,
-                    });
-                }
-            } else {
-                if let Some((timestamp, bundle)) = potential_read_holds {
-                    let read_holds = self.acquire_read_holds(timestamp, bundle);
-                    self.txn_read_holds
-                        .entry(session.conn_id().clone())
-                        .or_insert_with(ReadHolds::new)
-                        .extend(read_holds);
-                }
+        // Always either verify the current statement ids are within the existing
+        // transaction's read hold set (timedomain), or create the read holds if this is the
+        // first statement in a transaction (or this is a single statement transaction).
+        // This must happen even if this is an `AS OF` query as well. There are steps after
+        // this that happen off thread, so no matter the kind of statement or transaction,
+        // we must acquire read holds here so they are held until the off-thread work
+        // returns to the coordinator.
+        if let Some(txn_reads) = self.txn_read_holds.get(session.conn_id()) {
+            // Find referenced ids not in the read hold. A reference could be caused by a
+            // user specifying an object in a different schema than the first query. An
+            // index could be caused by a CREATE INDEX after the transaction started.
+            let allowed_id_bundle = txn_reads.id_bundle();
+            let outside = source_bundle.difference(&allowed_id_bundle);
+            // Queries without a timestamp and timeline can belong to any existing timedomain.
+            if determination.timestamp_context.contains_timestamp() && !outside.is_empty() {
+                let valid_names =
+                    self.resolve_collection_id_bundle_names(session, &allowed_id_bundle);
+                let invalid_names = self.resolve_collection_id_bundle_names(session, &outside);
+                return Err(AdapterError::RelationOutsideTimeDomain {
+                    relations: invalid_names,
+                    names: valid_names,
+                });
             }
+        } else if let Some((timestamp, bundle)) = potential_read_holds {
+            self.acquire_read_holds_auto_cleanup(session, timestamp, bundle);
         }
 
         // TODO: Checking for only `InTransaction` and not `Implied` (also `Started`?) seems
