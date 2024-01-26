@@ -113,3 +113,33 @@ INSERT INTO t VALUES (1) RETURNING 0;
 COMMIT;
 ----
 db error: ERROR: INSERT INTO t VALUES (1) RETURNING 0 cannot be run inside a transaction block
+
+# Regression for non-constant VALUES
+# VALUES cannot contain a query that references a table.
+simple
+ROLLBACK;
+BEGIN;
+INSERT INTO t1 VALUES((SELECT x FROM t1 LIMIT 1));
+COMMIT;
+----
+db error: ERROR: INSERT INTO t1 VALUES ((SELECT x FROM t1 LIMIT 1)) cannot be run inside a transaction block
+
+# VALUES can contain a subselect with no table references.
+simple
+ROLLBACK;
+BEGIN;
+INSERT INTO t1 VALUES((SELECT 1));
+COMMIT;
+----
+COMPLETE 0
+COMPLETE 0
+COMPLETE 1
+COMPLETE 0
+
+# Make sure we can't trick the constant checker with things like an ORDER BY.
+simple
+BEGIN;
+INSERT INTO t1 VALUES((SELECT 1 ORDER BY (SELECT x FROM t1 LIMIT 1)));
+COMMIT;
+----
+db error: ERROR: INSERT INTO t1 VALUES ((SELECT 1 ORDER BY (SELECT x FROM t1 LIMIT 1))) cannot be run inside a transaction block
