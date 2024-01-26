@@ -101,7 +101,10 @@ Implications:
   since handles, where before it was only `num_collection` handles.
 - More load on persist pubsub.
 - One could argue there would be more latency in learning about a new upper,
-  but I don't even think that's a valid concern.
+  but I don't think that's a valid concern: persist pubsub has so far proven to
+  be low latency in practice. And there's motivation to invest into fixing
+  issues with persist pubsub because it is used in all places where persist
+  shards are being read.
 
 ## TablesController
 
