@@ -33,6 +33,7 @@ from materialize.scalability.workload import (
 )
 from materialize.scalability.workload_markers import (
     ConnectionWorkload,
+    DdlWorkload,
     DmlDqlWorkload,
 )
 
@@ -92,7 +93,7 @@ class EstablishConnectionWorkload(WorkloadWithContext, ConnectionWorkload):
         return [OperationChainWithDataExchange([Connect(), SelectOne(), Disconnect()])]
 
 
-class CreateAndDropTableWorkload(WorkloadWithContext):
+class CreateAndDropTableWorkload(WorkloadWithContext, DdlWorkload):
     def amend_data_before_execution(self, data: OperationData) -> None:
         data.push("table_seed", data.get("worker_id"))
 
@@ -104,7 +105,7 @@ class CreateAndDropTableWorkload(WorkloadWithContext):
         ]
 
 
-class CreateAndDropTableWithMvWorkload(WorkloadWithContext):
+class CreateAndDropTableWithMvWorkload(WorkloadWithContext, DdlWorkload):
     def amend_data_before_execution(self, data: OperationData) -> None:
         data.push("table_seed", data.get("worker_id"))
 
