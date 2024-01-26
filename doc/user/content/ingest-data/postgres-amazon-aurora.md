@@ -188,7 +188,12 @@ Now that you've configured your database network and created an ingestion cluste
       );
     ```
 
-    - Replace `<host>` with your RDS endpoint. To find your RDS endpoint, select your database in the RDS Console, and look under **Connectivity & security**.
+    - Replace `<host>` with the **Writer** endpoint for your Aurora database. To find your endpoint, select your database in the RDS Console, select the **Connectivity & security** tab, and look for the endpoint with type **Writer**.
+
+        <div class="warning">
+            <strong class="gutter">WARNING!</strong>
+            You must use the <strong>Writer</strong> endpoint for the database. Using a <strong>Reader</strong> endpoint will not work.
+        </div>
 
     - Replace `<database>` with the name of the database containing the tables you want to replicate to Materialize.
 
