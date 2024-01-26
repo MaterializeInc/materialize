@@ -131,7 +131,21 @@ For Milestone 3, full physical use-case isolation, we also need #2.
 
 ## Alternatives
 
-TBD!
+### Centralized StorageController and RPC
+
+We can keep a centralized StorageController that runs as a singleton in one
+process. Whenever other processes want to, for example, acquire or release read
+holds they have to talk to this process via RPC.
+
+Arguments against this alternative:
+
+- We need to worry about processes timing out and then, for example, not
+  releasing read holds.
+- We would introduce a special-case RPC protocol and a new service while we
+  already have persist pub sub as a general purpose fabric that works for our
+  purposes.
+- Using `SinceHandles` (and other resources) for each cluster makes it clearer
+  who is holding on to things.
 
 ## Open questions
 
