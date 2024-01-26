@@ -83,7 +83,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "persist_pubsub_push_diff_enabled": "true",
     "persist_sink_minimum_batch_updates": "128",
     "persist_stats_audit_percent": "100",
-    "persist_txn_tables": "eager",
+    "persist_txn_tables": "lazy",
     "statement_logging_default_sample_rate": "0.01",
     "statement_logging_max_sample_rate": "0.01",
     "storage_persist_sink_minimum_batch_updates": "100",
