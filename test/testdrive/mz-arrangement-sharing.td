@@ -778,3 +778,6 @@ CREATE CLUSTER REPLICA arrangement_sharing.replica SIZE = '2', INTROSPECTION DEB
 "Arrange Timely(MessagesSent)"
 "Arrange Timely(Operates)"
 "Arrange Timely(Parks)"
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET log_filter = 'info'
