@@ -83,8 +83,8 @@ steps:
                - --other-tag
                # common-ancestor will default to latest if not in a PR
                - common-ancestor
-    - id: scalability-benchmark
-      label: "Scalability benchmark against merge base or 'latest'"
+    - id: scalability-benchmark-dml-dql
+      label: "Scalability benchmark (read & write) against merge base or 'latest'"
       timeout_in_minutes: 180
       agents:
         queue: linux-aarch64
@@ -99,8 +99,32 @@ steps:
               - common-ancestor
               - --regression-against
               - common-ancestor
+              - --workload-group-marker
+              - "DmlDqlWorkload"
               - --max-concurrency
               - "256"
+    - id: scalability-benchmark-connection
+      label: "Scalability benchmark (connection) against merge base or 'latest'"
+      timeout_in_minutes: 180
+      agents:
+        queue: linux-aarch64-large
+      artifact_paths: junit_*.xml
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: scalability
+            args:
+              - --target
+              - HEAD
+              - --target
+              - common-ancestor
+              - --regression-against
+              - common-ancestor
+              - --workload-group-marker
+              - "ConnectionWorkload"
+              - --exponent-base
+              - "2.5"
+              - --max-concurrency
+              - "2048"
 
   - group: Kafka
     key: kafka

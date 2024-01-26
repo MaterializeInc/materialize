@@ -22,55 +22,61 @@ from materialize.scalability.operations import (
     SelectUnionAll,
     Update,
 )
-from materialize.scalability.workload import Workload, WorkloadWithContext
+from materialize.scalability.workload import (
+    WorkloadWithContext,
+)
+from materialize.scalability.workload_markers import (
+    ConnectionWorkload,
+    DmlDqlWorkload,
+)
 
 
-class InsertWorkload(Workload):
+class InsertWorkload(DmlDqlWorkload):
     def operations(self) -> list["Operation"]:
         return [InsertDefaultValues()]
 
 
-class SelectOneWorkload(Workload):
+class SelectOneWorkload(DmlDqlWorkload):
     def operations(self) -> list["Operation"]:
         return [SelectOne()]
 
 
-class SelectStarWorkload(Workload):
+class SelectStarWorkload(DmlDqlWorkload):
     def operations(self) -> list["Operation"]:
         return [SelectStar()]
 
 
-class SelectLimitWorkload(Workload):
+class SelectLimitWorkload(DmlDqlWorkload):
     def operations(self) -> list["Operation"]:
         return [SelectLimit()]
 
 
-class SelectCountWorkload(Workload):
+class SelectCountWorkload(DmlDqlWorkload):
     def operations(self) -> list["Operation"]:
         return [SelectCount()]
 
 
-class SelectUnionAllWorkload(Workload):
+class SelectUnionAllWorkload(DmlDqlWorkload):
     def operations(self) -> list["Operation"]:
         return [SelectUnionAll()]
 
 
-class InsertAndSelectCountInMvWorkload(Workload):
+class InsertAndSelectCountInMvWorkload(DmlDqlWorkload):
     def operations(self) -> list["Operation"]:
         return [InsertDefaultValues(), SelectCountInMv()]
 
 
-class InsertAndSelectLimitWorkload(Workload):
+class InsertAndSelectLimitWorkload(DmlDqlWorkload):
     def operations(self) -> list["Operation"]:
         return [InsertDefaultValues(), SelectLimit()]
 
 
-class UpdateWorkload(Workload):
+class UpdateWorkload(DmlDqlWorkload):
     def operations(self) -> list["Operation"]:
         return [Update()]
 
 
-class EstablishConnectionWorkload(WorkloadWithContext):
+class EstablishConnectionWorkload(WorkloadWithContext, ConnectionWorkload):
     def amend_data_before_execution(self, data: OperationData) -> None:
         data.push("endpoint", self.endpoint)
         data.push("schema", self.schema)
