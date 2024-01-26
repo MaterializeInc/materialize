@@ -61,16 +61,9 @@
 //! Note also that after snapshot consolidation, additional space may be used if `StateValue` is
 //! used.
 //!
-//! Allow usage of `std::collections::HashMap`.
-//! We need to iterate through all the values in the map, so we can't use `mz_ore` wrapper.
-//! Also, we don't need any ordering for the values fetched, so using std HashMap.
-#![allow(clippy::disallowed_types)]
 
-use std::collections::hash_map::Drain;
-use std::collections::HashMap;
 use std::fmt;
 use std::num::Wrapping;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -78,12 +71,8 @@ use bincode::Options;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_ore::metrics::DeleteOnDropGauge;
-use mz_rocksdb::RocksDBConfig;
-use prometheus::core::AtomicU64;
 
 use crate::metrics::upsert::{UpsertMetrics, UpsertSharedMetrics};
-use crate::render::upsert::rocksdb::RocksDB;
 use crate::render::upsert::{UpsertKey, UpsertValue};
 use crate::statistics::SourceStatistics;
 
@@ -438,223 +427,6 @@ pub trait UpsertStateBackend {
     where
         G: IntoIterator<Item = UpsertKey>,
         R: IntoIterator<Item = &'r mut UpsertValueAndSize>;
-}
-
-/// A `HashMap` tracking its total size
-pub struct InMemoryHashMap {
-    state: HashMap<UpsertKey, StateValue>,
-    total_size: i64,
-}
-
-impl InMemoryHashMap {
-    /// Drain the map, returning the last total size as well.
-    fn drain(&mut self) -> (i64, Drain<'_, UpsertKey, StateValue>) {
-        let last_size = self.total_size;
-        self.total_size = 0;
-
-        (last_size, self.state.drain())
-    }
-
-    /// Get the current size of the map. Note that after `drain`-ing, this is 0.
-    fn current_size(&self) -> i64 {
-        self.total_size
-    }
-}
-
-impl Default for InMemoryHashMap {
-    fn default() -> Self {
-        Self {
-            state: HashMap::new(),
-            total_size: 0,
-        }
-    }
-}
-
-#[async_trait::async_trait(?Send)]
-impl UpsertStateBackend for InMemoryHashMap {
-    async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
-    where
-        P: IntoIterator<Item = (UpsertKey, PutValue<StateValue>)>,
-    {
-        let mut stats = PutStats::default();
-        for (key, p_value) in puts {
-            stats.processed_puts += 1;
-            match p_value.value {
-                Some(value) => {
-                    let size: i64 = value.memory_size().try_into().expect("less than i64 size");
-                    match p_value.previous_persisted_size {
-                        Some(previous_size) => {
-                            stats.size_diff -= previous_size;
-                            stats.size_diff += size;
-                            stats.updates += 1;
-                        }
-                        None => {
-                            stats.values_diff += 1;
-                            stats.size_diff += size;
-                            stats.inserts += 1;
-                        }
-                    }
-                    self.state.insert(key, value);
-                }
-                None => {
-                    if let Some(previous_size) = p_value.previous_persisted_size {
-                        stats.size_diff -= previous_size;
-                        stats.values_diff -= 1;
-                        stats.deletes += 1;
-                    }
-                    self.state.remove(&key);
-                }
-            }
-        }
-        self.total_size += stats.size_diff;
-        Ok(stats)
-    }
-
-    async fn multi_get<'r, G, R>(
-        &mut self,
-        gets: G,
-        results_out: R,
-    ) -> Result<GetStats, anyhow::Error>
-    where
-        G: IntoIterator<Item = UpsertKey>,
-        R: IntoIterator<Item = &'r mut UpsertValueAndSize>,
-    {
-        let mut stats = GetStats::default();
-        for (key, result_out) in gets.into_iter().zip_eq(results_out) {
-            stats.processed_gets += 1;
-            let value = self.state.get(&key).cloned();
-            let size = value.as_ref().map(|v| v.memory_size());
-            stats.processed_gets_size += size.unwrap_or(0);
-            stats.returned_gets += size.map(|_| 1).unwrap_or(0);
-            *result_out = UpsertValueAndSize { value, size };
-        }
-        Ok(stats)
-    }
-}
-
-pub enum BackendType {
-    InMemory(InMemoryHashMap),
-    RocksDb(RocksDB),
-}
-/// Params required to create rocksdb instance
-pub(crate) struct RocksDBParams {
-    pub(crate) instance_path: PathBuf,
-    pub(crate) legacy_instance_path: PathBuf,
-    pub(crate) env: rocksdb::Env,
-    pub(crate) tuning_config: RocksDBConfig,
-    pub(crate) shared_metrics: Arc<mz_rocksdb::RocksDBSharedMetrics>,
-    pub(crate) instance_metrics: Arc<mz_rocksdb::RocksDBInstanceMetrics>,
-}
-
-pub struct AutoSpillBackend {
-    backend_type: BackendType,
-    rockdsdb_params: RocksDBParams,
-    auto_spill_threshold_bytes: usize,
-    rocksdb_autospill_in_use: Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
-}
-
-impl AutoSpillBackend {
-    pub(crate) fn new(
-        rockdsdb_params: RocksDBParams,
-        auto_spill_threshold_bytes: usize,
-        rocksdb_autospill_in_use: Arc<DeleteOnDropGauge<'static, AtomicU64, Vec<String>>>,
-    ) -> Self {
-        // Initializing the metric to 0, to reflect in memory hash map is being used
-        rocksdb_autospill_in_use.set(0);
-        Self {
-            backend_type: BackendType::InMemory(InMemoryHashMap::default()),
-            rockdsdb_params,
-            auto_spill_threshold_bytes,
-            rocksdb_autospill_in_use,
-        }
-    }
-
-    async fn init_rocksdb(rocksdb_params: &RocksDBParams) -> RocksDB {
-        let RocksDBParams {
-            instance_path,
-            legacy_instance_path,
-            env,
-            tuning_config,
-            shared_metrics,
-            instance_metrics,
-        } = rocksdb_params;
-        tracing::info!("spilling to disk for upsert at {:?}", instance_path);
-
-        RocksDB::new(
-            mz_rocksdb::RocksDBInstance::new(
-                instance_path,
-                legacy_instance_path,
-                mz_rocksdb::InstanceOptions::defaults_with_env(env.clone()),
-                tuning_config.clone(),
-                Arc::clone(shared_metrics),
-                Arc::clone(instance_metrics),
-                upsert_bincode_opts(),
-            )
-            .await
-            .unwrap(),
-        )
-    }
-}
-
-#[async_trait::async_trait(?Send)]
-impl UpsertStateBackend for AutoSpillBackend {
-    async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
-    where
-        P: IntoIterator<Item = (UpsertKey, PutValue<StateValue>)>,
-    {
-        match &mut self.backend_type {
-            BackendType::InMemory(map) => {
-                let mut put_stats = map.multi_put(puts).await?;
-                let in_memory_size: usize = map
-                    .current_size()
-                    .try_into()
-                    .expect("unexpected error while casting");
-                if in_memory_size > self.auto_spill_threshold_bytes {
-                    let mut rocksdb_backend =
-                        AutoSpillBackend::init_rocksdb(&self.rockdsdb_params).await;
-
-                    let (last_known_size, new_puts) = map.drain();
-                    let new_puts = new_puts.map(|(k, v)| {
-                        (
-                            k,
-                            PutValue {
-                                value: Some(v),
-                                previous_persisted_size: None,
-                            },
-                        )
-                    });
-
-                    let rocksdb_stats = rocksdb_backend.multi_put(new_puts).await?;
-                    // Adjusting the sizes as the value sizes in rocksdb could be different than in memory
-                    put_stats.size_diff += rocksdb_stats.size_diff;
-                    put_stats.size_diff -= last_known_size;
-                    // Setting backend to rocksdb
-                    self.backend_type = BackendType::RocksDb(rocksdb_backend);
-                    // Switching metric to 1 for rocksdb
-                    self.rocksdb_autospill_in_use.set(1);
-                }
-                Ok(put_stats)
-            }
-            BackendType::RocksDb(rocks_db) => rocks_db.multi_put(puts).await,
-        }
-    }
-
-    async fn multi_get<'r, G, R>(
-        &mut self,
-        gets: G,
-        results_out: R,
-    ) -> Result<GetStats, anyhow::Error>
-    where
-        G: IntoIterator<Item = UpsertKey>,
-        R: IntoIterator<Item = &'r mut UpsertValueAndSize>,
-    {
-        match &mut self.backend_type {
-            BackendType::InMemory(in_memory_hash_map) => {
-                in_memory_hash_map.multi_get(gets, results_out).await
-            }
-            BackendType::RocksDb(rocks_db) => rocks_db.multi_get(gets, results_out).await,
-        }
-    }
 }
 
 /// An `UpsertStateBackend` wrapper that supports
