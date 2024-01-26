@@ -188,7 +188,7 @@ Now that you've configured your database network and created an ingestion cluste
       );
     ```
 
-    - Replace `<host>` with the **Writer** endpoint for your Aurora database. To find your endpoint, select your database in the RDS Console, select the **Connectivity & security** tab, and look for the endpoint with type **Writer**.
+    - Replace `<host>` with the **Writer** endpoint for your Aurora database. To find the endpoint, select your database in the RDS Console, then click the **Connectivity & security** tab and look for the endpoint with type **Writer**.
 
         <div class="warning">
             <strong class="gutter">WARNING!</strong>
