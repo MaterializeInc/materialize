@@ -135,6 +135,7 @@ mz_activity_log  sample_rate
 mz_activity_log  session_id
 mz_activity_log  sql
 mz_activity_log  statement_type
+mz_activity_log  throttled_count
 mz_activity_log  transaction_id
 mz_activity_log  transaction_isolation
 mz_activity_log  transient_index_id
@@ -364,6 +365,7 @@ mz_prepared_statement_history  redacted_sql
 mz_prepared_statement_history  session_id
 mz_prepared_statement_history  sql
 mz_prepared_statement_history  statement_type
+mz_prepared_statement_history  throttled_count
 mz_recent_activity_log  application_name
 mz_recent_activity_log  began_at
 mz_recent_activity_log  cluster_id
@@ -384,6 +386,7 @@ mz_recent_activity_log  sample_rate
 mz_recent_activity_log  session_id
 mz_recent_activity_log  sql
 mz_recent_activity_log  statement_type
+mz_recent_activity_log  throttled_count
 mz_recent_activity_log  transaction_id
 mz_recent_activity_log  transaction_isolation
 mz_recent_activity_log  transient_index_id
