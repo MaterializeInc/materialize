@@ -78,6 +78,15 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
     mzcompose cp balancerd:/usr/local/bin/balancerd coverage/ || true
 fi
 
+(while true; do
+        sleep 10
+        artifact=$(date +environmentd-%Y-%m-%d_%H:%M:%S.mzfg)
+        if mzcompose exec materialized curl http://127.0.0.1:6878/prof/ --data-raw action=dump_sym_mzfg > "$artifact"; then
+            buildkite-agent artifact upload "$artifact"
+        fi
+    done
+) &
+
 ci_uncollapsed_heading ":docker: Running \`bin/mzcompose --find \"$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION\" run ${run_args[*]}\`"
 
 mzcompose run "${run_args[@]}" |& tee run.log
