@@ -71,8 +71,9 @@ steps:
     key: benchmark
     steps:
     - id: feature-benchmark
-      label: "Feature benchmark against merge base or 'latest'"
+      label: "Feature benchmark against merge base or 'latest' %N"
       timeout_in_minutes: 720
+      parallelism: 8
       agents:
         queue: linux-aarch64-large
       artifact_paths: junit_*.xml
