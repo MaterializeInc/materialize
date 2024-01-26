@@ -8,6 +8,8 @@
 # by the Apache License, Version 2.0.
 from enum import Enum
 
+from overrides import EnforceOverrides, override
+
 from materialize.output_consistency.data_type.data_type_with_values import (
     DataTypeWithValues,
 )
@@ -39,7 +41,7 @@ class EvaluationStrategyKey(Enum):
     MZ_CONSTANT_FOLDING_OTHER_DB = 6
 
 
-class EvaluationStrategy:
+class EvaluationStrategy(EnforceOverrides):
     """Strategy how to execute a `QueryTemplate`"""
 
     def __init__(
@@ -90,7 +92,8 @@ class EvaluationStrategy:
         table_column_selection: TableColumnByNameSelection,
         override_db_object_name: str | None = None,
     ) -> list[str]:
-        raise NotImplementedError
+        # making sure that NotImplementedError is not handled differently
+        return []
 
     def get_db_object_name(
         self,
@@ -239,6 +242,7 @@ class DataFlowRenderingEvaluation(EvaluationStrategy):
             "dataflow_rendering",
         )
 
+    # not annotated with override although superclass has EnforceOverrides => should fail
     def generate_source_for_storage_layout(
         self,
         input_data: ConsistencyTestInputData,
@@ -278,6 +282,7 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
             "constant_folding",
         )
 
+    @override
     def generate_source_for_storage_layout(
         self,
         input_data: ConsistencyTestInputData,
@@ -285,6 +290,8 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
         row_selection: DataRowSelection,
         table_column_selection: TableColumnByNameSelection,
         override_db_object_name: str | None = None,
+        # added type despite override => should fail
+        a: int = 3,
     ) -> list[str]:
         db_object_name = self.get_db_object_name(
             storage_layout, override_db_object_name
@@ -305,3 +312,12 @@ class ConstantFoldingEvaluation(EvaluationStrategy):
         )
 
         return [create_view_statement]
+
+    @override
+    def get_db_object_name(
+        self,
+        storage_layout: ValueStorageLayout,
+        override_db_object_name: str | None = None,
+        # changed return type => should fail
+    ) -> int:
+        return 3
