@@ -232,7 +232,8 @@ steps:
     - id: limits
       label: "Product limits"
       agents:
-        queue: linux-aarch64
+        # OoMed with smaller instance
+        queue: linux-aarch64-large
       artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
