@@ -305,6 +305,9 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("Not supported by pg")
 
+        if 'invalid input syntax for type time: ""' in pg_error_msg:
+            return YesIgnore("#24736: different handling of empty time string")
+
         return NoIgnore()
 
     def _shall_ignore_mz_failure_where_pg_succeeds(
