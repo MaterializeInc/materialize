@@ -199,15 +199,6 @@ impl Optimize<HirRelationExpr> for Optimizer {
         let expr = expr.lower(&self.config)?;
 
         // MIR ⇒ MIR optimization (local)
-        self.optimize(expr)
-    }
-}
-
-impl Optimize<MirRelationExpr> for Optimizer {
-    type To = LocalMirPlan;
-
-    fn optimize(&mut self, expr: MirRelationExpr) -> Result<Self::To, OptimizerError> {
-        // MIR ⇒ MIR optimization (local)
         let expr = debug_span!(target: "optimizer", "local").in_scope(|| {
             #[allow(deprecated)]
             let optimizer = TransformOptimizer::logical_optimizer(&self.typecheck_ctx);
