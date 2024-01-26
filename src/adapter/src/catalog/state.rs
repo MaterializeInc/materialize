@@ -913,9 +913,11 @@ impl CatalogState {
                     mz_sql::plan::DataSourceDesc::Source => DataSourceDesc::Source,
                     mz_sql::plan::DataSourceDesc::Webhook {
                         validate_using,
+                        body_format,
                         headers,
                     } => DataSourceDesc::Webhook {
                         validate_using,
+                        body_format,
                         headers,
                         cluster_id: in_cluster
                             .expect("webhook sources must use an existing cluster"),
