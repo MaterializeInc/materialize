@@ -1908,7 +1908,7 @@ impl<'a> Parser<'a> {
             };
             Format::Csv { columns, delimiter }
         } else if self.parse_keyword(JSON) {
-            Format::Json
+            Format::Json { array: false }
         } else if self.parse_keyword(TEXT) {
             Format::Text
         } else if self.parse_keyword(BYTES) {
@@ -2768,7 +2768,10 @@ impl<'a> Parser<'a> {
         // Note: we don't use `parse_format()` here because we support fewer formats than other
         // sources, and the user gets better errors if we reject the formats here.
         let body_format = match self.expect_one_of_keywords(&[JSON, TEXT, BYTES])? {
-            JSON => Format::Json,
+            JSON => {
+                let array = self.parse_keyword(ARRAY);
+                Format::Json { array }
+            }
             TEXT => Format::Text,
             BYTES => Format::Bytes,
             _ => unreachable!(),
