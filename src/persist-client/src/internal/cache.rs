@@ -13,12 +13,12 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::{Atomicity, Blob, BlobMetadata, ExternalError};
 
 use crate::cfg::PersistConfig;
-use crate::dyn_cfg::{Config, ConfigSet};
 use crate::internal::metrics::Metrics;
 
 // In-memory cache for [Blob].

@@ -11,6 +11,7 @@
 
 use std::borrow::Cow;
 
+use mz_dyncfg::{Config, ConfigSet};
 use mz_persist::indexed::columnar::ColumnarRecords;
 use mz_persist_types::columnar::{PartEncoder, Schema};
 use mz_persist_types::part::{Part, PartBuilder};
@@ -19,7 +20,6 @@ use mz_persist_types::Codec;
 use proptest_derive::Arbitrary;
 
 use crate::batch::UntrimmableColumns;
-use crate::dyn_cfg::{Config, ConfigSet};
 use crate::internal::encoding::Schemas;
 use crate::ShardId;
 

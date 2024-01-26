@@ -20,6 +20,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::Stream;
+use mz_dyncfg::Config;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
 use mz_persist::location::{Blob, SeqNo};
@@ -33,7 +34,6 @@ use tracing::{debug_span, instrument, warn, Instrument};
 use uuid::Uuid;
 
 use crate::cfg::RetryParameters;
-use crate::dyn_cfg::Config;
 use crate::fetch::{
     fetch_leased_part, FetchBatchFilter, FetchedPart, LeasedBatchPart, SerdeLeasedBatchPart,
     SerdeLeasedBatchPartMetadata,

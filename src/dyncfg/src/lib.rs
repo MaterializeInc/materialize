@@ -19,7 +19,7 @@
 //!   set the value of `Config`.
 //!
 //! ```
-//! # use mz_persist_client::dyn_cfg::{Config, ConfigSet};
+//! # use mz_dyncfg::{Config, ConfigSet};
 //! const FOO: Config<bool> = Config::new("foo", false, "description of foo");
 //! fn bar(cfg: &ConfigSet) {
 //!     assert_eq!(FOO.get(&cfg), false);
@@ -64,7 +64,7 @@ use tracing::error;
 
 use mz_proto::{ProtoType, RustType};
 
-include!(concat!(env!("OUT_DIR"), "/mz_persist_client.dyn_cfg.rs"));
+include!(concat!(env!("OUT_DIR"), "/mz_dyncfg.rs"));
 
 /// A handle to a dynamically updatable configuration value.
 ///
@@ -342,7 +342,7 @@ mod impls {
     use mz_ore::cast::CastFrom;
     use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
-    use crate::dyn_cfg::{proto_config_val, Config, ConfigSet, ConfigType, ConfigVal};
+    use crate::{proto_config_val, Config, ConfigSet, ConfigType, ConfigVal};
 
     impl ConfigType for bool {
         type Default = bool;
@@ -456,7 +456,7 @@ mod impls {
 
     impl RustType<Option<proto_config_val::Val>> for ConfigVal {
         fn into_proto(&self) -> Option<proto_config_val::Val> {
-            use crate::dyn_cfg::proto_config_val::Val;
+            use crate::proto_config_val::Val;
             let val = match self {
                 ConfigVal::Bool(x) => Val::Bool(bool::get(x)),
                 ConfigVal::U32(x) => Val::U32(u32::get(x)),

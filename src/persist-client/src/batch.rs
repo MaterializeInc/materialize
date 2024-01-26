@@ -23,6 +23,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::stream::{FuturesUnordered, StreamExt};
+use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::task::{JoinHandle, JoinHandleExt};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
@@ -40,7 +41,6 @@ use tracing::{debug_span, error, instrument, trace_span, warn, Instrument};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cfg::MiB;
-use crate::dyn_cfg::Config;
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;

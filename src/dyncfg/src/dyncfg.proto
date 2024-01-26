@@ -11,7 +11,7 @@ syntax = "proto3";
 
 import "proto/src/proto.proto";
 
-package mz_persist_client.dyn_cfg;
+package mz_dyncfg;
 
 // A batch of value updates to [Config]s in a [ConfigSet].
 //
