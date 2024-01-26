@@ -109,7 +109,7 @@ categories:
 
 As we will see later, an important part of the current design is that these
 messages have priorities. The coordinator has to work off all Internal Commands
-(1.) before processing External Commands (2.), and so on for 2. and 3.
+(1.) before processing Controller Responses (2.), and so on for 2. and 3.
 
 ### Controller Commands
 
