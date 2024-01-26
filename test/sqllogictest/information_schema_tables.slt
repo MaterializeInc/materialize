@@ -625,6 +625,14 @@ mz_prepared_statement_history_redacted
 VIEW
 materialize
 mz_internal
+mz_recent_activity_log
+VIEW
+materialize
+mz_internal
+mz_recent_activity_log_redacted
+VIEW
+materialize
+mz_internal
 mz_records_per_dataflow
 VIEW
 materialize
