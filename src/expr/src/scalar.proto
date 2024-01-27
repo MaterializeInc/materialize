@@ -686,6 +686,7 @@ message ProtoVariadicFunc {
         google.protobuf.Empty make_acl_item = 38;
         google.protobuf.Empty regexp_split_to_array = 39;
         google.protobuf.Empty regexp_replace = 40;
+        mz_repr.relation_and_scalar.ProtoScalarType map_build = 41;
     }
 }
 

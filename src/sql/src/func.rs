@@ -3665,6 +3665,16 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             }) => MapAny, oid::FUNC_MAP_AGG;
         },
         "map_build" => Scalar {
+            // TODO: support a function to construct maps that looks like...
+            //
+            // params!([String], Any...) => Operation::variadic(|ecx, exprs| {
+            //
+            // ...the challenge here is that we don't support constructing other
+            // complex types from varidaic functions and instead use a SQL
+            // keyword; however that doesn't work very well for map because the
+            // intuitive syntax would be something akin to `MAP[key=>value]`,
+            // but that doesn't work out of the box because `key=>value` looks
+            // like an expression.
             params!(ListAny) => Operation::unary(|ecx, expr| {
                 let ty = ecx.scalar_type(&expr);
 
