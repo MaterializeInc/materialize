@@ -29,7 +29,7 @@ use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
@@ -111,6 +111,8 @@ pub struct LeasedReaderState<T> {
     pub seqno: SeqNo,
     /// The since capability of this reader.
     pub since: Antichain<T>,
+    /// The id of the since handle that protects this reader.
+    pub critical_id: Option<CriticalReaderId>,
     /// UNIX_EPOCH timestamp (in millis) of this reader's most recent heartbeat
     pub last_heartbeat_timestamp_ms: u64,
     /// Duration (in millis) allowed after [Self::last_heartbeat_timestamp_ms]
@@ -450,6 +452,7 @@ where
         &mut self,
         hostname: &str,
         reader_id: &LeasedReaderId,
+        critical_id: Option<&CriticalReaderId>,
         purpose: &str,
         seqno: SeqNo,
         lease_duration: Duration,
@@ -465,6 +468,7 @@ where
             },
             seqno,
             since: self.trace.since().clone(),
+            critical_id: critical_id.cloned(),
             last_heartbeat_timestamp_ms: heartbeat_timestamp_ms,
             lease_duration_ms: u64::try_from(lease_duration.as_millis())
                 .expect("lease duration as millis should fit within u64"),
@@ -657,6 +661,25 @@ where
         // SeqNos.
         if self.is_tombstone() {
             return Break(NoOpStateTransition(Since(Antichain::new())));
+        }
+
+        if let Some(reader_state) = self.leased_readers.get(reader_id) {
+            if let Some(critical_id) = reader_state.critical_id.as_ref() {
+                if let Some(critical_state) = self.critical_readers.get(critical_id) {
+                    if !PartialOrder::less_equal(&critical_state.since, new_since) {
+                        warn!(
+                            "reader {reader_id} should be protected by {critical_id}, \
+                            but its latest since {new_since:?} is not past the since hold at {:?}",
+                            critical_state.since
+                        )
+                    }
+                } else {
+                    warn!(
+                        "reader {reader_id} should be protected by {critical_id}, \
+                        but it does not exist",
+                    )
+                }
+            }
         }
 
         let reader_state = self.leased_reader(reader_id);
@@ -1545,11 +1568,19 @@ pub(crate) mod tests {
             (
                 any::<SeqNo>(),
                 any::<Option<T>>(),
+                any::<Option<CriticalReaderId>>(),
                 any::<u64>(),
                 any::<u64>(),
                 any::<HandleDebugState>(),
             ),
-            |(seqno, since, last_heartbeat_timestamp_ms, mut lease_duration_ms, debug)| {
+            |(
+                seqno,
+                since,
+                critical_id,
+                last_heartbeat_timestamp_ms,
+                mut lease_duration_ms,
+                debug,
+            )| {
                 // lease_duration_ms of 0 means this state was written by an old
                 // version of code, which means we'll migrate it in the decode
                 // path. Avoid.
@@ -1559,6 +1590,7 @@ pub(crate) mod tests {
                 LeasedReaderState {
                     seqno,
                     since: since.map_or_else(Antichain::new, Antichain::from_elem),
+                    critical_id,
                     last_heartbeat_timestamp_ms,
                     lease_duration_ms,
                     debug,
@@ -1699,6 +1731,7 @@ pub(crate) mod tests {
         let _ = state.collections.register_leased_reader(
             "",
             &reader,
+            None,
             "",
             seqno,
             Duration::from_secs(10),
@@ -1750,6 +1783,7 @@ pub(crate) mod tests {
         let _ = state.collections.register_leased_reader(
             "",
             &reader2,
+            None,
             "",
             seqno,
             Duration::from_secs(10),
@@ -1793,6 +1827,7 @@ pub(crate) mod tests {
         let _ = state.collections.register_leased_reader(
             "",
             &reader3,
+            None,
             "",
             seqno,
             Duration::from_secs(10),
@@ -2005,6 +2040,7 @@ pub(crate) mod tests {
         let _ = state.collections.register_leased_reader(
             "",
             &reader,
+            None,
             "",
             SeqNo::minimum(),
             Duration::from_secs(10),

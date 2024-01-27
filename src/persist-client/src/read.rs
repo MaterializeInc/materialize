@@ -33,6 +33,7 @@ use tracing::{debug_span, instrument, warn, Instrument};
 use uuid::Uuid;
 
 use crate::cfg::RetryParameters;
+use crate::critical::CriticalReaderId;
 use crate::dyn_cfg::Config;
 use crate::fetch::{
     fetch_leased_part, FetchBatchFilter, FetchedPart, LeasedBatchPart, SerdeLeasedBatchPart,
@@ -544,6 +545,7 @@ where
     pub(crate) gc: GarbageCollector<K, V, T, D>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
     pub(crate) reader_id: LeasedReaderId,
+    pub(crate) critical_id: Option<CriticalReaderId>,
     pub(crate) schemas: Schemas<K, V>,
 
     since: Antichain<T>,
@@ -574,6 +576,7 @@ where
         gc: GarbageCollector<K, V, T, D>,
         blob: Arc<dyn Blob + Send + Sync>,
         reader_id: LeasedReaderId,
+        critical_id: Option<CriticalReaderId>,
         schemas: Schemas<K, V>,
         since: Antichain<T>,
         last_heartbeat: EpochMillis,
@@ -585,6 +588,7 @@ where
             gc: gc.clone(),
             blob,
             reader_id: reader_id.clone(),
+            critical_id,
             schemas,
             since,
             last_heartbeat,
@@ -826,6 +830,7 @@ where
         let (reader_state, maintenance) = machine
             .register_leased_reader(
                 &new_reader_id,
+                self.critical_id.as_ref(),
                 purpose,
                 READER_LEASE_DURATION.get(&self.cfg),
                 heartbeat_ts,
@@ -842,6 +847,7 @@ where
             gc,
             Arc::clone(&self.blob),
             new_reader_id,
+            self.critical_id.clone(),
             self.schemas.clone(),
             reader_state.since,
             heartbeat_ts,

@@ -1007,6 +1007,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoLeasedReaderState> for LeasedReaderSt
         ProtoLeasedReaderState {
             seqno: self.seqno.into_proto(),
             since: Some(self.since.into_proto()),
+            critical_id: self.critical_id.into_proto(),
             last_heartbeat_timestamp_ms: self.last_heartbeat_timestamp_ms.into_proto(),
             lease_duration_ms: self.lease_duration_ms.into_proto(),
             debug: Some(self.debug.into_proto()),
@@ -1031,6 +1032,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoLeasedReaderState> for LeasedReaderSt
             since: proto
                 .since
                 .into_rust_if_some("ProtoLeasedReaderState::since")?,
+            critical_id: proto.critical_id.into_rust()?,
             last_heartbeat_timestamp_ms: proto.last_heartbeat_timestamp_ms.into_rust()?,
             lease_duration_ms,
             debug,
@@ -1412,6 +1414,7 @@ mod tests {
         let x = LeasedReaderState {
             seqno: SeqNo(1),
             since: Antichain::from_elem(2u64),
+            critical_id: None,
             last_heartbeat_timestamp_ms: 3,
             debug: HandleDebugState {
                 hostname: "host".to_owned(),

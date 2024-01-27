@@ -26,6 +26,7 @@ use mz_persist_client::cfg::{PersistConfig, RetryParameters};
 use mz_persist_client::fetch::FetchedPart;
 use mz_persist_client::fetch::SerdeLeasedBatchPart;
 use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
+use mz_persist_client::PersistClient;
 use mz_persist_txn::operator::txns_progress;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::Codec64;
@@ -317,6 +318,11 @@ where
             async move { c.open(l).await.unwrap() }
         },
         metadata.data_shard,
+        // NB: every persist source is expected to be protected by the dependency relationships
+        // set up in the storage controller. (If we haven't read frontier [t] yet, the progress
+        // we report to the controller won't advance past [t], so it will hang on to our inputs
+        // for us.)
+        PersistClient::CONTROLLER_CRITICAL_SINCE,
         as_of,
         snapshot_mode,
         until.clone(),

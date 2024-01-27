@@ -412,6 +412,28 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64 + Send + Sync,
     {
+        self.open_protected_reader(shard_id, None, key_schema, val_schema, diagnostics)
+            .await
+    }
+
+    /// Similar to [Self::open_leased_reader], but with an additional critical ID
+    /// that identifies a read hold whose since should never be greater than this
+    /// reader's since. (For example, the controller's since handle has this relationship
+    /// to the reads in all the dataflows it manages.)
+    pub async fn open_protected_reader<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        critical_id: Option<CriticalReaderId>,
+        key_schema: Arc<K::Schema>,
+        val_schema: Arc<V::Schema>,
+        diagnostics: Diagnostics,
+    ) -> Result<ReadHandle<K, V, T, D>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
         let mut machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
@@ -420,6 +442,7 @@ impl PersistClient {
         let (reader_state, maintenance) = machine
             .register_leased_reader(
                 &reader_id,
+                critical_id.as_ref(),
                 &diagnostics.handle_purpose,
                 READER_LEASE_DURATION.get(&self.cfg),
                 heartbeat_ts,
@@ -437,6 +460,7 @@ impl PersistClient {
             gc,
             Arc::clone(&self.blob),
             reader_id,
+            critical_id,
             schemas,
             reader_state.since,
             heartbeat_ts,

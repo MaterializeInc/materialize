@@ -577,6 +577,7 @@ impl DataSubscribe {
                     name,
                     move || std::future::ready(client.clone()),
                     data_id,
+                    PersistClient::CONTROLLER_CRITICAL_SINCE,
                     Some(Antichain::from_elem(as_of)),
                     SnapshotMode::Include,
                     until.clone(),
