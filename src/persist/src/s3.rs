@@ -30,7 +30,7 @@ use aws_types::region::Region;
 use bytes::Bytes;
 use futures_util::stream::FuturesOrdered;
 use futures_util::{FutureExt, StreamExt};
-use mz_ore::bytes::SegmentedBytes;
+use mz_ore::bytes::{LgallocBuf, LgallocBytes, SegmentedBytes};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::RuntimeExt;
@@ -443,6 +443,14 @@ impl Blob for S3Blob {
                     .map_err(|err| Error::from(format!("s3 get body err: {}", err)))?;
                 let body_elapsed = body_start.elapsed();
                 min_body_elapsed.observe(body_elapsed, "s3 download part body");
+                let body = body.into_segments().map(|buf| {
+                    const ENABLE_ENSURE_LGALLOC: bool = true;
+                    if ENABLE_ENSURE_LGALLOC {
+                        LgallocBytes::Lgalloc(LgallocBuf::from_slice(&self.metrics.lgalloc, &buf))
+                    } else {
+                        LgallocBytes::Bytes(buf)
+                    }
+                });
 
                 Ok::<_, Error>(body)
             };
@@ -458,7 +466,7 @@ impl Blob for S3Blob {
                 .map_err(|err| Error::from(format!("s3 get body err: {}", err)))?;
 
             // Collect all of our segments.
-            segments.extend(part_body.into_segments());
+            segments.extend(part_body);
         }
 
         debug!(

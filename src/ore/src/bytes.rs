@@ -419,6 +419,20 @@ impl From<Vec<Bytes>> for SegmentedBytes {
     }
 }
 
+impl From<Vec<LgallocBytes>> for SegmentedBytes {
+    fn from(value: Vec<LgallocBytes>) -> Self {
+        let mut len = 0;
+        let mut segments = SmallVec::with_capacity(value.len());
+
+        for segment in value {
+            len += segment.len();
+            segments.push(segment);
+        }
+
+        SegmentedBytes { segments, len }
+    }
+}
+
 impl From<Vec<u8>> for SegmentedBytes {
     fn from(value: Vec<u8>) -> Self {
         let bytes = Bytes::from(value);

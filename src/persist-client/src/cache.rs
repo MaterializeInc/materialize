@@ -23,7 +23,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle};
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{
-    Blob, Consensus, EnsureLgalloc, ExternalError, Tasked, VersionedData, BLOB_GET_LIVENESS_KEY,
+    Blob, Consensus, ExternalError, Tasked, VersionedData, BLOB_GET_LIVENESS_KEY,
     CONSENSUS_HEAD_LIVENESS_KEY,
 };
 use mz_persist_types::{Codec, Codec64};
@@ -212,14 +212,13 @@ impl PersistClientCache {
                     blob.clone().open()
                 })
                 .await;
-                let cfg = self.cfg.configs.clone();
                 let blob = Arc::new(MetricsBlob::new(blob, Arc::clone(&self.metrics)));
-                let enable_ensure_lgalloc = Box::new(move || ENABLE_ENSURE_LGALLOC.get(&cfg));
-                let blob = Arc::new(EnsureLgalloc {
-                    blob,
-                    enable_ensure_lgalloc,
-                    metrics: self.metrics.lgalloc.clone(),
-                });
+                // let enable_ensure_lgalloc = Box::new(move || ENABLE_ENSURE_LGALLOC.get(&cfg));
+                // let blob = Arc::new(EnsureLgalloc {
+                //     blob,
+                //     enable_ensure_lgalloc,
+                //     metrics: self.metrics.lgalloc.clone(),
+                // });
                 let blob = Arc::new(Tasked(blob));
                 let task = blob_rtt_latency_task(
                     Arc::clone(&blob),
@@ -255,7 +254,7 @@ pub(crate) const ENABLE_ENSURE_LGALLOC: Config<bool> =
 /// start.
 #[allow(clippy::unused_async)]
 async fn blob_rtt_latency_task(
-    blob: Arc<Tasked<EnsureLgalloc<MetricsBlob>>>,
+    blob: Arc<Tasked<MetricsBlob>>,
     metrics: Arc<Metrics>,
     measurement_interval: Duration,
 ) -> JoinHandle<()> {
