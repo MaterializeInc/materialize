@@ -4199,6 +4199,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-datadog-client"
+version = "0.0.0"
+dependencies = [
+ "mz-ore",
+ "once_cell",
+ "reqwest",
+ "serde",
+ "thiserror",
+ "tokio",
+ "url",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-environmentd"
 version = "0.86.0-dev"
 dependencies = [
