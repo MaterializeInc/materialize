@@ -373,3 +373,4 @@ pub const FUNC_CONNECTION_OID_OID: u32 = 16_650;
 pub const FUNC_SECRET_OID_OID: u32 = 16_651;
 pub const FUNC_MAP_BUILD: u32 = 16_652;
 pub const FUNC_MAP_AGG: u32 = 16_653;
+pub const FUNC_UNNEST_MAP_OID: u32 = 16_654;

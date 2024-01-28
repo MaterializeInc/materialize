@@ -3806,6 +3806,18 @@ pub static MZ_CATALOG_BUILTINS: Lazy<BTreeMap<&'static str, Func>> = Lazy::new(|
             }) =>
                 // This return type should be equivalent to "ListElementAny", but this would be its sole use.
                 ReturnType::set_of(Any), oid::FUNC_UNNEST_LIST_OID;
+            vec![MapAny] => Operation::unary(move |ecx, e| {
+                let value_type = ecx.scalar_type(&e).unwrap_map_value_type().clone();
+                Ok(TableFuncPlan {
+                    expr: HirRelationExpr::CallTable {
+                        func: TableFunc::UnnestMap { value_type },
+                        exprs: vec![e],
+                    },
+                    column_names: vec!["key".into(), "value".into()],
+                })
+            }) =>
+                // This return type should be equivalent to "ListElementAny", but this would be its sole use.
+                ReturnType::set_of(Any), oid::FUNC_UNNEST_MAP_OID;
         }
     }
 });
