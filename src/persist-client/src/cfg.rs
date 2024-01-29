@@ -274,6 +274,7 @@ pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::batch::BATCH_DELETE_ENABLED)
         .add(&crate::batch::BLOB_TARGET_SIZE)
         .add(&crate::cache::ENABLE_ENSURE_LGALLOC)
+        .add(&crate::cfg::BLOB_FETCH_LIMITER_PERMIT_BYTES)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL)
         .add(&crate::cfg::CRDB_CONNECT_TIMEOUT)
@@ -519,6 +520,12 @@ impl DynamicConfig {
     }
 }
 
+const BLOB_FETCH_LIMITER_PERMIT_BYTES: Config<usize> = Config::new(
+    "persist_blob_fetch_limiter_permit_bytes",
+    1024 * 1024 * 1024,
+    "WIP",
+);
+
 // TODO: Replace with dynamic values when PersistConfig is integrated with LD
 impl BlobKnobs for PersistConfig {
     fn operation_timeout(&self) -> Duration {
@@ -535,6 +542,10 @@ impl BlobKnobs for PersistConfig {
 
     fn read_timeout(&self) -> Duration {
         Duration::from_secs(10)
+    }
+
+    fn fetch_permit_bytes(&self) -> usize {
+        BLOB_FETCH_LIMITER_PERMIT_BYTES.get(self)
     }
 }
 

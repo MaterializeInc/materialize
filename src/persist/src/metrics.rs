@@ -12,7 +12,7 @@
 use mz_ore::bytes::LgallocBufMetrics;
 use mz_ore::metric;
 use mz_ore::metrics::{IntCounter, MetricsRegistry};
-use prometheus::IntCounterVec;
+use prometheus::{Counter, IntCounterVec};
 
 /// Metrics specific to S3Blob's internal workings.
 #[derive(Debug, Clone)]
@@ -31,6 +31,9 @@ pub struct S3BlobMetrics {
     pub(crate) list_objects: IntCounter,
 
     pub(crate) lgalloc: LgallocBufMetrics,
+    pub(crate) fetch_permit_count: IntCounter,
+    pub(crate) fetch_permit_waits: IntCounter,
+    pub(crate) fetch_permit_wait_seconds: Counter,
 }
 
 impl S3BlobMetrics {
@@ -67,6 +70,18 @@ impl S3BlobMetrics {
             delete_object: operations.with_label_values(&["delete_object"]),
             list_objects: operations.with_label_values(&["list_objects"]),
             lgalloc: LgallocBufMetrics::new(registry),
+            fetch_permit_count: registry.register(metric!(
+                name: "mz_persist_s3_fetch_permit_count",
+                help: "WIP",
+            )),
+            fetch_permit_waits: registry.register(metric!(
+                name: "mz_persist_s3_fetch_permit_waits",
+                help: "WIP",
+            )),
+            fetch_permit_wait_seconds: registry.register(metric!(
+                name: "mz_persist_s3_fetch_permit_wait_seconds",
+                help: "WIP",
+            )),
         }
     }
 }

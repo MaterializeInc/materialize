@@ -49,6 +49,8 @@ pub trait BlobKnobs: std::fmt::Debug + Send + Sync {
     fn connect_timeout(&self) -> Duration;
     /// Maximum time to wait to read the first byte of a response, including connection time.
     fn read_timeout(&self) -> Duration;
+    /// WIP
+    fn fetch_permit_bytes(&self) -> usize;
 }
 
 impl BlobConfig {
@@ -100,6 +102,7 @@ impl BlobConfig {
                     Some(password) => Some((url.username().to_string(), password.to_string())),
                 };
 
+                let fetch_permit_bytes = knobs.fetch_permit_bytes();
                 let config = S3BlobConfig::new(
                     bucket,
                     prefix,
@@ -109,6 +112,7 @@ impl BlobConfig {
                     credentials,
                     knobs,
                     metrics,
+                    fetch_permit_bytes,
                 )
                 .await?;
 

@@ -35,6 +35,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::RuntimeExt;
 use tokio::runtime::Handle as AsyncHandle;
+use tokio::sync::{Semaphore, SemaphorePermit, TryAcquireError};
 use tracing::{debug, debug_span, trace, trace_span, Instrument};
 use uuid::Uuid;
 
@@ -50,6 +51,7 @@ pub struct S3BlobConfig {
     client: S3Client,
     bucket: String,
     prefix: String,
+    fetch_limiter_permit_bytes: usize,
 }
 
 // There is no simple way to hook into the S3 client to capture when its various timeouts
@@ -119,6 +121,7 @@ impl S3BlobConfig {
         credentials: Option<(String, String)>,
         knobs: Box<dyn BlobKnobs>,
         metrics: S3BlobMetrics,
+        fetch_limiter_permit_bytes: usize,
     ) -> Result<Self, Error> {
         let mut loader = mz_aws_util::defaults();
 
@@ -172,6 +175,7 @@ impl S3BlobConfig {
             client,
             bucket,
             prefix,
+            fetch_limiter_permit_bytes,
         })
     }
 
@@ -244,6 +248,9 @@ impl S3BlobConfig {
             fn read_timeout(&self) -> Duration {
                 READ_TIMEOUT_MARKER
             }
+            fn fetch_permit_bytes(&self) -> usize {
+                usize::MAX
+            }
         }
 
         // Give each test a unique prefix so they don't conflict. We don't have
@@ -261,6 +268,7 @@ impl S3BlobConfig {
             None,
             Box::new(TestBlobKnobs),
             metrics,
+            usize::MAX,
         )
         .await?;
         Ok(Some(config))
@@ -286,11 +294,20 @@ pub struct S3Blob {
     // Defaults to 1000 which is the current AWS max.
     max_keys: i32,
     multipart_config: MultipartConfig,
+    fetch_limiter: Arc<Semaphore>,
 }
 
 impl S3Blob {
     /// Opens the given location for non-exclusive read-write access.
     pub async fn open(config: S3BlobConfig) -> Result<Self, ExternalError> {
+        let mut fetch_limiter_permit_bytes = config.fetch_limiter_permit_bytes;
+        if fetch_limiter_permit_bytes == usize::MAX {
+            fetch_limiter_permit_bytes = Semaphore::MAX_PERMITS;
+        }
+        tracing::warn!(
+            "WIP creating s3 fetch limiter of {} bytes",
+            fetch_limiter_permit_bytes
+        );
         let ret = S3Blob {
             metrics: config.metrics,
             client: config.client,
@@ -298,6 +315,7 @@ impl S3Blob {
             prefix: config.prefix,
             max_keys: 1_000,
             multipart_config: MultipartConfig::default(),
+            fetch_limiter: Arc::new(Semaphore::new(fetch_limiter_permit_bytes)),
         };
         // Connect before returning success. We don't particularly care about
         // what's stored in this blob (nothing writes to it, so presumably it's
@@ -308,6 +326,27 @@ impl S3Blob {
 
     fn get_path(&self, key: &str) -> String {
         format!("{}/{}", self.prefix, key)
+    }
+
+    async fn acquire_fetch_permit<'a>(&'a self, permit_bytes: usize) -> SemaphorePermit<'a> {
+        let permit_bytes = u32::try_from(permit_bytes).expect("permit bytes should fit in a u32");
+        self.metrics.fetch_permit_count.inc();
+        match self.fetch_limiter.try_acquire_many(permit_bytes) {
+            Ok(permits) => return permits,
+            Err(TryAcquireError::NoPermits) => {}
+            Err(TryAcquireError::Closed) => panic!("semaphore unexpectedly closed"),
+        }
+        let start = Instant::now();
+        let permits = self
+            .fetch_limiter
+            .acquire_many(permit_bytes)
+            .await
+            .expect("semaphore unexpectedly closed");
+        self.metrics.fetch_permit_waits.inc();
+        self.metrics
+            .fetch_permit_wait_seconds
+            .inc_by(start.elapsed().as_secs_f64());
+        permits
     }
 }
 
@@ -357,6 +396,10 @@ impl Blob for S3Blob {
 
         // Fetch our first header, this tells us how many more are left.
         let header_start = Instant::now();
+        // WIP probably need to skip this somehow for the blob latency task.
+        // also, pretty sure having these in non-tasks and then peeling them off
+        // in order can deadlock
+        let first_part_permits = self.acquire_fetch_permit(8 * 1024 * 1024).await;
         let object = self
             .client
             .get_object()
@@ -394,7 +437,7 @@ impl Blob for S3Blob {
         );
 
         let mut body_futures = FuturesOrdered::new();
-        let mut first_part = Some(first_part);
+        let mut first_part = Some((first_part, first_part_permits));
 
         // Fetch the headers of the rest of the parts. (Starting at part 2 because we already
         // did part 1.)
@@ -408,15 +451,16 @@ impl Blob for S3Blob {
             let request_future = async move {
                 // Fetch the headers of the rest of the parts. (Using the existing headers
                 // for part 1.
-                let object = match first_part {
-                    Some(first_part) => {
+                let (object, permit) = match first_part {
+                    Some((first_part, permits)) => {
                         assert_eq!(part_num, 1, "only the first part should be prefetched");
-                        first_part
+                        (first_part, permits)
                     }
                     None => {
                         assert_ne!(part_num, 1, "first part should be prefetched");
                         // Request our headers.
                         let header_start = Instant::now();
+                        let permits = self.acquire_fetch_permit(8 * 1024 * 1024).await;
                         let object = self
                             .client
                             .get_object()
@@ -430,7 +474,7 @@ impl Blob for S3Blob {
                             })?;
                         min_header_elapsed
                             .observe(header_start.elapsed(), "s3 download part header");
-                        object
+                        (object, permits)
                     }
                 };
 
@@ -451,6 +495,9 @@ impl Blob for S3Blob {
                         LgallocBytes::Bytes(buf)
                     }
                 });
+                // Very intentionally only drop the permit once we've copied
+                // things into lgalloc.
+                drop(permit);
 
                 Ok::<_, Error>(body)
             };
@@ -1009,6 +1056,7 @@ mod tests {
                     client: config.client.clone(),
                     bucket: config.bucket.clone(),
                     prefix: format!("{}/s3_blob_impl_test/{}", config.prefix, path),
+                    fetch_limiter_permit_bytes: usize::MAX,
                 };
                 let mut blob = S3Blob::open(config).await?;
                 blob.max_keys = 2;
