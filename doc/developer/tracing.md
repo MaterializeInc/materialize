@@ -162,8 +162,6 @@ See (TODO(guswynn): fill this in) for a demo on how this works.
 # Best Practices
 
 ## Setup tracing for all communication between services.
-TODO(guswynn): clean this up when https://github.com/MaterializeInc/materialize/issues/13019 is done.
-
 This is important to ensure that complex interactions between services can be debugged.
 
 ## Choose the appropriate abstraction for the queue you are piloting.

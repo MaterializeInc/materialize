@@ -62,7 +62,6 @@ where
                             None => continue,
                         };
 
-                        // TODO(#11664): Dedup and process the data before combining / merging data with tx metadata
                         let should_use = match dedup_state {
                             Some(ref mut s) => {
                                 let res = s.should_use_record(&value);
@@ -195,8 +194,6 @@ where
                 // matched data rows.  This will be dropped when we've matched the indicated number of events.
                 let mut tx_cap_event_count: BTreeMap<String, (Capability<_>, i64)> = BTreeMap::new();
                 move |_, _| {
-                    // TODO(#11669) Revisit error handling strategy to do something optimized than just emitting
-                    // everything we can and holding back the frontier to the first data error.
                     move |tx_metadata_input, data_input, output| {
                         while let Some((tx_metadata_cap, refmut_data)) = tx_metadata_input.next() {
                             refmut_data.swap(&mut tx_data);
