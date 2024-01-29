@@ -106,7 +106,7 @@ static DAY_OVERFLOW_ERROR: Lazy<String> = Lazy::new(|| {
         i32::MIN,
     )
 });
-static USECS_PER_DAY: Lazy<i64> = Lazy::new(|| {
+pub static USECS_PER_DAY: Lazy<i64> = Lazy::new(|| {
     Interval::convert_date_time_unit(DateTimeField::Day, DateTimeField::Microseconds, 1i64).unwrap()
 });
 
