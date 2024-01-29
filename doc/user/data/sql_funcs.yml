@@ -123,7 +123,8 @@
     - signature: 'map_build(kvs: list record(text, T)) -> map[text=>T]'
       description: >-
         Builds a map from a list of records whose fields are two elements, the
-        first of which is `text`. This function's current implementation is
+        first of which is `text`. In the face of duplicate keys, `map_build` retains
+        value from the record in the latest positition. This function is
         purpose-built to process [Kafka headers](/sql/create-source/kafka/#headers).
     - signature: 'map_agg(keys: text, values: T) -> map[text=>T]'
       description: Aggregate keys and values (including nulls) as a map. ([docs](/sql/functions/map_agg))
@@ -666,6 +667,8 @@
     description: Expands the array `a` into a set of rows.
   - signature: 'unnest(l: anylist)'
     description: Expands the list `l` into a set of rows.
+  - signature: "unnest(m: anymap)"
+    description: Explands the map `m` in a set of rows with the columns `key` and `value`.
 
 - type: Array
   functions:

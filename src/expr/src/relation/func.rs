@@ -2276,6 +2276,12 @@ fn unnest_list<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
         .map(move |e| (Row::pack_slice(&[e]), 1))
 }
 
+fn unnest_map<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
+    a.unwrap_map()
+        .iter()
+        .map(move |(k, v)| (Row::pack_slice(&[Datum::from(k), v]), 1))
+}
+
 impl<'a, M> fmt::Display for HumanizedExpr<'a, AggregateFunc, M>
 where
     M: HumanizerMode,
@@ -2630,6 +2636,9 @@ pub enum TableFunc {
     UnnestList {
         el_typ: ScalarType,
     },
+    UnnestMap {
+        value_type: ScalarType,
+    },
     /// Given `n` input expressions, wraps them into `n / width` rows, each of
     /// `width` columns.
     ///
@@ -2667,6 +2676,7 @@ impl RustType<ProtoTableFunc> for TableFunc {
                 TableFunc::Repeat => Kind::Repeat(()),
                 TableFunc::UnnestArray { el_typ } => Kind::UnnestArray(el_typ.into_proto()),
                 TableFunc::UnnestList { el_typ } => Kind::UnnestList(el_typ.into_proto()),
+                TableFunc::UnnestMap { value_type } => Kind::UnnestMap(value_type.into_proto()),
                 TableFunc::Wrap { types, width } => Kind::Wrap(ProtoWrap {
                     types: types.into_proto(),
                     width: width.into_proto(),
@@ -2707,6 +2717,9 @@ impl RustType<ProtoTableFunc> for TableFunc {
             },
             Kind::UnnestList(x) => TableFunc::UnnestList {
                 el_typ: x.into_rust()?,
+            },
+            Kind::UnnestMap(value_type) => TableFunc::UnnestMap {
+                value_type: value_type.into_rust()?,
             },
             Kind::Wrap(x) => TableFunc::Wrap {
                 width: x.width.into_rust()?,
@@ -2792,6 +2805,7 @@ impl TableFunc {
             TableFunc::Repeat => Ok(Box::new(repeat(datums[0]).into_iter())),
             TableFunc::UnnestArray { .. } => Ok(Box::new(unnest_array(datums[0]))),
             TableFunc::UnnestList { .. } => Ok(Box::new(unnest_list(datums[0]))),
+            TableFunc::UnnestMap { .. } => Ok(Box::new(unnest_map(datums[0]))),
             TableFunc::Wrap { width, .. } => Ok(Box::new(wrap(datums, *width))),
             TableFunc::TabletizedScalar { .. } => {
                 let r = Row::pack_slice(datums);
@@ -2909,6 +2923,14 @@ impl TableFunc {
                 let keys = vec![];
                 (column_types, keys)
             }
+            TableFunc::UnnestMap { value_type } => {
+                let column_types = vec![
+                    ScalarType::String.nullable(false),
+                    value_type.clone().nullable(true),
+                ];
+                let keys = vec![vec![0]];
+                (column_types, keys)
+            }
             TableFunc::Wrap { types, .. } => {
                 let column_types = types.clone();
                 let keys = vec![];
@@ -2943,6 +2965,7 @@ impl TableFunc {
             TableFunc::Repeat => 0,
             TableFunc::UnnestArray { .. } => 1,
             TableFunc::UnnestList { .. } => 1,
+            TableFunc::UnnestMap { .. } => 2,
             TableFunc::Wrap { width, .. } => *width,
             TableFunc::TabletizedScalar { relation, .. } => relation.column_types.len(),
         }
@@ -2964,7 +2987,8 @@ impl TableFunc {
             | TableFunc::CsvExtract(_)
             | TableFunc::Repeat
             | TableFunc::UnnestArray { .. }
-            | TableFunc::UnnestList { .. } => true,
+            | TableFunc::UnnestList { .. }
+            | TableFunc::UnnestMap { .. } => true,
             TableFunc::Wrap { .. } => false,
             TableFunc::TabletizedScalar { .. } => false,
         }
@@ -2990,6 +3014,7 @@ impl TableFunc {
             TableFunc::Repeat => false,
             TableFunc::UnnestArray { .. } => true,
             TableFunc::UnnestList { .. } => true,
+            TableFunc::UnnestMap { .. } => true,
             TableFunc::Wrap { .. } => true,
             TableFunc::TabletizedScalar { .. } => true,
         }
@@ -3014,6 +3039,7 @@ impl fmt::Display for TableFunc {
             TableFunc::Repeat => f.write_str("repeat_row"),
             TableFunc::UnnestArray { .. } => f.write_str("unnest_array"),
             TableFunc::UnnestList { .. } => f.write_str("unnest_list"),
+            TableFunc::UnnestMap { .. } => f.write_str("unnest_map"),
             TableFunc::Wrap { width, .. } => write!(f, "wrap{}", width),
             TableFunc::TabletizedScalar { name, .. } => f.write_str(name),
         }

@@ -788,3 +788,41 @@ query T
 SELECT (map_agg(a::TEXT, a) FILTER (WHERE a = 1))::TEXT FROM t1
 ----
 {1=>1}
+
+# unnest
+
+query TT colnames
+SELECT key, value FROM unnest('{a=>NULL}'::map[text=>int4]);
+----
+key value
+a   NULL
+
+query TT
+SELECT upper(key), value * 100 FROM unnest('{a=>1}'::map[text=>int4]);
+----
+A   100
+
+query T
+WITH v (a) AS (
+    SELECT '{a=>1}'::map[text=>int]
+),
+unnest (key, value) AS (
+    SELECT (a).key, (a).value FROM (
+        SELECT unnest(a) FROM v
+    ) AS u (a)
+),
+manipulate (key, value) AS (
+    SELECT upper(key), value * 100 FROM unnest
+)
+SELECT map_agg(key, value)::TEXT FROM manipulate;
+----
+{A=>100}
+
+query T
+SELECT unnest(NULL::map[text=>int4]);
+----
+
+query T
+SELECT unnest('{a=>NULL}'::map[text=>int4]);
+----
+(a,)

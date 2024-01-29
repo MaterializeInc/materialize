@@ -188,5 +188,6 @@ message ProtoTableFunc {
         ProtoTabletizedScalar tabletized_scalar = 15;
         google.protobuf.Empty acl_explode = 16;
         google.protobuf.Empty mz_acl_explode = 17;
+        mz_repr.relation_and_scalar.ProtoScalarType unnest_map = 18;
     }
 }
