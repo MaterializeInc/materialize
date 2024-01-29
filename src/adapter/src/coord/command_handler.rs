@@ -22,7 +22,7 @@ use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::role_id::RoleId;
-use mz_repr::Timestamp;
+use mz_repr::{ScalarType, Timestamp};
 use mz_sql::ast::{
     ConstantVisitor, CopyRelation, CopyStatement, Raw, Statement, SubscribeStatement,
 };
@@ -1008,11 +1008,12 @@ impl Coordinator {
                 return Err(name);
             };
 
-            let (body_ty, header_tys, validator) = match entry.item() {
+            let (body_format, header_tys, validator) = match entry.item() {
                 CatalogItem::Source(Source {
                     data_source:
                         DataSourceDesc::Webhook {
                             validate_using,
+                            body_format,
                             headers,
                             ..
                         },
@@ -1029,10 +1030,14 @@ impl Coordinator {
                         desc.arity()
                     );
 
-                    let body = desc
+                    // Double check that the body column of the webhook source matches the type
+                    // we're about to deserialize as.
+                    let body_column = desc
                         .get_by_name(&"body".into())
                         .map(|(_idx, ty)| ty.clone())
                         .ok_or(name.clone())?;
+                    assert!(!body_column.nullable, "webhook body column is nullable!?");
+                    assert_eq!(body_column.scalar_type, ScalarType::from(*body_format));
 
                     // Create a validator that can be called to validate a webhook request.
                     let validator = validate_using.as_ref().map(|v| {
@@ -1042,7 +1047,7 @@ impl Coordinator {
                             coord.caching_secrets_reader.clone(),
                         )
                     });
-                    (body, headers.clone(), validator)
+                    (*body_format, headers.clone(), validator)
                 }
                 _ => return Err(name),
             };
@@ -1061,7 +1066,7 @@ impl Coordinator {
 
             Ok(AppendWebhookResponse {
                 tx,
-                body_ty,
+                body_format,
                 header_tys,
                 validator,
             })

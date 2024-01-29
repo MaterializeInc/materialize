@@ -15,9 +15,9 @@ use std::sync::Arc;
 use mz_adapter::{AppendWebhookError, AppendWebhookResponse, WebhookAppenderCache};
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::str::StrExt;
-use mz_repr::adt::jsonb::JsonbPacker;
-use mz_repr::{ColumnType, Datum, Row, ScalarType};
-use mz_sql::plan::{WebhookHeaderFilters, WebhookHeaders};
+use mz_repr::adt::jsonb::Jsonb;
+use mz_repr::{Datum, Row, RowPacker, ScalarType};
+use mz_sql::plan::{WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders};
 use mz_storage_types::controller::StorageError;
 
 use axum::extract::{Path, State};
@@ -99,7 +99,7 @@ async fn append_webhook(
     // Get an appender for the provided object, if that object exists.
     let AppendWebhookResponse {
         tx,
-        body_ty,
+        body_format,
         header_tys,
         validator,
     } = async {
@@ -142,53 +142,94 @@ async fn append_webhook(
     }
 
     // Pack our body and headers into a Row.
-    let row = pack_row(Bytes::clone(body), headers, body_ty, header_tys)?;
+    let rows = pack_rows(body, &body_format, headers, &header_tys)?;
 
     // Send the row to get appended.
-    tx.append(vec![(row, 1)]).await?;
+    tx.append(rows).await?;
 
     Ok(())
 }
 
-/// Given the body and headers of a request, pack them into a [`Row`].
-fn pack_row(
-    body: Bytes,
+/// Packs the body and headers of a webhook request into as many rows as necessary.
+///
+/// TODO(parkmycar): Should we be consolidating the returned Rows here? Presumably something in
+/// storage would already be doing it, so no need to do it twice?
+fn pack_rows(
+    body: &[u8],
+    body_format: &WebhookBodyFormat,
     headers: &BTreeMap<String, String>,
-    body_ty: ColumnType,
-    header_tys: WebhookHeaders,
+    header_tys: &WebhookHeaders,
+) -> Result<Vec<(Row, i64)>, AppendWebhookError> {
+    // This method isn't that "deep" but it reflects the way we intend for the packing process to
+    // work and makes testing easier.
+    let rows = transform_body(body, body_format)?
+        .into_iter()
+        .map(|row| pack_header(row, headers, header_tys).map(|row| (row, 1)))
+        .collect::<Result<_, _>>()?;
+    Ok(rows)
+}
+
+/// Transforms the body of a webhook request into a `Vec<BodyRow>`.
+fn transform_body(
+    body: &[u8],
+    format: &WebhookBodyFormat,
+) -> Result<Vec<BodyRow>, AppendWebhookError> {
+    let rows = match format {
+        WebhookBodyFormat::Bytes => {
+            vec![Row::pack_slice(&[Datum::Bytes(&body[..])])]
+        }
+        WebhookBodyFormat::Text => {
+            let s = std::str::from_utf8(body)
+                .map_err(|m| AppendWebhookError::InvalidUtf8Body { msg: m.to_string() })?;
+            vec![Row::pack_slice(&[Datum::String(s)])]
+        }
+        WebhookBodyFormat::Json { array } => {
+            let value: serde_json::Value = serde_json::from_slice(body)
+                .map_err(|m| AppendWebhookError::InvalidJsonBody { msg: m.to_string() })?;
+
+            // Optionally expand a JSON array into separate rows, if requested.
+            let objects = match value {
+                serde_json::Value::Array(inners) if *array => inners,
+                value => vec![value],
+            };
+
+            let rows = objects
+                .into_iter()
+                .map(|o| {
+                    let row = Jsonb::from_serde_json(o)
+                        .map_err(|m| AppendWebhookError::InvalidJsonBody { msg: m.to_string() })?
+                        .into_row();
+                    Ok::<_, AppendWebhookError>(row)
+                })
+                .collect::<Result<_, _>>()?;
+            rows
+        }
+    };
+
+    // A `Row` cannot describe its schema without unpacking it. To add some safety we wrap the
+    // returned `Row`s in a newtype to signify they already have the "body" column packed.
+    let body_rows = rows.into_iter().map(BodyRow).collect();
+
+    Ok(body_rows)
+}
+
+/// Pack the headers of a request into a [`Row`].
+fn pack_header(
+    mut body_row: BodyRow,
+    headers: &BTreeMap<String, String>,
+    header_tys: &WebhookHeaders,
 ) -> Result<Row, AppendWebhookError> {
     // 1 column for the body plus however many are needed for the headers.
     let num_cols = 1 + header_tys.num_columns();
-    let mut num_cols_written = 0;
+    // The provided Row already has the Body written.
+    let mut num_cols_written = 1;
 
-    // Pack our row.
-    let mut row = Row::with_capacity(body.len());
-    let mut packer = row.packer();
-
-    // Pack our body into a row.
-    match body_ty.scalar_type {
-        ScalarType::Bytes => packer.push(Datum::Bytes(&body[..])),
-        ScalarType::String => {
-            let s = std::str::from_utf8(&body)
-                .map_err(|m| AppendWebhookError::InvalidUtf8Body { msg: m.to_string() })?;
-            packer.push(Datum::String(s));
-        }
-        ScalarType::Jsonb => {
-            let jsonb_packer = JsonbPacker::new(&mut packer);
-            jsonb_packer
-                .pack_slice(&body[..])
-                .map_err(|m| AppendWebhookError::InvalidJsonBody { msg: m.to_string() })?;
-        }
-        ty => Err(anyhow::anyhow!(
-            "Invalid body type for Webhook source: {ty:?}"
-        ))?,
-    }
-    num_cols_written += 1;
+    let mut packer = RowPacker::for_existing_row(body_row.inner_mut());
 
     // Pack the headers into our row, if required.
-    if let Some(filters) = header_tys.header_column {
+    if let Some(filters) = &header_tys.header_column {
         packer.push_dict(
-            filter_headers(headers, &filters).map(|(name, val)| (name, Datum::String(val))),
+            filter_headers(headers, filters).map(|(name, val)| (name, Datum::String(val))),
         );
         num_cols_written += 1;
     }
@@ -208,7 +249,7 @@ fn pack_row(
         packer.push(datum);
     }
 
-    Ok(row)
+    Ok(body_row.into_inner())
 }
 
 fn filter_headers<'a: 'b, 'b>(
@@ -226,6 +267,25 @@ fn filter_headers<'a: 'b, 'b>(
             filters.allow.is_empty() || filters.allow.contains(*header_name)
         })
         .map(|(key, val)| (key.as_str(), val.as_str()))
+}
+
+/// A [`Row`] that has the body of a request already packed into it.
+///
+/// Note: if you're constructing a [`BodyRow`] you need to guarantee the only column packed into
+/// the [`Row`] is a single "body" column.
+#[repr(transparent)]
+struct BodyRow(Row);
+
+impl BodyRow {
+    /// Obtain a mutable reference to the inner [`Row`].
+    fn inner_mut(&mut self) -> &mut Row {
+        &mut self.0
+    }
+
+    /// Return the inner [`Row`].
+    fn into_inner(self) -> Row {
+        self.0
+    }
 }
 
 /// Errors we can encounter when appending data to a Webhook Source.
@@ -334,12 +394,51 @@ mod tests {
     use bytes::Bytes;
     use http::StatusCode;
     use mz_adapter::AppendWebhookError;
-    use mz_repr::{ColumnType, GlobalId, ScalarType};
-    use mz_sql::plan::{WebhookHeaderFilters, WebhookHeaders};
+    use mz_repr::{GlobalId, Row};
+    use mz_sql::plan::{WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders};
     use mz_storage_types::controller::StorageError;
     use proptest::prelude::*;
+    use proptest::strategy::Union;
 
-    use super::{filter_headers, pack_row, WebhookError};
+    use super::{filter_headers, pack_rows, WebhookError};
+
+    // TODO(parkmycar): Move this strategy to `ore`?
+    fn arbitrary_json() -> impl Strategy<Value = serde_json::Value> {
+        let json_leaf = Union::new(vec![
+            any::<()>().prop_map(|_| serde_json::Value::Null).boxed(),
+            any::<bool>().prop_map(serde_json::Value::Bool).boxed(),
+            any::<i64>()
+                .prop_map(|x| serde_json::Value::Number(x.into()))
+                .boxed(),
+            any::<f64>()
+                .prop_map(|x| {
+                    let x: serde_json::value::Number =
+                        x.to_string().parse().expect("failed to parse f64");
+                    serde_json::Value::Number(x)
+                })
+                .boxed(),
+            any::<String>().prop_map(serde_json::Value::String).boxed(),
+        ]);
+
+        json_leaf.prop_recursive(4, 32, 8, |element| {
+            Union::new(vec![
+                prop::collection::vec(element.clone(), 0..16)
+                    .prop_map(serde_json::Value::Array)
+                    .boxed(),
+                prop::collection::hash_map(".*", element, 0..16)
+                    .prop_map(|map| serde_json::Value::Object(map.into_iter().collect()))
+                    .boxed(),
+            ])
+        })
+    }
+
+    #[track_caller]
+    fn check_rows(rows: &Vec<(Row, i64)>, expected_rows: usize, expected_cols: usize) {
+        assert_eq!(rows.len(), expected_rows);
+        for (row, _diff) in rows {
+            assert_eq!(row.unpack().len(), expected_cols);
+        }
+    }
 
     #[mz_ore::test]
     fn smoke_test_storage_error_response_status() {
@@ -356,19 +455,6 @@ mod tests {
         ))
         .into_response();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[mz_ore::test]
-    fn test_pack_invalid_column_type() {
-        let body = Bytes::from(vec![42, 42, 42, 42]);
-        let headers = BTreeMap::default();
-
-        // Int64 is an invalid column type for a webhook source.
-        let body_ty = ColumnType {
-            scalar_type: ScalarType::Int64,
-            nullable: false,
-        };
-        assert!(pack_row(body, &headers, body_ty, WebhookHeaders::default()).is_err());
     }
 
     #[mz_ore::test]
@@ -422,11 +508,71 @@ mod tests {
         assert!(h.next().is_none());
     }
 
+    #[mz_ore::test]
+    fn test_json_array_single() {
+        let single_raw = r#"
+        {
+            "event_type": "i am a single object",
+            "another_field": 42
+        }
+        "#;
+
+        // We should get a single Row regardless of whether or not we're requested to expand.
+        let rows = pack_rows(
+            single_raw.as_bytes(),
+            &WebhookBodyFormat::Json { array: false },
+            &BTreeMap::default(),
+            &WebhookHeaders::default(),
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+
+        // We should get a single Row regardless of whether or not we're requested to expand.
+        let rows = pack_rows(
+            single_raw.as_bytes(),
+            &WebhookBodyFormat::Json { array: true },
+            &BTreeMap::default(),
+            &WebhookHeaders::default(),
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[mz_ore::test]
+    fn test_json_deserializer_multi() {
+        let multi_raw = r#"
+            [
+                { "event_type": "smol" },
+                { "event_type": "dog" }
+            ]
+        "#;
+
+        let rows = pack_rows(
+            multi_raw.as_bytes(),
+            &WebhookBodyFormat::Json { array: false },
+            &BTreeMap::default(),
+            &WebhookHeaders::default(),
+        )
+        .unwrap();
+        // If we don't expand the body, we should have a single row.
+        assert_eq!(rows.len(), 1);
+
+        let rows = pack_rows(
+            multi_raw.as_bytes(),
+            &WebhookBodyFormat::Json { array: true },
+            &BTreeMap::default(),
+            &WebhookHeaders::default(),
+        )
+        .unwrap();
+        // If we _do_ expand the body, we should have a two rows.
+        assert_eq!(rows.len(), 2);
+    }
+
     proptest! {
         #[mz_ore::test]
         fn proptest_pack_row_never_panics(
             body: Vec<u8>,
-            body_ty: ColumnType,
+            body_ty: WebhookBodyFormat,
             headers: BTreeMap<String, String>,
             non_existent_headers: Vec<String>,
             block: BTreeSet<String>,
@@ -455,7 +601,7 @@ mod tests {
             };
 
             // Call this method to make sure it doesn't panic.
-            let _ = pack_row(body, &headers, body_ty, header_tys);
+            let _ = pack_rows(&body[..], &body_ty, &headers, &header_tys);
         }
 
         #[mz_ore::test]
@@ -466,11 +612,12 @@ mod tests {
         ) {
             let body = Bytes::from(body);
 
-            let body_ty = ColumnType { scalar_type: ScalarType::Bytes, nullable: false };
+            let body_ty = WebhookBodyFormat::Bytes;
             let mut header_tys = WebhookHeaders::default();
             header_tys.header_column = include_headers.then(Default::default);
 
-            prop_assert!(pack_row(body, &headers, body_ty, header_tys).is_ok());
+            let rows = pack_rows(&body[..], &body_ty, &headers, &header_tys).unwrap();
+            check_rows(&rows, 1, header_tys.num_columns() + 1);
         }
 
         #[mz_ore::test]
@@ -481,11 +628,12 @@ mod tests {
         ) {
             let body = Bytes::from(body);
 
-            let body_ty = ColumnType { scalar_type: ScalarType::String, nullable: false };
+            let body_ty = WebhookBodyFormat::Text;
             let mut header_tys = WebhookHeaders::default();
             header_tys.header_column = include_headers.then(Default::default);
 
-            prop_assert!(pack_row(body, &headers, body_ty, header_tys).is_ok());
+            let rows = pack_rows(&body[..], &body_ty, &headers, &header_tys).unwrap();
+            check_rows(&rows, 1, header_tys.num_columns() + 1);
         }
 
         #[mz_ore::test]
@@ -498,7 +646,7 @@ mod tests {
             allow: BTreeSet<String>,
         ) {
             let body = Bytes::from(body);
-            let body_ty = ColumnType { scalar_type: ScalarType::String, nullable: false };
+            let body_ty = WebhookBodyFormat::Text;
 
             // Include the headers column with a random set of block and allow.
             let filters = WebhookHeaderFilters { block, allow };
@@ -521,7 +669,34 @@ mod tests {
                 mapped_headers,
             };
 
-            prop_assert!(pack_row(body, &headers, body_ty, header_tys).is_ok());
+            let rows = pack_rows(&body[..], &body_ty, &headers, &header_tys).unwrap();
+            check_rows(&rows, 1, header_tys.num_columns() + 1);
+        }
+
+        #[mz_ore::test]
+        fn proptest_pack_json_with_array_expansion(
+            body in arbitrary_json(),
+            expand_array: bool,
+            headers: BTreeMap<String, String>,
+            include_headers: bool,
+        ) {
+            let json_raw = serde_json::to_vec(&body).unwrap();
+            let mut header_tys = WebhookHeaders::default();
+            header_tys.header_column = include_headers.then(Default::default);
+
+            let rows = pack_rows(
+                &json_raw[..],
+                &WebhookBodyFormat::Json { array: expand_array },
+                &headers,
+                &header_tys,
+            )
+            .unwrap();
+
+            let expected_num_rows = match body {
+                serde_json::Value::Array(inner) if expand_array => inner.len(),
+                _ => 1,
+            };
+            check_rows(&rows, expected_num_rows, header_tys.num_columns() + 1);
         }
     }
 }
