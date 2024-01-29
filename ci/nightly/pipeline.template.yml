@@ -787,7 +787,6 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=MigrateAarch64X86]
-        skip: "TODO(def-) Reenable when #24794 is fixed"
 
       - id: checks-upgrade-matrix
         label: "Random upgrades over the entire matrix"
