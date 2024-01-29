@@ -30,11 +30,15 @@ class InsertSelect(Check):
             Testdrive(dedent(s))
             for s in [
                 """
+                > SET statement_timeout = '240s'
+
                 > INSERT INTO insert_select_source_table SELECT 'T2' || generate_series FROM generate_series(1, 10000);
 
                 > INSERT INTO insert_select_destination SELECT * FROM insert_select_source_table;
                 """,
                 """
+                > SET statement_timeout = '240s'
+
                 > INSERT INTO insert_select_source_table SELECT 'T3' || generate_series FROM generate_series(1, 10000);
 
                 > INSERT INTO insert_select_destination SELECT * FROM insert_select_source_table;
