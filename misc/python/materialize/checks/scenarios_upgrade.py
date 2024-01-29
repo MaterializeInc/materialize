@@ -70,7 +70,7 @@ class UpgradeEntireMz(Scenario):
             Manipulate(self, phase=2),
             Validate(self),
             # A second restart while already on the new version
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(self, tag=None),
             Validate(self),
         ]
@@ -266,7 +266,12 @@ class PreflightCheckContinue(Scenario):
                 self,
                 tag=None,
                 environment_extra=["MZ_DEPLOY_GENERATION=1"],
-                healthcheck=False,
+                healthcheck=[
+                    "CMD",
+                    "curl",
+                    "-f",
+                    "localhost:6878/api/leader/status",
+                ],
             ),
             WaitReadyMz(),
             PromoteMz(),
@@ -274,7 +279,7 @@ class PreflightCheckContinue(Scenario):
             Validate(self),
             # A second restart while already on the new version
             KillMz(),
-            StartMz(self, tag=None, environment_extra=["MZ_DEPLOY_GENERATION=1"]),
+            StartMz(self, tag=None),
             Validate(self),
         ]
 
@@ -298,7 +303,12 @@ class PreflightCheckRollback(Scenario):
                 self,
                 tag=None,
                 environment_extra=["MZ_DEPLOY_GENERATION=1"],
-                healthcheck=False,
+                healthcheck=[
+                    "CMD",
+                    "curl",
+                    "-f",
+                    "localhost:6878/api/leader/status",
+                ],
             ),
             WaitReadyMz(),
             KillMz(capture_logs=True),
@@ -306,11 +316,10 @@ class PreflightCheckRollback(Scenario):
             Manipulate(self, phase=2),
             Validate(self),
             # A second restart while still on old version
-            KillMz(),
+            KillMz(capture_logs=True),
             StartMz(
                 self,
                 tag=self.base_version(),
-                environment_extra=["MZ_DEPLOY_GENERATION=0"],
             ),
             Validate(self),
         ]
