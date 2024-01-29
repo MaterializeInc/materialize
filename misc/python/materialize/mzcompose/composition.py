@@ -325,6 +325,9 @@ class Composition:
                     )
             break
 
+        if not self.silent and not silent:
+            print("--- ")
+
         assert ret is not None
         return ret
 
