@@ -30,6 +30,8 @@ models:
       schema: tpch
     pg_cdc:
       schema: pg_cdc
+    simple_table:
+      schema: simple_table
 
 tests:
     +cluster: qa_canary_environment_compute
