@@ -91,7 +91,8 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
     let (button, transient_errors) = builder.build_fallible(move |caps| {
         Box::pin(async move {
             let (id, worker_id) = (config.id, config.worker_id);
-            let [data_cap_set, upper_cap_set, definite_error_cap_set]: &mut [_; 3] = caps.try_into().unwrap();
+            let [data_cap_set, upper_cap_set, definite_error_cap_set]: &mut [_; 3] =
+                caps.try_into().unwrap();
 
             // Only run the replication reader on the worker responsible for it.
             if !config.responsible_for(REPL_READER) {
@@ -100,27 +101,39 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
 
             let connection_config = connection
                 .connection
-                .config(&*config.config.connection_context.secrets_reader, &config.config)
+                .config(
+                    &*config.config.connection_context.secrets_reader,
+                    &config.config,
+                )
                 .await?;
 
-            let mut conn = connection_config.connect(
-                &format!("timely-{worker_id} MySQL replication reader"),
-                &config.config.connection_context.ssh_tunnel_manager,
-            ).await?;
+            let mut conn = connection_config
+                .connect(
+                    &format!("timely-{worker_id} MySQL replication reader"),
+                    &config.config.connection_context.ssh_tunnel_manager,
+                )
+                .await?;
 
             // Get the set of GTIDs currently available in the binlogs (GTIDs that we can safely start replication from)
-            let binlog_gtid_set: String = conn.query_first("SELECT GTID_SUBTRACT(@@global.gtid_executed, @@global.gtid_purged)").await?.unwrap();
+            let binlog_gtid_set: String = conn
+                .query_first("SELECT GTID_SUBTRACT(@@global.gtid_executed, @@global.gtid_purged)")
+                .await?
+                .unwrap();
             // NOTE: The assumption here for the MVP is that there is only one source-id in the GTID set, so we can just
             // take the transaction_id from the first one. Fix this once we move to a partitioned timestamp.
-            let binlog_start_gtid = GtidSet::from_str(&binlog_gtid_set)?.first().expect("At least one gtid").to_owned();
-            let binlog_start_transaction_id = TransactionId::new(binlog_start_gtid.earliest_transaction_id());
+            let binlog_start_gtid = GtidSet::from_str(&binlog_gtid_set)?
+                .first()
+                .expect("At least one gtid")
+                .to_owned();
+            let binlog_start_transaction_id =
+                TransactionId::new(binlog_start_gtid.earliest_transaction_id());
 
             let resume_upper = Antichain::from_iter(
                 subsource_resume_uppers
                     .values()
                     .flat_map(|f| f.elements())
                     // Advance any upper as far as the start of the binlog.
-                    .map(|t| std::cmp::max(*t, binlog_start_transaction_id))
+                    .map(|t| std::cmp::max(*t, binlog_start_transaction_id)),
             );
 
             let Some(resume_transaction_id) = resume_upper.into_option() else {
@@ -128,22 +141,41 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
             };
             data_cap_set.downgrade([&resume_transaction_id]);
             upper_cap_set.downgrade([&resume_transaction_id]);
-            trace!(%id, "timely-{worker_id} replication reader started transaction_id={}", resume_transaction_id);
+            trace!(
+                %id,
+                "timely-{worker_id} replication \
+                   reader started transaction_id={}",
+                resume_transaction_id
+            );
 
             let mut rewinds = BTreeMap::new();
             while let Some(event) = rewind_input.next().await {
                 if let AsyncEvent::Data(caps, data) = event {
                     for req in data {
-                        let snapshot_transaction_id = TransactionId::new(req.snapshot_gtid_set.first().expect("at least one gtid").latest_transaction_id());
+                        let snapshot_transaction_id = TransactionId::new(
+                            req.snapshot_gtid_set
+                                .first()
+                                .expect("at least one gtid")
+                                .latest_transaction_id(),
+                        );
                         if resume_transaction_id > snapshot_transaction_id + TransactionId::new(1) {
-                            let err = DefiniteError::BinlogCompactedPastResumePoint(resume_transaction_id.to_string(), (snapshot_transaction_id + TransactionId::new(1)).to_string());
+                            let err = DefiniteError::BinlogCompactedPastResumePoint(
+                                resume_transaction_id.to_string(),
+                                (snapshot_transaction_id + TransactionId::new(1)).to_string(),
+                            );
                             // If the replication stream cannot be obtained from the resume point there is
                             // nothing else to do. These errors are not retractable.
                             for (output_index, _) in table_info.values() {
-                                let update = ((*output_index, Err(err.clone())), TransactionId::MAX, 1);
+                                let update =
+                                    ((*output_index, Err(err.clone())), TransactionId::MAX, 1);
                                 data_output.give(&data_cap_set[0], update).await;
                             }
-                            definite_error_handle.give(&definite_error_cap_set[0], ReplicationError::Definite(Rc::new(err))).await;
+                            definite_error_handle
+                                .give(
+                                    &definite_error_cap_set[0],
+                                    ReplicationError::Definite(Rc::new(err)),
+                                )
+                                .await;
                             return Ok(());
                         }
                         rewinds.insert(req.table.clone(), (caps.clone(), req));
@@ -169,14 +201,23 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
                         let update = ((*output_index, Err(err.clone())), TransactionId::MAX, 1);
                         data_output.give(&data_cap_set[0], update).await;
                     }
-                    definite_error_handle.give(&definite_error_cap_set[0], ReplicationError::Definite(Rc::new(err))).await;
+                    definite_error_handle
+                        .give(
+                            &definite_error_cap_set[0],
+                            ReplicationError::Definite(Rc::new(err)),
+                        )
+                        .await;
                     return Ok(());
                 }
             };
             let mut stream = pin!(binlog_stream.peekable());
 
             let mut container = Vec::new();
-            let max_capacity = timely::container::buffer::default_capacity::<((u32, Result<Vec<Option<Bytes>>, DefiniteError>), TransactionId, Diff)>();
+            let max_capacity = timely::container::buffer::default_capacity::<(
+                (u32, Result<Vec<Option<Bytes>>, DefiniteError>),
+                TransactionId,
+                Diff,
+            )>();
 
             // Binlog Table Id -> Table Name (its key in the `table_info` map)
             let mut table_id_map = BTreeMap::<u64, UnresolvedItemName>::new();
@@ -194,19 +235,33 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
                 let event_data = event.read_data()?;
 
                 match event_data {
-                    Some(EventData::HeartbeatEvent) =>  {
+                    Some(EventData::HeartbeatEvent) => {
                         // The upstream MySQL source only emits a heartbeat when there are no other events
                         // sent within the heartbeat interval. This means that we can safely advance the
                         // frontier once since we know there were no more events for the last sent GTID.
                         // See: https://dev.mysql.com/doc/refman/8.0/en/replication-administration-status.html
                         if advance_on_heartbeat {
-                            data_output.give_container(&data_cap_set[0], &mut container).await;
+                            data_output
+                                .give_container(&data_cap_set[0], &mut container)
+                                .await;
 
                             new_upper = new_upper + TransactionId::new(1);
-                            trace!(%id, "heartbeat: timely-{worker_id} advancing frontier to {new_upper:?}");
+                            trace!(
+                                %id,
+                                "heartbeat: timely-{worker_id} advancing \
+                                   frontier to {new_upper:?}"
+                            );
                             upper_cap_set.downgrade([&new_upper]);
                             data_cap_set.downgrade([&new_upper]);
-                            rewinds.retain(|_, (_, req)| data_cap_set[0].time() <= &TransactionId::new(req.snapshot_gtid_set.first().expect("at least one gtid").latest_transaction_id()));
+                            rewinds.retain(|_, (_, req)| {
+                                data_cap_set[0].time()
+                                    <= &TransactionId::new(
+                                        req.snapshot_gtid_set
+                                            .first()
+                                            .expect("at least one gtid")
+                                            .latest_transaction_id(),
+                                    )
+                            });
                             advance_on_heartbeat = false;
                         }
                     }
@@ -216,7 +271,12 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
                         // TODO: Use this when we use a partitioned timestamp
                         let _source_id = Uuid::from_bytes(event.sid());
                         let received_upper = TransactionId::new(event.gno());
-                        assert!(new_upper <= received_upper, "GTID went backwards {} -> {}", new_upper, received_upper);
+                        assert!(
+                            new_upper <= received_upper,
+                            "GTID went backwards {} -> {}",
+                            new_upper,
+                            received_upper
+                        );
                         new_upper = received_upper;
 
                         // Indicate that we should advance the frontier if we receive a heartbeat since that would indicate
@@ -227,9 +287,12 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
                     Some(EventData::RowsEvent(data)) => {
                         // Find the relevant table
                         let binlog_table_id = data.table_id();
-                        let table_map_event = stream.get_ref().get_tme(binlog_table_id).ok_or_else(|| {
-                            TransientError::Generic(anyhow::anyhow!("Table map event not found"))
-                        })?;
+                        let table_map_event =
+                            stream.get_ref().get_tme(binlog_table_id).ok_or_else(|| {
+                                TransientError::Generic(anyhow::anyhow!(
+                                    "Table map event not found"
+                                ))
+                            })?;
                         let table = match (
                             table_id_map.get(&binlog_table_id),
                             skipped_table_ids.get(&binlog_table_id),
@@ -240,7 +303,10 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
                                 continue;
                             }
                             (None, None) => {
-                                let table = table_name(&*table_map_event.database_name(), &*table_map_event.table_name())?;
+                                let table = table_name(
+                                    &*table_map_event.database_name(),
+                                    &*table_map_event.table_name(),
+                                )?;
                                 if table_info.contains_key(&table) {
                                     table_id_map.insert(binlog_table_id, table);
                                     &table_id_map[&binlog_table_id]
@@ -269,24 +335,51 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
 
                                 // Rewind this update if it was already present in the snapshot
                                 if let Some((rewind_caps, req)) = rewinds.get(table) {
-                                    let latest_transaction_id = req.snapshot_gtid_set.first().expect("at least one gtid").latest_transaction_id();
+                                    let latest_transaction_id = req
+                                        .snapshot_gtid_set
+                                        .first()
+                                        .expect("at least one gtid")
+                                        .latest_transaction_id();
                                     let [data_cap, _upper_cap] = rewind_caps;
                                     if new_upper <= TransactionId::new(latest_transaction_id) {
-                                        data_output.give(data_cap, (data.clone(), TransactionId::minimum(), -diff)).await;
+                                        data_output
+                                            .give(
+                                                data_cap,
+                                                (data.clone(), TransactionId::minimum(), -diff),
+                                            )
+                                            .await;
                                     }
                                 }
-                                trace!(%id, "timely-{worker_id} sending update {data:?} at {new_upper:?}");
+                                trace!(
+                                    %id,
+                                    "timely-{worker_id} sending update \
+                                       {data:?} at {new_upper:?}"
+                                );
                                 container.push((data, new_upper, diff));
                             }
                         }
 
                         // flush any pending records and advance our frontier
                         if container.len() > max_capacity {
-                            data_output.give_container(&data_cap_set[0], &mut container).await;
-                            trace!(%id, "timely-{worker_id} advancing frontier to {new_upper:?}");
+                            data_output
+                                .give_container(&data_cap_set[0], &mut container)
+                                .await;
+                            trace!(
+                                %id,
+                                "timely-{worker_id} advancing \
+                                    frontier to {new_upper:?}"
+                            );
                             upper_cap_set.downgrade([&new_upper]);
                             data_cap_set.downgrade([&new_upper]);
-                            rewinds.retain(|_, (_, req)| data_cap_set[0].time() <= &TransactionId::new(req.snapshot_gtid_set.first().expect("at least one gtid").latest_transaction_id()));
+                            rewinds.retain(|_, (_, req)| {
+                                data_cap_set[0].time()
+                                    <= &TransactionId::new(
+                                        req.snapshot_gtid_set
+                                            .first()
+                                            .expect("at least one gtid")
+                                            .latest_transaction_id(),
+                                    )
+                            });
                         }
                     }
                     _ => {

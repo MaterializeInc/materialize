@@ -164,7 +164,7 @@ impl SourceRender for KafkaSourceConnection {
                 metadata_columns,
                 // Exhaustive match protects against forgetting to apply an
                 // option. Ignored fields are justified below.
-                connection_id: _, // not needed here
+                connection_id: _,   // not needed here
                 group_id_prefix: _, // used above via `self.group_id`
             } = self;
 
@@ -196,7 +196,10 @@ impl SourceRender for KafkaSourceConnection {
                             start_offsets.insert(*pid, restored_offset);
                         }
 
-                        let part_ts = Partitioned::new_singleton(RangeBound::exact(*pid), ts.timestamp().clone());
+                        let part_ts = Partitioned::new_singleton(
+                            RangeBound::exact(*pid),
+                            ts.timestamp().clone(),
+                        );
                         let part_cap = PartitionCapability {
                             data: data_cap.delayed(&part_ts),
                             progress: progress_cap.delayed(&part_ts),
@@ -205,8 +208,11 @@ impl SourceRender for KafkaSourceConnection {
                     }
                 }
             }
-            let lower = max_pid.map(RangeBound::after).unwrap_or(RangeBound::NegInfinity);
-            let future_ts = Partitioned::new_range(lower, RangeBound::PosInfinity, MzOffset::from(0));
+            let lower = max_pid
+                .map(RangeBound::after)
+                .unwrap_or(RangeBound::NegInfinity);
+            let future_ts =
+                Partitioned::new_range(lower, RangeBound::PosInfinity, MzOffset::from(0));
             data_cap.downgrade(&future_ts);
             progress_cap.downgrade(&future_ts);
 
@@ -239,7 +245,10 @@ impl SourceRender for KafkaSourceConnection {
                         "auto.offset.reset" => "earliest".into(),
                         // Use the user-configured topic metadata refresh
                         // interval.
-                        "topic.metadata.refresh.interval.ms" => topic_metadata_refresh_interval.as_millis().to_string(),
+                        "topic.metadata.refresh.interval.ms" =>
+                            topic_metadata_refresh_interval
+                            .as_millis()
+                            .to_string(),
                         // TODO: document the rationale for this.
                         "fetch.message.max.bytes" => "134217728".into(),
                         // Consumer group ID, which may have been overridden by
@@ -306,8 +315,7 @@ impl SourceRender for KafkaSourceConnection {
 
                 // We want a fairly low ceiling on our polling frequency, since we rely
                 // on this heartbeat to determine the health of our Kafka connection.
-                let poll_interval =
-                    topic_metadata_refresh_interval.min(Duration::from_secs(60));
+                let poll_interval = topic_metadata_refresh_interval.min(Duration::from_secs(60));
 
                 let status_report = Arc::clone(&health_status);
 
@@ -453,8 +461,11 @@ impl SourceRender for KafkaSourceConnection {
                 let partition_info = reader.partition_info.lock().unwrap().take();
                 if let Some(partitions) = partition_info {
                     let max_pid = partitions.keys().last().cloned();
-                    let lower = max_pid.map(RangeBound::after).unwrap_or(RangeBound::NegInfinity);
-                    let future_ts = Partitioned::new_range(lower, RangeBound::PosInfinity, MzOffset::from(0));
+                    let lower = max_pid
+                        .map(RangeBound::after)
+                        .unwrap_or(RangeBound::NegInfinity);
+                    let future_ts =
+                        Partitioned::new_range(lower, RangeBound::PosInfinity, MzOffset::from(0));
 
                     // Topics are identified by name but it's possible that a user recreates a
                     // topic with the same name but different configuration. Ideally we'd want to
@@ -502,9 +513,14 @@ impl SourceRender for KafkaSourceConnection {
                                     None => 0u64,
                                 };
                                 let start_offset = std::cmp::max(start_offset, watermarks.low);
-                                let part_since_ts =
-                                    Partitioned::new_singleton(RangeBound::exact(pid), MzOffset::from(start_offset));
-                                let part_upper_ts = Partitioned::new_singleton(RangeBound::exact(pid), MzOffset::from(watermarks.high));
+                                let part_since_ts = Partitioned::new_singleton(
+                                    RangeBound::exact(pid),
+                                    MzOffset::from(start_offset),
+                                );
+                                let part_upper_ts = Partitioned::new_singleton(
+                                    RangeBound::exact(pid),
+                                    MzOffset::from(watermarks.high),
+                                );
 
                                 // This is the moment at which we have discovered a new partition
                                 // and we need to make sure we produce its initial snapshot at a,
@@ -627,7 +643,8 @@ impl SourceRender for KafkaSourceConnection {
                     if let Offset::Offset(offset) = position.offset() {
                         let pid = position.partition();
                         let upper_offset = MzOffset::from(u64::try_from(offset).unwrap());
-                        let upper = Partitioned::new_singleton(RangeBound::exact(pid), upper_offset);
+                        let upper =
+                            Partitioned::new_singleton(RangeBound::exact(pid), upper_offset);
 
                         let part_cap = reader.partition_capabilities.get_mut(&pid).unwrap();
                         part_cap.data.downgrade(&upper);
