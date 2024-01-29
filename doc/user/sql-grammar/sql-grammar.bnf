@@ -198,7 +198,7 @@ create_source_webhook ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   'IN CLUSTER' cluster_name
   'FROM' 'WEBHOOK'
-  'BODY FORMAT' ('TEXT' | 'JSON' | 'BYTES')
+  'BODY FORMAT' ('TEXT' | 'JSON' ('ARRAY')? | 'BYTES')
   (
     ('INCLUDE HEADER'  header_name 'AS' column_alias ('BYTES')? )? |
     ('INCLUDE HEADERS' ( '(' ('NOT')? header_name ( ',' ('NOT')? header_name )* ')' )?)?
