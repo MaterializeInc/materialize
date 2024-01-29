@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
+import time
 from textwrap import dedent
 from typing import TYPE_CHECKING, Any
 
@@ -40,6 +42,7 @@ class StartMz(MzcomposeAction):
         mz_service: str | None = None,
         catalog_store: str | None = None,
         platform: str | None = None,
+        healthcheck: bool = True,
     ) -> None:
         self.tag = tag
         self.environment_extra = environment_extra
@@ -50,6 +53,7 @@ class StartMz(MzcomposeAction):
             if scenario.base_version() >= MzVersion.parse_mz("v0.82.0-dev")
             else "stash"
         )
+        self.healthcheck = healthcheck
         self.mz_service = mz_service
         self.platform = platform
 
@@ -83,10 +87,14 @@ class StartMz(MzcomposeAction):
             sanity_restart=False,
             catalog_store=self.catalog_store,
             platform=self.platform,
+            healthcheck=self.healthcheck,
         )
 
         with c.override(mz):
-            c.up("materialized" if self.mz_service is None else self.mz_service)
+            c.up(
+                "materialized" if self.mz_service is None else self.mz_service,
+                wait=self.healthcheck,
+            )
 
             # This should live in ssh.py and alter_connection.py, but accessing the
             # ssh bastion host from inside a check is not possible currently.
@@ -365,3 +373,46 @@ class DropCreateDefaultReplica(MzcomposeAction):
             port=6877,
             user="mz_system",
         )
+
+
+class WaitReadyMz(MzcomposeAction):
+    """Wait until environmentd is ready, see https://github.com/MaterializeInc/cloud/blob/main/doc/design/20230418_upgrade_orchestration.md#get-apileaderstatus"""
+
+    def __init__(self, mz_service: str = "materialized") -> None:
+        self.mz_service = mz_service
+
+    def execute(self, e: Executor) -> None:
+        c = e.mzcompose_composition()
+
+        while True:
+            result = json.loads(
+                c.exec(
+                    self.mz_service, "curl", "http://127.0.0.1:6878/api/leader/status"
+                ).stdout
+            )
+            if result["status"] == "ReadyToPromote":
+                return
+            assert result["status"] == "IsInitializing", f"Unexpected status {result}"
+            print("Not ready yet, waiting 1 s")
+            time.sleep(1)
+
+
+class PromoteMz(MzcomposeAction):
+    """Promote environmentd to leader, see https://github.com/MaterializeInc/cloud/blob/main/doc/design/20230418_upgrade_orchestration.md#post-apileaderpromote"""
+
+    def __init__(self, mz_service: str = "materialized") -> None:
+        self.mz_service = mz_service
+
+    def execute(self, e: Executor) -> None:
+        c = e.mzcompose_composition()
+
+        result = json.loads(
+            c.exec(
+                self.mz_service,
+                "curl",
+                "-X",
+                "POST",
+                "http://127.0.0.1:6878/api/leader/promote",
+            ).stdout
+        )
+        assert result["result"] == "Success", f"Unexpected result {result}"

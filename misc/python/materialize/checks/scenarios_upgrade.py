@@ -14,9 +14,11 @@ from materialize.checks.executors import Executor
 from materialize.checks.mzcompose_actions import (
     KillClusterdCompute,
     KillMz,
+    PromoteMz,
     StartClusterdCompute,
     StartMz,
     UseClusterdCompute,
+    WaitReadyMz,
 )
 from materialize.checks.scenarios import Scenario
 from materialize.mz_version import MzVersion
@@ -241,5 +243,74 @@ class UpgradeClusterdComputeFirst(Scenario):
             Validate(self),
             KillMz(),
             StartMz(self, tag=None),
+            Validate(self),
+        ]
+
+
+class PreflightCheckContinue(Scenario):
+    """Preflght check, then upgrade"""
+
+    def base_version(self) -> MzVersion:
+        return get_last_version()
+
+    def actions(self) -> list[Action]:
+        print(f"Upgrading from tag {self.base_version()}")
+        return [
+            StartMz(self, tag=self.base_version()),
+            Initialize(self),
+            Manipulate(self, phase=1),
+            KillMz(
+                capture_logs=True
+            ),  #  We always use True here otherwise docker-compose will lose the pre-upgrade logs
+            StartMz(
+                self,
+                tag=None,
+                environment_extra=["MZ_DEPLOY_GENERATION=1"],
+                healthcheck=False,
+            ),
+            WaitReadyMz(),
+            PromoteMz(),
+            Manipulate(self, phase=2),
+            Validate(self),
+            # A second restart while already on the new version
+            KillMz(),
+            StartMz(self, tag=None, environment_extra=["MZ_DEPLOY_GENERATION=1"]),
+            Validate(self),
+        ]
+
+
+class PreflightCheckRollback(Scenario):
+    """Preflght check, then roll back"""
+
+    def base_version(self) -> MzVersion:
+        return get_last_version()
+
+    def actions(self) -> list[Action]:
+        print(f"Upgrading from tag {self.base_version()}")
+        return [
+            StartMz(self, tag=self.base_version()),
+            Initialize(self),
+            Manipulate(self, phase=1),
+            KillMz(
+                capture_logs=True
+            ),  #  We always use True here otherwise docker-compose will lose the pre-upgrade logs
+            StartMz(
+                self,
+                tag=None,
+                environment_extra=["MZ_DEPLOY_GENERATION=1"],
+                healthcheck=False,
+            ),
+            WaitReadyMz(),
+            KillMz(capture_logs=True),
+            StartMz(self, tag=self.base_version()),
+            Manipulate(self, phase=2),
+            Validate(self),
+            # A second restart while still on old version
+            KillMz(),
+            StartMz(
+                self,
+                tag=self.base_version(),
+                environment_extra=["MZ_DEPLOY_GENERATION=0"],
+            ),
             Validate(self),
         ]
