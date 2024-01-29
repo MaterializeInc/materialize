@@ -131,7 +131,21 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
-    print(f"--- Random seed is {args.seed}")
+    shard = os.environ.get("BUILDKITE_PARALLEL_JOB")
+    shard_count = os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT")
+
+    if shard is None and shard_count is None:
+        shard = 0
+        shard_count = 1
+    elif shard is not None and shard_count is not None:
+        shard = int(shard)
+        shard_count = int(shard_count)
+    else:
+        raise RuntimeError(
+            "'BUILDKITE_PARALLEL_JOB' and 'BUILDKITE_PARALLEL_JOB_COUNT' need to be both specified or not specified"
+        )
+
+    print(f"--- Random seed is {args.seed}, shard is {shard} of {shard_count} shards.")
     random.seed(args.seed)
 
     all_checks = {check.__name__: check for check in all_subclasses(Check)}
@@ -161,6 +175,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
     ):
         if args.scenario_id is not None and id != args.scenario_id:
+            continue
+
+        if id % shard_count != shard:
             continue
 
         print(f"--- Testing upgrade scenario with id {id}: {upgrade_scenario}")

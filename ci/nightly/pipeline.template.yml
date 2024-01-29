@@ -769,8 +769,9 @@ steps:
               args: [--scenario=TimestampOracleToggle, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-upgrade-matrix
-        label: "Random upgrades over the entire matrix"
-        timeout_in_minutes: 600
+        label: "Random upgrades over the entire matrix %N"
+        timeout_in_minutes: 150
+        parallelism: 4
         agents:
           queue: linux-aarch64
         artifact_paths: junit_*.xml
