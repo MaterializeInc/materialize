@@ -21,19 +21,18 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.testdrive import Testdrive
 
-REGION = "aws/us-east-1"
-ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
-USERNAME = os.getenv("PRODUCTION_SANDBOX_USERNAME", "infra+bot@materialize.com")
-APP_PASSWORD = os.environ["PRODUCTION_SANDBOX_APP_PASSWORD"]
-
-
 SERVICES = [
     Testdrive(),  # Overriden below
-    Mz(region=REGION, environment=ENVIRONMENT, app_password=APP_PASSWORD),
+    Mz(app_password=""),  # Overridden below
 ]
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    REGION = "aws/us-east-1"
+    ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
+    USERNAME = os.getenv("PRODUCTION_SANDBOX_USERNAME", "infra+bot@materialize.com")
+    APP_PASSWORD = os.environ["PRODUCTION_SANDBOX_APP_PASSWORD"]
+
     parser.add_argument("--runtime", default=600, type=int, help="Runtime in seconds")
     args = parser.parse_args()
 
@@ -45,7 +44,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         Testdrive(
             no_reset=True,
             materialize_url=f"postgres://{urllib.parse.quote(USERNAME)}:{urllib.parse.quote(APP_PASSWORD)}@{host}:6875/materialize",
-        )
+        ),
+        Mz(region=REGION, environment=ENVIRONMENT, app_password=APP_PASSWORD),
     ):
         c.up("testdrive", persistent=True)
 
