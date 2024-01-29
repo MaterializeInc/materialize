@@ -761,9 +761,9 @@ explain with(arity, join_impls) select * from t1 as a1 join t1 as a2 on (a2.f2 =
 Explained Query:
   CrossJoin type=delta // { arity: 4 }
     implementation
-      %0:t1 » %2[×]UA » %1:t1[×]Aef
-      %1:t1 » %2[×]UA » %0:t1[×]A
-      %2 » %1:t1[×]Aef » %0:t1[×]A
+      %0:t1 » %2[×]U » %1:t1[×]ef
+      %1:t1 » %2[×]U » %0:t1[×]
+      %2 » %1:t1[×]ef » %0:t1[×]
     ArrangeBy keys=[[]] // { arity: 2 }
       ReadStorage materialize.public.t1 // { arity: 2 }
     ArrangeBy keys=[[]] // { arity: 2 }
