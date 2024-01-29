@@ -2435,6 +2435,7 @@ mod monoids {
             | AggregateFunc::Dummy
             | AggregateFunc::JsonbAgg { .. }
             | AggregateFunc::JsonbObjectAgg { .. }
+            | AggregateFunc::MapAgg { .. }
             | AggregateFunc::ArrayConcat { .. }
             | AggregateFunc::ListConcat { .. }
             | AggregateFunc::StringAgg { .. }

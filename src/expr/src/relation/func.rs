@@ -237,11 +237,7 @@ where
     })
 }
 
-fn jsonb_object_agg<'a, I>(
-    datums: I,
-    temp_storage: &'a RowArena,
-    order_by: &[ColumnOrder],
-) -> Datum<'a>
+fn dict_agg<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -1276,6 +1272,13 @@ pub enum AggregateFunc {
     JsonbObjectAgg {
         order_by: Vec<ColumnOrder>,
     },
+    /// Zips a `Datum::List` whose first element is a `Datum::List` guaranteed
+    /// to be non-empty and whose len % 2 == 0 into a `Datum::Map`. The other
+    /// elements are columns used by `order_by`.
+    MapAgg {
+        order_by: Vec<ColumnOrder>,
+        value_type: ScalarType,
+    },
     /// Accumulates `Datum::Array`s of `ScalarType::Record` whose first element is a `Datum::Array`
     /// into a single `Datum::Array` (the remaining fields are used by `order_by`).
     ArrayConcat {
@@ -1387,6 +1390,15 @@ impl Arbitrary for AggregateFunc {
                 .boxed(),
             vec(proptest_any::<ColumnOrder>(), 1..4)
                 .prop_map(|order_by| AggregateFunc::JsonbObjectAgg { order_by })
+                .boxed(),
+            (
+                vec(proptest_any::<ColumnOrder>(), 1..4),
+                proptest_any::<ScalarType>(),
+            )
+                .prop_map(|(order_by, value_type)| AggregateFunc::MapAgg {
+                    order_by,
+                    value_type,
+                })
                 .boxed(),
             vec(proptest_any::<ColumnOrder>(), 1..4)
                 .prop_map(|order_by| AggregateFunc::ArrayConcat { order_by })
@@ -1504,6 +1516,13 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                 AggregateFunc::JsonbObjectAgg { order_by } => {
                     Kind::JsonbObjectAgg(order_by.into_proto())
                 }
+                AggregateFunc::MapAgg {
+                    order_by,
+                    value_type,
+                } => Kind::MapAgg(proto_aggregate_func::ProtoMapAgg {
+                    order_by: Some(order_by.into_proto()),
+                    value_type: Some(value_type.into_proto()),
+                }),
                 AggregateFunc::ArrayConcat { order_by } => Kind::ArrayConcat(order_by.into_proto()),
                 AggregateFunc::ListConcat { order_by } => Kind::ListConcat(order_by.into_proto()),
                 AggregateFunc::StringAgg { order_by } => Kind::StringAgg(order_by.into_proto()),
@@ -1607,6 +1626,12 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
             },
             Kind::JsonbObjectAgg(order_by) => AggregateFunc::JsonbObjectAgg {
                 order_by: order_by.into_rust()?,
+            },
+            Kind::MapAgg(pma) => AggregateFunc::MapAgg {
+                order_by: pma.order_by.into_rust_if_some("ProtoMapAgg::order_by")?,
+                value_type: pma
+                    .value_type
+                    .into_rust_if_some("ProtoMapAgg::value_type")?,
             },
             Kind::ArrayConcat(order_by) => AggregateFunc::ArrayConcat {
                 order_by: order_by.into_rust()?,
@@ -1738,8 +1763,8 @@ impl AggregateFunc {
             AggregateFunc::Any => any(datums),
             AggregateFunc::All => all(datums),
             AggregateFunc::JsonbAgg { order_by } => jsonb_agg(datums, temp_storage, order_by),
-            AggregateFunc::JsonbObjectAgg { order_by } => {
-                jsonb_object_agg(datums, temp_storage, order_by)
+            AggregateFunc::MapAgg { order_by, .. } | AggregateFunc::JsonbObjectAgg { order_by } => {
+                dict_agg(datums, temp_storage, order_by)
             }
             AggregateFunc::ArrayConcat { order_by } => array_concat(datums, temp_storage, order_by),
             AggregateFunc::ListConcat { order_by } => list_concat(datums, temp_storage, order_by),
@@ -1852,6 +1877,10 @@ impl AggregateFunc {
             AggregateFunc::SumUInt32 => ScalarType::UInt64,
             AggregateFunc::SumUInt64 => ScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::ZERO),
+            },
+            AggregateFunc::MapAgg { value_type, .. } => ScalarType::Map {
+                value_type: Box::new(value_type.clone()),
+                custom_id: None,
             },
             AggregateFunc::ArrayConcat { .. } | AggregateFunc::ListConcat { .. } => {
                 match input_type.scalar_type {
@@ -2308,6 +2337,10 @@ where
                     "jsonb_object_agg[order_by=[{}]]",
                     separated(", ", order_by)
                 )
+            }
+            AggregateFunc::MapAgg { order_by, .. } => {
+                let order_by = order_by.iter().map(|col| self.child(col));
+                write!(f, "map_agg[order_by=[{}]]", separated(", ", order_by))
             }
             AggregateFunc::ArrayConcat { order_by } => {
                 let order_by = order_by.iter().map(|col| self.child(col));

@@ -59,6 +59,13 @@ key     f1       f2     gus
 fish    fishval  1000   gusfive
 fish2   fishval  1000   <null>
 
+# map_build lets you get the headers as a map
+> SELECT key, f1, f2, map_build(headers)->'gus' as gus, map_build(headers)->'gus2' AS gus2 from headers_src;
+key     f1       f2     gus       gus2
+-------------------------------------------
+fish    fishval  1000   gusfive   gus3
+fish2   fishval  1000   <null>    <null>
+
 # selecting by key works
 > SELECT key, f1, f2, thekey, value FROM (SELECT i.key, i.f1, i.f2, unnest(headers).key as thekey, unnest(headers).value as value from headers_src as I) i WHERE thekey = 'gus'
 key     f1       f2     thekey  value
@@ -238,6 +245,33 @@ key          duplicates                 headers
 -------------------------------------------------
 message_3    message_3_header_3_third   "{\"(duplicates,\\\\x6d6573736167655f335f6865616465725f335f6669727374)\",\"(duplicates,\\\\x6d6573736167655f335f6865616465725f335f7365636f6e64)\",\"(duplicates,\\\\x6d6573736167655f335f6865616465725f335f7468697264)\"}"
 
+# We can control the header map more granularly with `map_agg`.
+> SELECT
+    key,
+    map_agg((headers).key, convert_from((headers).value, 'utf-8') ORDER BY (headers).value ASC)::TEXT AS headers_map
+  FROM (
+    SELECT
+      key, unnest(headers) AS headers
+    FROM duplicate_individual_headers
+  )
+  GROUP BY key;
+key       headers_map
+---------------------
+message_3 "{duplicates=>message_3_header_3_third}"
+
+# Reverse order of aggregating values.
+> SELECT
+    key,
+    map_agg((headers).key, convert_from((headers).value, 'utf-8') ORDER BY (headers).value DESC)::TEXT AS headers_map
+  FROM (
+    SELECT
+      key, unnest(headers) AS headers
+    FROM duplicate_individual_headers
+  )
+  GROUP BY key;
+key       headers_map
+---------------------
+message_3 "{duplicates=>message_3_header_3_first}"
 
 # Verify that the source is bricked when there are headers that cannot be parsed as utf-8
 $ kafka-create-topic topic=ill_formed_header

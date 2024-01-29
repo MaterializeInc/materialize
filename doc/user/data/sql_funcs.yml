@@ -120,6 +120,13 @@
   functions:
     - signature: 'map_length(m: mapany) -> int'
       description: Return the number of elements in `m`.
+    - signature: 'map_build(kvs: list record(text, T)) -> map[text=>T]'
+      description: >-
+        Builds a map from a list of records whose fields are two elements, the
+        first of which is `text`. This function's current implementation is
+        purpose-built to process [Kafka headers](/sql/create-source/kafka/#headers).
+    - signature: 'map_agg(keys: text, values: T) -> map[text=>T]'
+      description: Aggregate keys and values (including nulls) as a map. ([docs](/sql/functions/map_agg))
 
 - type: Numbers
   description: Number functions take number-like arguments, e.g. [`int`](../types/int),

@@ -9,6 +9,7 @@
 
 use std::fmt;
 
+use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_repr::{ColumnType, Datum, RowArena, ScalarType};
 use proptest_derive::Arbitrary;
@@ -123,5 +124,78 @@ impl LazyUnaryFunc for MapLength {
 impl fmt::Display for MapLength {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("map_length")
+    }
+}
+
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
+pub struct MapBuildFromRecordList {
+    pub value_type: ScalarType,
+}
+
+impl LazyUnaryFunc for MapBuildFromRecordList {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        let a = a.eval(datums, temp_storage)?;
+        if a.is_null() {
+            return Ok(Datum::Null);
+        }
+        let list = a.unwrap_list();
+        let mut map = std::collections::BTreeMap::new();
+
+        for i in list.iter() {
+            if i.is_null() {
+                continue;
+            }
+
+            for (k, v) in i.unwrap_list().iter().tuples() {
+                if k.is_null() {
+                    continue;
+                }
+                map.insert(k.unwrap_str(), v);
+            }
+        }
+
+        let map = temp_storage.make_datum(|packer| packer.push_dict(map.into_iter()));
+        Ok(map)
+    }
+
+    fn output_type(&self, _input_type: ColumnType) -> ColumnType {
+        ScalarType::Map {
+            value_type: Box::new(self.value_type.clone()),
+            custom_id: None,
+        }
+        .nullable(true)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        true
+    }
+
+    fn preserves_uniqueness(&self) -> bool {
+        false
+    }
+
+    fn inverse(&self) -> Option<crate::UnaryFunc> {
+        None
+    }
+
+    fn is_monotone(&self) -> bool {
+        false
+    }
+}
+
+impl fmt::Display for MapBuildFromRecordList {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("map_build")
     }
 }

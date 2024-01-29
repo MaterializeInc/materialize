@@ -84,6 +84,11 @@ message ProtoAggregateFunc {
         mz_expr.relation.ProtoWindowFrame window_frame = 3;
     }
 
+    message ProtoMapAgg {
+        ProtoColumnOrders order_by = 1;
+        mz_repr.relation_and_scalar.ProtoScalarType value_type = 2;
+    }
+
     oneof kind {
         google.protobuf.Empty max_numeric = 1;
         google.protobuf.Empty max_int16 = 2;
@@ -142,6 +147,7 @@ message ProtoAggregateFunc {
         google.protobuf.Empty sum_uint64 = 51;
         google.protobuf.Empty max_mz_timestamp = 52;
         google.protobuf.Empty min_mz_timestamp = 53;
+        ProtoMapAgg map_agg = 56;
     }
 }
 

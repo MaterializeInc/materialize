@@ -347,6 +347,8 @@ func_date_part ::=
   'date_part' '(' "'" ( 'epoch' | 'millennium' | 'century' | 'decade' | 'year' | 'quarter' | 'month' | 'week' | 'dat' | 'hour' | 'minute' | 'second' | 'microsecond' | 'millisecond' | 'dow' | 'isodow' | 'doy' ) "'" ',' val ')'
 func_length ::=
   'length' '(' str (',' encoding_name)? ')'
+func_map_agg ::=
+  'map_agg' '(' keys ',' values ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 func_substring ::=
   'substring' '(' str ',' start_pos (',' len)? ')'
 func_timezone ::=
