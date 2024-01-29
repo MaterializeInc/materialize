@@ -775,7 +775,7 @@ version = "0.7.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.librocksdb-sys]]
-version = "0.11.0+8.3.2@git:3305d514d509c6b95b0c925c78157e5e4ae4b7ba"
+version = "0.11.0+8.3.2@git:ab3684f999a5586d7a5e94bd65defd78af15d40f"
 criteria = "safe-to-deploy"
 
 [[exemptions.libz-sys]]
@@ -1239,7 +1239,7 @@ version = "0.8.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.rocksdb]]
-version = "0.21.0@git:3305d514d509c6b95b0c925c78157e5e4ae4b7ba"
+version = "0.21.0@git:ab3684f999a5586d7a5e94bd65defd78af15d40f"
 criteria = "safe-to-deploy"
 
 [[exemptions.ropey]]
