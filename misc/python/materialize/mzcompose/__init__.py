@@ -77,6 +77,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_statement_lifecycle_logging": "true",
     "enable_table_keys": "true",
     "enable_try_parse_monotonic_iso8601_timestamp": "true",
+    "enable_worker_core_affinity": "true",
     "persist_batch_delete_enabled": "true",
     "persist_fast_path_limit": "1000",
     "persist_pubsub_client_enabled": "true",
