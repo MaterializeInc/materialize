@@ -54,10 +54,13 @@ class Materialized(Service):
         sanity_restart: bool = True,
         catalog_store: str | None = "shadow",
         platform: str | None = None,
-        healthcheck: bool = True,
+        healthcheck: list[str] | None = None,
     ) -> None:
         if name is None:
             name = "materialized"
+
+        if healthcheck is None:
+            healthcheck = ["CMD", "curl", "-f", "localhost:6878/api/readyz"]
 
         depends_graph: dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
@@ -215,19 +218,14 @@ class Materialized(Service):
                 "environment": environment,
                 "volumes": volumes,
                 "tmpfs": ["/tmp"],
+                "healthcheck": {
+                    "test": healthcheck,
+                    "interval": "1s",
+                    # A fully loaded Materialize can take a long time to start.
+                    "start_period": "600s",
+                },
             }
         )
-        if healthcheck:
-            config.update(
-                {
-                    "healthcheck": {
-                        "test": ["CMD", "curl", "-f", "localhost:6878/api/readyz"],
-                        "interval": "1s",
-                        # A fully loaded Materialize can take a long time to start.
-                        "start_period": "600s",
-                    }
-                }
-            )
 
         if ports:
             config.update(

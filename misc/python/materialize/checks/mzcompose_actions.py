@@ -42,8 +42,10 @@ class StartMz(MzcomposeAction):
         mz_service: str | None = None,
         catalog_store: str | None = None,
         platform: str | None = None,
-        healthcheck: bool = True,
+        healthcheck: list[str] | None = None,
     ) -> None:
+        if healthcheck is None:
+            healthcheck = ["CMD", "curl", "-f", "localhost:6878/api/readyz"]
         self.tag = tag
         self.environment_extra = environment_extra
         self.system_parameter_defaults = system_parameter_defaults
@@ -91,10 +93,13 @@ class StartMz(MzcomposeAction):
         )
 
         with c.override(mz):
-            c.up(
-                "materialized" if self.mz_service is None else self.mz_service,
-                wait=self.healthcheck,
-            )
+            c.up("materialized" if self.mz_service is None else self.mz_service)
+
+            if any(
+                env.startswith("MZ_DEPLOY_GENERATION=")
+                for env in self.environment_extra
+            ):
+                return
 
             # This should live in ssh.py and alter_connection.py, but accessing the
             # ssh bastion host from inside a check is not possible currently.
@@ -387,12 +392,15 @@ class WaitReadyMz(MzcomposeAction):
         while True:
             result = json.loads(
                 c.exec(
-                    self.mz_service, "curl", "http://127.0.0.1:6878/api/leader/status"
+                    self.mz_service,
+                    "curl",
+                    "localhost:6878/api/leader/status",
+                    capture=True,
                 ).stdout
             )
             if result["status"] == "ReadyToPromote":
                 return
-            assert result["status"] == "IsInitializing", f"Unexpected status {result}"
+            assert result["status"] == "Initializing", f"Unexpected status {result}"
             print("Not ready yet, waiting 1 s")
             time.sleep(1)
 
@@ -413,6 +421,7 @@ class PromoteMz(MzcomposeAction):
                 "-X",
                 "POST",
                 "http://127.0.0.1:6878/api/leader/promote",
+                capture=True,
             ).stdout
         )
         assert result["result"] == "Success", f"Unexpected result {result}"
