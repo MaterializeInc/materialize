@@ -428,7 +428,7 @@ impl crate::coord::Coordinator {
     /// will acquire a read hold at the lowest possible time for that id.
     pub(crate) fn acquire_read_holds_auto_cleanup(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         time: Timestamp,
         id_bundle: &CollectionIdBundle,
     ) {

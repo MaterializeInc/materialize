@@ -29,7 +29,6 @@ use tracing::{event, warn, Level};
 use crate::command::ExecuteResponse;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{self, PeekDataflowPlan, PlannedPeek};
-use crate::coord::read_policy::ReadHolds;
 use crate::coord::sequencer::inner::{check_log_reads, return_if_err};
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{
@@ -168,12 +167,9 @@ impl Coordinator {
                     }
                 }
                 OptimizeLir(stage) => {
-                    let next = return_if_err!(
-                        self.peek_stage_optimize_lir(ctx.session_mut(), stage).await,
-                        ctx
-                    );
-
-                    (ctx, next)
+                    self.peek_stage_optimize_lir(ctx, root_otel_ctx.clone(), stage)
+                        .await;
+                    return;
                 }
                 Finish(stage) => {
                     let res = self.peek_stage_finish(&mut ctx, stage).await;
@@ -589,7 +585,8 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
     async fn peek_stage_optimize_lir(
         &mut self,
-        session: &mut Session,
+        mut ctx: ExecuteContext,
+        root_otel_ctx: OpenTelemetryContext,
         PeekStageOptimizeLir {
             validity,
             plan,
@@ -603,7 +600,11 @@ impl Coordinator {
             global_mir_plan,
             explain_ctx,
         }: PeekStageOptimizeLir,
-    ) -> Result<PeekStage, AdapterError> {
+    ) {
+        // Generate data structures that can be moved to another task where we will perform possibly
+        // expensive optimizations.
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+
         let id_bundle = id_bundle.unwrap_or_else(|| {
             self.index_oracle(optimizer.cluster_id())
                 .sufficient_collections(&source_ids)
@@ -611,7 +612,7 @@ impl Coordinator {
 
         let determination = self
             .sequence_peek_timestamp(
-                session,
+                ctx.session_mut(),
                 &plan.when,
                 optimizer.cluster_id(),
                 timeline_context,
@@ -620,26 +621,33 @@ impl Coordinator {
                 &source_ids,
                 real_time_recency_ts,
             )
-            .await?;
+            .await;
+
+        let determination = return_if_err!(determination, ctx);
         let timestamp_context = determination.clone().timestamp_context;
 
-        let pipeline = || -> Result<(optimize::peek::GlobalLirPlan, UsedIndexes), AdapterError> {
-            // In `explain_~` contexts, set the trace-derived dispatch
-            // as default while optimizing.
-            let _dispatch_guard = if let Some(explain_ctx) = explain_ctx.as_ref() {
-                let dispatch = tracing::Dispatch::from(&explain_ctx.optimizer_trace);
-                Some(tracing::dispatcher::set_default(&dispatch))
-            } else {
-                None
-            };
+        mz_ore::task::spawn_blocking(
+            || "optimize peek (LIR)",
+            move || {
+                let pipeline =
+                    || -> Result<(optimize::peek::GlobalLirPlan, UsedIndexes), AdapterError> {
+                        // In `explain_~` contexts, set the trace-derived dispatch
+                        // as default while optimizing.
+                        let _dispatch_guard = if let Some(explain_ctx) = explain_ctx.as_ref() {
+                            let dispatch = tracing::Dispatch::from(&explain_ctx.optimizer_trace);
+                            Some(tracing::dispatcher::set_default(&dispatch))
+                        } else {
+                            None
+                        };
 
-            let _span_guard = tracing::debug_span!(target: "optimizer", "optimize").entered();
+                        let _span_guard =
+                            tracing::debug_span!(target: "optimizer", "optimize").entered();
 
-            // Collect the list of indexes used by the dataflow at this point
-            let mut used_indexes = {
-                let df_desc = global_mir_plan.df_desc();
-                let df_meta = global_mir_plan.df_meta();
-                UsedIndexes::new(
+                        // Collect the list of indexes used by the dataflow at this point
+                        let mut used_indexes = {
+                            let df_desc = global_mir_plan.df_desc();
+                            let df_meta = global_mir_plan.df_meta();
+                            UsedIndexes::new(
                                 df_desc
                                     .index_imports
                                     .iter()
@@ -648,96 +656,104 @@ impl Coordinator {
                                     })
                                     .collect(),
                             )
-            };
+                        };
 
-            // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-            let global_mir_plan = global_mir_plan.resolve(timestamp_context.clone(), session);
-            let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
+                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                        let global_mir_plan =
+                            global_mir_plan.resolve(timestamp_context.clone(), ctx.session_mut());
+                        let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
 
-            // Trace the resulting plan for the top-level `optimize` path.
-            match global_lir_plan.peek_plan() {
-                peek::PeekPlan::FastPath(plan) => {
-                    let arity = global_lir_plan.typ().arity();
-                    let finishing = if !optimizer.finishing().is_trivial(arity) {
-                        Some(optimizer.finishing().clone())
-                    } else {
-                        None
+                        // Trace the resulting plan for the top-level `optimize` path.
+                        match global_lir_plan.peek_plan() {
+                            peek::PeekPlan::FastPath(plan) => {
+                                let arity = global_lir_plan.typ().arity();
+                                let finishing = if !optimizer.finishing().is_trivial(arity) {
+                                    Some(optimizer.finishing().clone())
+                                } else {
+                                    None
+                                };
+                                used_indexes = plan.used_indexes(&finishing);
+
+                                // TODO(aalexandrov): rework `OptimizerTrace` with support
+                                // for diverging plan types towards the end and add a
+                                // `PlanTrace` for the `FastPathPlan` type.
+                                trace_plan(&"fast_path_plan (missing)".to_string());
+                            }
+                            peek::PeekPlan::SlowPath(plan) => trace_plan(&plan.desc),
+                        }
+
+                        Ok((global_lir_plan, used_indexes))
                     };
-                    used_indexes = plan.used_indexes(&finishing);
 
-                    // TODO(aalexandrov): rework `OptimizerTrace` with support
-                    // for diverging plan types towards the end and add a
-                    // `PlanTrace` for the `FastPathPlan` type.
-                    trace_plan(&"fast_path_plan (missing)".to_string());
-                }
-                peek::PeekPlan::SlowPath(plan) => trace_plan(&plan.desc),
-            }
+                let stage = match pipeline() {
+                    Ok((global_lir_plan, used_indexes)) => {
+                        if let Some(explain_ctx) = explain_ctx {
+                            let (peek_plan, df_meta) = global_lir_plan.unapply();
+                            PeekStage::Explain(PeekStageExplain {
+                                validity,
+                                select_id: optimizer.select_id(),
+                                finishing: optimizer.finishing().clone(),
+                                fast_path_plan: match peek_plan {
+                                    peek::PeekPlan::FastPath(plan) => Some(plan),
+                                    peek::PeekPlan::SlowPath(_) => None,
+                                },
+                                df_meta,
+                                used_indexes,
+                                explain_ctx,
+                            })
+                        } else {
+                            PeekStage::Finish(PeekStageFinish {
+                                validity,
+                                plan,
+                                id_bundle,
+                                target_replica,
+                                source_ids,
+                                determination,
+                                timestamp_context,
+                                optimizer,
+                                global_lir_plan,
+                            })
+                        }
+                    }
+                    // Internal optimizer errors are handled differently
+                    // depending on the caller.
+                    Err(err) => {
+                        let Some(explain_ctx) = explain_ctx else {
+                            // In `sequence_~` contexts, immediately retire the
+                            // execution with the error.
+                            return ctx.retire(Err(err.into()));
+                        };
 
-            Ok((global_lir_plan, used_indexes))
-        };
-
-        let stage = match pipeline() {
-            Ok((global_lir_plan, used_indexes)) => {
-                if let Some(explain_ctx) = explain_ctx {
-                    let (peek_plan, df_meta) = global_lir_plan.unapply();
-                    PeekStage::Explain(PeekStageExplain {
-                        validity,
-                        select_id: optimizer.select_id(),
-                        finishing: optimizer.finishing().clone(),
-                        fast_path_plan: match peek_plan {
-                            peek::PeekPlan::FastPath(plan) => Some(plan),
-                            peek::PeekPlan::SlowPath(_) => None,
-                        },
-                        df_meta,
-                        used_indexes,
-                        explain_ctx,
-                    })
-                } else {
-                    PeekStage::Finish(PeekStageFinish {
-                        validity,
-                        plan,
-                        id_bundle,
-                        target_replica,
-                        source_ids,
-                        determination,
-                        timestamp_context,
-                        optimizer,
-                        global_lir_plan,
-                    })
-                }
-            }
-            // Internal optimizer errors are handled differently
-            // depending on the caller.
-            Err(err) => {
-                let Some(explain_ctx) = explain_ctx else {
-                    // In `sequence_~` contexts, immediately retire the
-                    // execution with the error.
-                    return Err(err.into());
+                        if explain_ctx.broken {
+                            // In `EXPLAIN BROKEN` contexts, just log the error
+                            // and move to the next stage with default
+                            // parameters.
+                            tracing::error!("error while handling EXPLAIN statement: {}", err);
+                            PeekStage::Explain(PeekStageExplain {
+                                validity,
+                                select_id: optimizer.select_id(),
+                                finishing: optimizer.finishing().clone(),
+                                fast_path_plan: Default::default(),
+                                df_meta: Default::default(),
+                                used_indexes: Default::default(),
+                                explain_ctx,
+                            })
+                        } else {
+                            // In regular `EXPLAIN` contexts, immediately retire
+                            // the execution with the error.
+                            return ctx.retire(Err(err.into()));
+                        }
+                    }
                 };
 
-                if explain_ctx.broken {
-                    // In `EXPLAIN BROKEN` contexts, just log the error
-                    // and move to the next stage with default
-                    // parameters.
-                    tracing::error!("error while handling EXPLAIN statement: {}", err);
-                    PeekStage::Explain(PeekStageExplain {
-                        validity,
-                        select_id: optimizer.select_id(),
-                        finishing: optimizer.finishing().clone(),
-                        fast_path_plan: Default::default(),
-                        df_meta: Default::default(),
-                        used_indexes: Default::default(),
-                        explain_ctx,
-                    })
-                } else {
-                    // In regular `EXPLAIN` contexts, immediately retire
-                    // the execution with the error.
-                    return Err(err.into());
-                }
-            }
-        };
-
-        Ok(stage)
+                // Ignore errors if the coordinator has shut down.
+                let _ = internal_cmd_tx.send(Message::PeekStageReady {
+                    ctx,
+                    otel_ctx: root_otel_ctx,
+                    stage,
+                });
+            },
+        );
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -1013,38 +1029,31 @@ impl Coordinator {
                 }
             };
 
-        // If we're in a multi-statement transaction and the query does not use `AS OF`,
-        // acquire read holds on any sources in the current time-domain if they have not
-        // already been acquired. If the query does use `AS OF`, it is not necessary to
-        // acquire read holds.
-        if in_immediate_multi_stmt_txn {
-            // Either set the valid read ids for this transaction (if it's the first statement in a
-            // transaction) otherwise verify the ids referenced in this query are in the timedomain.
-            if let Some(txn_reads) = self.txn_read_holds.get(session.conn_id()) {
-                // Find referenced ids not in the read hold. A reference could be caused by a
-                // user specifying an object in a different schema than the first query. An
-                // index could be caused by a CREATE INDEX after the transaction started.
-                let allowed_id_bundle = txn_reads.id_bundle();
-                let outside = source_bundle.difference(&allowed_id_bundle);
-                // Queries without a timestamp and timeline can belong to any existing timedomain.
-                if determination.timestamp_context.contains_timestamp() && !outside.is_empty() {
-                    let valid_names =
-                        self.resolve_collection_id_bundle_names(session, &allowed_id_bundle);
-                    let invalid_names = self.resolve_collection_id_bundle_names(session, &outside);
-                    return Err(AdapterError::RelationOutsideTimeDomain {
-                        relations: invalid_names,
-                        names: valid_names,
-                    });
-                }
-            } else {
-                if let Some((timestamp, bundle)) = potential_read_holds {
-                    let read_holds = self.acquire_read_holds(timestamp, bundle);
-                    self.txn_read_holds
-                        .entry(session.conn_id().clone())
-                        .or_insert_with(ReadHolds::new)
-                        .extend(read_holds);
-                }
+        // Always either verify the current statement ids are within the existing
+        // transaction's read hold set (timedomain), or create the read holds if this is the
+        // first statement in a transaction (or this is a single statement transaction).
+        // This must happen even if this is an `AS OF` query as well. There are steps after
+        // this that happen off thread, so no matter the kind of statement or transaction,
+        // we must acquire read holds here so they are held until the off-thread work
+        // returns to the coordinator.
+        if let Some(txn_reads) = self.txn_read_holds.get(session.conn_id()) {
+            // Find referenced ids not in the read hold. A reference could be caused by a
+            // user specifying an object in a different schema than the first query. An
+            // index could be caused by a CREATE INDEX after the transaction started.
+            let allowed_id_bundle = txn_reads.id_bundle();
+            let outside = source_bundle.difference(&allowed_id_bundle);
+            // Queries without a timestamp and timeline can belong to any existing timedomain.
+            if determination.timestamp_context.contains_timestamp() && !outside.is_empty() {
+                let valid_names =
+                    self.resolve_collection_id_bundle_names(session, &allowed_id_bundle);
+                let invalid_names = self.resolve_collection_id_bundle_names(session, &outside);
+                return Err(AdapterError::RelationOutsideTimeDomain {
+                    relations: invalid_names,
+                    names: valid_names,
+                });
             }
+        } else if let Some((timestamp, bundle)) = potential_read_holds {
+            self.acquire_read_holds_auto_cleanup(session, timestamp, bundle);
         }
 
         // TODO: Checking for only `InTransaction` and not `Implied` (also `Started`?) seems
