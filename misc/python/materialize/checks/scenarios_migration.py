@@ -21,9 +21,9 @@ class MigrateX86Aarch64(Scenario):
             StartMz(self, platform="linux/amd64"),
             Initialize(self),
             Manipulate(self, phase=1),
-            Manipulate(self, phase=2),
             KillMz(capture_logs=True),
             StartMz(self, platform="linux/arm64/v8"),
+            Manipulate(self, phase=2),
             Validate(self),
         ]
 
@@ -36,8 +36,8 @@ class MigrateAarch64X86(Scenario):
             StartMz(self, platform="linux/arm64/v8"),
             Initialize(self),
             Manipulate(self, phase=1),
-            Manipulate(self, phase=2),
             KillMz(capture_logs=True),
             StartMz(self, platform="linux/amd64"),
+            Manipulate(self, phase=2),
             Validate(self),
         ]

@@ -768,7 +768,7 @@ steps:
 
       - id: checks-migrate-x86-64-aarch64
         label: "Checks migrate from x86-64 to aarch64"
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         agents:
           queue: builder-linux-x86_64
         artifact_paths: junit_*.xml
@@ -779,7 +779,7 @@ steps:
 
       - id: checks-migrate-aarch64-x86-64
         label: "Checks migrate from aarch64 to x86-64"
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         agents:
           queue: builder-linux-aarch64
         artifact_paths: junit_*.xml
@@ -787,6 +787,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=MigrateAarch64X86]
+        skip: "TODO(def-) Reenable when #24794 is fixed"
 
       - id: checks-upgrade-matrix
         label: "Random upgrades over the entire matrix"

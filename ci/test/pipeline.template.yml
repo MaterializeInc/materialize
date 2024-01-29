@@ -581,7 +581,7 @@ steps:
           composition: metabase
     agents:
       # too slow to run emulated on aarch64, Metabase'ss docker image is not yet available for aarch64 natively yet: https://github.com/metabase/metabase/issues/13119
-      queue: linux-x86-64-small
+      queue: linux-x86_64-small
 
   - id: dbt-materialize
     label: dbt-materialize tests
