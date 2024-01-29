@@ -108,9 +108,19 @@ Implications:
 
 ## TablesController
 
-The `StorageController` only needs to know about tables when sinking them, and
-for that use case it can interface with them through CollectionsController,
-same as how ComputeController interfaces with collections.
+We can move table-related things out into a `TablesController` because the
+`StorageController` doesn't do much with/to tables, except:
+
+- Learn about upper updates through a channel: when adapter writes to tables,
+  an update get sent through a channel, the `StorageController` absorbs those
+  similarly to how it absorbs upper updates from running ingestions.
+- Acquire since holds when sinking tables to an export.
+
+For both of these use cases, the `StorageController` can be given access to a
+`CollectionsController`, and acquire read holds same as everyone else (same as
+compute and the adapter). Upper updates would no longer have to flow through a
+special channel, the `CollectionsController` would be keeping uppers/sinces up
+to date same as for other collections: through persist pubsub.
 
 ## StorageController (the per-cluster part)
 
