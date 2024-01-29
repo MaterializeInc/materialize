@@ -667,6 +667,8 @@
     description: Expands the array `a` into a set of rows.
   - signature: 'unnest(l: anylist)'
     description: Expands the list `l` into a set of rows.
+  - signature: "unnest(m: anymap)"
+    description: Explands the map `m` in a set of rows with the columns `key` and `value`.
 
 - type: Array
   functions:
