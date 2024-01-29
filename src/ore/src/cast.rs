@@ -248,47 +248,26 @@ pub trait CastLossy<T> {
     fn cast_lossy(from: T) -> Self;
 }
 
-impl CastLossy<usize> for f64 {
-    #[allow(clippy::as_conversions)]
-    fn cast_lossy(from: usize) -> Self {
-        from as f64
-    }
+/// Implement `CastLossy` for the specified types.
+macro_rules! cast_lossy {
+    ($from:ty, $to:ty) => {
+        impl crate::cast::CastLossy<$from> for $to {
+            #[allow(clippy::as_conversions)]
+            fn cast_lossy(from: $from) -> $to {
+                from as $to
+            }
+        }
+    };
 }
 
-impl CastLossy<isize> for f64 {
-    #[allow(clippy::as_conversions)]
-    fn cast_lossy(from: isize) -> Self {
-        from as f64
-    }
-}
-
-impl CastLossy<f64> for usize {
-    #[allow(clippy::as_conversions)]
-    fn cast_lossy(from: f64) -> Self {
-        from as usize
-    }
-}
-
-impl CastLossy<i64> for f64 {
-    #[allow(clippy::as_conversions)]
-    fn cast_lossy(from: i64) -> Self {
-        from as f64
-    }
-}
-
-impl CastLossy<u64> for f64 {
-    #[allow(clippy::as_conversions)]
-    fn cast_lossy(from: u64) -> Self {
-        from as f64
-    }
-}
-
-impl CastLossy<f64> for u64 {
-    #[allow(clippy::as_conversions)]
-    fn cast_lossy(from: f64) -> Self {
-        from as u64
-    }
-}
+cast_lossy!(usize, f64);
+cast_lossy!(isize, f64);
+cast_lossy!(f64, usize);
+cast_lossy!(i64, f64);
+cast_lossy!(f64, i64);
+cast_lossy!(u64, f64);
+cast_lossy!(f64, u64);
+cast_lossy!(f64, u32);
 
 #[mz_test_macro::test]
 fn test_try_cast_from() {
