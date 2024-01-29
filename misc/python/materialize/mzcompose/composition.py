@@ -45,6 +45,7 @@ from pg8000 import Connection, Cursor
 from materialize import MZ_ROOT, mzbuild, spawn, ui
 from materialize.mzcompose import loader
 from materialize.mzcompose.service import Service
+from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
@@ -110,6 +111,7 @@ class Composition:
         self.workflows: dict[str, Callable[..., None]] = {}
         self.test_results: OrderedDict[str, TestResult] = OrderedDict()
         self.files = {}
+        self.deploy_generation: int = 0
 
         if name in self.repo.compositions:
             self.path = self.repo.compositions[name]
@@ -398,7 +400,10 @@ class Composition:
                 # trivial help message.
                 parser.parse_args()
                 func(self)
-            self.sanity_restart_mz()
+            if os.getenv("CI_FINAL_PREFLIGHT_CHECK_VERSION") != None:
+                self.final_preflight_check()
+            else:
+                self.sanity_restart_mz()
         finally:
             loader.composition_path = None
 
@@ -824,6 +829,89 @@ class Composition:
 
         return None
 
+    def final_preflight_check(self) -> None:
+        """Check if Mz can do the preflight-check and upgrade/rollback with specified version."""
+        version = os.getenv("CI_FINAL_PREFLIGHT_CHECK_VERSION")
+        if version == None:
+            return
+        rollback = ui.env_is_truthy("CI_FINAL_PREFLIGHT_CHECK_ROLLBACK")
+        if "materialized" in self.compose["services"]:
+            ui.header("Final Preflight Check")
+            ps = self.invoke("ps", "materialized", "--quiet", capture=True)
+            if len(ps.stdout) == 0:
+                print("Service materialized not running, will not upgrade it.")
+                return
+
+            self.kill("materialized")
+            self.deploy_generation += 1
+            with self.override(
+                Materialized(
+                    image=f"materialize/materialized:{version}",
+                    environment_extra=[
+                        f"MZ_DEPLOY_GENERATION={self.deploy_generation}"
+                    ],
+                    healthcheck=[
+                        "CMD",
+                        "curl",
+                        "-f",
+                        "localhost:6878/api/leader/status",
+                    ],
+                )
+            ):
+                self.up("materialized")
+                while True:
+                    result = json.loads(
+                        self.exec(
+                            "materialized",
+                            "curl",
+                            "localhost:6878/api/leader/status",
+                            capture=True,
+                        ).stdout
+                    )
+                    if result["status"] == "ReadyToPromote":
+                        return
+                    assert (
+                        result["status"] == "Initializing"
+                    ), f"Unexpected status {result}"
+                    print("Not ready yet, waiting 1 s")
+                    time.sleep(1)
+                if rollback:
+                    with self.override(Materialized()):
+                        self.up("materialized")
+                else:
+                    result = json.loads(
+                        self.exec(
+                            "materialized",
+                            "curl",
+                            "-X",
+                            "POST",
+                            "localhost:6878/api/leader/promote",
+                            capture=True,
+                        ).stdout
+                    )
+                    assert result["result"] == "Success", f"Unexpected result {result}"
+            self.sql("SELECT 1")
+
+            NUM_RETRIES = 60
+            for i in range(NUM_RETRIES + 1):
+                error = self.validate_sources_sinks_clusters()
+                if not error:
+                    break
+                if i == NUM_RETRIES:
+                    raise ValueError(error)
+                # Sources and cluster replicas need a few seconds to start up
+                print(f"Retrying ({i+1}/{NUM_RETRIES})...")
+                time.sleep(1)
+
+            # In case the test has to continue, reset state
+            self.kill("materialized")
+            self.up("materialized")
+
+        else:
+            ui.header(
+                "Persist Catalog Forward Compatibility Check skipped because Mz not in services"
+            )
+
     def sanity_restart_mz(self) -> None:
         """Restart Materialized if it is part of the composition to find
         problems with persisted objects, functions as a sanity check."""
@@ -881,7 +969,9 @@ class Composition:
             sanity_restart_mz: Try restarting materialize first if it is part
                 of the composition, as a sanity check.
         """
-        if sanity_restart_mz:
+        if os.getenv("CI_FINAL_PREFLIGHT_CHECK_VERSION") != None:
+            self.final_preflight_check()
+        elif sanity_restart_mz:
             self.sanity_restart_mz()
         self.capture_logs()
         self.invoke(

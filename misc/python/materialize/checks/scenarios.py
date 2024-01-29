@@ -86,7 +86,10 @@ class Scenario:
 
         for index, action in enumerate(actions):
             # Implicitly call configure to raise version-dependent limits
-            if isinstance(action, StartMz):
+            if isinstance(action, StartMz) and not any(
+                env.startswith("MZ_DEPLOY_GENERATION=")
+                for env in action.environment_extra
+            ):
                 actions.insert(
                     index + 1, ConfigureMz(self, mz_service=action.mz_service)
                 )
