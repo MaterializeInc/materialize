@@ -123,8 +123,7 @@ dependencies = [
 [[package]]
 name = "arrow2"
 version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a4c5b03335bc1cb0fd9f5297f8fd3bbfd6fb04f3cb0bc7d6c91b7128cb8336a"
+source = "git+https://github.com/MaterializeInc/arrow2.git?branch=parquet_binary_next_iter#61e271a3f70bc993f8b7854b73e8fee099803d1c"
 dependencies = [
  "ahash",
  "arrow-format",
