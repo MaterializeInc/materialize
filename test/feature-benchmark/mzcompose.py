@@ -238,6 +238,13 @@ def start_overridden_mz_and_cockroach(
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Feature benchmark framework."""
+    shard = os.environ.get("BUILDKITE_PARALLEL_JOB")
+    shard_count = os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT")
+
+    if shard:
+        shard = int(shard)
+    if shard_count:
+        shard_count = int(shard_count)
 
     c.silent = True
 
@@ -367,9 +374,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     selected_scenarios = []
 
     if root_scenario.__subclasses__():
-        selected_scenarios = [
-            s for s in all_subclasses(root_scenario) if not s.__subclasses__()
-        ]
+        selected_scenarios = sorted(
+            [s for s in all_subclasses(root_scenario) if not s.__subclasses__()],
+            key=repr,
+        )
     else:
         selected_scenarios = [root_scenario]
 
@@ -382,7 +390,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up(*dependencies)
 
-    scenarios_to_run = selected_scenarios
+    scenarios_to_run = [
+        scenario
+        for i, scenario in enumerate(selected_scenarios)
+        if shard is None or shard_count is None or i % int(shard_count) == shard
+    ]
+
     scenarios_with_regressions = []
     for cycle in range(0, args.max_retries):
         print(
