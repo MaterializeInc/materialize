@@ -26,15 +26,21 @@ CREATE CLUSTER stuck SIZE '1';
 ----
 COMPLETE 0
 
+# TODO(jkosh44) Read mz_clusters once DDL is working
+
 simple conn=materialize,user=materialize
 CREATE TABLE t (a INT);
 ----
 COMPLETE 0
 
+# TODO(jkosh44) Read mz_tables once DDL is working
+
 simple conn=materialize,user=materialize
 CREATE MATERIALIZED VIEW mv IN CLUSTER stuck AS SELECT SUM(a) FROM t;
 ----
 COMPLETE 0
+
+# TODO(jkosh44) Read mz_materialized_views once DDL is working
 
 simple conn=materialize,user=materialize
 INSERT INTO t VALUES (1);

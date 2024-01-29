@@ -5297,7 +5297,6 @@ pub enum IsolationLevel {
     RepeatableRead,
     Serializable,
     /* TODO(jkosh44) Move this comment to user facing docs when this isolation level becomes available to users.
-     * TODO(jkosh44) Reread the blog post and paper to confirm that the semantics are correct ... it's been awhile.
      * The Strong Session Serializable isolation level combines the Serializable isolation level
      * (https://jepsen.io/consistency/models/serializable) with the Sequential consistency model
      * (https://jepsen.io/consistency/models/sequential). See
