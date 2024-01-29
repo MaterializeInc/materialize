@@ -23,8 +23,8 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::{PersistConfig, RetryParameters};
-use mz_persist_client::fetch::FetchedPart;
 use mz_persist_client::fetch::SerdeLeasedBatchPart;
+use mz_persist_client::fetch::{FetchedBlob, FetchedPart};
 use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
 use mz_persist_txn::operator::txns_progress;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -376,7 +376,7 @@ fn filter_may_match(
 
 pub fn decode_and_mfp<G>(
     cfg: PersistConfig,
-    fetched: &Stream<G, FetchedPart<SourceData, (), Timestamp, Diff>>,
+    fetched: &Stream<G, FetchedBlob<SourceData, (), Timestamp, Diff>>,
     name: &str,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
@@ -417,7 +417,7 @@ where
                 for fetched_part in buffer.drain(..) {
                     pending_work.push_back(PendingWork {
                         capability: capability.clone(),
-                        fetched_part,
+                        fetched_part: Some(PendingWorkPart::Blob(fetched_part)),
                     })
                 }
             });
@@ -461,7 +461,12 @@ struct PendingWork {
     /// The time at which the work should happen.
     capability: Capability<(mz_repr::Timestamp, Subtime)>,
     /// Pending fetched part.
-    fetched_part: FetchedPart<SourceData, (), Timestamp, Diff>,
+    fetched_part: Option<PendingWorkPart>,
+}
+
+enum PendingWorkPart {
+    Blob(FetchedBlob<SourceData, (), Timestamp, Diff>),
+    Part(FetchedPart<SourceData, (), Timestamp, Diff>),
 }
 
 impl PendingWork {
@@ -497,8 +502,18 @@ impl PendingWork {
         >,
         YFn: Fn(Instant, usize) -> bool,
     {
-        let is_filter_pushdown_audit = self.fetched_part.is_filter_pushdown_audit();
-        while let Some(((key, val), time, diff)) = self.fetched_part.next() {
+        self.fetched_part = Some(PendingWorkPart::Part(
+            match self.fetched_part.take().expect("WIP") {
+                PendingWorkPart::Blob(x) => x.parse(),
+                PendingWorkPart::Part(x) => x,
+            },
+        ));
+        let fetched_part = match self.fetched_part.as_mut().expect("WIP") {
+            PendingWorkPart::Blob(_) => unreachable!("WIP"),
+            PendingWorkPart::Part(x) => x,
+        };
+        let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
+        while let Some(((key, val), time, diff)) = fetched_part.next() {
             if until.less_equal(&time) {
                 continue;
             }

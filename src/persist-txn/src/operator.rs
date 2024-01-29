@@ -590,6 +590,7 @@ impl DataSubscribe {
             });
             let (mut data, mut txns) = (ProbeHandle::new(), ProbeHandle::new());
             let data_stream = data_stream.flat_map(|part| {
+                let part = part.parse();
                 part.map(|((k, v), t, d)| {
                     let (k, ()) = (k.unwrap(), v.unwrap());
                     (k, t, d)

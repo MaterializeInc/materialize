@@ -18,6 +18,7 @@ use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Blob, SeqNo};
@@ -96,6 +97,42 @@ where
             self.schemas.clone(),
         )
         .await;
+        Ok(fetched_part)
+    }
+
+    /// WIP
+    pub async fn fetch_leased_part_blob(
+        &self,
+        part: &LeasedBatchPart<T>,
+    ) -> Result<FetchedBlob<K, V, T, D>, InvalidUsage<T>> {
+        if &part.shard_id != &self.shard_id {
+            let batch_shard = part.shard_id.clone();
+            return Err(InvalidUsage::BatchNotFromThisShard {
+                batch_shard,
+                handle_shard: self.shard_id.clone(),
+            });
+        }
+
+        let ts_filter = FetchBatchFilter::new(&part.metadata);
+        let filter_pushdown_audit = if part.filter_pushdown_audit {
+            part.stats.clone()
+        } else {
+            None
+        };
+        let fetched_part = fetch_batch_part_blob(
+            &part.shard_id,
+            self.blob.as_ref(),
+            Arc::clone(&self.metrics),
+            &self.shard_metrics,
+            self.metrics.read.batch_fetcher.clone(),
+            self.schemas.clone(),
+            &part.key,
+            &part.desc,
+            ts_filter,
+            filter_pushdown_audit,
+        )
+        .await
+        .expect("WIP");
         Ok(fetched_part)
     }
 }
@@ -287,6 +324,128 @@ where
     read_metrics.seconds.inc_by(now.elapsed().as_secs_f64());
 
     Ok(part)
+}
+
+pub(crate) async fn fetch_batch_part_blob<K, V, T, D>(
+    shard_id: &ShardId,
+    blob: &(dyn Blob + Send + Sync),
+    metrics: Arc<Metrics>,
+    shard_metrics: &ShardMetrics,
+    read_metrics: ReadMetrics,
+    schemas: Schemas<K, V>,
+    key: &PartialBatchKey,
+    registered_desc: &Description<T>,
+    ts_filter: FetchBatchFilter<T>,
+    filter_pushdown_audit: Option<LazyPartStats>,
+) -> Result<FetchedBlob<K, V, T, D>, BlobKey>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    let now = Instant::now();
+    let get_span = debug_span!("fetch_batch::get");
+    let blob_key = key.complete(shard_id);
+    let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
+        shard_metrics.blob_gets.inc();
+        blob.get(&blob_key).await
+    })
+    .instrument(get_span.clone())
+    .await
+    .ok_or(blob_key)?;
+
+    drop(get_span);
+
+    read_metrics.part_count.inc();
+    read_metrics.part_bytes.inc_by(u64::cast_from(value.len()));
+    read_metrics.seconds.inc_by(now.elapsed().as_secs_f64());
+
+    let part = FetchedBlob {
+        key: key.0.clone(),
+        registered_desc: registered_desc.clone(),
+        part: value,
+        metrics,
+        read_metrics,
+        schemas,
+        ts_filter,
+        filter_pushdown_audit,
+        _phantom: PhantomData,
+    };
+    Ok(part)
+}
+
+impl<K, V, T, D> FetchedBlob<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64 + Send + Sync,
+{
+    /// WIP
+    pub fn parse(self) -> FetchedPart<K, V, T, D> {
+        let encoded_part = trace_span!("fetch_batch::decode").in_scope(|| {
+            let part = self
+                .metrics
+                .codecs
+                .batch
+                .decode(|| BlobTraceBatchPart::decode(&self.part))
+                .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", self.key, err))
+                // We received a State that we couldn't decode. This could happen if
+                // persist messes up backward/forward compatibility, if the durable
+                // data was corrupted, or if operations messes up deployment. In any
+                // case, fail loudly.
+                .expect("internal error: invalid encoded state");
+
+            // Drop the encoded representation as soon as we can to reclaim memory.
+            self.read_metrics.part_goodbytes.inc_by(u64::cast_from(
+                part.updates.iter().map(|x| x.goodbytes()).sum::<usize>(),
+            ));
+
+            EncodedPart::new(&self.key, self.registered_desc.clone(), part)
+        });
+
+        let fetched_part = FetchedPart {
+            metrics: self.metrics,
+            ts_filter: self.ts_filter,
+            part: encoded_part,
+            schemas: self.schemas,
+            filter_pushdown_audit: self.filter_pushdown_audit,
+            part_cursor: Cursor::default(),
+            _phantom: PhantomData,
+        };
+        fetched_part
+    }
+}
+
+/// WIP
+#[derive(Debug)]
+pub struct FetchedBlob<K: Codec, V: Codec, T, D> {
+    key: String,
+    registered_desc: Description<T>,
+    part: SegmentedBytes,
+    metrics: Arc<Metrics>,
+    read_metrics: ReadMetrics,
+    schemas: Schemas<K, V>,
+    ts_filter: FetchBatchFilter<T>,
+    filter_pushdown_audit: Option<LazyPartStats>,
+    _phantom: PhantomData<fn() -> D>,
+}
+
+impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedBlob<K, V, T, D> {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            registered_desc: self.registered_desc.clone(),
+            part: self.part.clone(),
+            metrics: self.metrics.clone(),
+            read_metrics: self.read_metrics.clone(),
+            schemas: self.schemas.clone(),
+            ts_filter: self.ts_filter.clone(),
+            filter_pushdown_audit: self.filter_pushdown_audit.clone(),
+            _phantom: self._phantom.clone(),
+        }
+    }
 }
 
 /// Propagates metadata from readers alongside a `HollowBatch` to apply the
