@@ -4994,7 +4994,7 @@ impl Coordinator {
         session: &Session,
         notices: &Vec<RawOptimizerNotice>,
     ) {
-        let humanizer = self.catalog().state();
+        let humanizer = self.catalog.for_session(session);
         let system_vars = self.catalog.system_config();
         for notice in notices {
             let kind = OptimizerNoticeKind::from(notice);
@@ -5011,8 +5011,8 @@ impl Coordinator {
                 // `emit_optimizer_notices` is onlyy called by the `sequence_~`
                 // method for the DDL that produces that notice.
                 session.add_notice(AdapterNotice::OptimizerNotice {
-                    notice: notice.message(humanizer, false).to_string(),
-                    hint: notice.hint(humanizer, false).to_string(),
+                    notice: notice.message(&humanizer, false).to_string(),
+                    hint: notice.hint(&humanizer, false).to_string(),
                 });
             }
             self.metrics

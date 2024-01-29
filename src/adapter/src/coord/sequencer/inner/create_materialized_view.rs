@@ -543,7 +543,7 @@ impl Coordinator {
                     let mut builtin_table_updates =
                         Vec::with_capacity(df_meta.optimizer_notices.len());
                     // Collect optimization hint updates.
-                    coord.catalog().pack_optimizer_notices(
+                    coord.catalog().state().pack_optimizer_notices(
                         &mut builtin_table_updates,
                         df_meta.optimizer_notices.iter(),
                         1,
