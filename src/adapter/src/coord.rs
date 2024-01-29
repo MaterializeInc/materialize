@@ -1625,7 +1625,7 @@ impl Coordinator {
 
                         if self.catalog().state().system_config().enable_mz_notices() {
                             // Collect optimization hint updates.
-                            self.catalog().pack_optimizer_notices(
+                            self.catalog().state().pack_optimizer_notices(
                                 &mut builtin_table_updates,
                                 df_meta.optimizer_notices.iter(),
                                 1,
@@ -1685,7 +1685,7 @@ impl Coordinator {
 
                     if self.catalog().state().system_config().enable_mz_notices() {
                         // Collect optimization hint updates.
-                        self.catalog().pack_optimizer_notices(
+                        self.catalog().state().pack_optimizer_notices(
                             &mut builtin_table_updates,
                             df_meta.optimizer_notices.iter(),
                             1,

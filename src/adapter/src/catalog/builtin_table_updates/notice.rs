@@ -17,7 +17,7 @@ use mz_transform::notice::{
     RawOptimizerNotice,
 };
 
-use crate::catalog::{BuiltinTableUpdate, Catalog};
+use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState};
 
 impl Catalog {
     /// Transform the [`DataflowMetainfo`] by rendering an [`OptimizerNotice`]
@@ -100,10 +100,12 @@ impl Catalog {
             index_usage_types: df_meta.index_usage_types,
         }
     }
+}
 
+impl CatalogState {
     /// Pack a [`BuiltinTableUpdate`] with the given `diff` for each
     /// [`OptimizerNotice`] in `notices` into `updates`.
-    pub fn pack_optimizer_notices<'a>(
+    pub(crate) fn pack_optimizer_notices<'a>(
         &self,
         updates: &mut Vec<BuiltinTableUpdate>,
         notices: impl Iterator<Item = &'a Arc<OptimizerNotice>>,
