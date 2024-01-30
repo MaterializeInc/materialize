@@ -92,6 +92,7 @@ use crate::TxnsCodecDefault;
 pub fn txns_progress<K, V, T, D, P, C, F, G>(
     passthrough: Stream<G, P>,
     name: &str,
+    ctx: TxnsContext<T>,
     client_fn: impl Fn() -> F,
     txns_id: ShardId,
     data_id: ShardId,
@@ -106,7 +107,7 @@ where
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Data + Semigroup + Codec64 + Send + Sync,
     P: Debug + Data,
-    C: TxnsCodec,
+    C: TxnsCodec + 'static,
     F: Future<Output = PersistClient> + Send + 'static,
     G: Scope<Timestamp = T>,
 {
@@ -114,6 +115,7 @@ where
     let (remap, source_button) = txns_progress_source::<K, V, T, D, P, C, G>(
         passthrough.scope(),
         name,
+        ctx,
         client_fn(),
         txns_id,
         data_id,
@@ -152,6 +154,7 @@ where
 fn txns_progress_source<K, V, T, D, P, C, G>(
     scope: G,
     name: &str,
+    ctx: TxnsContext<T>,
     client: impl Future<Output = PersistClient> + 'static,
     txns_id: ShardId,
     data_id: ShardId,
@@ -166,7 +169,7 @@ where
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Data + Semigroup + Codec64 + Send + Sync,
     P: Debug + Data,
-    C: TxnsCodec,
+    C: TxnsCodec + 'static,
     G: Scope<Timestamp = T>,
 {
     let worker_idx = scope.index();
@@ -183,10 +186,10 @@ where
 
         let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
         let client = client.await;
-        let mut txns_cache = TxnsCache::<T, C>::open(&client, txns_id, Some(data_id)).await;
+        let txns_read = ctx.get_or_init::<C>(&client, txns_id).await;
 
-        let _ = txns_cache.update_gt(&as_of).await;
-        let subscribe = txns_cache.data_subscribe::<K, V, D>(data_id, as_of.clone());
+        let _ = txns_read.update_gt(as_of.clone()).await;
+        let (snap, txns_read_cap) = txns_read.data_subscribe(data_id, as_of.clone()).await;
         let data_write = client
             .open_writer::<K, V, T, D>(
                 data_id,
@@ -203,11 +206,18 @@ where
         debug!("{} emitting {:?}", name, subscribe.remap);
         remap_output.give(&cap, subscribe.remap.clone()).await;
 
+        let mut txns_read_cap = Some(txns_read_cap);
         loop {
-            let _ = txns_cache.update_ge(&subscribe.remap.logical_upper).await;
-            cap.downgrade(&subscribe.remap.logical_upper);
-            let data_listen_next =
-                txns_cache.data_listen_next(&subscribe.data_id, &subscribe.remap.logical_upper);
+            txns_read.update_ge(remap.logical_upper.clone()).await;
+            cap.downgrade(&remap.logical_upper);
+            let data_listen_next = {
+                let trc = txns_read_cap.take().expect("valid cap");
+                let (dln, trc) = trc
+                    .data_listen_next(data_id, remap.logical_upper.clone())
+                    .await;
+                txns_read_cap = Some(trc);
+                dln
+            };
             debug!(
                 "{} data_listen_next at {:?}: {:?}",
                 name, subscribe.remap.logical_upper, data_listen_next,
@@ -430,6 +440,28 @@ where
     None
 }
 
+/// WIP
+#[derive(Default, Debug, Clone)]
+pub struct TxnsContext<T: Clone> {
+    read: Arc<tokio::sync::OnceCell<TxnsRead<T>>>,
+}
+
+impl<T: Timestamp + Lattice + Codec64> TxnsContext<T> {
+    async fn get_or_init<C>(&self, client: &PersistClient, txns_id: ShardId) -> TxnsRead<T>
+    where
+        T: TotalOrder + StepForward,
+        C: TxnsCodec + 'static,
+    {
+        let read = self
+            .read
+            .get_or_init(|| TxnsRead::start::<C>(client.clone(), txns_id))
+            .await;
+        // We initially only have one txns shard in the system.
+        assert_eq!(&txns_id, read.txns_id());
+        read.clone()
+    }
+}
+
 pub(crate) const DATA_SHARD_RETRYER_INITIAL_BACKOFF: Config<Duration> = Config::new(
     "persist_txns_data_shard_retryer_initial_backoff",
     Duration::from_millis(1024),
@@ -545,6 +577,7 @@ impl DataSubscribe {
                 txns_progress::<String, (), u64, i64, _, TxnsCodecDefault, _, _>(
                     data_stream,
                     name,
+                    TxnsContext::default(),
                     || std::future::ready(client.clone()),
                     txns_id,
                     data_id,
