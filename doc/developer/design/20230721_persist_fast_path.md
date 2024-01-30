@@ -34,17 +34,15 @@ Supporting a fast query path for select-limit queries against Persist shards wil
 
 Today, `environmentd` will generate a fast-path plan when a dataflow can be represented as: a `Get` from an indexed collection, a map-filter-project stage, and some “finishing” logic including order-by/limit. We’ll change this to also allow the `Get` to get from a non-indexed collection backed by a Persist shard.
 
-Today, every select query generates a peek request into an arrangement. (Even non-fast-path queries work by creating a new dataflow that writes out its data into an arrangement, then peeking into that arrangement.) This design introduces a second type of peek: one that peeks directly into the backing Persist shard. Concrentely, this means that `environmentd` will send `ComputeCommand::Peek` commands that reference a persisted collection’s `Id`, not the id of an index or arrangement.
+Today, every select query generates a peek request into an arrangement. (Even non-fast-path queries work by creating a new dataflow that writes out its data into an arrangement, then peeking into that arrangement.) This design introduces a second type of peek: one that peeks directly into the backing Persist shard. Concretely, this means that `environmentd` will send `ComputeCommand::Peek` commands that reference a persisted collection’s `Id`, not the id of an index or arrangement.
 
 ### Peeking
 
-When `clusterd` receives a peek command, it stores and tracks a `PendingPeek` struct with the arrangement and request metadata in the compute state, polls until that arrangement has data for the requested timestamp, then read that data synchronously back out of the arrangement before returning a `ComputeResponse::Peek` with the results.
+When `clusterd` receives a peek command, it stores and tracks a `PendingPeek` struct with the arrangement and request metadata in the compute state, polls until that arrangement has data for the requested timestamp, then reads that data synchronously back out of the arrangement before returning a `ComputeResponse::Peek` with the results.
 
-Since Persist’s API is asynchronous, one straightforward approach would be to fork off a new task for every incoming Peek, and hold on to the task handle. We can periodically poll the task for completion, and cancel it if the peek itself is cancelled by the user.
+Since Persist’s API is asynchronous, we can fork off a new task for every incoming Peek, and hold on to the task handle. We can periodically poll the task for completion, and cancel it if the peek itself is cancelled by the user.
 
-When executing an ordinary peek, each worker reads a subset of the results out of their local arrangement… so much of the work is spread equally across all workers/processes of a replica. However, with Persist-backed peeks, we’d really only be doing the reading in a single task running on just one of the replica's processes. We’ll need to take care to ensure these peek tasks are fairly distributed to avoid unduly skewing the workload. This will also shift work from the timely worker threads to the background task pool; we should likely cap the number of these peeks that run concurrently to avoid monopolizing these limited resources.
-
-Alternately, we could choose to run the entire peek process from `environmentd`... see the open questions below.
+When executing an ordinary peek, each worker reads a subset of the results out of their local arrangement… so much of the work is spread equally across all workers/processes of a replica. However, with Persist-backed peeks, we’d really only be doing the reading in a single task running on just one of the replica's processes. We’ll need to hash these reads across the compute nodes to avoid unduly skewing the workload. This will also shift work from the timely worker threads to the background task pool; we should cap the number of peeks that run concurrently to avoid monopolizing these limited resources.
 
 ### Persist
 
@@ -117,4 +115,4 @@ Similarly, we could also train users to solve their problems using other more-ef
 
 If we want to rely on Persist for consolidation, our data codecs need to be deterministic. (Specifically: two `[u8]` must decode to the equal values if and only if they are identical.) Otherwise, consolidating before decoding might not give the same results as decoding before consolidating. (And all our ideas for making Persist-source consolidation faster rely on consolidating first.)
 
-Currently, we use Protobuf to serialize our rows, and Protobuf does not guarantee deterministic serialization. (However, our Protobuf library seems to give us deterministic results in practice, given an unchanged schema.) We'll need to lock down our serializations in some way or other to be comfortable relying on this in production.
+Currently, we use Protobuf to serialize our rows, and Protobuf does not guarantee deterministic serialization. (However, our Protobuf library seems to give us deterministic results in practice, given an unchanged schema.) We'll need to add other checks that our serialization is stable to be comfortable relying on this in production.
