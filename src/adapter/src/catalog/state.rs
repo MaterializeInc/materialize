@@ -37,7 +37,7 @@ use mz_catalog::memory::objects::{
     CommentsMap, Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
     Role, Schema, Secret, Sink, Source, Table, Type, View,
 };
-use mz_catalog::{LINKED_CLUSTER_REPLICA_NAME, SYSTEM_CONN_ID};
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
     ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
     ReplicaAllocation, ReplicaConfig, ReplicaLocation, UnmanagedReplicaLocation,
@@ -122,8 +122,6 @@ pub struct CatalogState {
     pub(super) oid_counter: u32,
     pub(super) cluster_replica_sizes: ClusterReplicaSizeMap,
     #[serde(skip)]
-    pub(super) default_storage_cluster_size: Option<String>,
-    #[serde(skip)]
     pub(crate) availability_zones: Vec<String>,
     #[serde(skip)]
     pub(super) system_configuration: SystemVars,
@@ -178,7 +176,6 @@ impl CatalogState {
             },
             oid_counter: Default::default(),
             cluster_replica_sizes: Default::default(),
-            default_storage_cluster_size: Default::default(),
             availability_zones: Default::default(),
             system_configuration: Default::default(),
             egress_ips: Default::default(),
@@ -507,9 +504,6 @@ impl CatalogState {
                 dependents.extend_from_slice(&self.item_dependents(subsource_id, seen));
             }
             dependents.push(object_id);
-            if let Some(linked_cluster_id) = self.clusters_by_linked_object_id.get(&item_id) {
-                dependents.extend_from_slice(&self.cluster_dependents(*linked_cluster_id, seen));
-            }
         }
         dependents
     }
@@ -695,24 +689,6 @@ impl CatalogState {
 
     pub(super) fn try_get_cluster_mut(&mut self, cluster_id: ClusterId) -> Option<&mut Cluster> {
         self.clusters_by_id.get_mut(&cluster_id)
-    }
-
-    pub(super) fn get_linked_cluster(&self, object_id: GlobalId) -> Option<&Cluster> {
-        self.clusters_by_linked_object_id
-            .get(&object_id)
-            .map(|id| &self.clusters_by_id[id])
-    }
-
-    pub(super) fn get_storage_object_size(&self, object_id: GlobalId) -> Option<&str> {
-        let cluster = self.get_linked_cluster(object_id)?;
-        let replica_id = cluster
-            .replica_id(LINKED_CLUSTER_REPLICA_NAME)
-            .expect("Must exist");
-        let replica = cluster.replica(replica_id).expect("Must exist");
-        match &replica.config.location {
-            ReplicaLocation::Unmanaged(_) => None,
-            ReplicaLocation::Managed(ManagedReplicaLocation { size, .. }) => Some(size),
-        }
     }
 
     pub(super) fn try_get_role(&self, id: &RoleId) -> Option<&Role> {
@@ -1989,24 +1965,6 @@ impl CatalogState {
 
     pub fn availability_zones(&self) -> &[String] {
         &self.availability_zones
-    }
-
-    /// Returns the default storage cluster size .
-    ///
-    /// If a default size was given as configuration, it is always used,
-    /// otherwise the smallest size is used instead.
-    pub fn default_linked_cluster_size(&self) -> String {
-        match &self.default_storage_cluster_size {
-            Some(default_storage_cluster_size) => default_storage_cluster_size.clone(),
-            None => {
-                let (size, _allocation) = self
-                    .cluster_replica_sizes
-                    .enabled_allocations()
-                    .min_by_key(|(_, a)| (a.scale, a.workers, a.memory_limit))
-                    .expect("should have at least one valid cluster replica size");
-                size.clone()
-            }
-        }
     }
 
     pub fn concretize_replica_location(

@@ -584,7 +584,6 @@ name
 ----
 mz_aggregates
 mz_aws_connections
-mz_cluster_links
 mz_cluster_replica_metrics
 mz_cluster_replica_sizes
 mz_cluster_replica_statuses

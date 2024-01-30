@@ -326,10 +326,6 @@ SOURCE
 materialize
 mz_internal
 mz_aws_privatelink_connection_statuses
-VIEW
-materialize
-mz_internal
-mz_cluster_links
 BASE TABLE
 materialize
 mz_internal

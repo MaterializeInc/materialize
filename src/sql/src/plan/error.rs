@@ -210,10 +210,6 @@ pub enum PlanError {
         name: String,
         item_type: CatalogItemType,
     },
-    ModifyLinkedCluster {
-        cluster_name: String,
-        linked_object_name: String,
-    },
     ManagedCluster {
         cluster_name: String,
     },
@@ -640,7 +636,6 @@ impl fmt::Display for PlanError {
             Self::InvalidSchemaName => write!(f, "no schema has been selected to create in"),
             Self::ItemAlreadyExists { name, item_type } => write!(f, "{item_type} {} already exists", name.quoted()),
             Self::ManagedCluster {cluster_name} => write!(f, "cannot modify managed cluster {cluster_name}"),
-            Self::ModifyLinkedCluster {cluster_name, ..} => write!(f, "cannot modify linked cluster {}", cluster_name.quoted()),
             Self::InvalidKeysInSubscribeEnvelopeUpsert => {
                 write!(f, "invalid keys in SUBSCRIBE ENVELOPE UPSERT (KEY (..))")
             }

@@ -1067,17 +1067,11 @@ impl Coordinator {
                 Op::CreateRole { .. } => {
                     new_roles += 1;
                 }
-                Op::CreateCluster {
-                    linked_object_id, ..
-                } => {
-                    // Linked compute clusters don't count against the limit,
-                    // since we have a separate sources and sinks limit.
-                    //
-                    // TODO(benesch): remove the `max_sources` and `max_sinks`
-                    // limit, and set a higher max cluster limit?
-                    if linked_object_id.is_none() {
-                        new_clusters += 1;
-                    }
+                Op::CreateCluster { .. } => {
+                    // TODO(benesch): having deprecated linked clusters, remove
+                    // the `max_sources` and `max_sinks` limit, and set a higher
+                    // max cluster limit?
+                    new_clusters += 1;
                 }
                 Op::CreateClusterReplica {
                     cluster_id, config, ..
