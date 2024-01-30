@@ -26,7 +26,7 @@ use crate::indexed::columnar::arrow::{
 };
 use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{
-    decode_trace_inline_meta, encode_trace_inline_meta, BlobTraceBatchPart,
+    decode_trace_inline_meta, encode_trace_inline_meta, BlobTraceBatchPart, SchemaId,
 };
 
 const INLINE_METADATA_KEY: &str = "MZ:inline";
@@ -77,6 +77,7 @@ pub fn decode_trace_parquet<R: Read + Seek, T: Timestamp + Codec64>(
         ),
         index: meta.index,
         updates,
+        schema: SchemaId(meta.schema),
     };
     ret.validate()?;
     Ok(ret)

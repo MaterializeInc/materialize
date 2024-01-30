@@ -21,7 +21,10 @@ use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::Codec64;
+use mz_proto::RustType;
+use proptest_derive::Arbitrary;
 use prost::Message;
+use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
@@ -32,6 +35,49 @@ use crate::gen::persist::{
 use crate::indexed::columnar::parquet::{decode_trace_parquet, encode_trace_parquet};
 use crate::indexed::columnar::ColumnarRecords;
 use crate::location::Blob;
+
+/// WIP
+#[derive(
+    Arbitrary, Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
+)]
+pub struct SchemaId(pub u64);
+
+impl std::fmt::Display for SchemaId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "h{}", self.0)
+    }
+}
+
+impl std::str::FromStr for SchemaId {
+    type Err = String;
+
+    fn from_str(encoded: &str) -> Result<Self, Self::Err> {
+        let encoded = match encoded.strip_prefix('h') {
+            Some(x) => x,
+            None => return Err(format!("invalid SchemaId {}: incorrect prefix", encoded)),
+        };
+        let seqno = u64::from_str(encoded)
+            .map_err(|err| format!("invalid SchemaId {}: {}", encoded, err))?;
+        Ok(SchemaId(seqno))
+    }
+}
+
+impl SchemaId {
+    /// Returns the next SchemaId in the sequence.
+    pub fn next(self) -> SchemaId {
+        SchemaId(self.0 + 1)
+    }
+}
+
+impl RustType<u64> for SchemaId {
+    fn into_proto(&self) -> u64 {
+        self.0
+    }
+
+    fn from_proto(proto: u64) -> Result<Self, mz_proto::TryFromProtoError> {
+        Ok(SchemaId(proto))
+    }
+}
 
 /// The metadata necessary to reconstruct a list of [BlobTraceBatchPart]s.
 ///
@@ -94,6 +140,8 @@ pub struct BlobTraceBatchPart<T> {
     pub index: u64,
     /// The updates themselves.
     pub updates: Vec<ColumnarRecords>,
+    /// WIP
+    pub schema: SchemaId,
 }
 
 impl TraceBatchMeta {
@@ -318,6 +366,7 @@ pub fn encode_trace_inline_meta<T: Timestamp + Codec64>(
         format: format.into(),
         desc: Some((&batch.desc).into()),
         index: batch.index,
+        schema: batch.schema.0,
     };
     let inline_encoded = inline.encode_to_vec();
     base64::encode(inline_encoded)
@@ -394,6 +443,7 @@ mod tests {
             desc: u64_desc(0, 2),
             index: 0,
             updates: columnar_records(vec![update_with_key(0, "0"), update_with_key(1, "1")]),
+            schema: SchemaId::default(),
         };
         assert_eq!(b.validate(), Ok(()));
 
@@ -402,6 +452,7 @@ mod tests {
             desc: u64_desc(0, 2),
             index: 0,
             updates: columnar_records(vec![]),
+            schema: SchemaId::default(),
         };
         assert_eq!(b.validate(), Ok(()));
 
@@ -410,6 +461,7 @@ mod tests {
             desc: u64_desc(2, 0),
             index: 0,
             updates: columnar_records(vec![]),
+            schema: SchemaId::default(),
         };
         assert_eq!(
             b.validate(),
@@ -423,6 +475,7 @@ mod tests {
             desc: u64_desc(0, 0),
             index: 0,
             updates: columnar_records(vec![]),
+            schema: SchemaId::default(),
         };
         assert_eq!(
             b.validate(),
@@ -436,6 +489,7 @@ mod tests {
             desc: u64_desc(1, 2),
             index: 0,
             updates: columnar_records(vec![update_with_key(0, "0")]),
+            schema: SchemaId::default(),
         };
         assert_eq!(b.validate(), Err(Error::from("timestamp 0 is less than the batch lower: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }")));
 
@@ -444,6 +498,7 @@ mod tests {
             desc: u64_desc(1, 2),
             index: 0,
             updates: columnar_records(vec![update_with_key(2, "0")]),
+            schema: SchemaId::default(),
         };
         assert_eq!(b.validate(), Err(Error::from("timestamp 2 is greater than or equal to the batch upper: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }")));
 
@@ -452,6 +507,7 @@ mod tests {
             desc: u64_desc_since(1, 2, 4),
             index: 0,
             updates: columnar_records(vec![update_with_key(2, "0")]),
+            schema: SchemaId::default(),
         };
         assert_eq!(b.validate(), Ok(()));
 
@@ -460,6 +516,7 @@ mod tests {
             desc: u64_desc_since(1, 2, 4),
             index: 0,
             updates: columnar_records(vec![update_with_key(4, "0")]),
+            schema: SchemaId::default(),
         };
         assert_eq!(b.validate(), Ok(()));
 
@@ -468,6 +525,7 @@ mod tests {
             desc: u64_desc_since(1, 2, 4),
             index: 0,
             updates: columnar_records(vec![update_with_key(5, "0")]),
+            schema: SchemaId::default(),
         };
         assert_eq!(b.validate(), Ok(()));
 
@@ -476,6 +534,7 @@ mod tests {
             desc: u64_desc(0, 1),
             index: 0,
             updates: columnar_records(vec![(("0".into(), "0".into()), 0, 0)]),
+            schema: SchemaId::default(),
         };
         assert_eq!(
             b.validate(),
@@ -535,6 +594,7 @@ mod tests {
                 (("k".as_bytes().to_vec(), "v".as_bytes().to_vec()), 2, 1),
                 (("k3".as_bytes().to_vec(), "v3".as_bytes().to_vec()), 2, 1),
             ]),
+            schema: SchemaId::default(),
         };
         let batch1 = BlobTraceBatchPart {
             desc: batch_desc.clone(),
@@ -543,6 +603,7 @@ mod tests {
                 (("k4".as_bytes().to_vec(), "v4".as_bytes().to_vec()), 2, 1),
                 (("k5".as_bytes().to_vec(), "v5".as_bytes().to_vec()), 2, 1),
             ]),
+            schema: SchemaId::default(),
         };
 
         let batch0_size_bytes = expect_set_trace_batch(blob.as_ref(), "b0", &batch0).await;
@@ -610,6 +671,7 @@ mod tests {
                 ),
                 index: 0,
                 updates: data.batches().collect(),
+                schema: SchemaId::default(),
             };
             let mut trace_buf = Vec::new();
             trace.encode(&mut trace_buf);

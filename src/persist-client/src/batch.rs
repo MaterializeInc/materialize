@@ -826,6 +826,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     desc,
                     updates: vec![updates],
                     index,
+                    schema: schemas.id,
                 };
 
                 let (stats, (buf, encode_time)) = isolated_runtime

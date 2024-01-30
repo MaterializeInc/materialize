@@ -1224,6 +1224,7 @@ pub mod datadriven {
     use anyhow::anyhow;
     use differential_dataflow::consolidation::consolidate_updates;
     use differential_dataflow::trace::Description;
+    use mz_persist::indexed::encoding::SchemaId;
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 
     use crate::batch::{
@@ -1522,6 +1523,7 @@ pub mod datadriven {
         let schemas = Schemas {
             key: Arc::new(StringSchema),
             val: Arc::new(UnitSchema),
+            id: SchemaId::default(),
         };
         let builder = BatchBuilderInternal::new(
             cfg,
@@ -1695,6 +1697,7 @@ pub mod datadriven {
         let schemas = Schemas {
             key: Arc::new(StringSchema),
             val: Arc::new(UnitSchema),
+            id: SchemaId::default(),
         };
         let res = Compactor::<String, (), u64, i64>::compact(
             CompactConfig::new(&cfg, &writer_id),

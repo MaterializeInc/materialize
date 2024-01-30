@@ -28,7 +28,7 @@ use crate::error::Error;
 use crate::gen::persist::ProtoBatchFormat;
 use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{
-    decode_trace_inline_meta, encode_trace_inline_meta, BlobTraceBatchPart,
+    decode_trace_inline_meta, encode_trace_inline_meta, BlobTraceBatchPart, SchemaId,
 };
 
 /// The Arrow schema we use to encode ((K, V), T, D) tuples.
@@ -132,6 +132,7 @@ pub fn decode_trace_arrow<R: Read + Seek, T: Timestamp + Codec64>(
         ),
         index: meta.index,
         updates,
+        schema: SchemaId(meta.schema),
     };
     ret.validate()?;
     Ok(ret)

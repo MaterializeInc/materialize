@@ -19,7 +19,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
-use mz_persist::indexed::encoding::BlobTraceBatchPart;
+use mz_persist::indexed::encoding::{BlobTraceBatchPart, SchemaId};
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,7 @@ use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
 use crate::internal::paths::{BlobKey, PartialBatchKey};
 use crate::read::LeasedReaderId;
+use crate::schema::SchemaVersions;
 use crate::stats::PartStats;
 use crate::ShardId;
 
@@ -94,6 +95,7 @@ where
             &self.shard_metrics,
             None,
             self.schemas.clone(),
+            SchemaId::default(), // WIP
         )
         .await;
         Ok(fetched_part)
@@ -182,6 +184,7 @@ pub(crate) async fn fetch_leased_part<K, V, T, D>(
     shard_metrics: &ShardMetrics,
     reader_id: Option<&LeasedReaderId>,
     schemas: Schemas<K, V>,
+    target_schema: SchemaId,
 ) -> FetchedPart<K, V, T, D>
 where
     K: Debug + Codec,
@@ -218,11 +221,22 @@ where
             blob_key
         )
     });
+    // WIP get these schemas from some sort of registry in the shard metadata
+    // instead.
+    let schemas = SchemaVersions {
+        key_schemas: [(encoded_part.part.schema, schemas.key)]
+            .into_iter()
+            .collect(),
+        val_schemas: [(encoded_part.part.schema, schemas.val)]
+            .into_iter()
+            .collect(),
+    };
     let fetched_part = FetchedPart {
         metrics,
         ts_filter,
         part: encoded_part,
-        schemas,
+        schemas: Arc::new(schemas),
+        target_schema,
         filter_pushdown_audit: if part.filter_pushdown_audit {
             part.stats.clone()
         } else {
@@ -435,7 +449,8 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     metrics: Arc<Metrics>,
     ts_filter: FetchBatchFilter<T>,
     part: EncodedPart<T>,
-    schemas: Schemas<K, V>,
+    target_schema: SchemaId,
+    pub(crate) schemas: Arc<SchemaVersions<K, V>>,
     filter_pushdown_audit: Option<LazyPartStats>,
     part_cursor: Cursor,
 
@@ -448,7 +463,8 @@ impl<K: Codec, V: Codec, T: Clone, D> Clone for FetchedPart<K, V, T, D> {
             metrics: Arc::clone(&self.metrics),
             ts_filter: self.ts_filter.clone(),
             part: self.part.clone(),
-            schemas: self.schemas.clone(),
+            target_schema: self.target_schema,
+            schemas: Arc::clone(&self.schemas),
             filter_pushdown_audit: self.filter_pushdown_audit.clone(),
             part_cursor: self.part_cursor.clone(),
             _phantom: self._phantom.clone(),
@@ -520,6 +536,22 @@ where
 
             let k = self.metrics.codecs.key.decode(|| K::decode(k));
             let v = self.metrics.codecs.val.decode(|| V::decode(v));
+
+            // WIP also migrate v
+            let k = k.map(|mut k| {
+                eprintln!(
+                    "WIP migrating from {} to {}: {:?}",
+                    self.part.part.schema, self.target_schema, k
+                );
+                self.schemas
+                    .migrate_key(self.part.part.schema, self.target_schema, &mut k);
+                eprintln!(
+                    "WIP migrated  from {} to {}: {:?}",
+                    self.part.part.schema, self.target_schema, k
+                );
+                k
+            });
+
             return Some(((k, v), t, d));
         }
         None

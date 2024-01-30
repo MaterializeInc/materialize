@@ -23,6 +23,7 @@ use futures::Stream;
 use mz_dyncfg::Config;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
+use mz_persist::indexed::encoding::SchemaId;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 use proptest_derive::Arbitrary;
@@ -424,6 +425,7 @@ where
             &self.handle.machine.applier.shard_metrics,
             Some(&self.handle.reader_id),
             self.handle.schemas.clone(),
+            SchemaId::default(), // WIP
         )
         .await;
         self.handle.process_returned_leased_part(part);
@@ -1031,6 +1033,7 @@ where
                 &self.machine.applier.shard_metrics,
                 Some(&self.reader_id),
                 self.schemas.clone(),
+                SchemaId::default(), // WIP
             )
             .await;
             self.process_returned_leased_part(part);
@@ -1164,6 +1167,7 @@ where
                     &shard_metrics,
                     Some(&reader_id),
                     schemas.clone(),
+                    SchemaId::default() // WIP
                 )
                 .await;
                 lease_returner.return_leased_part(part);

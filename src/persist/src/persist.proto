@@ -32,6 +32,7 @@ message ProtoBatchPartInline {
     // be only one trace batch with the same description and index.
     ProtoU64Description desc = 2;
     uint64 index = 3;
+    uint64 schema = 4;
 }
 
 enum ProtoBatchFormat {
