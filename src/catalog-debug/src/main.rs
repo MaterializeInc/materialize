@@ -414,7 +414,6 @@ async fn upgrade_check(
             now,
             skip_migrations: false,
             cluster_replica_sizes,
-            default_storage_cluster_size: None,
             builtin_cluster_replica_size: "1".into(),
             system_parameter_defaults: Default::default(),
             remote_system_parameters: None,
