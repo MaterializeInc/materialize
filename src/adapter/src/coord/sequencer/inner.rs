@@ -101,7 +101,9 @@ use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
 use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
 use crate::optimize::{self, Optimize, OptimizerConfig};
-use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
+use crate::session::{
+    EndTransactionAction, RequireLinearization, Session, TransactionOps, TransactionStatus, WriteOp,
+};
 use crate::util::{viewable_variables, ClientTransmitter, ResultExt};
 use crate::{guard_write_critical_section, PeekResponseUnary, TimestampExplanation};
 
@@ -1626,9 +1628,15 @@ impl Coordinator {
                 });
                 return;
             }
-            Ok((Some(TransactionOps::Peeks { determination, .. }), _))
-                if ctx.session().vars().transaction_isolation()
-                    == &IsolationLevel::StrictSerializable =>
+            Ok((
+                Some(TransactionOps::Peeks {
+                    determination,
+                    requires_linearization: RequireLinearization::Required,
+                    ..
+                }),
+                _,
+            )) if ctx.session().vars().transaction_isolation()
+                == &IsolationLevel::StrictSerializable =>
             {
                 self.strict_serializable_reads_tx
                     .send(PendingReadTxn {
@@ -2259,7 +2267,8 @@ impl Coordinator {
                     oracle_read_ts,
                     &id_bundle,
                     &source_ids,
-                    None, // no real-time recency
+                    None, // no real-time recency,
+                    RequireLinearization::NotRequired,
                 )
                 .with_subscriber(root_dispatch.clone())
                 .await?
@@ -2774,6 +2783,7 @@ impl Coordinator {
                 &id_bundle,
                 &source_ids,
                 real_time_recency_ts,
+                RequireLinearization::NotRequired,
             )
             .await?;
         let explanation = self.explain_timestamp(session, cluster_id, &id_bundle, determination);
