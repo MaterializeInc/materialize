@@ -1122,7 +1122,12 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         enable_specialized_arrangements: bool,
         enable_reduce_mfp_fusion: bool,
     ) -> Result<DataflowDescription<Self>, String> {
-        let dataflow = todo!();
+        let context = lowering::Context::new(
+            desc.debug_name.clone(),
+            enable_specialized_arrangements,
+            enable_reduce_mfp_fusion,
+        );
+        let dataflow = context.lower(desc)?;
 
         mz_repr::explain::trace_plan(&dataflow);
 
