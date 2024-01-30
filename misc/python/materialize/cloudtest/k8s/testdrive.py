@@ -50,6 +50,7 @@ class TestdriveBase:
         default_timeout: str = "300s",
         kafka_options: str | None = None,
         log_filter: str = "off",
+        suppress_command_error_output: bool = False,
     ) -> None:
         command: list[str] = [
             "testdrive",
@@ -78,9 +79,15 @@ class TestdriveBase:
         self._run_internal(
             command,
             input,
+            suppress_command_error_output,
         )
 
-    def _run_internal(self, command: list[str], input: str | None = None) -> None:
+    def _run_internal(
+        self,
+        command: list[str],
+        input: str | None = None,
+        suppress_command_error_output: bool = False,
+    ) -> None:
         raise NotImplementedError
 
 
@@ -129,7 +136,12 @@ class TestdrivePod(K8sPod, TestdriveBase):
         )
         self.pod = V1Pod(metadata=metadata, spec=pod_spec)
 
-    def _run_internal(self, command: list[str], input: str | None = None) -> None:
+    def _run_internal(
+        self,
+        command: list[str],
+        input: str | None = None,
+        suppress_command_error_output: bool = False,
+    ) -> None:
         self.wait(condition="condition=Ready", resource="pod/testdrive")
         try:
             self.kubectl(
@@ -140,6 +152,7 @@ class TestdrivePod(K8sPod, TestdriveBase):
                 *command,
                 input=input,
                 capture_output=True,
+                suppress_command_error_output=suppress_command_error_output,
             )
         except subprocess.CalledProcessError as e:
             error_chunks = extract_error_chunks_from_stderr(e.stderr)
