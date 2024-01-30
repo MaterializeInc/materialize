@@ -620,6 +620,7 @@ impl Coordinator {
                 &id_bundle,
                 &source_ids,
                 real_time_recency_ts,
+                true,
             )
             .await;
 
@@ -975,6 +976,7 @@ impl Coordinator {
         source_bundle: &CollectionIdBundle,
         source_ids: &BTreeSet<GlobalId>,
         real_time_recency_ts: Option<Timestamp>,
+        requires_linearization: bool,
     ) -> Result<TimestampDetermination<Timestamp>, AdapterError> {
         let in_immediate_multi_stmt_txn = session.transaction().in_immediate_multi_stmt_txn(when);
         let timedomain_bundle;
@@ -1070,6 +1072,7 @@ impl Coordinator {
             session.add_transaction_ops(TransactionOps::Peeks {
                 determination: transaction_determination,
                 cluster_id,
+                requires_linearization,
             })?;
         } else if matches!(session.transaction(), &TransactionStatus::InTransaction(_)) {
             // If the query uses AS OF, then ignore the timestamp.
@@ -1077,6 +1080,7 @@ impl Coordinator {
             session.add_transaction_ops(TransactionOps::Peeks {
                 determination: transaction_determination,
                 cluster_id,
+                requires_linearization,
             })?;
         };
 

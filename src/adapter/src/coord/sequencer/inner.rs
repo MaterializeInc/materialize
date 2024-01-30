@@ -1626,8 +1626,15 @@ impl Coordinator {
                 });
                 return;
             }
-            Ok((Some(TransactionOps::Peeks { determination, .. }), _))
-                if ctx.session().vars().transaction_isolation()
+            Ok((
+                Some(TransactionOps::Peeks {
+                    determination,
+                    requires_linearization,
+                    ..
+                }),
+                _,
+            )) if requires_linearization
+                && ctx.session().vars().transaction_isolation()
                     == &IsolationLevel::StrictSerializable =>
             {
                 self.strict_serializable_reads_tx
@@ -2259,7 +2266,8 @@ impl Coordinator {
                     oracle_read_ts,
                     &id_bundle,
                     &source_ids,
-                    None, // no real-time recency
+                    None, // no real-time recency,
+                    false,
                 )
                 .with_subscriber(root_dispatch.clone())
                 .await?
@@ -2774,6 +2782,7 @@ impl Coordinator {
                 &id_bundle,
                 &source_ids,
                 real_time_recency_ts,
+                false,
             )
             .await?;
         let explanation = self.explain_timestamp(session, cluster_id, &id_bundle, determination);
