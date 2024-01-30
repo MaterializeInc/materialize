@@ -225,7 +225,6 @@ impl Catalog {
                 temporary_schemas: BTreeMap::new(),
                 clusters_by_id: BTreeMap::new(),
                 clusters_by_name: BTreeMap::new(),
-                clusters_by_linked_object_id: BTreeMap::new(),
                 roles_by_name: BTreeMap::new(),
                 roles_by_id: BTreeMap::new(),
                 config: mz_sql::catalog::CatalogConfig {
@@ -629,7 +628,6 @@ impl Catalog {
             for mz_catalog::durable::Cluster {
                 id,
                 name,
-                linked_object_id,
                 owner_id,
                 privileges,
                 config,
@@ -669,7 +667,6 @@ impl Catalog {
                 state.insert_cluster(
                     id,
                     name,
-                    linked_object_id,
                     all_indexes,
                     owner_id,
                     PrivilegeMap::from_mz_acl_items(privileges),

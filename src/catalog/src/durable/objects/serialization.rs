@@ -305,7 +305,6 @@ impl RustType<proto::ClusterValue> for ClusterValue {
         proto::ClusterValue {
             name: self.name.to_string(),
             config: Some(self.config.into_proto()),
-            linked_object_id: self.linked_object_id.into_proto(),
             owner_id: Some(self.owner_id.into_proto()),
             privileges: self.privileges.into_proto(),
         }
@@ -315,7 +314,6 @@ impl RustType<proto::ClusterValue> for ClusterValue {
         Ok(ClusterValue {
             name: proto.name,
             config: proto.config.unwrap_or_default().into_rust()?,
-            linked_object_id: proto.linked_object_id.into_rust()?,
             owner_id: proto.owner_id.into_rust_if_some("ClusterValue::owner_id")?,
             privileges: proto.privileges.into_rust()?,
         })

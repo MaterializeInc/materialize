@@ -509,10 +509,6 @@ pub trait CatalogCluster<'a> {
     /// Returns a stable ID for the cluster.
     fn id(&self) -> ClusterId;
 
-    /// Returns the ID of the object this cluster is linked to, if
-    /// any.
-    fn linked_object_id(&self) -> Option<GlobalId>;
-
     /// Returns the objects that are bound to this cluster.
     fn bound_objects(&self) -> &BTreeSet<GlobalId>;
 

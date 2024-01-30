@@ -409,7 +409,6 @@ Trace {
                     },
                     ClusterValue {
                         name: "quickstart",
-                        linked_object_id: None,
                         owner_id: Some(
                             RoleId {
                                 value: Some(

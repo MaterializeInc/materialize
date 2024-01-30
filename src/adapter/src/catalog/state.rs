@@ -111,8 +111,6 @@ pub struct CatalogState {
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) clusters_by_id: BTreeMap<ClusterId, Cluster>,
     pub(super) clusters_by_name: BTreeMap<String, ClusterId>,
-    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    pub(super) clusters_by_linked_object_id: BTreeMap<GlobalId, ClusterId>,
     pub(super) roles_by_name: BTreeMap<String, RoleId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) roles_by_id: BTreeMap<RoleId, Role>,
@@ -158,7 +156,6 @@ impl CatalogState {
             temporary_schemas: Default::default(),
             clusters_by_id: Default::default(),
             clusters_by_name: Default::default(),
-            clusters_by_linked_object_id: Default::default(),
             roles_by_name: Default::default(),
             roles_by_id: Default::default(),
             config: CatalogConfig {
@@ -1220,7 +1217,6 @@ impl CatalogState {
         &mut self,
         id: ClusterId,
         name: String,
-        linked_object_id: Option<GlobalId>,
         introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
         owner_id: RoleId,
         privileges: PrivilegeMap,
@@ -1289,7 +1285,6 @@ impl CatalogState {
             Cluster {
                 name: name.clone(),
                 id,
-                linked_object_id,
                 bound_objects: BTreeSet::new(),
                 log_indexes,
                 replica_id_by_name_: BTreeMap::new(),
@@ -1300,12 +1295,6 @@ impl CatalogState {
             },
         );
         assert!(self.clusters_by_name.insert(name, id).is_none());
-        if let Some(linked_object_id) = linked_object_id {
-            assert!(self
-                .clusters_by_linked_object_id
-                .insert(linked_object_id, id)
-                .is_none());
-        }
     }
 
     pub(super) fn rename_cluster(&mut self, id: ClusterId, to_name: String) {

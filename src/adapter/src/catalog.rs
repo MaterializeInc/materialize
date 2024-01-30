@@ -1228,7 +1228,7 @@ impl Catalog {
 
         // Drop in-memory planning metadata.
         let dropped_notices = self.drop_plans_and_metainfos(&drop_ids);
-        if self.state().system_config().enable_mz_notices() {
+        if self.state.system_config().enable_mz_notices() {
             // Generate retractions for the Builtin tables.
             self.state().pack_optimizer_notices(
                 &mut builtin_table_updates,
@@ -1535,13 +1535,10 @@ impl Catalog {
                 Op::CreateCluster {
                     id,
                     name,
-                    linked_object_id,
                     introspection_sources,
                     owner_id,
                     config,
                 } => {
-                    assert_eq!(linked_object_id, None);
-
                     if is_reserved_name(&name) {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReservedClusterName(name),
@@ -1567,7 +1564,6 @@ impl Catalog {
                     tx.insert_user_cluster(
                         id,
                         &name,
-                        linked_object_id,
                         introspection_sources.clone(),
                         owner_id,
                         privileges.clone(),
@@ -1592,7 +1588,6 @@ impl Catalog {
                     state.insert_cluster(
                         id,
                         name.clone(),
-                        linked_object_id,
                         introspection_sources,
                         owner_id,
                         PrivilegeMap::from_mz_acl_items(privileges),
@@ -1995,13 +1990,6 @@ impl Catalog {
                                 .remove(&id)
                                 .expect("can only drop known clusters");
                             state.clusters_by_name.remove(&cluster.name);
-
-                            if let Some(linked_object_id) = cluster.linked_object_id {
-                                state
-                                    .clusters_by_linked_object_id
-                                    .remove(&linked_object_id)
-                                    .expect("can only drop known clusters");
-                            }
 
                             for id in cluster.log_indexes.values() {
                                 state.drop_item(*id);
@@ -3565,7 +3553,6 @@ pub enum Op {
     CreateCluster {
         id: ClusterId,
         name: String,
-        linked_object_id: Option<GlobalId>,
         introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
         owner_id: RoleId,
         config: ClusterConfig,

@@ -104,14 +104,6 @@ impl CatalogState {
                 inconsistencies.push(InternalFieldsInconsistency::Cluster(name.clone(), *id));
             }
         }
-        for (global_id, cluster_id) in &self.clusters_by_linked_object_id {
-            if self.clusters_by_id.get(cluster_id).is_none() {
-                inconsistencies.push(InternalFieldsInconsistency::ClusterLinkedObjects(
-                    *global_id,
-                    *cluster_id,
-                ));
-            }
-        }
         for (name, role_id) in &self.roles_by_name {
             if self.roles_by_id.get(role_id).is_none() {
                 inconsistencies.push(InternalFieldsInconsistency::Role(name.clone(), *role_id))
@@ -574,7 +566,6 @@ enum InternalFieldsInconsistency {
     Database(String, DatabaseId),
     AmbientSchema(String, SchemaId),
     Cluster(String, ClusterId),
-    ClusterLinkedObjects(GlobalId, ClusterId),
     Role(String, RoleId),
 }
 
