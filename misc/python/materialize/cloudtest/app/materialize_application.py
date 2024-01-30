@@ -46,11 +46,17 @@ class MaterializeApplication(CloudtestApplicationBase):
         tag: str | None = None,
         aws_region: str | None = None,
         log_filter: str | None = None,
+        apply_node_selectors: bool = False,
     ) -> None:
         self.tag = tag
         self.environmentd = EnvironmentdService()
         self.materialized_alias = MaterializedAliasService()
-        self.testdrive = TestdrivePod(release_mode=release_mode, aws_region=aws_region)
+        self.testdrive = TestdrivePod(
+            release_mode=release_mode,
+            aws_region=aws_region,
+            apply_node_selectors=apply_node_selectors,
+        )
+        self.apply_node_selectors = apply_node_selectors
         super().__init__(release_mode, aws_region, log_filter)
 
         # Register the VpcEndpoint CRD.
@@ -62,12 +68,12 @@ class MaterializeApplication(CloudtestApplicationBase):
 
     def get_resources(self, log_filter: str | None) -> list[K8sResource]:
         return [
-            *cockroach_resources(),
-            *postgres_resources(),
-            *redpanda_resources(),
-            *debezium_resources(),
-            *ssh_resources(),
-            Minio(),
+            *cockroach_resources(apply_node_selectors=self.apply_node_selectors),
+            *postgres_resources(apply_node_selectors=self.apply_node_selectors),
+            *redpanda_resources(apply_node_selectors=self.apply_node_selectors),
+            *debezium_resources(apply_node_selectors=self.apply_node_selectors),
+            *ssh_resources(apply_node_selectors=self.apply_node_selectors),
+            Minio(apply_node_selectors=self.apply_node_selectors),
             VpcEndpointsClusterRole(),
             AdminRoleBinding(),
             EnvironmentdStatefulSet(
@@ -75,6 +81,7 @@ class MaterializeApplication(CloudtestApplicationBase):
                 tag=self.tag,
                 log_filter=log_filter,
                 coverage_mode=self.coverage_mode(),
+                apply_node_selectors=self.apply_node_selectors,
             ),
             PersistPubSubService(),
             self.environmentd,

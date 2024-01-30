@@ -17,10 +17,10 @@ MINIO_YAML_DIRECTORY_URL = (
 
 class Minio(K8sResource):
     def __init__(
-        self,
-        namespace: str = DEFAULT_K8S_NAMESPACE,
+        self, namespace: str = DEFAULT_K8S_NAMESPACE, apply_node_selectors: bool = False
     ) -> None:
         super().__init__(namespace)
+        self.apply_node_selectors = apply_node_selectors
 
     def create(self) -> None:
         self.kubectl(
@@ -42,15 +42,16 @@ class Minio(K8sResource):
                 f"{MINIO_YAML_DIRECTORY_URL}/{yaml_file}.yaml",
             )
 
-        self.kubectl(
-            "patch",
-            "deployment",
-            "minio-deployment",
-            "--type",
-            "json",
-            "-p",
-            '[{"op": "add", "path": "/spec/template/spec/nodeSelector", "value": {"supporting-services": "true"} }]',
-        )
+        if self.apply_node_selectors:
+            self.kubectl(
+                "patch",
+                "deployment",
+                "minio-deployment",
+                "--type",
+                "json",
+                "-p",
+                '[{"op": "add", "path": "/spec/template/spec/nodeSelector", "value": {"supporting-services": "true"} }]',
+            )
 
         # the PVC needs to be created after patching the deployment
         self.kubectl(

@@ -31,6 +31,9 @@ def mz(pytestconfig: pytest.Config) -> MaterializeApplication:
         # NOTE(necaris): pyright doesn't like that the `getoption` default type is `Notset`
         aws_region=pytestconfig.getoption("aws_region", None),  # type: ignore
         log_filter=pytestconfig.getoption("log_filter", None),  # type: ignore
+        apply_node_selectors=bool(
+            pytestconfig.getoption("apply_node_selectors", None) or False  # type: ignore
+        ),
     )
 
 
@@ -62,4 +65,10 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store",
         default=None,
         help="Log filter for Materialize binaries",
+    )
+
+    parser.addoption(
+        "--apply-node-selectors",
+        action="store_true",
+        default=False,
     )

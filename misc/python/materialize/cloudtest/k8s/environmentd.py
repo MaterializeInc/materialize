@@ -85,6 +85,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         namespace: str = DEFAULT_K8S_NAMESPACE,
         minio_namespace: str = DEFAULT_K8S_NAMESPACE,
         cockroach_namespace: str = DEFAULT_K8S_NAMESPACE,
+        apply_node_selectors: bool = False,
     ) -> None:
         self.tag = tag
         self.release_mode = release_mode
@@ -94,6 +95,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         self.extra_args: list[str] = []
         self.minio_namespace = minio_namespace
         self.cockroach_namespace = cockroach_namespace
+        self.apply_node_selectors = apply_node_selectors
         super().__init__(namespace)
 
     def generate_stateful_set(self) -> V1StatefulSet:
@@ -120,7 +122,9 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             volume_mounts=volume_mounts,
         )
 
-        node_selector = {"environmentd": "true"}
+        node_selector = None
+        if self.apply_node_selectors:
+            node_selector = {"environmentd": "true"}
 
         taint_toleration = V1Toleration(
             key="environmentd",

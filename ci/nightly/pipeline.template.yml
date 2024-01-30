@@ -854,7 +854,7 @@ steps:
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
-          args: [--exitfirst, -m=long, --aws-region=us-east-1, test/cloudtest/test_recovery.py]
+          args: [--exitfirst, -m=long, --aws-region=us-east-1, --apply-node-selectors, test/cloudtest/test_recovery.py]
 
   - group: Maelstrom
     key: maelstrom

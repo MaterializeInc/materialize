@@ -101,6 +101,7 @@ class TestdrivePod(K8sPod, TestdriveBase):
         materialize_internal_url: str | None = None,
         kafka_addr: str | None = None,
         schema_registry_url: str | None = None,
+        apply_node_selectors: bool = False,
     ) -> None:
         K8sPod.__init__(self, namespace)
         TestdriveBase.__init__(
@@ -131,9 +132,11 @@ class TestdrivePod(K8sPod, TestdriveBase):
             env=env,
         )
 
-        pod_spec = V1PodSpec(
-            containers=[container], node_selector={"supporting-services": "true"}
-        )
+        node_selector = None
+        if apply_node_selectors:
+            node_selector = {"supporting-services": "true"}
+
+        pod_spec = V1PodSpec(containers=[container], node_selector=node_selector)
         self.pod = V1Pod(metadata=metadata, spec=pod_spec)
 
     def _run_internal(

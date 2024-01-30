@@ -67,6 +67,12 @@ class CockroachService(K8sService):
 
 
 class CockroachStatefulSet(K8sStatefulSet):
+    def __init__(
+        self, namespace: str = DEFAULT_K8S_NAMESPACE, apply_node_selectors: bool = False
+    ):
+        self.apply_node_selectors = apply_node_selectors
+        super().__init__(namespace)
+
     def generate_stateful_set(self) -> V1StatefulSet:
         metadata = V1ObjectMeta(name="cockroach", labels={"app": "cockroach"})
         label_selector = V1LabelSelector(match_labels={"app": "cockroach"})
@@ -92,10 +98,14 @@ class CockroachStatefulSet(K8sStatefulSet):
             volume_mounts=volume_mounts,
         )
 
+        node_selector = None
+        if self.apply_node_selectors:
+            node_selector = {"supporting-services": "true"}
+
         pod_spec = V1PodSpec(
             containers=[container],
             volumes=volumes,
-            node_selector={"supporting-services": "true"},
+            node_selector=node_selector,
         )
         template_spec = V1PodTemplateSpec(metadata=metadata, spec=pod_spec)
         claim_templates = [
@@ -128,9 +138,10 @@ def cockroach_resources(
     / "misc"
     / "cockroach"
     / "setup_materialize.sql",
+    apply_node_selectors: bool = False,
 ) -> list[K8sResource]:
     return [
         CockroachConfigMap(namespace, path_to_setup_script),
         CockroachService(namespace),
-        CockroachStatefulSet(namespace),
+        CockroachStatefulSet(namespace, apply_node_selectors),
     ]
