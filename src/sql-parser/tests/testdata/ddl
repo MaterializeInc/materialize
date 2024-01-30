@@ -696,11 +696,11 @@ CREATE INDEX foo ON myschema.bar (a, b)
 CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
 
 parse-statement
-CREATE INDEX foo ON myschema.bar (a, b) WITH (LOGICAL COMPACTION WINDOW = 0)
+CREATE INDEX foo ON myschema.bar (a, b) WITH (RETAIN HISTORY = FOR 0)
 ----
-CREATE INDEX foo ON myschema.bar (a, b) WITH (LOGICAL COMPACTION WINDOW = 0)
+CREATE INDEX foo ON myschema.bar (a, b) WITH (RETAIN HISTORY = FOR 0)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [IndexOption { name: LogicalCompactionWindow, value: Some(Value(Number("0"))) }], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedItemName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [IndexOption { name: RetainHistory, value: Some(RetainHistoryFor(Number("0"))) }], if_not_exists: false })
 
 parse-statement
 CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop WHERE boop.z = z)), delta)
@@ -1136,49 +1136,49 @@ CREATE TABLE IF NOT EXISTS foo (bar int4)
 parse-statement
 ALTER INDEX name SET (property = true)
 ----
-error: Expected LOGICAL, found identifier "property"
+error: Expected RETAIN, found identifier "property"
 ALTER INDEX name SET (property = true)
                       ^
 
 parse-statement
 ALTER INDEX name RESET (property)
 ----
-error: Expected LOGICAL, found identifier "property"
+error: Expected RETAIN, found identifier "property"
 ALTER INDEX name RESET (property)
                         ^
 
 parse-statement
 ALTER INDEX IF EXISTS name SET (property = true)
 ----
-error: Expected LOGICAL, found identifier "property"
+error: Expected RETAIN, found identifier "property"
 ALTER INDEX IF EXISTS name SET (property = true)
                                 ^
 
 parse-statement
 ALTER INDEX name SET ()
 ----
-error: Expected LOGICAL, found right parenthesis
+error: Expected RETAIN, found right parenthesis
 ALTER INDEX name SET ()
                       ^
 
 parse-statement
 ALTER INDEX name RESET ()
 ----
-error: Expected LOGICAL, found right parenthesis
+error: Expected RETAIN, found right parenthesis
 ALTER INDEX name RESET ()
                         ^
 
 parse-statement
 ALTER INDEX name SET (property)
 ----
-error: Expected LOGICAL, found identifier "property"
+error: Expected RETAIN, found identifier "property"
 ALTER INDEX name SET (property)
                       ^
 
 parse-statement
 ALTER INDEX name RESET (property = true)
 ----
-error: Expected LOGICAL, found identifier "property"
+error: Expected RETAIN, found identifier "property"
 ALTER INDEX name RESET (property = true)
                         ^
 
@@ -2621,18 +2621,18 @@ DROP OWNED BY joe, mike CASCADE
 DropOwned(DropOwnedStatement { role_names: [Ident("joe"), Ident("mike")], cascade: true })
 
 parse-statement
-ALTER INDEX IF EXISTS alter_index_table_primary_idx SET (LOGICAL COMPACTION WINDOW = '1ms')
+ALTER INDEX IF EXISTS alter_index_table_primary_idx SET (RETAIN HISTORY = FOR '1ms')
 ----
-ALTER INDEX IF EXISTS alter_index_table_primary_idx SET (LOGICAL COMPACTION WINDOW = '1ms')
+ALTER INDEX IF EXISTS alter_index_table_primary_idx SET (RETAIN HISTORY = FOR '1ms')
 =>
-AlterIndex(AlterIndexStatement { index_name: UnresolvedItemName([Ident("alter_index_table_primary_idx")]), if_exists: true, action: SetOptions([IndexOption { name: LogicalCompactionWindow, value: Some(Value(String("1ms"))) }]) })
+AlterIndex(AlterIndexStatement { index_name: UnresolvedItemName([Ident("alter_index_table_primary_idx")]), if_exists: true, action: SetOptions([IndexOption { name: RetainHistory, value: Some(RetainHistoryFor(String("1ms"))) }]) })
 
 parse-statement
-ALTER INDEX IF EXISTS alter_index_table_primary_idx RESET (LOGICAL COMPACTION WINDOW)
+ALTER INDEX IF EXISTS alter_index_table_primary_idx RESET (RETAIN HISTORY)
 ----
-ALTER INDEX IF EXISTS alter_index_table_primary_idx RESET (LOGICAL COMPACTION WINDOW)
+ALTER INDEX IF EXISTS alter_index_table_primary_idx RESET (RETAIN HISTORY)
 =>
-AlterIndex(AlterIndexStatement { index_name: UnresolvedItemName([Ident("alter_index_table_primary_idx")]), if_exists: true, action: ResetOptions([LogicalCompactionWindow]) })
+AlterIndex(AlterIndexStatement { index_name: UnresolvedItemName([Ident("alter_index_table_primary_idx")]), if_exists: true, action: ResetOptions([RetainHistory]) })
 
 parse-statement
 ALTER CONNECTION IF EXISTS mc RENAME TO ic

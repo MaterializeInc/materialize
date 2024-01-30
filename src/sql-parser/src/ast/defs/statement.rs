@@ -1406,15 +1406,15 @@ impl_display_t!(CreateIndexStatement);
 /// An option in a `CREATE CLUSTER` statement.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum IndexOptionName {
-    // The `LOGICAL COMPACTION WINDOW` option
-    LogicalCompactionWindow,
+    // The `RETAIN HISTORY` option
+    RetainHistory,
 }
 
 impl AstDisplay for IndexOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            IndexOptionName::LogicalCompactionWindow => {
-                f.write_str("LOGICAL COMPACTION WINDOW");
+            IndexOptionName::RetainHistory => {
+                f.write_str("RETAIN HISTORY");
             }
         }
     }

@@ -644,7 +644,6 @@ pub struct CreateMaterializedViewPlan {
 pub struct CreateIndexPlan {
     pub name: QualifiedItemName,
     pub index: Index,
-    pub options: Vec<IndexOption>,
     pub if_not_exists: bool,
 }
 
@@ -1444,6 +1443,7 @@ pub struct Index {
     pub create_sql: String,
     pub on: GlobalId,
     pub keys: Vec<mz_expr::MirScalarExpr>,
+    pub compaction_window: Option<CompactionWindow>,
     pub cluster_id: ClusterId,
 }
 
@@ -1552,7 +1552,7 @@ pub enum ExecuteTimeout {
 #[derive(Clone, Debug)]
 pub enum IndexOption {
     /// Configures the logical compaction window for an index.
-    LogicalCompactionWindow(CompactionWindow),
+    RetainHistory(CompactionWindow),
 }
 
 #[derive(Clone, Debug)]

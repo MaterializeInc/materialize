@@ -338,8 +338,8 @@ impl Coordinator {
                             on,
                             keys,
                             cluster_id,
+                            compaction_window,
                         },
-                    options,
                     if_not_exists,
                 },
             resolved_ids,
@@ -360,7 +360,7 @@ impl Coordinator {
                 resolved_ids,
                 cluster_id,
                 is_retained_metrics_object: false,
-                custom_logical_compaction_window: None,
+                custom_logical_compaction_window: compaction_window,
             }),
             owner_id: *self.catalog().get_entry(&on).owner_id(),
         }];
@@ -423,7 +423,10 @@ impl Coordinator {
                 }
 
                 coord
-                    .set_index_options(exported_index_id, options)
+                    .set_index_compaction_window(
+                        exported_index_id,
+                        compaction_window.unwrap_or_default(),
+                    )
                     .expect("index enabled");
             })
             .await;

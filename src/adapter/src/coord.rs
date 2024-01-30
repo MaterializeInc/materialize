@@ -1614,11 +1614,35 @@ impl Coordinator {
                         let dependent_matviews = index_dependent_matviews
                             .remove(&entry.id())
                             .expect("all index dependants were collected");
+
+                        let lag = if let Some(window) = idx.custom_logical_compaction_window {
+                            match window {
+                                CompactionWindow::Default => {
+                                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS)
+                                }
+                                CompactionWindow::DisableCompaction => None,
+                                CompactionWindow::Duration(d) => Some(d),
+                            }
+                        } else if idx.is_retained_metrics_object {
+                            let retention =
+                                self.catalog().state().system_config().metrics_retention();
+                            Some(Timestamp::new(
+                                u64::try_from(retention.as_millis()).unwrap_or_else(|_| {
+                                    tracing::error!(
+                                        "absurd metrics retention duration: {retention:?}"
+                                    );
+                                    u64::MAX
+                                }),
+                            ))
+                        } else {
+                            Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS)
+                        };
+
                         let as_of = self.bootstrap_index_as_of(
                             &df_desc,
                             idx.cluster_id,
-                            idx.is_retained_metrics_object,
                             dependent_matviews,
+                            lag,
                         );
                         df_desc.set_as_of(as_of);
 
@@ -2181,8 +2205,9 @@ impl Coordinator {
         &self,
         dataflow: &DataflowDescription<Plan>,
         cluster_id: ComputeInstanceId,
-        is_retained_metrics_index: bool,
         dependent_matviews: BTreeSet<GlobalId>,
+        // If `None`, we never compact.
+        compaction_lag: Option<Timestamp>,
     ) -> Antichain<Timestamp> {
         // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
         // the `since`s of all dependencies.
@@ -2211,27 +2236,30 @@ impl Coordinator {
             return min_as_of;
         }
 
-        // Advancing the `as_of` to the write frontier means that we lose some historical data.
-        // That might be acceptable for the default 1-second index compaction window, but not for
-        // retained-metrics indexes. So we need to regress the write frontier by the retention
-        // duration of the index.
-        //
-        // NOTE: If we ever allow custom index compaction windows, we'll need to apply those here
-        // as well.
-        let lag = if is_retained_metrics_index {
-            let retention = self.catalog().state().system_config().metrics_retention();
-            Timestamp::new(u64::try_from(retention.as_millis()).unwrap_or_else(|_| {
-                tracing::error!("absurd metrics retention duration: {retention:?}");
-                u64::MAX
-            }))
+        // // Advancing the `as_of` to the write frontier means that we lose some historical data.
+        // // That might be acceptable for the default 1-second index compaction window, but not for
+        // // retained-metrics indexes. So we need to regress the write frontier by the retention
+        // // duration of the index.
+        // //
+        // // NOTE: If we ever allow custom index compaction windows, we'll need to apply those here
+        // // as well.
+        // let lag = if is_retained_metrics_index {
+        //     let retention = self.catalog().state().system_config().metrics_retention();
+        //     Timestamp::new(u64::try_from(retention.as_millis()).unwrap_or_else(|_| {
+        //         tracing::error!("absurd metrics retention duration: {retention:?}");
+        //         u64::MAX
+        //     }))
+        // } else {
+        //     DEFAULT_LOGICAL_COMPACTION_WINDOW_TS
+        // };
+
+        let max_compaction_frontier = if let Some(lag) = compaction_lag {
+            let time = write_frontier.clone().into_option().expect("checked above");
+            let time = time.saturating_sub(lag);
+            Antichain::from_elem(time)
         } else {
-            DEFAULT_LOGICAL_COMPACTION_WINDOW_TS
+            Antichain::from_elem(Timestamp::MIN)
         };
-
-        let time = write_frontier.clone().into_option().expect("checked above");
-        let time = time.saturating_sub(lag);
-        let max_compaction_frontier = Antichain::from_elem(time);
-
         // We must not select an `as_of` that is beyond any times that have not yet been written to
         // downstream materialized views. If we would, we might skip times in the output of these
         // materialized views, violating correctness. So our chosen `as_of` must be at most the
@@ -2279,7 +2307,7 @@ impl Coordinator {
             min_as_of = ?min_as_of.elements(),
             max_as_of = ?max_as_of.elements(),
             write_frontier = ?write_frontier.elements(),
-            %lag,
+            ?compaction_lag,
             max_compaction_frontier = ?max_compaction_frontier.elements(),
             "bootstrapping index `as_of`",
         );

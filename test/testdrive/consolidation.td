@@ -109,7 +109,7 @@ $ kafka-create-topic topic=nums
 
 # Disable logical compaction, to ensure we can view historical detail.
 > ALTER INDEX materialize.public.nums_primary_idx
-  SET (LOGICAL COMPACTION WINDOW = 0)
+  SET (RETAIN HISTORY = FOR 0)
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -193,7 +193,7 @@ mz_timestamp  mz_diff  num
 # 4.
 
 > ALTER INDEX materialize.public.nums_primary_idx
-  SET (LOGICAL COMPACTION WINDOW = '1ms')
+  SET (RETAIN HISTORY = FOR '1ms')
 
 $ kafka-ingest format=avro topic=nums schema=${nums-schema}
 {"array":[{"data":{"num":5},"time":4,"diff":-1}]}
@@ -213,11 +213,11 @@ contains:Timestamp (3) is not valid for all inputs
 # Set the compaction window back to off and advance the number in transactions 5 and 6.
 
 > ALTER INDEX materialize.public.nums_primary_idx
-  SET (LOGICAL COMPACTION WINDOW = 0)
+  SET (RETAIN HISTORY = FOR 0)
 
 # But also create an index that compacts frequently.
 > CREATE VIEW nums_compacted AS SELECT * FROM nums
-> CREATE DEFAULT INDEX ON nums_compacted WITH (LOGICAL COMPACTION WINDOW = '1ms')
+> CREATE DEFAULT INDEX ON nums_compacted WITH (RETAIN HISTORY = FOR '1ms')
 
 $ kafka-ingest format=avro topic=nums schema=${nums-schema}
 {"array":[{"data":{"num":6},"time":5,"diff":-1}]}

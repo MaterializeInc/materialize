@@ -42,6 +42,12 @@ pub enum CompactionWindow {
     Duration(Timestamp),
 }
 
+impl Default for CompactionWindow {
+    fn default() -> Self {
+        Self::Default
+    }
+}
+
 impl From<CompactionWindow> for ReadPolicy<Timestamp> {
     fn from(value: CompactionWindow) -> Self {
         let time = match value {
