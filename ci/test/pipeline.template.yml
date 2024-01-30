@@ -507,7 +507,7 @@ steps:
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
-          args: [--exitfirst, -m, "not long", --aws-region=us-east-1, test/cloudtest/]
+          args: [--exitfirst, -m, "not long and not node_recovery", --aws-region=us-east-1, test/cloudtest/]
     agents:
       queue: linux-aarch64
 

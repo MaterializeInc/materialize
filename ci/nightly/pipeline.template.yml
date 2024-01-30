@@ -839,6 +839,21 @@ steps:
           - ./ci/plugins/cloudtest:
               args: [-m=long,  --aws-region=us-east-1, test/cloudtest/test_upgrade.py]
 
+  - id: k8s-node-failure-recovery
+    label: "K8s node recovery cloudtest"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    artifact_paths: junit_*.xml
+    inputs:
+      - test/cloudtest
+      - misc/python/materialize/cloudtest
+      - misc/kind
+    plugins:
+      - ./ci/plugins/scratch-aws-access: ~
+      - ./ci/plugins/cloudtest:
+          args: [--exitfirst, -m=long, --aws-region=us-east-1, test/cloudtest/test_recovery.py]
+
   - group: Maelstrom
     key: maelstrom
     steps:
