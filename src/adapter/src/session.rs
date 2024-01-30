@@ -1076,7 +1076,14 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                                 }
                                 (_, TimestampContext::NoTimestamp) => {}
                             };
-                            *requires_linearization |= add_requires_linearization;
+                            if matches!(requires_linearization, RequireLinearization::NotRequired)
+                                && matches!(
+                                    add_requires_linearization,
+                                    RequireLinearization::Required
+                                )
+                            {
+                                *requires_linearization = add_requires_linearization;
+                            }
                         }
                         // Iff peeks thus far do not have a timestamp (i.e.
                         // they are constant), we can switch to a write
@@ -1280,7 +1287,7 @@ pub enum TransactionOps<T> {
         /// The cluster used to execute peeks.
         cluster_id: ClusterId,
         /// Whether this peek needs to be linearized.
-        requires_linearization: bool,
+        requires_linearization: RequireLinearization,
     },
     /// This transaction has done a `SUBSCRIBE` and must do nothing else.
     Subscribe,
@@ -1331,4 +1338,13 @@ pub struct WriteOp {
     pub id: GlobalId,
     /// The data rows.
     pub rows: Vec<(Row, Diff)>,
+}
+
+/// Whether a transaction requires linearization.
+#[derive(Debug)]
+pub enum RequireLinearization {
+    /// Linearization is not required.
+    Required,
+    /// Linearization is required.
+    NotRequired,
 }
