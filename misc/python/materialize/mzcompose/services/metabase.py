@@ -25,5 +25,8 @@ class Metabase(Service):
                     "interval": "1s",
                     "start_period": "300s",
                 },
+                # The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested
+                # See https://github.com/metabase/metabase/issues/13119
+                "platform": "linux/amd64",
             },
         )

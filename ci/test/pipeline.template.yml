@@ -25,7 +25,7 @@ steps:
   - group: Builds
     key: builds
     steps:
-      # TODO(def-) Get rid of this for PRs once we don't have any x86-64 tests remaining
+    # TODO(def-) Get rid of this for PRs once we don't have any x86-64 tests remaining
       - id: build-x86_64
         label: Build x86_64
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
@@ -318,8 +318,7 @@ steps:
               composition: debezium
               run: sql-server
         agents:
-          # sql-server The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested
-          # See https://github.com/microsoft/mssql-docker/issues/802
+          # too slow to run emulated on aarch64, SQL Server's docker image is not yet available for aarch64 natively yet: https://github.com/microsoft/mssql-docker/issues/802
           queue: linux-x86_64-small
 
       - id: debezium-mysql
@@ -486,7 +485,7 @@ steps:
       - ./ci/plugins/cloudtest:
           args: [--exitfirst, -m, "not long", --aws-region=us-east-1, test/cloudtest/]
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
 
   - id: source-sink-errors
     label: "Source/Sink Error Reporting"
@@ -521,7 +520,7 @@ steps:
           args: [--scenario=KafkaUpsertUnique]
     coverage: skip
     agents:
-      queue: linux-x86_64-small
+      queue: linux-aarch64-small
 
   # Fast tests closer to the end, doesn't matter as much if they have to wait
   # for an agent
@@ -581,8 +580,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: metabase
     agents:
-      # metabase The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested
-      # See https://github.com/metabase/metabase/issues/13119
+      # too slow to run emulated on aarch64, Metabase'ss docker image is not yet available for aarch64 natively yet: https://github.com/metabase/metabase/issues/13119
       queue: linux-x86_64-small
 
   - id: dbt-materialize
@@ -594,7 +592,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: dbt-materialize
     agents:
-      queue: linux-x86_64-small
+      queue: linux-aarch64-small
 
   - id: storage-usage
     label: "Storage Usage Table Test"
@@ -621,14 +619,14 @@ steps:
 
   - id: persist-catalog-migration
     label: "Persist Catalog Migration"
-    depends_on: build-x86_64
+    depends_on: build-aarch64
     timeout_in_minutes: 30
     artifact_paths: junit_*.xml
     plugins:
       - ./ci/plugins/mzcompose:
           composition: persist-catalog-migration
     agents:
-      queue: linux-x86_64-small
+      queue: linux-aarch64-small
 
   - id: deploy-website
     label: Deploy website

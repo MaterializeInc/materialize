@@ -53,6 +53,7 @@ class Materialized(Service):
         soft_assertions: bool = True,
         sanity_restart: bool = True,
         catalog_store: str | None = "shadow",
+        platform: str | None = None,
     ) -> None:
         if name is None:
             name = "materialized"
@@ -196,6 +197,9 @@ class Materialized(Service):
         if sanity_restart:
             # Workaround for https://bytemeta.vip/repo/docker/compose/issues/11133
             config["labels"] = {"sanity_restart": True}
+
+        if platform:
+            config["platform"] = platform
 
         volumes = []
         if use_default_volumes:
