@@ -38,6 +38,15 @@ SELECT DISTINCT ON (b) a FROM t GROUP BY a ORDER BY b
 query error column "t.b" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT t.b FROM t GROUP BY a
 
+query error column "t.a" must appear in the GROUP BY clause or be used in an aggregate function
+SELECT (SELECT a FROM t GROUP BY b) FROM t
+
+query error column "t1.b" must appear in the GROUP BY clause or be used in an aggregate function
+SELECT (SELECT t2.a FROM t t2 WHERE t1.b = t2.b) FROM t t1 GROUP BY t1.a;
+
+query error column "t1.b" must appear in the GROUP BY clause or be used in an aggregate function
+SELECT sum(t1.a), (SELECT t2.a FROM t t2 WHERE t1.b = t2.b) FROM t t1;
+
 query error column "c" does not exist
 SELECT c FROM t GROUP BY a
 
@@ -61,6 +70,21 @@ SELECT a + 1 FROM t GROUP BY a + 1 HAVING sum(b) = 3
 ----
 2
 3
+
+query II
+SELECT t1.a, (SELECT t2.a FROM t t2 WHERE t2.b = 2 AND t1.b = t2.b GROUP BY t2.a) FROM t t1;
+----
+1 NULL
+2 NULL
+3 NULL
+1 1
+
+query I
+SELECT (SELECT sum(b) FROM t WHERE b = 2 GROUP BY a) FROM t t1 GROUP BY t1.b;
+----
+2
+2
+2
 
 # Simple column names in GROUP BY can refer to columns from the output list...
 query TII rowsort
