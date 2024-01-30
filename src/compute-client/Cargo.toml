@@ -22,6 +22,7 @@ http = "0.2.8"
 mz-build-info = { path = "../build-info" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute-types = { path = "../compute-types" }
+mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
 mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore", features = ["tracing_"] }

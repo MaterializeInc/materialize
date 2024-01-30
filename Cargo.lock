@@ -4014,6 +4014,7 @@ dependencies = [
  "mz-cluster",
  "mz-compute",
  "mz-compute-client",
+ "mz-dyncfg",
  "mz-http-util",
  "mz-metrics",
  "mz-orchestrator-tracing",
@@ -4095,6 +4096,7 @@ dependencies = [
  "mz-build-info",
  "mz-cluster-client",
  "mz-compute-types",
+ "mz-dyncfg",
  "mz-expr",
  "mz-orchestrator",
  "mz-ore",
@@ -4196,6 +4198,22 @@ version = "0.0.0"
 dependencies = [
  "mz-cluster-client",
  "mz-compute-types",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-dyncfg"
+version = "0.0.0"
+dependencies = [
+ "mz-ore",
+ "mz-proto",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "prost-build",
+ "protobuf-src",
+ "serde",
+ "tracing",
  "workspace-hack",
 ]
 
@@ -4919,6 +4937,7 @@ dependencies = [
  "h2",
  "hex",
  "mz-build-info",
+ "mz-dyncfg",
  "mz-ore",
  "mz-persist",
  "mz-persist-types",
@@ -4959,6 +4978,7 @@ dependencies = [
  "differential-dataflow",
  "futures",
  "itertools",
+ "mz-dyncfg",
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
@@ -5515,6 +5535,7 @@ dependencies = [
  "mz-ccsr",
  "mz-cloud-resources",
  "mz-controller-types",
+ "mz-dyncfg",
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
@@ -5965,6 +5986,7 @@ dependencies = [
  "mz-aws-util",
  "mz-ccsr",
  "mz-cloud-resources",
+ "mz-dyncfg",
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",

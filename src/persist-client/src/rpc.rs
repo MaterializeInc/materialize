@@ -23,6 +23,7 @@ use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
+use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::{HashMap, HashSet};
 use mz_ore::metrics::MetricsRegistry;
@@ -43,7 +44,6 @@ use tracing::{debug, error, info, info_span, warn, Instrument};
 
 use crate::cache::{DynState, StateCache};
 use crate::cfg::PersistConfig;
-use crate::dyn_cfg::Config;
 use crate::internal::metrics::{PubSubClientCallMetrics, PubSubServerMetrics};
 use crate::internal::service::proto_persist_pub_sub_client::ProtoPersistPubSubClient;
 use crate::internal::service::proto_persist_pub_sub_server::ProtoPersistPubSubServer;

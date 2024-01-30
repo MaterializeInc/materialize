@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mz_build_info::BuildInfo;
+use mz_dyncfg::{Config, ConfigSet, ConfigType, ConfigUpdates};
 use mz_ore::now::NowFn;
 use mz_persist::cfg::BlobKnobs;
 use mz_persist::retry::Retry;
@@ -25,7 +26,6 @@ use proptest_derive::Arbitrary;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
-use crate::dyn_cfg::{Config, ConfigSet, ConfigType, ConfigUpdates};
 use crate::internal::compact::STREAMING_COMPACTION_ENABLED;
 use crate::internal::machine::{
     NEXT_LISTEN_BATCH_RETRYER_CLAMP, NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF,

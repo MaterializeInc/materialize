@@ -42,10 +42,6 @@ fn main() {
             ".mz_persist_client.batch",
             "#[derive(serde::Serialize, serde::Deserialize)]",
         )
-        .type_attribute(
-            ".mz_persist_client.dyn_cfg",
-            "#[derive(Eq, serde::Serialize, serde::Deserialize, proptest_derive::Arbitrary)]",
-        )
         .type_attribute(".", "#[allow(missing_docs)]")
         .btree_map(["."])
         .bytes([
@@ -68,7 +64,6 @@ fn main() {
             config,
             &[
                 "persist-client/src/batch.proto",
-                "persist-client/src/dyn_cfg.proto",
                 "persist-client/src/internal/service.proto",
                 "persist-client/src/internal/state.proto",
                 "persist-client/src/internal/diff.proto",
