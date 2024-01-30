@@ -45,7 +45,8 @@ use crate::coord::timestamp_selection::TimestampProvider;
 use crate::coord::Coordinator;
 use crate::AdapterError;
 
-/// An enum describing the timeline context of a query.
+/// An enum describing whether or not a query belongs to a timeline and whether the query can be
+/// affected by the timestamp at which it executes.
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub enum TimelineContext {
     /// Can only ever belong to a single specific timeline. The answer will depend on a timestamp
@@ -427,7 +428,7 @@ impl Coordinator {
         id_bundle
     }
 
-    /// Return an error if the ids are from incompatible timeline contexts. This should
+    /// Return an error if the ids are from incompatible [`TimelineContext`]s. This should
     /// be used to prevent users from doing things that are either meaningless
     /// (joining data from timelines that have similar numbers with different
     /// meanings like two separate debezium topics) or will never complete (joining
@@ -478,13 +479,13 @@ impl Coordinator {
         }
     }
 
-    /// Return the timeline context belonging to a GlobalId, if one exists.
+    /// Return the [`TimelineContext`] belonging to a GlobalId, if one exists.
     pub(crate) fn get_timeline_context(&self, id: GlobalId) -> TimelineContext {
         self.validate_timeline_context(vec![id])
             .expect("impossible for a single object to belong to incompatible timeline contexts")
     }
 
-    /// Return the timeline contexts belonging to a list of GlobalIds, if any exist.
+    /// Return the [`TimelineContext`]s belonging to a list of GlobalIds, if any exist.
     fn get_timeline_contexts<I>(&self, ids: I) -> BTreeSet<TimelineContext>
     where
         I: IntoIterator<Item = GlobalId>,
@@ -550,7 +551,8 @@ impl Coordinator {
         timelines
     }
 
-    /// Returns an iterator that partitions an id bundle by the timeline context that each id belongs to.
+    /// Returns an iterator that partitions an id bundle by the [`TimelineContext`] that each id
+    /// belongs to.
     pub fn partition_ids_by_timeline_context(
         &self,
         id_bundle: &CollectionIdBundle,
