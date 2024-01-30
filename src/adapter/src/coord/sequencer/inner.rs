@@ -1636,20 +1636,22 @@ impl Coordinator {
             )) if ctx.session().vars().transaction_isolation()
                 == &IsolationLevel::StrictSerializable =>
             {
-                self.strict_serializable_reads_tx
-                    .send(PendingReadTxn {
-                        txn: PendingRead::Read {
-                            txn: PendingTxn {
-                                ctx,
-                                response,
-                                action,
-                            },
+                let conn_id = ctx.session().conn_id().clone();
+                let pending_read_txn = PendingReadTxn {
+                    txn: PendingRead::Read {
+                        txn: PendingTxn {
+                            ctx,
+                            response,
+                            action,
                         },
-                        timestamp_context: determination.timestamp_context,
-                        created: Instant::now(),
-                        num_requeues: 0,
-                        otel_ctx: OpenTelemetryContext::obtain(),
-                    })
+                    },
+                    timestamp_context: determination.timestamp_context,
+                    created: Instant::now(),
+                    num_requeues: 0,
+                    otel_ctx: OpenTelemetryContext::obtain(),
+                };
+                self.strict_serializable_reads_tx
+                    .send((conn_id, pending_read_txn))
                     .expect("sending to strict_serializable_reads_tx cannot fail");
                 return;
             }
@@ -2560,13 +2562,15 @@ impl Coordinator {
             // the read and write.
             if let Some(timestamp_context) = timestamp_context {
                 let (tx, rx) = tokio::sync::oneshot::channel();
-                let result = strict_serializable_reads_tx.send(PendingReadTxn {
-                    txn: PendingRead::ReadThenWrite { tx },
+                let conn_id = ctx.session().conn_id().clone();
+                let pending_read_txn = PendingReadTxn {
+                    txn: PendingRead::ReadThenWrite { ctx, tx },
                     timestamp_context,
                     created: Instant::now(),
                     num_requeues: 0,
                     otel_ctx: OpenTelemetryContext::obtain(),
-                });
+                };
+                let result = strict_serializable_reads_tx.send((conn_id, pending_read_txn));
                 // It is not an error for these results to be ready after `strict_serializable_reads_rx` has been dropped.
                 if let Err(e) = result {
                     warn!(
@@ -2577,13 +2581,16 @@ impl Coordinator {
                 }
                 let result = rx.await;
                 // It is not an error for these results to be ready after `tx` has been dropped.
-                if let Err(e) = result {
-                    warn!(
-                        "tx used to linearize read in read then write transaction dropped before we could send: {:?}",
-                        e
-                    );
-                    return;
-                }
+                ctx = match result {
+                    Ok(ctx) => ctx,
+                    Err(e) => {
+                        warn!(
+                            "tx used to linearize read in read then write transaction dropped before we could send: {:?}",
+                            e
+                        );
+                        return;
+                    }
+                };
             }
 
             match diffs {

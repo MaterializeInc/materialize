@@ -911,6 +911,13 @@ impl Coordinator {
                 maybe_ctx = Some(ctx);
             }
 
+            // Cancel reads waiting on being linearized. There is at most one linearized read per
+            // session.
+            if let Some(pending_read_txn) = self.pending_linearize_read_txns.remove(&conn_id) {
+                let ctx = pending_read_txn.take_context();
+                maybe_ctx = Some(ctx);
+            }
+
             if let Some(ctx) = maybe_ctx {
                 ctx.retire(Ok(ExecuteResponse::Canceled));
             }
