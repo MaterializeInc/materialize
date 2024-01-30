@@ -372,7 +372,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
     async fn peek_stage_optimize_mir(
         &mut self,
-        ctx: ExecuteContext,
+        mut ctx: ExecuteContext,
         root_otel_ctx: OpenTelemetryContext,
         PeekStageOptimizeMir {
             mut validity,
@@ -402,7 +402,7 @@ impl Coordinator {
         let stats = {
             match self
                 .determine_timestamp(
-                    ctx.session(),
+                    ctx.session_mut(),
                     &id_bundle,
                     &plan.when,
                     optimizer.cluster_id(),

@@ -255,7 +255,8 @@ pub trait TimestampProvider {
             Some(timeline)
                 if when.must_advance_to_timeline_ts()
                     || (when.can_advance_to_timeline_ts()
-                        && isolation_level == &IsolationLevel::StrictSerializable) =>
+                        && (isolation_level == &IsolationLevel::StrictSerializable
+                            || isolation_level == &IsolationLevel::StrongSessionSerializable)) =>
             {
                 Some(timeline.clone())
             }
@@ -275,7 +276,7 @@ pub trait TimestampProvider {
     async fn determine_timestamp_for(
         &self,
         catalog: &CatalogState,
-        session: &Session,
+        session: &mut Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
@@ -335,24 +336,42 @@ pub trait TimestampProvider {
         // If we've acquired a read timestamp from the timestamp oracle, use it
         // as the new lower bound for the candidate
         if let Some(timestamp) = &oracle_read_ts {
-            candidate.join_assign(timestamp);
+            if isolation_level == &IsolationLevel::StrictSerializable {
+                candidate.join_assign(timestamp);
+            }
         }
 
         // We advance to the upper in the following scenarios:
-        // - The isolation level is Serializable or Strong Session Serializable and the `when`
-        //   allows us to advance to upper (ex: queries with no AS OF). We avoid using the upper in
-        //   Strict Serializable to prevent reading source data that is being written to in the
-        //   future.
+        // - The isolation level is Serializable and the `when` allows us to advance to upper (ex:
+        //   queries with no AS OF). We avoid using the upper in Strict Serializable to prevent
+        //   reading source data that is being written to in the future.
         // - The isolation level is Strict Serializable but there is no timelines and the `when`
         //   allows us to advance to upper.
         // - The `when` requires us to advance to the upper (ex: read-then-write queries).
         if when.must_advance_to_upper()
             || (when.can_advance_to_upper()
-                && (isolation_level == &IsolationLevel::Serializable
-                    || isolation_level == &IsolationLevel::StrongSessionSerializable
-                    || timeline.is_none()))
+                && (isolation_level == &IsolationLevel::Serializable || timeline.is_none()))
         {
             candidate.join_assign(&largest_not_in_advance_of_upper);
+        }
+
+        // When advancing the read timestamp under Strong Session Serializable, there is a
+        // trade-off to make between freshness and latency. We can choose a timestamp close the
+        // `upper`, but then later queries might block if the `upper` is too far into the future.
+        // We can chose a timestamp close to the current time, but then we may not be getting
+        // results that are as fresh as possible. As a heuristic, we choose the minimum of now and
+        // the upper, where we use the global timestamp oracle read timestamp as a proxy for now.
+        // If upper > now, then we choose now and prevent blocking future queries. If upper < now,
+        // then we choose the upper and prevent blocking the current query.
+        if isolation_level == &IsolationLevel::StrongSessionSerializable
+            && when.can_advance_to_upper()
+            && when.can_advance_to_timeline_ts()
+        {
+            let mut advance_to = largest_not_in_advance_of_upper;
+            if let Some(oracle_read_ts) = oracle_read_ts {
+                advance_to = std::cmp::min(advance_to, oracle_read_ts);
+            }
+            candidate.join_assign(&advance_to);
         }
 
         if let Some(real_time_recency_ts) = real_time_recency_ts {
@@ -520,7 +539,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn determine_timestamp(
         &self,
-        session: &Session,
+        session: &mut Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
@@ -528,7 +547,7 @@ impl Coordinator {
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<mz_repr::Timestamp>,
     ) -> Result<TimestampDetermination<mz_repr::Timestamp>, AdapterError> {
-        let isolation_level = session.vars().transaction_isolation();
+        let isolation_level = session.vars().transaction_isolation().clone();
         let det = self
             .determine_timestamp_for(
                 self.catalog().state(),
@@ -539,7 +558,7 @@ impl Coordinator {
                 timeline_context,
                 oracle_read_ts,
                 real_time_recency_ts,
-                isolation_level,
+                &isolation_level,
             )
             .await?;
         self.metrics
@@ -554,7 +573,7 @@ impl Coordinator {
             ])
             .inc();
         if !det.respond_immediately()
-            && isolation_level == &IsolationLevel::StrictSerializable
+            && isolation_level == IsolationLevel::StrictSerializable
             && real_time_recency_ts.is_none()
         {
             if let Some(strict) = det.timestamp_context.timestamp() {

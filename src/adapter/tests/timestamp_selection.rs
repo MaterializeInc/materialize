@@ -264,7 +264,7 @@ fn test_timestamp_selection() {
 
                     let ts = block_on(f.determine_timestamp_for(
                         &catalog,
-                        &session,
+                        &mut session,
                         &det.id_bundle.into(),
                         &parse_query_when(&det.when),
                         det.instance.parse().unwrap(),

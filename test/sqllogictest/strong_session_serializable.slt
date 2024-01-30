@@ -10,7 +10,7 @@
 mode cockroach
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_session_timelines = true
+ALTER SYSTEM SET enable_session_timelines = true;
 ----
 COMPLETE 0
 
@@ -48,7 +48,7 @@ INSERT INTO t VALUES (1);
 COMPLETE 1
 
 simple conn=materialize,user=materialize
-SELECT * FROM mv
+SELECT * FROM mv;
 ----
 1
 COMPLETE 1
@@ -70,7 +70,7 @@ ALTER CLUSTER stuck SET (REPLICATION FACTOR = 0);
 COMPLETE 0
 
 simple conn=materialize,user=materialize
-SELECT * FROM mv
+SELECT * FROM mv;
 ----
 2
 COMPLETE 1
@@ -88,7 +88,66 @@ ALTER CLUSTER stuck SET (REPLICATION FACTOR = 1);
 COMPLETE 0
 
 simple conn=materialize,user=materialize
-SELECT * FROM mv
+SELECT * FROM mv;
+----
+3
+COMPLETE 1
+
+# Test that reading from a constant materialized view doesn't send our session timeline too far
+# into the future.
+
+simple conn=materialize,user=materialize
+CREATE MATERIALIZED VIEW const_mv AS SELECT 1;
+----
+COMPLETE 0
+
+simple conn=materialize,user=materialize
+SELECT * FROM const_mv;
+----
+1
+COMPLETE 1
+
+simple conn=materialize,user=materialize
+SELECT * FROM mv;
+----
+3
+COMPLETE 1
+
+# Test that reading from a constant materialized view with a temporal filter doesn't send our
+# session timeline too far into the future.
+# This test will break in the year 10000. If you've survived that far then congratulations. Please
+# update the year 10000 in the view days to a much larger year.
+
+simple conn=materialize,user=materialize
+CREATE VIEW days AS
+    SELECT generate_series(
+        CAST('1970-08-06' AS timestamp),
+        CAST('1970-08-07' AS timestamp),
+        CAST('1 day' AS interval)
+    ) AS day
+    UNION ALL
+    SELECT generate_series(
+        CAST('10000-08-06' AS timestamp),
+        CAST('10000-08-07' AS timestamp),
+        CAST('1 day' AS interval)
+    ) AS day;
+----
+COMPLETE 0
+
+simple conn=materialize,user=materialize
+CREATE MATERIALIZED VIEW days_mv AS SELECT day FROM days WHERE mz_now() <= day;;
+----
+COMPLETE 0
+
+simple conn=materialize,user=materialize
+SELECT * FROM days_mv;
+----
+10000-08-06 00:00:00
+10000-08-07 00:00:00
+COMPLETE 2
+
+simple conn=materialize,user=materialize
+SELECT * FROM mv;
 ----
 3
 COMPLETE 1
