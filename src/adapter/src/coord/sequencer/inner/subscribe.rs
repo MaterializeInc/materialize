@@ -255,7 +255,7 @@ impl Coordinator {
         let oracle_read_ts = self.oracle_read_ts(&ctx.session, &timeline, when).await;
         let as_of = match self
             .determine_timestamp(
-                ctx.session_mut(),
+                ctx.session(),
                 &global_mir_plan.id_bundle(optimizer.cluster_id()),
                 when,
                 optimizer.cluster_id(),

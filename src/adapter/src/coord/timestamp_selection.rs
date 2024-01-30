@@ -90,16 +90,22 @@ impl<T: TimestampManipulation> TimestampContext<T> {
 
     /// The timeline belonging to this context, if one exists.
     pub fn timeline(&self) -> Option<&Timeline> {
-        match self {
-            Self::TimelineTimestamp { timeline, .. } => Some(timeline),
-            Self::NoTimestamp => None,
-        }
+        self.timeline_timestamp().map(|tt| tt.0)
     }
 
     /// The timestamp belonging to this context, if one exists.
     pub fn timestamp(&self) -> Option<&T> {
+        self.timeline_timestamp().map(|tt| tt.1)
+    }
+
+    /// The timeline and timestamp belonging to this context, if one exists.
+    pub fn timeline_timestamp(&self) -> Option<(&Timeline, &T)> {
         match self {
-            Self::TimelineTimestamp { chosen_ts, .. } => Some(chosen_ts),
+            Self::TimelineTimestamp {
+                timeline,
+                chosen_ts,
+                ..
+            } => Some((timeline, chosen_ts)),
             Self::NoTimestamp => None,
         }
     }
@@ -269,7 +275,7 @@ pub trait TimestampProvider {
     async fn determine_timestamp_for(
         &self,
         catalog: &CatalogState,
-        session: &mut Session,
+        session: &Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
@@ -383,13 +389,6 @@ pub trait TimestampProvider {
                 largest_not_in_advance_of_upper = format!("{largest_not_in_advance_of_upper}"),
                 timestamp = format!("{candidate}")
             );
-            if isolation_level == &IsolationLevel::StrongSessionSerializable {
-                if let Some(timeline) = &timeline {
-                    session
-                        .ensure_timestamp_oracle(timeline.clone())
-                        .apply_write(candidate.clone());
-                }
-            }
             candidate
         } else {
             coord_bail!(self.generate_timestamp_not_valid_error_msg(
@@ -521,7 +520,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn determine_timestamp(
         &self,
-        session: &mut Session,
+        session: &Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
@@ -529,7 +528,7 @@ impl Coordinator {
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<mz_repr::Timestamp>,
     ) -> Result<TimestampDetermination<mz_repr::Timestamp>, AdapterError> {
-        let isolation_level = session.vars().transaction_isolation().clone();
+        let isolation_level = session.vars().transaction_isolation();
         let det = self
             .determine_timestamp_for(
                 self.catalog().state(),
@@ -540,7 +539,7 @@ impl Coordinator {
                 timeline_context,
                 oracle_read_ts,
                 real_time_recency_ts,
-                &isolation_level,
+                isolation_level,
             )
             .await?;
         self.metrics
@@ -555,7 +554,7 @@ impl Coordinator {
             ])
             .inc();
         if !det.respond_immediately()
-            && isolation_level == IsolationLevel::StrictSerializable
+            && isolation_level == &IsolationLevel::StrictSerializable
             && real_time_recency_ts.is_none()
         {
             if let Some(strict) = det.timestamp_context.timestamp() {

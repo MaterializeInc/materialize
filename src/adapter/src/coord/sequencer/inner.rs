@@ -1649,6 +1649,17 @@ impl Coordinator {
                     .expect("sending to strict_serializable_reads_tx cannot fail");
                 return;
             }
+            Ok((Some(TransactionOps::Peeks { determination, .. }), _))
+                if ctx.session().vars().transaction_isolation()
+                    == &IsolationLevel::StrongSessionSerializable =>
+            {
+                if let Some((timeline, ts)) = determination.timestamp_context.timeline_timestamp() {
+                    ctx.session_mut()
+                        .ensure_timestamp_oracle(timeline.clone())
+                        .apply_write(*ts);
+                }
+                (response, action)
+            }
             Ok((Some(TransactionOps::SingleStatement { stmt, params }), _)) => {
                 self.internal_cmd_tx
                     .send(Message::ExecuteSingleStatementTransaction {
