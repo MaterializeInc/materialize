@@ -17,7 +17,10 @@ cd "$(dirname "$0")/../.."
 . test/cloudtest/config.bash
 
 if ! kind get clusters | grep -q "$K8S_CLUSTER_NAME"; then
-    run kind create cluster --name="$K8S_CLUSTER_NAME" --config=misc/kind/cluster.yaml --wait=60s
+    CLUSTER_YAML=${CLUSTER_DEFINITION_FILE:-"misc/kind/cluster.yaml"}
+    echo "Using cluster definition specified in ${CLUSTER_YAML}"
+
+    run kind create cluster --name="$K8S_CLUSTER_NAME" --config="${CLUSTER_YAML}" --wait=60s
 
     run kubectl --context="$K8S_CONTEXT" taint nodes --selector=environmentd=true "environmentd=true:NoSchedule"
 fi
