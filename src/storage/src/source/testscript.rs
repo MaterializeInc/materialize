@@ -105,7 +105,8 @@ impl SourceRender for TestScriptSourceConnection {
             stream.as_collection(),
             None,
             status,
-            // leave this alone
+            // Testscript sources don't report progress statistics, as there is no need for them
+            // currently.
             timely::dataflow::operators::generic::operator::empty(scope),
             vec![button.press_on_drop()],
         )

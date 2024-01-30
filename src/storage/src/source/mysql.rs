@@ -135,6 +135,8 @@ impl SourceRender for MySqlSourceConnection {
             updates,
             Some(uppers),
             health,
+            // TODO(guswynn): add progress statistics updates once the core mysql impl is fully
+            // fleshed out.
             timely::dataflow::operators::generic::operator::empty(scope),
             vec![snapshot_token, repl_token],
         )
