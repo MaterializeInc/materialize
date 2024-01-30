@@ -15,6 +15,7 @@ from collections.abc import Generator
 
 import networkx as nx
 
+from materialize import buildkite
 from materialize.util import all_subclasses
 from materialize.version_list import (
     get_published_minor_mz_versions,
@@ -131,19 +132,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
-    shard = os.environ.get("BUILDKITE_PARALLEL_JOB")
-    shard_count = os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT")
-
-    if shard is None and shard_count is None:
-        shard = 0
-        shard_count = 1
-    elif shard is not None and shard_count is not None:
-        shard = int(shard)
-        shard_count = int(shard_count)
-    else:
-        raise RuntimeError(
-            "'BUILDKITE_PARALLEL_JOB' and 'BUILDKITE_PARALLEL_JOB_COUNT' need to be both specified or not specified"
-        )
+    shard = buildkite.get_parallelism_index()
+    shard_count = buildkite.get_parallelism_count()
 
     print(f"--- Random seed is {args.seed}, shard is {shard} of {shard_count} shards.")
     random.seed(args.seed)
