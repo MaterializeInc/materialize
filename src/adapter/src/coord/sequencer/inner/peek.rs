@@ -686,8 +686,8 @@ impl Coordinator {
                     };
 
                 let stage = match pipeline() {
-                    Ok((global_lir_plan, used_indexes)) => {
-                        if let PeekContext::Explain(explain_ctx) = peek_ctx {
+                    Ok((global_lir_plan, used_indexes)) => match peek_ctx {
+                        PeekContext::Explain(explain_ctx) => {
                             let (peek_plan, df_meta) = global_lir_plan.unapply();
                             PeekStage::Explain(PeekStageExplain {
                                 validity,
@@ -701,20 +701,19 @@ impl Coordinator {
                                 used_indexes,
                                 explain_ctx,
                             })
-                        } else {
-                            PeekStage::Finish(PeekStageFinish {
-                                validity,
-                                plan,
-                                id_bundle,
-                                target_replica,
-                                source_ids,
-                                determination,
-                                timestamp_context,
-                                optimizer,
-                                global_lir_plan,
-                            })
                         }
-                    }
+                        PeekContext::Select => PeekStage::Finish(PeekStageFinish {
+                            validity,
+                            plan,
+                            id_bundle,
+                            target_replica,
+                            source_ids,
+                            determination,
+                            timestamp_context,
+                            optimizer,
+                            global_lir_plan,
+                        }),
+                    },
                     // Internal optimizer errors are handled differently
                     // depending on the caller.
                     Err(err) => {
