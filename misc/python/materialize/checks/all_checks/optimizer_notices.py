@@ -43,7 +43,7 @@ class OptimizerNotices(Check):
                 > CREATE MATERIALIZED VIEW {SCHEMA}.mv1 AS SELECT x, y FROM {SCHEMA}.t1 WHERE x = 5;
                 """,
                 f"""
-                # emits one "index too wide" notice one "index key empty" notice
+                # emits one "index too wide" notice and one "index key empty" notice
                 > CREATE VIEW {SCHEMA}.v1 AS SELECT x, y FROM {SCHEMA}.t1 WHERE x = 7;
                 > CREATE INDEX v1_idx ON {SCHEMA}.v1();
                 """,
@@ -53,14 +53,18 @@ class OptimizerNotices(Check):
     def validate(self) -> Testdrive:
         return Testdrive(
             dedent(
-                """
-                $postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                f"""
+                $postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
                 ALTER SYSTEM SET enable_rbac_checks TO false
-                > SELECT o.type, o.name, replace(n.notice_type, ' ', '␠') FROM mz_internal.mz_notices n JOIN mz_catalog.mz_objects o ON (o.id = n.object_id);
-                index             v1_idx Empty␠index␠key
-                index             v1_idx Index␠too␠wide␠for␠literal␠constraints
-                materialized-view mv1    Index␠too␠wide␠for␠literal␠constraints
-                $postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                > SELECT o.type, o.name, replace(n.notice_type, ' ', '␠')
+                  FROM mz_internal.mz_notices n
+                  JOIN mz_catalog.mz_objects o ON (o.id = n.object_id)
+                  JOIN mz_catalog.mz_schemas s ON (s.id = o.schema_id)
+                  WHERE s.name = '{SCHEMA}';
+                index             v1_idx  Empty␠index␠key
+                index             v1_idx  Index␠too␠wide␠for␠literal␠constraints
+                materialized-view mv1     Index␠too␠wide␠for␠literal␠constraints
+                $postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
                 ALTER SYSTEM SET enable_rbac_checks TO true
                 """
             )

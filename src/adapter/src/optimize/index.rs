@@ -33,7 +33,7 @@ use mz_repr::GlobalId;
 use mz_sql::names::QualifiedItemName;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
-use mz_transform::notice::IndexKeyEmpty;
+use mz_transform::notice::{IndexAlreadyExists, IndexKeyEmpty};
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
 
 use crate::catalog::Catalog;
@@ -41,8 +41,7 @@ use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
 };
 use crate::optimize::{
-    LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode, OptimizerConfig,
-    OptimizerError,
+    LirDataflowDescription, MirDataflowDescription, Optimize, OptimizerConfig, OptimizerError,
 };
 
 pub struct Optimizer {
@@ -149,24 +148,6 @@ impl Optimize<Index> for Optimizer {
         let mut df_builder = DataflowBuilder::new(state, self.compute_instance.clone());
         let mut df_desc = MirDataflowDescription::new(full_name.to_string());
 
-        // In EXPLAIN mode we should configure the dataflow builder to
-        // not consider existing indexes that are identical to the one that
-        // we are currently trying to explain.
-        if self.config.mode == OptimizeMode::Explain {
-            let ignored_indexes = state
-                .get_indexes_on(index.on, self.compute_instance.instance_id())
-                .filter_map(|(idx_id, idx)| {
-                    // Ignore `idx` if it is idential to the `index` we are
-                    // currently trying to optimize.
-                    if idx.on == index.on && idx.keys == index.keys {
-                        Some(idx_id)
-                    } else {
-                        None
-                    }
-                });
-            df_builder.ignore_indexes(ignored_indexes);
-        }
-
         df_builder.import_into_dataflow(&index.on, &mut df_desc)?;
         df_builder.reoptimize_imported_views(&mut df_desc, &self.config)?;
 
@@ -193,8 +174,22 @@ impl Optimize<Index> for Optimizer {
             self.config.enable_eager_delta_joins,
         )?;
 
+        // Emit a notice if we are trying to create an empty index.
         if index.keys.is_empty() {
             df_meta.push_optimizer_notice_dedup(IndexKeyEmpty);
+        }
+
+        // Emit a notice for each available index identical to the one we are
+        // currently optimizing.
+        for (index_id, idx) in df_builder
+            .indexes_on(index.on)
+            .filter(|(_id, idx)| idx.keys == index.keys)
+        {
+            df_meta.push_optimizer_notice_dedup(IndexAlreadyExists {
+                index_id,
+                index_key: idx.keys.clone(),
+                index_on_id: idx.on,
+            });
         }
 
         // Return the (sealed) plan at the end of this optimization step.

@@ -491,6 +491,10 @@ materialize.public.iv_b_idx_2:
 Used Indexes:
   - materialize.public.iv_b_idx (plan root (no new arrangement), index export)
 
+Notices:
+  - Notice: The current index is identical to materialize.public.iv_b_idx, which is also defined on iv(b).
+    Hint: Please drop all indexes except the first index created on iv(b) and recreate all dependent objects.
+
 EOF
 
 # Test multiple CTEs: a case where we cannot pull the let statement up through
