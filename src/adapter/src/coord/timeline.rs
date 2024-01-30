@@ -524,7 +524,7 @@ impl Coordinator {
                         // In some cases the timestamp selected may not affect the answer to a
                         // query, but it may affect our ability to query the materialized view.
                         // Materialized views must durably materialize the result of a query, even
-                        // for constant queries. If we choose a timestamps larger than the upper,
+                        // for constant queries. If we choose a timestamp larger than the upper,
                         // which represents the current progress of the view, then the query will
                         // need to block and wait for the materialized view to advance.
                         timelines.insert(TimelineContext::TimestampDependent);
