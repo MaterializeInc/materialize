@@ -1,9 +1,5 @@
 # Platform v2: Decouple Personalities of the Storage Controller
 
-> [!NOTE]
-> This is more a proto-design doc right now, laying out the context and basics
-> of what I want.
-
 ## Context
 
 As part of the platform v2 work (specifically use-case isolation) we want to
@@ -69,8 +65,6 @@ Finer-grained goals:
 
 ## CollectionsController
 
-Sketch of what I think we need and why:
-
 - The compute controller only needs a CollectionsController. It has a much
   reduced interface, compared to current StorageController. Greatly reducing
   surface area/coupling between the two.
@@ -84,10 +78,9 @@ Sketch of what I think we need and why:
   collections but only for those in which the compute controller expresses an
   interest.
 - In the past, we were hesitant about this approach because we wouldn't want to
-  regularly poll persist for uppers. Now, with persist pubsub, that wouldn't be
-  a problem anymore. Persist pubsub would essentially become the fabric that
-  ships upper information around a whole environment, between different
-  processes.
+  regularly poll persist for uppers. Now, with persist pubsub, that wont't be a
+  problem anymore. Persist pubsub will essentially become the fabric that ships
+  upper information around a whole environment, between different processes.
 
 Advantages of this approach:
 
@@ -118,8 +111,8 @@ We can move table-related things out into a `TablesController` because the
 
 For both of these use cases, the `StorageController` can be given access to a
 `CollectionsController`, and acquire read holds same as everyone else (same as
-compute and the adapter). Upper updates would no longer have to flow through a
-special channel, the `CollectionsController` would be keeping uppers/sinces up
+compute and the adapter). Upper updates will no longer have to flow through a
+special channel, the `CollectionsController` will be keeping uppers/sinces up
 to date same as for other collections: through persist pubsub.
 
 ## StorageController (the per-cluster part)
@@ -162,4 +155,4 @@ Arguments against this alternative:
 
 ## Open questions
 
-TBD!
+None so far.
