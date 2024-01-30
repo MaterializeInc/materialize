@@ -161,11 +161,6 @@ nodes:
   - role: worker
     labels:
       materialize.cloud/disk: true
-      materialize.cloud/availability-zone: "1"
-      topology.kubernetes.io/zone: "1"
-  - role: worker
-    labels:
-      materialize.cloud/disk: true
       materialize.cloud/availability-zone: "2"
       topology.kubernetes.io/zone: "2"
   - role: worker
@@ -190,22 +185,5 @@ nodes:
   - role: worker
     labels:
       materialize.cloud/disk: true
-      materialize.cloud/availability-zone: "3"
-      topology.kubernetes.io/zone: "3"
-  - role: worker
-    labels:
-      materialize.cloud/disk: true
-      environmentd: true
-      materialize.cloud/availability-zone: "3"
-      topology.kubernetes.io/zone: "3"
-  - role: worker
-    labels:
-      materialize.cloud/disk: true
-      environmentd: true
-      materialize.cloud/availability-zone: "3"
-      topology.kubernetes.io/zone: "3"
-  - role: worker
-    labels:
-      supporting-services: true
       materialize.cloud/availability-zone: "3"
       topology.kubernetes.io/zone: "3"
