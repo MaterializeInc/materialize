@@ -11,12 +11,18 @@
 
 use core::ops::Add;
 use std::fmt;
+use std::io;
+use std::num::NonZeroU64;
 
+use itertools::Itertools;
+use mz_timely_util::order::Extrema;
+use mz_timely_util::order::Step;
 use once_cell::sync::Lazy;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
+use timely::progress::Antichain;
 use uuid::Uuid;
 
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
@@ -170,82 +176,67 @@ impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {
 
 /// Represents a MySQL transaction id
 #[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub enum TransactionId {
-    // Represents a transaction id that is not yet known
+pub enum GTIDState {
+    // NOTE: The ordering of the variants is important for the derived order implementation
+    /// Represents a MySQL server source-id that has not yet presented a GTID
     Absent,
 
-    // Represents the Active transaction_id that has been seen
-    // This requires that the source is configured to apply updates in order
-    // so we can assume all transactions were monotonically increasing and consecutive
-    Active(u64),
+    /// Represents an active MySQL server transaction-id for a given source.
+    ///
+    /// When used in a frontier / antichain, this represents the next transaction_id value that
+    /// we expect to see for the corresponding source_id(s).
+    /// When used as a timestamp, it represents an exact transaction_id value.
+    Active(NonZeroU64),
 }
 
-impl fmt::Display for TransactionId {
+impl fmt::Display for GTIDState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TransactionId::Absent => write!(f, "Null"),
-            TransactionId::Active(id) => write!(f, "{}", id),
+            GTIDState::Absent => write!(f, "Null"),
+            GTIDState::Active(id) => write!(f, "{}", id),
         }
     }
 }
 
-impl From<TransactionId> for u64 {
-    fn from(id: TransactionId) -> Self {
-        match id {
-            // TransactionIds start at 1, so we can use 0 to represent the absent id
-            TransactionId::Absent => 0,
-            TransactionId::Active(id) => id,
-        }
-    }
+impl GTIDState {
+    pub const MAX: GTIDState = GTIDState::Active(NonZeroU64::MAX);
 }
 
-impl TransactionId {
-    pub const MAX: TransactionId = TransactionId::Active(u64::MAX);
-}
-
-impl Add for TransactionId {
+impl Add for GTIDState {
     type Output = Self;
 
     fn add(self, other: Self) -> Self {
         match self {
-            TransactionId::Absent => other,
-            TransactionId::Active(id) => match other {
-                TransactionId::Absent => self,
-                TransactionId::Active(other_id) => TransactionId::Active(id + other_id),
+            GTIDState::Absent => other,
+            GTIDState::Active(id) => match other {
+                GTIDState::Absent => self,
+                GTIDState::Active(other_id) => {
+                    GTIDState::Active(NonZeroU64::new(id.get() + other_id.get()).unwrap())
+                }
             },
         }
     }
 }
 
-impl Timestamp for TransactionId {
+impl Timestamp for GTIDState {
     // No need to describe complex summaries
     type Summary = ();
 
     fn minimum() -> Self {
-        TransactionId::Absent
+        GTIDState::Absent
     }
 }
 
-impl From<&TransactionId> for u64 {
-    fn from(id: &TransactionId) -> Self {
-        match id {
-            // TransactionIds start at 1, so we can use 0 to represent the absent id
-            TransactionId::Absent => 0,
-            TransactionId::Active(id) => *id,
-        }
-    }
-}
+impl TotalOrder for GTIDState {}
 
-impl TotalOrder for TransactionId {}
-
-impl PartialOrder for TransactionId {
+impl PartialOrder for GTIDState {
     fn less_equal(&self, other: &Self) -> bool {
-        Into::<u64>::into(self).less_equal(&Into::<u64>::into(other))
+        self <= other
     }
 }
 
-impl PathSummary<TransactionId> for () {
-    fn results_in(&self, src: &TransactionId) -> Option<TransactionId> {
+impl PathSummary<GTIDState> for () {
+    fn results_in(&self, src: &GTIDState) -> Option<GTIDState> {
         Some(*src)
     }
 
@@ -254,7 +245,7 @@ impl PathSummary<TransactionId> for () {
     }
 }
 
-impl Refines<()> for TransactionId {
+impl Refines<()> for GTIDState {
     fn to_inner(_other: ()) -> Self {
         Self::minimum()
     }
@@ -264,24 +255,36 @@ impl Refines<()> for TransactionId {
     fn summarize(_path: Self::Summary) -> <() as Timestamp>::Summary {}
 }
 
-/// This type is used to track the progress of the ingestion dataflow, and represents
-/// a 'Gtid Set' of transactions that have been committed on a MySQL cluster.
-/// Each Gtid corresponds to a specific committed transaction, and contains the SourceId (a UUID)
-/// of the server that committed the transaction, and the TransactionId (a u64) representing
-/// the transaction's position.
-/// This type partitions by SourceId and contains the highest TransactionId committed for each
-/// SourceId 'range' in the Gtid Set. We use the highest TransactionId rather than a set of intervals
-/// because we validate that the MySQL server has been configured maintain ordering of transactions
-/// within a source, and that the TransactionIds are monotonically increasing.
-/// A None TransactionId represents that no transactions have been seen for the corresponding
-/// sources (which is useful to represent a frontier of all future possible sources)
-pub type GtidPartition = Partitioned<Uuid, TransactionId>;
+/// This type is used to represent the the progress of each MySQL GTID 'source_id' in the
+/// ingestion dataflow.
+///
+/// A MySQL GTID consists of a source_id (UUID) and transaction_id (non-zero u64).
+///
+/// For the purposes of this documentation effort, the term "source" refers to a MySQL
+/// server that is being replicated from: https://dev.mysql.com/doc/refman/8.0/en/replication-gtids-concepts.html
+///
+/// Each source_id represents a unique MySQL server, and the transaction_id
+/// monotonically increases for each source, representing the position of the transaction
+/// relative to other transactions on the same source.
+///
+/// Paritioining is by source_id which can be a singular UUID to represent a single source_id
+/// or a range of UUIDs to represent multiple sources.
+///
+/// The value of the partition is the NEXT transaction_id that we expect to see for the
+/// corresponding source(s), represented a GTIDState::Next(transaction_id).
+///
+/// GTIDState::Absent represents that no transactions have been seen for the
+/// corresponding source(s).
+///
+/// A complete Antichain of this type represents a frontier of the future transactions
+/// that we might see.
+pub type GtidPartition = Partitioned<Uuid, GTIDState>;
 
 impl SourceTimestamp for GtidPartition {
     fn encode_row(&self) -> Row {
         let ts = match self.timestamp() {
-            TransactionId::Absent => Datum::Null,
-            TransactionId::Active(id) => Datum::from(*id),
+            GTIDState::Absent => Datum::Null,
+            GTIDState::Active(id) => Datum::from(id.get()),
         };
         Row::pack(&[
             Datum::from(self.interval().lower),
@@ -294,12 +297,135 @@ impl SourceTimestamp for GtidPartition {
         let mut datums = row.iter();
         match (datums.next(), datums.next(), datums.next(), datums.next()) {
             (Some(Datum::Uuid(lower)), Some(Datum::Uuid(upper)), Some(Datum::UInt64(ts)), None) => {
-                Partitioned::new_range(lower, upper, TransactionId::Active(ts))
+                match ts {
+                    0 => Partitioned::new_range(lower, upper, GTIDState::Absent),
+                    ts => Partitioned::new_range(
+                        lower,
+                        upper,
+                        GTIDState::Active(NonZeroU64::new(ts).unwrap()),
+                    ),
+                }
             }
             (Some(Datum::Uuid(lower)), Some(Datum::Uuid(upper)), Some(Datum::Null), None) => {
-                Partitioned::new_range(lower, upper, TransactionId::Absent)
+                Partitioned::new_range(lower, upper, GTIDState::Absent)
             }
             _ => panic!("invalid row {row:?}"),
         }
     }
+}
+
+/// Parses a GTID Set string received from a MySQL server (e.g. from @@gtid_purged or @@gtid_executed).
+///
+/// Returns the frontier of all future GTIDs that are not contained in the provided GTID set.
+///
+/// TODO(roshan): Add compatibility for MySQL 8.3 'Tagged' GTIDs
+pub fn gtid_set_frontier(gtid_set_str: &str) -> Result<Antichain<GtidPartition>, io::Error> {
+    let mut partitions = Antichain::new();
+    for gtid_str in gtid_set_str.split(',') {
+        if gtid_str.is_empty() {
+            continue;
+        };
+        let (uuid, intervals) = gtid_str.split_once(':').ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("invalid gtid: {}", gtid_str),
+            )
+        })?;
+
+        let uuid = Uuid::parse_str(uuid).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid uuid in gtid: {}: {}", gtid_str, e),
+            )
+        })?;
+
+        // From the MySQL docs:
+        // "When GTID sets are returned from server variables, UUIDs are in alphabetical order,
+        // and numeric intervals are merged and in ascending order."
+        // For our purposes, we need to ensure that all intervals are consecutive which means there
+        // should be at most one interval per GTID.
+        // TODO: should this same restriction be done when parsing a @@GTID_PURGED value? In that
+        // case the intervals might not be guaranteed to be consecutive, depending on how purging
+        // is implemented?
+        let mut intervals = intervals.split(':');
+        let end = match (intervals.next(), intervals.next()) {
+            (Some(interval_str), None) => {
+                let mut vals_iter = interval_str.split('-').map(str::parse::<u64>);
+                let start = vals_iter
+                    .next()
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("couldn't parse int: {}", interval_str),
+                        )
+                    })?
+                    .map_err(|e| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("couldn't parse int: {}: {}", interval_str, e),
+                        )
+                    })?;
+                match vals_iter.next() {
+                    Some(Ok(end)) => end,
+                    None => start,
+                    _ => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("invalid gtid interval: {}", interval_str),
+                        ))
+                    }
+                }
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("gtid with non-consecutive intervals found! {}", gtid_str),
+                ))
+            }
+        };
+        // Insert a partition representing the 'next' GTID that might be seen from this source
+        partitions.insert(GtidPartition::new_singleton(
+            uuid,
+            GTIDState::Active(NonZeroU64::new(end + 1).unwrap()),
+        ));
+    }
+
+    // Fill in gaps in the GTID set with Absent values for all future source-ids we may see
+    let mut future_partitions = vec![];
+
+    let mut prev = Uuid::nil();
+    let mut push_last = true;
+    for partition in partitions.iter().sorted_by(|a, b| {
+        a.interval()
+            .singleton()
+            .unwrap()
+            .cmp(b.interval().singleton().unwrap())
+    }) {
+        let part = partition.interval().singleton().unwrap();
+        assert!(prev < *part, "duplicate GTID found in GTID set");
+
+        // Create a partition representing all the UUIDs in the gap between the previous one and this one
+        if let Some(end) = part.backward_checked(1) {
+            future_partitions.push(GtidPartition::new_range(prev, end, GTIDState::Absent));
+        }
+
+        // Set prev to the UUID + 1 so the next gap starts after this one
+        if let Some(next) = part.forward_checked(1) {
+            prev = next;
+        } else {
+            // part was UUID::MAX so we don't need to add a future partition
+            push_last = false;
+            break;
+        };
+    }
+    if push_last {
+        future_partitions.push(GtidPartition::new_range(
+            prev,
+            Uuid::maximum(),
+            GTIDState::Absent,
+        ));
+    };
+
+    partitions.extend(future_partitions.into_iter());
+    Ok(partitions)
 }

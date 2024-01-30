@@ -9,7 +9,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
-use std::str::FromStr;
 
 use differential_dataflow::{AsCollection, Collection};
 use futures::TryStreamExt;
@@ -25,7 +24,7 @@ use uuid::Uuid;
 
 use mz_mysql_util::{
     ensure_full_row_binlog_format, ensure_gtid_consistency, ensure_replication_commit_order,
-    query_sys_var, GtidSet, SchemaRequest,
+    query_sys_var, SchemaRequest,
 };
 use mz_mysql_util::{schema_info, MySqlTableDesc};
 use mz_ore::cast::CastFrom;
@@ -33,7 +32,7 @@ use mz_ore::result::ResultExt;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::UnresolvedItemName;
-use mz_storage_types::sources::mysql::{GtidPartition, TransactionId};
+use mz_storage_types::sources::mysql::{gtid_set_frontier, GTIDState, GtidPartition};
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -42,7 +41,7 @@ use mz_timely_util::order::Extrema;
 
 use crate::source::{RawSourceCreationConfig, SourceReaderError};
 
-use super::{gtid_singletons, pack_mysql_row, ReplicationError, RewindRequest, TransientError};
+use super::{pack_mysql_row, DefiniteError, ReplicationError, RewindRequest, TransientError};
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
 pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
@@ -224,16 +223,15 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     )
                     .await?;
 
-                // Record the GTID set at the start of the snapshot
+                // Record the frontier of future GTIDs based on the executed GTID set at the start of the snapshot
                 let snapshot_gtid_set = query_sys_var(lock_conn.as_mut().expect("lock_conn just created"), "global.gtid_executed").await?;
-                let snapshot_gtid_set = GtidSet::from_str(snapshot_gtid_set.as_str())?;
-
-                let snapshot_gtid_set = match gtid_singletons(snapshot_gtid_set, true) {
-                    Ok(snapshot_partitions) => snapshot_partitions,
+                let snapshot_gtid_frontier = match gtid_set_frontier(snapshot_gtid_set.as_str()) {
+                    Ok(frontier) => frontier,
                     Err(err) => {
+                        let err = DefiniteError::UnsupportedGtidState(err.to_string());
                         // If we received a GTID Set with non-consecutive intervals this breaks all our assumptions, so there is nothing else we can do.
                         for output_index in all_outputs.iter() {
-                            let update = ((*output_index, Err(err.clone())), GtidPartition::new_range(Uuid::minimum(), Uuid::maximum(), TransactionId::MAX), 1);
+                            let update = ((*output_index, Err(err.clone())), GtidPartition::new_range(Uuid::minimum(), Uuid::maximum(), GTIDState::MAX), 1);
                             raw_handle.give(&data_cap_set[0], update).await;
                         }
                         definite_error_handle.give(&definite_error_cap_set[0], ReplicationError::Definite(Rc::new(err))).await;
@@ -244,17 +242,10 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 trace!(%id, "timely-{worker_id} acquired table locks at start gtid set: {snapshot_gtid_set:?}");
                 // TODO(roshan): Insert metric for how long it took to acquire the locks
 
-                // Wait for the start_gtids from the leader, which indicate that the table locks have
-                // been acquired and we should start a transaction.
-                let snapshot_gtid_set = loop {
-                    match lock_start_input.next().await {
-                        Some(AsyncEvent::Data(_, mut data)) => {
-                            break data.pop().expect("Sent above")
-                        }
-                        Some(AsyncEvent::Progress(_)) => (),
-                        None => panic!("lock_start_input closed unexpectedly"),
-                    }
-                };
+                // Send a signal to all workers that they should start their transactions
+                lock_start_handle.give(&lock_start_cap_set[0], snapshot_gtid_frontier).await;
+            }
+            *lock_start_cap_set = CapabilitySet::new();
 
                 trace!(
                     %id,
@@ -296,28 +287,16 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         }
                     }
 
-                    // TODO(roshan): Figure out how to add a test-case that ensures we do release this lock
-                    trace!(%id, "timely-{worker_id} releasing table locks");
-                    let mut lock_conn = lock_conn
-                        .expect("lock_conn should have been created for the snapshot leader");
-                    lock_conn.query_drop("UNLOCK TABLES").await?;
-                    lock_conn.disconnect().await?;
-                    // This worker has nothing else to do
-                    if reader_snapshot_table_info.is_empty() {
-                        return Ok(());
-                    }
+            // Wait for the start_gtids from the leader, which indicate that the table locks have
+            // been acquired and we should start a transaction.
+            let snapshot_gtid_frontier = loop {
+                match lock_start_input.next().await {
+                    Some(AsyncEvent::Data(_, mut data)) => break data.pop().expect("Sent above"),
+                    Some(AsyncEvent::Progress(_)) => (),
+                    None => panic!("lock_start_input closed unexpectedly"),
                 }
 
-                // We have established a snapshot GTID set so we can broadcast the rewind requests
-                for table in reader_snapshot_table_info.keys() {
-                    trace!(%id, "timely-{worker_id} producing rewind request for {table}");
-                    let req = RewindRequest {
-                        table: table.clone(),
-                        snapshot_gtid_set: snapshot_gtid_set.clone(),
-                    };
-                    rewinds_handle.give(&rewind_cap_set[0], req).await;
-                }
-                *rewind_cap_set = CapabilitySet::new();
+            trace!(%id, "timely-{worker_id} starting transaction with consistent snapshot at frontier: {snapshot_gtid_frontier:?}");
 
                 // Read the schemas of the tables we are snapshotting
                 // TODO: verify the schema matches the expected schema
@@ -392,10 +371,10 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 }
             }
 
-            // We have established a snapshot GTID set so we can broadcast the rewind requests
+            // We have established a snapshot frontier so we can broadcast the rewind requests
             for table in reader_snapshot_table_info.keys() {
                 trace!(%id, "timely-{worker_id} producing rewind request for {table}");
-                let req = RewindRequest { table: table.clone(), snapshot_gtid_set: snapshot_gtid_set.clone() };
+                let req = RewindRequest { table: table.clone(), snapshot_upper: snapshot_gtid_frontier.clone() };
                 rewinds_handle.give(&rewind_cap_set[0], req).await;
             }
             *rewind_cap_set = CapabilitySet::new();

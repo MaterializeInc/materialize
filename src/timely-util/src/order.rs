@@ -19,14 +19,14 @@ use std::cmp::Ordering;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
 
-use uuid::Uuid;
-
+use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use timely::communication::Data;
 use timely::order::Product;
 use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
 use timely::progress::Antichain;
 use timely::PartialOrder;
+use uuid::Uuid;
 
 /// A partially ordered timestamp that is partitioned by an arbitrary number of partitions
 /// identified by `P`. The construction allows for efficient representation of frontiers with
@@ -75,15 +75,13 @@ impl<P: Clone + PartialOrd, T> Partitioned<P, T> {
     }
 }
 
-impl<P: Clone + PartialOrd + Sequence, T: Clone> Partitioned<P, T> {
+impl<P: Clone + PartialOrd + Step, T: Clone> Partitioned<P, T> {
     /// Returns up to two partitions that contain the interval before and/or
     /// after given partition point, neither of which contain the point.
-    pub fn split(&self, point: &P) -> Vec<Self> {
-        self.interval()
-            .split(point)
-            .into_iter()
-            .map(|interval| Self(Product::new(interval, self.timestamp().clone())))
-            .collect()
+    pub fn split(&self, point: &P) -> (Option<Self>, Option<Self>) {
+        let (before, after) = self.interval().split(point);
+        let mapper = |interval| Self(Product::new(interval, self.timestamp().clone()));
+        (before.map(mapper), after.map(mapper))
     }
 }
 
@@ -169,25 +167,38 @@ impl Extrema for Uuid {
         Self::nil()
     }
     fn maximum() -> Self {
+        // TODO: fix
+        // The `Uuid::max()` method that implements this is shadowed by the `max()` method from the `Ord`
+        // trait so we implement it manually.
         Self::from_bytes([0xff; 16])
     }
 }
 
-pub trait Sequence {
+// TODO: Switch to the std one when it's no longer unstable: https://doc.rust-lang.org/std/iter/trait.Step.html
+pub trait Step
+where
+    Self: Sized,
+{
     // Returns the element value sequenced before the type.
-    fn before(&self) -> Self;
+    fn backward_checked(&self, count: usize) -> Option<Self>;
     // Returns the element value sequenced after the type.
-    fn after(&self) -> Self;
+    fn forward_checked(&self, count: usize) -> Option<Self>;
 }
 
-impl Sequence for Uuid {
-    fn before(&self) -> Self {
+impl Step for Uuid {
+    fn backward_checked(&self, count: usize) -> Option<Self> {
         let repr = self.as_u128();
-        Self::from_u128(repr - 1)
+        match repr {
+            0 => None,
+            _ => Some(Self::from_u128(repr - count.to_u128().unwrap())),
+        }
     }
-    fn after(&self) -> Self {
+    fn forward_checked(&self, count: usize) -> Option<Self> {
         let repr = self.as_u128();
-        Self::from_u128(repr + 1)
+        match repr {
+            u128::MAX => None,
+            _ => Some(Self::from_u128(repr + count.to_u128().unwrap())),
+        }
     }
 }
 
@@ -215,26 +226,25 @@ impl<P: PartialOrd> Interval<P> {
     }
 }
 
-impl<P: Sequence + PartialOrd + Clone> Interval<P> {
+impl<P: Step + PartialOrd + Clone> Interval<P> {
     /// Returns up to two intervals that contain the range before and/or after given point,
     /// neither of which contain the point.
-    pub fn split(&self, point: &P) -> Vec<Self> {
-        let mut ret = vec![];
-        let before = point.before();
-        let after = point.after();
-        if self.lower <= before {
-            ret.push(Interval {
+    pub fn split(&self, point: &P) -> (Option<Self>, Option<Self>) {
+        let before = match point.backward_checked(1) {
+            Some(bef) if self.lower <= bef => Some(Interval {
                 lower: self.lower.clone(),
-                upper: before,
-            });
-        }
-        if self.upper >= after {
-            ret.push(Interval {
-                lower: after,
+                upper: bef,
+            }),
+            _ => None,
+        };
+        let after = match point.forward_checked(1) {
+            Some(aft) if self.upper >= aft => Some(Interval {
+                lower: aft,
                 upper: self.upper.clone(),
-            });
-        }
-        ret
+            }),
+            _ => None,
+        };
+        (before, after)
     }
 }
 
