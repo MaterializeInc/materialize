@@ -172,7 +172,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         let table_info = reader_table_info;
         Box::pin(async move {
             let (id, worker_id) = (config.id, config.worker_id);
-            let [data_cap_set, upper_cap_set, definite_error_cap_set]: &mut [_; 3] = caps.try_into().unwrap();
+            let [data_cap_set, upper_cap_set, definite_error_cap_set]: &mut [_; 3] =
+                caps.try_into().unwrap();
 
             if !config.responsible_for("slot") {
                 return Ok(());
@@ -181,13 +182,16 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             // Determine the slot lsn.
             let connection_config = connection
                 .connection
-                .config(&*config.config.connection_context.secrets_reader, &config.config)
+                .config(
+                    &*config.config.connection_context.secrets_reader,
+                    &config.config,
+                )
                 .await?;
 
             let slot = &connection.publication_details.slot;
-            let replication_client = connection_config.connect_replication(
-                &config.config.connection_context.ssh_tunnel_manager,
-            ).await?;
+            let replication_client = connection_config
+                .connect_replication(&config.config.connection_context.ssh_tunnel_manager)
+                .await?;
 
             tracing::info!(%id, "ensuring replication slot {slot} exists");
             super::ensure_replication_slot(&replication_client, slot).await?;
@@ -198,7 +202,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     .values()
                     .flat_map(|f| f.elements())
                     // Advance any upper as far as the slot_lsn.
-                    .map(|t|std::cmp::max(*t, slot_lsn))
+                    .map(|t| std::cmp::max(*t, slot_lsn)),
             );
 
             let Some(resume_lsn) = resume_upper.into_option() else {
@@ -206,15 +210,18 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             };
             data_cap_set.downgrade([&resume_lsn]);
             upper_cap_set.downgrade([&resume_lsn]);
-            trace!(%id, "timely-{worker_id} replication reader started lsn={}", resume_lsn);
-
+            trace!(%id, "timely-{worker_id} replication \
+                   reader started lsn={}", resume_lsn);
 
             let mut rewinds = BTreeMap::new();
             while let Some(event) = rewind_input.next().await {
                 if let AsyncEvent::Data(caps, data) = event {
                     for req in data {
                         if resume_lsn > req.snapshot_lsn + 1 {
-                            let err = DefiniteError::SlotCompactedPastResumePoint(req.snapshot_lsn + 1, resume_lsn);
+                            let err = DefiniteError::SlotCompactedPastResumePoint(
+                                req.snapshot_lsn + 1,
+                                resume_lsn,
+                            );
                             // If the replication stream cannot be obtained from the resume point there is nothing
                             // else to do. These errors are not retractable.
                             for &oid in table_info.keys() {
@@ -223,7 +230,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 let update = ((oid, Err(err.clone())), MzOffset::from(u64::MAX), 1);
                                 data_output.give(&data_cap_set[0], update).await;
                             }
-                            definite_error_handle.give(&definite_error_cap_set[0], ReplicationError::Definite(Rc::new(err))).await;
+                            definite_error_handle
+                                .give(
+                                    &definite_error_cap_set[0],
+                                    ReplicationError::Definite(Rc::new(err)),
+                                )
+                                .await;
                             return Ok(());
                         }
                         rewinds.insert(req.oid, (caps.clone(), req));
@@ -234,10 +246,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
             let mut committed_uppers = pin!(committed_uppers);
 
-            let client = connection_config.connect(
-                "replication metadata",
-                &config.config.connection_context.ssh_tunnel_manager,
-            ).await?;
+            let client = connection_config
+                .connect(
+                    "replication metadata",
+                    &config.config.connection_context.ssh_tunnel_manager,
+                )
+                .await?;
 
             let stream_result = raw_stream(
                 &config,
@@ -247,7 +261,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 &connection.publication_details.timeline_id,
                 &connection.publication,
                 *data_cap_set[0].time(),
-                committed_uppers.as_mut()
+                committed_uppers.as_mut(),
             )
             .await?;
 
@@ -263,7 +277,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                         data_output.give(&data_cap_set[0], update).await;
                     }
 
-                    definite_error_handle.give(&definite_error_cap_set[0], ReplicationError::Definite(Rc::new(err))).await;
+                    definite_error_handle
+                        .give(
+                            &definite_error_cap_set[0],
+                            ReplicationError::Definite(Rc::new(err)),
+                        )
+                        .await;
                     return Ok(());
                 }
             };
@@ -271,7 +290,11 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
             let mut errored = HashSet::new();
             let mut container = Vec::new();
-            let max_capacity = timely::container::buffer::default_capacity::<((u32, Result<Vec<Option<Bytes>>, DefiniteError>), MzOffset, Diff)>();
+            let max_capacity = timely::container::buffer::default_capacity::<(
+                (u32, Result<Vec<Option<Bytes>>, DefiniteError>),
+                MzOffset,
+                Diff,
+            )>();
 
             while let Some(event) = stream.as_mut().next().await {
                 use LogicalReplicationMessage::*;
@@ -293,7 +316,11 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 &mut errored
                             ));
 
-                            trace!(%id, "timely-{worker_id} extracting transaction at {commit_lsn}");
+                            trace!(
+                                %id,
+                                "timely-{worker_id} extracting transaction \
+                                    at {commit_lsn}"
+                            );
                             while let Some((oid, event, diff)) = tx.try_next().await? {
                                 if !table_info.contains_key(&oid) {
                                     continue;
@@ -306,20 +333,32 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                         data_output.give(data_cap, update).await;
                                     }
                                 }
-                                assert!(new_upper <= commit_lsn, "new_upper={} tx_lsn={}", new_upper, commit_lsn);
+                                assert!(
+                                    new_upper <= commit_lsn,
+                                    "new_upper={} tx_lsn={}",
+                                    new_upper,
+                                    commit_lsn
+                                );
                                 container.push((data, commit_lsn, diff));
                             }
                             new_upper = commit_lsn + 1;
                             if container.len() > max_capacity {
-                                data_output.give_container(&data_cap_set[0], &mut container).await;
+                                data_output
+                                    .give_container(&data_cap_set[0], &mut container)
+                                    .await;
                                 upper_cap_set.downgrade([&new_upper]);
                                 data_cap_set.downgrade([&new_upper]);
                             }
-                        },
+                        }
                         _ => return Err(TransientError::BareTransactionEvent),
-                    }
+                    },
                     Ok(PrimaryKeepAlive(keepalive)) => {
-                        trace!(%id, "timely-{worker_id} received keepalive lsn={}", keepalive.wal_end());
+                        trace!(
+                            %id,
+                            "timely-{worker_id} received \
+                               keepalive lsn={}",
+                            keepalive.wal_end()
+                        );
                         new_upper = std::cmp::max(new_upper, keepalive.wal_end().into());
                     }
                     Ok(_) => return Err(TransientError::UnknownReplicationMessage),
@@ -328,7 +367,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
                 let will_yield = stream.as_mut().peek().now_or_never().is_none();
                 if will_yield {
-                    data_output.give_container(&data_cap_set[0], &mut container).await;
+                    data_output
+                        .give_container(&data_cap_set[0], &mut container)
+                        .await;
                     upper_cap_set.downgrade([&new_upper]);
                     data_cap_set.downgrade([&new_upper]);
                     rewinds.retain(|_, (_, req)| data_cap_set[0].time() <= &req.snapshot_lsn);
