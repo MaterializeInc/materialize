@@ -70,7 +70,7 @@ impl OptimizerNoticeApi for IndexKeyEmpty {
     ) -> fmt::Result {
         write!(
             f,
-            "Drop the encosing index and re-create it using `CREATE DEFAULT INDEX ON` instead."
+            "Drop the enclosing index and re-create it using `CREATE DEFAULT INDEX ON` instead."
         )
     }
 

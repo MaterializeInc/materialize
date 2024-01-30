@@ -14,10 +14,10 @@ use std::sync::Arc;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
-use mz_repr::{ColumnType, Datum, Diff, Row, RowArena};
+use mz_repr::{Datum, Diff, Row, RowArena};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
-use mz_sql::plan::{WebhookHeaders, WebhookValidation, WebhookValidationSecret};
+use mz_sql::plan::{WebhookBodyFormat, WebhookHeaders, WebhookValidation, WebhookValidationSecret};
 use mz_storage_client::controller::MonotonicAppender;
 use mz_storage_types::controller::StorageError;
 use tokio::sync::Semaphore;
@@ -233,7 +233,7 @@ pub struct AppendWebhookResponse {
     /// Channel to monotonically append rows to a webhook source.
     pub tx: WebhookAppender,
     /// Column type for the `body` column.
-    pub body_ty: ColumnType,
+    pub body_format: WebhookBodyFormat,
     /// Types of the columns for the headers of a request.
     pub header_tys: WebhookHeaders,
     /// Expression used to validate a webhook request.

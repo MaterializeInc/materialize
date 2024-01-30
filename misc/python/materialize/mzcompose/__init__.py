@@ -29,7 +29,7 @@ T = TypeVar("T")
 say = ui.speaker("C> ")
 
 
-DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.5.0"
+DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.5.2"
 
 DEFAULT_MZ_VOLUMES = [
     "mzdata:/mzdata",
@@ -64,7 +64,7 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_columnation_lgalloc": "true",
     "enable_comment": "true",
     "enable_disk_cluster_replicas": "true",
-    "enable_eager_delta_joins": "false",
+    "enable_eager_delta_joins": "true",
     "enable_expressions_in_limit_syntax": "true",
     "enable_jemalloc_profiling": "true",
     "enable_logical_compaction_window": "true",
@@ -77,13 +77,14 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "enable_statement_lifecycle_logging": "true",
     "enable_table_keys": "true",
     "enable_try_parse_monotonic_iso8601_timestamp": "true",
+    "enable_worker_core_affinity": "true",
     "persist_batch_delete_enabled": "true",
     "persist_fast_path_limit": "1000",
     "persist_pubsub_client_enabled": "true",
     "persist_pubsub_push_diff_enabled": "true",
     "persist_sink_minimum_batch_updates": "128",
     "persist_stats_audit_percent": "100",
-    "persist_txn_tables": "eager",
+    "persist_txn_tables": "lazy",
     "statement_logging_default_sample_rate": "0.01",
     "statement_logging_max_sample_rate": "0.01",
     "storage_persist_sink_minimum_batch_updates": "100",

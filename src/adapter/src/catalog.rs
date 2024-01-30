@@ -1248,7 +1248,11 @@ impl Catalog {
         let dropped_notices = self.drop_plans_and_metainfos(&drop_ids);
         if self.state().system_config().enable_mz_notices() {
             // Generate retractions for the Builtin tables.
-            self.pack_optimizer_notices(&mut builtin_table_updates, dropped_notices.iter(), -1);
+            self.state().pack_optimizer_notices(
+                &mut builtin_table_updates,
+                dropped_notices.iter(),
+                -1,
+            );
         }
 
         Ok(TransactionResult {

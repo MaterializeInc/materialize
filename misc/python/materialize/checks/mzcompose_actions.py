@@ -39,6 +39,7 @@ class StartMz(MzcomposeAction):
         additional_system_parameter_defaults: dict[str, str] = {},
         mz_service: str | None = None,
         catalog_store: str | None = None,
+        platform: str | None = None,
     ) -> None:
         self.tag = tag
         self.environment_extra = environment_extra
@@ -50,6 +51,7 @@ class StartMz(MzcomposeAction):
             else "stash"
         )
         self.mz_service = mz_service
+        self.platform = platform
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
@@ -80,6 +82,7 @@ class StartMz(MzcomposeAction):
             additional_system_parameter_defaults=self.additional_system_parameter_defaults,
             sanity_restart=False,
             catalog_store=self.catalog_store,
+            platform=self.platform,
         )
 
         with c.override(mz):

@@ -83,13 +83,11 @@ use mz_adapter_types::timestamp_oracle::{
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER,
 };
 use mz_build_info::BuildInfo;
+use mz_dyncfg::{ConfigSet, ConfigType, ConfigUpdates as PersistConfigUpdates, ConfigVal};
 use mz_ore::cast;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_persist_client::cfg::{CRDB_CONNECT_TIMEOUT, CRDB_TCP_USER_TIMEOUT};
-use mz_persist_client::dyn_cfg::{
-    ConfigSet, ConfigType, ConfigUpdates as PersistConfigUpdates, ConfigVal,
-};
 use mz_pgwire_common::Severity;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
@@ -1376,6 +1374,26 @@ pub const ENABLE_DEFAULT_CONNECTION_VALIDATION: ServerVar<bool> = ServerVar {
         "LD facing global boolean flag that allows turning default connection validation off for everyone (Materialize).",
     internal: true,
 };
+
+pub static STATEMENT_LOGGING_MAX_DATA_CREDIT: Lazy<ServerVar<Option<usize>>> = Lazy::new(|| {
+    ServerVar {
+    name: UncasedStr::new("statement_logging_max_data_credit"),
+    value: None,
+    // The idea is that during periods of low logging, tokens can accumulate up to this value,
+    // and then be depleted during periods of high logging.
+    description: "The maximum number of bytes that can be logged for statement logging in short burts, or NULL if unlimited (Materialize).",
+    internal: true,
+}
+});
+
+pub static STATEMENT_LOGGING_TARGET_DATA_RATE: Lazy<ServerVar<Option<usize>>> = Lazy::new(|| {
+    ServerVar {
+    name: UncasedStr::new("statement_logging_target_data_rate"),
+    value: None,
+    description: "The maximum sustained data rate of statement logging, in bytes per second, or NULL if unlimited (Materialize).",
+    internal: true,
+}
+});
 
 pub static STATEMENT_LOGGING_MAX_SAMPLE_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("statement_logging_max_sample_rate"),
@@ -2942,6 +2960,8 @@ impl SystemVars {
                 &STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE,
                 ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
             )
+            .with_var(&STATEMENT_LOGGING_TARGET_DATA_RATE)
+            .with_var(&STATEMENT_LOGGING_MAX_DATA_CREDIT)
             .with_var(&OPTIMIZER_STATS_TIMEOUT)
             .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
             .with_var(&PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE)
@@ -3777,6 +3797,14 @@ impl SystemVars {
     /// Returns the `privatelink_status_update_quota_per_minute` configuration parameter.
     pub fn privatelink_status_update_quota_per_minute(&self) -> u32 {
         *self.expect_value(&PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE)
+    }
+
+    pub fn statement_logging_target_data_rate(&self) -> Option<usize> {
+        *self.expect_value(&STATEMENT_LOGGING_TARGET_DATA_RATE)
+    }
+
+    pub fn statement_logging_max_data_credit(&self) -> Option<usize> {
+        *self.expect_value(&STATEMENT_LOGGING_MAX_DATA_CREDIT)
     }
 
     /// Returns the `statement_logging_max_sample_rate` configuration parameter.

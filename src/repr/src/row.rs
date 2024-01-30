@@ -2069,6 +2069,11 @@ impl RowPacker<'_> {
         // SAFETY: iterator offsets always lie on a datum boundary.
         unsafe { self.truncate(offset) }
     }
+
+    /// Returns the total amount of bytes used by the underlying row.
+    pub fn byte_len(&self) -> usize {
+        self.row.byte_len()
+    }
 }
 
 impl<'a> IntoIterator for &'a Row {

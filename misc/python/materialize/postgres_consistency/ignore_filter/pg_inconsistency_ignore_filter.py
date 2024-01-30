@@ -299,8 +299,14 @@ class PgPostExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("Not supported by pg")
 
-        if "cannot cast type boolean to bigint" in pg_error_msg:
+        if (
+            "cannot cast type boolean to bigint" in pg_error_msg
+            or "cannot cast type bigint to boolean" in pg_error_msg
+        ):
             return YesIgnore("Not supported by pg")
+
+        if 'invalid input syntax for type time: ""' in pg_error_msg:
+            return YesIgnore("#24736: different handling of empty time string")
 
         return NoIgnore()
 

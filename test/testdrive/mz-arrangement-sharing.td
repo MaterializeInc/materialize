@@ -44,14 +44,13 @@ DistinctByErrorCheck
 > SELECT mdo.name FROM mz_internal.mz_arrangement_sharing mash JOIN mz_internal.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 "ArrangeBy[[Column(0), Column(1)]] [val: empty]"
 "ArrangeBy[[Column(0)]] [val: empty]"
+"ArrangeBy[[Column(0)]]"
 "Arranged DistinctBy [val: empty]"
 "Arranged DistinctBy [val: empty]"
 "DistinctBy [val: empty]"
 "DistinctBy [val: empty]"
 DistinctByErrorCheck
 DistinctByErrorCheck
-JoinStage
-JoinStage
 
 > DROP TABLE squares CASCADE
 > DROP TABLE roots CASCADE
@@ -708,17 +707,19 @@ ReduceMinsMaxes
 "ArrangeBy[[Column(0), Column(2)]]"           1
 "ArrangeBy[[Column(0)]] [val: empty]"         2
 "ArrangeBy[[Column(0)]]-errors"              21
-"ArrangeBy[[Column(0)]]"                     38
+"ArrangeBy[[Column(0)]]"                     40
 "ArrangeBy[[Column(1), Column(3)]]"           2
 "ArrangeBy[[Column(1)]]-errors"               4
-"ArrangeBy[[Column(1)]]"                      9
+"ArrangeBy[[Column(1)]]"                     11
 "ArrangeBy[[Column(2)]]-errors"               9
-"ArrangeBy[[Column(2)]]"                     14
-"ArrangeBy[[Column(3)]]"                      1
+"ArrangeBy[[Column(2)]]"                     15
+"ArrangeBy[[Column(3)]]"                      2
 "ArrangeBy[[Column(4)]]-errors"               2
 "ArrangeBy[[Column(4)]]"                      5
 "ArrangeBy[[Column(5)]]-errors"               2
 "ArrangeBy[[Column(5)]]"                      2
+"ArrangeBy[[Column(19)]]"                     1
+"ArrangeBy[[Column(19)]]-errors"              1
 "Arranged DistinctBy [val: empty]"            7
 "Arranged MinsMaxesHierarchical input"        7
 "Arranged ReduceInaccumulable"                1
@@ -726,7 +727,6 @@ ReduceMinsMaxes
 "Distinct recursive err"                      1
 "DistinctBy [val: empty]"                     7
 "DistinctByErrorCheck"                        7
-"JoinStage"                                   5
 "ReduceAccumulable"                           3
 "ReduceCollation Errors"                      1
 "ReduceCollation"                             1
@@ -776,3 +776,6 @@ CREATE CLUSTER REPLICA arrangement_sharing.replica SIZE = '2', INTROSPECTION DEB
 "Arrange Timely(MessagesSent)"
 "Arrange Timely(Operates)"
 "Arrange Timely(Parks)"
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET log_filter = 'info'

@@ -120,6 +120,14 @@
   functions:
     - signature: 'map_length(m: mapany) -> int'
       description: Return the number of elements in `m`.
+    - signature: 'map_build(kvs: list record(text, T)) -> map[text=>T]'
+      description: >-
+        Builds a map from a list of records whose fields are two elements, the
+        first of which is `text`. In the face of duplicate keys, `map_build` retains
+        value from the record in the latest positition. This function is
+        purpose-built to process [Kafka headers](/sql/create-source/kafka/#headers).
+    - signature: 'map_agg(keys: text, values: T) -> map[text=>T]'
+      description: Aggregate keys and values (including nulls) as a map. ([docs](/sql/functions/map_agg))
 
 - type: Numbers
   description: Number functions take number-like arguments, e.g. [`int`](../types/int),
@@ -659,6 +667,8 @@
     description: Expands the array `a` into a set of rows.
   - signature: 'unnest(l: anylist)'
     description: Expands the list `l` into a set of rows.
+  - signature: "unnest(m: anymap)"
+    description: Explands the map `m` in a set of rows with the columns `key` and `value`.
 
 - type: Array
   functions:
@@ -902,11 +912,8 @@
 
 - type: Access privilege inquiry
   description: |
-    Functions that allow querying object access privileges. All of the following functions have
-    limitations involved in resolving the text names passed in. None of the object names can have
-    any schema or database qualifiers. For example, `has_table_privilege('public.t', 'SELECT')`
-    will not work properly. Additionally, the name lookup does not consider the current search path
-    or active database.
+    Functions that allow querying object access privileges. None of the following functions consider
+    whether the provided role is a _superuser_ or not.
   functions:
     - signature: 'has_cluster_privilege([role: text or oid,] cluster: text, privilege: text) -> bool'
       description: >-
@@ -927,7 +934,11 @@
       description: >-
         Reports whether the role with the specified role name or OID has the privilege on
         the schema with the specified schema name or OID. If the role is omitted then
-        the `current_role` is assumed.
+        the `current_role` is assumed. This function has the following
+        limitations around schema resolution: 1) none of the schema names can have
+        database qualifiers (e.g., `has_schema_privilege('materialize.public', 'SELECT')`
+        will not work properly); 2) the name lookup does not consider the
+        active database.
     - signature: 'has_role([user: name or oid,] role: text or oid, privilege: text) -> bool'
       description: >-
         Reports whether the `user` has the privilege for `role`. `privilege` can either be `MEMBER`

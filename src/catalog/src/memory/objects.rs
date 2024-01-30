@@ -45,8 +45,8 @@ use mz_sql::names::{
     ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier,
 };
 use mz_sql::plan::{
-    CreateSourcePlan, HirRelationExpr, Ingestion as PlanIngestion, WebhookHeaders,
-    WebhookValidation,
+    CreateSourcePlan, HirRelationExpr, Ingestion as PlanIngestion, WebhookBodyFormat,
+    WebhookHeaders, WebhookValidation,
 };
 use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
@@ -394,6 +394,8 @@ pub enum DataSourceDesc {
     Webhook {
         /// Optional components used to validation a webhook request.
         validate_using: Option<WebhookValidation>,
+        /// Describes how we deserialize the body of a webhook request.
+        body_format: WebhookBodyFormat,
         /// Describes whether or not to include headers and how to map them.
         headers: WebhookHeaders,
         /// The cluster which this source is associated with.
@@ -494,9 +496,11 @@ impl Source {
                 }
                 mz_sql::plan::DataSourceDesc::Webhook {
                     validate_using,
+                    body_format,
                     headers,
                 } => DataSourceDesc::Webhook {
                     validate_using,
+                    body_format,
                     headers,
                     cluster_id: plan
                         .in_cluster
@@ -1078,10 +1082,6 @@ impl CatalogItem {
     }
 
     /// The custom compaction window, if any has been set.
-    // Note[btv]: As of 2023-04-10, this is only set
-    // for objects with `is_retained_metrics_object`. That
-    // may not always be true in the future, if we enable user-settable
-    // compaction windows.
     pub fn custom_logical_compaction_window(&self) -> Option<CompactionWindow> {
         match self {
             CatalogItem::Table(table) => table.custom_logical_compaction_window,

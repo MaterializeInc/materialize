@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import json
-import os
 import re
 import time
 from collections.abc import Callable
@@ -23,6 +22,7 @@ from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
 from pg8000.exceptions import DatabaseError
 
+from materialize import buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
@@ -65,13 +65,8 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    shard = os.environ.get("BUILDKITE_PARALLEL_JOB")
-    shard_count = os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT")
-
-    if shard:
-        shard = int(shard)
-    if shard_count:
-        shard_count = int(shard_count)
+    shard = buildkite.get_parallelism_index()
+    shard_count = buildkite.get_parallelism_count()
 
     for i, name in enumerate(c.workflows):
         # incident-70 requires more memory, runs in separate CI step
@@ -82,7 +77,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "test-concurrent-connections",
         ):
             continue
-        if shard is None or shard_count is None or i % int(shard_count) == shard:
+        if buildkite.accepted_by_shard(i, shard, shard_count):
             with c.test_case(name):
                 c.workflow(name)
 

@@ -2287,6 +2287,7 @@ fn test_idle_in_transaction_session_timeout() {
 }
 
 #[mz_ore::test]
+#[ignore] // TODO: Reenable when #24809 is fixed
 fn test_coord_startup_blocking() {
     let initial_time = 0;
     let now = Arc::new(Mutex::new(initial_time));
@@ -3795,4 +3796,40 @@ async fn test_temporal_static_queries() {
         EpochMillis::MAX,
         timestamp
     )
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_constant_materialized_view() {
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
+    client
+        .batch_execute("CREATE CLUSTER cold (SIZE '1', REPLICATION FACTOR = 0);")
+        .await
+        .unwrap();
+    // The materialized view is created in a cluster with 0 replicas, so it's upper will be stuck
+    // at 0.
+    client
+        .batch_execute(
+            "CREATE MATERIALIZED VIEW mv IN CLUSTER cold AS SELECT generate_series(1, 100);",
+        )
+        .await
+        .unwrap();
+
+    let timestamp_determination = get_explain_timestamp_determination("mv", &client)
+        .await
+        .unwrap();
+
+    assert!(
+        !timestamp_determination.respond_immediately,
+        "upper is stuck at 0 so the query cannot respond immediately"
+    );
+    match timestamp_determination.determination.timestamp_context {
+        TimestampContext::TimelineTimestamp { chosen_ts, .. } => {
+            assert_ne!(Timestamp::MAX, chosen_ts)
+        }
+        TimestampContext::NoTimestamp => {
+            panic!("queries against materialized views always require a timestamp")
+        }
+    }
 }

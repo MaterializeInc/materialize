@@ -373,29 +373,30 @@ ORDER BY r.id;
 Explained Query:
   Finish order_by=[#0 asc nulls_last] output=[#0..=#5]
     Project (#0..=#3, #5, #14)
-      Join on=(#0 = #13 AND #2 = #4) type=differential
-        ArrangeBy keys=[[#2]]
+      Join on=(#0 = #13 AND #2 = #4) type=delta
+        ArrangeBy keys=[[#0], [#2]]
           Project (#0..=#3)
             ReadIndex on=mz_cluster_replicas mz_cluster_replicas_ind=[*** full scan ***]
         ArrangeBy keys=[[#0]]
-          ReadIndex on=mz_clusters mz_clusters_ind=[differential join]
+          ReadIndex on=mz_clusters mz_clusters_ind=[delta join lookup]
         ArrangeBy keys=[[#0]]
-          Project (#0, #19)
-            Filter (#3) IS NOT NULL
-              Map (((uint8_to_double(#17) / uint8_to_double(#11)) * 100))
-                Join on=(#0 = #14 AND #3 = #7) type=differential
-                  ArrangeBy keys=[[#0]]
-                    ReadIndex on=mz_cluster_replicas mz_cluster_replicas_ind=[differential join]
-                  ArrangeBy keys=[[#0]]
-                    ReadIndex on=mz_cluster_replica_sizes mz_cluster_replica_sizes_ind=[differential join]
-                  ArrangeBy keys=[[#0]]
-                    ReadIndex on=mz_cluster_replica_metrics mz_cluster_replica_metrics_ind=[differential join]
+          Project (#0, #14)
+            Map (((uint8_to_double(#12) / uint8_to_double(#6)) * 100))
+              Join on=(#0 = #9 AND #1 = #2) type=delta
+                ArrangeBy keys=[[#0], [#1]]
+                  Project (#0, #3)
+                    Filter (#3) IS NOT NULL
+                      ReadIndex on=mz_cluster_replicas mz_cluster_replicas_ind=[*** full scan ***]
+                ArrangeBy keys=[[#0]]
+                  ReadIndex on=mz_cluster_replica_sizes mz_cluster_replica_sizes_ind=[delta join lookup]
+                ArrangeBy keys=[[#0]]
+                  ReadIndex on=mz_cluster_replica_metrics mz_cluster_replica_metrics_ind=[delta join lookup]
 
 Used Indexes:
-  - mz_internal.mz_clusters_ind (differential join)
-  - mz_internal.mz_cluster_replicas_ind (*** full scan ***, differential join)
-  - mz_internal.mz_cluster_replica_sizes_ind (differential join)
-  - mz_internal.mz_cluster_replica_metrics_ind (differential join)
+  - mz_internal.mz_clusters_ind (delta join lookup)
+  - mz_internal.mz_cluster_replicas_ind (*** full scan ***)
+  - mz_internal.mz_cluster_replica_sizes_ind (delta join lookup)
+  - mz_internal.mz_cluster_replica_metrics_ind (delta join lookup)
 
 EOF
 
@@ -480,7 +481,7 @@ CREATE TABLE bar ( key text, val bigint );
 statement ok
 SET CLUSTER TO mz_introspection;
 
-statement error querying the following items "materialize\.public\.bar" is not allowed from the "mz_introspection" cluster\nHINT: Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query.
+statement error db error: ERROR: querying the following items "materialize\.public\.bar" is not allowed from the "mz_introspection" cluster
 SELECT key FROM bar;
 
 # But inspecting those objects, e.g. checking what indexes exist, should be allowed.

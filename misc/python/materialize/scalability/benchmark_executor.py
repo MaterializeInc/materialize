@@ -292,8 +292,9 @@ class BenchmarkExecutor:
         lock.release()
 
     def _get_concurrencies(self) -> list[int]:
+        range_end = 1024 if self.config.exponent_base < 2.0 else 32
         concurrencies: list[int] = [
-            round(self.config.exponent_base**c) for c in range(0, 1024)
+            round(self.config.exponent_base**c) for c in range(0, range_end)
         ]
         concurrencies = sorted(set(concurrencies))
         return [

@@ -3142,7 +3142,7 @@ dependencies = [
 [[package]]
 name = "librocksdb-sys"
 version = "0.11.0+8.3.2"
-source = "git+https://github.com/MaterializeInc/rust-rocksdb?branch=master#3305d514d509c6b95b0c925c78157e5e4ae4b7ba"
+source = "git+https://github.com/MaterializeInc/rust-rocksdb?branch=master#ab3684f999a5586d7a5e94bd65defd78af15d40f"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -3151,6 +3151,7 @@ dependencies = [
  "libc",
  "libz-sys",
  "lz4-sys",
+ "rustflags",
  "zstd-sys",
 ]
 
@@ -3737,7 +3738,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "0.85.0-dev"
+version = "0.86.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3850,7 +3851,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "0.85.0-dev"
+version = "0.86.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -4000,7 +4001,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.85.0-dev"
+version = "0.86.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -4013,6 +4014,7 @@ dependencies = [
  "mz-cluster",
  "mz-compute",
  "mz-compute-client",
+ "mz-dyncfg",
  "mz-http-util",
  "mz-metrics",
  "mz-orchestrator-tracing",
@@ -4094,6 +4096,7 @@ dependencies = [
  "mz-build-info",
  "mz-cluster-client",
  "mz-compute-types",
+ "mz-dyncfg",
  "mz-expr",
  "mz-orchestrator",
  "mz-ore",
@@ -4199,8 +4202,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-dyncfg"
+version = "0.0.0"
+dependencies = [
+ "mz-ore",
+ "mz-proto",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "prost-build",
+ "protobuf-src",
+ "serde",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-environmentd"
-version = "0.85.0-dev"
+version = "0.86.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -4902,7 +4921,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.85.0-dev"
+version = "0.86.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4918,6 +4937,7 @@ dependencies = [
  "h2",
  "hex",
  "mz-build-info",
+ "mz-dyncfg",
  "mz-ore",
  "mz-persist",
  "mz-persist-types",
@@ -4958,6 +4978,7 @@ dependencies = [
  "differential-dataflow",
  "futures",
  "itertools",
+ "mz-dyncfg",
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
@@ -5514,6 +5535,7 @@ dependencies = [
  "mz-ccsr",
  "mz-cloud-resources",
  "mz-controller-types",
+ "mz-dyncfg",
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
@@ -5714,7 +5736,7 @@ dependencies = [
 
 [[package]]
 name = "mz-stash-debug"
-version = "0.85.0-dev"
+version = "0.86.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -5964,6 +5986,7 @@ dependencies = [
  "mz-aws-util",
  "mz-ccsr",
  "mz-cloud-resources",
+ "mz-dyncfg",
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
@@ -6034,7 +6057,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "0.85.0-dev"
+version = "0.86.0-dev"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -7438,7 +7461,7 @@ dependencies = [
 [[package]]
 name = "rdkafka"
 version = "0.29.0"
-source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#8ea07c4d2b96636ff093e670bc921892aee0d56a"
+source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#c729f89b70935fb2ad8a4f377cff2845acc197b0"
 dependencies = [
  "futures-channel",
  "futures-util",
@@ -7455,7 +7478,7 @@ dependencies = [
 [[package]]
 name = "rdkafka-sys"
 version = "4.3.0+1.9.2"
-source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#8ea07c4d2b96636ff093e670bc921892aee0d56a"
+source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#c729f89b70935fb2ad8a4f377cff2845acc197b0"
 dependencies = [
  "cmake",
  "libc",
@@ -7647,7 +7670,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.21.0"
-source = "git+https://github.com/MaterializeInc/rust-rocksdb?branch=master#3305d514d509c6b95b0c925c78157e5e4ae4b7ba"
+source = "git+https://github.com/MaterializeInc/rust-rocksdb?branch=master#ab3684f999a5586d7a5e94bd65defd78af15d40f"
 dependencies = [
  "libc",
  "librocksdb-sys",
@@ -7704,6 +7727,12 @@ checksum = "bfa0f585226d2e68097d4f95d113b15b83a82e819ab25717ec0590d9584ef366"
 dependencies = [
  "semver",
 ]
+
+[[package]]
+name = "rustflags"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e74f1ec0cda1aea3a3a6c0df066cd67acac62e24064532b871e8eafb0ec6c126"
 
 [[package]]
 name = "rustix"

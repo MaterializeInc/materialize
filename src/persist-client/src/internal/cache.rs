@@ -13,12 +13,12 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::{Atomicity, Blob, BlobMetadata, ExternalError};
 
 use crate::cfg::PersistConfig;
-use crate::dyn_cfg::{Config, ConfigSet};
 use crate::internal::metrics::Metrics;
 
 // In-memory cache for [Blob].
@@ -98,8 +98,13 @@ impl Blob for BlobMemCache {
             // adding the data to the cache (e.g. compaction inputs, perhaps
             // some read handles).
             let mut cache = self.cache.lock().expect("lock poisoned");
-            cache.insert(key.to_owned(), blob.clone(), blob.len());
-            self.resize_and_update_size_metrics(&mut cache);
+            // If the weight of this single blob is greater than the capacity of
+            // the cache, it will push out everything in the cache and then
+            // immediately get evicted itself. So, skip adding it in that case.
+            if blob.len() <= cache.capacity() {
+                cache.insert(key.to_owned(), blob.clone(), blob.len());
+                self.resize_and_update_size_metrics(&mut cache);
+            }
         }
         Ok(res)
     }
@@ -116,8 +121,13 @@ impl Blob for BlobMemCache {
         let () = self.blob.set(key, value.clone(), atomic).await?;
         let weight = value.len();
         let mut cache = self.cache.lock().expect("lock poisoned");
-        cache.insert(key.to_owned(), SegmentedBytes::from(value), weight);
-        self.resize_and_update_size_metrics(&mut cache);
+        // If the weight of this single blob is greater than the capacity of
+        // the cache, it will push out everything in the cache and then
+        // immediately get evicted itself. So, skip adding it in that case.
+        if weight <= cache.capacity() {
+            cache.insert(key.to_owned(), SegmentedBytes::from(value), weight);
+            self.resize_and_update_size_metrics(&mut cache);
+        }
         Ok(())
     }
 
@@ -179,6 +189,11 @@ mod lru {
                 by_time: BTreeMap::new(),
                 total_weight: Weight(0),
             }
+        }
+
+        /// Returns the capacity of the cache.
+        pub fn capacity(&self) -> usize {
+            self.capacity.0
         }
 
         /// Returns the total number of entries in the cache.

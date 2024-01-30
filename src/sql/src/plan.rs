@@ -50,6 +50,7 @@ use mz_sql_parser::ast::{
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{SourceDesc, Timeline};
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
@@ -1284,6 +1285,7 @@ pub enum DataSourceDesc {
     /// Receives data from HTTP post requests.
     Webhook {
         validate_using: Option<WebhookValidation>,
+        body_format: WebhookBodyFormat,
         headers: WebhookHeaders,
     },
 }
@@ -1368,6 +1370,23 @@ impl WebhookHeaders {
 pub struct WebhookHeaderFilters {
     pub block: BTreeSet<String>,
     pub allow: BTreeSet<String>,
+}
+
+#[derive(Copy, Clone, Debug, Serialize, Arbitrary)]
+pub enum WebhookBodyFormat {
+    Json { array: bool },
+    Bytes,
+    Text,
+}
+
+impl From<WebhookBodyFormat> for ScalarType {
+    fn from(value: WebhookBodyFormat) -> Self {
+        match value {
+            WebhookBodyFormat::Json { .. } => ScalarType::Jsonb,
+            WebhookBodyFormat::Bytes => ScalarType::Bytes,
+            WebhookBodyFormat::Text => ScalarType::String,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]

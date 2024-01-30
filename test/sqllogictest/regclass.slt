@@ -35,12 +35,12 @@ CREATE MATERIALIZED VIEW s.m AS SELECT * FROM s.t;
 query T
 SELECT 't'::regclass::oid::int
 ----
-20693
+20698
 
 query T
 SELECT 's.t'::regclass::oid::int
 ----
-20694
+20699
 
 query T
 SELECT 't'::regclass = 's.t'::regclass
@@ -73,7 +73,7 @@ t
 query T
 SELECT 't'::regclass::oid::int
 ----
-20694
+20699
 
 query T
 SELECT 'public.t'::regclass::text;
@@ -101,12 +101,12 @@ d.public.t
 query T
 SELECT 'm'::regclass::oid::int
 ----
-20698
+20703
 
 query T
 SELECT 's.m'::regclass::oid::int
 ----
-20699
+20704
 
 query T
 SELECT 'm'::regclass = 's.m'::regclass

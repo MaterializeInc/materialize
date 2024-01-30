@@ -7,9 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import os
 import time
 
+from materialize import buildkite
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.alpine import Alpine
 from materialize.mzcompose.services.materialized import Materialized
@@ -45,12 +45,12 @@ def workflow_default(c: Composition) -> None:
         verify_no_snapshot_reingestion,
     ]
 
-    parallel_job_index = int(os.environ.get("BUILDKITE_PARALLEL_JOB", 0))
-    parallel_job_count = int(os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT", 1))
+    shard = buildkite.get_parallelism_index()
+    shard_count = buildkite.get_parallelism_count()
 
-    if parallel_job_count > 1:
-        scenarios = scenarios[parallel_job_index::parallel_job_count]
-        print(f"Selected scenarios in job with index {parallel_job_index}")
+    if shard_count > 1:
+        scenarios = scenarios[shard::shard_count]
+        print(f"Selected scenarios in job with index {shard}")
 
     print(f"Scenarios: {[s.__name__ for s in scenarios]}")
 

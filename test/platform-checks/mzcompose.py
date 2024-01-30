@@ -6,15 +6,16 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-import os
 from enum import Enum
 
+from materialize import buildkite
 from materialize.checks.all_checks import *  # noqa: F401 F403
 from materialize.checks.checks import Check
 from materialize.checks.executors import MzcomposeExecutor, MzcomposeExecutorParallel
 from materialize.checks.scenarios import *  # noqa: F401 F403
 from materialize.checks.scenarios import Scenario
 from materialize.checks.scenarios_backup_restore import *  # noqa: F401 F403
+from materialize.checks.scenarios_migration import *  # noqa: F401 F403
 from materialize.checks.scenarios_platform_v2 import *  # noqa: F401 F403
 from materialize.checks.scenarios_upgrade import *  # noqa: F401 F403
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -192,14 +193,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     else:
         checks = list(all_subclasses(Check))
 
-    parallel_job_index = int(os.environ.get("BUILDKITE_PARALLEL_JOB", 0))
-    parallel_job_count = int(os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT", 1))
+    shard = buildkite.get_parallelism_index()
+    shard_count = buildkite.get_parallelism_count()
 
-    if parallel_job_count > 1:
+    if shard_count > 1:
         checks.sort(key=lambda c: c.__name__)
-        checks = checks[parallel_job_index::parallel_job_count]
+        checks = checks[shard::shard_count]
         print(
-            f"Selected checks in job with index {parallel_job_index}: {[c.__name__ for c in checks]}"
+            f"Selected checks in job with index {shard}: {[c.__name__ for c in checks]}"
         )
 
     executor = MzcomposeExecutor(composition=c)

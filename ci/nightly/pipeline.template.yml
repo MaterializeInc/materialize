@@ -13,7 +13,6 @@ steps:
     command: bin/ci-builder run stable bin/pyactivate -m ci.test.build x86_64
     timeout_in_minutes: 60
     # For releases we trigger nightly from the test job directly, no need to build again
-    # TODO(def-) Get rid of this for PRs once we don't have any x86-64 tests remaining
     branches: "!v*.*"
     agents:
       queue: builder-linux-x86_64
@@ -26,6 +25,9 @@ steps:
     branches: "!v*.*"
     agents:
       queue: builder-linux-aarch64
+    # TODO(def-) Remove automatic retry when #24818 is fixed
+    retry:
+      automatic: true
 
   - wait: ~
 
@@ -71,8 +73,9 @@ steps:
     key: benchmark
     steps:
     - id: feature-benchmark
-      label: "Feature benchmark against merge base or 'latest'"
+      label: "Feature benchmark against merge base or 'latest' %N"
       timeout_in_minutes: 720
+      parallelism: 8
       agents:
         queue: linux-aarch64-large
       artifact_paths: junit_*.xml
@@ -83,8 +86,8 @@ steps:
                - --other-tag
                # common-ancestor will default to latest if not in a PR
                - common-ancestor
-    - id: scalability-benchmark
-      label: "Scalability benchmark against merge base or 'latest'"
+    - id: scalability-benchmark-dml-dql
+      label: "Scalability benchmark (read & write) against merge base or 'latest'"
       timeout_in_minutes: 180
       agents:
         queue: linux-aarch64
@@ -99,8 +102,32 @@ steps:
               - common-ancestor
               - --regression-against
               - common-ancestor
+              - --workload-group-marker
+              - "DmlDqlWorkload"
               - --max-concurrency
               - "256"
+    - id: scalability-benchmark-connection
+      label: "Scalability benchmark (connection) against merge base or 'latest'"
+      timeout_in_minutes: 180
+      agents:
+        queue: linux-aarch64-large
+      artifact_paths: junit_*.xml
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: scalability
+            args:
+              - --target
+              - HEAD
+              - --target
+              - common-ancestor
+              - --regression-against
+              - common-ancestor
+              - --workload-group-marker
+              - "ConnectionWorkload"
+              - --exponent-base
+              - "2.5"
+              - --max-concurrency
+              - "2048"
 
   - group: Kafka
     key: kafka
@@ -109,8 +136,7 @@ steps:
       label: Kafka smoke test against previous Kafka versions
       timeout_in_minutes: 60
       agents:
-        # no matching manifest for linux/arm64/v8 in the manifest list entries
-        queue: linux-x86_64-small
+        queue: linux-aarch64-small
       artifact_paths: junit_*.xml
       plugins:
         - ./ci/plugins/mzcompose:
@@ -726,7 +752,7 @@ steps:
         timeout_in_minutes: 45
         artifact_paths: junit_*.xml
         agents:
-          queue: builder-linux-x86_64
+          queue: builder-linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -737,15 +763,39 @@ steps:
         timeout_in_minutes: 45
         artifact_paths: junit_*.xml
         agents:
-          queue: builder-linux-x86_64
+          queue: builder-linux-aarch64
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=TimestampOracleToggle, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-migrate-x86-64-aarch64
+        label: "Checks migrate from x86-64 to aarch64"
+        timeout_in_minutes: 180
+        agents:
+          queue: builder-linux-x86_64
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=MigrateX86Aarch64]
+
+      - id: checks-migrate-aarch64-x86-64
+        label: "Checks migrate from aarch64 to x86-64"
+        timeout_in_minutes: 120
+        agents:
+          # On x86-64 because of 24794
+          queue: builder-linux-x86_64
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=MigrateAarch64X86]
+
       - id: checks-upgrade-matrix
-        label: "Random upgrades over the entire matrix"
-        timeout_in_minutes: 600
+        label: "Random upgrades over the entire matrix %N"
+        timeout_in_minutes: 150
+        parallelism: 4
         agents:
           queue: linux-aarch64
         artifact_paths: junit_*.xml
@@ -855,7 +905,7 @@ steps:
     concurrency_group: 'cloud-canary'
     agents:
       # no matching manifest for linux/arm64/v8 in the manifest list entries
-      queue: linux-x86-64-small
+      queue: linux-x86_64-small
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cloud-canary
@@ -884,7 +934,7 @@ steps:
           composition: canary-load
           args: ["--runtime=18000"]
     agents:
-      queue: linux-x86_64-small
+      queue: linux-aarch64-small
     branches: "main"
 
   - group: "Output consistency"
@@ -916,8 +966,7 @@ steps:
         label: "Output consistency (version)"
         timeout_in_minutes: 58
         agents:
-          # no matching manifest for linux/arm64/v8 in the manifest list entries
-          queue: linux-x86_64-small
+          queue: linux-aarch64-small
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/mzcompose:

@@ -630,19 +630,21 @@ WHERE a = c and d = e and b = f
 ----
 Explained Query:
   Project (#0, #1, #0, #3, #3, #1)
-    Filter (#0) IS NOT NULL AND (#1) IS NOT NULL AND (#3) IS NOT NULL
-      Join on=(#0 = #2 AND #1 = #5 AND #3 = #4) type=differential
-        ArrangeBy keys=[[#0]]
-          ReadIndex on=t t_a_idx=[differential join]
-        ArrangeBy keys=[[#0]]
-          ReadIndex on=u u_c_idx=[differential join]
+    Filter (#0) IS NOT NULL AND (#3) IS NOT NULL
+      Join on=(#0 = #2 AND #1 = #5 AND #3 = #4) type=delta
+        ArrangeBy keys=[[#0], [#0, #1]]
+          Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+            ReadIndex on=t t_a_idx=[*** full scan ***]
+        ArrangeBy keys=[[#0], [#1]]
+          ReadIndex on=u u_c_idx=[delta join lookup] u_d_idx=[delta join lookup]
         ArrangeBy keys=[[#0, #1]]
           Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
             ReadIndex on=v v_e_idx=[*** full scan ***]
 
 Used Indexes:
-  - materialize.public.t_a_idx (differential join)
-  - materialize.public.u_c_idx (differential join)
+  - materialize.public.t_a_idx (*** full scan ***)
+  - materialize.public.u_c_idx (delta join lookup)
+  - materialize.public.u_d_idx (delta join lookup)
   - materialize.public.v_e_idx (*** full scan ***)
 
 EOF
@@ -656,21 +658,25 @@ WHERE a = c and d = e and b = f
 ----
 Explained Query:
   Project (#0, #1, #0, #3, #3, #1)
-    Filter (#0) IS NOT NULL AND (#1) IS NOT NULL AND (#3) IS NOT NULL
-      Join on=(#0 = #2 AND #1 = #5 AND #3 = #4) type=differential
+    Filter (#0) IS NOT NULL AND (#3) IS NOT NULL
+      Join on=(#0 = #2 AND #1 = #5 AND #3 = #4) type=delta
         implementation
-          %0:t[#0]KA » %1:u[#0]KA » %2:v[#0, #1]KK
-        ArrangeBy keys=[[#0]]
-          ReadIndex on=t t_a_idx=[differential join]
-        ArrangeBy keys=[[#0]]
-          ReadIndex on=u u_c_idx=[differential join]
+          %0:t » %1:u[#0]KA » %2:v[#0, #1]KK
+          %1:u » %0:t[#0]KA » %2:v[#0, #1]KK
+          %2:v » %1:u[#1]KA » %0:t[#0, #1]KK
+        ArrangeBy keys=[[#0], [#0, #1]]
+          Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
+            ReadIndex on=t t_a_idx=[*** full scan ***]
+        ArrangeBy keys=[[#0], [#1]]
+          ReadIndex on=u u_c_idx=[delta join lookup] u_d_idx=[delta join lookup]
         ArrangeBy keys=[[#0, #1]]
           Filter (#0) IS NOT NULL AND (#1) IS NOT NULL
             ReadIndex on=v v_e_idx=[*** full scan ***]
 
 Used Indexes:
-  - materialize.public.t_a_idx (differential join)
-  - materialize.public.u_c_idx (differential join)
+  - materialize.public.t_a_idx (*** full scan ***)
+  - materialize.public.u_c_idx (delta join lookup)
+  - materialize.public.u_d_idx (delta join lookup)
   - materialize.public.v_e_idx (*** full scan ***)
 
 EOF

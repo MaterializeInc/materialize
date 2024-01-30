@@ -348,6 +348,30 @@ impl<const MAX: usize> fmt::Display for MaxLenString<MAX> {
     }
 }
 
+impl<const MAX: usize> TryFrom<String> for MaxLenString<MAX> {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        Self::new(s)
+    }
+}
+
+impl<'a, const MAX: usize> TryFrom<&'a String> for MaxLenString<MAX> {
+    type Error = String;
+
+    fn try_from(s: &'a String) -> Result<Self, Self::Error> {
+        Self::try_from(s.clone())
+    }
+}
+
+impl<'a, const MAX: usize> TryFrom<&'a str> for MaxLenString<MAX> {
+    type Error = String;
+
+    fn try_from(s: &'a str) -> Result<Self, Self::Error> {
+        Self::try_from(String::from(s))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

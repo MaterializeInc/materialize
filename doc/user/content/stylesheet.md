@@ -52,7 +52,7 @@ When an ordered list has `<p>` tags (in markdown, multiple linebreaks between it
 
 ### `diagram` shortcode
 
-Diagrams from [bottlecaps.de/rr/ui](https://www.bottlecaps.de/rr/ui):
+Diagrams from [rr.red-dove.com/ui](https://rr.red-dove.com/ui):
 
 {{< diagram "join-type.svg" >}}
 

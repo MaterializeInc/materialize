@@ -24,7 +24,6 @@ use mz_ore::metrics::MetricsRegistry;
 pub mod maelstrom;
 pub mod open_loop;
 pub mod service;
-pub mod txns;
 
 #[derive(Debug, clap::Parser)]
 #[clap(about = "Persist command-line utilities", long_about = None)]
@@ -44,7 +43,6 @@ enum Command {
     Inspect(mz_persist_client::cli::inspect::InspectArgs),
     Admin(mz_persist_client::cli::admin::AdminArgs),
     Service(crate::service::Args),
-    Txns(crate::txns::Args),
 }
 
 fn main() {
@@ -81,7 +79,6 @@ fn main() {
         }
         Command::Admin(command) => runtime.block_on(mz_persist_client::cli::admin::run(command)),
         Command::Service(args) => runtime.block_on(crate::service::run(args)),
-        Command::Txns(args) => runtime.block_on(crate::txns::run(args)),
     };
 
     if let Err(err) = res {

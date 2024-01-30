@@ -84,7 +84,7 @@ use crate::plan::expr::{
     VariadicFunc, WindowExpr, WindowExprType,
 };
 use crate::plan::plan_utils::{self, GroupSizeHints, JoinSide};
-use crate::plan::scope::{Scope, ScopeItem};
+use crate::plan::scope::{Scope, ScopeItem, ScopeUngroupedColumn};
 use crate::plan::statement::{show, StatementContext, StatementDesc};
 use crate::plan::typeconv::{self, CastContext};
 use crate::plan::with_options::TryFromValue;
@@ -2215,6 +2215,23 @@ fn plan_view_select(
                 agg_exprs,
                 group_size_hints.aggregate_input_group_size,
             );
+
+            // For every old column that wasn't a group key, add a scope item
+            // that errors when referenced. We can't simply drop these items
+            // from scope. These items need to *exist* because they might shadow
+            // variables in outer scopes that would otherwise be valid to
+            // reference, but accessing them needs to produce an error.
+            for i in 0..from_scope.len() {
+                if !select_all_mapping.contains_key(&i) {
+                    let scope_item = &ecx.scope.items[i];
+                    group_scope.ungrouped_columns.push(ScopeUngroupedColumn {
+                        table_name: scope_item.table_name.clone(),
+                        column_name: scope_item.column_name.clone(),
+                        allow_unqualified_references: scope_item.allow_unqualified_references,
+                    });
+                }
+            }
+
             (group_scope, select_all_mapping)
         } else {
             // if no GROUP BY, aggregates or having then all columns remain in scope
@@ -2223,26 +2240,6 @@ fn plan_view_select(
                 (0..from_scope.len()).map(|i| (i, i)).collect(),
             )
         }
-    };
-
-    // Checks if an unknown column error was the result of not including that
-    // column in the GROUP BY clause and produces a friendlier error instead.
-    let check_ungrouped_col = |e| match e {
-        PlanError::UnknownColumn {
-            table,
-            column,
-            similar,
-        } => match from_scope.resolve(&qcx.outer_scopes, table.as_ref(), &column) {
-            Ok(ColumnRef { level: 0, column }) => {
-                PlanError::ungrouped_column(&from_scope.items[column])
-            }
-            _ => PlanError::UnknownColumn {
-                table,
-                column,
-                similar,
-            },
-        },
-        e => e,
     };
 
     // Step 6. Handle HAVING clause.
@@ -2257,9 +2254,7 @@ fn plan_view_select(
             allow_parameters: true,
             allow_windows: false,
         };
-        let expr = plan_expr(ecx, having)
-            .map_err(check_ungrouped_col)?
-            .type_as(ecx, &ScalarType::Bool)?;
+        let expr = plan_expr(ecx, having)?.type_as(ecx, &ScalarType::Bool)?;
         relation_expr = relation_expr.filter(vec![expr]);
     }
 
@@ -2322,9 +2317,7 @@ fn plan_view_select(
                         return Err(PlanError::ungrouped_column(&from_scope.items[*i]));
                     }
                 }
-                ExpandedSelectItem::Expr(expr) => plan_expr(ecx, expr)
-                    .map_err(check_ungrouped_col)?
-                    .type_as_any(ecx)?,
+                ExpandedSelectItem::Expr(expr) => plan_expr(ecx, expr)?.type_as_any(ecx)?,
             };
             if let HirScalarExpr::Column(ColumnRef { level: 0, column }) = expr {
                 // Simple column reference; no need to map on a new expression.
@@ -2366,8 +2359,7 @@ fn plan_view_select(
             },
             &order_by_exprs,
             &output_columns,
-        )
-        .map_err(check_ungrouped_col)?;
+        )?;
 
         match s.distinct {
             None => relation_expr = relation_expr.map(map_exprs),
@@ -2404,8 +2396,7 @@ fn plan_view_select(
 
                 let mut distinct_exprs = vec![];
                 for expr in &exprs {
-                    let expr = plan_order_by_or_distinct_expr(ecx, expr, &output_columns)
-                        .map_err(check_ungrouped_col)?;
+                    let expr = plan_order_by_or_distinct_expr(ecx, expr, &output_columns)?;
                     distinct_exprs.push(expr);
                 }
 

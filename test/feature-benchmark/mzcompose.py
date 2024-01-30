@@ -14,6 +14,7 @@ import time
 import uuid
 from textwrap import dedent
 
+from materialize import buildkite
 from materialize.docker import is_image_tag_of_version
 from materialize.mz_version import MzVersion
 from materialize.version_list import (
@@ -238,6 +239,8 @@ def start_overridden_mz_and_cockroach(
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Feature benchmark framework."""
+    shard = buildkite.get_parallelism_index()
+    shard_count = buildkite.get_parallelism_count()
 
     c.silent = True
 
@@ -367,9 +370,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     selected_scenarios = []
 
     if root_scenario.__subclasses__():
-        selected_scenarios = [
-            s for s in all_subclasses(root_scenario) if not s.__subclasses__()
-        ]
+        selected_scenarios = sorted(
+            [s for s in all_subclasses(root_scenario) if not s.__subclasses__()],
+            key=repr,
+        )
     else:
         selected_scenarios = [root_scenario]
 
@@ -382,7 +386,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up(*dependencies)
 
-    scenarios_to_run = selected_scenarios
+    scenarios_to_run = [
+        scenario
+        for i, scenario in enumerate(selected_scenarios)
+        if buildkite.accepted_by_shard(i, shard, shard_count)
+    ]
+
     scenarios_with_regressions = []
     for cycle in range(0, args.max_retries):
         print(

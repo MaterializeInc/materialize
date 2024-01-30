@@ -465,7 +465,7 @@ async fn purify_create_sink(
             Format::Avro(AvroSchema::InlineSchema { .. })
             | Format::Bytes
             | Format::Csv { .. }
-            | Format::Json
+            | Format::Json { .. }
             | Format::Protobuf(ProtobufSchema::InlineSchema { .. })
             | Format::Regex(..)
             | Format::Text => {}
@@ -1580,7 +1580,11 @@ async fn purify_source_format_single(
             }
             ProtobufSchema::InlineSchema { .. } => {}
         },
-        Format::Bytes | Format::Regex(_) | Format::Json | Format::Text | Format::Csv { .. } => (),
+        Format::Bytes
+        | Format::Regex(_)
+        | Format::Json { .. }
+        | Format::Text
+        | Format::Csv { .. } => (),
     }
     Ok(())
 }

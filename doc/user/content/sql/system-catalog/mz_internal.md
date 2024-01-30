@@ -77,6 +77,8 @@ granted the `mz_monitor` role.
 | `redacted_sql`            | [`text`]                     | The SQL text of the statement, in a normalized form, with all string and numeric literals hidden.                                                                                                                                                                             |
 | `prepared_at`             | [`timestamp with time zone`] | The time at which the statement was prepared.                                                                                                                                                                                                                                 |
 | `statement_type`          | [`text`]                     | The _type_ of the statement, e.g. `select` for a `SELECT` query, or `NULL` if the statement was empty.                                                                                                                                                                        |
+| `throttled_count`         | [`uint8`]                    | The number of statements that were dropped due to throttling before the current one was seen. If you have a very high volume of queries and need to log them without throttling, [contact our team](https://materialize.com/docs/support/).                                                                             |
+
 
 ### `mz_aws_connections`
 
@@ -1353,6 +1355,8 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [query hints]: /sql/select/#query-hints
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_redacted -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_links -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability -->

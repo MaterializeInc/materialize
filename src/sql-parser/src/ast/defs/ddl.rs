@@ -415,7 +415,9 @@ pub enum Format<T: AstInfo> {
         columns: CsvColumns,
         delimiter: char,
     },
-    Json,
+    Json {
+        array: bool,
+    },
     Text,
 }
 
@@ -621,7 +623,12 @@ impl<T: AstInfo> AstDisplay for Format<T> {
                     f.write_str("'");
                 }
             }
-            Self::Json => f.write_str("JSON"),
+            Self::Json { array } => {
+                f.write_str("JSON");
+                if *array {
+                    f.write_str(" ARRAY");
+                }
+            }
             Self::Text => f.write_str("TEXT"),
         }
     }

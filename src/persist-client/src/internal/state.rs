@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_persist::location::SeqNo;
@@ -33,7 +34,6 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
-use crate::dyn_cfg::Config;
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{parse_id, LazyPartStats};
 use crate::internal::gc::GcReq;

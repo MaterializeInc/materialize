@@ -28,6 +28,7 @@ pub static MZ_PREPARED_STATEMENT_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(||
             ScalarType::TimestampTz { precision: None }.nullable(false),
         )
         .with_column("statement_type", ScalarType::String.nullable(true))
+        .with_column("throttled_count", ScalarType::UInt64.nullable(false))
 });
 
 pub static MZ_SESSION_HISTORY_DESC: Lazy<RelationDesc> = Lazy::new(|| {

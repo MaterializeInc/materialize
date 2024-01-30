@@ -983,7 +983,7 @@ impl RenderTimestamp for mz_repr::Timestamp {
     }
 }
 
-impl<T: Timestamp + Lattice + Columnation> RenderTimestamp for Product<mz_repr::Timestamp, T> {
+impl RenderTimestamp for Product<mz_repr::Timestamp, PointStamp<u64>> {
     fn system_time(&mut self) -> &mut mz_repr::Timestamp {
         &mut self.outer
     }
@@ -997,7 +997,17 @@ impl<T: Timestamp + Lattice + Columnation> RenderTimestamp for Product<mz_repr::
         Product::new(delay, Default::default())
     }
     fn step_back(&self) -> Self {
-        Product::new(self.outer.saturating_sub(1), self.inner.clone())
+        // It is necessary to step back both coordinates of a product,
+        // and when one is a `PointStamp` that also means all coordinates
+        // of the pointstamp.
+        let mut inner = self.inner.clone();
+        for item in inner.vector.iter_mut() {
+            *item = item.saturating_sub(1);
+        }
+        while inner.vector.last() == Some(&0) {
+            inner.vector.pop();
+        }
+        Product::new(self.outer.saturating_sub(1), inner)
     }
 }
 

@@ -1015,6 +1015,13 @@ pub enum AggregateFunc {
     JsonbObjectAgg {
         order_by: Vec<ColumnOrder>,
     },
+    /// Zips a `Datum::List` whose first element is a `Datum::List` guaranteed
+    /// to be non-empty and whose len % 2 == 0 into a `Datum::Map`. The other
+    /// elements are columns used by `order_by`.
+    MapAgg {
+        order_by: Vec<ColumnOrder>,
+        value_type: ScalarType,
+    },
     /// Accumulates `Datum::List`s whose first element is a `Datum::Array` into a
     /// single `Datum::Array`. The other elements are columns used by `order_by`.
     ArrayConcat {
@@ -1087,6 +1094,13 @@ impl AggregateFunc {
             AggregateFunc::JsonbObjectAgg { order_by } => {
                 mz_expr::AggregateFunc::JsonbObjectAgg { order_by }
             }
+            AggregateFunc::MapAgg {
+                order_by,
+                value_type,
+            } => mz_expr::AggregateFunc::MapAgg {
+                order_by,
+                value_type,
+            },
             AggregateFunc::ArrayConcat { order_by } => {
                 mz_expr::AggregateFunc::ArrayConcat { order_by }
             }
@@ -1132,6 +1146,10 @@ impl AggregateFunc {
             AggregateFunc::SumUInt64 => ScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::ZERO),
             },
+            AggregateFunc::MapAgg { value_type, .. } => ScalarType::Map {
+                value_type: Box::new(value_type.clone()),
+                custom_id: None,
+            },
             AggregateFunc::ArrayConcat { .. } | AggregateFunc::ListConcat { .. } => {
                 match input_type.scalar_type {
                     // The input is wrapped in a Record if there's an ORDER BY, so extract it out.
@@ -1152,6 +1170,7 @@ impl AggregateFunc {
             self,
             JsonbAgg { .. }
                 | JsonbObjectAgg { .. }
+                | MapAgg { .. }
                 | ArrayConcat { .. }
                 | ListConcat { .. }
                 | StringAgg { .. }

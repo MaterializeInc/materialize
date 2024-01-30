@@ -126,7 +126,8 @@ use crate::plan::{
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
     DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
     PlanClusterOption, PlanContext, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source,
-    Table, Type, VariableValue, View, WebhookHeaderFilters, WebhookHeaders, WebhookValidation,
+    Table, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
+    WebhookValidation,
 };
 use crate::session::vars;
 use crate::session::vars::ENABLE_REFRESH_EVERY_MVS;
@@ -446,10 +447,10 @@ pub fn plan_create_webhook_source(
         }
     }
 
-    let body_scalar_type = match body_format {
-        Format::Bytes => ScalarType::Bytes,
-        Format::Json => ScalarType::Jsonb,
-        Format::Text => ScalarType::String,
+    let body_format = match body_format {
+        Format::Bytes => WebhookBodyFormat::Bytes,
+        Format::Json { array } => WebhookBodyFormat::Json { array },
+        Format::Text => WebhookBodyFormat::Text,
         // TODO(parkmycar): Make an issue to support more types, or change this to NeverSupported.
         ty => {
             return Err(PlanError::Unsupported {
@@ -462,7 +463,7 @@ pub fn plan_create_webhook_source(
     let mut column_ty = vec![
         // Always include the body of the request as the first column.
         ColumnType {
-            scalar_type: body_scalar_type,
+            scalar_type: ScalarType::from(body_format),
             nullable: false,
         },
     ];
@@ -558,6 +559,7 @@ pub fn plan_create_webhook_source(
             create_sql,
             data_source: DataSourceDesc::Webhook {
                 validate_using,
+                body_format,
                 headers,
             },
             desc,
@@ -1919,7 +1921,7 @@ fn get_encoding_inner(
                     .map_err(|_| sql_err!("CSV delimiter must be an ASCII character"))?,
             })
         }
-        Format::Json => DataEncodingInner::Json,
+        Format::Json { .. } => DataEncodingInner::Json,
         Format::Text => DataEncodingInner::Text,
     }))
 }
@@ -2855,7 +2857,7 @@ fn kafka_sink_builder(
                 csr_connection,
             }
         }
-        Some(Format::Json) => KafkaSinkFormat::Json,
+        Some(Format::Json { .. }) => KafkaSinkFormat::Json,
         Some(format) => bail_unsupported!(format!("sink format {:?}", format)),
         None => bail_unsupported!("sink without format"),
     };
@@ -4514,11 +4516,14 @@ pub fn plan_alter_cluster(
                 // The long term plan is to phase out the v1 cluster sizes, at
                 // which point we'll be able to remove the `DISK` option
                 // entirely and simply always enable disk.
-                if is_cluster_size_v2(size) && disk.is_some() {
-                    sql_bail!("DISK option not supported for cluster sizes ending in cc or C because disk is always enabled");
+                if is_cluster_size_v2(size) {
+                    if disk.is_some() {
+                        sql_bail!("DISK option not supported for cluster sizes ending in cc or C because disk is always enabled");
+                    } else {
+                        options.disk = AlterOptionParameter::Set(true);
+                    }
                 }
                 options.size = AlterOptionParameter::Set(size.clone());
-                options.disk = AlterOptionParameter::Set(true);
             }
             if let Some(availability_zones) = availability_zones {
                 options.availability_zones = AlterOptionParameter::Set(availability_zones);

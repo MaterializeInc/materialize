@@ -7,9 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import os
 
-from materialize import MZ_ROOT, ci_util
+from materialize import MZ_ROOT, buildkite, ci_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.sql_logic_test import SqlLogicTest
@@ -39,8 +38,8 @@ def run_sqllogictest(
 
     c.up("cockroach")
 
-    shard = os.environ.get("BUILDKITE_PARALLEL_JOB")
-    shard_count = os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT")
+    shard = buildkite.get_parallelism_index()
+    shard_count = buildkite.get_parallelism_count()
 
     junit_report = ci_util.junit_report_filename(c.name)
 
@@ -50,12 +49,9 @@ def run_sqllogictest(
         f"--junit-report={junit_report}",
         "--postgres-url=postgres://root@cockroach:26257",
         f"--replicas={args.replicas}",
+        f"--shard={shard}",
+        f"--shard-count={shard_count}",
     ]
-
-    if shard:
-        cmd_args += [f"--shard={shard}"]
-    if shard_count:
-        cmd_args += [f"--shard-count={shard_count}"]
 
     try:
         c.run(*cmd_args)

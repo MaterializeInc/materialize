@@ -601,38 +601,6 @@ impl Coordinator {
                 coord
                     .initialize_storage_read_policies(vec![table_id], CompactionWindow::Default)
                     .await;
-
-                // Advance the new table to a timestamp higher than the current
-                // read timestamp so that the table is immediately readable.
-                // Since we're applying the register ts, do this through group
-                // commit so all the other tables are immediately readable
-                // again, too.
-                //
-                // TODO: It's a little odd to use a second timestamp here, but
-                // create tables should be rare and at most one of them will
-                // actually need to communicate with CRDB since we still
-                // allocate ranges of timestamps. This whole advancement and
-                // group_commit can be removed once we've finished the migration
-                // to the persist-txn tables.
-                let initial_read_ts = coord.get_local_write_ts().await;
-                let appends = vec![(table_id, Vec::new())];
-                coord
-                    .controller
-                    .storage
-                    .append_table(
-                        initial_read_ts.timestamp,
-                        initial_read_ts.advance_to,
-                        appends,
-                    )
-                    .expect("invalid table upper initialization")
-                    .await
-                    .expect("One-shot dropped while waiting synchronously")
-                    .unwrap_or_terminate("cannot fail to append");
-                coord.apply_local_write(initial_read_ts.timestamp).await;
-
-                // Kick off a group commit so the new rest of the tables catch up to the new oracle read
-                // ts.
-                coord.trigger_group_commit();
             })
             .await;
 
@@ -4996,7 +4964,7 @@ impl Coordinator {
         session: &Session,
         notices: &Vec<RawOptimizerNotice>,
     ) {
-        let humanizer = self.catalog().state();
+        let humanizer = self.catalog.for_session(session);
         let system_vars = self.catalog.system_config();
         for notice in notices {
             let kind = OptimizerNoticeKind::from(notice);
@@ -5013,8 +4981,8 @@ impl Coordinator {
                 // `emit_optimizer_notices` is onlyy called by the `sequence_~`
                 // method for the DDL that produces that notice.
                 session.add_notice(AdapterNotice::OptimizerNotice {
-                    notice: notice.message(humanizer, false).to_string(),
-                    hint: notice.hint(humanizer, false).to_string(),
+                    notice: notice.message(&humanizer, false).to_string(),
+                    hint: notice.hint(&humanizer, false).to_string(),
                 });
             }
             self.metrics

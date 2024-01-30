@@ -269,10 +269,12 @@ EXPLAIN WITH(arity, join_impls) SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXIS
 ----
 Explained Query:
   Project (#0, #0, #2) // { arity: 3 }
-    Join on=(#0 = #1) type=differential // { arity: 3 }
+    Join on=(#0 = #1) type=delta // { arity: 3 }
       implementation
-        %2[×]UA » %0:t1[×] » %1:t3[#0]K
-      ArrangeBy keys=[[]] // { arity: 1 }
+        %0:t1 » %2[×]UA » %1:t3[#0]K
+        %1:t3 » %2[×]UA » %0:t1[#0]K
+        %2 » %0:t1[×] » %1:t3[#0]K
+      ArrangeBy keys=[[], [#0]] // { arity: 1 }
         ReadStorage materialize.public.t1 // { arity: 1 }
       ArrangeBy keys=[[#0]] // { arity: 2 }
         ReadStorage materialize.public.t3 // { arity: 2 }
@@ -288,12 +290,14 @@ EXPLAIN WITH(arity, join_impls) SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXIS
 ----
 Explained Query:
   Project (#0, #0, #2) // { arity: 3 }
-    Join on=(#0 = #1 AND #2 = #3) type=differential // { arity: 4 }
+    Join on=(#0 = #1 AND #2 = #3) type=delta // { arity: 4 }
       implementation
-        %2[#0]UKA » %1:t3[#1]K » %0:t1[#0]K
+        %0:t1 » %1:t3[#0]K » %2[#0]UKA
+        %1:t3 » %2[#0]UKA » %0:t1[#0]K
+        %2 » %1:t3[#1]K » %0:t1[#0]K
       ArrangeBy keys=[[#0]] // { arity: 1 }
         ReadStorage materialize.public.t1 // { arity: 1 }
-      ArrangeBy keys=[[#1]] // { arity: 2 }
+      ArrangeBy keys=[[#0], [#1]] // { arity: 2 }
         ReadStorage materialize.public.t3 // { arity: 2 }
       ArrangeBy keys=[[#0]] // { arity: 1 }
         Distinct project=[#0] // { arity: 1 }

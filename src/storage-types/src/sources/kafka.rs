@@ -156,7 +156,7 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
                                 (
                                     "value".into(),
                                     ColumnType {
-                                        nullable: false,
+                                        nullable: true,
                                         scalar_type: ScalarType::Bytes,
                                     },
                                 ),

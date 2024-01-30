@@ -81,6 +81,7 @@ COPY --from=crosstool /opt/x-tools /opt/x-tools
 # Install dependencies needed by any CI job. Not all of these are available in
 # the Ubuntu repositories.
 RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    binfmt-support \
     bsdmainutils \
     ca-certificates \
     cmake \
@@ -106,6 +107,8 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     python3-dev \
     python3-pip \
     python3-setuptools \
+    qemu-system \
+    qemu-user-static \
     rsync \
     ruby \
     unzip \

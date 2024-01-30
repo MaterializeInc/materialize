@@ -27,6 +27,7 @@ fn main() {
         .message_attribute(".mz_storage_types.collections", ATTR)
         .enum_attribute("GlobalId.value", ATTR)
         .extern_path(".mz_ccsr.config", "::mz_ccsr")
+        .extern_path(".mz_dyncfg", "::mz_dyncfg")
         .extern_path(".mz_expr.id", "::mz_expr")
         .extern_path(".mz_expr.linear", "::mz_expr")
         .extern_path(".mz_expr.relation", "::mz_expr")

@@ -2548,7 +2548,7 @@ pub static MZ_PREPARED_STATEMENT_HISTORY_REDACTED: Lazy<BuiltinView> = Lazy::new
     column_defs: None,
     // everything but "sql"
     sql: "
-SELECT id, session_id, name, redacted_sql, prepared_at, statement_type
+SELECT id, session_id, name, redacted_sql, prepared_at, statement_type, throttled_count
 FROM mz_internal.mz_prepared_statement_history",
     access: vec![SUPPORT_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
 });
@@ -2572,7 +2572,7 @@ SELECT mseh.id AS execution_id, sample_rate, cluster_id, application_name, clust
 transaction_isolation, execution_timestamp, transient_index_id, params, began_at, finished_at, finished_status,
 error_message, rows_returned, execution_strategy, transaction_id,
 mpsh.id AS prepared_statement_id, sql, mpsh.name AS prepared_statement_name,
-session_id, redacted_sql, prepared_at, statement_type
+session_id, redacted_sql, prepared_at, statement_type, throttled_count
 FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh
 WHERE mseh.prepared_statement_id = mpsh.id",
     access: vec![MONITOR_SELECT],
@@ -2588,9 +2588,33 @@ pub static MZ_ACTIVITY_LOG_REDACTED: Lazy<BuiltinView> = Lazy::new(|| {
 SELECT execution_id, sample_rate, cluster_id, application_name, cluster_name,
 transaction_isolation, execution_timestamp, transient_index_id, began_at, finished_at, finished_status,
 error_message, rows_returned, execution_strategy, transaction_id, prepared_statement_id,
-prepared_statement_name, session_id, redacted_sql, prepared_at, statement_type
+prepared_statement_name, session_id, redacted_sql, prepared_at, statement_type, throttled_count
 FROM mz_internal.mz_activity_log",
     access: vec![SUPPORT_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
+    }
+});
+
+pub static MZ_RECENT_ACTIVITY_LOG: Lazy<BuiltinView> = Lazy::new(|| BuiltinView {
+    name: "mz_recent_activity_log",
+    schema: MZ_INTERNAL_SCHEMA,
+    column_defs: None,
+    sql:
+        "SELECT * FROM mz_internal.mz_activity_log WHERE prepared_at + INTERVAL '3 days' > mz_now()
+AND began_at + INTERVAL '3 days' > mz_now()",
+    access: vec![MONITOR_SELECT],
+});
+
+pub static MZ_RECENT_ACTIVITY_LOG_REDACTED: Lazy<BuiltinView> = Lazy::new(|| {
+    BuiltinView {
+        name: "mz_recent_activity_log_redacted",
+        schema: MZ_INTERNAL_SCHEMA,
+        column_defs: None,
+        sql: "SELECT execution_id, sample_rate, cluster_id, application_name, cluster_name,
+transaction_isolation, execution_timestamp, transient_index_id, began_at, finished_at, finished_status,
+error_message, rows_returned, execution_strategy, transaction_id, prepared_statement_id,
+prepared_statement_name, session_id, redacted_sql, prepared_at, statement_type
+FROM mz_internal.mz_recent_activity_log",
+        access: vec![SUPPORT_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
     }
 });
 
@@ -6286,6 +6310,16 @@ ON mz_internal.mz_frontiers (object_id)",
     is_retained_metrics_object: false,
 };
 
+pub const MZ_RECENT_ACTIVITY_LOG_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_recent_activity_log_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    sql: "IN CLUSTER mz_introspection
+-- session_id because we plan to join
+-- this against mz_internal.mz_session_history
+ON mz_internal.mz_recent_activity_log (session_id)",
+    is_retained_metrics_object: false,
+};
+
 pub const MZ_SYSTEM_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_SYSTEM_ROLE_ID,
     name: SYSTEM_USER_NAME,
@@ -6678,6 +6712,9 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Source(&MZ_SESSION_HISTORY),
         Builtin::View(&MZ_ACTIVITY_LOG),
         Builtin::View(&MZ_ACTIVITY_LOG_REDACTED),
+        Builtin::View(&MZ_RECENT_ACTIVITY_LOG),
+        Builtin::View(&MZ_RECENT_ACTIVITY_LOG_REDACTED),
+        Builtin::Index(&MZ_RECENT_ACTIVITY_LOG_IND),
         Builtin::View(&MZ_SOURCE_STATUSES),
         Builtin::Source(&MZ_STATEMENT_LIFECYCLE_HISTORY),
         Builtin::Source(&MZ_STORAGE_SHARDS),

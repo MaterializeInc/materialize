@@ -15,6 +15,7 @@ from collections.abc import Generator
 
 import networkx as nx
 
+from materialize import buildkite
 from materialize.util import all_subclasses
 from materialize.version_list import (
     get_published_minor_mz_versions,
@@ -131,7 +132,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
-    print(f"--- Random seed is {args.seed}")
+    shard = buildkite.get_parallelism_index()
+    shard_count = buildkite.get_parallelism_count()
+
+    print(f"--- Random seed is {args.seed}, shard is {shard} of {shard_count} shards.")
     random.seed(args.seed)
 
     all_checks = {check.__name__: check for check in all_subclasses(Check)}
@@ -161,6 +165,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
     ):
         if args.scenario_id is not None and id != args.scenario_id:
+            continue
+
+        if id % shard_count != shard:
             continue
 
         print(f"--- Testing upgrade scenario with id {id}: {upgrade_scenario}")

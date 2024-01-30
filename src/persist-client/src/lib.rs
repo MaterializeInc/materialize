@@ -62,7 +62,6 @@ pub mod cli {
     pub mod inspect;
 }
 pub mod critical;
-pub mod dyn_cfg;
 pub mod error;
 pub mod fetch;
 pub mod internals_bench;
@@ -75,7 +74,7 @@ pub mod metrics {
 pub mod operators {
     //! [timely] operators for reading and writing persist Shards.
 
-    use crate::dyn_cfg::Config;
+    use mz_dyncfg::Config;
 
     pub mod shard_source;
 

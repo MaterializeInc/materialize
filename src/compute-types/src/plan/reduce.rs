@@ -985,6 +985,7 @@ pub fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::MinTimestampTz => ReductionType::Hierarchical,
         AggregateFunc::JsonbAgg { .. }
         | AggregateFunc::JsonbObjectAgg { .. }
+        | AggregateFunc::MapAgg { .. }
         | AggregateFunc::ArrayConcat { .. }
         | AggregateFunc::ListConcat { .. }
         | AggregateFunc::StringAgg { .. }

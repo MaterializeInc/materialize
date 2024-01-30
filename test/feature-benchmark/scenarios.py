@@ -123,6 +123,8 @@ true
 
         return Td(
             f"""
+> SET auto_route_introspection_queries TO false
+
 > BEGIN
 
 > SELECT 1;
@@ -238,6 +240,8 @@ class InsertBatch(DML):
 
 > CREATE TABLE t1 (f1 INTEGER)
   /* A */
+
+> SET auto_route_introspection_queries TO false
 
 > BEGIN
 
@@ -1433,6 +1437,8 @@ class QueryLatency(Coordinator):
 
         return Td(
             f"""
+> SET auto_route_introspection_queries TO false
+
 > BEGIN
 
 > SELECT 1;
@@ -1464,6 +1470,8 @@ SELECT 1;
 
         return Td(
             f"""
+> SET auto_route_introspection_queries TO false
+
 > BEGIN
 
 > SELECT 1;

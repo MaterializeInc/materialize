@@ -4669,6 +4669,7 @@ derive_unary!(
     RecordGet,
     ListLength,
     MapLength,
+    MapBuildFromRecordList,
     Upper,
     Lower,
     Cos,
@@ -5074,6 +5075,11 @@ impl Arbitrary for UnaryFunc {
             TrimTrailingWhitespace::arbitrary().prop_map_into().boxed(),
             RecordGet::arbitrary().prop_map_into().boxed(),
             ListLength::arbitrary().prop_map_into().boxed(),
+            (any::<ScalarType>())
+                .prop_map(|value_type| {
+                    UnaryFunc::MapBuildFromRecordList(MapBuildFromRecordList { value_type })
+                })
+                .boxed(),
             MapLength::arbitrary().prop_map_into().boxed(),
             Upper::arbitrary().prop_map_into().boxed(),
             Lower::arbitrary().prop_map_into().boxed(),
@@ -5449,6 +5455,9 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::TrimTrailingWhitespace(_) => TrimTrailingWhitespace(()),
             UnaryFunc::RecordGet(func) => RecordGet(func.0.into_proto()),
             UnaryFunc::ListLength(_) => ListLength(()),
+            UnaryFunc::MapBuildFromRecordList(inner) => {
+                MapBuildFromRecordList(inner.value_type.into_proto())
+            }
             UnaryFunc::MapLength(_) => MapLength(()),
             UnaryFunc::Upper(_) => Upper(()),
             UnaryFunc::Lower(_) => Lower(()),
@@ -5906,6 +5915,10 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 TrimTrailingWhitespace(()) => Ok(impls::TrimTrailingWhitespace.into()),
                 RecordGet(field) => Ok(impls::RecordGet(field.into_rust()?).into()),
                 ListLength(()) => Ok(impls::ListLength.into()),
+                MapBuildFromRecordList(value_type) => Ok(impls::MapBuildFromRecordList {
+                    value_type: value_type.into_rust()?,
+                }
+                .into()),
                 MapLength(()) => Ok(impls::MapLength.into()),
                 Upper(()) => Ok(impls::Upper.into()),
                 Lower(()) => Ok(impls::Lower.into()),
@@ -6428,6 +6441,23 @@ fn jsonb_build_object<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> D
             packer.push_dict(kvs.into_iter().map(|kv| (kv[0].unwrap_str(), kv[1])))
         })
     }
+}
+
+fn map_build<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
+    // Collect into a `BTreeMap` to provide the same semantics as it.
+    let map: std::collections::BTreeMap<&str, _> = datums
+        .into_iter()
+        .tuples()
+        .filter_map(|(k, v)| {
+            if k.is_null() {
+                None
+            } else {
+                Some((k.unwrap_str(), v))
+            }
+        })
+        .collect();
+
+    temp_storage.make_datum(|packer| packer.push_dict(map.into_iter()))
 }
 
 /// Constructs a new multidimensional array out of an arbitrary number of
@@ -7417,6 +7447,9 @@ pub enum VariadicFunc {
     Replace,
     JsonbBuildArray,
     JsonbBuildObject,
+    MapBuild {
+        value_type: ScalarType,
+    },
     ArrayCreate {
         // We need to know the element type to type empty arrays.
         elem_type: ScalarType,
@@ -7511,6 +7544,7 @@ impl VariadicFunc {
             VariadicFunc::Translate => Ok(translate(&ds, temp_storage)),
             VariadicFunc::JsonbBuildArray => Ok(jsonb_build_array(&ds, temp_storage)),
             VariadicFunc::JsonbBuildObject => Ok(jsonb_build_object(&ds, temp_storage)),
+            VariadicFunc::MapBuild { .. } => Ok(map_build(&ds, temp_storage)),
             VariadicFunc::ArrayCreate {
                 elem_type: ScalarType::Array(_),
             } => array_create_multidim(&ds, temp_storage),
@@ -7593,6 +7627,7 @@ impl VariadicFunc {
             | VariadicFunc::Translate
             | VariadicFunc::JsonbBuildArray
             | VariadicFunc::JsonbBuildObject
+            | VariadicFunc::MapBuild { value_type: _ }
             | VariadicFunc::ArrayCreate { elem_type: _ }
             | VariadicFunc::ArrayToString { elem_type: _ }
             | VariadicFunc::ArrayIndex { offset: _ }
@@ -7648,6 +7683,11 @@ impl VariadicFunc {
             Replace => ScalarType::String.nullable(in_nullable),
             Translate => ScalarType::String.nullable(in_nullable),
             JsonbBuildArray | JsonbBuildObject => ScalarType::Jsonb.nullable(true),
+            MapBuild { value_type } => ScalarType::Map {
+                value_type: Box::new(value_type.clone()),
+                custom_id: None,
+            }
+            .nullable(true),
             ArrayCreate { elem_type } => {
                 debug_assert!(
                     input_types.iter().all(|t| t.scalar_type.base_eq(elem_type)),
@@ -7736,6 +7776,7 @@ impl VariadicFunc {
                 | VariadicFunc::ConcatWs
                 | VariadicFunc::JsonbBuildArray
                 | VariadicFunc::JsonbBuildObject
+                | VariadicFunc::MapBuild { .. }
                 | VariadicFunc::ListCreate { .. }
                 | VariadicFunc::RecordCreate { .. }
                 | VariadicFunc::ArrayCreate { .. }
@@ -7763,6 +7804,7 @@ impl VariadicFunc {
             | Translate
             | JsonbBuildArray
             | JsonbBuildObject
+            | MapBuild { .. }
             | ArrayCreate { .. }
             | ArrayToString { .. }
             | ListCreate { .. }
@@ -7866,6 +7908,7 @@ impl VariadicFunc {
             | VariadicFunc::Replace
             | VariadicFunc::JsonbBuildArray
             | VariadicFunc::JsonbBuildObject
+            | VariadicFunc::MapBuild { .. }
             | VariadicFunc::ArrayCreate { .. }
             | VariadicFunc::ArrayToString { .. }
             | VariadicFunc::ArrayIndex { .. }
@@ -7912,6 +7955,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::Translate => f.write_str("translate"),
             VariadicFunc::JsonbBuildArray => f.write_str("jsonb_build_array"),
             VariadicFunc::JsonbBuildObject => f.write_str("jsonb_build_object"),
+            VariadicFunc::MapBuild { .. } => f.write_str("map_build"),
             VariadicFunc::ArrayCreate { .. } => f.write_str("array_create"),
             VariadicFunc::ArrayToString { .. } => f.write_str("array_to_string"),
             VariadicFunc::ArrayIndex { .. } => f.write_str("array_index"),
@@ -7977,6 +8021,9 @@ impl Arbitrary for VariadicFunc {
             Just(VariadicFunc::Replace).boxed(),
             Just(VariadicFunc::JsonbBuildArray).boxed(),
             Just(VariadicFunc::JsonbBuildObject).boxed(),
+            ScalarType::arbitrary()
+                .prop_map(|value_type| VariadicFunc::MapBuild { value_type })
+                .boxed(),
             Just(VariadicFunc::MakeAclItem).boxed(),
             Just(VariadicFunc::MakeMzAclItem).boxed(),
             ScalarType::arbitrary()
@@ -8037,6 +8084,7 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
             VariadicFunc::Translate => Translate(()),
             VariadicFunc::JsonbBuildArray => JsonbBuildArray(()),
             VariadicFunc::JsonbBuildObject => JsonbBuildObject(()),
+            VariadicFunc::MapBuild { value_type } => MapBuild(value_type.into_proto()),
             VariadicFunc::ArrayCreate { elem_type } => ArrayCreate(elem_type.into_proto()),
             VariadicFunc::ArrayToString { elem_type } => ArrayToString(elem_type.into_proto()),
             VariadicFunc::ArrayIndex { offset } => ArrayIndex(offset.into_proto()),
@@ -8088,6 +8136,9 @@ impl RustType<ProtoVariadicFunc> for VariadicFunc {
                 Translate(()) => Ok(VariadicFunc::Translate),
                 JsonbBuildArray(()) => Ok(VariadicFunc::JsonbBuildArray),
                 JsonbBuildObject(()) => Ok(VariadicFunc::JsonbBuildObject),
+                MapBuild(value_type) => Ok(VariadicFunc::MapBuild {
+                    value_type: value_type.into_rust()?,
+                }),
                 ArrayCreate(elem_type) => Ok(VariadicFunc::ArrayCreate {
                     elem_type: elem_type.into_rust()?,
                 }),

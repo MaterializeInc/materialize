@@ -8,7 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use chrono::NaiveTime;
-use mz_repr::adt::interval::Interval;
+use mz_ore::cast::CastLossy;
+use mz_repr::adt::interval::{Interval, USECS_PER_DAY};
 use mz_repr::strconv;
 use num::traits::CheckedNeg;
 
@@ -29,23 +30,33 @@ sqlfunc!(
     #[sqlname = "interval_to_time"]
     #[preserves_uniqueness = false]
     #[inverse = to_unary!(super::CastTimeToInterval)]
-    fn cast_interval_to_time(mut i: Interval) -> NaiveTime {
-        // Negative durations have their HH::MM::SS.NS values subtracted from 1 day.
-        if i.is_negative() {
-            i = Interval::new(0, 0, 86_400_000_000)
-                .checked_add(&i.as_time_interval())
-                .unwrap();
+    fn cast_interval_to_time(i: Interval) -> NaiveTime {
+        // Modeled after the PostgreSQL implementation:
+        // https://github.com/postgres/postgres/blob/6a1ea02c491d16474a6214603dce40b5b122d4d1/src/backend/utils/adt/date.c#L2003-L2027
+        let mut result = i.micros % *USECS_PER_DAY;
+        if result < 0 {
+            result += *USECS_PER_DAY;
         }
 
-        // TODO(benesch): remove potentially dangerous usage of `as`.
-        #[allow(clippy::as_conversions)]
-        NaiveTime::from_hms_nano_opt(
-            i.hours() as u32,
-            i.minutes() as u32,
-            i.seconds::<f64>() as u32,
-            i.nanoseconds() as u32,
-        )
-        .unwrap()
+        let i = Interval::new(0, 0, result);
+
+        let hours: u32 = i
+            .hours()
+            .try_into()
+            .expect("interval is positive and hours() returns a value in the range [-24, 24]");
+        let minutes: u32 = i
+            .minutes()
+            .try_into()
+            .expect("interval is positive and minutes() returns a value in the range [-60, 60]");
+        let seconds: u32 = i64::cast_lossy(i.seconds::<f64>()).try_into().expect(
+            "interval is positive and seconds() returns a value in the range [-60.0, 60.0]",
+        );
+        let nanoseconds: u32 =
+            i.nanoseconds().try_into().expect(
+                "interval is positive and nanoseconds() returns a value in the range [-1_000_000_000, 1_000_000_000]",
+            );
+
+        NaiveTime::from_hms_nano_opt(hours, minutes, seconds, nanoseconds).unwrap()
     }
 );
 
