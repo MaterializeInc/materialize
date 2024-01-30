@@ -78,6 +78,11 @@ SERVICES = [
     ),
 ]
 
+# Tests that are currently broken because the Fivetran Tester seems to do the wrong thing.
+#
+# 'test-truncate': https://materializeinc.slack.com/archives/C060KAR4802/p1706651239233319
+BROKEN_TESTS = ["test-truncate"]
+
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("filter", nargs="?")
@@ -89,6 +94,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         if path.name.startswith("test-"):
             if args.filter and args.filter not in path.name:
                 print(f"Test case {path.name!r} does not match filter; skipping...")
+                continue
+            if path.name in BROKEN_TESTS:
+                print(f"Test case {path.name!r} is currently broken; skipping...")
                 continue
             with c.test_case(path.name):
                 _run_test_case(c, path)
