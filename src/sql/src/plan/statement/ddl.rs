@@ -4516,11 +4516,14 @@ pub fn plan_alter_cluster(
                 // The long term plan is to phase out the v1 cluster sizes, at
                 // which point we'll be able to remove the `DISK` option
                 // entirely and simply always enable disk.
-                if is_cluster_size_v2(size) && disk.is_some() {
-                    sql_bail!("DISK option not supported for cluster sizes ending in cc or C because disk is always enabled");
+                if is_cluster_size_v2(size) {
+                    if disk.is_some() {
+                        sql_bail!("DISK option not supported for cluster sizes ending in cc or C because disk is always enabled");
+                    } else {
+                        options.disk = AlterOptionParameter::Set(true);
+                    }
                 }
                 options.size = AlterOptionParameter::Set(size.clone());
-                options.disk = AlterOptionParameter::Set(true);
             }
             if let Some(availability_zones) = availability_zones {
                 options.availability_zones = AlterOptionParameter::Set(availability_zones);
