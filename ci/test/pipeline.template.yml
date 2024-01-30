@@ -47,6 +47,9 @@ steps:
         timeout_in_minutes: 60
         agents:
           queue: builder-linux-aarch64
+        # TODO(def-) Remove automatic retry when #24818 is fixed
+        retry:
+          automatic: true
 
       - id: build-wasm
         label: Build WASM
@@ -210,6 +213,9 @@ steps:
               composition: cargo-test
         agents:
           queue: builder-linux-aarch64
+        # TODO(def-) Remove automatic retry when #24818 is fixed
+        retry:
+          automatic: true
 
       - id: miri-test
         label: Miri test (fast)
@@ -225,6 +231,9 @@ steps:
         agents:
           queue: builder-linux-aarch64
         coverage: skip
+        # TODO(def-) Remove automatic retry when #24818 is fixed
+        retry:
+          automatic: true
 
   - id: testdrive
     label: Testdrive %N
