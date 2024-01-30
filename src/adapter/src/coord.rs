@@ -383,9 +383,9 @@ impl RealTimeRecencyContext {
 
 #[derive(Debug)]
 pub enum PeekContext {
-    /// Peek was initiated from SELECT stmt
+    /// Peek was initiated from SELECT stmt.
     Select,
-    /// Peek was initiated with an EXPLAIN stmt
+    /// Peek was initiated with an EXPLAIN stmt.
     Explain(ExplainContext),
 }
 
@@ -418,7 +418,7 @@ impl PeekStage {
 pub struct PeekStageValidate {
     plan: mz_sql::plan::SelectPlan,
     target_cluster: TargetCluster,
-    /// Context from where this peek initiated from
+    /// Context from where this peek initiated.
     peek_ctx: PeekContext,
 }
 
@@ -431,7 +431,7 @@ pub struct PeekStageTimestamp {
     timeline_context: TimelineContext,
     in_immediate_multi_stmt_txn: bool,
     optimizer: optimize::peek::Optimizer,
-    /// Context from where this peek initiated from
+    /// Context from where this peek initiated.
     peek_ctx: PeekContext,
 }
 
@@ -445,7 +445,7 @@ pub struct PeekStageOptimizeMir {
     oracle_read_ts: Option<Timestamp>,
     in_immediate_multi_stmt_txn: bool,
     optimizer: optimize::peek::Optimizer,
-    /// Context from where this peek initiated from
+    /// Context from where this peek initiated.
     peek_ctx: PeekContext,
 }
 
@@ -461,7 +461,7 @@ pub struct PeekStageRealTimeRecency {
     in_immediate_multi_stmt_txn: bool,
     optimizer: optimize::peek::Optimizer,
     global_mir_plan: optimize::peek::GlobalMirPlan,
-    /// Context from where this peek initiated from
+    /// Context from where this peek initiated.
     peek_ctx: PeekContext,
 }
 
@@ -477,7 +477,7 @@ pub struct PeekStageOptimizeLir {
     real_time_recency_ts: Option<mz_repr::Timestamp>,
     optimizer: optimize::peek::Optimizer,
     global_mir_plan: optimize::peek::GlobalMirPlan,
-    /// Context from where this peek initiated from
+    /// Context from where this peek initiated.
     peek_ctx: PeekContext,
 }
 
