@@ -115,8 +115,8 @@ COMPLETE 1
 
 # Test that reading from a constant materialized view with a temporal filter doesn't send our
 # session timeline too far into the future.
-# This test will break in the year 10000. If you've survived that far then congratulations. Please
-# update the year 10000 in the view days to a much larger year.
+# This test will break in the year 10000. Please update the year 10000 in the view days to a much
+# larger year.
 
 simple conn=materialize,user=materialize
 CREATE VIEW days AS
@@ -135,7 +135,7 @@ CREATE VIEW days AS
 COMPLETE 0
 
 simple conn=materialize,user=materialize
-CREATE MATERIALIZED VIEW days_mv AS SELECT day FROM days WHERE mz_now() <= day;;
+CREATE MATERIALIZED VIEW days_mv AS SELECT day FROM days WHERE mz_now() <= day;
 ----
 COMPLETE 0
 

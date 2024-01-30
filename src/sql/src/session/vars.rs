@@ -5354,6 +5354,12 @@ pub enum IsolationLevel {
      * level then t0 < t1 is not considered a consistency violation. This matches the semantics of
      * Serializable, which can execute queries arbitrarily in the future without violating the
      * consistency of Strict Serializable queries within the same session.
+     *
+     * The items left TODO before this is considered ready for prod are:
+     *
+     * - Add more tests.
+     * - Linearize writes to system tables under this isolation (most of these are the side effect
+     *   of some DDL).
      */
     StrongSessionSerializable,
     StrictSerializable,
