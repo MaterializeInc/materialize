@@ -282,7 +282,7 @@ pub enum DataListenNext<T> {
 
 /// A shared [TxnsCache] running in a task and communicated with over a channel.
 #[derive(Debug, Clone)]
-pub struct TxnsRead<T> {
+pub struct TxnsRead<T: Clone> {
     txns_id: ShardId,
     tx: mpsc::UnboundedSender<TxnsReadCmd<T>>,
     _read_task: Arc<AbortOnDropHandle<()>>,
@@ -306,6 +306,7 @@ impl<T: Timestamp + Lattice + Codec64> TxnsRead<T> {
             rx,
             pending_waits_by_ts: BTreeSet::new(),
             pending_waits_by_id: BTreeMap::new(),
+            caps_by_ts: BTreeSet::new(),
         };
 
         let read_task =
@@ -332,6 +333,22 @@ impl<T: Timestamp + Lattice + Codec64> TxnsRead<T> {
     pub async fn data_snapshot(&self, data_id: ShardId, as_of: T) -> DataSnapshot<T> {
         self.send(|tx| TxnsReadCmd::DataSnapshot { data_id, as_of, tx })
             .await
+    }
+
+    /// See [crate::txn_cache::TxnsCacheState::data_snapshot] and
+    /// [crate::txn_cache::TxnsCacheState::data_listen_next].
+    pub async fn data_subscribe(
+        &self,
+        data_id: ShardId,
+        as_of: T,
+    ) -> (DataSnapshot<T>, TxnsReadCapability<T>) {
+        self.send(|tx| TxnsReadCmd::DataSubscribe {
+            txns_read_tx: self.tx.clone(),
+            data_id,
+            as_of,
+            tx,
+        })
+        .await
     }
 
     /// See [TxnsCache::update_ge].
@@ -380,14 +397,54 @@ impl<T: Timestamp + Lattice + Codec64> TxnsRead<T> {
     }
 }
 
+/// WIP
+#[derive(Debug)]
+pub struct TxnsReadCapability<T: Clone> {
+    cap_id: Uuid,
+    /// A capability to query a TxnsRead at times >= this one.
+    cap_ts: T,
+    txns_read_tx: mpsc::UnboundedSender<TxnsReadCmd<T>>,
+}
+
+impl<T: Timestamp + Lattice + Codec64> TxnsReadCapability<T> {
+    /// See [crate::txn_cache::TxnsCacheState::data_listen_next].
+    pub async fn data_listen_next(
+        self,
+        data_id: ShardId,
+        ts: T,
+    ) -> (DataListenNext<T>, TxnsReadCapability<T>) {
+        assert!(ts >= self.cap_ts);
+        let (tx, rx) = oneshot::channel();
+        self.txns_read_tx
+            .clone()
+            .send(TxnsReadCmd::DataListenNext {
+                cap: self,
+                data_id,
+                ts,
+                tx,
+            })
+            .expect("task unexpectedly shut down");
+        rx.await.expect("task unexpectedly shut down")
+    }
+}
+
+impl<T: Clone> Drop for TxnsReadCapability<T> {
+    fn drop(&mut self) {
+        let _ = self.txns_read_tx.send(TxnsReadCmd::DropCap {
+            id: self.cap_id,
+            ts: self.cap_ts.clone(),
+        });
+    }
+}
+
 /// Cancels an in-flight wait command when dropped, unless the given `tx` is
 /// yanked before that.
-struct CancelWaitOnDrop<T> {
+struct CancelWaitOnDrop<T: Clone> {
     id: Uuid,
     tx: Option<mpsc::UnboundedSender<TxnsReadCmd<T>>>,
 }
 
-impl<T> CancelWaitOnDrop<T> {
+impl<T: Clone> CancelWaitOnDrop<T> {
     /// Marks the wait command as complete. This guard will no longer send a
     /// cancel command when dropped.
     pub fn complete(&mut self) {
@@ -395,7 +452,7 @@ impl<T> CancelWaitOnDrop<T> {
     }
 }
 
-impl<T> Drop for CancelWaitOnDrop<T> {
+impl<T: Clone> Drop for CancelWaitOnDrop<T> {
     fn drop(&mut self) {
         let tx = match self.tx.take() {
             Some(tx) => tx,
@@ -412,7 +469,7 @@ impl<T> Drop for CancelWaitOnDrop<T> {
 }
 
 #[derive(Debug)]
-enum TxnsReadCmd<T> {
+enum TxnsReadCmd<T: Clone> {
     Updates {
         entries: Vec<(TxnsEntry, T, i64)>,
         frontier: T,
@@ -422,6 +479,18 @@ enum TxnsReadCmd<T> {
         as_of: T,
         tx: oneshot::Sender<DataSnapshot<T>>,
     },
+    DataSubscribe {
+        txns_read_tx: mpsc::UnboundedSender<TxnsReadCmd<T>>,
+        data_id: ShardId,
+        as_of: T,
+        tx: oneshot::Sender<(DataSnapshot<T>, TxnsReadCapability<T>)>,
+    },
+    DataListenNext {
+        cap: TxnsReadCapability<T>,
+        data_id: ShardId,
+        ts: T,
+        tx: oneshot::Sender<(DataListenNext<T>, TxnsReadCapability<T>)>,
+    },
     Wait {
         id: Uuid,
         ts: WaitTs<T>,
@@ -429,6 +498,10 @@ enum TxnsReadCmd<T> {
     },
     CancelWait {
         id: Uuid,
+    },
+    DropCap {
+        id: Uuid,
+        ts: T,
     },
 }
 
@@ -504,6 +577,7 @@ struct TxnsReadTask<T: Timestamp + Lattice + Codec64> {
     cache: TxnsCacheState<T>,
     pending_waits_by_ts: BTreeSet<(WaitTs<T>, Uuid)>,
     pending_waits_by_id: BTreeMap<Uuid, PendingWait<T>>,
+    caps_by_ts: BTreeSet<(T, Uuid)>,
 }
 
 /// A pending "wait" notification that we will complete once the frontier
@@ -563,12 +637,11 @@ where
                             "compacting TxnsRead cache to {:?} progress={:?}",
                             prev_frontier, self.cache.progress_exclusive
                         );
-                        // NB: If we add back a `data_listen_next` method, then
-                        // this will need to held back for any active users of
-                        // that. We'd probably package that up in some sort of
-                        // "subscription" abstraction that holds a capability on
-                        // this compaction frontier.
-                        self.cache.compact_to(&prev_frontier);
+                        let new_since_ts = match self.caps_by_ts.first() {
+                            Some((ts, _)) => std::cmp::min(ts, &prev_frontier),
+                            None => &prev_frontier,
+                        };
+                        self.cache.compact_to(new_since_ts);
                     }
 
                     // The frontier has advanced, so respond to waits and retain
@@ -605,6 +678,40 @@ where
                     let res = self.cache.data_snapshot(data_id, as_of.clone());
                     let _ = tx.send(res);
                 }
+                TxnsReadCmd::DataSubscribe {
+                    txns_read_tx,
+                    data_id,
+                    as_of,
+                    tx,
+                } => {
+                    let snap = self.cache.data_snapshot(data_id, as_of.clone());
+                    let cap_ts = snap.empty_to.clone();
+                    let cap_id = Uuid::new_v4();
+                    self.caps_by_ts.insert((cap_ts.clone(), cap_id));
+                    let cap = TxnsReadCapability {
+                        cap_ts,
+                        cap_id,
+                        txns_read_tx,
+                    };
+                    let _ = tx.send((snap, cap));
+                }
+                TxnsReadCmd::DataListenNext {
+                    mut cap,
+                    data_id,
+                    ts,
+                    tx,
+                } => {
+                    assert!(self.caps_by_ts.remove(&(cap.cap_ts.clone(), cap.cap_id)));
+                    let res = self.cache.data_listen_next(&data_id, ts);
+                    match &res {
+                        DataListenNext::ReadDataTo(x) | DataListenNext::EmitLogicalProgress(x) => {
+                            cap.cap_ts.clone_from(x)
+                        }
+                        DataListenNext::CompactedTo(_) | DataListenNext::WaitForTxnsProgress => {}
+                    };
+                    assert!(self.caps_by_ts.insert((cap.cap_ts.clone(), cap.cap_id)));
+                    let _ = tx.send((res, cap));
+                }
                 TxnsReadCmd::Wait { id, ts, tx } => {
                     let mut pending_wait = PendingWait { ts, tx: Some(tx) };
                     let completed = pending_wait.maybe_complete(&self.cache.progress_exclusive);
@@ -618,6 +725,9 @@ where
                     let pending_wait = self.pending_waits_by_id.remove(&id).expect("missing wait");
                     let wait_ts = pending_wait.ts.clone();
                     self.pending_waits_by_ts.remove(&(wait_ts, id));
+                }
+                TxnsReadCmd::DropCap { id, ts } => {
+                    assert!(self.caps_by_ts.remove(&(ts, id)));
                 }
             }
         }

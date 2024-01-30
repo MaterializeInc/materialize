@@ -42,7 +42,7 @@ use timely::{Data, PartialOrder, WorkerConfig};
 use tracing::debug;
 
 use crate::txn_cache::TxnsCache;
-use crate::txn_read::DataListenNext;
+use crate::txn_read::{DataListenNext, TxnsRead};
 use crate::TxnsCodecDefault;
 
 /// An operator for translating physical data shard frontiers into logical ones.
@@ -90,6 +90,7 @@ use crate::TxnsCodecDefault;
 pub fn txns_progress<K, V, T, D, P, C, F, G>(
     passthrough: Stream<G, P>,
     name: &str,
+    ctx: TxnsContext<T>,
     client_fn: impl Fn() -> F,
     txns_id: ShardId,
     data_id: ShardId,
@@ -104,7 +105,7 @@ where
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Data + Semigroup + Codec64 + Send + Sync,
     P: Debug + Data,
-    C: TxnsCodec,
+    C: TxnsCodec + 'static,
     F: Future<Output = PersistClient> + Send + 'static,
     G: Scope<Timestamp = T>,
 {
@@ -112,6 +113,7 @@ where
     let (remap, source_button) = txns_progress_source::<K, V, T, D, P, C, G>(
         passthrough.scope(),
         name,
+        ctx,
         client_fn(),
         txns_id,
         data_id,
@@ -164,6 +166,7 @@ struct DataRemapEntry<T> {
 fn txns_progress_source<K, V, T, D, P, C, G>(
     scope: G,
     name: &str,
+    ctx: TxnsContext<T>,
     client: impl Future<Output = PersistClient> + 'static,
     txns_id: ShardId,
     data_id: ShardId,
@@ -178,7 +181,7 @@ where
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Data + Semigroup + Codec64 + Send + Sync,
     P: Debug + Data,
-    C: TxnsCodec,
+    C: TxnsCodec + 'static,
     G: Scope<Timestamp = T>,
 {
     let worker_idx = scope.index();
@@ -195,10 +198,10 @@ where
 
         let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
         let client = client.await;
-        let mut txns_cache = TxnsCache::<T, C>::open(&client, txns_id, Some(data_id)).await;
+        let txns_read = ctx.get_or_init::<C>(&client, txns_id).await;
 
-        txns_cache.update_gt(&as_of).await;
-        let snap = txns_cache.data_snapshot(data_id, as_of.clone());
+        txns_read.update_gt(as_of.clone()).await;
+        let (snap, txns_read_cap) = txns_read.data_subscribe(data_id, as_of.clone()).await;
         let data_write = client
             .open_writer::<K, V, T, D>(
                 data_id,
@@ -226,12 +229,18 @@ where
         debug!("{} emitting {:?}", name, remap);
         remap_output.give(&cap, remap.clone()).await;
 
+        let mut txns_read_cap = Some(txns_read_cap);
         loop {
-            txns_cache.update_ge(&remap.logical_upper).await;
-            txns_cache.compact_to(&remap.logical_upper);
+            txns_read.update_ge(remap.logical_upper.clone()).await;
             cap.downgrade(&remap.logical_upper);
-            let data_listen_next =
-                txns_cache.data_listen_next(&data_id, remap.logical_upper.clone());
+            let data_listen_next = {
+                let trc = txns_read_cap.take().expect("valid cap");
+                let (dln, trc) = trc
+                    .data_listen_next(data_id, remap.logical_upper.clone())
+                    .await;
+                txns_read_cap = Some(trc);
+                dln
+            };
             debug!(
                 "{} data_listen_next at {:?}: {:?}",
                 name, remap, data_listen_next,
@@ -244,7 +253,7 @@ where
                 // the cache is past remap.logical_upper (as it will be after
                 // this update_gt call), we're guaranteed to get an answer.
                 DataListenNext::WaitForTxnsProgress => {
-                    txns_cache.update_gt(&remap.logical_upper).await;
+                    txns_read.update_gt(remap.logical_upper.clone()).await;
                     continue;
                 }
                 // The data shard got a write!
@@ -458,6 +467,28 @@ where
     None
 }
 
+/// WIP
+#[derive(Default, Debug, Clone)]
+pub struct TxnsContext<T: Clone> {
+    read: Arc<tokio::sync::OnceCell<TxnsRead<T>>>,
+}
+
+impl<T: Timestamp + Lattice + Codec64> TxnsContext<T> {
+    async fn get_or_init<C>(&self, client: &PersistClient, txns_id: ShardId) -> TxnsRead<T>
+    where
+        T: TotalOrder + StepForward,
+        C: TxnsCodec + 'static,
+    {
+        let read = self
+            .read
+            .get_or_init(|| TxnsRead::start::<C>(client.clone(), txns_id))
+            .await;
+        // We initially only have one txns shard in the system.
+        assert_eq!(&txns_id, read.txns_id());
+        read.clone()
+    }
+}
+
 pub(crate) const DATA_SHARD_RETRYER_INITIAL_BACKOFF: Config<Duration> = Config::new(
     "persist_txns_data_shard_retryer_initial_backoff",
     Duration::from_millis(1024),
@@ -572,6 +603,7 @@ impl DataSubscribe {
                 txns_progress::<String, (), u64, i64, _, TxnsCodecDefault, _, _>(
                     data_stream,
                     name,
+                    TxnsContext::default(),
                     || std::future::ready(client.clone()),
                     txns_id,
                     data_id,
