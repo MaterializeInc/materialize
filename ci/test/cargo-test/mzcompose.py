@@ -129,8 +129,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             cpu_count = os.cpu_count()
             assert cpu_count
 
-            partition = int(os.environ.get("BUILDKITE_PARALLEL_JOB", 0)) + 1
-            total = int(os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT", 1))
+            partition = buildkite.get_parallelism_index() + 1
+            total = buildkite.get_parallelism_count()
 
             spawn.runv(
                 [

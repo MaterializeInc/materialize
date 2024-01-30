@@ -123,3 +123,28 @@ def upload_artifact(path: Path | str, cwd: Path | None = None):
         ],
         cwd=cwd,
     )
+
+
+def get_parallelism_index() -> int:
+    _validate_parallelism_configuration()
+    return int(os.environ.get("BUILDKITE_PARALLEL_JOB", 0))
+
+
+def get_parallelism_count() -> int:
+    _validate_parallelism_configuration()
+    return int(os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT", 1))
+
+
+def accepted_by_shard(
+    index: int, parallelism_index: int, parallelism_count: int
+) -> bool:
+    return index % parallelism_count == parallelism_index
+
+
+def _validate_parallelism_configuration() -> None:
+    job_index = os.environ.get("BUILDKITE_PARALLEL_JOB")
+    job_count = os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT")
+
+    assert (job_index is None) == (
+        job_count is None
+    ), f"$BUILDKITE_PARALLEL_JOB (= '{job_index}') and $BUILDKITE_PARALLEL_JOB_COUNT (= '{job_count}') need to be either both specified or not specified"

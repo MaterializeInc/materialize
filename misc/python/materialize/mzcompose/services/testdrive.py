@@ -7,9 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import os
 import random
 
+from materialize import buildkite
 from materialize.mzcompose import DEFAULT_MZ_VOLUMES
 from materialize.mzcompose.service import (
     Service,
@@ -111,12 +111,9 @@ class Testdrive(Service):
             entrypoint.append(f"--kafka-default-partitions={kafka_default_partitions}")
 
         if forward_buildkite_shard:
-            shard = os.environ.get("BUILDKITE_PARALLEL_JOB")
-            shard_count = os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT")
-            if shard:
-                entrypoint += [f"--shard={shard}"]
-            if shard_count:
-                entrypoint += [f"--shard-count={shard_count}"]
+            shard = buildkite.get_parallelism_index()
+            shard_count = buildkite.get_parallelism_count()
+            entrypoint += [f"--shard={shard}", f"--shard-count={shard_count}"]
 
         if seed is not None and consistent_seed:
             raise RuntimeError("Can't pass `seed` and `consistent_seed` at same time")
