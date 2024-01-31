@@ -35,9 +35,10 @@
 //!    change could then impact a previous migration. You need to write separate upgrade functions
 //!    for the stash catalog and the persist catalog.
 //! 9. Call your upgrade function in [`stash::upgrade()`] and [`persist::upgrade()`].
-//! 10. Run `cargo test --package mz-catalog --lib \
-//!     durable::upgrade::tests::generate_missing_snapshots -- --ignored` to generate a test file
-//!     for the new version.
+//! 10. To generate a test file for the new version:
+//!     ```ignore
+//!     cargo test --package mz-catalog --lib durable::upgrade::tests::generate_missing_encodings -- --ignored
+//!     ```
 //!
 //! When in doubt, reach out to the Surfaces team, and we'll be more than happy to help :)
 
