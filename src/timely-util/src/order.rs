@@ -167,10 +167,7 @@ impl Extrema for Uuid {
         Self::nil()
     }
     fn maximum() -> Self {
-        // TODO: fix
-        // The `Uuid::max()` method that implements this is shadowed by the `max()` method from the `Ord`
-        // trait so we implement it manually.
-        Self::from_bytes([0xff; 16])
+        Self::max()
     }
 }
 
