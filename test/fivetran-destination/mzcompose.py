@@ -115,27 +115,53 @@ def _run_test_case(c: Composition, path: Path):
             assert False, f"unexpected test file: {test_file}"
 
 
+# Run the Fivetran Destination Tester with a single file.
 def _run_destination_tester(c: Composition, test_file: Path):
-    data_dir = ROOT / "data"
-    for data_file in data_dir.iterdir():
-        if data_file.name in ("configuration.json", ".gitignore"):
-            continue
-        data_file.unlink()
-    shutil.copy(test_file, data_dir)
+    # The Fivetran Destination tester operates on an entire directory at a time. We run
+    # individual test cases by copying everything into a single "data" directory which
+    # automatically gets cleaned up at the start and end of every run.
+    with DataDirGuard(ROOT / "data") as data_dir:
+        test_file = ROOT / test_file
+        shutil.copy(test_file, data_dir.path())
 
-    expected_failure = None
-    last_line = test_file.read_text().splitlines()[-1]
-    if last_line.startswith("// FAIL: "):
-        expected_failure = last_line.removeprefix("// FAIL: ")
-    if expected_failure:
-        ret = c.run("fivetran-destination-tester", check=False, capture=True)
-        print("stdout:")
-        print(ret.stdout)
-        assert (
-            ret.returncode != 0
-        ), f"destination tester did not fail with expected message {expected_failure!r}"
-        assert (
-            expected_failure in ret.stdout
-        ), f"destination tester did not fail with expected message {expected_failure!r}"
-    else:
-        c.run("fivetran-destination-tester")
+        last_line = test_file.read_text().splitlines()[-1]
+        if last_line.startswith("// FAIL: "):
+            expected_failure = last_line.removeprefix("// FAIL: ")
+        else:
+            expected_failure = None
+
+        if expected_failure:
+            ret = c.run("fivetran-destination-tester", check=False, capture=True)
+            print("stdout:")
+            print(ret.stdout)
+            assert (
+                ret.returncode != 0
+            ), f"destination tester did not fail with expected message {expected_failure!r}"
+            assert (
+                expected_failure in ret.stdout
+            ), f"destination tester did not fail with expected message {expected_failure!r}"
+        else:
+            c.run("fivetran-destination-tester")
+
+
+# Type that implements the Context Protocol that makes it easy to automatically clean up our data
+# directory before and after every test run.
+class DataDirGuard:
+    def __init__(self, dir: Path):
+        self._dir = dir
+
+    def clean(self):
+        for file in self._dir.iterdir():
+            if file.name in ("configuration.json", ".gitignore"):
+                continue
+            file.unlink()
+
+    def path(self) -> Path:
+        return self._dir
+
+    def __enter__(self):
+        self.clean()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.clean()

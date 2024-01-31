@@ -403,7 +403,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: fivetran-destination
         agents:
-          queue: linux-aarch64
+          queue: linux-aarch64-small
 
   - group: "Kafka tests"
     key: kafka-tests
