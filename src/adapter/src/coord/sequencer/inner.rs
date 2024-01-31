@@ -48,9 +48,9 @@ use mz_catalog::memory::objects::{
     CatalogItem, Cluster, Connection, DataSourceDesc, Secret, Sink, Source, Table, Type,
 };
 use mz_sql::plan::{
-    AlterConnectionAction, AlterConnectionPlan, ExplainSinkSchemaPlan, Explainee, IndexOption,
-    MutationKind, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen,
-    SideEffectingFunc, UpdatePrivilege, VariableValue,
+    AlterConnectionAction, AlterConnectionPlan, ExplainSinkSchemaPlan, IndexOption, MutationKind,
+    Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen, SideEffectingFunc,
+    UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::user::UserKind;
 use mz_sql::session::vars::{
@@ -1801,7 +1801,7 @@ impl Coordinator {
         target_cluster: TargetCluster,
     ) {
         match &plan.explainee {
-            Explainee::Statement(stmt) => match stmt {
+            plan::Explainee::Statement(stmt) => match stmt {
                 plan::ExplaineeStatement::CreateMaterializedView { .. } => {
                     self.explain_create_materialized_view(ctx, plan).await;
                 }
@@ -1812,13 +1812,21 @@ impl Coordinator {
                     self.explain_peek(ctx, plan, target_cluster).await;
                 }
             },
-            Explainee::MaterializedView(_) => {
+            plan::Explainee::MaterializedView(_) => {
                 let result = self.explain_materialized_view(&ctx, plan);
                 ctx.retire(result);
             }
-            Explainee::Index(_) => {
+            plan::Explainee::Index(_) => {
                 let result = self.explain_index(&ctx, plan);
                 ctx.retire(result);
+            }
+            plan::Explainee::ReplanMaterializedView(_) => {
+                let msg = "EXPLAIN REPLAN MATERIALIZED VIEW is currently not supported";
+                ctx.retire(Err(AdapterError::Unsupported(msg)));
+            }
+            plan::Explainee::ReplanIndex(_) => {
+                let msg = "EXPLAIN REPLAN INDEX is currently not supported";
+                ctx.retire(Err(AdapterError::Unsupported(msg)));
             }
         };
     }
@@ -1826,25 +1834,18 @@ impl Coordinator {
     fn explain_materialized_view(
         &mut self,
         ctx: &ExecuteContext,
-        plan: plan::ExplainPlanPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let plan::ExplainPlanPlan {
+        plan::ExplainPlanPlan {
             stage,
             format,
             config,
             explainee,
-        } = plan;
-
-        let Explainee::MaterializedView(id) = explainee else {
-            // This is currently asserted in the `sequence_explain_plan` code that
-            // calls this method.
-            unreachable!()
+        }: plan::ExplainPlanPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let plan::Explainee::MaterializedView(id) = explainee else {
+            unreachable!() // Asserted in `sequence_explain_plan`.
         };
-
         let CatalogItem::MaterializedView(_) = self.catalog().get_entry(&id).item() else {
-            // This is currently asserted in the planner. However, this
-            // assumption might change when we make changes for #18089.
-            unreachable!()
+            unreachable!() // Asserted in `plan_explain_plan`.
         };
 
         let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
@@ -1896,25 +1897,18 @@ impl Coordinator {
     fn explain_index(
         &mut self,
         ctx: &ExecuteContext,
-        plan: plan::ExplainPlanPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let plan::ExplainPlanPlan {
+        plan::ExplainPlanPlan {
             stage,
             format,
             config,
             explainee,
-        } = plan;
-
-        let Explainee::Index(id) = explainee else {
-            // This is currently asserted in the `sequence_explain_plan` code that
-            // calls this method.
-            unreachable!()
+        }: plan::ExplainPlanPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let plan::Explainee::Index(id) = explainee else {
+            unreachable!() // Asserted in `sequence_explain_plan`.
         };
-
         let CatalogItem::Index(_) = self.catalog().get_entry(&id).item() else {
-            // This is currently asserted in the planner. However, this
-            // assumption might change when we make changes for #18089.
-            unreachable!()
+            unreachable!() // Asserted in `plan_explain_plan`.
         };
 
         let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&id) else {
