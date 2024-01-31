@@ -242,7 +242,8 @@ impl Refines<()> for GTIDState {
 /// A MySQL GTID consists of a source_id (UUID) and transaction_id (non-zero u64).
 ///
 /// For the purposes of this documentation effort, the term "source" refers to a MySQL
-/// server that is being replicated from: https://dev.mysql.com/doc/refman/8.0/en/replication-gtids-concepts.html
+/// server that is being replicated from:
+/// <https://dev.mysql.com/doc/refman/8.0/en/replication-gtids-concepts.html>
 ///
 /// Each source_id represents a unique MySQL server, and the transaction_id
 /// monotonically increases for each source, representing the position of the transaction
