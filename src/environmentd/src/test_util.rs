@@ -42,6 +42,7 @@ use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_server_core::TlsCertConfig;
 use mz_sql::catalog::EnvironmentId;
+use mz_sql::session::vars::all_dyn_configs;
 use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
@@ -337,7 +338,8 @@ impl Listeners {
         // Messing with the clock causes persist to expire leases, causing hangs and
         // panics. Is it possible/desirable to put this back somehow?
         let persist_now = SYSTEM_TIME.clone();
-        let mut persist_cfg = PersistConfig::new_default_configs(&crate::BUILD_INFO, persist_now);
+        let mut persist_cfg =
+            PersistConfig::new(&crate::BUILD_INFO, persist_now.clone(), all_dyn_configs());
         // Tune down the number of connections to make this all work a little easier
         // with local postgres.
         persist_cfg.consensus_connection_pool_max_size = 1;
