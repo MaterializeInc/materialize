@@ -67,8 +67,13 @@ message ProtoPlan {
    }
 
    message ProtoPlanConstant {
+        ProtoPlanRows rows = 1;
+        uint64 node_id = 2;
+   }
+
+   message ProtoPlanRows {
         oneof result {
-            ProtoRowDiffVec rows = 1;
+            ProtoRowDiffVec ok = 1;
             mz_expr.scalar.ProtoEvalError err = 2;
         }
    }
@@ -77,12 +82,14 @@ message ProtoPlan {
         mz_expr.id.ProtoId id = 1;
         ProtoAvailableCollections keys = 2;
         ProtoGetPlan plan = 3;
+        uint64 node_id = 4;
    }
 
    message ProtoPlanLet {
         mz_expr.id.ProtoLocalId id = 1;
         ProtoPlan value = 2;
         ProtoPlan body  = 3;
+        uint64 node_id = 4;
    }
 
    message ProtoPlanLetRec {
@@ -91,6 +98,7 @@ message ProtoPlan {
         repeated ProtoLetRecLimit limits = 4;
         repeated bool limit_is_some = 5;
         ProtoPlan body  = 3;
+        uint64 node_id = 6;
    }
 
    message ProtoPlanInputKeyVal {
@@ -102,6 +110,7 @@ message ProtoPlan {
         ProtoPlan input = 1;
         mz_expr.linear.ProtoMapFilterProject mfp = 2;
         ProtoPlanInputKeyVal input_key_val = 3;
+        uint64 node_id = 4;
    }
 
    message ProtoPlanInputKey {
@@ -114,11 +123,13 @@ message ProtoPlan {
         repeated mz_expr.scalar.ProtoMirScalarExpr exprs = 3;
         mz_expr.linear.ProtoMapFilterProject mfp_after = 4;
         ProtoPlanInputKey input_key = 5;
+        uint64 node_id = 6;
    }
 
    message ProtoPlanJoin {
         repeated ProtoPlan inputs = 1;
         mz_compute_types.plan.join.ProtoJoinPlan plan = 2;
+        uint64 node_id = 3;
    }
 
    message ProtoPlanReduce {
@@ -127,21 +138,30 @@ message ProtoPlan {
         mz_compute_types.plan.reduce.ProtoReducePlan plan = 3;
         ProtoPlanInputKey input_key = 4;
         mz_expr.linear.ProtoMapFilterProject mfp_after = 5;
+        uint64 node_id = 6;
    }
 
    message ProtoPlanTopK {
         ProtoPlan input = 1;
         mz_compute_types.plan.top_k.ProtoTopKPlan top_k_plan = 2;
+        uint64 node_id = 3;
+   }
+
+   message ProtoPlanNegate {
+        ProtoPlan input = 1;
+        uint64 node_id = 2;
    }
 
    message ProtoPlanThreshold {
         ProtoPlan input = 1;
         mz_compute_types.plan.threshold.ProtoThresholdPlan threshold_plan = 2;
+        uint64 node_id = 3;
    }
 
    message ProtoPlanUnion {
         repeated ProtoPlan inputs = 1;
         bool consolidate_output = 2;
+        uint64 node_id = 3;
    }
 
    message ProtoPlanArrangeBy {
@@ -149,6 +169,7 @@ message ProtoPlan {
         ProtoAvailableCollections forms = 2;
         ProtoPlanInputKey input_key = 3;
         mz_expr.linear.ProtoMapFilterProject input_mfp = 4;
+        uint64 node_id = 5;
    }
 
    oneof kind {
@@ -160,7 +181,7 @@ message ProtoPlan {
         ProtoPlanJoin join = 6;
         ProtoPlanReduce reduce = 7;
         ProtoPlanTopK top_k = 8;
-        ProtoPlan negate = 9;
+        ProtoPlanNegate negate = 9;
         ProtoPlanThreshold threshold = 10;
         ProtoPlanUnion union = 11;
         ProtoPlanArrangeBy arrange_by = 12;

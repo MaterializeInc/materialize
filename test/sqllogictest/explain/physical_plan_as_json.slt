@@ -112,7 +112,8 @@ SELECT 1 / 0
         "Constant": {
           "rows": {
             "Err": "DivisionByZero"
-          }
+          },
+          "node_id": 0
         }
       }
     }
@@ -159,7 +160,8 @@ EXPLAIN PHYSICAL PLAN WITH(no_fast_path) AS JSON FOR
                 1
               ]
             ]
-          }
+          },
+          "node_id": 0
         }
       }
     }
@@ -216,7 +218,8 @@ SELECT * FROM t
               }
             ]
           },
-          "plan": "PassArrangements"
+          "plan": "PassArrangements",
+          "node_id": 0
         }
       }
     }
@@ -246,7 +249,8 @@ SELECT * FROM u
             "arranged": [],
             "types": null
           },
-          "plan": "PassArrangements"
+          "plan": "PassArrangements",
+          "node_id": 0
         }
       }
     }
@@ -346,7 +350,8 @@ SELECT a + b, 1 FROM t
                 "input_arity": 2
               }
             ]
-          }
+          },
+          "node_id": 0
         }
       }
     }
@@ -386,7 +391,8 @@ SELECT c + d, 1 FROM u
               ],
               "input_arity": 2
             }
-          }
+          },
+          "node_id": 0
         }
       }
     }
@@ -487,7 +493,8 @@ SELECT * FROM ov
                       }
                     ]
                   },
-                  "plan": "PassArrangements"
+                  "plan": "PassArrangements",
+                  "node_id": 0
                 }
               },
               "forms": {
@@ -508,7 +515,8 @@ SELECT * FROM ov
                   1
                 ],
                 "input_arity": 2
-              }
+              },
+              "node_id": 1
             }
           },
           "top_k_plan": {
@@ -545,7 +553,8 @@ SELECT * FROM ov
               "arity": 2,
               "must_consolidate": true
             }
-          }
+          },
+          "node_id": 2
         }
       }
     }
@@ -623,7 +632,8 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                               "input_arity": 2
                             }
                           ]
-                        }
+                        },
+                        "node_id": 0
                       }
                     },
                     {
@@ -649,13 +659,16 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                                 ],
                                 "input_arity": 1
                               }
-                            }
+                            },
+                            "node_id": 1
                           }
-                        }
+                        },
+                        "node_id": 2
                       }
                     }
                   ],
-                  "consolidate_output": true
+                  "consolidate_output": true,
+                  "node_id": 3
                 }
               },
               "forms": {
@@ -688,7 +701,8 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                   0
                 ],
                 "input_arity": 1
-              }
+              },
+              "node_id": 4
             }
           },
           "threshold_plan": {
@@ -705,7 +719,8 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                 []
               ]
             }
-          }
+          },
+          "node_id": 5
         }
       }
     }
@@ -776,7 +791,8 @@ SELECT * FROM ov
                       }
                     ]
                   },
-                  "plan": "PassArrangements"
+                  "plan": "PassArrangements",
+                  "node_id": 0
                 }
               },
               "forms": {
@@ -797,7 +813,8 @@ SELECT * FROM ov
                   1
                 ],
                 "input_arity": 2
-              }
+              },
+              "node_id": 1
             }
           },
           "top_k_plan": {
@@ -834,7 +851,8 @@ SELECT * FROM ov
               "arity": 2,
               "must_consolidate": true
             }
-          }
+          },
+          "node_id": 2
         }
       }
     }
@@ -916,7 +934,8 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                   "input_arity": 2
                                 }
                               ]
-                            }
+                            },
+                            "node_id": 0
                           }
                         },
                         {
@@ -942,13 +961,16 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                     ],
                                     "input_arity": 1
                                   }
-                                }
+                                },
+                                "node_id": 1
                               }
-                            }
+                            },
+                            "node_id": 2
                           }
                         }
                       ],
-                      "consolidate_output": true
+                      "consolidate_output": true,
+                      "node_id": 3
                     }
                   },
                   "forms": {
@@ -981,7 +1003,8 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                       0
                     ],
                     "input_arity": 1
-                  }
+                  },
+                  "node_id": 4
                 }
               },
               "threshold_plan": {
@@ -998,7 +1021,8 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                     []
                   ]
                 }
-              }
+              },
+              "node_id": 5
             }
           },
           "body": {
@@ -1073,7 +1097,8 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                           "input_arity": 1
                         }
                       ]
-                    }
+                    },
+                    "node_id": 6
                   }
                 },
                 {
@@ -1145,13 +1170,16 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                           "input_arity": 1
                         }
                       ]
-                    }
+                    },
+                    "node_id": 7
                   }
                 }
               ],
-              "consolidate_output": false
+              "consolidate_output": false,
+              "node_id": 8
             }
-          }
+          },
+          "node_id": 9
         }
       }
     }
@@ -1232,7 +1260,8 @@ SELECT x * 5 FROM cte WHERE x = 5
                                       }
                                     ]
                                   },
-                                  "plan": "PassArrangements"
+                                  "plan": "PassArrangements",
+                                  "node_id": 0
                                 }
                               },
                               {
@@ -1252,7 +1281,8 @@ SELECT x * 5 FROM cte WHERE x = 5
                                             1
                                           ]
                                         ]
-                                      }
+                                      },
+                                      "node_id": 1
                                     }
                                   },
                                   "forms": {
@@ -1285,7 +1315,8 @@ SELECT x * 5 FROM cte WHERE x = 5
                                       0
                                     ],
                                     "input_arity": 1
-                                  }
+                                  },
+                                  "node_id": 2
                                 }
                               }
                             ],
@@ -1329,7 +1360,8 @@ SELECT x * 5 FROM cte WHERE x = 5
                                 ],
                                 "final_closure": null
                               }
-                            }
+                            },
+                            "node_id": 3
                           }
                         },
                         {
@@ -1355,13 +1387,16 @@ SELECT x * 5 FROM cte WHERE x = 5
                                     ],
                                     "input_arity": 1
                                   }
-                                }
+                                },
+                                "node_id": 4
                               }
-                            }
+                            },
+                            "node_id": 5
                           }
                         }
                       ],
-                      "consolidate_output": true
+                      "consolidate_output": true,
+                      "node_id": 6
                     }
                   },
                   "forms": {
@@ -1394,7 +1429,8 @@ SELECT x * 5 FROM cte WHERE x = 5
                       0
                     ],
                     "input_arity": 1
-                  }
+                  },
+                  "node_id": 7
                 }
               },
               "threshold_plan": {
@@ -1411,7 +1447,8 @@ SELECT x * 5 FROM cte WHERE x = 5
                     []
                   ]
                 }
-              }
+              },
+              "node_id": 8
             }
           },
           "mfp": {
@@ -1446,7 +1483,8 @@ SELECT x * 5 FROM cte WHERE x = 5
               }
             ],
             null
-          ]
+          ],
+          "node_id": 9
         }
       }
     }
@@ -1544,7 +1582,8 @@ SELECT generate_series(a, b) from t
                   }
                 ]
               },
-              "plan": "PassArrangements"
+              "plan": "PassArrangements",
+              "node_id": 0
             }
           },
           "func": "GenerateSeriesInt32",
@@ -1584,7 +1623,8 @@ SELECT generate_series(a, b) from t
             {
               "Column": 0
             }
-          ]
+          ],
+          "node_id": 1
         }
       }
     }
@@ -1640,7 +1680,8 @@ SELECT DISTINCT a, b FROM t
                   }
                 ]
               },
-              "plan": "PassArrangements"
+              "plan": "PassArrangements",
+              "node_id": 0
             }
           },
           "key_val_plan": {
@@ -1678,7 +1719,8 @@ SELECT DISTINCT a, b FROM t
               1
             ],
             "input_arity": 2
-          }
+          },
+          "node_id": 1
         }
       }
     }
@@ -1739,7 +1781,8 @@ GROUP BY a
                   }
                 ]
               },
-              "plan": "PassArrangements"
+              "plan": "PassArrangements",
+              "node_id": 0
             }
           },
           "key_val_plan": {
@@ -1825,7 +1868,8 @@ GROUP BY a
               2
             ],
             "input_arity": 3
-          }
+          },
+          "node_id": 1
         }
       }
     }
@@ -1904,7 +1948,8 @@ FROM t
                         "input_arity": 2
                       }
                     ]
-                  }
+                  },
+                  "node_id": 0
                 }
               },
               "key_val_plan": {
@@ -1983,7 +2028,8 @@ FROM t
                   1
                 ],
                 "input_arity": 2
-              }
+              },
+              "node_id": 1
             }
           },
           "body": {
@@ -2013,7 +2059,8 @@ FROM t
                           ],
                           "types": null
                         },
-                        "plan": "PassArrangements"
+                        "plan": "PassArrangements",
+                        "node_id": 2
                       }
                     },
                     "forms": {
@@ -2030,7 +2077,8 @@ FROM t
                         1
                       ],
                       "input_arity": 2
-                    }
+                    },
+                    "node_id": 8
                   }
                 },
                 {
@@ -2073,9 +2121,11 @@ FROM t
                                         "input_arity": 2
                                       }
                                     ]
-                                  }
+                                  },
+                                  "node_id": 3
                                 }
-                              }
+                              },
+                              "node_id": 4
                             }
                           },
                           {
@@ -2090,11 +2140,13 @@ FROM t
                                     1
                                   ]
                                 ]
-                              }
+                              },
+                              "node_id": 5
                             }
                           }
                         ],
-                        "consolidate_output": true
+                        "consolidate_output": true,
+                        "node_id": 6
                       }
                     },
                     "mfp": {
@@ -2137,13 +2189,16 @@ FROM t
                       ],
                       "input_arity": 0
                     },
-                    "input_key_val": null
+                    "input_key_val": null,
+                    "node_id": 7
                   }
                 }
               ],
-              "consolidate_output": false
+              "consolidate_output": false,
+              "node_id": 9
             }
-          }
+          },
+          "node_id": 10
         }
       }
     }
@@ -2199,7 +2254,8 @@ SELECT * FROM hierarchical_group_by
                   }
                 ]
               },
-              "plan": "PassArrangements"
+              "plan": "PassArrangements",
+              "node_id": 0
             }
           },
           "key_val_plan": {
@@ -2254,7 +2310,8 @@ SELECT * FROM hierarchical_group_by
               2
             ],
             "input_arity": 3
-          }
+          },
+          "node_id": 1
         }
       }
     }
@@ -2330,7 +2387,8 @@ MATERIALIZED VIEW hierarchical_global_mv
                         "input_arity": 2
                       }
                     ]
-                  }
+                  },
+                  "node_id": 0
                 }
               },
               "key_val_plan": {
@@ -2386,7 +2444,8 @@ MATERIALIZED VIEW hierarchical_global_mv
                   1
                 ],
                 "input_arity": 2
-              }
+              },
+              "node_id": 1
             }
           },
           "body": {
@@ -2416,7 +2475,8 @@ MATERIALIZED VIEW hierarchical_global_mv
                           ],
                           "types": null
                         },
-                        "plan": "PassArrangements"
+                        "plan": "PassArrangements",
+                        "node_id": 2
                       }
                     },
                     "forms": {
@@ -2433,7 +2493,8 @@ MATERIALIZED VIEW hierarchical_global_mv
                         1
                       ],
                       "input_arity": 2
-                    }
+                    },
+                    "node_id": 8
                   }
                 },
                 {
@@ -2476,9 +2537,11 @@ MATERIALIZED VIEW hierarchical_global_mv
                                         "input_arity": 2
                                       }
                                     ]
-                                  }
+                                  },
+                                  "node_id": 3
                                 }
-                              }
+                              },
+                              "node_id": 4
                             }
                           },
                           {
@@ -2493,11 +2556,13 @@ MATERIALIZED VIEW hierarchical_global_mv
                                     1
                                   ]
                                 ]
-                              }
+                              },
+                              "node_id": 5
                             }
                           }
                         ],
-                        "consolidate_output": true
+                        "consolidate_output": true,
+                        "node_id": 6
                       }
                     },
                     "mfp": {
@@ -2540,13 +2605,16 @@ MATERIALIZED VIEW hierarchical_global_mv
                       ],
                       "input_arity": 0
                     },
-                    "input_key_val": null
+                    "input_key_val": null,
+                    "node_id": 7
                   }
                 }
               ],
-              "consolidate_output": false
+              "consolidate_output": false,
+              "node_id": 9
             }
-          }
+          },
+          "node_id": 10
         }
       }
     }
@@ -2622,7 +2690,8 @@ SELECT * FROM hierarchical_global
                         "input_arity": 2
                       }
                     ]
-                  }
+                  },
+                  "node_id": 0
                 }
               },
               "key_val_plan": {
@@ -2670,7 +2739,8 @@ SELECT * FROM hierarchical_global
                   1
                 ],
                 "input_arity": 2
-              }
+              },
+              "node_id": 1
             }
           },
           "body": {
@@ -2700,7 +2770,8 @@ SELECT * FROM hierarchical_global
                           ],
                           "types": null
                         },
-                        "plan": "PassArrangements"
+                        "plan": "PassArrangements",
+                        "node_id": 2
                       }
                     },
                     "forms": {
@@ -2717,7 +2788,8 @@ SELECT * FROM hierarchical_global
                         1
                       ],
                       "input_arity": 2
-                    }
+                    },
+                    "node_id": 8
                   }
                 },
                 {
@@ -2760,9 +2832,11 @@ SELECT * FROM hierarchical_global
                                         "input_arity": 2
                                       }
                                     ]
-                                  }
+                                  },
+                                  "node_id": 3
                                 }
-                              }
+                              },
+                              "node_id": 4
                             }
                           },
                           {
@@ -2777,11 +2851,13 @@ SELECT * FROM hierarchical_global
                                     1
                                   ]
                                 ]
-                              }
+                              },
+                              "node_id": 5
                             }
                           }
                         ],
-                        "consolidate_output": true
+                        "consolidate_output": true,
+                        "node_id": 6
                       }
                     },
                     "mfp": {
@@ -2824,13 +2900,16 @@ SELECT * FROM hierarchical_global
                       ],
                       "input_arity": 0
                     },
-                    "input_key_val": null
+                    "input_key_val": null,
+                    "node_id": 7
                   }
                 }
               ],
-              "consolidate_output": false
+              "consolidate_output": false,
+              "node_id": 9
             }
-          }
+          },
+          "node_id": 10
         }
       }
     }
@@ -2891,7 +2970,8 @@ GROUP BY a
                   }
                 ]
               },
-              "plan": "PassArrangements"
+              "plan": "PassArrangements",
+              "node_id": 0
             }
           },
           "key_val_plan": {
@@ -3260,7 +3340,8 @@ GROUP BY a
               2
             ],
             "input_arity": 3
-          }
+          },
+          "node_id": 1
         }
       }
     }
@@ -3339,7 +3420,8 @@ FROM t
                         "input_arity": 2
                       }
                     ]
-                  }
+                  },
+                  "node_id": 0
                 }
               },
               "key_val_plan": {
@@ -3701,7 +3783,8 @@ FROM t
                   1
                 ],
                 "input_arity": 2
-              }
+              },
+              "node_id": 1
             }
           },
           "body": {
@@ -3731,7 +3814,8 @@ FROM t
                           ],
                           "types": null
                         },
-                        "plan": "PassArrangements"
+                        "plan": "PassArrangements",
+                        "node_id": 2
                       }
                     },
                     "forms": {
@@ -3748,7 +3832,8 @@ FROM t
                         1
                       ],
                       "input_arity": 2
-                    }
+                    },
+                    "node_id": 8
                   }
                 },
                 {
@@ -3791,9 +3876,11 @@ FROM t
                                         "input_arity": 2
                                       }
                                     ]
-                                  }
+                                  },
+                                  "node_id": 3
                                 }
-                              }
+                              },
+                              "node_id": 4
                             }
                           },
                           {
@@ -3808,11 +3895,13 @@ FROM t
                                     1
                                   ]
                                 ]
-                              }
+                              },
+                              "node_id": 5
                             }
                           }
                         ],
-                        "consolidate_output": true
+                        "consolidate_output": true,
+                        "node_id": 6
                       }
                     },
                     "mfp": {
@@ -3855,13 +3944,16 @@ FROM t
                       ],
                       "input_arity": 0
                     },
-                    "input_key_val": null
+                    "input_key_val": null,
+                    "node_id": 7
                   }
                 }
               ],
-              "consolidate_output": false
+              "consolidate_output": false,
+              "node_id": 9
             }
-          }
+          },
+          "node_id": 10
         }
       }
     }
@@ -3917,7 +4009,8 @@ MATERIALIZED VIEW collated_group_by_mv
                   }
                 ]
               },
-              "plan": "PassArrangements"
+              "plan": "PassArrangements",
+              "node_id": 0
             }
           },
           "key_val_plan": {
@@ -4369,7 +4462,8 @@ MATERIALIZED VIEW collated_group_by_mv
               6
             ],
             "input_arity": 7
-          }
+          },
+          "node_id": 1
         }
       }
     }
@@ -4425,7 +4519,8 @@ SELECT * FROM collated_group_by
                   }
                 ]
               },
-              "plan": "PassArrangements"
+              "plan": "PassArrangements",
+              "node_id": 0
             }
           },
           "key_val_plan": {
@@ -4869,7 +4964,8 @@ SELECT * FROM collated_group_by
               6
             ],
             "input_arity": 7
-          }
+          },
+          "node_id": 1
         }
       }
     }
@@ -4945,7 +5041,8 @@ MATERIALIZED VIEW collated_global_mv
                         "input_arity": 2
                       }
                     ]
-                  }
+                  },
+                  "node_id": 0
                 }
               },
               "key_val_plan": {
@@ -5390,7 +5487,8 @@ MATERIALIZED VIEW collated_global_mv
                   5
                 ],
                 "input_arity": 6
-              }
+              },
+              "node_id": 1
             }
           },
           "body": {
@@ -5428,7 +5526,8 @@ MATERIALIZED VIEW collated_global_mv
                           ],
                           "types": null
                         },
-                        "plan": "PassArrangements"
+                        "plan": "PassArrangements",
+                        "node_id": 2
                       }
                     },
                     "forms": {
@@ -5449,7 +5548,8 @@ MATERIALIZED VIEW collated_global_mv
                         5
                       ],
                       "input_arity": 6
-                    }
+                    },
+                    "node_id": 8
                   }
                 },
                 {
@@ -5500,9 +5600,11 @@ MATERIALIZED VIEW collated_global_mv
                                         "input_arity": 6
                                       }
                                     ]
-                                  }
+                                  },
+                                  "node_id": 3
                                 }
-                              }
+                              },
+                              "node_id": 4
                             }
                           },
                           {
@@ -5517,11 +5619,13 @@ MATERIALIZED VIEW collated_global_mv
                                     1
                                   ]
                                 ]
-                              }
+                              },
+                              "node_id": 5
                             }
                           }
                         ],
-                        "consolidate_output": true
+                        "consolidate_output": true,
+                        "node_id": 6
                       }
                     },
                     "mfp": {
@@ -5628,13 +5732,16 @@ MATERIALIZED VIEW collated_global_mv
                       ],
                       "input_arity": 0
                     },
-                    "input_key_val": null
+                    "input_key_val": null,
+                    "node_id": 7
                   }
                 }
               ],
-              "consolidate_output": false
+              "consolidate_output": false,
+              "node_id": 9
             }
-          }
+          },
+          "node_id": 10
         }
       }
     }
@@ -5710,7 +5817,8 @@ SELECT * FROM collated_global
                         "input_arity": 2
                       }
                     ]
-                  }
+                  },
+                  "node_id": 0
                 }
               },
               "key_val_plan": {
@@ -6147,7 +6255,8 @@ SELECT * FROM collated_global
                   5
                 ],
                 "input_arity": 6
-              }
+              },
+              "node_id": 1
             }
           },
           "body": {
@@ -6185,7 +6294,8 @@ SELECT * FROM collated_global
                           ],
                           "types": null
                         },
-                        "plan": "PassArrangements"
+                        "plan": "PassArrangements",
+                        "node_id": 2
                       }
                     },
                     "forms": {
@@ -6206,7 +6316,8 @@ SELECT * FROM collated_global
                         5
                       ],
                       "input_arity": 6
-                    }
+                    },
+                    "node_id": 8
                   }
                 },
                 {
@@ -6257,9 +6368,11 @@ SELECT * FROM collated_global
                                         "input_arity": 6
                                       }
                                     ]
-                                  }
+                                  },
+                                  "node_id": 3
                                 }
-                              }
+                              },
+                              "node_id": 4
                             }
                           },
                           {
@@ -6274,11 +6387,13 @@ SELECT * FROM collated_global
                                     1
                                   ]
                                 ]
-                              }
+                              },
+                              "node_id": 5
                             }
                           }
                         ],
-                        "consolidate_output": true
+                        "consolidate_output": true,
+                        "node_id": 6
                       }
                     },
                     "mfp": {
@@ -6385,13 +6500,16 @@ SELECT * FROM collated_global
                       ],
                       "input_arity": 0
                     },
-                    "input_key_val": null
+                    "input_key_val": null,
+                    "node_id": 7
                   }
                 }
               ],
-              "consolidate_output": false
+              "consolidate_output": false,
+              "node_id": 9
             }
-          }
+          },
+          "node_id": 10
         }
       }
     }
@@ -6450,7 +6568,8 @@ WHERE a = c AND d = e AND b + d > 42
                     }
                   ]
                 },
-                "plan": "PassArrangements"
+                "plan": "PassArrangements",
+                "node_id": 0
               }
             },
             {
@@ -6477,7 +6596,8 @@ WHERE a = c AND d = e AND b + d > 42
                         ],
                         "input_arity": 2
                       }
-                    }
+                    },
+                    "node_id": 1
                   }
                 },
                 "forms": {
@@ -6532,7 +6652,8 @@ WHERE a = c AND d = e AND b + d > 42
                     1
                   ],
                   "input_arity": 2
-                }
+                },
+                "node_id": 2
               }
             },
             {
@@ -6558,7 +6679,8 @@ WHERE a = c AND d = e AND b + d > 42
                         ],
                         "input_arity": 1
                       }
-                    }
+                    },
+                    "node_id": 3
                   }
                 },
                 "forms": {
@@ -6591,7 +6713,8 @@ WHERE a = c AND d = e AND b + d > 42
                     0
                   ],
                   "input_arity": 1
-                }
+                },
+                "node_id": 4
               }
             }
           ],
@@ -7112,7 +7235,8 @@ WHERE a = c AND d = e AND b + d > 42
                 }
               ]
             }
-          }
+          },
+          "node_id": 5
         }
       }
     }
@@ -7272,7 +7396,8 @@ WHERE a = c AND d = e AND f = a
                     }
                   ]
                 },
-                "plan": "PassArrangements"
+                "plan": "PassArrangements",
+                "node_id": 0
               }
             },
             {
@@ -7372,7 +7497,8 @@ WHERE a = c AND d = e AND f = a
                           "input_arity": 2
                         }
                       ]
-                    }
+                    },
+                    "node_id": 1
                   }
                 },
                 "forms": {
@@ -7428,7 +7554,8 @@ WHERE a = c AND d = e AND f = a
                     1
                   ],
                   "input_arity": 2
-                }
+                },
+                "node_id": 2
               }
             },
             {
@@ -7528,7 +7655,8 @@ WHERE a = c AND d = e AND f = a
                           "input_arity": 2
                         }
                       ]
-                    }
+                    },
+                    "node_id": 3
                   }
                 },
                 "forms": {
@@ -7570,7 +7698,8 @@ WHERE a = c AND d = e AND f = a
                     1
                   ],
                   "input_arity": 2
-                }
+                },
+                "node_id": 4
               }
             }
           ],
@@ -7969,7 +8098,8 @@ WHERE a = c AND d = e AND f = a
                 }
               ]
             }
-          }
+          },
+          "node_id": 5
         }
       }
     }
@@ -8028,7 +8158,8 @@ WHERE a = c and a = e
                     }
                   ]
                 },
-                "plan": "PassArrangements"
+                "plan": "PassArrangements",
+                "node_id": 0
               }
             },
             {
@@ -8067,7 +8198,8 @@ WHERE a = c and a = e
                     }
                   ]
                 },
-                "plan": "PassArrangements"
+                "plan": "PassArrangements",
+                "node_id": 1
               }
             },
             {
@@ -8106,7 +8238,8 @@ WHERE a = c and a = e
                     }
                   ]
                 },
-                "plan": "PassArrangements"
+                "plan": "PassArrangements",
+                "node_id": 2
               }
             }
           ],
@@ -8500,7 +8633,8 @@ WHERE a = c and a = e
                 }
               ]
             }
-          }
+          },
+          "node_id": 3
         }
       }
     }
