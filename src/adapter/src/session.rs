@@ -1068,10 +1068,12 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                     TransactionOps::Peeks {
                         determination,
                         cluster_id,
+                        requires_linearization,
                     } => match add_ops {
                         TransactionOps::Peeks {
                             determination: add_timestamp_determination,
                             cluster_id: add_cluster_id,
+                            requires_linearization: add_requires_linearization,
                         } => {
                             assert_eq!(*cluster_id, add_cluster_id);
                             match (
@@ -1098,6 +1100,14 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                                 }
                                 (_, TimestampContext::NoTimestamp) => {}
                             };
+                            if matches!(requires_linearization, RequireLinearization::NotRequired)
+                                && matches!(
+                                    add_requires_linearization,
+                                    RequireLinearization::Required
+                                )
+                            {
+                                *requires_linearization = add_requires_linearization;
+                            }
                         }
                         // Iff peeks thus far do not have a timestamp (i.e.
                         // they are constant), we can switch to a write
@@ -1286,7 +1296,7 @@ impl<T> From<&TransactionStatus<T>> for TransactionCode {
 /// This is needed because we currently do not allow mixing reads and writes in
 /// a transaction. Use this to record what we have done, and what may need to
 /// happen at commit.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum TransactionOps<T> {
     /// The transaction has been initiated, but no statement has yet been executed
     /// in it.
@@ -1300,6 +1310,8 @@ pub enum TransactionOps<T> {
         determination: TimestampDetermination<T>,
         /// The cluster used to execute peeks.
         cluster_id: ClusterId,
+        /// Whether this peek needs to be linearized.
+        requires_linearization: RequireLinearization,
     },
     /// This transaction has done a `SUBSCRIBE` and must do nothing else.
     Subscribe,
@@ -1350,4 +1362,13 @@ pub struct WriteOp {
     pub id: GlobalId,
     /// The data rows.
     pub rows: Vec<(Row, Diff)>,
+}
+
+/// Whether a transaction requires linearization.
+#[derive(Debug)]
+pub enum RequireLinearization {
+    /// Linearization is not required.
+    Required,
+    /// Linearization is required.
+    NotRequired,
 }

@@ -3833,3 +3833,35 @@ async fn test_constant_materialized_view() {
         }
     }
 }
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_explain_timestamp_blocking() {
+    let server = test_util::TestHarness::default().start().await;
+    server
+        .enable_feature_flags(&["enable_refresh_every_mvs"])
+        .await;
+    let client = server.connect().await.unwrap();
+    // This test will break in the year 30,000 after Jan 1st. When that happens, increase the year
+    // to fix the test.
+    client
+        .batch_execute(
+            "CREATE MATERIALIZED VIEW const_mv WITH (REFRESH AT '30000-01-01 23:59') AS SELECT 2;",
+        )
+        .await
+        .unwrap();
+
+    let mv_timestamp = get_explain_timestamp("const_mv", &client).await;
+
+    let row = client
+        .query_one("SELECT mz_now()::text;", &[])
+        .await
+        .unwrap();
+    let mz_now_ts_raw: String = row.get(0);
+    let mz_now_timestamp: EpochMillis = mz_now_ts_raw.parse().unwrap();
+
+    assert!(
+        mv_timestamp > mz_now_timestamp,
+        "read against mv at timestamp {mv_timestamp} should be in the future compared to now, {mz_now_timestamp}"
+    );
+}

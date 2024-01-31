@@ -1978,6 +1978,13 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_notices_for_index_already_exists,
+        desc: "emitting notices for IndexAlreadyExists (doesn't affect EXPLAIN)",
+        default: true,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_notices_for_index_too_wide_for_literal_constraints,
         desc: "emitting notices for IndexTooWideForLiteralConstraints (doesn't affect EXPLAIN)",
         default: false,
