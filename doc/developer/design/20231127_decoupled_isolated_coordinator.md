@@ -422,60 +422,59 @@ Previous design documents describe physical implementations of the newly require
  - [Differential CATALOG state](./20230806_durable_catalog_state.md)
  - [TIMESTAMP ORACLE as a service](./20230921_distributed_ts_oracle.md)
 
-## Roadmap to Use-Case Isolation and Platform v2 in General
+## Roadmap for Use-Case Isolation and Platform v2 in General
 
-We organize the existing milestones ([Use-Case Isolation: Milestones
-(internal)](https://www.notion.so/materialize/Use-case-Isolation-Milestones-f1a37b024ea74b7c9d870778c4349fe3)) into three distinct phases.
+These milestones gradually move us from our current architecture to a design
+where the query/control layer (aka. the adapter, coordinator, and controllers)
+is less and less tightly coupled and therefore supports better scalability and
+isolation.
 
-### Phase 1: Laying the Foundations
+### Milestone 1: Laying the Foundations
 
-This phase is about developing the components that we will need to decouple
-processing from the single event loop. The current abstractions around the
+This milestone is about developing the components that we will need to decouple
+the components of the query/control layer. The current abstractions around the
 catalog and timestamp oracle are not shareable between multiple actors.
 Similarly, table writes cannot be done concurrently by multiple actors.
 
-- [Abstraction for Table Transactions](https://github.com/MaterializeInc/materialize/issues/22173)
-- Differential Catalog State (aka. catalog pTVC):
-  - [First EPIC](https://github.com/MaterializeInc/materialize/issues/20953)
-  - [Second EPIC](https://github.com/MaterializeInc/materialize/issues/22392)
-- [Distributed TimestampOracle](https://github.com/MaterializeInc/materialize/issues/22029)
+Epics:
 
-We are nearing the end of this phase. All of the above workstreams have
-implementations merged behind feature flags and are being refined before we
-start rolling them out to staging and then production.
+- persist-txn: an abstraction that makes tables isolated and scalable
+  - https://github.com/MaterializeInc/materialize/issues/22173
+- Differential Catalog State (aka. Catalog pTVC): an abstraction that will allow multi-writer, multi-subscriber access to durable catalog state
+  - https://github.com/MaterializeInc/materialize/issues/20953
+  - https://github.com/MaterializeInc/materialize/issues/22392
+- Distributed TimestampOracle: making the timetamp oracle distributed/shareable
+  - https://github.com/MaterializeInc/materialize/issues/22029)
 
-### Phase 2: Towards a Vertically Scalable Serving Layer
+### Milestone 2: A Vertically Scalable Query/Control Layer
 
-Once we have the new components developed in Phase 1 we can start incrementally
-pulling responsibilities out of the Coordinator event loop. In line with our
-milestones, we will start with Peeks, move on to table writes, and then finally
-decouple the controllers from the event loop.
+Once we have the new components developed in Milestone 1 we can start
+incrementally pulling responsibilities out of the "single-threaded" Coordinator
+event loop. Individual benefits of this are:
 
+- Isolated Controller Control Loops: A single cluster (and it's controller),
+  that is, for example, sending back a lot of responses no longer negatively
+  interferes with the rest of the Coordinator responsibilities.
 - Isolated Peeks: Processing of Peeks will no longer interfere with other
   responsibilities of the Coordinator, for example processing of controller
   responses or other (potentially blocking things). Controllers will send Peek
   Responses back to `pgwire` proactively, bypassing the event loop. And, most
   importantly other responsibilities will not negatively aspect processing
   Peeks.
-- Isolated Writes: What we have above for Peeks, but for Writes, basically!
-- Isolated Controller Control Loops: A single cluster (and it's controller),
-  that is, for example, sending back a lot of responses no longer negatively
-  interferes with the rest of the Coordinator responsibilities.
+- Isolated Writes: What we have above for Peeks, but for Writes!
 
-TODO: More exciting details about what the benefits of the individual steps
-will be!
-
-At the end of this phase, we will have an isolated and vertically scalable
-serving layer. The current serving layer can not be scaled up by adding more
+At the end of this milestone, we will have an isolated and vertically scalable
+query/control layer. The current implementation can not scale up by adding more
 resources to the single process/machine because the single event loop is a
 bottleneck. Once responsibilities are decouple we _can_ scale up vertically.
 
-### Phase 3: A Horizontally Scalable Serving Layer, aka. Full Physical Use-Case Isolation
+### Milestone 3: A Horizontally Scalable Query/Control Layer, aka. Full Physical
+Use-Case Isolation
 
-Once the controllers are decoupled from the Coordinator via the CATALOG pTVC,
-we can start moving them out into their own processes or move them along-side
-the cluster/replica processes. Similarly, we can start moving query processing
-to other processes.
+Once the controllers are decoupled from the Coordinator via the Catalog pTVC, we
+can start moving them out into their own processes or move them along-side the
+cluster/replica processes. Similarly, we can start moving query processing to
+other processes.
 
 ## Alternatives
 
