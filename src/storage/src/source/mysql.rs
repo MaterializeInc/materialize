@@ -322,7 +322,7 @@ impl GtidReplicationPartitions {
         Antichain::from_iter(
             self.active
                 .values()
-                .map(|part| part.clone())
+                .cloned()
                 .chain(self.future.iter().cloned()),
         )
     }

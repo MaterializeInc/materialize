@@ -19,7 +19,6 @@ use std::cmp::Ordering;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
 
-use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use timely::communication::Data;
 use timely::order::Product;
@@ -27,6 +26,8 @@ use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
 use timely::progress::Antichain;
 use timely::PartialOrder;
 use uuid::Uuid;
+
+use mz_ore::cast::CastFrom;
 
 /// A partially ordered timestamp that is partitioned by an arbitrary number of partitions
 /// identified by `P`. The construction allows for efficient representation of frontiers with
@@ -72,6 +73,10 @@ impl<P: Clone + PartialOrd, T> Partitioned<P, T> {
     /// Returns the timestamp component of this partitioned timestamp.
     pub fn timestamp(&self) -> &T {
         &self.0.inner
+    }
+
+    pub fn timestamp_mut(&mut self) -> &mut T {
+        &mut self.0.inner
     }
 }
 
@@ -184,18 +189,14 @@ where
 
 impl Step for Uuid {
     fn backward_checked(&self, count: usize) -> Option<Self> {
-        let repr = self.as_u128();
-        match repr {
-            0 => None,
-            _ => Some(Self::from_u128(repr - count.to_u128().unwrap())),
-        }
+        self.as_u128()
+            .checked_sub(u128::cast_from(count))
+            .map(Self::from_u128)
     }
     fn forward_checked(&self, count: usize) -> Option<Self> {
-        let repr = self.as_u128();
-        match repr {
-            u128::MAX => None,
-            _ => Some(Self::from_u128(repr + count.to_u128().unwrap())),
-        }
+        self.as_u128()
+            .checked_add(u128::cast_from(count))
+            .map(Self::from_u128)
     }
 }
 

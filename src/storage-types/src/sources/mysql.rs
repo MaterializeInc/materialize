@@ -9,13 +9,10 @@
 
 //! Types related to mysql sources
 
-use core::ops::Add;
 use std::fmt;
 use std::io;
 use std::num::NonZeroU64;
 
-use itertools::Itertools;
-use mz_timely_util::order::Extrema;
 use mz_timely_util::order::Step;
 use once_cell::sync::Lazy;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
@@ -192,7 +189,7 @@ pub enum GTIDState {
 impl fmt::Display for GTIDState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            GTIDState::Absent => write!(f, "Null"),
+            GTIDState::Absent => write!(f, "Absent"),
             GTIDState::Active(id) => write!(f, "{}", id),
         }
     }
@@ -200,22 +197,6 @@ impl fmt::Display for GTIDState {
 
 impl GTIDState {
     pub const MAX: GTIDState = GTIDState::Active(NonZeroU64::MAX);
-}
-
-impl Add for GTIDState {
-    type Output = Self;
-
-    fn add(self, other: Self) -> Self {
-        match self {
-            GTIDState::Absent => other,
-            GTIDState::Active(id) => match other {
-                GTIDState::Absent => self,
-                GTIDState::Active(other_id) => {
-                    GTIDState::Active(NonZeroU64::new(id.get() + other_id.get()).unwrap())
-                }
-            },
-        }
-    }
 }
 
 impl Timestamp for GTIDState {
@@ -284,11 +265,11 @@ impl SourceTimestamp for GtidPartition {
     fn encode_row(&self) -> Row {
         let ts = match self.timestamp() {
             GTIDState::Absent => Datum::Null,
-            GTIDState::Active(id) => Datum::from(id.get()),
+            GTIDState::Active(id) => Datum::UInt64(id.get()),
         };
         Row::pack(&[
-            Datum::from(self.interval().lower),
-            Datum::from(self.interval().upper),
+            Datum::Uuid(self.interval().lower),
+            Datum::Uuid(self.interval().upper),
             ts,
         ])
     }
@@ -318,9 +299,14 @@ impl SourceTimestamp for GtidPartition {
 ///
 /// Returns the frontier of all future GTIDs that are not contained in the provided GTID set.
 ///
+/// This includes singlular partitions that represent each UUID seen in the GTID Set, and range
+/// partitions that represent the missing UUIDs between the singular partitions, which are
+/// each set to GTIDState::Absent.
+///
 /// TODO(roshan): Add compatibility for MySQL 8.3 'Tagged' GTIDs
 pub fn gtid_set_frontier(gtid_set_str: &str) -> Result<Antichain<GtidPartition>, io::Error> {
     let mut partitions = Antichain::new();
+    let mut gap_lower = Some(Uuid::nil());
     for gtid_str in gtid_set_str.split(',') {
         if gtid_str.is_empty() {
             continue;
@@ -383,6 +369,16 @@ pub fn gtid_set_frontier(gtid_set_str: &str) -> Result<Antichain<GtidPartition>,
                 ))
             }
         };
+        // Create a partition representing all the UUIDs in the gap between the previous one and this one
+        if let Some(gap_upper) = uuid.backward_checked(1) {
+            let gap_lower = gap_lower.expect("uuids are in alphabetical order");
+            partitions.insert(GtidPartition::new_range(
+                gap_lower,
+                gap_upper,
+                GTIDState::Absent,
+            ));
+        }
+        gap_lower = uuid.forward_checked(1);
         // Insert a partition representing the 'next' GTID that might be seen from this source
         partitions.insert(GtidPartition::new_singleton(
             uuid,
@@ -390,42 +386,14 @@ pub fn gtid_set_frontier(gtid_set_str: &str) -> Result<Antichain<GtidPartition>,
         ));
     }
 
-    // Fill in gaps in the GTID set with Absent values for all future source-ids we may see
-    let mut future_partitions = vec![];
-
-    let mut prev = Uuid::nil();
-    let mut push_last = true;
-    for partition in partitions.iter().sorted_by(|a, b| {
-        a.interval()
-            .singleton()
-            .unwrap()
-            .cmp(b.interval().singleton().unwrap())
-    }) {
-        let part = partition.interval().singleton().unwrap();
-        assert!(prev < *part, "duplicate GTID found in GTID set");
-
-        // Create a partition representing all the UUIDs in the gap between the previous one and this one
-        if let Some(end) = part.backward_checked(1) {
-            future_partitions.push(GtidPartition::new_range(prev, end, GTIDState::Absent));
-        }
-
-        // Set prev to the UUID + 1 so the next gap starts after this one
-        if let Some(next) = part.forward_checked(1) {
-            prev = next;
-        } else {
-            // part was UUID::MAX so we don't need to add a future partition
-            push_last = false;
-            break;
-        };
-    }
-    if push_last {
-        future_partitions.push(GtidPartition::new_range(
-            prev,
-            Uuid::maximum(),
+    // Add the final range partition if there is a gap between the last partition and the maximum
+    if let Some(gap_lower) = gap_lower {
+        partitions.insert(GtidPartition::new_range(
+            gap_lower,
+            Uuid::max(),
             GTIDState::Absent,
         ));
-    };
+    }
 
-    partitions.extend(future_partitions.into_iter());
     Ok(partitions)
 }

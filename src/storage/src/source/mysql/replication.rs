@@ -210,13 +210,16 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         // sent within the heartbeat interval. This means that we can safely advance the
                         // frontier once since we know there were no more events for the last sent GTID.
                         // See: https://dev.mysql.com/doc/refman/8.0/en/replication-administration-status.html
-                        if let Some(new_gtid) = next_gtid {
-                            let new_upper_part = GtidPartition::new_singleton(
-                                new_gtid.interval().singleton().unwrap().clone(),
-                                *new_gtid.timestamp() + GTIDState::Active(NonZeroU64::new(1).unwrap()),
-                            );
+                        if let Some(mut new_gtid) = next_gtid.take() {
+                            // Increment the transaction-id to the next GTID we should see from this source-id
+                            match new_gtid.timestamp_mut() {
+                                GTIDState::Active(time) => {
+                                    *time = time.checked_add(1).unwrap();
+                                }
+                                _ => unreachable!(),
+                            }
 
-                            if let Err(err) = repl_partitions.update(new_upper_part) {
+                            if let Err(err) = repl_partitions.update(new_gtid) {
                                 return Ok(
                                     return_definite_error(err, &output_indexes, &mut data_output, data_cap_set, &mut definite_error_handle, definite_error_cap_set).await
                                 )
@@ -230,8 +233,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             rewinds.retain(|_, (_, req)| !PartialOrder::less_equal(&req.snapshot_upper, &new_upper));
 
                             trace!(%id, "timely-{worker_id} pending rewinds after filtering: {rewinds:?}");
-
-                            next_gtid = None;
                         }
                     }
                     // We receive a GtidEvent that tells us the GTID of the incoming RowsEvents (and other events)
@@ -283,7 +284,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
                         let (output_index, table_desc) = &table_info[table];
                         let new_gtid = next_gtid.as_ref().expect("gtid cap should be set by previous GtidEvent");
-                        let new_gtid_antichain = Antichain::from_elem(new_gtid.clone());
 
                         // Iterate over the rows in this RowsEvent. Each row is a pair of 'before_row', 'after_row',
                         // to accomodate for updates and deletes (which include a before_row),
@@ -300,7 +300,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
                                 // Rewind this update if it was already present in the snapshot
                                 if let Some(([data_cap, _upper_cap], rewind_req)) = rewinds.get(table) {
-                                    if !PartialOrder::less_equal(&rewind_req.snapshot_upper, &new_gtid_antichain) {
+                                    if !rewind_req.snapshot_upper.less_equal(new_gtid) {
                                         trace!(%id, "timely-{worker_id} rewinding update {data:?} for {new_gtid:?}");
                                         data_output.give(data_cap, (data.clone(), GtidPartition::minimum(), -diff)).await;
                                     }
@@ -422,21 +422,20 @@ async fn raw_stream<'a>(
     // https://dev.mysql.com/doc/dev/mysql-server/latest/classGtid__set.html#ab46da5ceeae0198b90f209b0a8be2a24
     let seen_gtids = resume_upper
         .iter()
-        // If we're starting from the beginning of the binlog or the first transaction id
-        // we haven't seen 'anything'
-        .filter(|partition| partition.timestamp() != &GTIDState::Absent)
-        .map(|partition| {
-            let part_uuid = partition
-                .interval()
-                .singleton()
-                .expect("Non-absent paritions will be singletons");
-            let frontier_time = match partition.timestamp() {
-                GTIDState::Active(time) => time,
-                _ => unreachable!(),
-            };
-            // NOTE: Since we enforce replica_preserve_commit_order=ON we can start the interval at 1
-            // since we know that all transactions with a lower transaction id were monotonic
-            Sid::new(*part_uuid.as_bytes()).with_interval(GnoInterval::new(1, frontier_time.get()))
+        .flat_map(|partition| match partition.timestamp() {
+            GTIDState::Absent => None,
+            GTIDState::Active(frontier_time) => {
+                let part_uuid = partition
+                    .interval()
+                    .singleton()
+                    .expect("Non-absent paritions will be singletons");
+                // NOTE: Since we enforce replica_preserve_commit_order=ON we can start the interval at 1
+                // since we know that all transactions with a lower transaction id were monotonic
+                Some(
+                    Sid::new(*part_uuid.as_bytes())
+                        .with_interval(GnoInterval::new(1, frontier_time.get())),
+                )
+            }
         })
         .collect::<Vec<_>>();
 
