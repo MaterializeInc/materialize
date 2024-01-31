@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::pin::Pin;
@@ -24,12 +25,20 @@ use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 use tokio_postgres::types::{to_sql_checked, Format, IsNull, ToSql, Type};
 
 use crate::crypto::AsyncAesDecrypter;
-use crate::destination::{config, ddl};
+use crate::destination::config;
 use crate::fivetran_sdk::write_batch_request::FileParams;
 use crate::fivetran_sdk::{
     Compression, Encryption, Table, TruncateRequest, TruncateResponse, WriteBatchRequest,
     WriteBatchResponse,
 };
+use crate::utils;
+
+/// Tracks if a row has been "soft deleted" if this column to true.
+const FIVETRAN_SYSTEM_COLUMN_DELETE: &str = "_fivetran_deleted";
+/// Tracks the last time this Row was modified by Fivetran.
+const FIVETRAN_SYSTEM_COLUMN_SYNCED: &str = "_fivetran_synced";
+/// Fivetran will synthesize a primary key column when one doesn't exist.
+const FIVETRAN_SYSTEM_COLUMN_ID: &str = "_fivetran_id";
 
 pub async fn handle_truncate_request(
     request: TruncateRequest,
@@ -113,10 +122,6 @@ async fn write_batch(request: WriteBatchRequest) -> Result<(), anyhow::Error> {
         bail!("internal error: WriteBatchRequest missing \"file_params\" field");
     };
 
-    if !request.delete_files.is_empty() {
-        bail!("hard deletions are not supported");
-    }
-
     let file_config = FileConfig {
         compression: match csv_file_params.compression() {
             Compression::Off => FileCompression::None,
@@ -133,6 +138,11 @@ async fn write_batch(request: WriteBatchRequest) -> Result<(), anyhow::Error> {
 
     let (_dbname, client) = config::connect(request.configuration).await?;
 
+    // Note: This ordering of operations is important! Fivetran expects that we run "replace",
+    // "update", and then "delete" ops.
+    //
+    // See: https://materializeinc.slack.com/archives/C060KAR4802/p1706726115147059?thread_ts=1706720574.377339&cid=C060KAR4802
+
     replace_files(
         &request.schema_name,
         &table,
@@ -148,6 +158,15 @@ async fn write_batch(request: WriteBatchRequest) -> Result<(), anyhow::Error> {
         &file_config,
         &client,
         &request.update_files,
+    )
+    .await?;
+
+    delete_files(
+        &request.schema_name,
+        &table,
+        &file_config,
+        &client,
+        &request.delete_files,
     )
     .await?;
 
@@ -342,7 +361,7 @@ async fn update_files(
                 name = escape::escape_identifier(&column.name),
                 p = i + 1,
                 unmodified_string = escape::escape_literal(&file_config.unmodified_string),
-                ty = ddl::to_materialize_type(column.r#type())?,
+                ty = utils::to_materialize_type(column.r#type())?,
             ));
         }
     }
@@ -386,6 +405,152 @@ async fn update_file(
         client.execute_raw(update_stmt, params).await?;
     }
     Ok(())
+}
+
+async fn delete_files(
+    schema: &str,
+    table: &Table,
+    file_config: &FileConfig,
+    client: &tokio_postgres::Client,
+    delete_files: &[String],
+) -> Result<(), anyhow::Error> {
+    // TODO(parkmycar): Make sure table exists.
+    // TODO(parkmycar): Retry transient errors.
+
+    // Copy into a temporary table, which we then merge into the destination.
+    let ts = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .context("time went backwards!")?;
+    // TODO(parkmycar): Make sure table name is <= 255 characters.
+    let temp_table_name = format!("fivetran_{}_temp_delete_{}", table.name, ts.as_millis());
+
+    let schema_name = escape::escape_identifier(schema);
+    let table_name = escape::escape_identifier(&table.name);
+    let temp_table_name = escape::escape_identifier(&temp_table_name);
+
+    let columns = table
+        .columns
+        .iter()
+        .map(|col| {
+            let mut ty: Cow<'static, str> = utils::to_materialize_type(col.r#type())?.into();
+            if let Some(d) = &col.decimal {
+                ty.to_mut()
+                    .push_str(&format!("({}, {})", d.precision, d.scale));
+            }
+
+            Ok(ColumnMetadata {
+                name: col.name.to_string(),
+                ty,
+                is_primary: col.primary_key || col.name.to_lowercase() == FIVETRAN_SYSTEM_COLUMN_ID,
+            })
+        })
+        .collect::<Result<Vec<_>, anyhow::Error>>()?;
+
+    // Create our temporary table that we'll copy the delete files into.
+    let defs = columns
+        .iter()
+        .map(|col| format!("{} {}", col.name, col.ty))
+        .join(",");
+    let create_table_stmt = format!("CREATE TABLE {schema_name}.{temp_table_name} ({defs})");
+    client.batch_execute(&create_table_stmt).await?;
+
+    // TODO(parkmycar): Ideally we'd use the COPY FROM protocol here, but we need to add support
+    // for compression and encryption.
+    let cols = columns
+        .iter()
+        .enumerate()
+        .map(|(idx, col)| format!("${}::{}", idx + 1, col.ty))
+        .join(",");
+    let insert_stmt = format!("INSERT INTO {schema_name}.{temp_table_name} VALUES ({cols})",);
+    let insert_stmt = client
+        .prepare(&insert_stmt)
+        .await
+        .context("internal error: preparing delete temp table insert statement")?;
+
+    let mut total_count = 0;
+    for path in delete_files {
+        let reader = load_file(file_config, path)
+            .await
+            .with_context(|| format!("loading delete file {path}"))?;
+        let copied = copy_delete_file(file_config, client, &insert_stmt, reader)
+            .await
+            .with_context(|| format!("handling delete file {path}"))?;
+        total_count += copied;
+    }
+    tracing::info!(total_count, "inserted rows to {schema}.{temp_table_name}");
+
+    // Skip the update if there are no rows to delete!
+    if total_count > 0 {
+        // Mark rows as deleted by "merging" our temporary table into the destination table.
+        //
+        // TODO(parkmycar): Fivetran provides a column name in truncate for soft deletes, should the
+        // delete operation be doing the same?
+
+        // HACKY: We want to update the "_fivetran_synced" column for all of the rows we marked as
+        // deleted, but don't have a way to read from the temp table that would allow this in an
+        // `UPDATE` statement.
+        let synced_time_stmt = format!(
+            "SELECT MAX({synced_col}) FROM {schema_name}.{temp_table_name}",
+            synced_col = escape::escape_identifier(FIVETRAN_SYSTEM_COLUMN_SYNCED)
+        );
+        let synced_time: SystemTime = client
+            .query_one(&synced_time_stmt, &[])
+            .await
+            .and_then(|row| row.try_get(0))?;
+
+        let matching_cols = columns.iter().filter(|col| col.is_primary);
+        let merge_stmt = format!(
+            r#"
+            UPDATE {schema_name}.{table_name}
+            SET {deleted_col} = true, {synced_col} = $1
+            WHERE ({cols}) IN (
+                SELECT {cols}
+                FROM {schema_name}.{temp_table_name}
+            )"#,
+            deleted_col = escape::escape_identifier(FIVETRAN_SYSTEM_COLUMN_DELETE),
+            synced_col = escape::escape_identifier(FIVETRAN_SYSTEM_COLUMN_SYNCED),
+            cols = matching_cols.map(|col| &col.name).join(","),
+        );
+        let total_count = client.execute(&merge_stmt, &[&synced_time]).await?;
+        tracing::info!(?total_count, "altered rows in {schema}.{table_name}");
+    }
+
+    // Cleanup, drop our temporary table.
+    client
+        .batch_execute(&format!("DROP TABLE {schema_name}.{temp_table_name}"))
+        .await?;
+
+    Ok(())
+}
+
+async fn copy_delete_file(
+    file_config: &FileConfig,
+    client: &tokio_postgres::Client,
+    insert_stmt: &tokio_postgres::Statement,
+    reader: AsyncCsvReader,
+) -> Result<usize, anyhow::Error> {
+    let mut count = 0;
+    let mut stream = reader.into_byte_records();
+    while let Some(record) = stream.try_next().await? {
+        let params = record.iter().map(|value| TextFormatter {
+            value,
+            null_string: &file_config.null_string,
+        });
+        client.execute_raw(insert_stmt, params).await?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+/// Metadata about a column that is relevant to operations peformed by the destination.
+#[derive(Debug)]
+struct ColumnMetadata {
+    /// Name of the column in the destination table.
+    name: String,
+    /// Type of the column in the destination table.
+    ty: Cow<'static, str>,
+    /// Is this column a primary key.
+    is_primary: bool,
 }
 
 #[derive(Debug)]
