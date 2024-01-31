@@ -919,7 +919,7 @@ impl Coordinator {
             }
 
             if let Some(ctx) = maybe_ctx {
-                ctx.retire(Ok(ExecuteResponse::Canceled));
+                ctx.retire(Err(AdapterError::Canceled));
             }
 
             // Inform the target session (if it asks) about the cancellation.
