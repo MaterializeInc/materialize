@@ -982,6 +982,8 @@ impl From<PendingTxnResponse> for ExecuteResponse {
 pub struct PendingReadTxn {
     /// The transaction type
     txn: PendingRead,
+    /// The timestamp context of the transaction.
+    timestamp_context: TimestampContext<mz_repr::Timestamp>,
     /// When we created this pending txn, when the transaction ends. Only used for metrics.
     created: Instant,
     /// Number of times we requeued the processing of this pending read txn.
@@ -992,42 +994,27 @@ pub struct PendingReadTxn {
     otel_ctx: OpenTelemetryContext,
 }
 
+impl PendingReadTxn {
+    /// Return the timestamp context of the pending read transaction.
+    pub fn timestamp_context(&self) -> &TimestampContext<mz_repr::Timestamp> {
+        &self.timestamp_context
+    }
+}
+
 #[derive(Debug)]
 /// A pending read transaction waiting to be linearized.
 enum PendingRead {
     Read {
         /// The inner transaction.
         txn: PendingTxn,
-        /// The timestamp context of the transaction.
-        timestamp_context: TimestampContext<mz_repr::Timestamp>,
     },
     ReadThenWrite {
         /// Channel used to alert the transaction that the read has been linearized.
         tx: oneshot::Sender<()>,
-        /// Timestamp and timeline of the read.
-        timestamp: (mz_repr::Timestamp, Timeline),
     },
 }
 
 impl PendingRead {
-    /// Return the timestamp context of the pending read transaction.
-    pub fn timestamp_context(&self) -> TimestampContext<mz_repr::Timestamp> {
-        match &self {
-            PendingRead::Read {
-                timestamp_context, ..
-            } => timestamp_context.clone(),
-            PendingRead::ReadThenWrite {
-                timestamp: (timestamp, timeline),
-                ..
-            } => TimestampContext::TimelineTimestamp {
-                timeline: timeline.clone(),
-                chosen_ts: timestamp.clone(),
-                oracle_ts: None, // For writes, we always pick the oracle
-                                 // timestamp!
-            },
-        }
-    }
-
     /// Alert the client that the read has been linearized.
     ///
     /// If it is necessary to finalize an execute, return the state necessary to do so

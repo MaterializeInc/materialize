@@ -87,9 +87,7 @@ use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::FastPathPlan;
 use crate::coord::timeline::TimelineContext;
-use crate::coord::timestamp_selection::{
-    TimestampContext, TimestampDetermination, TimestampSource,
-};
+use crate::coord::timestamp_selection::{TimestampDetermination, TimestampSource};
 use crate::coord::{
     AlterConnectionValidationReady, Coordinator, CreateConnectionValidationReady, ExecuteContext,
     Message, PendingRead, PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity,
@@ -1646,8 +1644,8 @@ impl Coordinator {
                                 response,
                                 action,
                             },
-                            timestamp_context: determination.timestamp_context,
                         },
+                        timestamp_context: determination.timestamp_context,
                         created: Instant::now(),
                         num_requeues: 0,
                         otel_ctx: OpenTelemetryContext::obtain(),
@@ -3185,18 +3183,11 @@ impl Coordinator {
             // Note: It's only OK for the write to have a greater timestamp than the read
             // because the write lock prevents any other writes from happening in between
             // the read and write.
-            if let Some(TimestampContext::TimelineTimestamp {
-                timeline,
-                chosen_ts: chosen_read_ts,
-                oracle_ts: _,
-            }) = timestamp_context
-            {
+            if let Some(timestamp_context) = timestamp_context {
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 let result = strict_serializable_reads_tx.send(PendingReadTxn {
-                    txn: PendingRead::ReadThenWrite {
-                        tx,
-                        timestamp: (chosen_read_ts, timeline),
-                    },
+                    txn: PendingRead::ReadThenWrite { tx },
+                    timestamp_context,
                     created: Instant::now(),
                     num_requeues: 0,
                     otel_ctx: OpenTelemetryContext::obtain(),
