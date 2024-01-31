@@ -7,13 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-name: fivetran-destination-tester
-publish: true
-pre-image:
-  - type: copy
-    source: misc/fivetran-sdk/tools
-    destination: build
-  - type: copy
-    source: misc/fivetran-sdk
-    destination: build
-    matching: "*.proto"
+> SELECT k1, k2, v1, v2, _fivetran_deleted FROM test.tester.test_truncate
+k1  k2  v1     v2               _fivetran_deleted
+-------------------------------------------------
+1   a   12.78  "{\"x\":\"y\"}"  true
+1   b   91.28  {}               true
+2   a   34.21  "{\"x\":\"z\"}"  true

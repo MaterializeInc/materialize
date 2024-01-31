@@ -3,4 +3,4 @@
 	url = https://github.com/MaterializeInc/sqllogictest.git
 [submodule "fivetran-sdk"]
 	path = misc/fivetran-sdk
-	url = https://github.com/MaterializeInc/fivetran_sdk.git
+	url = https://github.com/fivetran/fivetran_sdk.git

@@ -7,16 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM bazel
-
-WORKDIR /home/ubuntu
-
-COPY build build
-
-RUN cd build \
-    && bazel build //testers:run_sdk_destination_tester_deploy.jar
-
-RUN apt-get update \
-    && apt-get -qy install openjdk-17-jre
-
-ENTRYPOINT ["java", "-jar", "/home/ubuntu/build/bazel-bin/testers/run_sdk_destination_tester_deploy.jar", "--working-dir=/data"]
+> SELECT k1, k2, v1, v2, _fivetran_deleted FROM test.tester.test_update
+k1  k2  v1     v2               _fivetran_deleted
+-------------------------------------------------
+1   a   12.78  "{\"x\":\"y\"}"  false
+1   b   91.28  {}               false
+2   a   34.21  "{\"x\":\"z\"}"  false
