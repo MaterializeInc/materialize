@@ -995,56 +995,6 @@ impl RustType<ProtoLetRecLimit> for LetRecLimit {
 }
 
 impl<T: timely::progress::Timestamp> Plan<T> {
-    /// Replace the plan with another one
-    /// that has the collection in some additional forms.
-    pub fn arrange_by(
-        self,
-        collections: AvailableCollections,
-        old_collections: &AvailableCollections,
-        arity: usize,
-    ) -> Self {
-        let new_self = if let Self::ArrangeBy {
-            input,
-            mut forms,
-            input_key,
-            input_mfp,
-        } = self
-        {
-            forms.raw |= collections.raw;
-            forms.arranged.extend(collections.arranged);
-            forms.arranged.sort_by(|k1, k2| k1.0.cmp(&k2.0));
-            forms.arranged.dedup_by(|k1, k2| k1.0 == k2.0);
-            if forms.types.is_none() {
-                forms.types = collections.types;
-            } else {
-                assert!(collections.types.is_none() || collections.types == forms.types);
-            }
-            Self::ArrangeBy {
-                input,
-                forms,
-                input_key,
-                input_mfp,
-            }
-        } else {
-            let (input_key, input_mfp) = if let Some((input_key, permutation, thinning)) =
-                old_collections.arbitrary_arrangement()
-            {
-                let mut mfp = MapFilterProject::new(arity);
-                mfp.permute(permutation.clone(), thinning.len() + input_key.len());
-                (Some(input_key.clone()), mfp)
-            } else {
-                (None, MapFilterProject::new(arity))
-            };
-            Self::ArrangeBy {
-                input: Box::new(self),
-                forms: collections,
-                input_key,
-                input_mfp,
-            }
-        };
-        new_self
-    }
-
     /// Convert the dataflow description into one that uses render plans.
     #[tracing::instrument(
         target = "optimizer",

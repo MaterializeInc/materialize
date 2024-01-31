@@ -525,7 +525,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                                 rows: Ok(Vec::new()),
                             },
                         );
-                        *input_plan = raw_plan.arrange_by(missing, input_keys, arity);
+                        *input_plan = self.arrange_by(raw_plan, missing, input_keys, arity);
                     }
                 }
                 // Return the plan, and no arrangements.
@@ -621,7 +621,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
                 let input = if !keys.raw {
-                    input.arrange_by(AvailableCollections::new_raw(), &keys, arity)
+                    self.arrange_by(input, AvailableCollections::new_raw(), &keys, arity)
                 } else {
                     input
                 };
@@ -641,7 +641,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
                 let input = if !keys.raw {
-                    input.arrange_by(AvailableCollections::new_raw(), &keys, arity)
+                    self.arrange_by(input, AvailableCollections::new_raw(), &keys, arity)
                 } else {
                     input
                 };
@@ -659,7 +659,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
                 let plan = if !keys.raw {
-                    plan.arrange_by(AvailableCollections::new_raw(), &keys, arity)
+                    self.arrange_by(plan, AvailableCollections::new_raw(), &keys, arity)
                 } else {
                     plan
                 };
@@ -675,7 +675,8 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     } else {
                         None
                     };
-                    plan.arrange_by(
+                    self.arrange_by(
+                        plan,
                         AvailableCollections::new_arranged(
                             vec![required_arrangement],
                             types.clone(),
@@ -712,7 +713,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         // We don't have an MFP here -- install an operator to permute the
                         // input, if necessary.
                         if !keys.raw {
-                            plan.arrange_by(AvailableCollections::new_raw(), &keys, arity)
+                            self.arrange_by(plan, AvailableCollections::new_raw(), &keys, arity)
                         } else {
                             plan
                         }
@@ -857,6 +858,56 @@ This is not expected to cause incorrect results, but could indicate a performanc
         }
 
         Ok((plan, keys))
+    }
+
+    /// Replace the plan with another one
+    /// that has the collection in some additional forms.
+    pub fn arrange_by<T>(
+        &mut self,
+        plan: Plan<T>,
+        collections: AvailableCollections,
+        old_collections: &AvailableCollections,
+        arity: usize,
+    ) -> Plan<T> {
+        if let Plan::ArrangeBy {
+            input,
+            mut forms,
+            input_key,
+            input_mfp,
+        } = plan
+        {
+            forms.raw |= collections.raw;
+            forms.arranged.extend(collections.arranged);
+            forms.arranged.sort_by(|k1, k2| k1.0.cmp(&k2.0));
+            forms.arranged.dedup_by(|k1, k2| k1.0 == k2.0);
+            if forms.types.is_none() {
+                forms.types = collections.types;
+            } else {
+                assert!(collections.types.is_none() || collections.types == forms.types);
+            }
+            Plan::ArrangeBy {
+                input,
+                forms,
+                input_key,
+                input_mfp,
+            }
+        } else {
+            let (input_key, input_mfp) = if let Some((input_key, permutation, thinning)) =
+                old_collections.arbitrary_arrangement()
+            {
+                let mut mfp = MapFilterProject::new(arity);
+                mfp.permute(permutation.clone(), thinning.len() + input_key.len());
+                (Some(input_key.clone()), mfp)
+            } else {
+                (None, MapFilterProject::new(arity))
+            };
+            Plan::ArrangeBy {
+                input: Box::new(plan),
+                forms: collections,
+                input_key,
+                input_mfp,
+            }
+        }
     }
 }
 
