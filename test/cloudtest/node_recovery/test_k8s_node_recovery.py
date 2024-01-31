@@ -44,6 +44,7 @@ class ClusterDefinition:
 
 
 def default_compute_cluster() -> ClusterDefinition:
+    """Single cluster in availability zone 1."""
     compute_cluster = ClusterDefinition("c_compute", [])
     compute_cluster.replica_definitions.append(
         ReplicaDefinition(compute_cluster.name, index=1, availability_zone="1")
@@ -52,9 +53,10 @@ def default_compute_cluster() -> ClusterDefinition:
 
 
 def default_storage_cluster() -> ClusterDefinition:
+    """Single cluster in availability zone 2."""
     storage_cluster = ClusterDefinition("c_storage", [])
     storage_cluster.replica_definitions.append(
-        ReplicaDefinition(storage_cluster.name, index=1, availability_zone="1")
+        ReplicaDefinition(storage_cluster.name, index=1, availability_zone="2")
     )
     return storage_cluster
 
@@ -308,8 +310,12 @@ def test_replicated_compute_cluster_on_failing_node(mz: MaterializeApplication) 
     """
     compute_cluster = default_compute_cluster()
     compute_cluster.replica_definitions.append(
-        ReplicaDefinition(compute_cluster.name, index=2, availability_zone="2")
+        ReplicaDefinition(compute_cluster.name, index=2, availability_zone="3")
     )
+    assert (
+        compute_cluster.replica_definitions[0].availability_zone
+        != compute_cluster.replica_definitions[1].availability_zone
+    ), "Test configuration error"
     storage_cluster = default_storage_cluster()
 
     populate(mz, compute_cluster, storage_cluster)
