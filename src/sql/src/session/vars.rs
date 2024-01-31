@@ -2153,6 +2153,13 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_compute_aggressive_readhold_downgrades,
+        desc: "let the compute controller aggressively downgrade read holds for sink dataflows",
+        default: true,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 /// Returns a new ConfigSet containing every `Config` in Materialize.

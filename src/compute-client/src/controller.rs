@@ -138,6 +138,12 @@ pub struct ComputeController<T> {
     response_rx: crossbeam_channel::Receiver<ComputeControllerResponse<T>>,
     /// Response sender that's passed to new `Instance`s.
     response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
+
+    /// Whether to aggressively downgrade read holds for sink dataflows.
+    ///
+    /// This flag exists to derisk the rollout of the aggressive downgrading approach.
+    /// TODO(teskje): Remove this after a couple weeks.
+    enable_aggressive_readhold_downgrades: bool,
 }
 
 impl<T: Timestamp> ComputeController<T> {
@@ -162,6 +168,7 @@ impl<T: Timestamp> ComputeController<T> {
             introspection: Introspection::new(),
             response_rx,
             response_tx,
+            enable_aggressive_readhold_downgrades: true,
         }
     }
 
@@ -241,6 +248,10 @@ impl<T: Timestamp> ComputeController<T> {
         self.default_arrangement_exert_proportionality = value;
     }
 
+    pub fn set_enable_aggressive_readhold_downgrades(&mut self, value: bool) {
+        self.enable_aggressive_readhold_downgrades = value;
+    }
+
     /// Returns the read and write frontiers for each collection.
     pub fn collection_frontiers(&self) -> BTreeMap<GlobalId, (Antichain<T>, Antichain<T>)> {
         let collections = self.instances.values().flat_map(|i| i.collections_iter());
@@ -290,6 +301,7 @@ where
                 self.metrics.for_instance(id),
                 self.response_tx.clone(),
                 self.introspection.tx.clone(),
+                self.enable_aggressive_readhold_downgrades,
             ),
         );
 
