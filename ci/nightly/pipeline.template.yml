@@ -850,7 +850,7 @@ steps:
       - misc/python/materialize/cloudtest
       - misc/kind
     env:
-      CLUSTER_DEFINITION_FILE: "misc/kind/cluster-node-recovery-test.yaml"
+      CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster-node-recovery-test.yaml"
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
