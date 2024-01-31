@@ -26,7 +26,7 @@ statement ok
 INSERT INTO edges VALUES (4, 2), (8, 6);
 
 statement ok
-CREATE VIEW strongly_connected_components AS../.
+CREATE VIEW strongly_connected_components AS
 WITH MUTUALLY RECURSIVE
     intra_edges (src int, dst int) as (
         SELECT * FROM edges
