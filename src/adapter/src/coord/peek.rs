@@ -414,18 +414,10 @@ impl FastPathPlan {
             FastPathPlan::PeekExisting(_coll_id, idx_id, literal_constraints, _mfp) => {
                 if literal_constraints.is_some() {
                     UsedIndexes::new([(*idx_id, vec![IndexUsageType::Lookup(*idx_id)])].into())
+                } else if finishing.map_or(false, |f| f.limit.is_some() && f.order_by.is_empty()) {
+                    UsedIndexes::new([(*idx_id, vec![IndexUsageType::FastPathLimit])].into())
                 } else {
-                    if let Some(finishing) = finishing {
-                        if finishing.limit.is_some() && finishing.order_by.is_empty() {
-                            UsedIndexes::new(
-                                [(*idx_id, vec![IndexUsageType::FastPathLimit])].into(),
-                            )
-                        } else {
-                            UsedIndexes::new([(*idx_id, vec![IndexUsageType::FullScan])].into())
-                        }
-                    } else {
-                        UsedIndexes::new([(*idx_id, vec![IndexUsageType::FullScan])].into())
-                    }
+                    UsedIndexes::new([(*idx_id, vec![IndexUsageType::FullScan])].into())
                 }
             }
             FastPathPlan::PeekPersist(..) => UsedIndexes::default(),
