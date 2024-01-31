@@ -17,12 +17,12 @@ SERVICES = [Cockroach(in_memory=True), SqlLogicTest()]
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    "Run fast SQL logic tests"
+    """Run fast SQL logic tests"""
     run_sqllogictest(c, parser, "ci/test/slt-fast.sh")
 
 
 def workflow_sqllogictest(c: Composition, parser: WorkflowArgumentParser) -> None:
-    "Run slow SQL logic tests"
+    """Run slow SQL logic tests"""
     run_sqllogictest(
         c,
         parser,
