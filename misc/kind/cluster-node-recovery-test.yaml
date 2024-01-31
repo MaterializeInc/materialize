@@ -171,17 +171,8 @@ nodes:
   - role: worker
     labels:
       materialize.cloud/disk: true
-      materialize.cloud/availability-zone: "3"
-      topology.kubernetes.io/zone: "3"
-
-  # no-disk
-  - role: worker
-    labels:
-      materialize.cloud/disk: false
-      materialize.cloud/availability-zone: "1"
-      topology.kubernetes.io/zone: "1"
-
-  # others
+      materialize.cloud/availability-zone: "2"
+      topology.kubernetes.io/zone: "2"
   - role: worker
     labels:
       materialize.cloud/disk: true
@@ -192,6 +183,8 @@ nodes:
       materialize.cloud/disk: true
       materialize.cloud/availability-zone: "3"
       topology.kubernetes.io/zone: "3"
+
+  # only envd (nodes will be tainted in the setup)
   - role: worker
     labels:
       materialize.cloud/disk: true
@@ -204,6 +197,8 @@ nodes:
       environmentd: true
       materialize.cloud/availability-zone: "3"
       topology.kubernetes.io/zone: "3"
+
+  # for supporting services
   - role: worker
     labels:
       supporting-services: true
