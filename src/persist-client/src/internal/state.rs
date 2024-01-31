@@ -1152,8 +1152,15 @@ where
     where
         WorkFn: FnMut(SeqNo, &PersistConfig, &mut StateCollections<T>) -> ControlFlow<E, R>,
     {
+        // Now that we support one minor version of forward compatibility, tag
+        // each version of state with the _max_ version of code that has ever
+        // contributed to it. Otherwise, we'd erroneously allow rolling back an
+        // arbitrary number of versions if they were done one-by-one.
+        //
+        // WIP add a test for this before merging.
+        let new_applier_version = std::cmp::max(&self.applier_version, &cfg.build_version);
         let mut new_state = State {
-            applier_version: cfg.build_version.clone(),
+            applier_version: new_applier_version.clone(),
             shard_id: self.shard_id,
             seqno: self.seqno.next(),
             walltime_ms: (cfg.now)(),

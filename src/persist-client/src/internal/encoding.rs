@@ -203,8 +203,11 @@ pub(crate) fn check_data_version(code_version: &Version, data_version: &Version)
     // clone with some nested comparisons of the semver fields, but this code
     // isn't particularly performance sensitive and I find this impl easier to
     // reason about.
-    let mut max_allowed_data_version = code_version.clone();
-    max_allowed_data_version.minor = max_allowed_data_version.minor.saturating_add(1);
+    let max_allowed_data_version = Version::new(
+        code_version.major,
+        code_version.minor.saturating_add(1),
+        u64::MAX,
+    );
     if &max_allowed_data_version < data_version {
         // We can't catch halts, so panic in test, so we can get unit test
         // coverage.
@@ -1618,6 +1621,7 @@ mod tests {
         fn testcase(code: &str, data: &str, expected: Result<(), ()>) {
             let code = Version::parse(code).unwrap();
             let data = Version::parse(data).unwrap();
+            #[allow(clippy::disallowed_methods)]
             let actual =
                 std::panic::catch_unwind(|| check_data_version(&code, &data)).map_err(|_| ());
             assert_eq!(actual, expected);
@@ -1626,10 +1630,11 @@ mod tests {
         testcase("0.10.0-dev", "0.10.0-dev", Ok(()));
         testcase("0.10.0-dev", "0.10.0", Ok(()));
         testcase("0.10.0-dev", "0.11.0-dev", Ok(()));
-        testcase("0.10.0-dev", "0.11.0", Err(()));
+        testcase("0.10.0-dev", "0.11.0", Ok(()));
         testcase("0.10.0-dev", "0.12.0-dev", Err(()));
         testcase("0.10.0-dev", "0.12.0", Err(()));
         testcase("0.10.0-dev", "0.13.0-dev", Err(()));
+
         testcase("0.10.0", "0.8.0-dev", Ok(()));
         testcase("0.10.0", "0.8.0", Ok(()));
         testcase("0.10.0", "0.9.0-dev", Ok(()));
@@ -1638,8 +1643,19 @@ mod tests {
         testcase("0.10.0", "0.10.0", Ok(()));
         testcase("0.10.0", "0.11.0-dev", Ok(()));
         testcase("0.10.0", "0.11.0", Ok(()));
+        testcase("0.10.0", "0.11.1", Ok(()));
+        testcase("0.10.0", "0.11.1000000", Ok(()));
         testcase("0.10.0", "0.12.0-dev", Err(()));
         testcase("0.10.0", "0.12.0", Err(()));
         testcase("0.10.0", "0.13.0-dev", Err(()));
+
+        testcase("0.10.1", "0.11.0", Ok(()));
+        testcase("0.10.1", "0.11.1", Ok(()));
+        testcase("0.10.1", "0.11.100", Ok(()));
+
+        // This is probably a bad idea, but not much we can do, given the
+        // `state_version = max(code_version, prev_state_version)` logic we need
+        // to prevent rolling back an arbitrary number of versions.
+        testcase("0.10.1", "0.10.0", Ok(()));
     }
 }
