@@ -2167,119 +2167,159 @@ fn test_internal_ws_auth() {
     }
 }
 
-#[mz_ore::test]
+#[mz_ore::test(tokio::test(flavor = "multi_thread"))]
 #[cfg_attr(miri, ignore)] // too slow
-fn test_leader_promotion() {
+async fn test_leader_promotion() {
     let tmpdir = TempDir::new().unwrap();
     let harness = test_util::TestHarness::default()
         .unsafe_mode()
         .data_directory(tmpdir.path());
     {
-        // start with a catalog with no deploy generation to match current production
-        let server = harness.clone().start_blocking();
-        let mut client = server.connect(postgres::NoTls).unwrap();
-        client.simple_query("SELECT 1").unwrap();
+        // start with a catalog with no deploy generation to match current production.
+        let server = harness.clone().start().await;
+        let client = server.connect().await.unwrap();
+        client.simple_query("SELECT 1").await.unwrap();
     }
+    // propose a deploy generation for the first time.
+    let harness = harness.with_deploy_generation(Some(2));
     {
-        // propose a deploy generation for the first time
-        let server = harness.clone().start_blocking();
-        let mut client = server.connect(postgres::NoTls).unwrap();
-        client.simple_query("SELECT 1").unwrap();
+        let listeners_2 = test_util::Listeners::new().await.unwrap();
+        let internal_http_addr_2 = listeners_2.inner.internal_http_local_addr();
+        let config_2 = harness.clone();
+        let server_2 = mz_ore::task::spawn(|| "gen-2", async move {
+            listeners_2.serve(config_2).await.unwrap()
+        })
+        .abort_on_drop();
 
-        // make sure asking about the leader and promoting don't panic
-        let res = Client::new()
-            .get(
-                Url::parse(&format!(
-                    "http://{}/api/leader/status",
-                    server.inner().internal_http_local_addr()
-                ))
-                .unwrap(),
-            )
-            .send()
+        // make sure asking about the leader and promoting don't panic.
+        let status_http_url = Url::parse(&format!(
+            "http://{}/api/leader/status",
+            internal_http_addr_2
+        ))
+        .unwrap();
+        Retry::default()
+            .max_tries(10)
+            .retry_async(|_state| async {
+                let res = reqwest::Client::new()
+                    .get(status_http_url.clone())
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(res.status(), StatusCode::OK);
+                let response: LeaderStatusResponse = res.json().await.unwrap();
+                assert_ne!(response.status, LeaderStatus::IsLeader);
+                if response.status == LeaderStatus::ReadyToPromote {
+                    Ok(())
+                } else {
+                    Err(())
+                }
+            })
+            .await
             .unwrap();
-        tracing::info!("response: {res:?}");
-        assert_eq!(
-            res.status(),
-            StatusCode::OK,
-            "{:?}",
-            res.json::<serde_json::Value>()
-        );
-
-        let res = Client::new()
+        let res = reqwest::Client::new()
             .post(
                 Url::parse(&format!(
                     "http://{}/api/leader/promote",
-                    server.inner().internal_http_local_addr()
+                    internal_http_addr_2
                 ))
                 .unwrap(),
             )
             .send()
+            .await
             .unwrap();
         tracing::info!("response: {res:?}");
         assert_eq!(
             res.status(),
             StatusCode::OK,
             "{:?}",
-            res.json::<serde_json::Value>()
+            res.json::<serde_json::Value>().await
         );
+        let server_2 = server_2.await.unwrap();
+        let client = server_2.connect().await.unwrap();
+        client.simple_query("SELECT 1").await.unwrap();
     }
-    let harness = harness.with_deploy_generation(Some(2));
+    // start with different deploy generation.
+    let harness = harness.with_deploy_generation(Some(3));
     {
-        // start with different deploy generation
-        let harness = harness.with_deploy_generation(Some(3));
-        std::thread::spawn(move || {
-            let server = harness.start_blocking();
-            let internal_http_addr = server.inner().internal_http_local_addr();
-            let status_http_url =
-                Url::parse(&format!("http://{}/api/leader/status", internal_http_addr)).unwrap();
-
-            Retry::default()
-                .max_tries(10)
-                .retry(|_state| {
-                    let res = Client::new().get(status_http_url.clone()).send().unwrap();
-                    assert_eq!(res.status(), StatusCode::OK);
-                    let response: LeaderStatusResponse = res.json().unwrap();
-                    assert_ne!(response.status, LeaderStatus::IsLeader);
-                    if response.status == LeaderStatus::ReadyToPromote {
-                        Ok(())
-                    } else {
-                        Err(())
-                    }
-                })
-                .unwrap();
-
-            let promote_http_url =
-                Url::parse(&format!("http://{}/api/leader/promote", internal_http_addr)).unwrap();
-
-            let res = Client::new().post(promote_http_url.clone()).send().unwrap();
-            assert_eq!(res.status(), StatusCode::OK);
-            let response: BecomeLeaderResponse = res.json().unwrap();
-            assert_eq!(
-                response,
-                BecomeLeaderResponse {
-                    result: BecomeLeaderResult::Success
+        let listeners_3 = test_util::Listeners::new().await.unwrap();
+        let internal_http_addr_3 = listeners_3.inner.internal_http_local_addr();
+        let config_3 = harness.clone();
+        let server_3 = mz_ore::task::spawn(|| "gen-3", async move {
+            listeners_3.serve(config_3).await.unwrap()
+        })
+        .abort_on_drop();
+        // make sure asking about the leader and promoting don't panic.
+        let status_http_url = Url::parse(&format!(
+            "http://{}/api/leader/status",
+            internal_http_addr_3
+        ))
+        .unwrap();
+        Retry::default()
+            .max_tries(10)
+            .retry_async(|_state| async {
+                let res = reqwest::Client::new()
+                    .get(status_http_url.clone())
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(res.status(), StatusCode::OK);
+                let response: LeaderStatusResponse = res.json().await.unwrap();
+                assert_ne!(response.status, LeaderStatus::IsLeader);
+                if response.status == LeaderStatus::ReadyToPromote {
+                    Ok(())
+                } else {
+                    Err(())
                 }
-            );
+            })
+            .await
+            .unwrap();
+        let promote_http_url = Url::parse(&format!(
+            "http://{}/api/leader/promote",
+            internal_http_addr_3
+        ))
+        .unwrap();
+        let res = reqwest::Client::new()
+            .post(promote_http_url.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let response: BecomeLeaderResponse = res.json().await.unwrap();
+        assert_eq!(
+            response,
+            BecomeLeaderResponse {
+                result: BecomeLeaderResult::Success
+            }
+        );
 
-            let mut client = server.connect(postgres::NoTls).unwrap();
-            client.simple_query("SELECT 1").unwrap();
+        let server_3 = server_3.await.unwrap();
 
-            // check that we're the leader and promotion doesn't do anything
-            let res = Client::new().get(status_http_url).send().unwrap();
-            assert_eq!(res.status(), StatusCode::OK);
-            let response: LeaderStatusResponse = res.json().unwrap();
-            assert_eq!(response.status, LeaderStatus::IsLeader);
+        let client = server_3.connect().await.unwrap();
+        client.simple_query("SELECT 1").await.unwrap();
 
-            let res = Client::new().post(promote_http_url).send().unwrap();
-            assert_eq!(res.status(), StatusCode::OK);
-            let response: BecomeLeaderResponse = res.json().unwrap();
-            assert_eq!(
-                response,
-                BecomeLeaderResponse {
-                    result: BecomeLeaderResult::Success
-                }
-            );
-        });
+        // check that we're the leader and promotion doesn't do anything
+        let res = reqwest::Client::new()
+            .get(status_http_url)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let response: LeaderStatusResponse = res.json().await.unwrap();
+        assert_eq!(response.status, LeaderStatus::IsLeader);
+
+        let res = reqwest::Client::new()
+            .post(promote_http_url)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let response: BecomeLeaderResponse = res.json().await.unwrap();
+        assert_eq!(
+            response,
+            BecomeLeaderResponse {
+                result: BecomeLeaderResult::Success
+            }
+        );
     }
 }
 
