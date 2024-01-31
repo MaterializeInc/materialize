@@ -41,7 +41,7 @@ use tracing::{debug, trace};
 
 use crate::batch::BLOB_TARGET_SIZE;
 use crate::cfg::RetryParameters;
-use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
+use crate::fetch::{FetchedBlob, SerdeLeasedBatchPart};
 use crate::read::SubscriptionLeaseReturner;
 use crate::stats::{PartStats, STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
 use crate::{Diagnostics, PersistClient, ShardId};
@@ -74,7 +74,7 @@ pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
 ) -> (
-    Stream<Child<'g, G, T>, FetchedPart<K, V, G::Timestamp, D>>,
+    Stream<Child<'g, G, T>, FetchedBlob<K, V, G::Timestamp, D>>,
     Vec<PressOnDropButton>,
 )
 where
@@ -435,7 +435,7 @@ pub(crate) fn shard_source_fetch<K, V, T, D, G>(
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
 ) -> (
-    Stream<G, FetchedPart<K, V, T, D>>,
+    Stream<G, FetchedBlob<K, V, T, D>>,
     Stream<G, SerdeLeasedBatchPart>,
     PressOnDropButton,
 )
