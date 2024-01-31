@@ -355,25 +355,6 @@ pub trait TimestampProvider {
             candidate.join_assign(&largest_not_in_advance_of_upper);
         }
 
-        // When advancing the read timestamp under Strong Session Serializable, there is a
-        // trade-off to make between freshness and latency. We can choose a timestamp close the
-        // `upper`, but then later queries might block if the `upper` is too far into the future.
-        // We can chose a timestamp close to the current time, but then we may not be getting
-        // results that are as fresh as possible. As a heuristic, we choose the minimum of now and
-        // the upper, where we use the global timestamp oracle read timestamp as a proxy for now.
-        // If upper > now, then we choose now and prevent blocking future queries. If upper < now,
-        // then we choose the upper and prevent blocking the current query.
-        if isolation_level == &IsolationLevel::StrongSessionSerializable
-            && when.can_advance_to_upper()
-            && when.can_advance_to_timeline_ts()
-        {
-            let mut advance_to = largest_not_in_advance_of_upper;
-            if let Some(oracle_read_ts) = oracle_read_ts {
-                advance_to = std::cmp::min(advance_to, oracle_read_ts);
-            }
-            candidate.join_assign(&advance_to);
-        }
-
         if let Some(real_time_recency_ts) = real_time_recency_ts {
             assert!(
                 session.vars().real_time_recency()
@@ -390,6 +371,23 @@ pub trait TimestampProvider {
                 let session_ts = session.ensure_timestamp_oracle(timeline.clone()).read_ts();
                 candidate.join_assign(&session_ts);
                 session_oracle_read_ts = Some(session_ts);
+            }
+
+            // When advancing the read timestamp under Strong Session Serializable, there is a
+            // trade-off to make between freshness and latency. We can choose a timestamp close the
+            // `upper`, but then later queries might block if the `upper` is too far into the
+            // future. We can chose a timestamp close to the current time, but then we may not be
+            // getting results that are as fresh as possible. As a heuristic, we choose the minimum
+            // of now and the upper, where we use the global timestamp oracle read timestamp as a
+            // proxy for now. If upper > now, then we choose now and prevent blocking future
+            // queries. If upper < now, then we choose the upper and prevent blocking the current
+            // query.
+            if when.can_advance_to_upper() && when.can_advance_to_timeline_ts() {
+                let mut advance_to = largest_not_in_advance_of_upper;
+                if let Some(oracle_read_ts) = oracle_read_ts {
+                    advance_to = std::cmp::min(advance_to, oracle_read_ts);
+                }
+                candidate.join_assign(&advance_to);
             }
         }
 
