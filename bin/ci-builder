@@ -206,6 +206,7 @@ case "$cmd" in
             --env CI
             --env CI_COVERAGE_ENABLED
             --env CI_TEST_SELECTION
+            --env CLUSTER_DEFINITION_FILE
             --env CONFLUENT_CLOUD_DEVEX_KAFKA_PASSWORD
             --env CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME
             --env GITHUB_TOKEN
