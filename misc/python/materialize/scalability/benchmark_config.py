@@ -19,6 +19,7 @@ class BenchmarkConfiguration:
     min_concurrency: int
     max_concurrency: int
     count: int
+    verbose: bool
 
     def get_count_for_concurrency(self, concurrency: int) -> int:
         return floor(self.count * sqrt(concurrency))

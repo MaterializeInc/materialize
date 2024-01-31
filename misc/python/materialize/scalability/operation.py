@@ -34,6 +34,9 @@ class Operation:
     def _execute(self, data: OperationData) -> OperationData:
         raise NotImplementedError
 
+    def __str__(self) -> str:
+        return self.__class__.__name__
+
 
 class SqlOperationWithInput(Operation):
     def required_keys(self) -> set[str]:
@@ -114,3 +117,6 @@ class OperationChainWithDataExchange(Operation):
             data = operation.execute(data)
 
         return data
+
+    def __str__(self) -> str:
+        return f"{self.__class__.__name__} with {', '.join(str(op) for op in self.operations())}"
