@@ -1657,9 +1657,15 @@ impl Coordinator {
                     .expect("sending to strict_serializable_reads_tx cannot fail");
                 return;
             }
-            Ok((Some(TransactionOps::Peeks { determination, .. }), _))
-                if ctx.session().vars().transaction_isolation()
-                    == &IsolationLevel::StrongSessionSerializable =>
+            Ok((
+                Some(TransactionOps::Peeks {
+                    determination,
+                    requires_linearization: RequireLinearization::Required,
+                    ..
+                }),
+                _,
+            )) if ctx.session().vars().transaction_isolation()
+                == &IsolationLevel::StrongSessionSerializable =>
             {
                 if let Some((timeline, ts)) = determination.timestamp_context.timeline_timestamp() {
                     ctx.session_mut()
