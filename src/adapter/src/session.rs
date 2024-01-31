@@ -1344,9 +1344,9 @@ pub struct WriteOp {
 /// Whether a transaction requires linearization.
 #[derive(Debug)]
 pub enum RequireLinearization {
-    /// Linearization is not required.
-    Required,
     /// Linearization is required.
+    Required,
+    /// Linearization is not required.
     NotRequired,
 }
 
