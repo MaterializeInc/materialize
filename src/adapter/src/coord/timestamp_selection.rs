@@ -336,7 +336,7 @@ pub trait TimestampProvider {
         // If we've acquired a read timestamp from the timestamp oracle, use it
         // as the new lower bound for the candidate
         if let Some(timestamp) = &oracle_read_ts {
-            if isolation_level == &IsolationLevel::StrictSerializable {
+            if isolation_level != &IsolationLevel::StrongSessionSerializable {
                 candidate.join_assign(timestamp);
             }
         }
