@@ -84,6 +84,36 @@ SELECT * FROM t1
 ----
 4
 
+# Test that updates work in Serializable mode
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_session_timelines = true;
+----
+COMPLETE 0
+
+statement ok
+SET transaction_isolation='strong session serializable'
+
+statement ok
+UPDATE t1 SET x=1
+
+statement ok
+UPDATE t1 SET x=2
+
+statement ok
+UPDATE t1 SET x=3
+
+statement ok
+UPDATE t1 SET x=4
+
+statement ok
+SET transaction_isolation='strict serializable'
+
+query I
+SELECT * FROM t1
+----
+4
+
 # Test UPDATE AS
 
 statement ok
