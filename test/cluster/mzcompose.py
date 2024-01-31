@@ -65,9 +65,6 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    shard = buildkite.get_parallelism_index()
-    shard_count = buildkite.get_parallelism_count()
-
     for i, name in enumerate(c.workflows):
         # incident-70 requires more memory, runs in separate CI step
         # concurrent-connections is too flaky
@@ -77,7 +74,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "test-concurrent-connections",
         ):
             continue
-        if buildkite.accepted_by_shard(i, shard, shard_count):
+        if buildkite.accepted_by_shard(i):
             with c.test_case(name):
                 c.workflow(name)
 
