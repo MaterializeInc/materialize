@@ -1027,3 +1027,15 @@ create materialized view mv4 with (refresh at creation) as
 select * from
   (select mz_unsafe.mz_sleep(3)),
   (select * from t2);
+
+# EXPLAIN and EXPLAIN TIMESTAMP on an MV that hasn't had its first refresh yet shouldn't block
+# See also `test_explain_timestamp_blocking`
+statement ok
+CREATE MATERIALIZED VIEW mv5 WITH (REFRESH AT mz_now()::text::int8 + 1000000) AS
+SELECT x+y+z from t2;
+
+statement ok
+EXPLAIN SELECT * FROM mv5;
+
+statement ok
+EXPLAIN TIMESTAMP FOR SELECT * FROM mv5;
