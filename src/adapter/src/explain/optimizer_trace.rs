@@ -42,7 +42,7 @@ use crate::explain::Explainable;
 /// The [`OptimizerTrace::drain_all`] method on the created instance can be
 /// then used to collect the trace, and [`OptimizerTrace::drain_all`] to obtain
 /// the collected trace as a vector of [`TraceEntry`] instances.
-pub(crate) struct OptimizerTrace(dispatcher::Dispatch);
+pub struct OptimizerTrace(dispatcher::Dispatch);
 
 impl std::fmt::Debug for OptimizerTrace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

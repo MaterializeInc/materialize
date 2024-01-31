@@ -51,6 +51,7 @@ use crate::client::RecordFirstRowStream;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::statement_logging::PreparedStatementLoggingInfo;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
+use crate::coord::PeekContext;
 use crate::error::AdapterError;
 use crate::AdapterNotice;
 
@@ -1347,4 +1348,13 @@ pub enum RequireLinearization {
     Required,
     /// Linearization is required.
     NotRequired,
+}
+
+impl From<&PeekContext> for RequireLinearization {
+    fn from(ctx: &PeekContext) -> Self {
+        match ctx {
+            PeekContext::Select => RequireLinearization::Required,
+            PeekContext::Explain(..) => RequireLinearization::NotRequired,
+        }
+    }
 }
