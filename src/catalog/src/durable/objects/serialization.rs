@@ -11,11 +11,11 @@
 
 use mz_audit_log::{
     AlterDefaultPrivilegeV1, AlterSetClusterV1, AlterSourceSinkV1, CreateClusterReplicaV1,
-    CreateSourceSinkV1, CreateSourceSinkV2, DropClusterReplicaV1, EventDetails, EventType, EventV1,
-    FullNameV1, GrantRoleV1, GrantRoleV2, IdFullNameV1, IdNameV1, RenameClusterReplicaV1,
-    RenameClusterV1, RenameItemV1, RenameSchemaV1, RevokeRoleV1, RevokeRoleV2, SchemaV1, SchemaV2,
-    StorageUsageV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1, VersionedEvent,
-    VersionedStorageUsage,
+    CreateSourceSinkV1, CreateSourceSinkV2, CreateSourceSinkV3, DropClusterReplicaV1, EventDetails,
+    EventType, EventV1, FullNameV1, GrantRoleV1, GrantRoleV2, IdFullNameV1, IdNameV1,
+    RenameClusterReplicaV1, RenameClusterV1, RenameItemV1, RenameSchemaV1, RevokeRoleV1,
+    RevokeRoleV2, SchemaV1, SchemaV2, StorageUsageV1, UpdateItemV1, UpdateOwnerV1,
+    UpdatePrivilegeV1, VersionedEvent, VersionedStorageUsage,
 };
 use mz_compute_client::controller::ComputeReplicaLogging;
 use mz_controller_types::ReplicaId;
@@ -1662,6 +1662,26 @@ impl RustType<proto::audit_log_event_v1::CreateSourceSinkV2> for CreateSourceSin
     }
 }
 
+impl RustType<proto::audit_log_event_v1::CreateSourceSinkV3> for CreateSourceSinkV3 {
+    fn into_proto(&self) -> proto::audit_log_event_v1::CreateSourceSinkV3 {
+        proto::audit_log_event_v1::CreateSourceSinkV3 {
+            id: self.id.to_string(),
+            name: Some(self.name.into_proto()),
+            external_type: self.external_type.to_string(),
+        }
+    }
+
+    fn from_proto(
+        proto: proto::audit_log_event_v1::CreateSourceSinkV3,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(CreateSourceSinkV3 {
+            id: proto.id,
+            name: proto.name.into_rust_if_some("CreateSourceSinkV2::name")?,
+            external_type: proto.external_type,
+        })
+    }
+}
+
 impl RustType<proto::audit_log_event_v1::AlterSourceSinkV1> for AlterSourceSinkV1 {
     fn into_proto(&self) -> proto::audit_log_event_v1::AlterSourceSinkV1 {
         proto::audit_log_event_v1::AlterSourceSinkV1 {
@@ -1957,6 +1977,7 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             }
             EventDetails::CreateSourceSinkV1(details) => CreateSourceSinkV1(details.into_proto()),
             EventDetails::CreateSourceSinkV2(details) => CreateSourceSinkV2(details.into_proto()),
+            EventDetails::CreateSourceSinkV3(details) => CreateSourceSinkV3(details.into_proto()),
             EventDetails::AlterSourceSinkV1(details) => AlterSourceSinkV1(details.into_proto()),
             EventDetails::AlterSetClusterV1(details) => AlterSetClusterV1(details.into_proto()),
             EventDetails::GrantRoleV1(details) => GrantRoleV1(details.into_proto()),
@@ -1997,6 +2018,9 @@ impl RustType<proto::audit_log_event_v1::Details> for EventDetails {
             }
             CreateSourceSinkV2(details) => {
                 Ok(EventDetails::CreateSourceSinkV2(details.into_rust()?))
+            }
+            CreateSourceSinkV3(details) => {
+                Ok(EventDetails::CreateSourceSinkV3(details.into_rust()?))
             }
             AlterSourceSinkV1(details) => Ok(EventDetails::AlterSourceSinkV1(details.into_rust()?)),
             AlterSetClusterV1(details) => Ok(EventDetails::AlterSetClusterV1(details.into_rust()?)),

@@ -1765,20 +1765,16 @@ impl Catalog {
                         );
                         let details = match &item {
                             CatalogItem::Source(s) => {
-                                EventDetails::CreateSourceSinkV2(mz_audit_log::CreateSourceSinkV2 {
+                                EventDetails::CreateSourceSinkV3(mz_audit_log::CreateSourceSinkV3 {
                                     id: id.to_string(),
                                     name,
-                                    // TODO: remove size; vestigial from linked clusters
-                                    size: None,
                                     external_type: s.source_type().to_string(),
                                 })
                             }
                             CatalogItem::Sink(s) => {
-                                EventDetails::CreateSourceSinkV2(mz_audit_log::CreateSourceSinkV2 {
+                                EventDetails::CreateSourceSinkV3(mz_audit_log::CreateSourceSinkV3 {
                                     id: id.to_string(),
                                     name,
-                                    // TODO: remove size; vestigial from linked clusters
-                                    size: None,
                                     external_type: s.sink_type().to_string(),
                                 })
                             }

@@ -540,6 +540,12 @@ message AuditLogEventV1 {
         string external_type = 4;
     }
 
+    message CreateSourceSinkV3 {
+        string id = 1;
+        FullNameV1 name = 2;
+        string external_type = 3;
+    }
+
     message AlterSourceSinkV1 {
         string id = 1;
         FullNameV1 name = 2;
@@ -630,7 +636,7 @@ message AuditLogEventV1 {
     StringWrapper user = 4;
     EpochMillis occurred_at = 5;
 
-    // next-id: 28
+    // next-id: 29
     oneof details {
         CreateClusterReplicaV1 create_cluster_replica_v1 = 6;
         DropClusterReplicaV1 drop_cluster_replica_v1 = 7;
@@ -654,6 +660,7 @@ message AuditLogEventV1 {
         SchemaV2 schema_v2 = 19;
         RenameSchemaV1 rename_schema_v1 = 27;
         UpdateItemV1 update_item_v1 = 26;
+        CreateSourceSinkV3 create_source_sink_v3 = 29;
     }
 }
 
