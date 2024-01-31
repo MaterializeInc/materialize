@@ -1156,8 +1156,6 @@ where
         // each version of state with the _max_ version of code that has ever
         // contributed to it. Otherwise, we'd erroneously allow rolling back an
         // arbitrary number of versions if they were done one-by-one.
-        //
-        // WIP add a test for this before merging.
         let new_applier_version = std::cmp::max(&self.applier_version, &cfg.build_version);
         let mut new_state = State {
             applier_version: new_applier_version.clone(),
@@ -1505,9 +1503,12 @@ pub(crate) mod tests {
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
 
+    use crate::cache::PersistClientCache;
     use crate::internal::paths::RollupId;
     use crate::internal::trace::tests::any_trace;
+    use crate::tests::new_test_client_cache;
     use crate::InvalidUsage::{InvalidBounds, InvalidEmptyTimeInterval};
+    use crate::PersistLocation;
 
     use super::*;
 
@@ -2391,5 +2392,48 @@ pub(crate) mod tests {
             "\n\nNEW GOLDEN\n{}\n",
             json
         );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn sneaky_downgrades() {
+        let mut clients = new_test_client_cache();
+        let shard_id = ShardId::new();
+
+        async fn open_and_write(
+            clients: &mut PersistClientCache,
+            version: semver::Version,
+            shard_id: ShardId,
+        ) -> Result<(), tokio::task::JoinError> {
+            clients.cfg.build_version = version.clone();
+            clients.clear_state_cache();
+            let client = clients.open(PersistLocation::new_in_mem()).await.unwrap();
+            // Run in a task so we can catch the panic.
+            mz_ore::task::spawn(|| version.to_string(), async move {
+                let (mut write, _) = client.expect_open::<String, (), u64, i64>(shard_id).await;
+                let current = *write.upper().as_option().unwrap();
+                // Do a write so that we tag the state with the version.
+                write
+                    .expect_compare_and_append_batch(&mut [], current, current + 1)
+                    .await;
+            })
+            .await
+        }
+
+        // Start at v0.10.0.
+        let res = open_and_write(&mut clients, Version::new(0, 10, 0), shard_id).await;
+        assert!(res.is_ok());
+
+        // Upgrade to v0.11.0 is allowed.
+        let res = open_and_write(&mut clients, Version::new(0, 11, 0), shard_id).await;
+        assert!(res.is_ok());
+
+        // Downgrade to v0.10.0 is allowed.
+        let res = open_and_write(&mut clients, Version::new(0, 10, 0), shard_id).await;
+        assert!(res.is_ok());
+
+        // Downgrade to v0.9.0 is _NOT_ allowed.
+        let res = open_and_write(&mut clients, Version::new(0, 9, 0), shard_id).await;
+        assert!(res.unwrap_err().is_panic());
     }
 }
