@@ -84,7 +84,7 @@ SELECT * FROM t1
 ----
 4
 
-# Test that updates work in Serializable mode
+# Test that updates work in Strong Session Serializable mode
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_session_timelines = true;

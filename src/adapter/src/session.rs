@@ -105,7 +105,7 @@ where
     // on. We express this by gating access with this token.
     #[derivative(Debug = "ignore")]
     qcell_owner: QCellOwner,
-    pub(crate) session_oracles: BTreeMap<Timeline, InMemoryTimestampOracle<T, NowFn<T>>>,
+    session_oracles: BTreeMap<Timeline, InMemoryTimestampOracle<T, NowFn<T>>>,
 }
 
 impl<T: TimestampManipulation> Session<T> {
