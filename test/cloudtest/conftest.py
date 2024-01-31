@@ -22,6 +22,10 @@ def pytest_configure(config: "Config") -> None:
         "markers",
         "long: A long running test. Select with -m=long, deselect with -m 'not long'",
     )
+    config.addinivalue_line(
+        "markers",
+        "node_recovery: Tests that require a separate cluster definition",
+    )
 
 
 @pytest.fixture(scope="session")

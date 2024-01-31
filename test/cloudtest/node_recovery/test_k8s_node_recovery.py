@@ -10,6 +10,8 @@ import time
 from dataclasses import dataclass
 from textwrap import dedent
 
+import pytest
+
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 
 TD_TIMEOUT_SHORT = 30
@@ -196,6 +198,7 @@ def suspend_node_of_replica(
     return suspended_node_name
 
 
+@pytest.mark.node_recovery
 def test_unreplicated_storage_cluster_on_failing_node(
     mz: MaterializeApplication,
 ) -> None:
@@ -256,6 +259,7 @@ def test_unreplicated_storage_cluster_on_failing_node(
     )
 
 
+@pytest.mark.node_recovery
 def test_unreplicated_compute_cluster_on_failing_node(
     mz: MaterializeApplication,
 ) -> None:
@@ -296,6 +300,7 @@ def test_unreplicated_compute_cluster_on_failing_node(
     )
 
 
+@pytest.mark.node_recovery
 def test_replicated_compute_cluster_on_failing_node(mz: MaterializeApplication) -> None:
     """
     A replicated compute cluster is on the failed node. Queries of indexes on the compute cluster should experience no
@@ -348,6 +353,7 @@ def test_replicated_compute_cluster_on_failing_node(mz: MaterializeApplication) 
     )
 
 
+@pytest.mark.node_recovery
 def test_envd_on_failing_node(mz: MaterializeApplication) -> None:
     """
     environmentd is on the failed node. All connections should fail, but resolve within a minute or two.
