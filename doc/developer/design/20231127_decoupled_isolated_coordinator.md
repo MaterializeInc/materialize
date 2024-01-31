@@ -435,7 +435,7 @@ catalog and timestamp oracle are not shareable between multiple actors.
 Similarly, table writes cannot be done concurrently by multiple actors.
 
 - [Abstraction for Table Transactions](https://github.com/MaterializeInc/materialize/issues/22173)
-- Differential Catalog State:
+- Differential Catalog State (aka. catalog pTVC):
   - [First EPIC](https://github.com/MaterializeInc/materialize/issues/20953)
   - [Second EPIC](https://github.com/MaterializeInc/materialize/issues/22392)
 - [Distributed TimestampOracle](https://github.com/MaterializeInc/materialize/issues/22029)
