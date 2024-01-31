@@ -308,10 +308,11 @@ impl SourceTimestamp for GtidPartition {
 pub fn gtid_set_frontier(gtid_set_str: &str) -> Result<Antichain<GtidPartition>, io::Error> {
     let mut partitions = Antichain::new();
     let mut gap_lower = Some(Uuid::nil());
-    for gtid_str in gtid_set_str.split(',') {
+    for mut gtid_str in gtid_set_str.split(',') {
         if gtid_str.is_empty() {
             continue;
         };
+        gtid_str = gtid_str.trim();
         let (uuid, intervals) = gtid_str.split_once(':').ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -322,7 +323,7 @@ pub fn gtid_set_frontier(gtid_set_str: &str) -> Result<Antichain<GtidPartition>,
         let uuid = Uuid::parse_str(uuid).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("invalid uuid in gtid: {}: {}", gtid_str, e),
+                format!("invalid uuid in gtid: {}: {}", uuid, e),
             )
         })?;
 
@@ -373,11 +374,21 @@ pub fn gtid_set_frontier(gtid_set_str: &str) -> Result<Antichain<GtidPartition>,
         // Create a partition representing all the UUIDs in the gap between the previous one and this one
         if let Some(gap_upper) = uuid.backward_checked(1) {
             let gap_lower = gap_lower.expect("uuids are in alphabetical order");
-            partitions.insert(GtidPartition::new_range(
-                gap_lower,
-                gap_upper,
-                GTIDState::Absent,
-            ));
+            if gap_upper >= gap_lower {
+                partitions.insert(GtidPartition::new_range(
+                    gap_lower,
+                    gap_upper,
+                    GTIDState::Absent,
+                ));
+            } else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "gtid set not presented in alphabetical uuid order: {}",
+                        gtid_set_str
+                    ),
+                ));
+            }
         }
         gap_lower = uuid.forward_checked(1);
         // Insert a partition representing the 'next' GTID that might be seen from this source
@@ -397,4 +408,103 @@ pub fn gtid_set_frontier(gtid_set_str: &str) -> Result<Antichain<GtidPartition>,
     }
 
     Ok(partitions)
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use std::num::NonZeroU64;
+
+    #[mz_ore::test]
+    fn test_gtid_set_frontier_valid() {
+        let gtid_set_str =
+            "14c1b43a-eb64-11eb-8a9a-0242ac130002:1, 2174B383-5441-11E8-B90A-C80AA9429562:1-3, 3E11FA47-71CA-11E1-9E33-C80AA9429562:1-19";
+        let result = gtid_set_frontier(gtid_set_str).unwrap();
+        assert_eq!(result.len(), 7);
+        assert_eq!(
+            result,
+            Antichain::from_iter(vec![
+                GtidPartition::new_range(
+                    Uuid::nil(),
+                    Uuid::parse_str("14c1b43a-eb64-11eb-8a9a-0242ac130001").unwrap(),
+                    GTIDState::Absent,
+                ),
+                GtidPartition::new_singleton(
+                    Uuid::parse_str("14c1b43a-eb64-11eb-8a9a-0242ac130002").unwrap(),
+                    GTIDState::Active(NonZeroU64::new(2).unwrap()),
+                ),
+                GtidPartition::new_range(
+                    Uuid::parse_str("14c1b43a-eb64-11eb-8a9a-0242ac130003").unwrap(),
+                    Uuid::parse_str("2174B383-5441-11E8-B90A-C80AA9429561").unwrap(),
+                    GTIDState::Absent,
+                ),
+                GtidPartition::new_singleton(
+                    Uuid::parse_str("2174B383-5441-11E8-B90A-C80AA9429562").unwrap(),
+                    GTIDState::Active(NonZeroU64::new(4).unwrap()),
+                ),
+                GtidPartition::new_range(
+                    Uuid::parse_str("2174B383-5441-11E8-B90A-C80AA9429563").unwrap(),
+                    Uuid::parse_str("3E11FA47-71CA-11E1-9E33-C80AA9429561").unwrap(),
+                    GTIDState::Absent,
+                ),
+                GtidPartition::new_singleton(
+                    Uuid::parse_str("3E11FA47-71CA-11E1-9E33-C80AA9429562").unwrap(),
+                    GTIDState::Active(NonZeroU64::new(20).unwrap()),
+                ),
+                GtidPartition::new_range(
+                    Uuid::parse_str("3E11FA47-71CA-11E1-9E33-C80AA9429563").unwrap(),
+                    Uuid::max(),
+                    GTIDState::Absent,
+                ),
+            ]),
+        )
+    }
+
+    #[mz_ore::test]
+    fn test_gtid_set_frontier_non_alphabetical_uuids() {
+        let gtid_set_str =
+            "3E11FA47-71CA-11E1-9E33-C80AA9429562:1-19, 2174B383-5441-11E8-B90A-C80AA9429562:1-3";
+        let result = gtid_set_frontier(gtid_set_str);
+        assert!(result.is_err());
+    }
+
+    #[mz_ore::test]
+    fn test_gtid_set_frontier_non_consecutive() {
+        let gtid_set_str =
+            "2174B383-5441-11E8-B90A-C80AA9429562:1-3:5-8, 3E11FA47-71CA-11E1-9E33-C80AA9429562:1-19";
+        let result = gtid_set_frontier(gtid_set_str);
+        assert!(result.is_err());
+    }
+
+    #[mz_ore::test]
+    fn test_gtid_set_frontier_invalid_uuid() {
+        let gtid_set_str =
+            "14c1b43a-eb64-11eb-8a9a-0242ac130002:1-5,24DA167-0C0C-11E8-8442-00059A3C7B00:1";
+        let result = gtid_set_frontier(gtid_set_str);
+        assert!(result.is_err());
+    }
+
+    #[mz_ore::test]
+    fn test_gtid_set_frontier_invalid_interval() {
+        let gtid_set_str =
+            "14c1b43a-eb64-11eb-8a9a-0242ac130002:1-5,14c1b43a-eb64-11eb-8a9a-0242ac130003:1-3:4";
+        let result = gtid_set_frontier(gtid_set_str);
+        assert!(result.is_err());
+    }
+
+    #[mz_ore::test]
+    fn test_gtid_set_frontier_empty_string() {
+        let gtid_set_str = "";
+        let result = gtid_set_frontier(gtid_set_str).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result,
+            Antichain::from_elem(GtidPartition::new_range(
+                Uuid::nil(),
+                Uuid::max(),
+                GTIDState::Absent,
+            ))
+        );
+    }
 }

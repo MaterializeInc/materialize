@@ -308,7 +308,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     }
 
                     // TODO(roshan): Figure out how to add a test-case that ensures we do release this lock
-                    // trace!(%id, "timely-{worker_id} releasing table locks");
+                    trace!(%id, "timely-{worker_id} releasing table locks");
                     let mut lock_conn = lock_conn
                         .expect("lock_conn should have been created for the snapshot leader");
                     lock_conn.query_drop("UNLOCK TABLES").await?;

@@ -53,14 +53,14 @@ use super::{
     pack_mysql_row, table_name, DefiniteError, ReplicationError, RewindRequest, TransientError,
 };
 
-// Used as a partition id to determine if the worker is
-// responsible for reading from the MySQL replication stream
+/// Used as a partition id to determine if the worker is
+/// responsible for reading from the MySQL replication stream
 static REPL_READER: &str = "reader";
 
-// A constant arbitrary offset to add to the source-id to
-// produce a deterministic server-id for identifying Materialize
-// as a replica on the upstream MySQL server.
-// TODO(roshan): Add documentation for this
+/// A constant arbitrary offset to add to the source-id to
+/// produce a deterministic server-id for identifying Materialize
+/// as a replica on the upstream MySQL server.
+/// TODO(roshan): Add user-facing documentation for this
 static REPLICATION_SERVER_ID_OFFSET: u32 = 524000;
 
 /// Renders the replication dataflow. See the module documentation for more
