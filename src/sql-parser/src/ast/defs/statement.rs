@@ -3437,6 +3437,18 @@ pub enum NamedPlan {
 }
 
 impl NamedPlan {
+    /// Return the [`NamedPlan`] for a given `path` if it exists.
+    pub fn of_path(value: &str) -> Option<Self> {
+        match value {
+            "optimize/raw" => Some(Self::Raw),
+            "optimize/hir_to_mir" => Some(Self::Decorrelated),
+            "optimize/global" => Some(Self::Optimized),
+            "optimize/finalize_dataflow" => Some(Self::Physical),
+            "optimize/fast_path" => Some(Self::FastPath),
+            _ => None,
+        }
+    }
+
     /// Return the tracing path under which the plan can be found in an
     /// optimizer trace.
     pub fn path(&self) -> &'static str {

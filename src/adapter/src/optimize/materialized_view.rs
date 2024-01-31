@@ -40,14 +40,15 @@ use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
 use mz_transform::Optimizer as TransformOptimizer;
 use timely::progress::Antichain;
-use tracing::{span, Level};
+use tracing::debug_span;
 
 use crate::catalog::Catalog;
 use crate::optimize::dataflows::{
     prep_relation_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
 };
 use crate::optimize::{
-    LirDataflowDescription, MirDataflowDescription, Optimize, OptimizerConfig, OptimizerError,
+    trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode,
+    OptimizerConfig, OptimizerError,
 };
 
 pub struct Optimizer {
@@ -123,10 +124,6 @@ impl GlobalMirPlan {
     pub fn df_desc(&self) -> &MirDataflowDescription {
         &self.df_desc
     }
-
-    pub fn df_meta(&self) -> &DataflowMetainfo {
-        &self.df_meta
-    }
 }
 
 /// The (final) result after MIR ⇒ LIR lowering and optimizing the resulting
@@ -157,11 +154,14 @@ impl Optimize<HirRelationExpr> for Optimizer {
     type To = LocalMirPlan;
 
     fn optimize(&mut self, expr: HirRelationExpr) -> Result<Self::To, OptimizerError> {
+        // Trace the pipeline input under `optimize/raw`.
+        trace_plan!(at: "raw", &expr);
+
         // HIR ⇒ MIR lowering and decorrelation
         let expr = expr.lower(&self.config)?;
 
         // MIR ⇒ MIR optimization (local)
-        let expr = span!(target: "optimizer", Level::DEBUG, "local").in_scope(|| {
+        let expr = debug_span!(target: "optimizer", "local").in_scope(|| {
             #[allow(deprecated)]
             let optimizer = TransformOptimizer::logical_optimizer(&self.typecheck_ctx);
             let expr = optimizer.optimize(expr)?.into_inner();
@@ -236,6 +236,11 @@ impl Optimize<LocalMirPlan> for Optimizer {
             sink_description,
         )?;
 
+        if self.config.mode == OptimizeMode::Explain {
+            // Collect the list of indexes used by the dataflow at this point.
+            trace_plan!(at: "global", &df_meta.used_indexes(&df_desc));
+        }
+
         // Return the (sealed) plan at the end of this optimization step.
         Ok(GlobalMirPlan { df_desc, df_meta })
     }
@@ -265,6 +270,9 @@ impl Optimize<GlobalMirPlan> for Optimizer {
             self.config.enable_reduce_mfp_fusion,
         )
         .map_err(OptimizerError::Internal)?;
+
+        // Trace the pipeline output under `optimize`.
+        trace_plan(&df_desc);
 
         // Return the plan at the end of this `optimize` step.
         Ok(GlobalLirPlan { df_desc, df_meta })

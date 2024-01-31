@@ -8,13 +8,12 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeSet;
-use std::time::Duration;
 
 use mz_expr::explain::{enforce_linear_chains, ExplainContext};
 use mz_expr_parser::{handle_define, try_parse_mir, TestCatalog};
 use mz_ore::str::Indent;
 use mz_repr::explain::text::text_string_at;
-use mz_repr::explain::{ExplainConfig, PlanRenderingContext, UsedIndexes};
+use mz_repr::explain::{ExplainConfig, PlanRenderingContext};
 use mz_transform::attribute::annotate_plan;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::typecheck::TypeErrorHumanizer;
@@ -57,9 +56,9 @@ fn handle_explain(
     let context = ExplainContext {
         config: &config,
         humanizer: catalog,
-        used_indexes: UsedIndexes::default(),
-        finishing: None,
-        duration: Duration::default(),
+        used_indexes: Default::default(),
+        finishing: Default::default(),
+        duration: Default::default(),
         optimizer_notices: Vec::default(),
     };
 

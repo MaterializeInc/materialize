@@ -107,7 +107,7 @@ use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::{soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_pgcopy::CopyFormatParams;
-use mz_repr::explain::{ExplainConfig, ExplainFormat, UsedIndexes};
+use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
@@ -528,7 +528,6 @@ pub struct PeekStageExplain {
     select_id: GlobalId,
     finishing: RowSetFinishing,
     df_meta: DataflowMetainfo,
-    used_indexes: UsedIndexes,
     explain_ctx: ExplainContext,
 }
 
@@ -586,7 +585,6 @@ pub struct CreateIndexExplain {
     exported_index_id: GlobalId,
     plan: plan::CreateIndexPlan,
     df_meta: DataflowMetainfo,
-    used_indexes: UsedIndexes,
     explain_ctx: ExplainContext,
 }
 
@@ -694,7 +692,6 @@ pub struct CreateMaterializedViewExplain {
     exported_sink_id: GlobalId,
     plan: plan::CreateMaterializedViewPlan,
     df_meta: DataflowMetainfo,
-    used_indexes: UsedIndexes,
     explain_ctx: ExplainContext,
 }
 

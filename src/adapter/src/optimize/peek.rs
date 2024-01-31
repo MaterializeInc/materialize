@@ -137,16 +137,6 @@ pub struct GlobalMirPlan<T = Unresolved> {
     context: T,
 }
 
-impl<T> GlobalMirPlan<T> {
-    pub fn df_desc(&self) -> &MirDataflowDescription {
-        &self.df_desc
-    }
-
-    pub fn df_meta(&self) -> &DataflowMetainfo {
-        &self.df_meta
-    }
-}
-
 impl Debug for GlobalMirPlan<Unresolved> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GlobalMirPlan")
@@ -175,17 +165,6 @@ pub struct GlobalLirPlan {
     peek_plan: PeekPlan,
     df_meta: DataflowMetainfo,
     typ: RelationType,
-}
-
-impl GlobalLirPlan {
-    pub fn peek_plan(&self) -> &PeekPlan {
-        &self.peek_plan
-    }
-
-    /// Return the output type for this [`GlobalLirPlan`].
-    pub fn typ(&self) -> &RelationType {
-        &self.typ
-    }
 }
 
 impl Optimize<HirRelationExpr> for Optimizer {
@@ -300,6 +279,11 @@ impl<'s> Optimize<LocalMirPlan<ResolvedLocal<'s>>> for Optimizer {
             self.config.enable_eager_delta_joins,
         )?;
 
+        if self.config.mode == OptimizeMode::Explain {
+            // Collect the list of indexes used by the dataflow at this point.
+            trace_plan!(at: "global", &df_meta.used_indexes(&df_desc));
+        }
+
         // Return the (sealed) plan at the end of this optimization step.
         Ok(GlobalMirPlan {
             df_desc,
@@ -398,10 +382,22 @@ impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
             self.config.persist_fast_path_limit,
         )? {
             Some(plan) if self.config.enable_fast_path => {
+                if self.config.mode == OptimizeMode::Explain {
+                    // Trace the `used_indexes` for the FastPathPlan.
+                    debug_span!(target: "optimizer", "fast_path").in_scope(|| {
+                        // Fast path plans come with an updated finishing.
+                        let finishing = if !self.finishing.is_trivial(typ.arity()) {
+                            Some(&self.finishing)
+                        } else {
+                            None
+                        };
+                        trace_plan(&plan.used_indexes(finishing));
+                    });
+                }
                 // Trace the FastPathPlan.
                 trace_plan!(at: "fast_path", &plan);
 
-                // Trace the final plan
+                // Trace the pipeline output under `optimize`.
                 trace_plan(&plan);
 
                 // Build the PeekPlan
@@ -424,7 +420,7 @@ impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
                 )
                 .map_err(OptimizerError::Internal)?;
 
-                // Trace the final plan
+                // Trace the pipeline output under `optimize`.
                 trace_plan(&df_desc);
 
                 // Build the PeekPlan

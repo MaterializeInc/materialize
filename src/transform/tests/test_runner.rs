@@ -18,7 +18,6 @@
 mod tests {
     use std::collections::BTreeMap;
     use std::fmt::Write;
-    use std::time::Duration;
 
     use anyhow::{anyhow, Error};
     use mz_expr::explain::ExplainContext;
@@ -29,7 +28,7 @@ mod tests {
     use mz_lowertest::{deserialize, tokenize};
     use mz_ore::collections::HashMap;
     use mz_ore::str::separated;
-    use mz_repr::explain::{Explain, ExplainConfig, ExplainFormat, UsedIndexes};
+    use mz_repr::explain::{Explain, ExplainConfig, ExplainFormat};
     use mz_repr::GlobalId;
     use mz_transform::dataflow::{
         optimize_dataflow_demand_inner, optimize_dataflow_filters_inner, DataflowMetainfo,
@@ -146,9 +145,9 @@ mod tests {
                 let context = ExplainContext {
                     config: &config,
                     humanizer: cat,
-                    used_indexes: UsedIndexes::default(),
-                    finishing: None,
-                    duration: Duration::default(),
+                    used_indexes: Default::default(),
+                    finishing: Default::default(),
+                    duration: Default::default(),
                     optimizer_notices: Vec::new(),
                 };
 
