@@ -801,10 +801,18 @@ impl<T: TimestampManipulation> Session<T> {
             .or_insert_with(|| InMemoryTimestampOracle::new(T::minimum(), NowFn::from(T::minimum)))
     }
 
-    /// Returns a reference to the timestamp oracle used for reads and writes
-    /// from/to a local input.
-    pub fn local_timestamp_oracle(&mut self) -> &mut InMemoryTimestampOracle<T, NowFn<T>> {
+    /// Ensures that a timestamp oracle exists for reads and writes from/to a local input and
+    /// returns a mutable reference to the timestamp oracle.
+    pub fn ensure_local_timestamp_oracle(&mut self) -> &mut InMemoryTimestampOracle<T, NowFn<T>> {
         self.ensure_timestamp_oracle(Timeline::EpochMilliseconds)
+    }
+
+    /// Returns a reference to the timestamp oracle for `timeline`.
+    pub fn get_timestamp_oracle(
+        &self,
+        timeline: &Timeline,
+    ) -> Option<&InMemoryTimestampOracle<T, NowFn<T>>> {
+        self.session_oracles.get(timeline)
     }
 }
 

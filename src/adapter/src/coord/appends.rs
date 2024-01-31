@@ -396,7 +396,7 @@ impl Coordinator {
                                 == &IsolationLevel::StrongSessionSerializable
                             {
                                 ctx.session_mut()
-                                    .local_timestamp_oracle()
+                                    .ensure_local_timestamp_oracle()
                                     .apply_write(timestamp);
                             }
                             ctx.retire(result);
@@ -460,7 +460,7 @@ impl Coordinator {
                 == &IsolationLevel::StrongSessionSerializable
             {
                 ctx.session_mut()
-                    .local_timestamp_oracle()
+                    .ensure_local_timestamp_oracle()
                     .apply_write(timestamp);
             }
             ctx.retire(result);

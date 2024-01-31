@@ -276,7 +276,7 @@ pub trait TimestampProvider {
     async fn determine_timestamp_for(
         &self,
         catalog: &CatalogState,
-        session: &mut Session,
+        session: &Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
@@ -372,9 +372,11 @@ pub trait TimestampProvider {
         let mut session_oracle_read_ts = None;
         if isolation_level == &IsolationLevel::StrongSessionSerializable {
             if let Some(timeline) = &timeline {
-                let session_ts = session.ensure_timestamp_oracle(timeline.clone()).read_ts();
-                candidate.join_assign(&session_ts);
-                session_oracle_read_ts = Some(session_ts);
+                if let Some(oracle) = session.get_timestamp_oracle(&timeline) {
+                    let session_ts = oracle.read_ts();
+                    candidate.join_assign(&session_ts);
+                    session_oracle_read_ts = Some(session_ts);
+                }
             }
 
             // When advancing the read timestamp under Strong Session Serializable, there is a
@@ -541,7 +543,7 @@ impl Coordinator {
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn determine_timestamp(
         &self,
-        session: &mut Session,
+        session: &Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
         compute_instance: ComputeInstanceId,
@@ -549,7 +551,7 @@ impl Coordinator {
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<mz_repr::Timestamp>,
     ) -> Result<TimestampDetermination<mz_repr::Timestamp>, AdapterError> {
-        let isolation_level = session.vars().transaction_isolation().clone();
+        let isolation_level = session.vars().transaction_isolation();
         let det = self
             .determine_timestamp_for(
                 self.catalog().state(),
@@ -560,7 +562,7 @@ impl Coordinator {
                 timeline_context,
                 oracle_read_ts,
                 real_time_recency_ts,
-                &isolation_level,
+                isolation_level,
             )
             .await?;
         self.metrics
@@ -575,7 +577,7 @@ impl Coordinator {
             ])
             .inc();
         if !det.respond_immediately()
-            && isolation_level == IsolationLevel::StrictSerializable
+            && isolation_level == &IsolationLevel::StrictSerializable
             && real_time_recency_ts.is_none()
         {
             if let Some(strict) = det.timestamp_context.timestamp() {
