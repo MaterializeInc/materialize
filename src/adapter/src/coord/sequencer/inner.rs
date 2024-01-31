@@ -2582,7 +2582,12 @@ impl Coordinator {
                 let result = rx.await;
                 // It is not an error for these results to be ready after `tx` has been dropped.
                 ctx = match result {
-                    Ok(ctx) => ctx,
+                    Ok(Some(ctx)) => ctx,
+                    Ok(None) => {
+                        // Coordinator took our context and will handle responding to the client.
+                        // This usually indicates that our transaction was aborted.
+                        return;
+                    }
                     Err(e) => {
                         warn!(
                             "tx used to linearize read in read then write transaction dropped before we could send: {:?}",

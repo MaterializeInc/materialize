@@ -1043,7 +1043,7 @@ enum PendingRead {
         ctx: ExecuteContext,
         /// Channel used to alert the transaction that the read has been linearized and send back
         /// `ctx`.
-        tx: oneshot::Sender<ExecuteContext>,
+        tx: oneshot::Sender<Option<ExecuteContext>>,
     },
 }
 
@@ -1075,7 +1075,7 @@ impl PendingRead {
             }
             PendingRead::ReadThenWrite { ctx, tx, .. } => {
                 // Ignore errors if the caller has hung up.
-                let _ = tx.send(ctx);
+                let _ = tx.send(Some(ctx));
                 None
             }
         }
@@ -1091,7 +1091,12 @@ impl PendingRead {
     pub(crate) fn take_context(self) -> ExecuteContext {
         match self {
             PendingRead::Read { txn, .. } => txn.ctx,
-            PendingRead::ReadThenWrite { ctx, .. } => ctx,
+            PendingRead::ReadThenWrite { ctx, tx, .. } => {
+                // Inform the transaction that we've taken their context.
+                // Ignore errors if the caller has hung up.
+                let _ = tx.send(None);
+                ctx
+            }
         }
     }
 }
