@@ -399,7 +399,6 @@ pub fn describe_create_subsource(
 generate_extracted_config!(
     CreateSourceOption,
     (IgnoreKeys, bool),
-    (Size, String),
     (Timeline, String),
     (TimestampInterval, Duration),
     (RetainHistory, Duration)
@@ -536,7 +535,7 @@ pub fn plan_create_webhook_source(
 
     // Webhook sources must currently specify the cluster on which they run, so
     // we don't need to wait to normalize the statement.
-    let in_cluster = source_sink_cluster_config(scx, "source", &mut Some(in_cluster), None)?;
+    let in_cluster = source_sink_cluster_config(scx, "source", &mut Some(in_cluster))?;
 
     // Check for an object in the catalog with this same name
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
@@ -593,7 +592,6 @@ pub fn plan_create_source(
     let envelope = envelope.clone().unwrap_or(Envelope::None);
 
     let allowed_with_options = vec![
-        CreateSourceOptionName::Size,
         CreateSourceOptionName::TimestampInterval,
         CreateSourceOptionName::RetainHistory,
     ];
@@ -1134,7 +1132,6 @@ pub fn plan_create_source(
     }
 
     let CreateSourceOptionExtracted {
-        size,
         timeline,
         timestamp_interval,
         ignore_keys,
@@ -1315,7 +1312,7 @@ pub fn plan_create_source(
     // We will rewrite the cluster if one is not provided, so we must use the
     // `in_cluster` value we plan to normalize when we canonicalize the create
     // statement.
-    let in_cluster = source_sink_cluster_config(scx, "source", &mut stmt.in_cluster, size)?;
+    let in_cluster = source_sink_cluster_config(scx, "source", &mut stmt.in_cluster)?;
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSource(stmt))?;
 
@@ -1685,12 +1682,7 @@ fn source_sink_cluster_config(
     scx: &StatementContext,
     ty: &'static str,
     in_cluster: &mut Option<ResolvedClusterName>,
-    size: Option<String>,
 ) -> Result<ClusterId, PlanError> {
-    if size.is_some() {
-        sql_bail!("specifying {ty} SIZE deprecated; use IN CLUSTER")
-    }
-
     let cluster = match in_cluster {
         None => {
             let cluster = scx.catalog.resolve_cluster(None)?;
@@ -2387,7 +2379,7 @@ pub fn describe_create_sink(
     Ok(StatementDesc::new(None))
 }
 
-generate_extracted_config!(CreateSinkOption, (Size, String), (Snapshot, bool));
+generate_extracted_config!(CreateSinkOption, (Snapshot, bool));
 
 pub fn plan_create_sink(
     scx: &StatementContext,
@@ -2404,8 +2396,7 @@ pub fn plan_create_sink(
         with_options,
     } = stmt.clone();
 
-    const ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] =
-        &[CreateSinkOptionName::Size, CreateSinkOptionName::Snapshot];
+    const ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] = &[CreateSinkOptionName::Snapshot];
 
     if let Some(op) = with_options
         .iter()
@@ -2545,11 +2536,7 @@ pub fn plan_create_sink(
         )?,
     };
 
-    let CreateSinkOptionExtracted {
-        size,
-        snapshot,
-        seen: _,
-    } = with_options.try_into()?;
+    let CreateSinkOptionExtracted { snapshot, seen: _ } = with_options.try_into()?;
 
     // WITH SNAPSHOT defaults to true
     let with_snapshot = snapshot.unwrap_or(true);
@@ -2557,7 +2544,7 @@ pub fn plan_create_sink(
     // We will rewrite the cluster if one is not provided, so we must use the
     // `in_cluster` value we plan to normalize when we canonicalize the create
     // statement.
-    let in_cluster = source_sink_cluster_config(scx, "sink", &mut stmt.in_cluster, size)?;
+    let in_cluster = source_sink_cluster_config(scx, "sink", &mut stmt.in_cluster)?;
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt))?;
 
     Ok(Plan::CreateSink(CreateSinkPlan {
@@ -5265,47 +5252,15 @@ pub fn plan_alter_source(
 
     let action = match action {
         AlterSourceAction::SetOptions(options) => {
-            let CreateSourceOptionExtracted { seen, .. } =
-                CreateSourceOptionExtracted::try_from(options)?;
-
-            if let Some(option) = seen
-                .iter()
-                .find(|o| !matches!(o, CreateSourceOptionName::Size))
-            {
-                sql_bail!("Cannot modify the {} of a SOURCE.", option.to_ast_string());
-            }
-
-            // This used to be supported to resize source's linked clusters, but
-            // we no longer support linked clusters.
-            match entry.cluster_id() {
-                None => bail_never_supported!("ALTER SOURCE...SET SIZE for non-cluster source"),
-                Some(cluster_id) => {
-                    let cluster = scx.catalog.get_cluster(cluster_id);
-                    return Err(crate::plan::PlanError::AlterSourceSinkSizeUnsupported {
-                        cluster: cluster.name().to_string(),
-                    });
-                }
-            }
+            let option = options.into_iter().next().unwrap();
+            sql_bail!(
+                "Cannot modify the {} of a SOURCE.",
+                option.name.to_ast_string()
+            );
         }
         AlterSourceAction::ResetOptions(reset) => {
-            if let Some(option) = reset
-                .iter()
-                .find(|o| !matches!(o, CreateSourceOptionName::Size))
-            {
-                sql_bail!("Cannot modify the {} of a SOURCE.", option.to_ast_string());
-            }
-
-            // This used to be supported to resize source's linked clusters, but
-            // we no longer support linked clusters.
-            match entry.cluster_id() {
-                None => bail_never_supported!("ALTER SOURCE...RESET SIZE for non-cluster source"),
-                Some(cluster_id) => {
-                    let cluster = scx.catalog.get_cluster(cluster_id);
-                    return Err(crate::plan::PlanError::AlterSourceSinkSizeUnsupported {
-                        cluster: cluster.name().to_string(),
-                    });
-                }
-            }
+            let option = reset.into_iter().next().unwrap();
+            sql_bail!("Cannot modify the {} of a SOURCE.", option.to_ast_string());
         }
         AlterSourceAction::DropSubsources {
             if_exists,

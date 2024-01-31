@@ -2293,7 +2293,7 @@ DROP TABLE t
 ----
 COMPLETE 0
 
-# Test that linked cluster, linked replica, and subsource owners are consistent with their linked
+# Test that linked replica, and subsource owners are consistent with their linked
 # object and primary source owners.
 
 statement ok
