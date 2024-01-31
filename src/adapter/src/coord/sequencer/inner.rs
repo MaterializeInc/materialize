@@ -1598,6 +1598,9 @@ impl Coordinator {
         {
             action = EndTransactionAction::Rollback;
         }
+
+        action = EndTransactionAction::Rollback;
+
         let response = match action {
             EndTransactionAction::Commit => Ok(PendingTxnResponse::Committed {
                 params: BTreeMap::new(),

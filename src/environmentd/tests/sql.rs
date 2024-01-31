@@ -3852,3 +3852,20 @@ async fn test_explain_timestamp_blocking() {
         "read against mv at timestamp {mv_timestamp} should be in the future compared to now, {mz_now_timestamp}"
     );
 }
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_commit_abort() {
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
+    let res = client.query_one("SELECT 1;", &[]).await;
+    match res {
+        Ok(row) => {
+            let c: i32 = row.get(0);
+            panic!("Found result {c}");
+        }
+        Err(e) => {
+            println!("Found err: {e:?}");
+        }
+    }
+}
