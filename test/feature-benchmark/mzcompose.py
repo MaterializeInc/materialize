@@ -239,9 +239,6 @@ def start_overridden_mz_and_cockroach(
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Feature benchmark framework."""
-    shard = buildkite.get_parallelism_index()
-    shard_count = buildkite.get_parallelism_count()
-
     c.silent = True
 
     parser.add_argument(
@@ -389,7 +386,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     scenarios_to_run = [
         scenario
         for i, scenario in enumerate(selected_scenarios)
-        if buildkite.accepted_by_shard(i, shard, shard_count)
+        if buildkite.accepted_by_shard(i)
     ]
 
     scenarios_with_regressions = []
