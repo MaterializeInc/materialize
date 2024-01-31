@@ -23,7 +23,7 @@ use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
-use mz_dyncfg::Config;
+use mz_dyncfg::{config, Config};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::{HashMap, HashSet};
 use mz_ore::metrics::MetricsRegistry;
@@ -55,20 +55,20 @@ use crate::metrics::Metrics;
 use crate::ShardId;
 
 /// Determines whether PubSub clients should connect to the PubSub server.
-pub(crate) const PUBSUB_CLIENT_ENABLED: Config<bool> = Config::new(
-    "persist_pubsub_client_enabled",
-    true,
-    "Whether to connect to the Persist PubSub service.",
-);
+pub(crate) const PUBSUB_CLIENT_ENABLED: Config<bool> = config! {
+    name: "persist_pubsub_client_enabled",
+    default: true,
+    desc: "Whether to connect to the Persist PubSub service.",
+};
 
 /// For connected clients, determines whether to push state diffs to the PubSub
 /// server. For the server, determines whether to broadcast state diffs to
 /// subscribed clients.
-pub(crate) const PUBSUB_PUSH_DIFF_ENABLED: Config<bool> = Config::new(
-    "persist_pubsub_push_diff_enabled",
-    true,
-    "Whether to push state diffs to Persist PubSub.",
-);
+pub(crate) const PUBSUB_PUSH_DIFF_ENABLED: Config<bool> = config! {
+    name: "persist_pubsub_push_diff_enabled",
+    default: true,
+    desc: "Whether to push state diffs to Persist PubSub.",
+};
 
 /// Top-level Trait to create a PubSubClient.
 ///

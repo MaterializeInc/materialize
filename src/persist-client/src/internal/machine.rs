@@ -19,7 +19,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::{FuturesUnordered, StreamExt};
 use futures::FutureExt;
-use mz_dyncfg::{Config, ConfigSet};
+use mz_dyncfg::{config, Config, ConfigSet};
 use mz_ore::error::ErrorExt;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
@@ -1106,23 +1106,23 @@ where
     }
 }
 
-pub(crate) const NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF: Config<Duration> = Config::new(
-    "persist_next_listen_batch_retryer_initial_backoff",
-    Duration::from_millis(1200), // pubsub is on by default!
-    "The initial backoff when polling for new batches from a Listen or Subscribe.",
-);
+pub(crate) const NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF: Config<Duration> = config! {
+    name: "persist_next_listen_batch_retryer_initial_backoff",
+    default: Duration::from_millis(1200), // pubsub is on by default!
+    desc: "The initial backoff when polling for new batches from a Listen or Subscribe.",
+};
 
-pub(crate) const NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER: Config<u32> = Config::new(
-    "persist_next_listen_batch_retryer_multiplier",
-    2,
-    "The backoff multiplier when polling for new batches from a Listen or Subscribe.",
-);
+pub(crate) const NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER: Config<u32> = config! {
+    name: "persist_next_listen_batch_retryer_multiplier",
+    default: 2,
+    desc: "The backoff multiplier when polling for new batches from a Listen or Subscribe.",
+};
 
-pub(crate) const NEXT_LISTEN_BATCH_RETRYER_CLAMP: Config<Duration> = Config::new(
-    "persist_next_listen_batch_retryer_clamp",
-    Duration::from_millis(100), // pubsub is on by default!
-    "The backoff clamp duration when polling for new batches from a Listen or Subscribe.",
-);
+pub(crate) const NEXT_LISTEN_BATCH_RETRYER_CLAMP: Config<Duration> = config! {
+    name: "persist_next_listen_batch_retryer_clamp",
+    default: Duration::from_millis(100), // pubsub is on by default!
+    desc: "The backoff clamp duration when polling for new batches from a Listen or Subscribe.",
+};
 
 fn next_listen_batch_retry_params(cfg: &ConfigSet) -> RetryParameters {
     RetryParameters {

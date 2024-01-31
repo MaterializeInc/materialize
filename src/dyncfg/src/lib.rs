@@ -19,8 +19,8 @@
 //!   set the value of `Config`.
 //!
 //! ```
-//! # use mz_dyncfg::{Config, ConfigSet};
-//! const FOO: Config<bool> = Config::new("foo", false, "description of foo");
+//! # use mz_dyncfg::{Config, ConfigSet, config};
+//! const FOO: Config<bool> = config! {name:"foo", default: false, desc: "description of foo"};
 //! fn bar(cfg: &ConfigSet) {
 //!     assert_eq!(FOO.get(&cfg), false);
 //! }
@@ -72,47 +72,75 @@ include!(concat!(env!("OUT_DIR"), "/mz_dyncfg.rs"));
 /// registered to a set of such configs with [ConfigSet::add] and then later
 /// used to retrieve the latest value at any time with [Self::get].
 ///
-/// The supported types are [bool], [usize], and [String].
-///
-/// TODO(cfg): Add Duration in a followup.
+/// The supported types are [bool], [u32], [usize], [String], and [Duration].
 #[derive(Clone, Debug)]
 pub struct Config<T: ConfigType> {
-    name: &'static str,
-    desc: &'static str,
+    meta: ConfigMeta,
     default: T::Default,
 }
 
+#[derive(Clone, Debug)]
+/// [ConfigType]-independent metadata about a [Config].
+struct ConfigMeta {
+    name: &'static str,
+    desc: &'static str,
+
+    #[allow(dead_code)]
+    file: &'static str,
+    #[allow(dead_code)]
+    line: u32,
+}
+
+/// Constructs a handle for a config of type `T`.
+///
+/// It is best practice, but not strictly required, for the name to be
+/// globally unique within a process.
+///
+/// TODO(cfg): Add some sort of categorization of config purpose here: e.g.
+/// limited-lifetime rollout flag, CYA, magic number that we never expect to
+/// tune, magic number that we DO expect to tune, etc. This could be used to
+/// power something like a `--future-default-flags` for CI, to replace part
+/// or all of the manually maintained list.
+#[macro_export]
+macro_rules! config {
+    (
+        name: $name:expr,
+        default: $default:expr,
+        desc: $desc:expr $(,)?
+    ) => {{
+        Config::new($name, $default, $desc, ::std::file!(), ::std::line!())
+    }};
+}
+
 impl<T: ConfigType> Config<T> {
-    /// Constructs a handle for a config of type `T`.
-    ///
-    /// It is best practice, but not strictly required, for the name to be
-    /// globally unique within a process.
-    ///
-    /// TODO(cfg): Add some sort of categorization of config purpose here: e.g.
-    /// limited-lifetime rollout flag, CYA, magic number that we never expect to
-    /// tune, magic number that we DO expect to tune, etc. This could be used to
-    /// power something like a `--future-default-flags` for CI, to replace part
-    /// or all of the manually maintained list.
-    ///
-    /// TODO(cfg): See if we can make this more Rust-y and take these params as
-    /// a struct (the obvious thing hits some issues with const combined with
-    /// Drop).
-    pub const fn new(name: &'static str, default: T::Default, desc: &'static str) -> Self {
+    /// Exposed for the [config!] macro.
+    #[doc(hidden)]
+    pub const fn new(
+        name: &'static str,
+        default: T::Default,
+        desc: &'static str,
+        file: &'static str,
+        line: u32,
+    ) -> Self {
         Config {
-            name,
+            meta: ConfigMeta {
+                name,
+                desc,
+                file,
+                line,
+            },
             default,
-            desc,
         }
     }
 
     /// The name of this config.
     pub fn name(&self) -> &str {
-        self.name
+        self.meta.name
     }
 
     /// The description of this config.
     pub fn desc(&self) -> &str {
-        self.desc
+        self.meta.desc
     }
 
     /// The default value of this config.
@@ -203,13 +231,12 @@ impl ConfigSet {
     /// allow for easy chaining.
     pub fn add<T: ConfigType>(mut self, config: &Config<T>) -> Self {
         let config = ConfigEntry {
-            name: config.name,
-            desc: config.desc,
+            meta: config.meta.clone(),
             default: T::to_val(&Into::<T>::into(config.default.clone())),
             val: T::to_val(&Into::<T>::into(config.default.clone())),
         };
-        if let Some(prev) = self.configs.insert(config.name.to_owned(), config) {
-            panic!("{} registered twice", prev.name);
+        if let Some(prev) = self.configs.insert(config.meta.name.to_owned(), config) {
+            panic!("{} registered twice", prev.meta.name);
         }
         self
     }
@@ -223,8 +250,7 @@ impl ConfigSet {
 /// An entry for a config in a [ConfigSet].
 #[derive(Clone, Debug)]
 pub struct ConfigEntry {
-    name: &'static str,
-    desc: &'static str,
+    meta: ConfigMeta,
     default: ConfigVal,
     val: ConfigVal,
 }
@@ -232,12 +258,12 @@ pub struct ConfigEntry {
 impl ConfigEntry {
     /// The name of this config.
     pub fn name(&self) -> &'static str {
-        self.name
+        self.meta.name
     }
 
     /// The description of this config.
     pub fn desc(&self) -> &'static str {
-        self.desc
+        self.meta.desc
     }
 
     /// The default value of this config.
@@ -281,7 +307,7 @@ impl ConfigUpdates {
     /// updates, replaces it.
     pub fn add(&mut self, config: &ConfigEntry) {
         self.updates.push(ProtoConfigVal {
-            name: config.name.to_owned(),
+            name: config.meta.name.to_owned(),
             val: config.val.into_proto(),
         });
     }
@@ -349,7 +375,7 @@ mod impls {
         type Shared = AtomicBool;
 
         fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>> {
-            let entry = vals.configs.get(config.name)?;
+            let entry = vals.configs.get(config.meta.name)?;
             match entry.val() {
                 ConfigVal::Bool(x) => Some(x),
                 x => panic!("expected bool value got {:?}", x),
@@ -371,7 +397,7 @@ mod impls {
         type Shared = AtomicU32;
 
         fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>> {
-            let entry = vals.configs.get(config.name)?;
+            let entry = vals.configs.get(config.meta.name)?;
             match entry.val() {
                 ConfigVal::U32(x) => Some(x),
                 x => panic!("expected u32 value got {:?}", x),
@@ -393,7 +419,7 @@ mod impls {
         type Shared = AtomicU64;
 
         fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>> {
-            let entry = vals.configs.get(config.name)?;
+            let entry = vals.configs.get(config.meta.name)?;
             match entry.val() {
                 ConfigVal::Usize(x) => Some(x),
                 x => panic!("expected usize value got {:?}", x),
@@ -415,7 +441,7 @@ mod impls {
         type Shared = RwLock<String>;
 
         fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>> {
-            let entry = vals.configs.get(config.name)?;
+            let entry = vals.configs.get(config.meta.name)?;
             match entry.val() {
                 ConfigVal::String(x) => Some(x),
                 x => panic!("expected String value got {:?}", x),
@@ -437,7 +463,7 @@ mod impls {
         type Shared = RwLock<Duration>;
 
         fn shared<'a>(config: &Config<Self>, vals: &'a ConfigSet) -> Option<&'a Arc<Self::Shared>> {
-            let entry = vals.configs.get(config.name)?;
+            let entry = vals.configs.get(config.meta.name)?;
             match entry.val() {
                 ConfigVal::Duration(x) => Some(x),
                 x => panic!("expected Duration value got {:?}", x),
@@ -502,9 +528,9 @@ mod impls {
 mod tests {
     use super::*;
 
-    const BOOL: Config<bool> = Config::new("bool", true, "");
-    const USIZE: Config<usize> = Config::new("usize", 1, "");
-    const STRING: Config<String> = Config::new("string", "a", "");
+    const BOOL: Config<bool> = config! {name: "bool", default: true, desc: ""};
+    const USIZE: Config<usize> = config! {name: "usize", default: 1, desc: ""};
+    const STRING: Config<String> = config! {name: "string", default: "a", desc: ""};
 
     #[mz_ore::test]
     fn all_types() {

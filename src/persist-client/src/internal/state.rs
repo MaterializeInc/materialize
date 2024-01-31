@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_dyncfg::Config;
+use mz_dyncfg::{config, Config};
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_persist::location::SeqNo;
@@ -60,11 +60,11 @@ include!(concat!(
 /// incremental GC, this threshold will determine about how many live diffs are
 /// held in Consensus. Lowering this value decreases the live diff count at the
 /// cost of more maintenance work + blob writes.
-pub(crate) const ROLLUP_THRESHOLD: Config<usize> = Config::new(
-    "persist_rollup_threshold",
-    128,
-    "The number of seqnos between rollups.",
-);
+pub(crate) const ROLLUP_THRESHOLD: Config<usize> = config! {
+    name: "persist_rollup_threshold",
+    default: 128,
+    desc: "The number of seqnos between rollups.",
+};
 
 /// A token to disambiguate state commands that could not otherwise be
 /// idempotent.

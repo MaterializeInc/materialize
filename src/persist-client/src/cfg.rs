@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mz_build_info::BuildInfo;
-use mz_dyncfg::{Config, ConfigSet, ConfigType, ConfigUpdates};
+use mz_dyncfg::{config, Config, ConfigSet, ConfigType, ConfigUpdates};
 use mz_ore::now::NowFn;
 use mz_persist::cfg::BlobKnobs;
 use mz_persist::retry::Retry;
@@ -315,13 +315,13 @@ impl PersistConfig {
 /// The minimum TTL of a connection to Postgres/CRDB before it is proactively
 /// terminated. Connections are routinely culled to balance load against the
 /// downstream database.
-const CONSENSUS_CONNECTION_POOL_TTL: Config<Duration> = Config::new(
-    "persist_consensus_connection_pool_ttl",
-    Duration::from_secs(300),
-    "\
+const CONSENSUS_CONNECTION_POOL_TTL: Config<Duration> = config! {
+    name: "persist_consensus_connection_pool_ttl",
+    default: Duration::from_secs(300),
+    desc: "\
     The minimum TTL of a Consensus connection to Postgres/CRDB before it is \
     proactively terminated",
-);
+};
 
 /// The minimum time between TTLing connections to Postgres/CRDB. This delay is
 /// used to stagger reconnections to avoid stampedes and high tail latencies.
@@ -330,31 +330,31 @@ const CONSENSUS_CONNECTION_POOL_TTL: Config<Duration> = Config::new(
 /// value of `consensus_connection_pool_ttl /
 /// consensus_connection_pool_max_size` is likely a good place to start so that
 /// all connections are rotated when the pool is fully used.
-const CONSENSUS_CONNECTION_POOL_TTL_STAGGER: Config<Duration> = Config::new(
-    "persist_consensus_connection_pool_ttl_stagger",
-    Duration::from_secs(6),
-    "The minimum time between TTLing Consensus connections to Postgres/CRDB.",
-);
+const CONSENSUS_CONNECTION_POOL_TTL_STAGGER: Config<Duration> = config! {
+    name: "persist_consensus_connection_pool_ttl_stagger",
+    default: Duration::from_secs(6),
+    desc: "The minimum time between TTLing Consensus connections to Postgres/CRDB.",
+};
 
 /// The duration to wait for a Consensus Postgres/CRDB connection to be made
 /// before retrying.
-pub const CRDB_CONNECT_TIMEOUT: Config<Duration> = Config::new(
-    "crdb_connect_timeout",
-    Duration::from_secs(5),
-    "The time to connect to CockroachDB before timing out and retrying.",
-);
+pub const CRDB_CONNECT_TIMEOUT: Config<Duration> = config! {
+    name: "crdb_connect_timeout",
+    default: Duration::from_secs(5),
+    desc: "The time to connect to CockroachDB before timing out and retrying.",
+};
 
 /// The TCP user timeout for a Consensus Postgres/CRDB connection. Specifies the
 /// amount of time that transmitted data may remain unacknowledged before the
 /// TCP connection is forcibly closed.
-pub const CRDB_TCP_USER_TIMEOUT: Config<Duration> = Config::new(
-    "crdb_tcp_user_timeout",
-    Duration::from_secs(30),
-    "\
+pub const CRDB_TCP_USER_TIMEOUT: Config<Duration> = config! {
+    name: "crdb_tcp_user_timeout",
+    default: Duration::from_secs(30),
+    desc: "\
     The TCP timeout for connections to CockroachDB. Specifies the amount of \
     time that transmitted data may remain unacknowledged before the TCP \
     connection is forcibly closed.",
-);
+};
 
 impl PostgresClientKnobs for PersistConfig {
     fn connection_pool_max_size(&self) -> usize {

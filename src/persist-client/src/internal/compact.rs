@@ -19,7 +19,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::TryFutureExt;
-use mz_dyncfg::Config;
+use mz_dyncfg::{config, Config};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::task::{spawn, JoinHandle};
@@ -69,11 +69,11 @@ pub struct CompactRes<T> {
     pub output: HollowBatch<T>,
 }
 
-pub(crate) const STREAMING_COMPACTION_ENABLED: Config<bool> = Config::new(
-    "persist_streaming_compaction_enabled",
-    false,
-    "use the new streaming consolidate during compaction",
-);
+pub(crate) const STREAMING_COMPACTION_ENABLED: Config<bool> = config! {
+    name: "persist_streaming_compaction_enabled",
+    default: false,
+    desc: "use the new streaming consolidate during compaction",
+};
 
 /// A snapshot of dynamic configs to make it easier to reason about an
 /// individual run of compaction.
@@ -131,13 +131,13 @@ impl<K, V, T, D> Clone for Compactor<K, V, T, D> {
 /// In Compactor::compact_and_apply_background, the minimum amount of time to
 /// allow a compaction request to run before timing it out. A request may be
 /// given a timeout greater than this value depending on the inputs' size
-pub(crate) const COMPACTION_MINIMUM_TIMEOUT: Config<Duration> = Config::new(
-    "persist_compaction_minimum_timeout",
-    Duration::from_secs(90),
-    "\
+pub(crate) const COMPACTION_MINIMUM_TIMEOUT: Config<Duration> = config! {
+    name: "persist_compaction_minimum_timeout",
+    default: Duration::from_secs(90),
+    desc: "\
     The minimum amount of time to allow a persist compaction request to run \
     before timing it out (Materialize).",
-);
+};
 
 impl<K, V, T, D> Compactor<K, V, T, D>
 where
