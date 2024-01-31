@@ -106,6 +106,30 @@ steps:
               - "DmlDqlWorkload"
               - --max-concurrency
               - "256"
+    - id: scalability-benchmark-ddl
+      label: "Scalability benchmark (DDL) against merge base or 'latest'"
+      timeout_in_minutes: 1200
+      agents:
+        queue: linux-aarch64
+      artifact_paths: junit_*.xml
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: scalability
+            args:
+              - --target
+              - HEAD
+              - --target
+              - common-ancestor
+              - --regression-against
+              - common-ancestor
+              - --workload-group-marker
+              - "DdlWorkload"
+              - --count
+              - "128"
+              - --exponent-base
+              - "4"
+              - --max-concurrency
+              - "64"
     - id: scalability-benchmark-connection
       label: "Scalability benchmark (connection) against merge base or 'latest'"
       timeout_in_minutes: 180

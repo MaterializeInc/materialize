@@ -12,13 +12,19 @@ from materialize.scalability.operation import Operation, OperationChainWithDataE
 from materialize.scalability.operation_data import OperationData
 from materialize.scalability.operations import (
     Connect,
+    CreateMvOnTableX,
+    CreateTableX,
     Disconnect,
+    DropTableX,
     InsertDefaultValues,
+    PopulateTableX,
     SelectCount,
     SelectCountInMv,
     SelectLimit,
     SelectOne,
     SelectStar,
+    SelectStarFromMvOnTableX,
+    SelectStarFromTableX,
     SelectUnionAll,
     Update,
 )
@@ -27,6 +33,7 @@ from materialize.scalability.workload import (
 )
 from materialize.scalability.workload_markers import (
     ConnectionWorkload,
+    DdlWorkload,
     DmlDqlWorkload,
 )
 
@@ -84,3 +91,33 @@ class EstablishConnectionWorkload(WorkloadWithContext, ConnectionWorkload):
 
     def operations(self) -> list["Operation"]:
         return [OperationChainWithDataExchange([Connect(), SelectOne(), Disconnect()])]
+
+
+class CreateAndDropTableWorkload(WorkloadWithContext, DdlWorkload):
+    def amend_data_before_execution(self, data: OperationData) -> None:
+        data.push("table_seed", data.get("worker_id"))
+
+    def operations(self) -> list["Operation"]:
+        return [
+            OperationChainWithDataExchange(
+                [CreateTableX(), PopulateTableX(), SelectStarFromTableX(), DropTableX()]
+            )
+        ]
+
+
+class CreateAndDropTableWithMvWorkload(WorkloadWithContext, DdlWorkload):
+    def amend_data_before_execution(self, data: OperationData) -> None:
+        data.push("table_seed", data.get("worker_id"))
+
+    def operations(self) -> list["Operation"]:
+        return [
+            OperationChainWithDataExchange(
+                [
+                    CreateTableX(),
+                    PopulateTableX(),
+                    CreateMvOnTableX(),
+                    SelectStarFromMvOnTableX(),
+                    DropTableX(),
+                ]
+            )
+        ]

@@ -23,6 +23,12 @@ class DmlDqlWorkload(WorkloadMarker):
     pass
 
 
+class DdlWorkload(WorkloadMarker):
+    """Workloads that run DDL statements."""
+
+    pass
+
+
 class ConnectionWorkload(WorkloadMarker):
     """Workloads that perform connection operations."""
 
