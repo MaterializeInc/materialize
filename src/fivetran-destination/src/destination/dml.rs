@@ -27,8 +27,8 @@ use crate::crypto::AsyncAesDecrypter;
 use crate::destination::{config, ddl};
 use crate::fivetran_sdk::write_batch_request::FileParams;
 use crate::fivetran_sdk::{
-    Column, Compression, DataType, Encryption, Table, TruncateRequest, TruncateResponse,
-    WriteBatchRequest, WriteBatchResponse,
+    Compression, Encryption, Table, TruncateRequest, TruncateResponse, WriteBatchRequest,
+    WriteBatchResponse,
 };
 
 pub async fn handle_truncate_request(
@@ -101,27 +101,13 @@ async fn truncate_table(request: TruncateRequest) -> Result<(), anyhow::Error> {
 }
 
 async fn write_batch(request: WriteBatchRequest) -> Result<(), anyhow::Error> {
-    let Some(mut table) = request.table else {
+    let Some(table) = request.table else {
         bail!("internal error: WriteBatchRequest missing \"table\" field");
     };
 
     if !table.columns.iter().any(|c| c.primary_key) {
         bail!("table has no primary key columns");
     }
-
-    // TODO(benesch): should the SDK be providing these in the request?
-    table.columns.push(Column {
-        name: "_fivetran_deleted".into(),
-        r#type: DataType::Boolean.into(),
-        primary_key: false,
-        decimal: None,
-    });
-    table.columns.push(Column {
-        name: "_fivetran_synced".into(),
-        r#type: DataType::UtcDatetime.into(),
-        primary_key: false,
-        decimal: None,
-    });
 
     let Some(FileParams::Csv(csv_file_params)) = request.file_params else {
         bail!("internal error: WriteBatchRequest missing \"file_params\" field");

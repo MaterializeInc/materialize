@@ -53,6 +53,7 @@ use crate::coord::catalog_oracle::InMemoryTimestampOracle;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::statement_logging::PreparedStatementLoggingInfo;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
+use crate::coord::PeekContext;
 use crate::error::AdapterError;
 use crate::AdapterNotice;
 
@@ -1383,8 +1384,17 @@ pub struct WriteOp {
 /// Whether a transaction requires linearization.
 #[derive(Debug)]
 pub enum RequireLinearization {
-    /// Linearization is not required.
-    Required,
     /// Linearization is required.
+    Required,
+    /// Linearization is not required.
     NotRequired,
+}
+
+impl From<&PeekContext> for RequireLinearization {
+    fn from(ctx: &PeekContext) -> Self {
+        match ctx {
+            PeekContext::Select => RequireLinearization::Required,
+            PeekContext::Explain(..) => RequireLinearization::NotRequired,
+        }
+    }
 }

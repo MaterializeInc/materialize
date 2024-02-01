@@ -64,7 +64,7 @@ class Schema:
     def connect_sqls(self) -> list[str]:
         init_sqls = [f"SET SCHEMA = {self.schema};"]
         if self.cluster_name is not None:
-            init_sqls.append(f"SET cluster_name = {self.cluster_name};")
+            init_sqls.append(f"SET CLUSTER = {self.cluster_name};")
 
         if self.transaction_isolation is not None:
             init_sqls.append(

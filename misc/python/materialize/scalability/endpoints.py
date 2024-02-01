@@ -99,6 +99,7 @@ class MaterializeNonRemote(Endpoint):
         priv_cursor = priv_conn.cursor()
         priv_cursor.execute("ALTER SYSTEM SET max_connections = 65535;")
         priv_cursor.execute("ALTER SYSTEM SET max_tables = 65535;")
+        priv_cursor.execute("ALTER SYSTEM SET max_materialized_views = 65535;")
 
 
 class MaterializeLocal(MaterializeNonRemote):

@@ -386,17 +386,32 @@ steps:
         agents:
           queue: linux-aarch64-small
 
-  - id: ssh-connection
-    label: SSH connection tests
-    depends_on: build-aarch64
-    timeout_in_minutes: 40
-    inputs: [test/ssh-connection]
-    artifact_paths: junit_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: ssh-connection
-    agents:
-      queue: linux-aarch64
+  - group: "Connection tests"
+    key: connection-tests
+    steps:
+      - id: ssh-connection
+        label: SSH connection tests
+        depends_on: build-aarch64
+        timeout_in_minutes: 40
+        inputs: [test/ssh-connection]
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: ssh-connection
+        agents:
+          queue: linux-aarch64
+
+      - id: fivetran-destination-tests
+        label: Fivetran Destination tests
+        depends_on: build-aarch64
+        timeout_in_minutes: 10
+        inputs: [test/fivetran-destination]
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: fivetran-destination
+        agents:
+          queue: linux-aarch64-small
 
   - group: "Kafka tests"
     key: kafka-tests
@@ -489,10 +504,12 @@ steps:
       - test/cloudtest
       - misc/python/materialize/cloudtest
       - misc/kind
+    env:
+      CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
     plugins:
       - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/cloudtest:
-          args: [--exitfirst, -m, "not long", --aws-region=us-east-1, test/cloudtest/]
+          args: [--exitfirst, -m, "not long and not node_recovery", --aws-region=us-east-1, test/cloudtest/]
     agents:
       queue: linux-aarch64
 

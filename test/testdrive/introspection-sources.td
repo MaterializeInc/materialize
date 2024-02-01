@@ -517,16 +517,21 @@ mv_div_by_zero   2
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
 
-# Test logging of errors in things that advance to the empty frontier.
+# Test logging of errors in indexes that advance to the empty frontier.
+#
+# Note that the same is not expected to work for MVs that advance to the empty
+# frontier. There is no reason to keep completed MV dataflows around, so we
+# drop them immediately, removing all their associated logging in the process.
 
 > CREATE MATERIALIZED VIEW mv_zero AS SELECT 0 AS x
-> CREATE MATERIALIZED VIEW mv2_div_by_zero AS SELECT 1 / x FROM mv_zero
+> CREATE VIEW div_by_zero AS SELECT 1 / x FROM mv_zero
+> CREATE INDEX idx_div_by_zero ON div_by_zero ()
 
 > SELECT name, count
   FROM mz_internal.mz_compute_error_counts c
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
-mv2_div_by_zero 1
+idx_div_by_zero 1
 
 > DROP MATERIALIZED VIEW mv_zero CASCADE
 

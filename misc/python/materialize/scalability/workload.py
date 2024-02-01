@@ -16,12 +16,26 @@ from materialize.scalability.schema import Schema
 
 
 class Workload:
+    def init_operations(self) -> list[Operation]:
+        return []
+
     def operations(self) -> list[Operation]:
         raise NotImplementedError
 
-    def execute_operation(self, operation: Operation, cursor: Cursor) -> None:
-        data = OperationData(cursor)
+    def execute_operation(
+        self,
+        operation: Operation,
+        cursor: Cursor,
+        worker_id: int,
+        transaction_index: int,
+        verbose: bool,
+    ) -> None:
+        data = OperationData(cursor, worker_id)
         self.amend_data_before_execution(data)
+
+        if verbose:
+            print(f"#{transaction_index}: {operation} (worker_id={worker_id})")
+
         operation.execute(data)
 
     def amend_data_before_execution(self, data: OperationData) -> None:

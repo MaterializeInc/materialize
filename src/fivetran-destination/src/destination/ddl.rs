@@ -145,12 +145,6 @@ async fn create_table(request: CreateTableRequest) -> Result<(), anyhow::Error> 
         }
     }
 
-    // TODO(benesch): should the SDK be providing these in the request?
-    defs.extend([
-        "_fivetran_deleted boolean".into(),
-        "_fivetran_synced timestamptz".into(),
-    ]);
-
     // TODO(benesch): support primary keys.
     #[allow(clippy::overly_complex_bool_expr)]
     if !primary_key_columns.is_empty() && false {

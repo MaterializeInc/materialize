@@ -278,10 +278,17 @@ where
 
     /// Identifiers of exported objects (indexes and sinks).
     pub fn export_ids(&self) -> impl Iterator<Item = GlobalId> + Clone + '_ {
-        self.index_exports
-            .keys()
-            .chain(self.sink_exports.keys())
-            .copied()
+        self.exported_index_ids().chain(self.exported_sink_ids())
+    }
+
+    /// Identifiers of exported indexes.
+    pub fn exported_index_ids(&self) -> impl Iterator<Item = GlobalId> + Clone + '_ {
+        self.index_exports.keys().copied()
+    }
+
+    /// Identifiers of exported sinks.
+    pub fn exported_sink_ids(&self) -> impl Iterator<Item = GlobalId> + Clone + '_ {
+        self.sink_exports.keys().copied()
     }
 
     /// Identifiers of exported subscribe sinks.

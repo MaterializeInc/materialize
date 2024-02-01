@@ -620,7 +620,7 @@ impl Coordinator {
                 &id_bundle,
                 &source_ids,
                 real_time_recency_ts,
-                RequireLinearization::Required,
+                (&peek_ctx).into(),
             )
             .await;
 

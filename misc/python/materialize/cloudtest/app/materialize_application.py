@@ -9,6 +9,7 @@
 
 import logging
 import os
+import subprocess
 import time
 from datetime import datetime, timedelta
 
@@ -45,11 +46,17 @@ class MaterializeApplication(CloudtestApplicationBase):
         tag: str | None = None,
         aws_region: str | None = None,
         log_filter: str | None = None,
+        apply_node_selectors: bool = False,
     ) -> None:
         self.tag = tag
         self.environmentd = EnvironmentdService()
         self.materialized_alias = MaterializedAliasService()
-        self.testdrive = TestdrivePod(release_mode=release_mode, aws_region=aws_region)
+        self.testdrive = TestdrivePod(
+            release_mode=release_mode,
+            aws_region=aws_region,
+            apply_node_selectors=apply_node_selectors,
+        )
+        self.apply_node_selectors = apply_node_selectors
         super().__init__(release_mode, aws_region, log_filter)
 
         # Register the VpcEndpoint CRD.
@@ -61,12 +68,12 @@ class MaterializeApplication(CloudtestApplicationBase):
 
     def get_resources(self, log_filter: str | None) -> list[K8sResource]:
         return [
-            *cockroach_resources(),
-            *postgres_resources(),
-            *redpanda_resources(),
-            *debezium_resources(),
-            *ssh_resources(),
-            Minio(),
+            *cockroach_resources(apply_node_selectors=self.apply_node_selectors),
+            *postgres_resources(apply_node_selectors=self.apply_node_selectors),
+            *redpanda_resources(apply_node_selectors=self.apply_node_selectors),
+            *debezium_resources(apply_node_selectors=self.apply_node_selectors),
+            *ssh_resources(apply_node_selectors=self.apply_node_selectors),
+            Minio(apply_node_selectors=self.apply_node_selectors),
             VpcEndpointsClusterRole(),
             AdminRoleBinding(),
             EnvironmentdStatefulSet(
@@ -74,6 +81,7 @@ class MaterializeApplication(CloudtestApplicationBase):
                 tag=self.tag,
                 log_filter=log_filter,
                 coverage_mode=self.coverage_mode(),
+                apply_node_selectors=self.apply_node_selectors,
             ),
             PersistPubSubService(),
             self.environmentd,
@@ -190,6 +198,7 @@ class MaterializeApplication(CloudtestApplicationBase):
 
     def get_cluster_node_names(self, cluster_name: str) -> list[str]:
         cluster_id = self.get_cluster_id(cluster_name)
+        print(f"Cluster with name '{cluster_name}' has ID {cluster_id}")
 
         value_string = self.get_pod_value(
             cluster_id, "{.items[*].spec.nodeName}", remove_quotes=True
@@ -208,3 +217,23 @@ class MaterializeApplication(CloudtestApplicationBase):
             f"SELECT s.cluster_id, r.id FROM {mz_table} s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = '{name}'"
         )[0]
         return cluster_id, replica_id
+
+    def suspend_k8s_node(self, node_name: str) -> None:
+        print(f"Suspending node {node_name}...")
+        result = subprocess.run(
+            ["docker", "pause", node_name], stderr=subprocess.STDOUT, text=True
+        )
+
+        assert result.returncode == 0, f"Got return code {result.returncode}"
+
+        print(f"Suspended node {node_name}.")
+
+    def revive_suspended_k8s_node(self, node_name: str) -> None:
+        print(f"Reviving node {node_name}...")
+        result = subprocess.run(
+            ["docker", "unpause", node_name], stderr=subprocess.STDOUT, text=True
+        )
+
+        assert result.returncode == 0, f"Got return code {result.returncode}"
+
+        print(f"Node {node_name} is running again.")

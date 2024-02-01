@@ -27,10 +27,7 @@ from materialize.cloudtest.k8s.api.k8s_service import K8sService
 
 
 class RedpandaDeployment(K8sDeployment):
-    def __init__(
-        self,
-        namespace: str,
-    ) -> None:
+    def __init__(self, namespace: str, apply_node_selectors: bool) -> None:
         super().__init__(namespace)
         container = V1Container(
             name="redpanda",
@@ -60,9 +57,13 @@ class RedpandaDeployment(K8sDeployment):
             ],
         )
 
+        node_selector = None
+        if apply_node_selectors:
+            node_selector = {"supporting-services": "true"}
+
         template = V1PodTemplateSpec(
             metadata=V1ObjectMeta(namespace=namespace, labels={"app": "redpanda"}),
-            spec=V1PodSpec(containers=[container]),
+            spec=V1PodSpec(containers=[container], node_selector=node_selector),
         )
 
         selector = V1LabelSelector(match_labels={"app": "redpanda"})
@@ -99,6 +100,9 @@ class RedpandaService(K8sService):
 
 
 def redpanda_resources(
-    namespace: str = DEFAULT_K8S_NAMESPACE,
+    namespace: str = DEFAULT_K8S_NAMESPACE, apply_node_selectors: bool = False
 ) -> list[K8sResource]:
-    return [RedpandaDeployment(namespace), RedpandaService(namespace)]
+    return [
+        RedpandaDeployment(namespace, apply_node_selectors),
+        RedpandaService(namespace),
+    ]

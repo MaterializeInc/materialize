@@ -1525,7 +1525,8 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
 
         let result = Query {
             ctes,
-            body: self.fold_set_expr(q.body),
+            // Queries can be recursive, so need the ability to grow the stack.
+            body: mz_ore::stack::maybe_grow(|| self.fold_set_expr(q.body)),
             limit: q.limit.map(|l| self.fold_limit(l)),
             offset: q.offset.map(|l| self.fold_expr(l)),
             order_by: q
