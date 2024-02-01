@@ -164,14 +164,17 @@ def validate_state(
             break
         except Exception as e:
             # arbitrary error can occur if envd is not yet ready after restart
-            print("Error occurred, retrying.")
+            if is_last_run:
+                print("Error occurred, aborting!")
+            else:
+                print("Error occurred, retrying.")
             last_error_message = str(e)
 
     end_time = time.time()
 
     if not validation_succeeded:
         raise RuntimeError(
-            f"Failed to achieve '{expected_state}' using '{isolation_level}' within {timeout_in_sec}s! {last_error_message}"
+            f"Failed to achieve '{expected_state}' using '{isolation_level}' within {timeout_in_sec}s!\nLast error message:{last_error_message}"
         )
 
     duration = round(end_time - start_time, 1)
