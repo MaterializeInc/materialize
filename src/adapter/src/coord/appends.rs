@@ -20,7 +20,6 @@ use mz_ore::task;
 use mz_ore::vec::VecExt;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_sql::plan::Plan;
-use mz_sql::session::vars::IsolationLevel;
 use mz_storage_client::client::TimestamplessUpdate;
 use mz_timestamp_oracle::WriteTimestamp;
 use tokio::sync::{oneshot, Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
@@ -450,7 +449,7 @@ impl Coordinator {
         self.apply_local_write(timestamp).await;
         for response in responses {
             let (mut ctx, result) = response.finalize();
-            ctx.session_mut().apply_write_ts(timestamp);
+            ctx.session_mut().apply_write(timestamp);
             ctx.retire(result);
         }
 
