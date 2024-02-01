@@ -4977,15 +4977,8 @@ pub fn plan_alter_object_swap(
                 sql_bail!("unable to swap!");
             }
 
-            // To make these temporary names a bit more manageable, we make them short, by using
-            // the last component of a UUID, which should be 12 characters long.
-            //
-            // Note: the reason we use the last 12 characters is because the bits 6, 7, and 12 - 15
-            // are all hard coded <https://www.rfc-editor.org/rfc/rfc4122#section-4.4>.
-            let temp_uuid = uuid::Uuid::new_v4().as_hyphenated().to_string();
-            let short_id: String = temp_uuid.chars().rev().take_while(|c| *c != '-').collect();
-
             // Call the provided closure to make sure this name is unique!
+            let short_id = mz_ore::id_gen::temp_id();
             if check_fn(&short_id) {
                 break short_id;
             }

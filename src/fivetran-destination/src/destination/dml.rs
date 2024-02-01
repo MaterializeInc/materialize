@@ -15,14 +15,16 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::{anyhow, bail, Context};
 use async_compression::tokio::bufread::{GzipDecoder, ZstdDecoder};
-use futures::TryStreamExt;
+use futures::{SinkExt, TryStreamExt};
 use itertools::Itertools;
 use mz_ore::error::ErrorExt;
+use mz_sql_parser::ast::Ident;
 use postgres_protocol::escape;
 use prost::bytes::{BufMut, BytesMut};
 use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 use tokio_postgres::types::{to_sql_checked, Format, IsNull, ToSql, Type};
+use tokio_util::io::ReaderStream;
 
 use crate::crypto::AsyncAesDecrypter;
 use crate::destination::config;
@@ -141,7 +143,7 @@ async fn write_batch(request: WriteBatchRequest) -> Result<(), anyhow::Error> {
     // Note: This ordering of operations is important! Fivetran expects that we run "replace",
     // "update", and then "delete" ops.
     //
-    // See: https://materializeinc.slack.com/archives/C060KAR4802/p1706726115147059?thread_ts=1706720574.377339&cid=C060KAR4802
+    // Note: This isn't part of their documentation but was mentioned in a private conversation.
 
     replace_files(
         &request.schema_name,
@@ -188,9 +190,10 @@ enum FileCompression {
     Zstd,
 }
 
+type AsyncFileReader = Pin<Box<dyn AsyncRead + Send>>;
 type AsyncCsvReader = csv_async::AsyncReader<Pin<Box<dyn AsyncRead + Send>>>;
 
-async fn load_file(file_config: &FileConfig, path: &str) -> Result<AsyncCsvReader, anyhow::Error> {
+async fn load_file(file_config: &FileConfig, path: &str) -> Result<AsyncFileReader, anyhow::Error> {
     let mut file = File::open(path)
         .await
         .context("internal error: opening file")?;
@@ -224,9 +227,6 @@ async fn load_file(file_config: &FileConfig, path: &str) -> Result<AsyncCsvReade
         FileCompression::Gzip => Box::pin(GzipDecoder::new(file)),
         FileCompression::Zstd => Box::pin(ZstdDecoder::new(file)),
     };
-
-    // Build CSV reader.
-    let file = csv_async::AsyncReaderBuilder::new().create_reader(file);
 
     Ok(file)
 }
@@ -289,9 +289,11 @@ async fn replace_files(
         .context("internal error: preparing insert statement")?;
 
     for path in replace_files {
-        let reader = load_file(file_config, path)
+        let file = load_file(file_config, path)
             .await
             .with_context(|| format!("loading replace file {path}"))?;
+        let reader = csv_async::AsyncReaderBuilder::new().create_reader(file);
+
         replace_file(
             file_config,
             &key,
@@ -380,9 +382,11 @@ async fn update_files(
         .context("internal error: preparing update statement")?;
 
     for path in update_files {
-        let reader = load_file(file_config, path)
+        let file = load_file(file_config, path)
             .await
             .with_context(|| format!("loading update file {path}"))?;
+        let reader = csv_async::AsyncReaderBuilder::new().create_reader(file);
+
         update_file(file_config, client, &update_stmt, reader)
             .await
             .with_context(|| format!("handling update file {path}"))?;
@@ -417,16 +421,27 @@ async fn delete_files(
     // TODO(parkmycar): Make sure table exists.
     // TODO(parkmycar): Retry transient errors.
 
-    // Copy into a temporary table, which we then merge into the destination.
-    let ts = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .context("time went backwards!")?;
-    // TODO(parkmycar): Make sure table name is <= 255 characters.
-    let temp_table_name = format!("fivetran_{}_temp_delete_{}", table.name, ts.as_millis());
+    // Bail early if there is no work to do.
+    if delete_files.is_empty() {
+        return Ok(());
+    }
 
-    let schema_name = escape::escape_identifier(schema);
-    let table_name = escape::escape_identifier(&table.name);
-    let temp_table_name = escape::escape_identifier(&temp_table_name);
+    // Copy into a temporary table, which we then merge into the destination.
+    //
+    // This temporary table names to be a valid identifier within Materialize, and a table with the
+    // same name must not already exist in the provided schema.
+    let prefix = format!("fivetran_temp_{}_", mz_ore::id_gen::temp_id());
+    let mut temp_table_name = Ident::new_lossy(prefix);
+    temp_table_name.append_lossy(&table.name);
+    let temp_table_name = temp_table_name.into_string();
+
+    let qualified_table_name = format!(
+        "{}.{}",
+        escape::escape_identifier(schema),
+        escape::escape_identifier(&table.name)
+    );
+    // Note: temporary items are all created in the same schema.
+    let qualified_temp_table_name = escape::escape_identifier(&temp_table_name);
 
     let columns = table
         .columns
@@ -451,46 +466,41 @@ async fn delete_files(
         .iter()
         .map(|col| format!("{} {}", col.name, col.ty))
         .join(",");
-    let create_table_stmt = format!("CREATE TABLE {schema_name}.{temp_table_name} ({defs})");
-    client.batch_execute(&create_table_stmt).await?;
+    let create_table_stmt = format!("CREATE TEMPORARY TABLE {qualified_temp_table_name} ({defs})");
+    client.execute(&create_table_stmt, &[]).await?;
 
-    // TODO(parkmycar): Ideally we'd use the COPY FROM protocol here, but we need to add support
-    // for compression and encryption.
-    let cols = columns
-        .iter()
-        .enumerate()
-        .map(|(idx, col)| format!("${}::{}", idx + 1, col.ty))
-        .join(",");
-    let insert_stmt = format!("INSERT INTO {schema_name}.{temp_table_name} VALUES ({cols})",);
-    let insert_stmt = client
-        .prepare(&insert_stmt)
-        .await
-        .context("internal error: preparing delete temp table insert statement")?;
+    // COPY all of the rows from delete_files into our temporary table.
+    let copy_in_stmt = format!(
+        "COPY {qualified_temp_table_name} FROM STDIN WITH (FORMAT CSV, HEADER true, NULL {null_value})",
+        null_value = escape::escape_literal(&file_config.null_string),
+    );
+    let sink = client.copy_in(&copy_in_stmt).await?;
+    let mut sink = std::pin::pin!(sink);
 
-    let mut total_count = 0;
     for path in delete_files {
-        let reader = load_file(file_config, path)
+        let file = load_file(file_config, path)
             .await
             .with_context(|| format!("loading delete file {path}"))?;
-        let copied = copy_delete_file(file_config, client, &insert_stmt, reader)
+        let mut file_stream = ReaderStream::new(file).map_err(anyhow::Error::from);
+
+        (&mut sink)
+            .sink_map_err(anyhow::Error::from)
+            .send_all(&mut file_stream)
             .await
-            .with_context(|| format!("handling delete file {path}"))?;
-        total_count += copied;
+            .context("sinking data")?;
     }
-    tracing::info!(total_count, "inserted rows to {schema}.{temp_table_name}");
+    let row_count = sink.finish().await.context("closing sink")?;
+    tracing::info!(row_count, "copied rows into {qualified_temp_table_name}");
 
     // Skip the update if there are no rows to delete!
-    if total_count > 0 {
+    if row_count > 0 {
         // Mark rows as deleted by "merging" our temporary table into the destination table.
         //
-        // TODO(parkmycar): Fivetran provides a column name in truncate for soft deletes, should the
-        // delete operation be doing the same?
-
         // HACKY: We want to update the "_fivetran_synced" column for all of the rows we marked as
         // deleted, but don't have a way to read from the temp table that would allow this in an
         // `UPDATE` statement.
         let synced_time_stmt = format!(
-            "SELECT MAX({synced_col}) FROM {schema_name}.{temp_table_name}",
+            "SELECT MAX({synced_col}) FROM {qualified_temp_table_name}",
             synced_col = escape::escape_identifier(FIVETRAN_SYSTEM_COLUMN_SYNCED)
         );
         let synced_time: SystemTime = client
@@ -501,45 +511,21 @@ async fn delete_files(
         let matching_cols = columns.iter().filter(|col| col.is_primary);
         let merge_stmt = format!(
             r#"
-            UPDATE {schema_name}.{table_name}
+            UPDATE {qualified_table_name}
             SET {deleted_col} = true, {synced_col} = $1
             WHERE ({cols}) IN (
                 SELECT {cols}
-                FROM {schema_name}.{temp_table_name}
+                FROM {qualified_temp_table_name}
             )"#,
             deleted_col = escape::escape_identifier(FIVETRAN_SYSTEM_COLUMN_DELETE),
             synced_col = escape::escape_identifier(FIVETRAN_SYSTEM_COLUMN_SYNCED),
             cols = matching_cols.map(|col| &col.name).join(","),
         );
         let total_count = client.execute(&merge_stmt, &[&synced_time]).await?;
-        tracing::info!(?total_count, "altered rows in {schema}.{table_name}");
+        tracing::info!(?total_count, "altered rows in {qualified_table_name}");
     }
-
-    // Cleanup, drop our temporary table.
-    client
-        .batch_execute(&format!("DROP TABLE {schema_name}.{temp_table_name}"))
-        .await?;
 
     Ok(())
-}
-
-async fn copy_delete_file(
-    file_config: &FileConfig,
-    client: &tokio_postgres::Client,
-    insert_stmt: &tokio_postgres::Statement,
-    reader: AsyncCsvReader,
-) -> Result<usize, anyhow::Error> {
-    let mut count = 0;
-    let mut stream = reader.into_byte_records();
-    while let Some(record) = stream.try_next().await? {
-        let params = record.iter().map(|value| TextFormatter {
-            value,
-            null_string: &file_config.null_string,
-        });
-        client.execute_raw(insert_stmt, params).await?;
-        count += 1;
-    }
-    Ok(count)
 }
 
 /// Metadata about a column that is relevant to operations peformed by the destination.
