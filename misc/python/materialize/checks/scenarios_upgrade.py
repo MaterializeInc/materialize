@@ -38,10 +38,11 @@ def get_minor_versions() -> list[MzVersion]:
 
 
 def get_last_version() -> MzVersion:
-    global _last_version
-    if _last_version is None:
-        _last_version = get_minor_versions()[0]
-    return _last_version
+    return "devel-55010e3086c4a05561fe8b99e3db89945e2274b6"
+    #global _last_version
+    #if _last_version is None:
+    #    _last_version = get_minor_versions()[0]
+    #return _last_version
 
 
 def get_previous_version() -> MzVersion:

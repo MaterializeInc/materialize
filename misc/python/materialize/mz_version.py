@@ -49,6 +49,8 @@ class TypedVersionBase(Version):
     @classmethod
     def parse(cls: type[T], version: str, drop_dev_suffix: bool = False) -> T:
         """Parses a version string with prefix, for example: v0.45.0-dev (f01773cb1)"""
+        if version == "devel-55010e3086c4a05561fe8b99e3db89945e2274b6":
+            return super().parse("0.85.2")
         expected_prefix = cls.get_prefix()
         if not version.startswith(expected_prefix):
             raise ValueError(
