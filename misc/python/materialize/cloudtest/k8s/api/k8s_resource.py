@@ -6,7 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-
+import subprocess
 
 from kubernetes.client import AppsV1Api, CoreV1Api, RbacAuthorizationV1Api
 from kubernetes.config import new_client_from_config  # type: ignore
@@ -22,7 +22,11 @@ class K8sResource:
         self.selected_namespace = namespace
 
     def kubectl(
-        self, *args: str, input: str | None = None, capture_output: bool = False
+        self,
+        *args: str,
+        input: str | None = None,
+        capture_output: bool = False,
+        suppress_command_error_output: bool = False,
     ) -> None:
         cmd = [
             "kubectl",
@@ -33,7 +37,12 @@ class K8sResource:
             *args,
         ]
 
-        run_process_with_error_information(cmd, input, capture_output=capture_output)
+        if suppress_command_error_output:
+            subprocess.run(cmd, text=True, input=input, check=True)
+        else:
+            run_process_with_error_information(
+                cmd, input, capture_output=capture_output
+            )
 
     def api(self) -> CoreV1Api:
         api_client = new_client_from_config(context=self.context())
