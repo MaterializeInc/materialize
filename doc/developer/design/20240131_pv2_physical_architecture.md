@@ -141,7 +141,7 @@ How are queries routed/processed:
 
 Pros:
 
-- Easy to migrate to from our current architecture.
+- Easy to migrate to from our current architecture.https://github.com/MaterializeInc/materialize/pull/23543
 - Easy-ish to think about how information flows in the system, who "holds" read
   holds, how queries are routed through adapter and to replicas.
 - Nothing changes in the UX, users still interact with clusters, it's just that
@@ -158,9 +158,41 @@ Cons:
 ## Multi-clusterd, No-envd Architecture
 
 It's certainly possible, but hard for me to see how we get there with how
-controllers work currently.
+controllers, read holds, and query processing work today.
 
-TODO: spell out questions!
+Remember: a user-facing CLUSTER is made up of replicas, which themselves are
+made up up `clusterd` processes.
+
+Questions:
+
+- How does Catalog content (the source of truth) get translated to instructions
+  for clusters/replicas?
+  - In the multi-envd-multi-colusterd design, there is still a single point
+    (the controller, in that clusters `envd`) that instructs all cluster
+    replicas, based on the Catalog. Which is easy to reason about.
+  - Do all replicas participate in a distributed protocol to figure out what to
+    do amongst themselves?
+- Who holds on to `SinceHandles` for storage collections? Is it all `clusterd`
+  processes?
+  - The `n*m` problem, where `n` is number of `clusterd` processes, and `m` is
+    number of storage collections,  doesn't seem to problematic, because our
+    `n` is small. This one seems tractable, at least.
+- Who holds on to read holds for compute objects, and how?
+  - In the multi-envd-multi-colusterd design, there is still a single point
+    (the controller, in that clusters `envd`) that instructs all cluster
+    replicas, allows them to do compaction when desired. It can therefore
+    logically keep read holds.
+  - Would all `clusterd` processes somehow logically keep read holds for all
+    replicas? They would need this to do query processing!
+- How do queries get routed?
+  - In the multi-envd-multi-clusterd design, there is still a single entrypoint
+    _per cluster_: that clusters `envd` process.
+  - The balancer could choose one `clusterd` process, round-robin. And then
+    that `clusterd` process (the piece of adapter logic in it) has to process
+    the query, talk to the other replicas/processes?
+  - There could be one "special" `clusterd` process that does the query/control
+    work. Feels very iffy!
+
 
 ### Commentary
 
