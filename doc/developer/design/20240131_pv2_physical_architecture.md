@@ -160,6 +160,8 @@ Cons:
 It's certainly possible, but hard for me to see how we get there with how
 controllers work currently.
 
+TODO: spell out questions!
+
 ### Commentary
 
 Pros:
