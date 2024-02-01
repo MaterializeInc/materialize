@@ -2432,6 +2432,10 @@ impl Coordinator {
                 .catalog
                 .system_config()
                 .coord_slow_message_reporting_threshold();
+            let warn_threshold = self
+                .catalog()
+                .system_config()
+                .coord_slow_message_warn_threshold();
 
             loop {
                 // Before adding a branch to this select loop, please ensure that the branch is
@@ -2554,9 +2558,8 @@ impl Coordinator {
                 }
 
                 // If something is _really_ slow, print a trace id for debugging, if OTEL is enabled.
-                let trace_id_threshold = Duration::from_secs(5).min(prometheus_threshold * 25);
-                if duration > trace_id_threshold && otel_context.is_valid() {
-                    let trace_id = otel_context.trace_id();
+                if duration > warn_threshold {
+                    let trace_id = otel_context.is_valid().then(|| otel_context.trace_id());
                     tracing::warn!(
                         ?msg_kind,
                         ?trace_id,

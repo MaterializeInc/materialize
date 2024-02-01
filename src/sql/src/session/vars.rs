@@ -951,6 +951,14 @@ const COORD_SLOW_MESSAGE_REPORTING_THRESHOLD: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
+const COORD_SLOW_MESSAGE_WARN_THRESHOLD: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("coord_slow_message_warn_threshold"),
+    // Note(parkmycar): This value was chosen arbitrarily.
+    value: Duration::from_secs(5),
+    description: "Sets the threshold at which we will warn! for a coordinator message being slow.",
+    internal: true,
+};
+
 /// Controls the connect_timeout setting when connecting to PG via `mz_postgres_util`.
 const PG_SOURCE_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_source_connect_timeout"),
@@ -2953,6 +2961,7 @@ impl SystemVars {
             .with_var(&SENTRY_FILTERS)
             .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
             .with_var(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
+            .with_var(&COORD_SLOW_MESSAGE_WARN_THRESHOLD)
             .with_var(&grpc_client::CONNECT_TIMEOUT)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
@@ -3755,6 +3764,10 @@ impl SystemVars {
 
     pub fn coord_slow_message_reporting_threshold(&self) -> Duration {
         *self.expect_value(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
+    }
+
+    pub fn coord_slow_message_warn_threshold(&self) -> Duration {
+        *self.expect_value(&COORD_SLOW_MESSAGE_WARN_THRESHOLD)
     }
 
     pub fn grpc_client_http2_keep_alive_interval(&self) -> Duration {
