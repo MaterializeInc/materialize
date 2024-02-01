@@ -255,8 +255,7 @@ pub trait TimestampProvider {
             Some(timeline)
                 if when.must_advance_to_timeline_ts()
                     || (when.can_advance_to_timeline_ts()
-                        && (isolation_level == &IsolationLevel::StrictSerializable
-                            || isolation_level == &IsolationLevel::StrongSessionSerializable)) =>
+                        && matches!(isolation_level, IsolationLevel::StrictSerializable | IsolationLevel::StrongSessionSerializable)) =>
             {
                 Some(timeline.clone())
             }
