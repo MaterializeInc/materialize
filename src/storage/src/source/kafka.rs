@@ -82,6 +82,9 @@ pub struct KafkaSourceReader {
     start_offsets: BTreeMap<PartitionId, i64>,
     /// Channel to receive Kafka statistics JSON blobs from the stats callback.
     stats_rx: crossbeam_channel::Receiver<Jsonb>,
+    /// Progress statistics as collected from the `resume_uppers` stream and the partition metadata
+    /// thread.
+    progress_statistics: Arc<Mutex<PartialProgressStatistics>>,
     /// The last partition info we received. For each partition we also fetch the high watermark.
     partition_info: Arc<Mutex<Option<BTreeMap<PartitionId, WatermarkOffsets>>>>,
     /// A handle to the spawned metadata thread
@@ -96,6 +99,14 @@ pub struct KafkaSourceReader {
     health_status: Arc<Mutex<HealthStatus>>,
     /// Per partition capabilities used to produce messages
     partition_capabilities: BTreeMap<PartitionId, PartitionCapability>,
+}
+
+/// A partially-filled version of `ProgressStatisticsUpdate`. This allows us to
+/// only emit updates when `upstream_values` is updated by the metadata thread.
+#[derive(Default)]
+struct PartialProgressStatistics {
+    upstream_values: Option<u64>,
+    committed_values: Option<u64>,
 }
 
 struct PartitionCapability {
@@ -117,10 +128,13 @@ struct WatermarkOffsets {
     high: u64,
 }
 
-pub struct KafkaOffsetCommiter {
+/// Processes `resume_uppers` stream updates, committing them upstream and
+/// storing them in the `progress_statistics` to be emitted later.
+pub struct KafkaResumeUpperProcessor {
     config: RawSourceCreationConfig,
     topic_name: String,
     consumer: Arc<BaseConsumer<TunnelingClientContext<GlueConsumerContext>>>,
+    progress_statistics: Arc<Mutex<PartialProgressStatistics>>,
 }
 
 impl SourceRender for KafkaSourceConnection {
@@ -151,9 +165,11 @@ impl SourceRender for KafkaSourceConnection {
         let (mut data_output, stream) = builder.new_output();
         let (_progress_output, progress_stream) = builder.new_output();
         let (mut health_output, health_stream) = builder.new_output();
+        let (mut stats_output, stats_stream) = builder.new_output();
 
         let button = builder.build(move |caps| async move {
-            let [mut data_cap, mut progress_cap, health_cap]: [_; 3] = caps.try_into().unwrap();
+            let [mut data_cap, mut progress_cap, health_cap, stats_cap]: [_; 4] =
+                caps.try_into().unwrap();
 
             let client_id = self.client_id(&config.config.connection_context, config.id);
             let group_id = self.group_id(&config.config.connection_context, config.id);
@@ -414,6 +430,7 @@ impl SourceRender for KafkaSourceConnection {
                 last_offsets: BTreeMap::new(),
                 start_offsets,
                 stats_rx,
+                progress_statistics: Default::default(),
                 partition_info,
                 metadata_columns: metadata_columns
                     .into_iter()
@@ -429,16 +446,17 @@ impl SourceRender for KafkaSourceConnection {
                 partition_capabilities,
             };
 
-            let offset_committer = KafkaOffsetCommiter {
+            let offset_committer = KafkaResumeUpperProcessor {
                 config: config.clone(),
                 topic_name: topic.clone(),
                 consumer,
+                progress_statistics: Arc::clone(&reader.progress_statistics),
             };
 
-            let offset_commit_loop = async move {
+            let resume_uppers_process_loop = async move {
                 tokio::pin!(resume_uppers);
                 while let Some(frontier) = resume_uppers.next().await {
-                    if let Err(e) = offset_committer.commit_offsets(frontier.clone()).await {
+                    if let Err(e) = offset_committer.process_frontier(frontier.clone()).await {
                         offset_commit_metrics.offset_commit_failures.inc();
                         tracing::warn!(
                             %e,
@@ -455,7 +473,7 @@ impl SourceRender for KafkaSourceConnection {
                 // is dropped.
                 std::future::pending::<()>().await;
             };
-            tokio::pin!(offset_commit_loop);
+            tokio::pin!(resume_uppers_process_loop);
 
             let mut prev_pid_info: Option<BTreeMap<PartitionId, WatermarkOffsets>> = None;
             loop {
@@ -505,8 +523,10 @@ impl SourceRender for KafkaSourceConnection {
                         }
                     }
 
+                    let mut upstream_stat = 0;
                     for (&pid, watermarks) in &partitions {
                         if config.responsible_for(pid) {
+                            upstream_stat += watermarks.high;
                             reader.ensure_partition(pid);
                             if let Entry::Vacant(entry) = reader.partition_capabilities.entry(pid) {
                                 let start_offset = match reader.start_offsets.get(&pid) {
@@ -539,6 +559,12 @@ impl SourceRender for KafkaSourceConnection {
                             }
                         }
                     }
+
+                    reader
+                        .progress_statistics
+                        .lock()
+                        .expect("poisoned")
+                        .upstream_values = Some(upstream_stat);
                     data_cap.downgrade(&future_ts);
                     progress_cap.downgrade(&future_ts);
                     prev_pid_info = Some(partitions);
@@ -686,6 +712,33 @@ impl SourceRender for KafkaSourceConnection {
                         .await;
                 }
 
+                // If we have a new `upstream_values` from the partition metadata thread, and
+                // `committed` from reading the `resume_uppers` stream, we can emit a
+                // progress stats update.
+                let progress_statistics = {
+                    let mut stats = reader.progress_statistics.lock().expect("poisoned");
+
+                    if stats.committed_values.is_some() && stats.upstream_values.is_some() {
+                        Some((
+                            stats.upstream_values.take().unwrap(),
+                            stats.committed_values.take().unwrap(),
+                        ))
+                    } else {
+                        None
+                    }
+                };
+                if let Some((upstream_values, committed_values)) = progress_statistics {
+                    stats_output
+                        .give(
+                            &stats_cap,
+                            ProgressStatisticsUpdate {
+                                committed_values,
+                                upstream_values,
+                            },
+                        )
+                        .await;
+                }
+
                 // Wait to be notified while also making progress with offset committing
                 tokio::select! {
                     // TODO(petrosagg): remove the timeout and rely purely on librdkafka waking us
@@ -694,7 +747,7 @@ impl SourceRender for KafkaSourceConnection {
                     // This future is not cancel safe but we are only passing a reference to it in
                     // the select! loop so the future stays on the stack and never gets cancelled
                     // until the end of the function.
-                    _ = offset_commit_loop.as_mut() => {},
+                    _ = resume_uppers_process_loop.as_mut() => {},
                 }
             }
         });
@@ -703,14 +756,14 @@ impl SourceRender for KafkaSourceConnection {
             stream.as_collection(),
             Some(progress_stream),
             health_stream,
-            timely::dataflow::operators::generic::operator::empty(scope),
+            stats_stream,
             vec![button.press_on_drop()],
         )
     }
 }
 
-impl KafkaOffsetCommiter {
-    async fn commit_offsets(
+impl KafkaResumeUpperProcessor {
+    async fn process_frontier(
         &self,
         frontier: Antichain<Partitioned<RangeBound<PartitionId>, MzOffset>>,
     ) -> Result<(), anyhow::Error> {
@@ -718,14 +771,25 @@ impl KafkaOffsetCommiter {
 
         // Generate a list of partitions that this worker is responsible for
         let mut offsets = vec![];
+        let mut progress_stat = 0;
         for ts in frontier.iter() {
             if let Some(pid) = ts.interval().singleton() {
                 let pid = pid.unwrap_exact();
                 if self.config.responsible_for(pid) {
                     offsets.push((pid.clone(), *ts.timestamp()));
+
+                    // Note that we do not subtract 1 from the frontier. Imagine
+                    // that frontier is 2 for this pid. That means we have
+                    // full processed offset 0 and offset 1, which means we have
+                    // processed _2_ offsets.
+                    progress_stat += ts.timestamp().offset;
                 }
             }
         }
+        self.progress_statistics
+            .lock()
+            .expect("poisoned")
+            .committed_values = Some(progress_stat);
 
         if !offsets.is_empty() {
             let mut tpl = TopicPartitionList::new();
