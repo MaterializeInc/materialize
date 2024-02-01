@@ -105,7 +105,7 @@ def cargo(
     _target_features = ",".join(target_features(arch))
 
     rustflags += [
-        "-Clink-arg=-Wl,--compress-debug-sections=zlib",
+        "-Clink-arg=-Wl,--compress-debug-sections=zstd",
         "-Csymbol-mangling-version=v0",
         f"-Ctarget-cpu={_target_cpu}",
         f"-Ctarget-feature={_target_features}",
