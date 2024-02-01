@@ -35,7 +35,10 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     help2man \
     libc-dev \
     libncurses-dev \
+    libstdc++6 \
+    libstdc++-13-dev \
     libtool-bin \
+    llvm \
     make \
     patch \
     texinfo \

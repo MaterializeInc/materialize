@@ -17,6 +17,7 @@ RUN apt-get update && apt-get -qy install --no-install-recommends \
     curl \
     dnsutils \
     iputils-ping \
+    llvm \
     postgresql-client \
     ssh \
     wait-for-it \
