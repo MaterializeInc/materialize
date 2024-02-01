@@ -942,8 +942,9 @@ static WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<ServerVar<usize>> = Lazy::new(|| 
 
 const COORD_SLOW_MESSAGE_REPORTING_THRESHOLD: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("coord_slow_message_reporting_threshold"),
-    // Note(parkmycar): This value was chosen arbitrarily.
-    value: Duration::from_millis(100),
+    // Default to recording all messages, but left here so we can dynamically increase if this
+    // causes unexpected problems.
+    value: Duration::from_millis(0),
     description:
         "Sets the threshold at which we will report the handling of a coordinator message \
     for being slow.",
