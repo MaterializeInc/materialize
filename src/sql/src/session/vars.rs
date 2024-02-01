@@ -2153,6 +2153,20 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_compute_aggressive_readhold_downgrades,
+        desc: "let the compute controller aggressively downgrade read holds for sink dataflows",
+        default: true,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_session_timelines,
+        desc: "strong session serializable isolation levels",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 /// Returns a new ConfigSet containing every `Config` in Materialize.
@@ -5324,6 +5338,44 @@ pub enum IsolationLevel {
     ReadCommitted,
     RepeatableRead,
     Serializable,
+    /* TODO(jkosh44) Move this comment to user facing docs when this isolation level becomes available to users.
+     * The Strong Session Serializable isolation level combines the Serializable isolation level
+     * (https://jepsen.io/consistency/models/serializable) with the Sequential consistency model
+     * (https://jepsen.io/consistency/models/sequential). See
+     * http://dbmsmusings.blogspot.com/2019/06/correctness-anomalies-under.html and
+     * https://cs.uwaterloo.ca/~kmsalem/pubs/DaudjeeICDE04.pdf. Operations within a single session
+     * are linearizable, but operations across sessions are not linearizable.
+     *
+     * Operations in sessions that use Strong Session Serializable are not linearizable with
+     * operations in sessions that use Strict Serializable. For example, consider the following
+     * sequence of events in order:
+     *
+     *   1. Session s0 executes read at timestamp t0 under Strong Session Serializable.
+     *   2. Session s1 executes read at timestamp t1 under Strict Serializable.
+     *
+     * If t0 > t1, then this is not considered a consistency violation. This matches with the
+     * semantics of Serializable, which can execute queries arbitrarily in the future without
+     * violating the consistency of Strict Serializable queries.
+     *
+     * All operations within a session that use Strong Session Serializable are only
+     * linearizable within operations within the same session that also use Strong Session
+     * Serializable. For example, consider the following sequence of events in order:
+     *
+     *   1. Session s0 executes read at timestamp t0 under Strong Session Serializable.
+     *   2. Session s0 executes read at timestamp t1 under I.
+     *
+     * If I is Strong Session Serializable then t0 > t1 is guaranteed. If I is any other isolation
+     * level then t0 < t1 is not considered a consistency violation. This matches the semantics of
+     * Serializable, which can execute queries arbitrarily in the future without violating the
+     * consistency of Strict Serializable queries within the same session.
+     *
+     * The items left TODO before this is considered ready for prod are:
+     *
+     * - Add more tests.
+     * - Linearize writes to system tables under this isolation (most of these are the side effect
+     *   of some DDL).
+     */
+    StrongSessionSerializable,
     StrictSerializable,
 }
 
@@ -5334,6 +5386,7 @@ impl IsolationLevel {
             Self::ReadCommitted => "read committed",
             Self::RepeatableRead => "repeatable read",
             Self::Serializable => "serializable",
+            Self::StrongSessionSerializable => "strong session serializable",
             Self::StrictSerializable => "strict serializable",
         }
     }
@@ -5344,6 +5397,7 @@ impl IsolationLevel {
             Self::ReadCommitted.as_str(),
             Self::RepeatableRead.as_str(),
             Self::Serializable.as_str(),
+            // TODO(jkosh44) Add StrongSessionSerializable when it becomes available to users.
             Self::StrictSerializable.as_str(),
         ]
     }
@@ -5375,6 +5429,8 @@ impl Value for IsolationLevel {
             || s == Self::Serializable.as_str()
         {
             Ok(Self::Serializable)
+        } else if s == Self::StrongSessionSerializable.as_str() {
+            Ok(Self::StrongSessionSerializable)
         } else if s == Self::StrictSerializable.as_str() {
             Ok(Self::StrictSerializable)
         } else {
@@ -5398,6 +5454,7 @@ impl From<TransactionIsolationLevel> for IsolationLevel {
             TransactionIsolationLevel::ReadCommitted => Self::ReadCommitted,
             TransactionIsolationLevel::RepeatableRead => Self::RepeatableRead,
             TransactionIsolationLevel::Serializable => Self::Serializable,
+            TransactionIsolationLevel::StrongSessionSerializable => Self::StrongSessionSerializable,
             TransactionIsolationLevel::StrictSerializable => Self::StrictSerializable,
         }
     }

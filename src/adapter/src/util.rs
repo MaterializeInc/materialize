@@ -10,7 +10,8 @@
 use std::fmt::Debug;
 
 use mz_compute_client::controller::error::{
-    CollectionUpdateError, DataflowCreationError, InstanceMissing, PeekError, SubscribeTargetError,
+    CollectionUpdateError, DataflowCreationError, InstanceMissing, PeekError, ReadPolicyError,
+    SubscribeTargetError,
 };
 use mz_controller_types::ClusterId;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -374,6 +375,16 @@ impl ShouldHalt for PeekError {
             | PeekError::InstanceMissing(_)
             | PeekError::CollectionMissing(_)
             | PeekError::ReplicaMissing(_) => false,
+        }
+    }
+}
+
+impl ShouldHalt for ReadPolicyError {
+    fn should_halt(&self) -> bool {
+        match self {
+            ReadPolicyError::InstanceMissing(_)
+            | ReadPolicyError::CollectionMissing(_)
+            | ReadPolicyError::WriteOnlyCollection(_) => false,
         }
     }
 }

@@ -51,10 +51,7 @@ class PostgresService(K8sService):
 
 
 class PostgresDeployment(K8sDeployment):
-    def __init__(
-        self,
-        namespace: str,
-    ) -> None:
+    def __init__(self, namespace: str, apply_node_selectors: bool) -> None:
         super().__init__(namespace)
         env = [
             V1EnvVar(name="POSTGRESDB", value="postgres"),
@@ -69,9 +66,13 @@ class PostgresDeployment(K8sDeployment):
             ports=ports,
         )
 
+        node_selector = None
+        if apply_node_selectors:
+            node_selector = {"supporting-services": "true"}
+
         template = V1PodTemplateSpec(
             metadata=V1ObjectMeta(namespace=namespace, labels={"app": "postgres"}),
-            spec=V1PodSpec(containers=[container]),
+            spec=V1PodSpec(containers=[container], node_selector=node_selector),
         )
 
         selector = V1LabelSelector(match_labels={"app": "postgres"})
@@ -87,9 +88,9 @@ class PostgresDeployment(K8sDeployment):
 
 
 def postgres_resources(
-    namespace: str = DEFAULT_K8S_NAMESPACE,
+    namespace: str = DEFAULT_K8S_NAMESPACE, apply_node_selectors: bool = False
 ) -> list[K8sResource]:
     return [
         PostgresService(namespace),
-        PostgresDeployment(namespace),
+        PostgresDeployment(namespace, apply_node_selectors),
     ]

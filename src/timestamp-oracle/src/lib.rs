@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use mz_ore::now::NowFn;
+use mz_ore::now::{EpochMillis, NowFn};
 
 pub mod batching_oracle;
 pub mod metrics;
@@ -119,9 +119,15 @@ pub trait GenericNowFn<T>: Clone + Send + Sync {
     fn now(&self) -> T;
 }
 
-impl GenericNowFn<mz_repr::Timestamp> for NowFn {
+impl GenericNowFn<mz_repr::Timestamp> for NowFn<EpochMillis> {
     fn now(&self) -> mz_repr::Timestamp {
         (self)().into()
+    }
+}
+
+impl<T: Clone + Send + Sync> GenericNowFn<T> for NowFn<T> {
+    fn now(&self) -> T {
+        (self)()
     }
 }
 

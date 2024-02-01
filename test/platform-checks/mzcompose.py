@@ -6,6 +6,8 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
+import os
 from enum import Enum
 
 from materialize import buildkite
@@ -34,7 +36,7 @@ from materialize.mzcompose.services.testdrive import Testdrive as TestdriveServi
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import all_subclasses
 
-DEFAULT_TESTDRIVE_TIMEOUT = "300s"
+TESTDRIVE_DEFAULT_TIMEOUT = os.environ.get("PLATFORM_CHECKS_TD_TIMEOUT", "300s")
 
 SERVICES = [
     TestCerts(),
@@ -95,7 +97,7 @@ SERVICES = [
         catalog_store="stash",
     ),
     TestdriveService(
-        default_timeout=DEFAULT_TESTDRIVE_TIMEOUT,
+        default_timeout=TESTDRIVE_DEFAULT_TIMEOUT,
         no_reset=True,
         seed=1,
         entrypoint_extra=[

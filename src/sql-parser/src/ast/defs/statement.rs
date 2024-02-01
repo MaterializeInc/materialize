@@ -3293,6 +3293,7 @@ pub enum TransactionIsolationLevel {
     ReadCommitted,
     RepeatableRead,
     Serializable,
+    StrongSessionSerializable,
     StrictSerializable,
 }
 
@@ -3304,6 +3305,7 @@ impl AstDisplay for TransactionIsolationLevel {
             ReadCommitted => "READ COMMITTED",
             RepeatableRead => "REPEATABLE READ",
             Serializable => "SERIALIZABLE",
+            StrongSessionSerializable => "STRONG SESSION SERIALIZABLE",
             StrictSerializable => "STRICT SERIALIZABLE",
         })
     }

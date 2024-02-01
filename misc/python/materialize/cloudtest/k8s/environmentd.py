@@ -29,6 +29,7 @@ from kubernetes.client import (
     V1ServiceSpec,
     V1StatefulSet,
     V1StatefulSetSpec,
+    V1Toleration,
     V1VolumeMount,
 )
 
@@ -84,6 +85,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         namespace: str = DEFAULT_K8S_NAMESPACE,
         minio_namespace: str = DEFAULT_K8S_NAMESPACE,
         cockroach_namespace: str = DEFAULT_K8S_NAMESPACE,
+        apply_node_selectors: bool = False,
     ) -> None:
         self.tag = tag
         self.release_mode = release_mode
@@ -93,6 +95,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         self.extra_args: list[str] = []
         self.minio_namespace = minio_namespace
         self.cockroach_namespace = cockroach_namespace
+        self.apply_node_selectors = apply_node_selectors
         super().__init__(namespace)
 
     def generate_stateful_set(self) -> V1StatefulSet:
@@ -101,7 +104,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
 
         ports = [V1ContainerPort(container_port=5432, name="sql")]
 
-        volume_mounts = [V1VolumeMount(name="data", mount_path="/data")]
+        volume_mounts = []
 
         if self.coverage_mode:
             volume_mounts.append(V1VolumeMount(name="coverage", mount_path="/coverage"))
@@ -119,7 +122,23 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
             volume_mounts=volume_mounts,
         )
 
-        pod_spec = V1PodSpec(containers=[container])
+        node_selector = None
+        if self.apply_node_selectors:
+            node_selector = {"environmentd": "true"}
+
+        taint_toleration = V1Toleration(
+            key="environmentd",
+            operator="Equal",
+            value="true",
+            effect="NoSchedule",
+        )
+
+        pod_spec = V1PodSpec(
+            containers=[container],
+            tolerations=[taint_toleration],
+            node_selector=node_selector,
+            termination_grace_period_seconds=0,
+        )
         template_spec = V1PodTemplateSpec(metadata=metadata, spec=pod_spec)
 
         return V1StatefulSet(
@@ -137,15 +156,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         )
 
     def claim_templates(self) -> list[V1PersistentVolumeClaim]:
-        claim_templates = [
-            V1PersistentVolumeClaim(
-                metadata=V1ObjectMeta(name="data"),
-                spec=V1PersistentVolumeClaimSpec(
-                    access_modes=["ReadWriteOnce"],
-                    resources=V1ResourceRequirements(requests={"storage": "1Gi"}),
-                ),
-            ),
-        ]
+        claim_templates = []
 
         if self.coverage_mode:
             claim_templates.append(

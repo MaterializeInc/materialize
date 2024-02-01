@@ -141,11 +141,6 @@ criteria = "safe-to-deploy"
 version = "10.7.0"
 
 [[audits.rdkafka]]
-who = "Petros Angelatos <petrosagg@gmail.com>"
-criteria = "safe-to-deploy"
-version = "0.29.0@git:357983e11c7969b3669e813f700910f82158c461"
-
-[[audits.rdkafka]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.29.0@git:c729f89b70935fb2ad8a4f377cff2845acc197b0"
@@ -154,11 +149,6 @@ version = "0.29.0@git:c729f89b70935fb2ad8a4f377cff2845acc197b0"
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
 version = "4.3.0+1.9.2@git:c729f89b70935fb2ad8a4f377cff2845acc197b0"
-
-[[audits.rdkafka-sys]]
-who = "Petros Angelatos <petrosagg@gmail.com>"
-criteria = "safe-to-deploy"
-version = "4.3.0+2.3.0@git:357983e11c7969b3669e813f700910f82158c461"
 
 [[audits.redox_syscall]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
@@ -239,6 +229,11 @@ version = "0.3.18"
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 delta = "0.7.1 -> 0.9.0"
+
+[[audits.uuid]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.7.0"
 
 [[audits.web-time]]
 who = "Gus Wynn <gus@materialize.com>"

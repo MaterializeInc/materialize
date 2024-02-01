@@ -43,9 +43,9 @@ pub fn to_datetime(millis: EpochMillis) -> DateTime<Utc> {
 // implement `Debug` by default. It derefs to a callable so that it is
 // ergonomically equivalent to a closure.
 #[derive(Clone)]
-pub struct NowFn(Arc<dyn Fn() -> EpochMillis + Send + Sync>);
+pub struct NowFn<T = EpochMillis>(Arc<dyn Fn() -> T + Send + Sync>);
 
-impl NowFn {
+impl NowFn<EpochMillis> {
     /// Returns now in seconds.
     pub fn as_secs(&self) -> i64 {
         let millis: u64 = (self)();
@@ -55,25 +55,25 @@ impl NowFn {
     }
 }
 
-impl fmt::Debug for NowFn {
+impl<T> fmt::Debug for NowFn<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("<now_fn>")
     }
 }
 
-impl Deref for NowFn {
-    type Target = dyn Fn() -> EpochMillis + Send + Sync;
+impl<T> Deref for NowFn<T> {
+    type Target = dyn Fn() -> T + Send + Sync;
 
     fn deref(&self) -> &Self::Target {
         &(*self.0)
     }
 }
 
-impl<F> From<F> for NowFn
+impl<F, T> From<F> for NowFn<T>
 where
-    F: Fn() -> EpochMillis + Send + Sync + 'static,
+    F: Fn() -> T + Send + Sync + 'static,
 {
-    fn from(f: F) -> NowFn {
+    fn from(f: F) -> NowFn<T> {
         NowFn(Arc::new(f))
     }
 }

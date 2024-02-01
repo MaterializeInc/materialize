@@ -758,18 +758,14 @@ impl Coordinator {
                 continue;
             }
 
-            if self.drop_compute_read_policy(&sink.global_id) {
-                by_cluster
-                    .entry(sink.cluster_id)
-                    .or_default()
-                    .push(sink.global_id);
+            by_cluster
+                .entry(sink.cluster_id)
+                .or_default()
+                .push(sink.global_id);
 
-                // Mark the sink as dropped so we don't try to drop it again.
-                if let Some(sink) = self.active_subscribes.get_mut(&sink.global_id) {
-                    sink.dropping = true;
-                }
-            } else {
-                tracing::error!("Instructed to drop a compute sink that isn't one");
+            // Mark the sink as dropped so we don't try to drop it again.
+            if let Some(sink) = self.active_subscribes.get_mut(&sink.global_id) {
+                sink.dropping = true;
             }
         }
         let mut compute = self.controller.active_compute();
@@ -817,12 +813,8 @@ impl Coordinator {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         let mut source_ids = Vec::new();
         for (cluster_id, id) in mviews {
-            if self.drop_compute_read_policy(&id) {
-                by_cluster.entry(cluster_id).or_default().push(id);
-                source_ids.push(id);
-            } else {
-                tracing::error!("Instructed to drop a materialized view that isn't one");
-            }
+            by_cluster.entry(cluster_id).or_default().push(id);
+            source_ids.push(id);
         }
 
         // Drop compute sinks.

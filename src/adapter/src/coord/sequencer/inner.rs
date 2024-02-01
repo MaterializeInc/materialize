@@ -11,7 +11,6 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::iter;
 use std::num::{NonZeroI64, NonZeroUsize};
-use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -22,7 +21,6 @@ use maplit::{btreemap, btreeset};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_expr::{CollectionPlan, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::tracing::OpenTelemetryContext;
@@ -31,11 +29,9 @@ use mz_ore::{soft_assert_or_log, task};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::json::json_string;
-use mz_repr::explain::{
-    ExplainFormat, ExprHumanizer, ExprHumanizerExt, TransientItem, UsedIndexes,
-};
+use mz_repr::explain::{ExplainFormat, ExprHumanizer};
 use mz_repr::role_id::RoleId;
-use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, Row, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, IndexOptionName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
@@ -52,9 +48,9 @@ use mz_catalog::memory::objects::{
     CatalogItem, Cluster, Connection, DataSourceDesc, Secret, Sink, Source, Table, Type,
 };
 use mz_sql::plan::{
-    AlterConnectionAction, AlterConnectionPlan, ExplainSinkSchemaPlan, Explainee, Index,
-    IndexOption, MutationKind, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable,
-    QueryWhen, SideEffectingFunc, UpdatePrivilege, VariableValue,
+    AlterConnectionAction, AlterConnectionPlan, ExplainSinkSchemaPlan, Explainee, IndexOption,
+    MutationKind, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable, QueryWhen,
+    SideEffectingFunc, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::user::UserKind;
 use mz_sql::session::vars::{
@@ -72,21 +68,16 @@ use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
-use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
 use mz_transform::EmptyStatisticsOracle;
 use timely::progress::Antichain;
 use tokio::sync::{oneshot, OwnedMutexGuard};
-use tracing::instrument::WithSubscriber;
-use tracing::{warn, Level, Span};
-use tracing_core::callsite::rebuild_interest_cache;
+use tracing::{warn, Span};
 
 use crate::catalog::{self, Catalog, ConnCatalog, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::peek::FastPathPlan;
-use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{TimestampDetermination, TimestampSource};
 use crate::coord::{
     AlterConnectionValidationReady, Coordinator, CreateConnectionValidationReady, ExecuteContext,
@@ -95,10 +86,9 @@ use crate::coord::{
 };
 use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
-use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
 use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
-use crate::optimize::{self, Optimize, OptimizerConfig};
+use crate::optimize::{self, Optimize};
 use crate::session::{
     EndTransactionAction, RequireLinearization, Session, TransactionOps, TransactionStatus, WriteOp,
 };
@@ -1512,6 +1502,8 @@ impl Coordinator {
                         session.add_notice(AdapterNotice::UnimplementedIsolationLevel {
                             isolation_level: v,
                         });
+                    } else if v == IsolationLevel::StrongSessionSerializable.as_str() {
+                        session.add_notice(AdapterNotice::StrongSessionSerializable);
                     }
                 }
             }
@@ -1653,6 +1645,23 @@ impl Coordinator {
                     .expect("sending to strict_serializable_reads_tx cannot fail");
                 return;
             }
+            Ok((
+                Some(TransactionOps::Peeks {
+                    determination,
+                    requires_linearization: RequireLinearization::Required,
+                    ..
+                }),
+                _,
+            )) if ctx.session().vars().transaction_isolation()
+                == &IsolationLevel::StrongSessionSerializable =>
+            {
+                if let Some((timeline, ts)) = determination.timestamp_context.timeline_timestamp() {
+                    ctx.session_mut()
+                        .ensure_timestamp_oracle(timeline.clone())
+                        .apply_write(*ts);
+                }
+                (response, action)
+            }
             Ok((Some(TransactionOps::SingleStatement { stmt, params }), _)) => {
                 self.internal_cmd_tx
                     .send(Message::ExecuteSingleStatementTransaction {
@@ -1774,33 +1783,22 @@ impl Coordinator {
 
     pub(super) async fn sequence_explain_plan(
         &mut self,
-        mut ctx: ExecuteContext,
+        ctx: ExecuteContext,
         plan: plan::ExplainPlanPlan,
         target_cluster: TargetCluster,
     ) {
         match &plan.explainee {
-            Explainee::Statement(stmt) => {
-                if self
-                    .catalog()
-                    .system_config()
-                    .enable_off_thread_optimization()
-                {
-                    match stmt {
-                        plan::ExplaineeStatement::CreateMaterializedView { .. } => {
-                            self.explain_create_materialized_view(ctx, plan).await;
-                        }
-                        plan::ExplaineeStatement::CreateIndex { .. } => {
-                            self.explain_create_index(ctx, plan).await;
-                        }
-                        plan::ExplaineeStatement::Select { .. } => {
-                            self.explain_peek(ctx, plan, target_cluster).await;
-                        }
-                    }
-                } else {
-                    let result = self.explain_statement(&mut ctx, plan, target_cluster).await;
-                    ctx.retire(result);
+            Explainee::Statement(stmt) => match stmt {
+                plan::ExplaineeStatement::CreateMaterializedView { .. } => {
+                    self.explain_create_materialized_view(ctx, plan).await;
                 }
-            }
+                plan::ExplaineeStatement::CreateIndex { .. } => {
+                    self.explain_create_index(ctx, plan).await;
+                }
+                plan::ExplaineeStatement::Select { .. } => {
+                    self.explain_peek(ctx, plan, target_cluster).await;
+                }
+            },
             Explainee::MaterializedView(_) => {
                 let result = self.explain_materialized_view(&ctx, plan);
                 ctx.retire(result);
@@ -1946,637 +1944,6 @@ impl Coordinator {
         let rows = vec![Row::pack_slice(&[Datum::from(explain.as_str())])];
 
         Ok(Self::send_immediate_rows(rows))
-    }
-
-    async fn explain_statement(
-        &mut self,
-        ctx: &mut ExecuteContext,
-        plan: plan::ExplainPlanPlan,
-        target_cluster: TargetCluster,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let plan::ExplainPlanPlan {
-            stage,
-            format,
-            config,
-            explainee,
-        } = plan;
-
-        let Explainee::Statement(stmt) = explainee else {
-            // This is currently asserted in the `sequence_explain_plan` code that
-            // calls this method.
-            unreachable!()
-        };
-
-        let stmt_kind = plan::ExplaineeStatementKind::from(&stmt);
-        let broken = stmt.broken();
-        let row_set_finishing = stmt.row_set_finishing();
-
-        // Create an OptimizerTrace instance to collect plans emitted when
-        // executing the optimizer pipeline.
-        let optimizer_trace = OptimizerTrace::new(broken, stage.path());
-
-        // It's easy to leak `Dispatch`'s (see
-        // <https://docs.rs/tracing/latest/tracing/struct.Dispatch.html#method.downgrade>), but
-        // we aren't storing this clone in a `Subscriber`, so we should be fine.
-        let root_dispatch = tracing::dispatcher::get_default(|d| d.clone());
-
-        let pipeline_result = match stmt {
-            plan::ExplaineeStatement::Select { broken, plan, desc } => {
-                // Please see the doc comment on `explain_query_optimizer_pipeline` for more
-                // information regarding its subtleties.
-                self.explain_query_optimizer_pipeline(
-                    plan.source,
-                    broken,
-                    target_cluster,
-                    ctx.session_mut(),
-                    plan.finishing,
-                    desc,
-                    plan.when,
-                    &config,
-                    root_dispatch,
-                )
-                .with_subscriber(&optimizer_trace)
-                .await
-            }
-            plan::ExplaineeStatement::CreateMaterializedView {
-                broken,
-                plan:
-                    plan::CreateMaterializedViewPlan {
-                        name,
-                        materialized_view:
-                            plan::MaterializedView {
-                                expr,
-                                column_names,
-                                cluster_id,
-                                non_null_assertions,
-                                refresh_schedule,
-                                ..
-                            },
-                        ..
-                    },
-            } => {
-                // Please see the docs on `explain_query_optimizer_pipeline` above.
-                self.explain_create_materialized_view_optimizer_pipeline(
-                    name,
-                    expr,
-                    column_names,
-                    cluster_id,
-                    broken,
-                    non_null_assertions,
-                    refresh_schedule,
-                    &config,
-                    root_dispatch,
-                )
-                .with_subscriber(&optimizer_trace)
-                .await
-            }
-            plan::ExplaineeStatement::CreateIndex {
-                broken,
-                plan: plan::CreateIndexPlan { name, index, .. },
-            } => {
-                // Please see the docs on `explain_query_optimizer_pipeline` above.
-                self.explain_create_index_optimizer_pipeline(
-                    name,
-                    index,
-                    broken,
-                    &config,
-                    root_dispatch,
-                )
-                .with_subscriber(&optimizer_trace)
-                .await
-            }
-        };
-
-        let (used_indexes, fast_path_plan, dataflow_metainfo, transient_items) =
-            match pipeline_result {
-                Ok(pipeline_result) => pipeline_result,
-                Err(err) => {
-                    if broken {
-                        tracing::error!("error while handling EXPLAIN statement: {}", err);
-                        Default::default()
-                    } else {
-                        return Err(err);
-                    }
-                }
-            };
-
-        let session_catalog = self.catalog().for_session(ctx.session());
-        let expr_humanizer = ExprHumanizerExt::new(transient_items, &session_catalog);
-
-        let trace = optimizer_trace.drain_all(
-            format,
-            &config,
-            &expr_humanizer,
-            row_set_finishing,
-            used_indexes,
-            fast_path_plan,
-            dataflow_metainfo,
-        )?;
-
-        let rows = match stage.path() {
-            None => {
-                // For the `Trace` (pseudo-)stage, return the entire trace as
-                // triples of (time, path, plan) values.
-                let rows = trace
-                    .into_iter()
-                    .map(|entry| {
-                        // The trace would have to take over 584 years to overflow a u64.
-                        let span_duration = u64::try_from(entry.span_duration.as_nanos());
-                        Row::pack_slice(&[
-                            Datum::from(span_duration.unwrap_or(u64::MAX)),
-                            Datum::from(entry.path.as_str()),
-                            Datum::from(entry.plan.as_str()),
-                        ])
-                    })
-                    .collect();
-                rows
-            }
-            Some(path) => {
-                // For everything else, return the plan for the stage identified
-                // by the corresponding path.
-                let row = trace
-                    .into_iter()
-                    .find(|entry| entry.path == path)
-                    .map(|entry| Row::pack_slice(&[Datum::from(entry.plan.as_str())]))
-                    .ok_or_else(|| {
-                        if !stmt_kind.supports(&stage) {
-                            // Print a nicer error for unsupported stages.
-                            AdapterError::Unstructured(anyhow!(format!(
-                                "cannot EXPLAIN {stage} FOR {stmt_kind}"
-                            )))
-                        } else {
-                            // We don't expect this stage to be missing.
-                            AdapterError::Internal(format!(
-                                "stage `{path}` not present in the collected optimizer trace",
-                            ))
-                        }
-                    })?;
-                vec![row]
-            }
-        };
-
-        if broken {
-            rebuild_interest_cache();
-        }
-
-        Ok(Self::send_immediate_rows(rows))
-    }
-
-    /// Run the query optimization explanation pipeline. This function must be called with
-    /// an `OptimizerTrace` `tracing` subscriber, using `.with_subscriber(...)`.
-    /// The `root_dispatch` should be the global `tracing::Dispatch`.
-    //
-    // WARNING, ENTERING SPOOKY ZONE 3.0
-    //
-    // You must be careful when altering this function. Any async call (so, anything that uses
-    // `.await` should be wrapped with `.with_subscriber(root_dispatch)`.
-    //
-    // `tracing` has limitations that mean that any `Span` created under the `OptimizerTrace`
-    // subscriber that _leaves_ this function will almost assuredly cause a panic inside `tracing`.
-    // This is because `Span`s track the `Subscriber` they were created under, but certain actions
-    // (like an ordinary `Span` exit) will call a method on the _thread-local_ `Subscriber`, which
-    // may be backed with a different `Registry`.
-    //
-    // At first glance, there is no obvious way this method leaks `Span`s, but ANY tokio
-    // resource (like `oneshot` channels) create `Span`s if tokio is built with `tokio_unstable`
-    // and the `tracing` feature. This method has been audited to make sure ALL such
-    // cases are dispatched inside the global `root_dispatch`, and **any change to this method
-    // needs to ensure this invariant is upheld.**
-    //
-    // It is a bit wonky to have this method under a specialized `Dispatch`, but ensuring
-    // all `.await` points inside it use the passed `root_dispatch`, but splitting the method
-    // into pieces to allow us to control the `Dispatch` for various pieces at a higher-level
-    // would be very hard to read. Additionally, once the issues with `broken` are resolved
-    // (as discussed in <https://github.com/MaterializeInc/materialize/pull/21809>), this
-    // can be simplified, as only a _singular_ `Registry` will be in use.
-    async fn explain_query_optimizer_pipeline(
-        &mut self,
-        raw_plan: mz_sql::plan::HirRelationExpr,
-        broken: bool,
-        target_cluster: TargetCluster,
-        session: &mut Session,
-        finishing: RowSetFinishing,
-        desc: RelationDesc,
-        when: QueryWhen,
-        explain_config: &mz_repr::explain::ExplainConfig,
-        root_dispatch: tracing::Dispatch,
-    ) -> Result<
-        (
-            UsedIndexes,
-            Option<FastPathPlan>,
-            DataflowMetainfo,
-            BTreeMap<GlobalId, TransientItem>,
-        ),
-        AdapterError,
-    > {
-        use mz_repr::explain::trace_plan;
-
-        if broken {
-            tracing::warn!("EXPLAIN ... BROKEN <query> is known to leak memory, use with caution");
-        }
-
-        // Initialize optimizer context
-        // ----------------------------
-
-        // Collect optimizer parameters.
-        let catalog = self.owned_catalog();
-        let target_cluster_id = catalog.resolve_target_cluster(target_cluster, session)?.id;
-        let compute_instance = self
-            .instance_snapshot(target_cluster_id)
-            .expect("compute instance does not exist");
-        let select_id = self.allocate_transient_id()?;
-        let index_id = self.allocate_transient_id()?;
-        let system_config = catalog.system_config();
-        let optimizer_config = OptimizerConfig::from((system_config, explain_config));
-
-        // Build an optimizer for this SELECT.
-        let mut optimizer = optimize::peek::Optimizer::new(
-            Arc::clone(&catalog),
-            compute_instance,
-            finishing,
-            select_id,
-            index_id,
-            optimizer_config.clone(),
-        );
-
-        // Create a transient catalog item
-        // -------------------------------
-
-        let mut transient_items = BTreeMap::new();
-        transient_items.insert(select_id, {
-            TransientItem::new(
-                Some(GlobalId::Explain.to_string()),
-                Some(GlobalId::Explain.to_string()),
-                Some(desc.iter_names().map(|c| c.to_string()).collect()),
-            )
-        });
-
-        // Execute the various stages of the optimization pipeline
-        // -------------------------------------------------------
-
-        let local_mir_plan = catch_unwind(broken, "optimize", || {
-            // Create a top-level `optimize` span required for `PlanTrace`
-            // collection and enter it immediately.
-            //
-            // We are doing this explicitly here because annotating this method
-            // with a `#[tracing::instrument(...)]` call is currently broken.
-            let _span = tracing::debug_span!(target: "optimizer", "optimize").entered();
-
-            // Trace the pipeline input under `optimize/raw`.
-            tracing::span!(target: "optimizer", Level::DEBUG, "raw").in_scope(|| {
-                trace_plan(&raw_plan);
-            });
-
-            // MIR ⇒ MIR optimization (local)
-            optimizer.optimize(raw_plan)
-        })?;
-
-        // Resolve timestamp statistics catalog
-        // ------------------------------------
-
-        let (timestamp_ctx, stats) = {
-            let source_ids = local_mir_plan.expr().depends_on();
-            let mut timeline_context =
-                self.validate_timeline_context(source_ids.iter().cloned())?;
-            if matches!(timeline_context, TimelineContext::TimestampIndependent)
-                && local_mir_plan.expr().contains_temporal()
-            {
-                // If the source IDs are timestamp independent but the query contains temporal functions,
-                // then the timeline context needs to be upgraded to timestamp dependent. This is
-                // required because `source_ids` doesn't contain functions.
-                timeline_context = TimelineContext::TimestampDependent;
-            }
-
-            let id_bundle = self
-                .index_oracle(target_cluster_id)
-                .sufficient_collections(&source_ids);
-
-            // Acquire a timestamp (necessary for loading statistics).
-            let oracle_read_ts = self
-                .oracle_read_ts(session, &timeline_context, &when)
-                .with_subscriber(root_dispatch.clone())
-                .await;
-            let timestamp_ctx = self
-                .sequence_peek_timestamp(
-                    session,
-                    &when,
-                    target_cluster_id,
-                    timeline_context,
-                    oracle_read_ts,
-                    &id_bundle,
-                    &source_ids,
-                    None, // no real-time recency,
-                    RequireLinearization::NotRequired,
-                )
-                .with_subscriber(root_dispatch.clone())
-                .await?
-                .timestamp_context;
-
-            // Load cardinality statistics.
-            //
-            // TODO: proper stats needs exact timestamp at the moment. However, we
-            // don't want to resolve the timestamp twice, so we need to figure out a
-            // way to get somewhat stale stats.
-            let stats = self
-                .statistics_oracle(session, &source_ids, timestamp_ctx.antichain(), true)
-                .with_subscriber(root_dispatch)
-                .await?;
-
-            (timestamp_ctx, stats)
-        };
-
-        let (used_indexes, fast_path_plan, df_meta) = catch_unwind(broken, "optimize", || {
-            // Create a top-level `optimize` span required for `PlanTrace`
-            // collection and enter it immediately.
-            //
-            // We are doing this explicitly here because annotating this method
-            // with a `#[tracing::instrument(...)]` call is currently broken.
-            let _span = tracing::debug_span!(target: "optimizer", "optimize").entered();
-
-            // MIR ⇒ MIR optimization (global)
-            let local_mir_plan = local_mir_plan.resolve(session, stats);
-            let global_mir_plan = optimizer.optimize(local_mir_plan)?;
-
-            // Collect the list of indexes used by the dataflow at this point
-            let mut used_indexes = {
-                let df_desc = global_mir_plan.df_desc();
-                let df_meta = global_mir_plan.df_meta();
-                UsedIndexes::new(
-                    df_desc
-                        .index_imports
-                        .iter()
-                        .map(|(id, _index_import)| {
-                            (*id, df_meta.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
-                        })
-                        .collect(),
-                )
-            };
-
-            // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-            let global_mir_plan = global_mir_plan.resolve(timestamp_ctx, session);
-            let global_lir_plan = optimizer.optimize(global_mir_plan)?;
-
-            let arity = global_lir_plan.typ().arity();
-            let (peek_plan, df_meta) = global_lir_plan.unapply();
-
-            let fast_path_plan = match peek_plan {
-                crate::coord::peek::PeekPlan::FastPath(plan) => {
-                    let finishing = if !optimizer.finishing().is_trivial(arity) {
-                        Some(optimizer.finishing().clone())
-                    } else {
-                        None
-                    };
-                    used_indexes = plan.used_indexes(&finishing);
-
-                    // TODO(aalexandrov): rework `OptimizerTrace` with support
-                    // for diverging plan types towards the end and add a
-                    // `PlanTrace` for the `FastPathPlan` type.
-                    trace_plan(&"fast_path_plan (missing)".to_string());
-
-                    Some(plan)
-                }
-                crate::coord::peek::PeekPlan::SlowPath(plan) => {
-                    trace_plan(&plan.desc);
-                    None
-                }
-            };
-
-            Ok::<_, AdapterError>((used_indexes, fast_path_plan, df_meta))
-        })?;
-
-        // Return objects that need to be passed to the `ExplainContext`
-        // when rendering explanations for the various trace entries.
-        Ok((used_indexes, fast_path_plan, df_meta, transient_items))
-    }
-
-    /// Run the MV optimization explanation pipeline. This function must be called with
-    /// an `OptimizerTrace` `tracing` subscriber, using `.with_subscriber(...)`.
-    /// The `root_dispatch` should be the global `tracing::Dispatch`.
-    ///
-    /// WARNING, ENTERING SPOOKY ZONE 3.0
-    ///
-    /// Please read the docs on `explain_query_optimizer_pipeline` before changing this function.
-    ///
-    /// Currently this method does not need to use the global `Dispatch` like
-    /// `explain_query_optimizer_pipeline`, but it is passed in case changes to this function
-    /// require it.
-    #[tracing::instrument(target = "optimizer", level = "debug", name = "optimize", skip_all)]
-    async fn explain_create_materialized_view_optimizer_pipeline(
-        &mut self,
-        name: QualifiedItemName,
-        raw_plan: mz_sql::plan::HirRelationExpr,
-        column_names: Vec<ColumnName>,
-        target_cluster_id: ClusterId,
-        broken: bool,
-        non_null_assertions: Vec<usize>,
-        refresh_schedule: Option<RefreshSchedule>,
-        explain_config: &mz_repr::explain::ExplainConfig,
-        _root_dispatch: tracing::Dispatch,
-    ) -> Result<
-        (
-            UsedIndexes,
-            Option<FastPathPlan>,
-            DataflowMetainfo,
-            BTreeMap<GlobalId, TransientItem>,
-        ),
-        AdapterError,
-    > {
-        use mz_repr::explain::trace_plan;
-
-        if broken {
-            tracing::warn!("EXPLAIN ... BROKEN <query> is known to leak memory, use with caution");
-        }
-
-        let full_name = self.catalog().resolve_full_name(&name, None);
-
-        // Initialize optimizer context
-        // ----------------------------
-
-        // Collect optimizer parameters.
-        let compute_instance = self
-            .instance_snapshot(target_cluster_id)
-            .expect("compute instance does not exist");
-        let exported_sink_id = self.allocate_transient_id()?;
-        let internal_view_id = self.allocate_transient_id()?;
-        let debug_name = full_name.to_string();
-        let system_config = self.catalog().system_config();
-        let optimizer_config = optimize::OptimizerConfig::from((system_config, explain_config));
-
-        // Build an optimizer for this MATERIALIZED VIEW.
-        let mut optimizer = optimize::materialized_view::Optimizer::new(
-            self.owned_catalog(),
-            compute_instance,
-            exported_sink_id,
-            internal_view_id,
-            column_names.clone(),
-            non_null_assertions,
-            refresh_schedule,
-            debug_name,
-            optimizer_config,
-        );
-
-        // Create a transient catalog item
-        // -------------------------------
-
-        let mut transient_items = BTreeMap::new();
-        transient_items.insert(exported_sink_id, {
-            TransientItem::new(
-                Some(full_name.to_string()),
-                Some(full_name.item.to_string()),
-                Some(column_names.iter().map(|c| c.to_string()).collect()),
-            )
-        });
-
-        // Execute the various stages of the optimization pipeline
-        // -------------------------------------------------------
-
-        // Trace the pipeline input under `optimize/raw`.
-        tracing::span!(target: "optimizer", Level::DEBUG, "raw").in_scope(|| {
-            trace_plan(&raw_plan);
-        });
-
-        let (df_desc, df_meta, used_indexes) = catch_unwind(broken, "optimize", || {
-            // MIR ⇒ MIR optimization (local and global)
-            let local_mir_plan = optimizer.optimize(raw_plan)?;
-            let global_mir_plan = optimizer.optimize(local_mir_plan)?;
-
-            // Collect the list of indexes used by the dataflow at this point
-            let used_indexes = {
-                let df_desc = global_mir_plan.df_desc();
-                let df_meta = global_mir_plan.df_meta();
-                UsedIndexes::new(
-                    df_desc
-                        .index_imports
-                        .iter()
-                        .map(|(id, _index_import)| {
-                            (*id, df_meta.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
-                        })
-                        .collect(),
-                )
-            };
-
-            // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-            let global_lir_plan = optimizer.optimize(global_mir_plan)?;
-
-            let (df_desc, df_meta) = global_lir_plan.unapply();
-
-            Ok::<_, AdapterError>((df_desc, df_meta, used_indexes))
-        })?;
-
-        // Trace the resulting plan for the top-level `optimize` path.
-        trace_plan(&df_desc);
-
-        // Return objects that need to be passed to the `ExplainContext`
-        // when rendering explanations for the various trace entries.
-        Ok((used_indexes, None, df_meta, transient_items))
-    }
-
-    /// Run the index optimization explanation pipeline. This function must be called with
-    /// an `OptimizerTrace` `tracing` subscriber, using `.with_subscriber(...)`.
-    /// The `root_dispatch` should be the global `tracing::Dispatch`.
-    //
-    // WARNING, ENTERING SPOOKY ZONE 3.0
-    //
-    // Please read the docs on `explain_query_optimizer_pipeline` before changing this function.
-    //
-    // Currently this method does not need to use the global `Dispatch` like
-    // `explain_query_optimizer_pipeline`, but it is passed in case changes to this function
-    // require it.
-    #[tracing::instrument(target = "optimizer", level = "debug", name = "optimize", skip_all)]
-    async fn explain_create_index_optimizer_pipeline(
-        &mut self,
-        name: QualifiedItemName,
-        index: Index,
-        broken: bool,
-        explain_config: &mz_repr::explain::ExplainConfig,
-        _root_dispatch: tracing::Dispatch,
-    ) -> Result<
-        (
-            UsedIndexes,
-            Option<FastPathPlan>,
-            DataflowMetainfo,
-            BTreeMap<GlobalId, TransientItem>,
-        ),
-        AdapterError,
-    > {
-        use mz_repr::explain::trace_plan;
-
-        if broken {
-            tracing::warn!("EXPLAIN ... BROKEN <query> is known to leak memory, use with caution");
-        }
-
-        // Initialize optimizer context
-        // ----------------------------
-        let compute_instance = self
-            .instance_snapshot(index.cluster_id)
-            .expect("compute instance does not exist");
-        let exported_index_id = self.allocate_transient_id()?;
-        let system_config = self.catalog().system_config();
-        let optimizer_config = optimize::OptimizerConfig::from((system_config, explain_config));
-
-        // Build an optimizer for this INDEX.
-        let mut optimizer = optimize::index::Optimizer::new(
-            self.owned_catalog(),
-            compute_instance,
-            exported_index_id,
-            optimizer_config,
-        );
-
-        // Create a transient catalog item
-        // -------------------------------
-
-        let on_entry = self.catalog.get_entry(&index.on);
-        let full_name = self.catalog.resolve_full_name(&name, on_entry.conn_id());
-        let on_desc = on_entry
-            .desc(&full_name)
-            .expect("can only create indexes on items with a valid description");
-
-        let mut transient_items = BTreeMap::new();
-        transient_items.insert(exported_index_id, {
-            TransientItem::new(
-                Some(full_name.to_string()),
-                Some(full_name.item.to_string()),
-                Some(on_desc.iter_names().map(|c| c.to_string()).collect()),
-            )
-        });
-
-        // Execute the various stages of the optimization pipeline
-        // -------------------------------------------------------
-
-        let (df_desc, df_meta, used_indexes) = catch_unwind(broken, "optimize", || {
-            // MIR ⇒ MIR optimization (global)
-            let index_plan = optimize::index::Index::new(&name, &index.on, &index.keys);
-            let global_mir_plan = optimizer.optimize(index_plan)?;
-
-            // Collect the list of indexes used by the dataflow at this point
-            let used_indexes = {
-                let df_desc = global_mir_plan.df_desc();
-                let df_meta = global_mir_plan.df_meta();
-                UsedIndexes::new(
-                    df_desc
-                        .index_imports
-                        .iter()
-                        .map(|(id, _index_import)| {
-                            (*id, df_meta.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
-                        })
-                        .collect(),
-                )
-            };
-
-            // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-            let global_lir_plan = optimizer.optimize(global_mir_plan)?;
-
-            let (df_desc, df_meta) = global_lir_plan.unapply();
-
-            Ok::<_, AdapterError>((df_desc, df_meta, used_indexes))
-        })?;
-
-        // Trace the resulting plan for the top-level `optimize` path.
-        trace_plan(&df_desc);
-
-        // Return objects that need to be passed to the `ExplainContext`
-        // when rendering explanations for the various trace entries.
-        Ok((used_indexes, None, df_meta, transient_items))
     }
 
     pub async fn sequence_explain_timestamp(
@@ -4925,35 +4292,6 @@ where
     Ok(vars
         .emit_introspection_query_notice()
         .then_some(AdapterNotice::PerReplicaLogRead { log_names }))
-}
-
-/// Like [`mz_ore::panic::catch_unwind`], with an extra guard that must be true
-/// in order to wrap the function call in a [`mz_ore::panic::catch_unwind`]
-/// call.
-///
-/// Used to implement `EXPLAIN BROKEN <statement>` in the `~_optimizer_pipeline`
-/// methods above.
-pub(crate) fn catch_unwind<R, E, F>(
-    guard: bool,
-    stage: &'static str,
-    f: F,
-) -> Result<R, AdapterError>
-where
-    F: FnOnce() -> Result<R, E>,
-    E: Into<AdapterError>,
-{
-    if guard {
-        let r: Result<Result<R, E>, _> = mz_ore::panic::catch_unwind(AssertUnwindSafe(f));
-        match r {
-            Ok(result) => result.map_err(Into::into),
-            Err(_) => {
-                let msg = format!("panic at the `{}` optimization stage", stage);
-                Err(AdapterError::Internal(msg))
-            }
-        }
-    } else {
-        f().map_err(Into::into)
-    }
 }
 
 impl Coordinator {
