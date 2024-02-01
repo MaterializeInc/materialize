@@ -12,7 +12,7 @@
 import argparse
 import sys
 
-from materialize import mzbuild, spawn, xcompile
+from materialize import mzbuild, spawn, ui, xcompile
 
 
 def main() -> int:
@@ -31,7 +31,7 @@ def main() -> int:
 
     parser.add_argument(
         "--channel",
-        default=None,
+        default="nightly" if ui.env_is_truthy("CI_ASAN_ENABLED") else None,
         help="Rust compiler channel to use",
     )
 

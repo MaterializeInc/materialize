@@ -32,6 +32,9 @@ class Application:
     def coverage_mode(self) -> bool:
         return ui.env_is_truthy("CI_COVERAGE_ENABLED")
 
+    def asane_mode(self) -> bool:
+        return ui.env_is_truthy("CI_ASAN_ENABLED")
+
     def acquire_images(self) -> None:
         raise NotImplementedError
 

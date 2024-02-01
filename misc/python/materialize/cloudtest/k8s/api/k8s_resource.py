@@ -75,8 +75,9 @@ class K8sResource:
             return f"materialize/{service}:{tag}"
         else:
             coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
+            asan = ui.env_is_truthy("CI_ASAN_ENABLED")
             repo = mzbuild.Repository(
-                MZ_ROOT, release_mode=release_mode, coverage=coverage
+                MZ_ROOT, release_mode=release_mode, coverage=coverage, asan=asan
             )
             deps = repo.resolve_dependencies([repo.images[service]])
             rimage = deps[service]

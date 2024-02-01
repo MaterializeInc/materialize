@@ -16,6 +16,7 @@ RUN apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install \
         ca-certificates \
         curl \
+        llvm \
         tini \
         ssh \
     && groupadd --system --gid=999 materialize \

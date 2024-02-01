@@ -80,4 +80,6 @@ fi
 
 ci_uncollapsed_heading ":docker: Running \`bin/mzcompose --find \"$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION\" run ${run_args[*]}\`"
 
+# TODO: REMOVE BEFORE SUBMITTING, this is just to test easier
+export CI_ASAN_ENABLED=1
 mzcompose run "${run_args[@]}" |& tee run.log

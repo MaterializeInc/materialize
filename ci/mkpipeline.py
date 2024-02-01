@@ -51,6 +51,8 @@ from .deploy.deploy_util import rust_version
 # trying to capture that.)
 CI_GLUE_GLOBS = ["bin", "ci", "misc/python"]
 
+DEFAULT_AGENT = "linux-aarch64-small"
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -62,6 +64,9 @@ so it is executed.""",
     )
 
     parser.add_argument("--coverage", action="store_true")
+    parser.add_argument(
+        "--asan", action="store_true", default=True
+    )  # TODO: REMOVE True before submitting, just for easier testing
     parser.add_argument("pipeline", type=str)
     args = parser.parse_args()
 
@@ -78,8 +83,8 @@ so it is executed.""",
     pipeline = yaml.safe_load(raw)
 
     if args.pipeline == "test":
-        if args.coverage:
-            print("Coverage build, not trimming pipeline")
+        if args.coverage or args.asan:
+            print("Coverage/ASan build, not trimming pipeline")
         elif os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
             print("On main branch or tag, so not trimming pipeline")
         elif have_paths_changed(CI_GLUE_GLOBS):
@@ -89,15 +94,55 @@ so it is executed.""",
             print(
                 "Repository glue code has changed, so the trimmed pipeline below does not apply"
             )
-            trim_tests_pipeline(copy.deepcopy(pipeline), args.coverage)
+            trim_tests_pipeline(copy.deepcopy(pipeline), args.coverage, args.asan)
         else:
             print("--- Trimming unchanged steps from pipeline")
-            trim_tests_pipeline(pipeline, args.coverage)
+            trim_tests_pipeline(pipeline, args.coverage, args.asan)
 
         # Upload a dummy JUnit report so that the "Analyze tests" step doesn't fail
         # if we trim away all the JUnit report-generating steps.
         Path("junit_dummy.xml").write_text("")
         buildkite.upload_artifact("junit_dummy.xml")
+
+    if args.asan:
+        pipeline.setdefault("env", {})["CI_ASAN_ENABLED"] = 1
+
+        def visit(step: dict[str, Any]) -> None:
+            # ASan runs are slower ...
+            if "timeout_in_minutes" in step:
+                step["timeout_in_minutes"] *= 2
+
+            # ... and need more memory:
+            if "agents" in step:
+                agent = step["agents"].get("queue", None)
+                if agent == "linux-aarch64-small":
+                    agent = "linux-aarch64"
+                elif agent == "linux-aarch64":
+                    agent = "linux-aarch64-large"
+                elif agent == "linux-aarch64-large":
+                    agent = "builder-linux-aarch64"
+                step["agents"] = {"queue": agent}
+
+            if step.get("asan") == "skip":
+                step["skip"] = True
+
+        for step in pipeline["steps"]:
+            visit(step)
+            # Groups can't be nested, so handle them explicitly here instead of recursing
+            if "group" in step:
+                for inner_step in step.get("steps", []):
+                    visit(inner_step)
+    else:
+
+        def visit(step: dict[str, Any]) -> None:
+            if step.get("asan") == "only":
+                step["skip"] = True
+
+        for step in pipeline["steps"]:
+            visit(step)
+            if "group" in step:
+                for inner_step in step.get("steps", []):
+                    visit(inner_step)
 
     if args.coverage:
         pipeline["env"]["CI_BUILDER_SCCACHE"] = 1
@@ -144,7 +189,7 @@ so it is executed.""",
 
     check_depends_on(pipeline, args.pipeline)
 
-    trim_builds(pipeline, args.coverage)
+    trim_builds(pipeline, args.coverage, args.asan)
 
     # Remove the Materialize-specific keys from the configuration that are
     # only used to inform how to trim the pipeline and for coverage runs.
@@ -153,6 +198,8 @@ so it is executed.""",
             del step["inputs"]
         if "coverage" in step:
             del step["coverage"]
+        if "asan" in step:
+            del step["asan"]
         if (
             "timeout_in_minutes" not in step
             and "prompt" not in step
@@ -225,7 +272,7 @@ def set_default_agents_queue(pipeline: Any) -> None:
             and "group" not in step
             and "trigger" not in step
         ):
-            step["agents"] = {"queue": "linux-aarch64-small"}
+            step["agents"] = {"queue": DEFAULT_AGENT}
 
     for step in pipeline["steps"]:
         visit(step)
@@ -331,7 +378,7 @@ def add_test_selection_block(pipeline: Any, pipeline_name: str) -> None:
     pipeline["steps"].insert(0, selection_step)
 
 
-def trim_tests_pipeline(pipeline: Any, coverage: bool) -> None:
+def trim_tests_pipeline(pipeline: Any, coverage: bool, asan: bool) -> None:
     """Trim pipeline steps whose inputs have not changed in this branch.
 
     Steps are assigned inputs in two ways:
@@ -345,7 +392,7 @@ def trim_tests_pipeline(pipeline: Any, coverage: bool) -> None:
     A step is trimmed if a) none of its inputs have changed, and b) there are
     no other untrimmed steps that depend on it.
     """
-    repo = mzbuild.Repository(Path("."), coverage=coverage)
+    repo = mzbuild.Repository(Path("."), coverage=coverage, asan=asan)
     deps = repo.resolve_dependencies(image for image in repo)
 
     steps = OrderedDict()
@@ -444,11 +491,11 @@ def trim_tests_pipeline(pipeline: Any, coverage: bool) -> None:
     ]
 
 
-def trim_builds(pipeline: Any, coverage: bool) -> None:
+def trim_builds(pipeline: Any, coverage: bool, asan: bool) -> None:
     """Trim unnecessary x86-64/aarch64 builds if all artifacts already exist. Also mark remaining builds with a unique concurrency group for the code state so that the same build doesn't happen multiple times."""
 
     def deps_publish(arch: Arch) -> mzbuild.DependencySet:
-        repo = mzbuild.Repository(Path("."), arch=arch, coverage=coverage)
+        repo = mzbuild.Repository(Path("."), arch=arch, coverage=coverage, asan=asan)
         return repo.resolve_dependencies(image for image in repo if image.publish)
 
     def hash(deps: mzbuild.DependencySet) -> str:
