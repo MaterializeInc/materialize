@@ -517,6 +517,13 @@ impl PendingWork {
         >,
         YFn: Fn(Instant, usize) -> bool,
     {
+        // This `part_mut` call might end up doing some parquet decoding. It's
+        // here because it's best from a memory spike perspective to decode
+        // things into parquet one at a time and flushing them out before
+        // continuing on to the next one. It might be nice to model this as
+        // taking some sort of fuel, but there's not a great translation between
+        // the two types of work. It's already under the yield_fn clock, so
+        // hopefully that's good enough.
         let fetched_part = self.part.part_mut();
         let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
         while let Some(((key, val), time, diff)) = fetched_part.next() {

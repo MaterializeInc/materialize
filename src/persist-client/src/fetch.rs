@@ -33,7 +33,7 @@ use crate::error::InvalidUsage;
 use crate::internal::encoding::{LazyPartStats, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
-use crate::internal::paths::{BlobKey, PartialBatchKey};
+use crate::internal::paths::PartialBatchKey;
 use crate::read::LeasedReaderId;
 use crate::stats::PartStats;
 use crate::ShardId;
@@ -93,20 +93,10 @@ where
             &self.metrics,
             &self.shard_metrics,
             &self.metrics.read.batch_fetcher,
+            None,
             &part.key,
         )
-        .await
-        .unwrap_or_else(|blob_key| {
-            // Ideally, readers should never encounter a missing blob. They place a seqno
-            // hold as they consume their snapshot/listen, preventing any blobs they need
-            // from being deleted by garbage collection, and all blob implementations are
-            // linearizable so there should be no possibility of stale reads.
-            //
-            // If we do have a bug and a reader does encounter a missing blob, the state
-            // cannot be recovered, and our best option is to panic and retry the whole
-            // process.
-            panic!("batch fetcher could not fetch batch part: {}", blob_key)
-        });
+        .await;
         let fetched_blob = FetchedBlob {
             key: part.key.0.clone(),
             metrics: Arc::clone(&self.metrics),
@@ -218,21 +208,11 @@ where
         &metrics,
         shard_metrics,
         read_metrics,
+        Some(reader_id),
         &part.key,
         &part.desc,
     )
-    .await
-    .unwrap_or_else(|blob_key| {
-        // Ideally, readers should never encounter a missing blob. They place a seqno
-        // hold as they consume their snapshot/listen, preventing any blobs they need
-        // from being deleted by garbage collection, and all blob implementations are
-        // linearizable so there should be no possibility of stale reads.
-        //
-        // If we do have a bug and a reader does encounter a missing blob, the state
-        // cannot be recovered, and our best option is to panic and retry the whole
-        // process.
-        panic!("{} could not fetch batch part: {}", reader_id, blob_key)
-    });
+    .await;
     FetchedPart::new(
         metrics,
         encoded_part,
@@ -249,8 +229,9 @@ pub(crate) async fn fetch_batch_part_blob(
     metrics: &Metrics,
     shard_metrics: &ShardMetrics,
     read_metrics: &ReadMetrics,
+    reader_id: Option<&LeasedReaderId>,
     key: &PartialBatchKey,
-) -> Result<SegmentedBytes, BlobKey> {
+) -> SegmentedBytes {
     let now = Instant::now();
     let get_span = debug_span!("fetch_batch::get");
     let blob_key = key.complete(shard_id);
@@ -259,8 +240,25 @@ pub(crate) async fn fetch_batch_part_blob(
         blob.get(&blob_key).await
     })
     .instrument(get_span.clone())
-    .await
-    .ok_or(blob_key)?;
+    .await;
+    let value = value.unwrap_or_else(|| {
+        // Ideally, readers should never encounter a missing blob. They place a
+        // seqno hold as they consume their snapshot/listen, preventing any
+        // blobs they need from being deleted by garbage collection, and all
+        // blob implementations are linearizable so there should be no
+        // possibility of stale reads.
+        //
+        // If we do have a bug and a reader does encounter a missing blob, the
+        // state cannot be recovered, and our best option is to panic and retry
+        // the whole process.
+        panic!(
+            "{} could not fetch batch part: {}",
+            reader_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "batch fetcher".to_string()),
+            blob_key
+        )
+    });
 
     drop(get_span);
 
@@ -268,7 +266,7 @@ pub(crate) async fn fetch_batch_part_blob(
     read_metrics.part_bytes.inc_by(u64::cast_from(value.len()));
     read_metrics.seconds.inc_by(now.elapsed().as_secs_f64());
 
-    Ok(value)
+    value
 }
 
 pub(crate) fn decode_batch_part_blob<T>(
@@ -305,16 +303,24 @@ pub(crate) async fn fetch_batch_part<T>(
     metrics: &Metrics,
     shard_metrics: &ShardMetrics,
     read_metrics: &ReadMetrics,
+    reader_id: Option<&LeasedReaderId>,
     key: &PartialBatchKey,
     registered_desc: &Description<T>,
-) -> Result<EncodedPart<T>, BlobKey>
+) -> EncodedPart<T>
 where
     T: Timestamp + Lattice + Codec64,
 {
-    let value =
-        fetch_batch_part_blob(shard_id, blob, metrics, shard_metrics, read_metrics, key).await?;
-    let part = decode_batch_part_blob(metrics, read_metrics, key, registered_desc.clone(), &value);
-    Ok(part)
+    let value = fetch_batch_part_blob(
+        shard_id,
+        blob,
+        metrics,
+        shard_metrics,
+        read_metrics,
+        reader_id,
+        key,
+    )
+    .await;
+    decode_batch_part_blob(metrics, read_metrics, key, registered_desc.clone(), &value)
 }
 
 /// Propagates metadata from readers alongside a `HollowBatch` to apply the
