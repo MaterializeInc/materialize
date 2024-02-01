@@ -29,7 +29,8 @@ DEBUGINFO_BINS = ["environmentd", "clusterd"]
 
 def main() -> None:
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
-    repo = mzbuild.Repository(Path("."), coverage=coverage)
+    sanitizer = os.getenv("CI_SANITIZER", "none")
+    repo = mzbuild.Repository(Path("."), coverage=coverage, sanitizer=sanitizer)
 
     # Build and push any images that are not already available on Docker Hub,
     # so they are accessible to other build agents.

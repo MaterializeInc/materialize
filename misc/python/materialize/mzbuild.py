@@ -64,6 +64,7 @@ class RepositoryDetails:
         release_mode: Whether the repository is being built in release mode.
         coverage: Whether the repository has code coverage instrumentation
             enabled.
+        sanitizer: Whether to use a sanitizer (address, hwaddress, cfi, thread, leak, memory, none)
         cargo_workspace: The `cargo.Workspace` associated with the repository.
     """
 
@@ -73,19 +74,29 @@ class RepositoryDetails:
         arch: Arch,
         release_mode: bool,
         coverage: bool,
+        sanitizer: str,
     ):
         self.root = root
         self.arch = arch
         self.release_mode = release_mode
         self.coverage = coverage
+        self.sanitizer = sanitizer
         self.cargo_workspace = cargo.Workspace(root)
 
     def cargo(
-        self, subcommand: str, rustflags: list[str], channel: str | None = None
+        self,
+        subcommand: str,
+        rustflags: list[str],
+        channel: str | None = None,
+        cflags: list[str] = [],
     ) -> list[str]:
         """Start a cargo invocation for the configured architecture."""
         return xcompile.cargo(
-            arch=self.arch, channel=channel, subcommand=subcommand, rustflags=rustflags
+            arch=self.arch,
+            channel=channel,
+            subcommand=subcommand,
+            rustflags=rustflags,
+            cflags=cflags,
         )
 
     def tool(self, name: str) -> list[str]:
@@ -221,13 +232,15 @@ class CargoPreImage(PreImage):
         }
 
     def extra(self) -> str:
-        # Cargo images depend on the release mode and whether coverage is
-        # enabled.
+        # Cargo images depend on the release mode and whether
+        # coverage/sanitizer is enabled.
         flags: list[str] = []
         if self.rd.release_mode:
             flags += "release"
         if self.rd.coverage:
             flags += "coverage"
+        if self.rd.sanitizer != "none":
+            flags += self.rd.sanitizer
         flags.sort()
         return ",".join(flags)
 
@@ -256,9 +269,20 @@ class CargoBuild(CargoPreImage):
         bins: list[str],
         examples: list[str],
     ) -> list[str]:
-        rustflags = rustc_flags.coverage if rd.coverage else ["--cfg=tokio_unstable"]
+        rustflags = (
+            rustc_flags.coverage
+            if rd.coverage
+            else rustc_flags.sanitizer[rd.sanitizer]
+            if rd.sanitizer != "none"
+            else ["--cfg=tokio_unstable"]
+        )
+        cflags = (
+            rustc_flags.sanitizer_cflags[rd.sanitizer] if rd.sanitizer != "none" else []
+        )
 
-        cargo_build = [*rd.cargo("build", channel=None, rustflags=rustflags)]
+        cargo_build = [
+            *rd.cargo("build", channel=None, rustflags=rustflags, cflags=cflags)
+        ]
 
         for bin in bins:
             cargo_build.extend(["--bin", bin])
@@ -267,6 +291,8 @@ class CargoBuild(CargoPreImage):
 
         if rd.release_mode:
             cargo_build.append("--release")
+        if rd.sanitizer != "none":
+            cargo_build.append("--no-default-features")
 
         return cargo_build
 
@@ -681,6 +707,7 @@ class ResolvedImage:
 
         self_hash.update(f"arch={self.image.rd.arch}".encode())
         self_hash.update(f"coverage={self.image.rd.coverage}".encode())
+        self_hash.update(f"sanitizer={self.image.rd.sanitizer}".encode())
 
         full_hash = hashlib.sha1()
         full_hash.update(self_hash.digest())
@@ -806,6 +833,7 @@ class Repository:
         arch: The CPU architecture to build for.
         release_mode: Whether to build the repository in release mode.
         coverage: Whether to enable code coverage instrumentation.
+        sanitizer: Whether to a sanitizer (address, thread, leak, memory, none)
 
     Attributes:
         images: A mapping from image name to `Image` for all contained images.
@@ -818,8 +846,9 @@ class Repository:
         arch: Arch = Arch.host(),
         release_mode: bool = True,
         coverage: bool = False,
+        sanitizer: str = "none",
     ):
-        self.rd = RepositoryDetails(root, arch, release_mode, coverage)
+        self.rd = RepositoryDetails(root, arch, release_mode, coverage, sanitizer)
         self.images: dict[str, Image] = {}
         self.compositions: dict[str, Path] = {}
         for path, dirs, files in os.walk(self.root, topdown=True):
@@ -891,6 +920,12 @@ class Repository:
             action="store_true",
         )
         parser.add_argument(
+            "--sanitizer",
+            help="whether to enable a sanitizer (address, thread, leak, memory)",
+            default=os.getenv("CI_SANITIZER", "none"),
+            type=str,
+        )
+        parser.add_argument(
             "--arch",
             default=Arch.host(),
             help="the CPU architecture to build for",
@@ -906,7 +941,11 @@ class Repository:
         `Repository.install_arguments`.
         """
         return cls(
-            root, release_mode=args.release, coverage=args.coverage, arch=args.arch
+            root,
+            release_mode=args.release,
+            coverage=args.coverage,
+            sanitizer=args.sanitizer,
+            arch=args.arch,
         )
 
     @property

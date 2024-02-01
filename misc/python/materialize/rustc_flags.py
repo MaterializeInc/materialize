@@ -21,3 +21,61 @@ coverage = [
     "-Cinstrument-coverage",
     "-Cllvm-args=-runtime-counter-relocation",
 ]
+
+sanitizer = {
+    "address": [
+        "-Zsanitizer=address",
+        # "-Cllvm-args=-asan-use-after-scope",
+        # "-Cllvm-args=-asan-use-after-return=always",
+        # "-Cllvm-args=-asan-recover",
+        # "-Cllvm-args=-asan-stack=false",  # Remove when #25017 is fixed
+        # "-Cdebug-assertions=on",
+        # "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
+        "-Clink-arg=-fsanitize=address",
+        # "-Clinker=clang-17",
+        # "-Clink-arg=-Wl,--whole-archive,/home/deen/.rustup/toolchains/nightly-2024-01-18-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/librustc-nightly_rt.asan.a",
+        # "-Clink-arg=-lasan",
+    ],
+    "hwaddress": [
+        "-Zsanitizer=hwaddress",
+        "-Ctarget-feature=+tagged-globals",
+        "-Cdebug-assertions=off",
+        "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
+        "-Clink-arg=-fsanitize=hwaddress",
+        # "-Clinker=clang-17",
+    ],
+    "cfi": [
+        "-Zsanitizer=cfi",
+        "-Cdebug-assertions=off",
+        "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
+        "-Clink-arg=-fsanitize=cfi",
+        # "-Clinker=clang-17",
+    ],
+    "thread": [
+        "-Zsanitizer=thread",
+        "-Cdebug-assertions=off",
+        "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
+        "-Clink-arg=-fsanitize=thread",
+        # "-Clinker=clang-17",
+    ],
+    "leak": [
+        "-Zsanitizer=leak",
+        "-Cdebug-assertions=off",
+        "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
+        "-Clink-arg=-fsanitize=leak",
+        # "-Clinker=clang-17",
+    ],
+    "undefined": [],
+}
+
+sanitizer_cflags = {
+    "address": [
+        "-fsanitize=address",
+        "-fsanitize-address-use-after-scope",
+    ],
+    "hwaddress": ["-fsanitize=hwaddress"],
+    "cfi": ["-fsanitize=cfi"],
+    "thread": ["-fsanitize=thread"],
+    "leak": ["-fsanitize=leak"],
+    "undefined": ["-fsanitize=undefined"],
+}

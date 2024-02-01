@@ -166,7 +166,7 @@ async fn main() {
 }
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
-    mz_ore::panic::set_abort_on_panic();
+    //mz_ore::panic::set_abort_on_panic();
     let metrics_registry = MetricsRegistry::new();
     let (tracing_handle, _tracing_guard) = args
         .tracing
@@ -183,7 +183,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     // Keep this _after_ the mz_ore::tracing::configure call so that its panic
     // hook runs _before_ the one that sends things to sentry.
-    mz_timely_util::panic::halt_on_timely_communication_panic();
+    // TODO: Only for asan
+    //mz_timely_util::panic::halt_on_timely_communication_panic();
 
     let _failpoint_scenario = FailScenario::setup();
 

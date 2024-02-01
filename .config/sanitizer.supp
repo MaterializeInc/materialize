@@ -1,0 +1,4 @@
+# TODO: Remove when #25017 is fixed
+interceptor_via_fun:*render_plan*
+# TODO: Remove when #21751 is fixed
+interceptor_via_fun:mz_timely_util::panic::halt_on_timely_communication_panic*
