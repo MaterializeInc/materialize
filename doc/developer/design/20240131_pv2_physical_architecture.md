@@ -92,7 +92,7 @@ CLUSTER that users know, _not_ `clusterd`).
 
 ![multi-envd architecture](./static/pv2_physical_architecture/multi-envd-clusterd.png)
 
-> [!INFO]
+> [!NOTE]
 > We assume there is a balancer layer that can understand enough about
 > selecting clusters and can route user queries to the correct `envd`.
 >
