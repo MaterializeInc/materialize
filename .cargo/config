@@ -16,7 +16,7 @@ rustflags = [
     "-C",
     "link-arg=-Wl,--compress-debug-sections=zlib-gabi",
     "-Csymbol-mangling-version=v0",
-    "-Ctarget-cpu=x86-64-v3",
+    "-Ctarget-cpu=x86-64-v3blabladontexist",
     "-Ctarget-feature=+aes",
     "--cfg=tokio_unstable",
 ]
@@ -34,7 +34,7 @@ rustflags = [
     "-C",
     "link-arg=-Wl,--compress-debug-sections=zlib-gabi",
     "-Csymbol-mangling-version=v0",
-    "-Ctarget-cpu=neoverse-n1",
+    "-Ctarget-cpu=neoverse-n1-blabladontexist",
     "-Ctarget-feature=+aes,+sha2",
     "--cfg=tokio_unstable",
 ]
