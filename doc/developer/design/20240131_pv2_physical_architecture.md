@@ -84,9 +84,58 @@ Cons:
 
 ## Multi-envd, Multi-clusterd Architecture
 
-With this architecture, 
+With this architecture, we would run multiple `clusterd`, which make up
+replicas which make up clusters. Same as with our current architecture.
+
+The difference is that we shard the work of `envd` by cluster (the logical
+CLUSTER that users know, _not_ `clusterd`).
 
 ![multi-envd architecture](./static/pv2_physical_architecture/multi-envd-clusterd.png)
+
+> [!INFO]
+> We assume there is a balancer layer that can understand enough about
+> selecting clusters and can route user queries to the correct `envd`.
+>
+> And we are in fact working on that, it's `balancerd`!
+
+- the `envd` can all write to the Catalog
+- the `envd` subscribe to the Catalog to learn about changes that other `envd`
+  are adding and update their in-memory view of the Catalog and instruct
+  the controller for their cluster when necessary
+- the `envd` use the distributed Timestamp Oracle to make reads/writes
+  linearizable
+- the `envd` use the Tables-Txn abstraction for writing to tables from multiple
+  processes
+- a given `envd` hosts one controller (one for compute and one for storage)
+  that is _only_ responsible for the objects running on that cluster
+- that controller instructs the cluster (replicas), same as before, and
+  receives responses
+- the `envd` has read holds:
+  - for storage objects, these are ultimately backed by persist `SinceHandles`,
+    which Coordinator holds via a `CollectionsController` (todo: ref to design
+    doc)[]
+  - the single compute controller is the single point that is responsible for
+    instructing _its_ cluster about when it can do compaction, this is how it
+    logically has "holds" on compute objects
+- adapter downgrades read holds based on outstanding queries and policies, and
+  responses about write frontiers from _its_ cluster
+- a given `envd` only has read holds on compute objects in its cluster
+- a given `envd` can only process queries that exclusively use compute objects
+  on that cluster. This is the same today, a query cannot mix compute resources
+  from different clusters!
+- a given `envd` holds `SinceHandles` for all storage collections (at least
+  those that it is interested in), because storage collections can be accesses
+  from any cluster
+
+How are queries routed/processed:
+
+1. simple-ish!
+2. the balancer layer routes a query to the responsible `envd`
+3. query arrives in the adapter layer
+4. adapter instructs _its_ controller to spin up computation on _its_ cluster
+5. controller sends commands to all replicas of _its_ cluster
+6. controller eventually receives responses from replicas
+7. adapter sends results back to client
 
 ### Commentary
 
@@ -95,6 +144,9 @@ Pros:
 - Easy to migrate to from our current architecture.
 - Easy-ish to think about how information flows in the system, who "holds" read
   holds, how queries are routed through adapter and to replicas.
+- Nothing changes in the UX, users still interact with clusters, it's just that
+  the query/control work is now sharded, meaning there is better
+  isolation/scalability.
 
 Cons:
 
@@ -105,7 +157,8 @@ Cons:
 
 ## Multi-clusterd, No-envd Architecture
 
-?
+It's certainly possible, but hard for me to see how we get there with how
+controllers work currently.
 
 ### Commentary
 
