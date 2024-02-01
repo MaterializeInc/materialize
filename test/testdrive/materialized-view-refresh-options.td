@@ -173,6 +173,80 @@ ALTER SYSTEM SET enable_refresh_every_mvs = true
 2
 3
 
+# Test that MVs that advance to the empty frontier do not retain read holds on
+# their inputs. Regression test for #24469.
+
+> CREATE TABLE t4 (x int)
+> CREATE MATERIALIZED VIEW mv7 WITH (REFRESH AT CREATION) AS SELECT * FROM t4
+> SELECT * FROM mv7
+
+> SELECT f.write_frontier
+  FROM mz_internal.mz_frontiers f
+  JOIN mz_materialized_views m ON (m.id = f.object_id)
+  WHERE m.name = 'mv7'
+<null>
+
+# Verify that `t4`'s read frontier advances past the read frontier of `mv7`.
+> SELECT ft.read_frontier > fm.read_frontier
+  FROM mz_internal.mz_frontiers fm
+  JOIN mz_materialized_views m ON (m.id = fm.object_id)
+  JOIN mz_internal.mz_frontiers ft ON (true)
+  JOIN mz_tables t ON (t.id = ft.object_id)
+  WHERE m.name = 'mv7' AND t.name = 't4'
+true
+
+# Test the same thing with multiple replicas.
+
+> DROP MATERIALIZED VIEW mv7
+> ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 2);
+
+> CREATE MATERIALIZED VIEW mv7
+  IN CLUSTER refresh_cluster
+  WITH (REFRESH AT CREATION)
+  AS SELECT * FROM t4
+> SELECT * FROM mv7
+
+> SELECT f.write_frontier
+  FROM mz_internal.mz_frontiers f
+  JOIN mz_materialized_views m ON (m.id = f.object_id)
+  WHERE m.name = 'mv7'
+<null>
+
+> SELECT ft.read_frontier > fm.read_frontier
+  FROM mz_internal.mz_frontiers fm
+  JOIN mz_materialized_views m ON (m.id = fm.object_id)
+  JOIN mz_internal.mz_frontiers ft ON (true)
+  JOIN mz_tables t ON (t.id = ft.object_id)
+  WHERE m.name = 'mv7' AND t.name = 't4'
+true
+
+# Test the same thing with initially zero replicas.
+
+> DROP MATERIALIZED VIEW mv7
+> ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 0);
+
+> CREATE MATERIALIZED VIEW mv7
+  IN CLUSTER refresh_cluster
+  WITH (REFRESH AT CREATION)
+  AS SELECT * FROM t4
+
+> ALTER CLUSTER refresh_cluster SET (REPLICATION FACTOR 1);
+> SELECT * FROM mv7
+
+> SELECT f.write_frontier
+  FROM mz_internal.mz_frontiers f
+  JOIN mz_materialized_views m ON (m.id = f.object_id)
+  WHERE m.name = 'mv7'
+<null>
+
+> SELECT ft.read_frontier > fm.read_frontier
+  FROM mz_internal.mz_frontiers fm
+  JOIN mz_materialized_views m ON (m.id = fm.object_id)
+  JOIN mz_internal.mz_frontiers ft ON (true)
+  JOIN mz_tables t ON (t.id = ft.object_id)
+  WHERE m.name = 'mv7' AND t.name = 't4'
+true
+
 ######## Cleanup ########
 > DROP DATABASE materialized_view_refresh_options CASCADE;
 > DROP CLUSTER refresh_cluster CASCADE;
