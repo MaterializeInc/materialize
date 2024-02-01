@@ -285,7 +285,7 @@ pub(crate) mod persist {
     use crate::durable::impls::persist::state_update::{
         IntoStateUpdateKindRaw, StateUpdateKindRaw,
     };
-    use crate::durable::impls::persist::{Timestamp, UnopenedPersistCatalogState};
+    use crate::durable::impls::persist::{StateUpdateKind, Timestamp, UnopenedPersistCatalogState};
     use crate::durable::initialize::USER_VERSION_KEY;
     use crate::durable::objects::serialization::proto;
     use crate::durable::upgrade::{
@@ -340,6 +340,8 @@ pub(crate) mod persist {
             "cannot upgrade uninitialized catalog"
         );
 
+        // Consolidate to avoid migrating old state.
+        persist_handle.consolidate();
         let mut version = persist_handle
             .get_user_version()
             .await?
@@ -403,7 +405,7 @@ pub(crate) mod persist {
             .snapshot
             .iter()
             .map(|update| {
-                soft_assert_eq_or_log!(1, update.diff, "snapshot is consolidated");
+                soft_assert_eq_or_log!(1, update.diff, "snapshot is consolidated, {update:?}");
                 V1::try_from(update.clone().kind).expect("invalid catalog data persisted")
             })
             .collect();
@@ -433,18 +435,14 @@ pub(crate) mod persist {
 
     /// Generates a [`proto::StateUpdateKind`] to update the user version.
     fn version_update_kind(version: u64) -> StateUpdateKindRaw {
-        // We can use the current protobuf versions because Configs can never be migrated and are
-        // always wire compatible.
-        proto::StateUpdateKind {
-            kind: Some(proto::state_update_kind::Kind::Config(
-                proto::state_update_kind::Config {
-                    key: Some(proto::ConfigKey {
-                        key: USER_VERSION_KEY.to_string(),
-                    }),
-                    value: Some(proto::ConfigValue { value: version }),
-                },
-            )),
-        }
+        // We can use the current version because Configs can never be migrated and are always wire
+        // compatible.
+        StateUpdateKind::Config(
+            proto::ConfigKey {
+                key: USER_VERSION_KEY.to_string(),
+            },
+            proto::ConfigValue { value: version },
+        )
         .into()
     }
 }
