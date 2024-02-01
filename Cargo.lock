@@ -3111,13 +3111,14 @@ checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
 
 [[package]]
 name = "lgalloc"
-version = "0.1.6"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04e800ee9a186dfd634b56aac0814ab6281f87c962bc63087361fa73442e30e1"
+checksum = "06e3de70c23cbcf5613858a870f9c02185e6c337ebcd076453383a24fde8f64a"
 dependencies = [
  "crossbeam-deque",
  "libc",
  "memmap2",
+ "page_size",
  "tempfile",
  "thiserror",
 ]
@@ -6688,6 +6689,16 @@ name = "overload"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b15813163c1d831bf4a13c3610c05c0d03b39feb07f7e09fa234dac9b15aaf39"
+
+[[package]]
+name = "page_size"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30d5b2194ed13191c1999ae0704b7839fb18384fa22e49b57eeaa97d79ce40da"
+dependencies = [
+ "libc",
+ "winapi",
+]
 
 [[package]]
 name = "papergrid"
