@@ -261,6 +261,7 @@ class Composition:
         *args: str,
         capture: bool | TextIO = False,
         capture_stderr: bool | TextIO = False,
+        capture_and_print: bool = False,
         stdin: str | None = None,
         check: bool = True,
         max_tries: int = 1,
@@ -274,6 +275,8 @@ class Composition:
                 opened file to capture stdout into the file directly.
             capture_stderr: Whether to capture the child's stderr stream, can
                 be an opened file to capture stderr into the file directly.
+            capture_and_print: Print during execution and capture the stdout and
+                stderr of the `docker compose` invocation.
             input: A string to provide as stdin for the command.
         """
 
@@ -304,28 +307,57 @@ class Composition:
             yaml.dump(self.compose, file)
             self.files[thread_id] = file
 
+        cmd = [
+            "docker",
+            "compose",
+            f"-f/dev/fd/{file.fileno()}",
+            "--project-directory",
+            self.path,
+            *project_name_args,
+            *args,
+        ]
+
         ret = None
+        stdout_result = ""
         for retry in range(1, max_tries + 1):
             file.seek(0)
             try:
-                ret = subprocess.run(
-                    [
-                        "docker",
-                        "compose",
-                        f"-f/dev/fd/{file.fileno()}",
-                        "--project-directory",
-                        self.path,
-                        *project_name_args,
-                        *args,
-                    ],
-                    close_fds=False,
-                    check=check,
-                    stdout=stdout,
-                    stderr=stderr,
-                    input=stdin,
-                    text=True,
-                    bufsize=1,
-                )
+                if capture_and_print:
+                    p = subprocess.Popen(
+                        cmd,
+                        close_fds=False,
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1,
+                    )
+                    if stdin != None:
+                        p.stdin.write(stdin)  # type: ignore
+                    if p.stdin != None:
+                        p.stdin.close()
+                    for line in p.stdout:  # type: ignore
+                        print(line, end="")
+                        stdout_result += line
+                    p.wait()
+                    retcode = p.poll()
+                    assert retcode != None
+                    if check and retcode:
+                        raise subprocess.CalledProcessError(
+                            retcode, p.args, output=stdout_result
+                        )
+                    return subprocess.CompletedProcess(p.args, retcode, stdout_result)
+                else:
+                    ret = subprocess.run(
+                        cmd,
+                        close_fds=False,
+                        check=check,
+                        stdout=stdout,
+                        stderr=stderr,
+                        input=stdin,
+                        text=True,
+                        bufsize=1,
+                    )
             except subprocess.CalledProcessError as e:
                 if e.stdout:
                     print(e.stdout)
@@ -620,6 +652,7 @@ class Composition:
         env_extra: dict[str, str] = {},
         capture: bool = False,
         capture_stderr: bool = False,
+        capture_and_print: bool = False,
         stdin: str | None = None,
         entrypoint: str | None = None,
         check: bool = True,
@@ -640,6 +673,8 @@ class Composition:
             rm: Remove container after run.
             capture: Capture the stdout of the `docker compose` invocation.
             capture_stderr: Capture the stderr of the `docker compose` invocation.
+            capture_and_print: Print during execution and capture the
+                stdout+stderr of the `docker compose` invocation.
         """
         # Restart any dependencies whose definitions have changed. The trick,
         # taken from Buildkite's Docker Compose plugin, is to run an `up`
@@ -655,6 +690,7 @@ class Composition:
             *args,
             capture=capture,
             capture_stderr=capture_stderr,
+            capture_and_print=capture_and_print,
             stdin=stdin,
             check=check,
         )
@@ -668,8 +704,8 @@ class Composition:
             "testdrive",
             *args,
             rm=rm,
-            # needed for sufficient error information in the junit.xml
-            capture_stderr=True,
+            # needed for sufficient error information in the junit.xml while still printing to stdout during execution
+            capture_and_print=True,
         )
 
     def exec(
@@ -679,6 +715,7 @@ class Composition:
         detach: bool = False,
         capture: bool = False,
         capture_stderr: bool = False,
+        capture_and_print: bool = False,
         stdin: str | None = None,
         check: bool = True,
         workdir: str | None = None,
@@ -711,6 +748,7 @@ class Composition:
             *args,
             capture=capture,
             capture_stderr=capture_stderr,
+            capture_and_print=capture_and_print,
             stdin=stdin,
             check=check,
         )
@@ -1195,12 +1233,12 @@ class Composition:
             ]
 
         if persistent:
-            self.exec(service, *args, stdin=input, capture_stderr=True)
+            self.exec(service, *args, stdin=input, capture_and_print=True)
         else:
             assert (
                 mz_service is None
             ), "testdrive(mz_service = ...) can only be used with persistent Testdrive containers."
-            self.run(service, *args, stdin=input, capture_stderr=True)
+            self.run(service, *args, stdin=input, capture_and_print=True)
 
     def enable_minio_versioning(self) -> None:
         self.up("minio")
