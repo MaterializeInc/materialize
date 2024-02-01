@@ -229,6 +229,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::Rollback => "rollback",
         StatementKind::Subscribe => "subscribe",
         StatementKind::ExplainPlan => "explain_plan",
+        StatementKind::ExplainPushdown => "explain_pushdown",
         StatementKind::ExplainTimestamp => "explain_timestamp",
         StatementKind::ExplainSinkSchema => "explain_sink_schema",
         StatementKind::Declare => "declare",

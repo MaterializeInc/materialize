@@ -142,6 +142,7 @@ pub enum Plan {
     CopyFrom(CopyFromPlan),
     CopyTo(CopyToPlan),
     ExplainPlan(ExplainPlanPlan),
+    ExplainPushdown(ExplainPushdownPlan),
     ExplainTimestamp(ExplainTimestampPlan),
     ExplainSinkSchema(ExplainSinkSchemaPlan),
     Insert(InsertPlan),
@@ -272,6 +273,7 @@ impl Plan {
             StatementKind::DropOwned => vec![PlanKind::DropOwned],
             StatementKind::Execute => vec![PlanKind::Execute],
             StatementKind::ExplainPlan => vec![PlanKind::ExplainPlan],
+            StatementKind::ExplainPushdown => vec![PlanKind::ExplainPushdown],
             StatementKind::ExplainTimestamp => vec![PlanKind::ExplainTimestamp],
             StatementKind::ExplainSinkSchema => vec![PlanKind::ExplainSinkSchema],
             StatementKind::Fetch => vec![PlanKind::Fetch],
@@ -359,6 +361,7 @@ impl Plan {
             Plan::CopyFrom(_) => "copy from",
             Plan::CopyTo(_) => "copy to",
             Plan::ExplainPlan(_) => "explain plan",
+            Plan::ExplainPushdown(_) => "EXPLAIN FILTER PUSHDOWN",
             Plan::ExplainTimestamp(_) => "explain timestamp",
             Plan::ExplainSinkSchema(_) => "explain schema",
             Plan::Insert(_) => "insert",
@@ -897,6 +900,11 @@ impl std::fmt::Display for ExplaineeStatementKind {
             Self::CreateIndex => write!(f, "CREATE INDEX"),
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct ExplainPushdownPlan {
+    pub explainee: Explainee,
 }
 
 #[derive(Clone, Debug)]

@@ -101,6 +101,7 @@ pub fn auto_run_on_introspection<'a, 's, 'p>(
         | Plan::CopyFrom(_)
         | Plan::CopyTo(_)
         | Plan::ExplainPlan(_)
+        | Plan::ExplainPushdown(_)
         | Plan::ExplainSinkSchema(_)
         | Plan::Insert(_)
         | Plan::AlterNoop(_)
