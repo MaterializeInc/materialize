@@ -59,6 +59,7 @@ steps:
           # Error: no prebuilt wasm-opt binaries are available for this platform: Unrecognized target!
           queue: linux-x86_64-small
         coverage: skip
+        sanitizer: skip
 
       - id: check-merge-with-target
         label: Merge skew cargo check
@@ -73,6 +74,7 @@ steps:
           queue: linux-aarch64
         if: "build.pull_request.id != null"
         coverage: skip
+        sanitizer: skip
 
       - id: devel-docker-tags
         label: Tag development docker images
@@ -86,6 +88,7 @@ steps:
         agents:
           queue: linux-aarch64-small
         coverage: skip
+        sanitizer: skip
         # Fortify against intermittent DockerHub issues
         retry:
           automatic:
@@ -105,6 +108,7 @@ steps:
         agents:
           queue: linux-aarch64-small
         coverage: skip
+        sanitizer: skip
 
       - id: lint-slow
         label: Clippy and doctests
@@ -119,6 +123,7 @@ steps:
           # note: the `x86_64-unknown-linux-gnu` target may not be installed
           queue: builder-linux-x86_64
         coverage: skip
+        sanitizer: skip
 
       - id: lint-macos
         label: macOS Clippy
@@ -135,6 +140,7 @@ steps:
         agents:
           queue: mac
         coverage: skip
+        sanitizer: skip
 
       - id: lint-deps
         label: Lint dependencies
@@ -148,6 +154,7 @@ steps:
         agents:
           queue: linux-aarch64-small
         coverage: skip
+        sanitizer: skip
 
       - id: vet-check
         label: Cargo vet Check
@@ -160,6 +167,7 @@ steps:
         agents:
           queue: linux-aarch64-small
         coverage: skip
+        sanitizer: skip
 
       - id: lint-docs
         label: Lint docs
@@ -174,6 +182,7 @@ steps:
           # hugo: command not found
           queue: linux-x86_64-small
         coverage: skip
+        sanitizer: skip
 
       - id: preview-docs
         label: Preview docs
@@ -185,6 +194,7 @@ steps:
           # hugo: command not found
           queue: linux-x86_64-small
         coverage: skip
+        sanitizer: skip
 
   - id: cargo-test
     label: Cargo test
@@ -478,6 +488,7 @@ steps:
           args: [--exitfirst, -m, "not long and not node_recovery", --aws-region=us-east-1, test/cloudtest/]
     agents:
       queue: linux-aarch64
+    sanitizer: skip
 
   - id: source-sink-errors
     label: "Source/Sink Error Reporting %N"
@@ -622,6 +633,7 @@ steps:
       env:
         BUILDKITE_TAG: "$BUILDKITE_TAG"
     coverage: skip
+    sanitizer: skip
 
   - id: release-qualification
     label: Release qualification
@@ -635,6 +647,7 @@ steps:
         BUILDKITE_TAG: "$BUILDKITE_TAG"
     if: build.tag != "" && build.branch =~ /^v.*\..*\$/
     coverage: skip
+    sanitizer: skip
 
   - id: nightly-if-release
     label: Nightly for releases
@@ -648,6 +661,7 @@ steps:
         BUILDKITE_TAG: "$BUILDKITE_TAG"
     if: build.tag != "" && build.branch =~ /^v.*\..*\$/
     coverage: skip
+    sanitizer: skip
 
   - id: nightly-if-risky
     label: Nightly for risky PRs
@@ -694,6 +708,7 @@ steps:
       - ci/nightly
       - ci/plugins
     coverage: skip
+    sanitizer: skip
 
   - wait: ~
     continue_on_failure: true
@@ -722,3 +737,4 @@ steps:
       env:
         BUILDKITE_TAG: "$BUILDKITE_TAG"
     coverage: skip
+    sanitizer: skip

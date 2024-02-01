@@ -10,6 +10,7 @@
 # xcompile.py — builds Materialize-specific Docker images.
 
 import argparse
+import os
 import sys
 
 from materialize import mzbuild, spawn, xcompile
@@ -31,7 +32,7 @@ def main() -> int:
 
     parser.add_argument(
         "--channel",
-        default=None,
+        default="nightly" if os.getenv("CI_SANITIZER", "none") else None,
         help="Rust compiler channel to use",
     )
 

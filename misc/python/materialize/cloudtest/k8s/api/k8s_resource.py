@@ -6,6 +6,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+import os
 import subprocess
 
 from kubernetes.client import AppsV1Api, CoreV1Api, RbacAuthorizationV1Api
@@ -85,8 +86,12 @@ class K8sResource:
             return image_name
         else:
             coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
+            sanitizer = os.getenv("CI_SANITIZER", "none")
             repo = mzbuild.Repository(
-                MZ_ROOT, release_mode=release_mode, coverage=coverage
+                MZ_ROOT,
+                release_mode=release_mode,
+                coverage=coverage,
+                sanitizer=sanitizer,
             )
             deps = repo.resolve_dependencies([repo.images[service]])
             rimage = deps[service]

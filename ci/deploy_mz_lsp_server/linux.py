@@ -19,7 +19,7 @@ from .deploy_util import MZ_LSP_SERVER_VERSION
 
 
 def main() -> None:
-    repo = mzbuild.Repository(Path("."), coverage=False)
+    repo = mzbuild.Repository(Path("."), coverage=False, sanitizer="none")
     target = f"{repo.rd.arch}-unknown-linux-gnu"
 
     print("--- Checking version")

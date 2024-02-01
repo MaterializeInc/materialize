@@ -85,7 +85,11 @@ def target_features(arch: Arch) -> list[str]:
 
 
 def cargo(
-    arch: Arch, subcommand: str, rustflags: list[str], channel: str | None = None
+    arch: Arch,
+    subcommand: str,
+    rustflags: list[str],
+    channel: str | None = None,
+    extra_env: dict[str, str] = {},
 ) -> list[str]:
     """Construct a Cargo invocation for cross compiling.
 
@@ -104,6 +108,11 @@ def cargo(
     _target_cpu = target_cpu(arch)
     _target_features = ",".join(target_features(arch))
 
+    env = {
+        "RUSTFLAGS": " ".join(rustflags),
+        **extra_env,
+    }
+
     rustflags += [
         "-Clink-arg=-Wl,--compress-debug-sections=zlib",
         "-Csymbol-mangling-version=v0",
@@ -116,18 +125,20 @@ def cargo(
         _bootstrap_darwin(arch)
         sysroot = spawn.capture([f"{_target}-cc", "-print-sysroot"]).strip()
         rustflags += [f"-L{sysroot}/lib"]
-        extra_env = {
-            "CMAKE_SYSTEM_NAME": "Linux",
-            f"CARGO_TARGET_{_target_env}_LINKER": f"{_target}-cc",
-            "CARGO_TARGET_DIR": str(MZ_ROOT / "target-xcompile"),
-            "TARGET_AR": f"{_target}-ar",
-            "TARGET_CPP": f"{_target}-cpp",
-            "TARGET_CC": f"{_target}-cc",
-            "TARGET_CXX": f"{_target}-c++",
-            "TARGET_CXXSTDLIB": "static=stdc++",
-            "TARGET_LD": f"{_target}-ld",
-            "TARGET_RANLIB": f"{_target}-ranlib",
-        }
+        env.update(
+            {
+                "CMAKE_SYSTEM_NAME": "Linux",
+                f"CARGO_TARGET_{_target_env}_LINKER": f"{_target}-cc",
+                "CARGO_TARGET_DIR": str(MZ_ROOT / "target-xcompile"),
+                "TARGET_AR": f"{_target}-ar",
+                "TARGET_CPP": f"{_target}-cpp",
+                "TARGET_CC": f"{_target}-cc",
+                "TARGET_CXX": f"{_target}-c++",
+                "TARGET_CXXSTDLIB": "static=stdc++",
+                "TARGET_LD": f"{_target}-ld",
+                "TARGET_RANLIB": f"{_target}-ranlib",
+            }
+        )
     else:
         # NOTE(benesch): The required Rust flags have to be duplicated with
         # their definitions in ci/builder/Dockerfile because `rustc` has no way
@@ -136,12 +147,6 @@ def cargo(
             "-Clink-arg=-fuse-ld=lld",
             f"-L/opt/x-tools/{_target}/{_target}/sysroot/lib",
         ]
-        extra_env: dict[str, str] = {}
-
-    env = {
-        **extra_env,
-        "RUSTFLAGS": " ".join(rustflags),
-    }
 
     return [
         *_enter_builder(arch, channel),

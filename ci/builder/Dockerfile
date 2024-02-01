@@ -35,7 +35,10 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     help2man \
     libc-dev \
     libncurses-dev \
+    libstdc++6 \
+    libstdc++-13-dev \
     libtool-bin \
+    llvm \
     make \
     patch \
     texinfo \
@@ -84,6 +87,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     binfmt-support \
     bsdmainutils \
     ca-certificates \
+    clang \
     cmake \
     curl \
     docker.io \
@@ -95,7 +99,9 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     jq \
     lcov \
     libc-dbg \
+    libclang-common-15-dev \
     libclang-dev \
+    libclang-rt-15-dev \
     libpq-dev \
     lld \
     llvm \
@@ -277,13 +283,13 @@ ENV RANLIB=$ARCH_GCC-unknown-linux-gnu-ranlib
 ENV CPP=$ARCH_GCC-unknown-linux-gnu-cpp
 ENV CC=$ARCH_GCC-unknown-linux-gnu-cc
 ENV CXX=$ARCH_GCC-unknown-linux-gnu-c++
-ENV CXXSTDLIB=static=stdc++
+ENV CXXSTDLIB=stdc++
 ENV LDFLAGS="-fuse-ld=lld -static-libstdc++"
 ENV RUSTFLAGS="-Clink-arg=-Wl,--compress-debug-sections=zlib -Clink-arg=-fuse-ld=lld -L/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot/lib/ -Csymbol-mangling-version=v0 -Ctarget-cpu=$RUST_CPU_TARGET -Ctarget-feature=$RUST_TARGET_FEATURES --cfg=tokio_unstable"
 ENV TARGET_AR=$AR
 ENV TARGET_CC=$CC
 ENV TARGET_CXX=$CXX
-ENV TARGET_CXXSTDLIB=static=stdc++
+ENV TARGET_CXXSTDLIB=stdc++
 ENV TARGET_RANLIB=$RANLIB
 ENV PATH=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin:$PATH
 ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-unknown-linux-gnu-cc
@@ -316,3 +322,8 @@ RUN userdel -r ubuntu
 # Ensure that all python output is unbuffered, otherwise it is not
 # logged properly in Buildkite
 ENV PYTHONUNBUFFERED=1
+
+RUN mkdir /asanshim \
+    && echo "#!/usr/bin/bash\nexec /usr/bin/clang -fsanitize=address --target=$ARCH_GCC-unknown-linux-gnu --gcc-toolchain=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/ -fuse-ld=lld --sysroot=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot -L/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot/lib \"\$@\"" > /asanshim/cc \
+    && echo "#!/usr/bin/bash\nexec /usr/bin/clang++ -fsanitize=address --target=$ARCH_GCC-unknown-linux-gnu --gcc-toolchain=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/ -fuse-ld=lld --sysroot=/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot -L/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot/lib \"\$@\"" > /asanshim/c++ \
+    && chmod +x /asanshim/cc /asanshim/c++

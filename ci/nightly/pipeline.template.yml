@@ -13,7 +13,7 @@ steps:
     steps:
       - id: build-x86_64
         label: Build x86_64
-        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build x86_64
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         timeout_in_minutes: 60
         # For releases we trigger nightly from the test job directly, no need to build again
         branches: "!v*.*"
@@ -22,7 +22,7 @@ steps:
 
       - id: build-aarch64
         label: Build aarch64
-        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build aarch64
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         timeout_in_minutes: 60
         # For releases we trigger nightly from the test job directly, no need to build again
         branches: "!v*.*"
@@ -49,6 +49,7 @@ steps:
         agents:
           queue: linux-aarch64-small
         branches: "!v*.*"
+        sanitizer: skip
 
       - id: unused-deps
         label: Unused dependencies
@@ -56,7 +57,7 @@ steps:
         timeout_in_minutes: 30
         agents:
           queue: linux-aarch64
-
+        sanitizer: skip
 
   - id: miri-test
     label: Miri test (full)
@@ -68,6 +69,7 @@ steps:
           args: [--miri-full]
     agents:
       queue: builder-linux-aarch64
+    sanitizer: skip
 
   - group: Benchmarks
     key: benchmark
@@ -249,6 +251,7 @@ steps:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
               args: [-m=long, --aws-region=us-east-1, test/cloudtest/test_full_testdrive.py]
+        sanitizer: skip
 
       - id: persistence-testdrive
         label: ":racing_car: testdrive with --persistent-user-tables"
@@ -761,6 +764,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=MigrateX86Aarch64]
+        sanitizer: skip
 
       - id: checks-migrate-aarch64-x86-64
         label: "Checks migrate from aarch64 to x86-64"
@@ -772,6 +776,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=MigrateAarch64X86]
+        sanitizer: skip
 
       - id: cloudtest-upgrade
         label: "Platform checks upgrade in Cloudtest/K8s"
@@ -782,6 +787,7 @@ steps:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
               args: [-m=long,  --aws-region=us-east-1, test/cloudtest/test_upgrade.py]
+        sanitizer: skip
 
   - group: "K8s node recovery cloudtest"
     key: k8s-node-recovery
@@ -806,6 +812,8 @@ steps:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
               args: [--exitfirst, -k=test_unreplicated_storage_cluster_on_failing_node, --aws-region=us-east-1, --apply-node-selectors, test/cloudtest]
+        sanitizer: skip
+
       - id: k8s-node-recovery-compute-on-failing
         label: "K8s recovery: compute on failing node"
         timeout_in_minutes: 30
@@ -827,6 +835,8 @@ steps:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
               args: [--exitfirst, -k=test_unreplicated_compute_cluster_on_failing_node, --aws-region=us-east-1, --apply-node-selectors, test/cloudtest]
+        sanitizer: skip
+
       - id: k8s-node-recovery-replicated-compute-on-failing
         label: "K8s recovery: replicated compute on failing node"
         timeout_in_minutes: 30
@@ -847,6 +857,8 @@ steps:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
               args: [--exitfirst, -k=test_replicated_compute_cluster_on_failing_node, --aws-region=us-east-1, --apply-node-selectors, test/cloudtest]
+        sanitizer: skip
+
       - id: k8s-node-recovery-envd-on-failing
         label: "K8s recovery: envd on failing node"
         timeout_in_minutes: 30
@@ -867,6 +879,7 @@ steps:
           - ./ci/plugins/scratch-aws-access: ~
           - ./ci/plugins/cloudtest:
               args: [--exitfirst, -k=test_envd_on_failing_node, --aws-region=us-east-1, --apply-node-selectors, test/cloudtest]
+        sanitizer: skip
 
   - group: Maelstrom
     key: maelstrom

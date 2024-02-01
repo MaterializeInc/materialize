@@ -7,15 +7,19 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
 import os
+import subprocess
 
-from materialize import MZ_ROOT, buildkite, spawn, ui
+from materialize import MZ_ROOT, buildkite, rustc_flags, spawn, ui
+from materialize.cli.run import SANITIZER_TARGET
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.xcompile import Arch, target
 
 SERVICES = [
     Zookeeper(),
@@ -33,6 +37,10 @@ SERVICES = [
     Postgres(image="postgres:14.2"),
     Cockroach(),
 ]
+
+
+def flatten(xss):
+    return [x for xs in xss for x in xs]
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -62,6 +70,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
+    sanitizer = os.getenv("CI_SANITIZER", "none")
+    print(f"sanitizer: {sanitizer}")
+    extra_env = {}
 
     if coverage:
         # TODO(def-): For coverage inside of clusterd called from unit tests need
@@ -108,26 +119,88 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     else:
         if args.miri_full:
             spawn.runv(
-                ["bin/ci-builder", "run", "nightly", "ci/test/cargo-test-miri.sh"],
+                [
+                    "bin/ci-builder",
+                    "run",
+                    "nightly",
+                    "ci/test/cargo-test-miri.sh",
+                ],
                 env=env,
             )
         elif args.miri_fast:
             spawn.runv(
-                ["bin/ci-builder", "run", "nightly", "ci/test/cargo-test-miri-fast.sh"],
-                env=env,
-            )
-        else:
-            spawn.runv(
                 [
-                    "cargo",
-                    "build",
-                    "--workspace",
-                    "--bin",
-                    "clusterd",
-                    "--profile=ci",
+                    "bin/ci-builder",
+                    "run",
+                    "nightly",
+                    "ci/test/cargo-test-miri-fast.sh",
                 ],
                 env=env,
             )
+        else:
+            if sanitizer != "none":
+                cflags = [
+                    f"--target={target(Arch.host())}",
+                    f"--gcc-toolchain=/opt/x-tools/{target(Arch.host())}/",
+                    f"--sysroot=/opt/x-tools/{target(Arch.host())}/{target(Arch.host())}/sysroot",
+                ] + rustc_flags.sanitizer_cflags[sanitizer]
+                ldflags = cflags + [
+                    "-fuse-ld=lld",
+                    f"-L/opt/x-tools/{target(Arch.host())}/{target(Arch.host())}/lib64",
+                ]
+                extra_env = {
+                    "CFLAGS": " ".join(cflags),
+                    "CXXFLAGS": " ".join(cflags),
+                    "LDFLAGS": " ".join(ldflags),
+                    "CXXSTDLIB": "stdc++",
+                    "CC": "cc",
+                    "CXX": "c++",
+                    "CPP": "clang-cpp-15",
+                    "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc",
+                    "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "cc",
+                    "PATH": f"/asanshim:/opt/x-tools/{target(Arch.host())}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                    "RUSTFLAGS": (
+                        env.get("RUSTFLAGS", "")
+                        + " "
+                        + " ".join(rustc_flags.sanitizer[sanitizer])
+                    ),
+                }
+                spawn.runv(
+                    [
+                        "bin/ci-builder",
+                        "run",
+                        "nightly",
+                        *flatten(
+                            [
+                                ["--env", f"{key}={val}"]
+                                for key, val in extra_env.items()
+                            ]
+                        ),
+                        "cargo",
+                        "build",
+                        "--workspace",
+                        "--no-default-features",
+                        "--bin",
+                        "clusterd",
+                        "-Zbuild-std",
+                        "--target",
+                        SANITIZER_TARGET,
+                        # The ci target fails to find any tests because of https://github.com/nextest-rs/nextest/issues/910
+                        "--profile=dev",
+                    ],
+                )
+            else:
+                spawn.runv(
+                    [
+                        "cargo",
+                        "build",
+                        "--workspace",
+                        "--bin",
+                        "clusterd",
+                        "--profile=ci",
+                    ],
+                    env=env,
+                )
 
             cpu_count = os.cpu_count()
             assert cpu_count
@@ -135,19 +208,62 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             partition = buildkite.get_parallelism_index() + 1
             total = buildkite.get_parallelism_count()
 
-            spawn.runv(
-                [
-                    "cargo",
-                    "nextest",
-                    "run",
-                    "--workspace",
-                    "--all-features",
-                    "--profile=ci",
-                    "--cargo-profile=ci",
-                    f"--partition=count:{partition}/{total}",
-                    # Most tests don't use 100% of a CPU core, so run two tests per CPU.
-                    f"--test-threads={cpu_count * 2}",
-                    *args.args,
-                ],
-                env=env,
-            )
+            if sanitizer != "none":
+                # Can't just use --workspace because of https://github.com/rust-lang/cargo/issues/7160
+                metadata = json.loads(
+                    subprocess.check_output(
+                        ["cargo", "metadata", "--no-deps", "--format-version=1"]
+                    )
+                )
+                for pkg in metadata["packages"]:
+                    try:
+                        spawn.runv(
+                            [
+                                "bin/ci-builder",
+                                "run",
+                                "nightly",
+                                *flatten(
+                                    [
+                                        ["--env", f"{key}={val}"]
+                                        for key, val in extra_env.items()
+                                    ]
+                                ),
+                                "cargo",
+                                "nextest",
+                                "run",
+                                "--package",
+                                pkg["name"],
+                                "--no-default-features",
+                                "--profile=sanitizer",
+                                # The ci target fails to find any tests because of https://github.com/nextest-rs/nextest/issues/910
+                                "--cargo-profile=dev",
+                                f"--partition=count:{partition}/{total}",
+                                # We want all tests to run
+                                "--no-fail-fast",
+                                "-Zbuild-std",
+                                "--target",
+                                SANITIZER_TARGET,
+                                *args.args,
+                            ],
+                            env=env,
+                        )
+                    except subprocess.CalledProcessError:
+                        print(f"Test against package {pkg['name']} failed, continuing")
+
+            else:
+                spawn.runv(
+                    [
+                        "cargo",
+                        "nextest",
+                        "run",
+                        "--workspace",
+                        "--all-features",
+                        "--profile=ci",
+                        "--cargo-profile=ci",
+                        f"--partition=count:{partition}/{total}",
+                        # Most tests don't use 100% of a CPU core, so run two tests per CPU.
+                        f"--test-threads={cpu_count * 2}",
+                        *args.args,
+                    ],
+                    env=env,
+                )

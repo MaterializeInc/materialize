@@ -5301,16 +5301,6 @@ mod tests {
                 }
             }
         }
-        // Because the tests are run with one task per fn, these execution times go up compared to
-        // running them serially on a single task/thread. Thus choose a fairly high timeout.
-        // Additionally, CI infra has variable performance and we want to avoid flakes. This timeout
-        // is designed to detect something taking an unexpectedly long time, but that's hard to
-        // define. If this causes problems in CI it should probably be removed instead of getting
-        // bumped to a higher timeout.
-        let elapsed = start.elapsed();
-        if elapsed > Duration::from_millis(5_000) {
-            panic!("LONG EXECUTION ({elapsed:?}): {call_name}");
-        }
     }
 
     /// If the given MirScalarExpr

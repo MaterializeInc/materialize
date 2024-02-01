@@ -21,3 +21,54 @@ coverage = [
     "-Cinstrument-coverage",
     "-Cllvm-args=-runtime-counter-relocation",
 ]
+
+sanitizer = {
+    "address": [
+        "-Zsanitizer=address",
+        "-Cllvm-args=-asan-use-after-scope",
+        "-Cllvm-args=-asan-use-after-return=always",
+        # "-Cllvm-args=-asan-stack=false",  # Remove when #25017 is fixed
+        "-Cdebug-assertions=on",
+        "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
+        "-Clinker=clang++",
+    ],
+    "hwaddress": [
+        "-Zsanitizer=hwaddress",
+        "-Ctarget-feature=+tagged-globals",
+        "-Cdebug-assertions=off",
+        "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
+        "-Clink-arg=-fsanitize=hwaddress",
+        "-Clinkerclang++",
+    ],
+    "cfi": [
+        "-Zsanitizer=cfi",
+        "-Cdebug-assertions=off",
+        "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
+        "-Clink-arg=-fsanitize=cfi",
+        "-Clinkerclang++",
+    ],
+    "thread": [
+        "-Zsanitizer=thread",
+        "-Cdebug-assertions=off",
+        "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
+        "-Clink-arg=-fsanitize=thread",
+        "-Clinkerclang++",
+    ],
+    "leak": [
+        "-Zsanitizer=leak",
+        "-Cdebug-assertions=off",
+        "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
+        "-Clink-arg=-fsanitize=leak",
+        "-Clinkerclang++",
+    ],
+    "undefined": [],
+}
+
+sanitizer_cflags = {
+    "address": ["-fsanitize=address"],
+    "hwaddress": ["-fsanitize=hwaddress"],
+    "cfi": ["-fsanitize=cfi"],
+    "thread": ["-fsanitize=thread"],
+    "leak": ["-fsanitize=leak"],
+    "undefined": ["-fsanitize=undefined"],
+}
