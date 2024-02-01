@@ -1,4 +1,4 @@
-# Platform v2: Decouple and Isolate Responsibilities of the Coordinator
+# Platform v2: Logical Architecture
 
 > [!WARNING]
 > This is a first draft! I wanted to get the general idea out as fast as I
@@ -23,13 +23,10 @@ competing for execution time on the single event loop.
 I propose a change to our Coordination Layer that makes it decoupled and
 isolated, along with a roadmap for getting to the full vision of isolated
 serving-layer processes that will allow us to incrementally provide user value,
-roughly along the milestones already laid out in [Use-Case Isolation:
-Milestones
-(internal)](https://www.notion.so/materialize/Use-case-Isolation-Milestones-f1a37b024ea74b7c9d870778c4349fe3).
+along the milestones laid out in [Use-Case Isolation: Milestones
+(internal)](https://www.notion.so/materialize/Use-case-Isolation-Milestones-b64e53900c0c498eae4bd38df6adb7c8).
 
 ## Goals
-
-Some of these will only become clear after reading Overview and Background, below.
 
 - shrink number of types of operations that are sequentialized through the
   singleton Coordinator event loop
@@ -40,19 +37,18 @@ Some of these will only become clear after reading Overview and Background, belo
 
 ## Non-Goals
 
+- specify the physical design of the post-platform-v2 architecture
 - implement the full vision of use-case isolation: a multi-process serving
   layer
-- remove the singleton event-loop, for now
 
 ## Overview
 
 In order to understand (and be able to judge) the proposal below we first need
 to understand what the Coordinator is doing and why it currently has a
 singleton event loop. I will therefore first explore the Coordinator in
-Background. Then I will give my proposed logical architecture design, then
-sketch some of the interesting parts of the physical design. To close things
-out, I will describe a roadmap, highlighting interesting incremental value that
-we can deliver along the way.
+Background. Then I will give my proposed logical architecture design. To close
+things out, I will describe a roadmap, highlighting interesting incremental
+value that we can deliver along the way.
 
 The choice of splitting the design into a logical and a physical architecture
 is meant to mirror [architecture-db.md](./../platform/architecture-db.md), but
@@ -87,12 +83,12 @@ ADAPTER.
 At a high level, the Coordinator is the component that glues all the other
 components together. It is the sole holder of interesting resources, such as:
 the controllers(s), which are used to drive around what COMPUTE and STORAGE do,
-the Catalog (which I use as a proxy for "all persistent environment state" he),
-and the Timestamp Oracle. The Coordinator mediates access to those resources,
-by only allowing operations that flow through it's event loop to access and
-modify those resources. Among other things, handling of client queries is
-sequentialized by the main loop, as well as handling responses/status updates
-from the controllers/clusters.
+the Catalog (which I use as a proxy for "all persistent environment state"
+here), and the Timestamp Oracle. The Coordinator mediates access to those
+resources, by only allowing operations that flow through it's event loop to
+access and modify those resources. Among other things, handling of client
+queries is sequentialized by the main loop, as well as handling
+responses/status updates from the controllers/clusters.
 
 The messages/operations that pass through the event-loop fall into these
 categories:
@@ -413,9 +409,6 @@ controller commands are consistent with what the controller must know as of
 that timestamp.
 
 ## Physical Architecture Design
-
-Left mostly TBD while socializing other parts of the document, especially
-Background, Assumptions and the Logical Architecture Design.
 
 Previous design documents describe physical implementations of the newly required components:
 
