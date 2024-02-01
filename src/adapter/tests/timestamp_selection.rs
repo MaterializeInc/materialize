@@ -221,6 +221,10 @@ fn test_timestamp_selection() {
                     isolation =
                         if level == TransactionIsolationLevel::StrictSerializable.to_string() {
                             TransactionIsolationLevel::StrictSerializable
+                        } else if level
+                            == TransactionIsolationLevel::StrongSessionSerializable.to_string()
+                        {
+                            TransactionIsolationLevel::StrongSessionSerializable
                         } else if level == TransactionIsolationLevel::Serializable.to_string() {
                             TransactionIsolationLevel::Serializable
                         } else {

@@ -90,16 +90,22 @@ impl<T: TimestampManipulation> TimestampContext<T> {
 
     /// The timeline belonging to this context, if one exists.
     pub fn timeline(&self) -> Option<&Timeline> {
-        match self {
-            Self::TimelineTimestamp { timeline, .. } => Some(timeline),
-            Self::NoTimestamp => None,
-        }
+        self.timeline_timestamp().map(|tt| tt.0)
     }
 
     /// The timestamp belonging to this context, if one exists.
     pub fn timestamp(&self) -> Option<&T> {
+        self.timeline_timestamp().map(|tt| tt.1)
+    }
+
+    /// The timeline and timestamp belonging to this context, if one exists.
+    pub fn timeline_timestamp(&self) -> Option<(&Timeline, &T)> {
         match self {
-            Self::TimelineTimestamp { chosen_ts, .. } => Some(chosen_ts),
+            Self::TimelineTimestamp {
+                timeline,
+                chosen_ts,
+                ..
+            } => Some((timeline, chosen_ts)),
             Self::NoTimestamp => None,
         }
     }
@@ -249,7 +255,11 @@ pub trait TimestampProvider {
             Some(timeline)
                 if when.must_advance_to_timeline_ts()
                     || (when.can_advance_to_timeline_ts()
-                        && isolation_level == &IsolationLevel::StrictSerializable) =>
+                        && matches!(
+                            isolation_level,
+                            IsolationLevel::StrictSerializable
+                                | IsolationLevel::StrongSessionSerializable
+                        )) =>
             {
                 Some(timeline.clone())
             }
@@ -327,9 +337,15 @@ pub trait TimestampProvider {
         }
 
         // If we've acquired a read timestamp from the timestamp oracle, use it
-        // as the new lower bound for the candidate
+        // as the new lower bound for the candidate.
+        // In Strong Session Serializable, we ignore the oracle timestamp for now, unless we need
+        // to use it.
         if let Some(timestamp) = &oracle_read_ts {
-            candidate.join_assign(timestamp);
+            if isolation_level != &IsolationLevel::StrongSessionSerializable
+                || when.must_advance_to_timeline_ts()
+            {
+                candidate.join_assign(timestamp);
+            }
         }
 
         // We advance to the upper in the following scenarios:
@@ -354,6 +370,34 @@ pub trait TimestampProvider {
                             is enabled and the isolation level is strict serializable"
             );
             candidate.join_assign(&real_time_recency_ts);
+        }
+
+        let mut session_oracle_read_ts = None;
+        if isolation_level == &IsolationLevel::StrongSessionSerializable {
+            if let Some(timeline) = &timeline {
+                if let Some(oracle) = session.get_timestamp_oracle(timeline) {
+                    let session_ts = oracle.read_ts();
+                    candidate.join_assign(&session_ts);
+                    session_oracle_read_ts = Some(session_ts);
+                }
+            }
+
+            // When advancing the read timestamp under Strong Session Serializable, there is a
+            // trade-off to make between freshness and latency. We can choose a timestamp close the
+            // `upper`, but then later queries might block if the `upper` is too far into the
+            // future. We can chose a timestamp close to the current time, but then we may not be
+            // getting results that are as fresh as possible. As a heuristic, we choose the minimum
+            // of now and the upper, where we use the global timestamp oracle read timestamp as a
+            // proxy for now. If upper > now, then we choose now and prevent blocking future
+            // queries. If upper < now, then we choose the upper and prevent blocking the current
+            // query.
+            if when.can_advance_to_upper() && when.can_advance_to_timeline_ts() {
+                let mut advance_to = largest_not_in_advance_of_upper;
+                if let Some(oracle_read_ts) = oracle_read_ts {
+                    advance_to = std::cmp::min(advance_to, oracle_read_ts);
+                }
+                candidate.join_assign(&advance_to);
+            }
         }
 
         // If the timestamp is greater or equal to some element in `since` we are
@@ -393,6 +437,7 @@ pub trait TimestampProvider {
             upper,
             largest_not_in_advance_of_upper,
             oracle_read_ts,
+            session_oracle_read_ts,
         })
     }
 
@@ -638,6 +683,8 @@ pub struct TimestampDetermination<T> {
     pub largest_not_in_advance_of_upper: T,
     /// The value of the timeline's oracle timestamp, if used.
     pub oracle_read_ts: Option<T>,
+    /// The value of the session local timestamp's oracle timestamp, if used.
+    pub session_oracle_read_ts: Option<T>,
 }
 
 impl<T: TimestampManipulation> TimestampDetermination<T> {
@@ -732,6 +779,13 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
                 f,
                 "          oracle read timestamp: {}",
                 oracle_read_ts.display(timeline)
+            )?;
+        }
+        if let Some(session_oracle_read_ts) = &self.determination.session_oracle_read_ts {
+            writeln!(
+                f,
+                "  session oracle read timestamp: {}",
+                session_oracle_read_ts.display(timeline)
             )?;
         }
         writeln!(
