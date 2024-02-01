@@ -371,7 +371,7 @@ pub trait TimestampProvider {
         let mut session_oracle_read_ts = None;
         if isolation_level == &IsolationLevel::StrongSessionSerializable {
             if let Some(timeline) = &timeline {
-                if let Some(oracle) = session.get_timestamp_oracle(&timeline) {
+                if let Some(oracle) = session.get_timestamp_oracle(timeline) {
                     let session_ts = oracle.read_ts();
                     candidate.join_assign(&session_ts);
                     session_oracle_read_ts = Some(session_ts);

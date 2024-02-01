@@ -814,6 +814,14 @@ impl<T: TimestampManipulation> Session<T> {
     ) -> Option<&InMemoryTimestampOracle<T, NowFn<T>>> {
         self.session_oracles.get(timeline)
     }
+
+    /// If the current session is using the Strong Session Serializable isolation level advance the
+    /// session local timestamp oracle to `write_ts`.
+    pub fn apply_write(&mut self, timestamp: T) {
+        if self.vars().transaction_isolation() == &IsolationLevel::StrongSessionSerializable {
+            self.ensure_local_timestamp_oracle().apply_write(timestamp);
+        }
+    }
 }
 
 /// A prepared statement.

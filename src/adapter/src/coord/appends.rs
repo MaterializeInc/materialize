@@ -392,13 +392,7 @@ impl Coordinator {
                         // Notify the external clients of the result.
                         for response in responses {
                             let (mut ctx, result) = response.finalize();
-                            if ctx.session().vars().transaction_isolation()
-                                == &IsolationLevel::StrongSessionSerializable
-                            {
-                                ctx.session_mut()
-                                    .ensure_local_timestamp_oracle()
-                                    .apply_write(timestamp);
-                            }
+                            ctx.session_mut().apply_write(timestamp);
                             ctx.retire(result);
                         }
 
@@ -456,13 +450,7 @@ impl Coordinator {
         self.apply_local_write(timestamp).await;
         for response in responses {
             let (mut ctx, result) = response.finalize();
-            if ctx.session().vars().transaction_isolation()
-                == &IsolationLevel::StrongSessionSerializable
-            {
-                ctx.session_mut()
-                    .ensure_local_timestamp_oracle()
-                    .apply_write(timestamp);
-            }
+            ctx.session_mut().apply_write_ts(timestamp);
             ctx.retire(result);
         }
 
