@@ -12,11 +12,16 @@ use futures::FutureExt;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::{
     shadow_catalog_state, stash_backed_catalog_state, test_bootstrap_args,
-    test_persist_backed_catalog_state, test_stash_backed_catalog_state, test_stash_config,
-    CatalogError, DurableCatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState,
+    test_persist_backed_catalog_state, test_persist_backed_catalog_state_with_version,
+    test_stash_backed_catalog_state, test_stash_config, CatalogError, DurableCatalogError,
+    DurableCatalogState, Epoch, OpenableDurableCatalogState,
 };
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
-use mz_persist_client::PersistClient;
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::rpc::PubSubClientConnection;
+use mz_persist_client::{PersistClient, PersistLocation};
 use mz_proto::RustType;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{RoleAttributes, RoleMembership, RoleVars};
@@ -763,4 +768,88 @@ async fn test_tombstone(
     assert_eq!(state.get_tombstone().await.unwrap(), Some(true));
 
     assert_eq!(openable_state2.get_tombstone().await.unwrap(), Some(true));
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_fencing() {
+    async fn new_persist_client(version: semver::Version) -> PersistClient {
+        let mut cfg = PersistConfig::new_for_tests();
+        cfg.build_version = version;
+        let metrics = &MetricsRegistry::new();
+        let cache = PersistClientCache::new(cfg, metrics, |_, _| PubSubClientConnection::noop());
+        cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("in-mem location is valid")
+    }
+
+    async fn testcase(catalog: &str, reader: &str, expected: Result<(), ()>) {
+        let catalog_version = semver::Version::parse(catalog).unwrap();
+        let reader_version = semver::Version::parse(reader).unwrap();
+        let organization_id = Uuid::new_v4();
+
+        let persist_client = new_persist_client(catalog_version.clone()).await;
+        let persist_openable_state = test_persist_backed_catalog_state_with_version(
+            persist_client.clone(),
+            organization_id.clone(),
+            catalog_version,
+        )
+        .await
+        .unwrap();
+        let _persist_state = Box::new(persist_openable_state)
+            .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
+            .await
+            .unwrap();
+
+        let persist_client = new_persist_client(reader_version.clone()).await;
+        let persist_openable_state = test_persist_backed_catalog_state_with_version(
+            persist_client.clone(),
+            organization_id.clone(),
+            reader_version,
+        )
+        .await
+        .map(|_| ())
+        .map_err(|err| match err {
+            DurableCatalogError::IncompatiblePersistVersion { .. } => (),
+            err => panic!("unexpected error: {err:?}"),
+        });
+        assert_eq!(
+            persist_openable_state, expected,
+            "test case failed, catalog: {catalog}, reader: {reader}, expected: {expected:?}"
+        );
+    }
+
+    // Test cases copied from mz_persist_client::internal::encoding::tests::check_data_versions.
+    testcase("0.10.0-dev", "0.10.0-dev", Ok(())).await;
+    testcase("0.10.0-dev", "0.10.0", Ok(())).await;
+
+    testcase("0.10.0-dev", "0.11.0-dev", Ok(())).await;
+    testcase("0.10.0-dev", "0.11.0", Ok(())).await;
+    testcase("0.10.0-dev", "0.12.0-dev", Err(())).await;
+    testcase("0.10.0-dev", "0.12.0", Err(())).await;
+    testcase("0.10.0-dev", "0.13.0-dev", Err(())).await;
+
+    testcase("0.10.0", "0.8.0-dev", Ok(())).await;
+    testcase("0.10.0", "0.8.0", Ok(())).await;
+    testcase("0.10.0", "0.9.0-dev", Ok(())).await;
+    testcase("0.10.0", "0.9.0", Ok(())).await;
+    testcase("0.10.0", "0.10.0-dev", Ok(())).await;
+    testcase("0.10.0", "0.10.0", Ok(())).await;
+
+    testcase("0.10.0", "0.11.0-dev", Ok(())).await;
+    testcase("0.10.0", "0.11.0", Ok(())).await;
+    testcase("0.10.0", "0.11.1", Ok(())).await;
+    testcase("0.10.0", "0.11.1000000", Ok(())).await;
+    testcase("0.10.0", "0.12.0-dev", Err(())).await;
+    testcase("0.10.0", "0.12.0", Err(())).await;
+    testcase("0.10.0", "0.13.0-dev", Err(())).await;
+
+    testcase("0.10.1", "0.9.0", Ok(())).await;
+    testcase("0.10.1", "0.10.0", Ok(())).await;
+    testcase("0.10.1", "0.11.0", Ok(())).await;
+    testcase("0.10.1", "0.11.1", Ok(())).await;
+    testcase("0.10.1", "0.11.100", Ok(())).await;
+
+    testcase("0.10.0", "0.10.1", Ok(())).await;
 }

@@ -43,10 +43,17 @@ pub enum DurableCatalogError {
     #[error(
         "incompatible Catalog version {found_version}, minimum: {min_catalog_version}, current: {catalog_version}"
     )]
-    IncompatibleVersion {
+    IncompatibleDataVersion {
         found_version: u64,
         min_catalog_version: u64,
         catalog_version: u64,
+    },
+    /// The applier version in persist is too old for the current catalog. Reading from persist
+    /// would cause other readers to be fenced out.
+    #[error("incompatible persist version {found_version}, current: {catalog_version}, make sure to upgrade the catalog one version at a time")]
+    IncompatiblePersistVersion {
+        found_version: semver::Version,
+        catalog_version: semver::Version,
     },
     /// Catalog is uninitialized.
     #[error("uninitialized")]
@@ -102,7 +109,7 @@ impl From<StashError> for DurableCatalogError {
                 found_version,
                 min_stash_version,
                 stash_version,
-            } => DurableCatalogError::IncompatibleVersion {
+            } => DurableCatalogError::IncompatibleDataVersion {
                 found_version,
                 min_catalog_version: min_stash_version,
                 catalog_version: stash_version,

@@ -72,11 +72,27 @@ pub(crate) type Timestamp = mz_repr::Timestamp;
 /// `new_unchecked` is safe to call with a non-zero value.
 const MIN_EPOCH: Epoch = unsafe { Epoch::new_unchecked(1) };
 
-/// Human readable shard name.
-const SHARD_NAME: &str = "catalog";
+/// Human readable catalog shard name.
+const CATALOG_SHARD_NAME: &str = "catalog";
+/// Human readable upgrade shard name.
+const UPGRADE_SHARD_NAME: &str = "catalog_upgrade";
+
+/// Seed used to generate the persist shard ID for the catalog.
+const CATALOG_SEED: usize = 1;
+/// Seed used to generate the upgrade shard ID.
+///
+/// All state that gets written to persist is tagged with the version of the code that wrote that
+/// state. Persist has limited forward compatibility in how many version in the future a reader can
+/// read. Reading from persist updates state and the version that the state is tagged with. As a
+/// consequence, reading from persist may unintentionally fence out other readers and writers with
+/// a lower version. We use the upgrade shard to track what database version is actively deployed
+/// so readers from the future, such as the upgrade checker tool, don't accidentally fence out the
+/// database from persist. Only writable opened catalogs can increment the version in the upgrade
+/// shard.
+const UPGRADE_SEED: usize = 2;
 
 /// Durable catalog mode that dictates the effect of mutable operations.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Mode {
     /// Mutable operations are prohibited.
     Readonly,
@@ -152,6 +168,8 @@ pub struct UnopenedPersistCatalogState {
     /// The config collection of the catalog. This information is also included in `snapshot`,
     /// but it's useful to have quick access to these fields without parsing through all updates.
     configs: BTreeMap<String, u64>,
+    /// The organization ID of the environment.
+    organization_id: Uuid,
     /// Metrics for the persist catalog.
     metrics: Arc<Metrics>,
 }
@@ -170,19 +188,39 @@ impl UnopenedPersistCatalogState {
     pub(crate) async fn new(
         persist_client: PersistClient,
         organization_id: Uuid,
+        version: semver::Version,
         metrics: Arc<Metrics>,
-    ) -> UnopenedPersistCatalogState {
-        const SEED: usize = 1;
-        let shard_id = Self::shard_id(organization_id, SEED);
-        debug!(?shard_id, "new persist backed catalog state");
+    ) -> Result<UnopenedPersistCatalogState, DurableCatalogError> {
+        let catalog_shard_id = Self::shard_id(organization_id, CATALOG_SEED);
+        let upgrade_shard_id = Self::shard_id(organization_id, UPGRADE_SEED);
+        debug!(
+            ?catalog_shard_id,
+            ?upgrade_shard_id,
+            "new persist backed catalog state"
+        );
+
+        // Check the upgrade shard to see ensure that we don't fence anyone out of persist.
+        let upgrade_version = persist_client
+            .shard_version::<Timestamp>(&upgrade_shard_id)
+            .await
+            .expect("invalid usage");
+        if let Some(upgrade_version) = upgrade_version {
+            if mz_persist_client::cfg::is_data_version_invalid(&upgrade_version, &version) {
+                return Err(DurableCatalogError::IncompatiblePersistVersion {
+                    found_version: upgrade_version,
+                    catalog_version: version,
+                });
+            }
+        }
+
         let since_handle = persist_client
             .open_critical_since(
-                shard_id,
+                catalog_shard_id,
                 // TODO: We may need to use a different critical reader
                 // id for this if we want to be able to introspect it via SQL.
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
                 Diagnostics {
-                    shard_name: SHARD_NAME.to_string(),
+                    shard_name: CATALOG_SHARD_NAME.to_string(),
                     handle_purpose: "durable catalog state critical since".to_string(),
                 },
             )
@@ -190,11 +228,11 @@ impl UnopenedPersistCatalogState {
             .expect("invalid usage");
         let (mut write_handle, mut read_handle) = persist_client
             .open(
-                shard_id,
+                catalog_shard_id,
                 Arc::new(PersistCatalogState::desc()),
                 Arc::new(UnitSchema::default()),
                 Diagnostics {
-                    shard_name: SHARD_NAME.to_string(),
+                    shard_name: CATALOG_SHARD_NAME.to_string(),
                     handle_purpose: "durable catalog state handles".to_string(),
                 },
             )
@@ -239,18 +277,19 @@ impl UnopenedPersistCatalogState {
             }
         }
 
-        UnopenedPersistCatalogState {
+        Ok(UnopenedPersistCatalogState {
             since_handle,
             write_handle,
             listen,
             persist_client,
-            shard_id,
+            shard_id: catalog_shard_id,
             snapshot,
             upper,
             epoch,
             configs,
+            organization_id,
             metrics,
-        }
+        })
     }
 
     #[tracing::instrument(level = "info", skip(self))]
@@ -316,7 +355,7 @@ impl UnopenedPersistCatalogState {
             "initializing catalog state"
         );
         let mut catalog = PersistCatalogState {
-            mode,
+            mode: mode.clone(),
             since_handle: self.since_handle,
             write_handle: self.write_handle,
             listen: self.listen,
@@ -360,6 +399,43 @@ impl UnopenedPersistCatalogState {
             catalog.apply_updates(updates)?;
         } else {
             txn.commit().await?;
+        }
+
+        // Now that we've fully opened the catalog at the current version, we can increment the
+        // version in the upgrade shard to signal to readers that the allowable versions have
+        // increased.
+        if matches!(mode, Mode::Writable) {
+            let upgrade_shard_id = Self::shard_id(self.organization_id, UPGRADE_SEED);
+            let mut write_handle: WriteHandle<(), (), Timestamp, Diff> = catalog
+                .persist_client
+                .open_writer(
+                    upgrade_shard_id,
+                    Arc::new(UnitSchema::default()),
+                    Arc::new(UnitSchema::default()),
+                    Diagnostics {
+                        shard_name: UPGRADE_SHARD_NAME.to_string(),
+                        handle_purpose: "increment durable catalog upgrade shard version"
+                            .to_string(),
+                    },
+                )
+                .await
+                .expect("invalid usage");
+            const EMPTY_UPDATES: &[(((), ()), Timestamp, Diff)] = &[];
+            let upper = write_handle.fetch_recent_upper().await.clone();
+            let next_upper = upper
+                .iter()
+                .map(|timestamp| timestamp.step_forward())
+                .collect();
+            write_handle
+                .compare_and_append(EMPTY_UPDATES, upper, next_upper)
+                .await
+                .expect("invalid usage")
+                .map_err(|upper_mismatch| {
+                    DurableCatalogError::Fence(format!(
+                        "current upgrade upper {:?} fenced by new upgrade upper {:?}",
+                        upper_mismatch.expected, upper_mismatch.current
+                    ))
+                })?;
         }
 
         Ok(Box::new(catalog))
@@ -497,7 +573,7 @@ impl UnopenedPersistCatalogState {
                 Arc::new(PersistCatalogState::desc()),
                 Arc::new(UnitSchema::default()),
                 Diagnostics {
-                    shard_name: SHARD_NAME.to_string(),
+                    shard_name: CATALOG_SHARD_NAME.to_string(),
                     handle_purpose: "openable durable catalog state temporary reader".to_string(),
                 },
             )
@@ -984,7 +1060,7 @@ impl PersistCatalogState {
                 Arc::new(PersistCatalogState::desc()),
                 Arc::new(UnitSchema::default()),
                 Diagnostics {
-                    shard_name: SHARD_NAME.to_string(),
+                    shard_name: CATALOG_SHARD_NAME.to_string(),
                     handle_purpose: "durable catalog state temporary reader".to_string(),
                 },
             )
