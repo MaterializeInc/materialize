@@ -115,7 +115,7 @@ use mz_compute_types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_compute_types::plan::Plan;
 use mz_expr::{EvalError, Id};
 use mz_persist_client::operators::shard_source::SnapshotMode;
-use mz_repr::{Diff, GlobalId};
+use mz_repr::{Datum, Diff, GlobalId, Row, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
@@ -1062,4 +1062,45 @@ where
             }
         }
     })
+}
+
+/// Helper to merge pairs of datum iterators into a row or split a datum iterator
+/// into two rows, given the arity of the first component.
+#[derive(Clone, Copy, Debug)]
+struct Pairer {
+    split_arity: usize,
+}
+
+impl Pairer {
+    /// Creates a pairer with knowledge of the arity of first component in the pair.
+    fn new(split_arity: usize) -> Self {
+        Self { split_arity }
+    }
+
+    /// Merges a pair of datum iterators creating a `Row` instance.
+    fn merge<'a, I1, I2>(&self, first: I1, second: I2) -> Row
+    where
+        I1: IntoIterator<Item = Datum<'a>>,
+        I2: IntoIterator<Item = Datum<'a>>,
+    {
+        let binding = SharedRow::get();
+        let mut row_builder = binding.borrow_mut();
+        let mut row_packer = row_builder.packer();
+        row_packer.extend(first);
+        row_packer.extend(second);
+        row_builder.clone()
+    }
+
+    /// Splits a datum iterator into a pair of `Row` instances.
+    fn split<'a>(&self, datum_iter: impl IntoIterator<Item = Datum<'a>>) -> (Row, Row) {
+        let mut datum_iter = datum_iter.into_iter();
+        let binding = SharedRow::get();
+        let mut row_builder = binding.borrow_mut();
+        let mut row_packer = row_builder.packer();
+        row_packer.extend(datum_iter.by_ref().take(self.split_arity));
+        let first = row_builder.clone();
+        row_packer = row_builder.packer();
+        row_packer.extend(datum_iter);
+        (first, row_builder.clone())
+    }
 }
