@@ -23,6 +23,7 @@ from materialize.buildkite_insights.util.data_io import (
 )
 
 OUTPUT_TYPE_TXT = "txt"
+OUTPUT_TYPE_TXT_SHORT = "txt-short"
 OUTPUT_TYPE_CSV = "csv"
 
 BUILDKITE_BUILD_STATES = [
@@ -140,27 +141,35 @@ def collect_data(data: list[Any], build_step_key: str) -> list[StepData]:
 
 
 def print_data(
-    step_infos: list[StepData], build_step_key: str, output_type: str
+    step_infos: list[StepData],
+    pipeline_slug: str,
+    build_step_key: str,
+    output_type: str,
 ) -> None:
     if output_type == OUTPUT_TYPE_CSV:
         print("step_key,build_number,created_at,duration_in_min,passed")
 
     for entry in step_infos:
-        if output_type == OUTPUT_TYPE_TXT:
+        if output_type in [OUTPUT_TYPE_TXT, OUTPUT_TYPE_TXT_SHORT]:
             formatted_duration = (
                 f"{entry.duration_in_min:.2f}"
                 if entry.duration_in_min is not None
                 else "None"
             )
+            url = (
+                ""
+                if output_type == OUTPUT_TYPE_TXT_SHORT
+                else f"https://buildkite.com/materialize/{pipeline_slug}/builds/{entry.build_number}, "
+            )
             print(
-                f"{entry.step_key}, {entry.build_number}, {entry.created_at}, {formatted_duration} min, {'SUCCESS' if entry.passed else 'FAIL'}"
+                f"{entry.step_key}, {entry.build_number}, {entry.created_at}, {formatted_duration} min, {url}{'SUCCESS' if entry.passed else 'FAIL'}"
             )
         elif output_type == OUTPUT_TYPE_CSV:
             print(
                 f"{entry.step_key},{entry.build_number},{entry.created_at.isoformat()},{entry.duration_in_min}, {1 if entry.passed else 0}"
             )
 
-    if output_type == OUTPUT_TYPE_TXT:
+    if output_type in [OUTPUT_TYPE_TXT, OUTPUT_TYPE_TXT_SHORT]:
         print_stats(step_infos, build_step_key)
 
 
@@ -207,7 +216,7 @@ def main(
 ) -> None:
     data = get_data(pipeline_slug, no_fetch, max_fetches, branch, build_state)
     step_infos = collect_data(data, build_step_key)
-    print_data(step_infos, build_step_key, output_type)
+    print_data(step_infos, pipeline_slug, build_step_key, output_type)
 
 
 if __name__ == "__main__":
@@ -235,7 +244,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--output-type",
-        choices=[OUTPUT_TYPE_TXT, OUTPUT_TYPE_CSV],
+        choices=[OUTPUT_TYPE_TXT, OUTPUT_TYPE_TXT_SHORT, OUTPUT_TYPE_CSV],
         default=OUTPUT_TYPE_TXT,
         type=str,
     )
