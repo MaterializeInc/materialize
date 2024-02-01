@@ -2373,6 +2373,66 @@ async fn test_leader_promotion_always_using_deploy_generation() {
     }
 }
 
+#[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_leader_promotion_mixed_code_version() {
+    let tmpdir = TempDir::new().unwrap();
+    let this_version = mz_environmentd::BUILD_INFO.semver_version();
+    let next_version = semver::Version::new(this_version.major, this_version.minor + 1, 0);
+    let harness = test_util::TestHarness::default()
+        .unsafe_mode()
+        .data_directory(tmpdir.path())
+        .with_deploy_generation(Some(1))
+        .with_code_version(this_version);
+
+    // Query a server at the current version before we start a second server.
+    let server_this = harness.clone().start().await;
+    let client_this = server_this.connect().await.unwrap();
+    client_this.simple_query("SELECT 1").await.unwrap();
+
+    // Simulate a rolling upgrade and wait for the preflight checks.
+    let listeners_next = test_util::Listeners::new().await.unwrap();
+    let internal_http_addr_next = listeners_next.inner.internal_http_local_addr();
+    let config_next = harness
+        .clone()
+        .with_deploy_generation(Some(2))
+        .with_code_version(next_version.clone());
+    let _server_next = mz_ore::task::spawn(|| "next version", async move {
+        listeners_next.serve(config_next).await.unwrap()
+    })
+    .abort_on_drop();
+
+    let status_http_url_next = Url::parse(&format!(
+        "http://{}/api/leader/status",
+        internal_http_addr_next
+    ))
+    .unwrap();
+    // Wait for the new version to be ready to promote.
+    Retry::default()
+        .retry_async(|_state| async {
+            let res = reqwest::Client::new()
+                .get(status_http_url_next.clone())
+                .send()
+                .await
+                .unwrap();
+            tracing::info!("{} response: {res:?}", next_version);
+            assert_eq!(res.status(), StatusCode::OK);
+            let response: LeaderStatusResponse = res.json().await.unwrap();
+            tracing::info!("{} response body: {response:?}", next_version);
+            assert_ne!(response.status, LeaderStatus::IsLeader);
+            if response.status == LeaderStatus::ReadyToPromote {
+                Ok(())
+            } else {
+                Err(())
+            }
+        })
+        .await
+        .unwrap();
+    // The next_version preflight checks shouldn't fence out the this_version
+    // server.
+    client_this.simple_query("SELECT 1").await.unwrap();
+}
+
 // Test that websockets observe cancellation.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
