@@ -9,7 +9,8 @@
 
 import os
 
-from materialize import MZ_ROOT, buildkite, spawn, ui
+from materialize import MZ_ROOT, buildkite, rustc_flags, spawn, ui
+from materialize.cli.run import SANITIZER_TARGET
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
@@ -62,6 +63,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
+    sanitizer = os.getenv("CI_SANITIZER", "none")
 
     if coverage:
         # TODO(def-): For coverage inside of clusterd called from unit tests need
@@ -117,17 +119,57 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 env=env,
             )
         else:
-            spawn.runv(
-                [
-                    "cargo",
-                    "build",
-                    "--workspace",
-                    "--bin",
-                    "clusterd",
-                    "--profile=ci",
-                ],
-                env=env,
-            )
+            if sanitizer != "none":
+                env["RUSTFLAGS"] = (
+                    env.get("RUSTFLAGS", "")
+                    + " -L/usr/lib/gcc/aarch64-linux-gnu/12"
+                    + " ".join(rustc_flags.sanitizer[sanitizer])
+                )
+                env["CFLAGS"] = (
+                    env.get("CFLAGS", "")
+                    + " "
+                    + " ".join(rustc_flags.sanitizer_cflags[args.sanitizer])
+                )
+                env["CXXFLAGS"] = (
+                    env.get("CXXFLAGS", "")
+                    + " "
+                    + " ".join(rustc_flags.sanitizer_cflags[args.sanitizer])
+                )
+                env["LDFLAGS"] = (
+                    env.get("LDFLAGS", "")
+                    + " "
+                    + " ".join(rustc_flags.sanitizer_cflags[args.sanitizer])
+                )
+                spawn.runv(
+                    [
+                        "bin/ci-builder",
+                        "run",
+                        "nightly",
+                        "cargo",
+                        "build",
+                        "--workspace",
+                        "--no-default-features",
+                        "--bin",
+                        "clusterd",
+                        "-Zbuild-std",
+                        "--target",
+                        SANITIZER_TARGET,
+                        "--profile=ci",
+                    ],
+                    env=env,
+                )
+            else:
+                spawn.runv(
+                    [
+                        "cargo",
+                        "build",
+                        "--workspace",
+                        "--bin",
+                        "clusterd",
+                        "--profile=ci",
+                    ],
+                    env=env,
+                )
 
             cpu_count = os.cpu_count()
             assert cpu_count
@@ -135,19 +177,45 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             partition = buildkite.get_parallelism_index() + 1
             total = buildkite.get_parallelism_count()
 
-            spawn.runv(
-                [
-                    "cargo",
-                    "nextest",
-                    "run",
-                    "--workspace",
-                    "--all-features",
-                    "--profile=ci",
-                    "--cargo-profile=ci",
-                    f"--partition=count:{partition}/{total}",
-                    # Most tests don't use 100% of a CPU core, so run two tests per CPU.
-                    f"--test-threads={cpu_count * 2}",
-                    *args.args,
-                ],
-                env=env,
-            )
+            if sanitizer != "none":
+                spawn.runv(
+                    [
+                        "bin/ci-builder",
+                        "run",
+                        "nightly",
+                        "cargo",
+                        "nextest",
+                        "run",
+                        "--workspace",
+                        "--no-default-features",
+                        "--profile=sanitizer",
+                        "--cargo-profile=ci",
+                        f"--partition=count:{partition}/{total}",
+                        # We want all tests to run
+                        "--no-fail-fast",
+                        "-Zbuild-std",
+                        "--target",
+                        SANITIZER_TARGET,
+                        # Most tests don't use 100% of a CPU core, so run two tests per CPU.
+                        f"--test-threads={cpu_count * 2}",
+                        *args.args,
+                    ],
+                    env=env,
+                )
+            else:
+                spawn.runv(
+                    [
+                        "cargo",
+                        "nextest",
+                        "run",
+                        "--workspace",
+                        "--all-features",
+                        "--profile=ci",
+                        "--cargo-profile=ci",
+                        f"--partition=count:{partition}/{total}",
+                        # Most tests don't use 100% of a CPU core, so run two tests per CPU.
+                        f"--test-threads={cpu_count * 2}",
+                        *args.args,
+                    ],
+                    env=env,
+                )

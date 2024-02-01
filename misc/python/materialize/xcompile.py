@@ -85,7 +85,11 @@ def target_features(arch: Arch) -> list[str]:
 
 
 def cargo(
-    arch: Arch, subcommand: str, rustflags: list[str], channel: str | None = None
+    arch: Arch,
+    subcommand: str,
+    rustflags: list[str],
+    channel: str | None = None,
+    cflags: list[str] = [],
 ) -> list[str]:
     """Construct a Cargo invocation for cross compiling.
 
@@ -141,6 +145,11 @@ def cargo(
     env = {
         **extra_env,
         "RUSTFLAGS": " ".join(rustflags),
+        "CFLAGS": os.getenv("CFLAGS", "") + " " + " ".join(cflags),
+        "CXXFLAGS": os.getenv("CXXFLAGS", "") + " " + " ".join(cflags),
+        "LDFLAGS": os.getenv("LDFLAGS", "") + " " + " ".join(cflags),
+        # "CC": "clang-17",
+        # "CXX": "clang++-17",
     }
 
     return [

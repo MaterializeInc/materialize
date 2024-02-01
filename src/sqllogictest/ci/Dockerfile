@@ -9,6 +9,10 @@
 
 MZFROM ubuntu-base
 
+RUN apt-get update \
+    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install \
+        llvm
+
 COPY clusterd sqllogictest /usr/local/bin/
 
 WORKDIR /workdir

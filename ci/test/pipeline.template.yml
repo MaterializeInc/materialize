@@ -28,7 +28,8 @@ steps:
       # TODO(def-) Get rid of this for PRs once we don't have any x86-64 tests remaining
       - id: build-x86_64
         label: Build x86_64
-        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+        # TODO: Stay on stable, but switch to nightly in mkpipeline.py
+        command: bin/ci-builder run nightly bin/pyactivate -m ci.test.build
         inputs:
           - "*"
         depends_on: []
@@ -39,7 +40,7 @@ steps:
 
       - id: build-aarch64
         label: Build aarch64
-        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
+        command: bin/ci-builder run nightly bin/pyactivate -m ci.test.build
         inputs:
           - "*"
         depends_on: []
@@ -50,7 +51,7 @@ steps:
 
       - id: build-wasm
         label: Build WASM
-        command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.npm --no-release
+        command: bin/ci-builder run nightly bin/pyactivate -m ci.deploy.npm --no-release
         inputs:
           - "*"
         depends_on: []
@@ -59,6 +60,7 @@ steps:
           # Error: no prebuilt wasm-opt binaries are available for this platform: Unrecognized target!
           queue: linux-x86_64-small
         coverage: skip
+        sanitizer: skip
 
       - id: check-merge-with-target
         label: Merge skew cargo check
@@ -73,10 +75,11 @@ steps:
           queue: linux-aarch64
         if: "build.pull_request.id != null"
         coverage: skip
+        sanitizer: skip
 
       - id: devel-docker-tags
         label: Tag development docker images
-        command: bin/ci-builder run stable bin/pyactivate -m ci.test.dev_tag
+        command: bin/ci-builder run nightly bin/pyactivate -m ci.test.dev_tag
         inputs:
           - "*"
         depends_on:
@@ -86,6 +89,7 @@ steps:
         agents:
           queue: linux-aarch64-small
         coverage: skip
+        sanitizer: skip
         # Fortify against intermittent DockerHub issues
         retry:
           automatic:
@@ -97,7 +101,7 @@ steps:
     steps:
       - id: lint-fast
         label: Lint and rustfmt
-        command: bin/ci-builder run stable ci/test/lint-fast.sh
+        command: bin/ci-builder run nightly ci/test/lint-fast.sh
         inputs:
           - "*"
         depends_on: []
@@ -105,10 +109,11 @@ steps:
         agents:
           queue: linux-aarch64-small
         coverage: skip
+        sanitizer: skip
 
       - id: lint-slow
         label: Clippy and doctests
-        command: bin/ci-builder run stable ci/test/lint-slow.sh
+        command: bin/ci-builder run nightly ci/test/lint-slow.sh
         inputs:
           - Cargo.lock
           - "**/Cargo.toml"
@@ -119,6 +124,7 @@ steps:
           # note: the `x86_64-unknown-linux-gnu` target may not be installed
           queue: builder-linux-x86_64
         coverage: skip
+        sanitizer: skip
 
       - id: lint-macos
         label: macOS Clippy
@@ -135,10 +141,11 @@ steps:
         agents:
           queue: mac
         coverage: skip
+        sanitizer: skip
 
       - id: lint-deps
         label: Lint dependencies
-        command: bin/ci-builder run stable ci/test/lint-deps.sh
+        command: bin/ci-builder run nightly ci/test/lint-deps.sh
         inputs:
           - Cargo.lock
           - "**/Cargo.toml"
@@ -148,10 +155,11 @@ steps:
         agents:
           queue: linux-aarch64-small
         coverage: skip
+        sanitizer: skip
 
       - id: vet-check
         label: Cargo vet Check
-        command: bin/ci-builder run stable cargo vet check --locked
+        command: bin/ci-builder run nightly cargo vet check --locked
         inputs:
           - Cargo.lock
           - misc/cargo-vet/config.toml
@@ -160,10 +168,11 @@ steps:
         agents:
           queue: linux-aarch64-small
         coverage: skip
+        sanitizer: skip
 
       - id: lint-docs
         label: Lint docs
-        command: bin/ci-builder run stable ci/test/lint-docs.sh
+        command: bin/ci-builder run nightly ci/test/lint-docs.sh
         inputs:
           - doc/user
           - src/adapter/src/catalog
@@ -174,10 +183,11 @@ steps:
           # hugo: command not found
           queue: linux-x86_64-small
         coverage: skip
+        sanitizer: skip
 
       - id: preview-docs
         label: Preview docs
-        command: bin/ci-builder run stable ci/test/preview-docs.sh
+        command: bin/ci-builder run nightly ci/test/preview-docs.sh
         inputs: [doc/user]
         depends_on: []
         timeout_in_minutes: 30
@@ -185,6 +195,7 @@ steps:
           # hugo: command not found
           queue: linux-x86_64-small
         coverage: skip
+        sanitizer: skip
 
   - group: "Cargo tests"
     key: cargo-tests
@@ -224,6 +235,7 @@ steps:
         agents:
           queue: builder-linux-aarch64
         coverage: skip
+        sanitizer: skip
 
   - id: testdrive
     label: Testdrive %N
@@ -637,6 +649,7 @@ steps:
       env:
         BUILDKITE_TAG: "$BUILDKITE_TAG"
     coverage: skip
+    sanitizer: skip
 
   - id: release-qualification
     label: Release qualification
@@ -650,6 +663,7 @@ steps:
         BUILDKITE_TAG: "$BUILDKITE_TAG"
     if: build.tag != "" && build.branch =~ /^v.*\..*\$/
     coverage: skip
+    sanitizer: skip
 
   - id: nightly-if-release
     label: Nightly for releases
@@ -663,6 +677,7 @@ steps:
         BUILDKITE_TAG: "$BUILDKITE_TAG"
     if: build.tag != "" && build.branch =~ /^v.*\..*\$/
     coverage: skip
+    sanitizer: skip
 
   - id: nightly-if-risky
     label: Nightly for risky PRs
@@ -709,6 +724,7 @@ steps:
       - ci/nightly
       - ci/plugins
     coverage: skip
+    sanitizer: skip
 
   - wait: ~
     continue_on_failure: true
@@ -716,7 +732,7 @@ steps:
   - id: coverage-pr-analyze
     label: Analyze code coverage for PR
     timeout_in_minutes: 20
-    command: bin/ci-builder run stable ci/test/coverage_report.sh
+    command: bin/ci-builder run nightly ci/test/coverage_report.sh
     inputs: ["*"]
     priority: 1
     agents:
@@ -737,3 +753,4 @@ steps:
       env:
         BUILDKITE_TAG: "$BUILDKITE_TAG"
     coverage: skip
+    sanitizer: skip

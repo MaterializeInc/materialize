@@ -81,6 +81,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         tag: str | None = None,
         release_mode: bool = True,
         coverage_mode: bool = False,
+        sanitizer_mode: str = "none",
         log_filter: str | None = None,
         namespace: str = DEFAULT_K8S_NAMESPACE,
         minio_namespace: str = DEFAULT_K8S_NAMESPACE,
@@ -90,6 +91,7 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         self.tag = tag
         self.release_mode = release_mode
         self.coverage_mode = coverage_mode
+        self.sanitizer_mode = sanitizer_mode
         self.log_filter = log_filter
         self.env: dict[str, str] = {}
         self.extra_args: list[str] = []
@@ -308,6 +310,15 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
                         value="1",
                     ),
                     V1EnvVar(name="MZ_ORCHESTRATOR_KUBERNETES_COVERAGE", value="1"),
+                ]
+            )
+        if self.sanitizer_mode != "none":
+            env.extend(
+                [
+                    V1EnvVar(
+                        name="CI_SANITIZER_MODE",
+                        value=self.sanitizer_mode,
+                    ),
                 ]
             )
 

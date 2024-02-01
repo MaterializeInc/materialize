@@ -24,10 +24,16 @@ import psutil
 from materialize import MZ_ROOT, rustc_flags, spawn, ui
 from materialize.mzcompose import DEFAULT_SYSTEM_PARAMETERS
 from materialize.ui import UIError
+from materialize.xcompile import Arch
 
 KNOWN_PROGRAMS = ["environmentd", "sqllogictest"]
 REQUIRED_SERVICES = ["clusterd"]
 
+SANITIZER_TARGET = (
+    f"{Arch.host()}-unknown-linux-gnu"
+    if sys.platform.startswith("linux")
+    else f"{Arch.host()}-apple-darwin"
+)
 DEFAULT_POSTGRES = "postgres://root@localhost:26257/materialize"
 
 # sets entitlements on the built binary, e.g. environmentd, so you can inspect it with Instruments
@@ -123,6 +129,12 @@ def main() -> int:
         action="store_true",
     )
     parser.add_argument(
+        "--sanitizer",
+        help="Build with sanitizer",
+        type=str,
+        default="none",
+    )
+    parser.add_argument(
         "--wrapper",
         help="Wrapper command for the program",
     )
@@ -147,9 +159,15 @@ def main() -> int:
             return build_retcode
 
         if args.release:
-            artifact_path = MZ_ROOT / "target" / "release"
+            if args.sanitizer != "none":
+                artifact_path = MZ_ROOT / "target" / SANITIZER_TARGET / "release"
+            else:
+                artifact_path = MZ_ROOT / "target" / "release"
         else:
-            artifact_path = MZ_ROOT / "target" / "debug"
+            if args.sanitizer != "none":
+                artifact_path = MZ_ROOT / "target" / SANITIZER_TARGET / "debug"
+            else:
+                artifact_path = MZ_ROOT / "target" / "debug"
 
         if args.disable_mac_codesigning:
             if sys.platform != "darwin":
@@ -307,6 +325,29 @@ def _build(
         env["RUSTFLAGS"] = (
             env.get("RUSTFLAGS", "") + " " + " ".join(rustc_flags.coverage)
         )
+    if args.sanitizer != "none":
+        env["RUSTFLAGS"] = (
+            env.get("RUSTFLAGS", "")
+            + " "
+            + " ".join(rustc_flags.sanitizer[args.sanitizer])
+        )
+        env["CFLAGS"] = (
+            env.get("CFLAGS", "")
+            + " "
+            + " ".join(rustc_flags.sanitizer_cflags[args.sanitizer])
+        )
+        env["CXXFLAGS"] = (
+            env.get("CXXFLAGS", "")
+            + " "
+            + " ".join(rustc_flags.sanitizer_cflags[args.sanitizer])
+        )
+        env["LDFLAGS"] = (
+            env.get("LDFLAGS", "")
+            + " "
+            + " ".join(rustc_flags.sanitizer_cflags[args.sanitizer])
+        )
+        # env["CC"] = "clang-17"
+        # env["CXX"] = "clang++-17"
     if args.features:
         features.extend(args.features.split(","))
     if features:
@@ -347,6 +388,8 @@ def _cargo_command(args: argparse.Namespace, subcommand: str) -> list[str]:
         command += ["--timings"]
     if args.no_default_features:
         command += ["--no-default-features"]
+    if args.sanitizer:
+        command += ["-Zbuild-std", "--target", SANITIZER_TARGET]
     return command
 
 

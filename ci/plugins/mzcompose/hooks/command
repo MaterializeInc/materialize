@@ -94,6 +94,8 @@ fi
 
 ci_uncollapsed_heading ":docker: Running \`bin/mzcompose --find $BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION run ${run_args[*]}\`"
 
+# TODO: REMOVE BEFORE SUBMITTING, this is just to test easier
+export CI_SANITIZER=hwaddress
 mzcompose run "${run_args[@]}" |& tee run.log
 RESULT=$?
 if [ "$RESULT" != "0" ]; then
