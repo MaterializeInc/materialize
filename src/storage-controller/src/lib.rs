@@ -27,6 +27,7 @@ use mz_cluster_client::ReplicaId;
 
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::soft_assert_or_log;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ReadHandle;
@@ -3010,7 +3011,7 @@ where
             // Fill in the storage dependencies.
             let collection = self.collection_mut(id).expect("known to exist");
 
-            assert!(
+            soft_assert_or_log!(
                 PartialOrder::less_than(&collection.implied_capability, &collection.write_frontier)
                     // Whenever a collection is being initialized, this state is
                     // acceptable.
