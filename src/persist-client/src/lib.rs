@@ -1754,7 +1754,7 @@ mod tests {
         );
         assert_eq!(
             ShardId::from_str("s00000000-0000-0000-0000-000000000000FOO"),
-            Err("invalid ShardId s00000000-0000-0000-0000-000000000000FOO: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-zA-Z], found `O` at 38".to_string())
+            Err("invalid ShardId s00000000-0000-0000-0000-000000000000FOO: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `O` at 38".to_string())
         );
     }
 

@@ -9,64 +9,69 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
+use std::num::NonZeroU64;
 use std::pin::pin;
 use std::rc::Rc;
-use std::str::FromStr;
 use std::time::Duration;
 
-use bytes::Bytes;
 use differential_dataflow::{AsCollection, Collection};
 use futures::StreamExt;
+use itertools::Itertools;
 use mysql_async::prelude::Queryable;
 use mysql_async::{BinlogStream, BinlogStreamRequest, Conn, GnoInterval, Sid};
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::{Concat, Map};
+use timely::dataflow::channels::pushers::TeeCore;
+use timely::dataflow::operators::{CapabilitySet, Concat, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::progress::Timestamp;
+use timely::PartialOrder;
 use tracing::trace;
 use uuid::Uuid;
 
-use mz_mysql_util::GtidSet;
 use mz_mysql_util::{
     ensure_full_row_binlog_format, ensure_gtid_consistency, ensure_replication_commit_order,
-    MySqlTableDesc, ER_SOURCE_FATAL_ERROR_READING_BINLOG_CODE,
+    query_sys_var, MySqlTableDesc, ER_SOURCE_FATAL_ERROR_READING_BINLOG_CODE,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_sql_parser::ast::UnresolvedItemName;
+use mz_storage_types::sources::mysql::{gtid_set_frontier, GTIDState, GtidPartition};
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_timely_util::builder_async::{
-    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+    AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
+    PressOnDropButton,
 };
+use mz_timely_util::order::Extrema;
 
+use crate::source::mysql::GtidReplicationPartitions;
 use crate::source::types::SourceReaderError;
 use crate::source::RawSourceCreationConfig;
 
 use super::{
-    pack_mysql_row, table_name, DefiniteError, ReplicationError, RewindRequest, TransactionId,
-    TransientError,
+    pack_mysql_row, table_name, DefiniteError, ReplicationError, RewindRequest, TransientError,
 };
 
-// Used as a partition id to determine if the worker is responsible for reading from the
-// MySQL replication stream
+/// Used as a partition id to determine if the worker is
+/// responsible for reading from the MySQL replication stream
 static REPL_READER: &str = "reader";
 
-// A constant arbitrary offset to add to the source-id to produce a deterministic server-id for
-// identifying Materialize as a replica on the upstream MySQL server.
-// TODO(roshan): Add documentation for this
+/// A constant arbitrary offset to add to the source-id to
+/// produce a deterministic server-id for identifying Materialize
+/// as a replica on the upstream MySQL server.
+/// TODO(roshan): Add user-facing documentation for this
 static REPLICATION_SERVER_ID_OFFSET: u32 = 524000;
 
-/// Renders the replication dataflow. See the module documentation for more information.
-pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
+/// Renders the replication dataflow. See the module documentation for more
+/// information.
+pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     scope: G,
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
-    subsource_resume_uppers: BTreeMap<GlobalId, Antichain<TransactionId>>,
+    subsource_resume_uppers: BTreeMap<GlobalId, Antichain<GtidPartition>>,
     table_info: BTreeMap<UnresolvedItemName, (usize, MySqlTableDesc)>,
     rewind_stream: &Stream<G, RewindRequest>,
-    _committed_uppers: impl futures::Stream<Item = Antichain<TransactionId>> + 'static,
 ) -> (
     Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
     Stream<G, Infallible>,
@@ -85,6 +90,11 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
         Exchange::new(move |_| repl_reader_id),
         [&data_output, &upper_output],
     );
+
+    let output_indexes = table_info
+        .values()
+        .map(|(output_index, _)| *output_index)
+        .collect_vec();
 
     // TODO: Add metrics
 
@@ -114,110 +124,108 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
                 )
                 .await?;
 
-            // Get the set of GTIDs currently available in the binlogs (GTIDs that we can safely start replication from)
-            let binlog_gtid_set: String = conn
-                .query_first("SELECT GTID_SUBTRACT(@@global.gtid_executed, @@global.gtid_purged)")
-                .await?
-                .unwrap();
-            // NOTE: The assumption here for the MVP is that there is only one source-id in the GTID set, so we can just
-            // take the transaction_id from the first one. Fix this once we move to a partitioned timestamp.
-            let binlog_start_gtid = GtidSet::from_str(&binlog_gtid_set)?
-                .first()
-                .expect("At least one gtid")
-                .to_owned();
-            let binlog_start_transaction_id =
-                TransactionId::new(binlog_start_gtid.earliest_transaction_id());
-
-            let resume_upper = Antichain::from_iter(
-                subsource_resume_uppers
-                    .values()
-                    .flat_map(|f| f.elements())
-                    // Advance any upper as far as the start of the binlog.
-                    .map(|t| std::cmp::max(*t, binlog_start_transaction_id)),
-            );
-
-            let Some(resume_transaction_id) = resume_upper.into_option() else {
-                return Ok(());
+            // Get the set of GTIDs that have been purged from the binlogs. The assumption is that this
+            // represents the frontier of possible GTIDs that exist in the binlog, that we can start
+            // replicating from.
+            let binlog_purged_set = query_sys_var(&mut conn, "global.gtid_purged").await?;
+            let binlog_frontier = match gtid_set_frontier(&binlog_purged_set) {
+                Ok(frontier) => frontier,
+                Err(err) => {
+                    let err = DefiniteError::UnsupportedGtidState(err.to_string());
+                    return Ok(
+                        // If GTID intervals in the binlog are not available in a monotonic consecutive
+                        // order this breaks all of our assumptions and there is nothing else we can do.
+                        // This can occur if the mysql server is restored to a previous point-in-time
+                        // or if a user manually adds transactions to the @@gtid_purged system var.
+                        return_definite_error(
+                            err,
+                            &output_indexes,
+                            &mut data_output,
+                            data_cap_set,
+                            &mut definite_error_handle,
+                            definite_error_cap_set,
+                        )
+                        .await,
+                    );
+                }
             };
-            data_cap_set.downgrade([&resume_transaction_id]);
-            upper_cap_set.downgrade([&resume_transaction_id]);
-            trace!(
-                %id,
-                "timely-{worker_id} replication \
-                   reader started transaction_id={}",
-                resume_transaction_id
-            );
+
+            trace!(%id, "timely-{worker_id} replication binlog frontier: {binlog_frontier:?}");
+
+            // Calculate the minimum frontier across all subsources, which represents the point which
+            // we should start replication from.
+            let resume_upper =
+                Antichain::from_iter(subsource_resume_uppers.into_values().flatten());
+
+            // Validate that we can actually resume from this upper.
+            if !PartialOrder::less_equal(&binlog_frontier, &resume_upper) {
+                let err = DefiniteError::BinlogMissingResumePoint(
+                    format!("{:?}", binlog_frontier),
+                    format!("{:?}", resume_upper),
+                );
+                return Ok(return_definite_error(
+                    err,
+                    &output_indexes,
+                    &mut data_output,
+                    data_cap_set,
+                    &mut definite_error_handle,
+                    definite_error_cap_set,
+                )
+                .await);
+            };
+
+            data_cap_set.downgrade(&*resume_upper);
+            upper_cap_set.downgrade(&*resume_upper);
+            trace!(%id, "timely-{worker_id} replication reader started at {:?}", resume_upper);
 
             let mut rewinds = BTreeMap::new();
             while let Some(event) = rewind_input.next().await {
                 if let AsyncEvent::Data(caps, data) = event {
                     for req in data {
-                        let snapshot_transaction_id = TransactionId::new(
-                            req.snapshot_gtid_set
-                                .first()
-                                .expect("at least one gtid")
-                                .latest_transaction_id(),
-                        );
-                        if resume_transaction_id > snapshot_transaction_id + TransactionId::new(1) {
-                            let err = DefiniteError::BinlogCompactedPastResumePoint(
-                                resume_transaction_id.to_string(),
-                                (snapshot_transaction_id + TransactionId::new(1)).to_string(),
+                        // Check that the replication stream will be resumed from the snapshot point or before.
+                        if !PartialOrder::less_equal(&resume_upper, &req.snapshot_upper) {
+                            let err = DefiniteError::BinlogMissingResumePoint(
+                                format!("{:?}", resume_upper),
+                                format!("{:?}", req.snapshot_upper),
                             );
-                            // If the replication stream cannot be obtained from the resume point there is
-                            // nothing else to do. These errors are not retractable.
-                            for (output_index, _) in table_info.values() {
-                                let update =
-                                    ((*output_index, Err(err.clone())), TransactionId::MAX, 1);
-                                data_output.give(&data_cap_set[0], update).await;
-                            }
-                            definite_error_handle
-                                .give(
-                                    &definite_error_cap_set[0],
-                                    ReplicationError::Definite(Rc::new(err)),
-                                )
-                                .await;
-                            return Ok(());
-                        }
+                            return Ok(return_definite_error(
+                                err,
+                                &output_indexes,
+                                &mut data_output,
+                                data_cap_set,
+                                &mut definite_error_handle,
+                                definite_error_cap_set,
+                            )
+                            .await);
+                        };
                         rewinds.insert(req.table.clone(), (caps.clone(), req));
                     }
                 }
             }
             trace!(%id, "timely-{worker_id} pending rewinds {rewinds:?}");
 
-            let stream_result = raw_stream(
-                &config,
-                conn,
-                binlog_start_gtid.uuid,
-                *data_cap_set[0].time(),
-            )
-            .await?;
-
-            let binlog_stream = match stream_result {
+            let binlog_stream = match raw_stream(&config, conn, &resume_upper).await? {
                 Ok(stream) => stream,
+                // If the replication stream cannot be obtained in a definite way there is
+                // nothing else to do. These errors are not retractable.
                 Err(err) => {
-                    // If the replication stream cannot be obtained in a definite way there is
-                    // nothing else to do. These errors are not retractable.
-                    for (output_index, _) in table_info.values() {
-                        let update = ((*output_index, Err(err.clone())), TransactionId::MAX, 1);
-                        data_output.give(&data_cap_set[0], update).await;
-                    }
-                    definite_error_handle
-                        .give(
-                            &definite_error_cap_set[0],
-                            ReplicationError::Definite(Rc::new(err)),
-                        )
-                        .await;
-                    return Ok(());
+                    return Ok(return_definite_error(
+                        err,
+                        &output_indexes,
+                        &mut data_output,
+                        data_cap_set,
+                        &mut definite_error_handle,
+                        definite_error_cap_set,
+                    )
+                    .await)
                 }
             };
             let mut stream = pin!(binlog_stream.peekable());
 
-            let mut container = Vec::new();
-            let max_capacity = timely::container::buffer::default_capacity::<(
-                (u32, Result<Vec<Option<Bytes>>, DefiniteError>),
-                TransactionId,
-                Diff,
-            )>();
+            // Store all partitions from the resume_upper so we can create a frontier that comprises
+            // timestamps for partitions representing the full range of UUIDs to advance our main
+            // capabilities.
+            let mut repl_partitions: GtidReplicationPartitions = resume_upper.into();
 
             // Binlog Table Id -> Table Name (its key in the `table_info` map)
             let mut table_id_map = BTreeMap::<u64, UnresolvedItemName>::new();
@@ -225,10 +233,8 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
 
             let mut final_row = Row::default();
 
-            let mut new_upper = *data_cap_set[0].time();
-            let mut advance_on_heartbeat = false;
+            let mut next_gtid: Option<GtidPartition> = None;
 
-            trace!(%id, "timely-{worker_id} starting replication at {new_upper:?}");
             while let Some(event) = stream.as_mut().next().await {
                 use mysql_async::binlog::events::*;
                 let event = event?;
@@ -240,48 +246,49 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
                         // sent within the heartbeat interval. This means that we can safely advance the
                         // frontier once since we know there were no more events for the last sent GTID.
                         // See: https://dev.mysql.com/doc/refman/8.0/en/replication-administration-status.html
-                        if advance_on_heartbeat {
-                            data_output
-                                .give_container(&data_cap_set[0], &mut container)
-                                .await;
+                        if let Some(mut new_gtid) = next_gtid.take() {
+                            // Increment the transaction-id to the next GTID we should see from this source-id
+                            match new_gtid.timestamp_mut() {
+                                GTIDState::Active(time) => {
+                                    *time = time.checked_add(1).unwrap();
+                                }
+                                _ => unreachable!(),
+                            }
 
-                            new_upper = new_upper + TransactionId::new(1);
-                            trace!(
-                                %id,
-                                "heartbeat: timely-{worker_id} advancing \
-                                   frontier to {new_upper:?}"
-                            );
-                            upper_cap_set.downgrade([&new_upper]);
-                            data_cap_set.downgrade([&new_upper]);
+                            if let Err(err) = repl_partitions.update(new_gtid) {
+                                return Ok(return_definite_error(
+                                    err,
+                                    &output_indexes,
+                                    &mut data_output,
+                                    data_cap_set,
+                                    &mut definite_error_handle,
+                                    definite_error_cap_set,
+                                )
+                                .await);
+                            }
+                            let new_upper = repl_partitions.frontier();
+
+                            trace!(%id, "timely-{worker_id} advancing frontier from \
+                                         heartbeat to {new_upper:?}");
+                            data_cap_set.downgrade(&*new_upper);
+                            upper_cap_set.downgrade(&*new_upper);
+
                             rewinds.retain(|_, (_, req)| {
-                                data_cap_set[0].time()
-                                    <= &TransactionId::new(
-                                        req.snapshot_gtid_set
-                                            .first()
-                                            .expect("at least one gtid")
-                                            .latest_transaction_id(),
-                                    )
+                                !PartialOrder::less_equal(&req.snapshot_upper, &new_upper)
                             });
-                            advance_on_heartbeat = false;
+
+                            trace!(%id, "timely-{worker_id} pending rewinds after \
+                                         filtering: {rewinds:?}");
                         }
                     }
-                    // We receive a GtidEvent that tells us the transaction-id of proceeding
-                    // RowsEvents (and other events)
+                    // We receive a GtidEvent that tells us the GTID of the incoming RowsEvents (and other events)
                     Some(EventData::GtidEvent(event)) => {
-                        // TODO: Use this when we use a partitioned timestamp
-                        let _source_id = Uuid::from_bytes(event.sid());
-                        let received_upper = TransactionId::new(event.gno());
-                        assert!(
-                            new_upper <= received_upper,
-                            "GTID went backwards {} -> {}",
-                            new_upper,
-                            received_upper
-                        );
-                        new_upper = received_upper;
+                        let source_id = Uuid::from_bytes(event.sid());
+                        let received_tx_id =
+                            GTIDState::Active(NonZeroU64::new(event.gno()).unwrap());
 
-                        // Indicate that we should advance the frontier if we receive a heartbeat since that would indicate
-                        // that there are no more records for this GTID.
-                        advance_on_heartbeat = true;
+                        // Store this GTID as a partition timestamp for ease of use in publishing data
+                        next_gtid = Some(GtidPartition::new_singleton(source_id, received_tx_id));
                     }
                     // A row event is a write/update/delete event
                     Some(EventData::RowsEvent(data)) => {
@@ -312,6 +319,10 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
                                     &table_id_map[&binlog_table_id]
                                 } else {
                                     skipped_table_ids.insert(binlog_table_id);
+                                    trace!(
+                                        "timely-{worker_id} skipping table {table:?} \
+                                         with id {binlog_table_id}"
+                                    );
                                     // We don't know about this table, so skip this event
                                     continue;
                                 }
@@ -319,11 +330,17 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
                             _ => unreachable!(),
                         };
 
+                        trace!(%id, "timely-{worker_id} received rows event: {data:?}");
+
                         let (output_index, table_desc) = &table_info[table];
+                        let new_gtid = next_gtid
+                            .as_ref()
+                            .expect("gtid cap should be set by previous GtidEvent");
 
                         // Iterate over the rows in this RowsEvent. Each row is a pair of 'before_row', 'after_row',
                         // to accomodate for updates and deletes (which include a before_row),
                         // and updates and inserts (which inclued an after row).
+                        let mut container = Vec::new();
                         let mut rows_iter = data.rows(table_map_event);
                         while let Some(Ok((before_row, after_row))) = rows_iter.next() {
                             let updates = [before_row.map(|r| (r, -1)), after_row.map(|r| (r, 1))];
@@ -334,53 +351,63 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
                                 let data = (*output_index, packed_row);
 
                                 // Rewind this update if it was already present in the snapshot
-                                if let Some((rewind_caps, req)) = rewinds.get(table) {
-                                    let latest_transaction_id = req
-                                        .snapshot_gtid_set
-                                        .first()
-                                        .expect("at least one gtid")
-                                        .latest_transaction_id();
-                                    let [data_cap, _upper_cap] = rewind_caps;
-                                    if new_upper <= TransactionId::new(latest_transaction_id) {
+                                if let Some(([data_cap, _upper_cap], rewind_req)) =
+                                    rewinds.get(table)
+                                {
+                                    if !rewind_req.snapshot_upper.less_equal(new_gtid) {
+                                        trace!(%id, "timely-{worker_id} rewinding update \
+                                                     {data:?} for {new_gtid:?}");
                                         data_output
                                             .give(
                                                 data_cap,
-                                                (data.clone(), TransactionId::minimum(), -diff),
+                                                (data.clone(), GtidPartition::minimum(), -diff),
                                             )
                                             .await;
                                     }
                                 }
-                                trace!(
-                                    %id,
-                                    "timely-{worker_id} sending update \
-                                       {data:?} at {new_upper:?}"
-                                );
-                                container.push((data, new_upper, diff));
+                                trace!(%id, "timely-{worker_id} sending update {data:?}
+                                             for {new_gtid:?}");
+                                container.push((data, new_gtid.clone(), diff));
                             }
                         }
 
-                        // flush any pending records and advance our frontier
-                        if container.len() > max_capacity {
-                            data_output
-                                .give_container(&data_cap_set[0], &mut container)
-                                .await;
-                            trace!(
-                                %id,
-                                "timely-{worker_id} advancing \
-                                    frontier to {new_upper:?}"
-                            );
-                            upper_cap_set.downgrade([&new_upper]);
-                            data_cap_set.downgrade([&new_upper]);
-                            rewinds.retain(|_, (_, req)| {
-                                data_cap_set[0].time()
-                                    <= &TransactionId::new(
-                                        req.snapshot_gtid_set
-                                            .first()
-                                            .expect("at least one gtid")
-                                            .latest_transaction_id(),
-                                    )
-                            });
+                        // Flush this data
+                        let gtid_cap = data_cap_set.delayed(new_gtid);
+                        trace!(%id, "timely-{worker_id} sending container for {new_gtid:?} \
+                                     with {container:?} updates");
+                        data_output.give_container(&gtid_cap, &mut container).await;
+
+                        // Advance the frontier up to the point right before this GTID
+                        // We are being careful here and not advancing beyond this GTID since we aren't
+                        // sure that other mysql event-types may need to be supported that present other
+                        // data to commit at this timestamp. In the future if we are sure that this RowsEvent
+                        // represents all the data that we need to commit at this timestamp and that there is no
+                        // then we can do so (like we currently do when handling Heartbeat Events).
+                        // This is still useful to allow data committed at previous timestamps to become available
+                        // without waiting for the next break in data at which point we should receive a Heartbeat
+                        // Event.
+                        if let Err(err) = repl_partitions.update(new_gtid.clone()) {
+                            return Ok(return_definite_error(
+                                err,
+                                &output_indexes,
+                                &mut data_output,
+                                data_cap_set,
+                                &mut definite_error_handle,
+                                definite_error_cap_set,
+                            )
+                            .await);
                         }
+                        let new_upper = repl_partitions.frontier();
+
+                        trace!(%id, "timely-{worker_id} advancing frontier to {new_upper:?}");
+                        data_cap_set.downgrade(&*new_upper);
+                        upper_cap_set.downgrade(&*new_upper);
+
+                        rewinds.retain(|_, (_, req)| {
+                            !PartialOrder::less_equal(&req.snapshot_upper, &new_upper)
+                        });
+                        trace!(%id, "timely-{worker_id} pending rewinds \
+                                     after filtering: {rewinds:?}");
                     }
                     _ => {
                         // TODO: Handle other event types
@@ -388,8 +415,6 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
                         // that might affect the schema of the tables we care about.
                     }
                 }
-
-                // TODO: Do we need to downgrade the frontier if the stream yields? Or is that handled by the heartbeat?
             }
             // We never expect the replication stream to gracefully end
             Err(TransientError::ReplicationEOF)
@@ -411,16 +436,45 @@ pub(crate) fn render<G: Scope<Timestamp = TransactionId>>(
     )
 }
 
-/// Produces the logical replication stream while taking care of regularly sending standby
-/// keepalive messages with the provided `uppers` stream.
-///
-/// The returned stream will contain all transactions that whose commit LSN is beyond `resume_lsn`.
+async fn return_definite_error(
+    err: DefiniteError,
+    outputs: &[usize],
+    data_handle: &mut AsyncOutputHandle<
+        GtidPartition,
+        Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>,
+        TeeCore<GtidPartition, Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
+    >,
+    data_cap_set: &CapabilitySet<GtidPartition>,
+    definite_error_handle: &mut AsyncOutputHandle<
+        GtidPartition,
+        Vec<ReplicationError>,
+        TeeCore<GtidPartition, Vec<ReplicationError>>,
+    >,
+    definite_error_cap_set: &CapabilitySet<GtidPartition>,
+) -> () {
+    for output_index in outputs {
+        let update = (
+            (*output_index, Err(err.clone())),
+            GtidPartition::new_range(Uuid::minimum(), Uuid::maximum(), GTIDState::MAX),
+            1,
+        );
+        data_handle.give(&data_cap_set[0], update).await;
+    }
+    definite_error_handle
+        .give(
+            &definite_error_cap_set[0],
+            ReplicationError::Definite(Rc::new(err)),
+        )
+        .await;
+    ()
+}
+
+/// Produces the replication stream from the MySQL server. This will return all transactions
+/// whose GTIDs were not present in the GTID UUIDs referenced in the `resume_uppper` partitions.
 async fn raw_stream<'a>(
     config: &RawSourceCreationConfig,
     mut conn: Conn,
-    // TODO: this is only needed while we use a single source-id for the timestamp; remove once we move to a partitioned timestamp
-    gtid_source_id: Uuid,
-    resume_transaction_id: TransactionId,
+    resume_upper: &Antichain<GtidPartition>,
 ) -> Result<Result<BinlogStream, DefiniteError>, TransientError> {
     // Verify the MySQL system settings are correct for consistent row-based replication using GTIDs
     // TODO: Should these return DefiniteError instead of TransientError?
@@ -434,21 +488,27 @@ async fn raw_stream<'a>(
     // interval, which is different than the closed-set [start, end] form returned by the
     // @gtid_executed system variable. So the intervals we construct in this GTID set
     // end with the value of the transaction-id that we want to start replication at,
-    // which happens to be our `resume_transaction_id`
+    // which happens to be the same as the definition of a frontier value.
     // https://dev.mysql.com/doc/refman/8.0/en/replication-options-gtids.html#sysvar_gtid_executed
     // https://dev.mysql.com/doc/dev/mysql-server/latest/classGtid__set.html#ab46da5ceeae0198b90f209b0a8be2a24
-    let seen_gtids = match resume_transaction_id.into() {
-        0 | 1 => {
-            // If we're starting from the beginning of the binlog or the first transaction id
-            // we haven't seen 'anything'
-            Vec::new()
-        }
-        ref a => {
-            // NOTE: Since we enforce replica_preserve_commit_order=ON we can start the interval at 1
-            // since we know that all transactions with a lower transaction id were monotonic
-            vec![Sid::new(*gtid_source_id.as_bytes()).with_interval(GnoInterval::new(1, *a))]
-        }
-    };
+    let seen_gtids = resume_upper
+        .iter()
+        .flat_map(|partition| match partition.timestamp() {
+            GTIDState::Absent => None,
+            GTIDState::Active(frontier_time) => {
+                let part_uuid = partition
+                    .interval()
+                    .singleton()
+                    .expect("Non-absent paritions will be singletons");
+                // NOTE: Since we enforce replica_preserve_commit_order=ON we can start the interval at 1
+                // since we know that all transactions with a lower transaction id were monotonic
+                Some(
+                    Sid::new(*part_uuid.as_bytes())
+                        .with_interval(GnoInterval::new(1, frontier_time.get())),
+                )
+            }
+        })
+        .collect::<Vec<_>>();
 
     // Request that the stream provide us with a heartbeat message when no other messages have been sent
     let heartbeat = Duration::from_secs(3);
@@ -459,8 +519,8 @@ async fn raw_stream<'a>(
     .await?;
 
     // Generate a deterministic server-id for identifying us as a replica on the upstream mysql server.
-    // The value does not actually matter since it's irrelevant for GTID-based replication and won't cause errors
-    // if it happens to be the same as another replica in the mysql cluster (based on testing),
+    // The value does not actually matter since it's irrelevant for GTID-based replication and won't
+    // cause errors if it happens to be the same as another replica in the mysql cluster (based on testing),
     // but by setting it to a constant value we can make it easier for users to identify Materialize connections
     let server_id = match config.id {
         GlobalId::System(id) => id,
@@ -472,6 +532,11 @@ async fn raw_stream<'a>(
         Ok(id) if id + REPLICATION_SERVER_ID_OFFSET < u32::MAX => id + REPLICATION_SERVER_ID_OFFSET,
         _ => REPLICATION_SERVER_ID_OFFSET,
     };
+
+    trace!(
+        "requesting replication stream with seen_gtids: {seen_gtids:?} \
+         and server_id: {server_id:?}"
+    );
 
     let repl_stream = match conn
         .get_binlog_stream(

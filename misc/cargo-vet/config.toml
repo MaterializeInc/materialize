@@ -1698,10 +1698,6 @@ criteria = "safe-to-deploy"
 version = "0.7.6"
 criteria = "safe-to-deploy"
 
-[[exemptions.uuid]]
-version = "1.2.2"
-criteria = "safe-to-deploy"
-
 [[exemptions.vcpkg]]
 version = "0.2.8"
 criteria = "safe-to-deploy"

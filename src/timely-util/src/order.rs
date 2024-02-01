@@ -25,6 +25,9 @@ use timely::order::Product;
 use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
 use timely::progress::Antichain;
 use timely::PartialOrder;
+use uuid::Uuid;
+
+use mz_ore::cast::CastFrom;
 
 /// A partially ordered timestamp that is partitioned by an arbitrary number of partitions
 /// identified by `P`. The construction allows for efficient representation of frontiers with
@@ -70,6 +73,20 @@ impl<P: Clone + PartialOrd, T> Partitioned<P, T> {
     /// Returns the timestamp component of this partitioned timestamp.
     pub fn timestamp(&self) -> &T {
         &self.0.inner
+    }
+
+    pub fn timestamp_mut(&mut self) -> &mut T {
+        &mut self.0.inner
+    }
+}
+
+impl<P: Clone + PartialOrd + Step, T: Clone> Partitioned<P, T> {
+    /// Returns up to two partitions that contain the interval before and/or
+    /// after given partition point, neither of which contain the point.
+    pub fn split(&self, point: &P) -> (Option<Self>, Option<Self>) {
+        let (before, after) = self.interval().split(point);
+        let mapper = |interval| Self(Product::new(interval, self.timestamp().clone()));
+        (before.map(mapper), after.map(mapper))
     }
 }
 
@@ -150,6 +167,39 @@ impl Extrema for i32 {
     }
 }
 
+impl Extrema for Uuid {
+    fn minimum() -> Self {
+        Self::nil()
+    }
+    fn maximum() -> Self {
+        Self::max()
+    }
+}
+
+// TODO: Switch to the std one when it's no longer unstable: https://doc.rust-lang.org/std/iter/trait.Step.html
+pub trait Step
+where
+    Self: Sized,
+{
+    // Returns the element value sequenced before the type.
+    fn backward_checked(&self, count: usize) -> Option<Self>;
+    // Returns the element value sequenced after the type.
+    fn forward_checked(&self, count: usize) -> Option<Self>;
+}
+
+impl Step for Uuid {
+    fn backward_checked(&self, count: usize) -> Option<Self> {
+        self.as_u128()
+            .checked_sub(u128::cast_from(count))
+            .map(Self::from_u128)
+    }
+    fn forward_checked(&self, count: usize) -> Option<Self> {
+        self.as_u128()
+            .checked_add(u128::cast_from(count))
+            .map(Self::from_u128)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 /// A type representing an inclusive interval of type `P`, ordered under the subset relation.
 pub struct Interval<P> {
@@ -165,6 +215,34 @@ impl<P: Eq> Interval<P> {
         } else {
             None
         }
+    }
+}
+
+impl<P: PartialOrd> Interval<P> {
+    pub fn contains(&self, other: &P) -> bool {
+        self.lower <= *other && *other <= self.upper
+    }
+}
+
+impl<P: Step + PartialOrd + Clone> Interval<P> {
+    /// Returns up to two intervals that contain the range before and/or after given point,
+    /// neither of which contain the point.
+    pub fn split(&self, point: &P) -> (Option<Self>, Option<Self>) {
+        let before = match point.backward_checked(1) {
+            Some(bef) if self.lower <= bef => Some(Interval {
+                lower: self.lower.clone(),
+                upper: bef,
+            }),
+            _ => None,
+        };
+        let after = match point.forward_checked(1) {
+            Some(aft) if self.upper >= aft => Some(Interval {
+                lower: aft,
+                upper: self.upper.clone(),
+            }),
+            _ => None,
+        };
+        (before, after)
     }
 }
 
