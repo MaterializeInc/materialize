@@ -72,6 +72,7 @@ pub struct StorageParameters {
     // but people mostly care about either rates, or the values to within 1 minute.
     pub statistics_collection_interval: Duration,
     pub pg_snapshot_config: PgSourceSnapshotConfig,
+    pub enable_dependency_read_hold_asserts: bool,
 }
 
 pub const STATISTICS_INTERVAL_DEFAULT: Duration = Duration::from_secs(60);
@@ -102,6 +103,7 @@ impl Default for StorageParameters {
             statistics_interval: STATISTICS_INTERVAL_DEFAULT,
             statistics_collection_interval: STATISTICS_COLLECTION_INTERVAL_DEFAULT,
             pg_snapshot_config: Default::default(),
+            enable_dependency_read_hold_asserts: true,
         }
     }
 }
@@ -198,6 +200,7 @@ impl StorageParameters {
             statistics_interval,
             statistics_collection_interval,
             pg_snapshot_config,
+            enable_dependency_read_hold_asserts,
         }: StorageParameters,
     ) {
         self.persist.update(persist);
@@ -223,6 +226,7 @@ impl StorageParameters {
         self.statistics_interval = statistics_interval;
         self.statistics_collection_interval = statistics_collection_interval;
         self.pg_snapshot_config = pg_snapshot_config;
+        self.enable_dependency_read_hold_asserts = enable_dependency_read_hold_asserts;
     }
 }
 
@@ -261,6 +265,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             statistics_interval: Some(self.statistics_interval.into_proto()),
             statistics_collection_interval: Some(self.statistics_collection_interval.into_proto()),
             pg_snapshot_config: Some(self.pg_snapshot_config.into_proto()),
+            enable_dependency_read_hold_asserts: self.enable_dependency_read_hold_asserts,
         }
     }
 
@@ -324,6 +329,7 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             pg_snapshot_config: proto
                 .pg_snapshot_config
                 .into_rust_if_some("ProtoStorageParameters::pg_snapshot_config")?,
+            enable_dependency_read_hold_asserts: proto.enable_dependency_read_hold_asserts,
         })
     }
 }
