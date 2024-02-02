@@ -10,69 +10,82 @@ menu:
 ---
 
 ## Why is my query slow?
+### Overview
+<!-- TODO: update this to use the query history UI once it's available -->
+Your query may be taking longer than expected for a handful of reasons, including:
+* Processing lag in upstream dependencies, like materialized views and indexes
+* Index design
+* Query design
 
-### Step 1: Inspect the query lifecycle
-TODO -
-Without this, we can also just suggest folks look into the each of the detection steps, sthg like "The below are all reasons why your query might be slow. You can follow the guidance to investigate whether one or more of these are happening to you."
+Below we detail how you can detect and address each of these issues and more.
 
-### Step 2: Detect 
-
-#### Lagging materialized views or indexes
+### Lagging materialized views or indexes
+#### Detect
 When a materialized view or index upstream of your query is behind on processing, your query must wait for it to catch up before returning. This is how we ensure consistent results for all queries.
 
-To see whether any materialized views or indexes are lagging you can:
-
-1. Look at the workflow graphs for your objects in the Materialize console. Go to https://console.materialize.com/ and TODO.
-
-OR
-
-2. Do we even want to give someone the complicated WMR queries etc to fetch this themselves?
+To see whether any materialized views or indexes are lagging you can look at the workflow graphs for your objects in the Materialize console.
+1. Go to https://console.materialize.com/
+2. Click on the "Clusters" tab in the nav bar
+3. Click on the cluster in which your upstream materialized view or index resides
+4. Go to the applicable "Materialized Views" or "Indexes" section
+5. Click on the materialized view or index's name
 
 If you find that one of the upstream materialized views or indexes is lagging, this could be the cause of your query slowness.
 
-*Do you have multiple materialized views chained on top of each other? Are you seeing small amounts of lag?*\
-Tip: avoid intermediary materialized views where not necessary. Each chained materialized view incurs a small amount of processing lag from the previous one. <TODO add more guidance on avoiding chained mat views>
-
+#### Address
 To troubleshoot and fix a lagging materialized view or index, follow the steps in the [dataflow troubleshooting](/transform-data/dataflow-troubleshooting) guide.
+
+*Do you have multiple materialized views chained on top of each other? Are you seeing small amounts of lag?*\
+Tip: avoid intermediary materialized views where not necessary. Each chained materialized view incurs a small amount of processing lag from the previous one.
+<!-- TODO add more guidance on avoiding chained mat views-->
 
 Some other things to consider:
 *  If you've gone through the dataflow troubleshooting and do not want to make any changes to your query, another option to consider is [sizing up your cluster](/sql/create-cluster/#size).
-* You can also consider changing your [isolation level](/get-started/isolation-level/), depending on the consistency guarantees that you need.
+* You can also consider changing your [isolation level](/get-started/isolation-level/), depending on the consistency guarantees that you need. With a lower isolation level you may be able to query stale results out of lagging indexes and materialized views.
 * You can also check whether you're using a [transaction](#Transactions) and follow the guidance there.
 
-##### Transactions
-Copy from https://materialize.com/docs/manage/troubleshooting/#transactions
-
-#### Lagging or stalled source
-TODO: similar to materialized views, checking the workflow graph for detection.
-Redirect to [troubleshooting sources](/transform-data/source-troubleshooting) page.
-
-#### Slow query execution
+### Slow query execution
 Query execution time is largely dependent on the amount of on-the-fly work that needs to be done in order to compute the result. There are a number of ways to reduce that.
 
-##### Indexing and query optimization
+#### Indexing and query optimization
 If you haven’t already, you should consider an [index](/sql/create-index/) for your query, and read through the [optimizations](/transform-data/optimization) guide on how to optimize query performance in Materialize.
 
 If you already created an index, you can confirm that the query is actually using the index. The tool for this is an [`EXPLAIN` plan](/sql/explain-plan/). If you run `EXPLAIN` for your query, and the index was correctly used, you should see the index you created in the section "Used Indexes". If you're not seeing the index in the explain plan, some things to troubleshoot:
 * Are you running the query in the same cluster that you created the index? You must do so in order for the index to be used.
 * Does the index's indexed expression (key) match up with how you're querying the data?
 
-##### Computation-intensive queries
-Another thing to be aware of, in Materialize, aggregations like `COUNT(*)` and limit constraints like `LIMIT 1` perform computation across the full underlying dataset being queried, so can be resource intensive. TODO: tips of what to do instead?
+#### Computation-intensive queries
+Another thing to be aware of, in Materialize, aggregations like `COUNT(*)` and limit constraints that return more than 25 rows like `LIMIT 50` perform a computation across the full underlying dataset being queried, so can be resource intensive. If you want to execute these types of queries you should either:
+* Create a materialized view or index for these queries if you plan to issue them often
+* Use a large enough cluster to fit the full underlying dataset being queried
 
 
-#### Other things to consider
-##### Client-side latency
-Copy from https://materialize.com/docs/manage/troubleshooting/#client-side-latency 
+### Other things to consider
+#### Transactions
+<!-- Copied from doc/user/content/manage/troubleshooting.md#Transactions -->
+Transactions are a database concept for bundling multiple query steps into a single, all-or-nothing operation. You can read more about them in the [transactions](https://materialize.com/docs/sql/begin) section of our docs.
 
-##### Result size
-Smaller results lead to less time spent transmitting data over the network.
-Todo: how to see your result size, maybe using activity log's time to last row and size
+In Materialize, `BEGIN` starts a transaction block. All statements in a transaction block will be executed in a single transaction until an explicit `COMMIT` or `ROLLBACK` is given. All statements in that transaction happen at the same timestamp, and that timestamp must be valid for all objects the transaction may access.
 
-##### Cluster CPU
-Another think to look at is the how busy cluster you're issueing queries on is. A busy cluster means your query might be blocked by some other processing going on. If you issue a lot of resource-intensive queries at once, that can spike the CPU.
+What this means for latency: Materialize may delay queries against "slow" tables, materialized views, and indexes until they catch up to faster ones in the same schema. We recommend you avoid using transactions in contexts where you require low latency responses and are not certain that all objects in a schema will be equally current.
 
-The measure of cluster busyness is CPU. You can see the CPU by going to https://console.materialize.com/, clicking the "clusters" tab, and clicking into the cluster. You can also query the CPU via SQL:
+What you can do:
+
+- Avoid using transactions where you don’t need them. For example, if you’re only executing single statements at a time.
+- Double check whether your SQL library or ORM is wrapping all queries in transactions on your behalf, and disable that setting, only using transactions explicitly when you want them.
+
+#### Client-side latency
+<!-- Copied from doc/user/content/manage/troubleshooting.md#client-side-latency -->
+To minimize the roundtrip latency associated with making requests from your client to Materialize, make your requests as physically close to your Materialize region as possible. For example, if you use the AWS `us-east-1` region for Materialize, your client server would ideally also be running in AWS `us-east-1`.
+
+#### Result size
+<!-- TODO: Use the query history UI to fetch result size -->
+Smaller results lead to less time spent transmitting data over the network. You can calculate your result size as `number of rows returned x byte size of each row`, where `byte size of each row = sum(byte size of each column)`. If your result size is large, this will be a factor in query latency.
+
+#### Cluster CPU
+Another think to look at is the how busy cluster you're issuing queries on is. A busy cluster means your query might be blocked by some other processing going on, and thus take longer to return. If you issue a lot of resource-intensive queries at once, that can spike the CPU.
+
+The measure of cluster busyness is CPU. You can see the CPU by going to Materialize console at https://console.materialize.com/, clicking the "Clusters" tab in the nav bar, and clicking into the cluster. You can also query the CPU via SQL:
 ```
 SELECT cru.cpu_percent
 FROM mz_internal.mz_cluster_replica_utilization cru
@@ -83,3 +96,20 @@ WHERE c.name = <CLUSTER_NAME>;
 
 
 ## Why is my query not responding?
+### Overview
+Your query may hang because:
+* Your cluster is unhealthy
+* A stalled upstream source
+
+Your query may also be running, but slowly. If none of the reasons below detects your issue, follow the section above [Why is my query slow?](#Why-is-my-query-slow?).
+
+### Stalled source
+<!-- TODO: update this to use the query history UI once it's available -->
+#### Detect
+TODO: similar to materialized views, checking the workflow graph for detection.
+#### Address
+Redirect to [troubleshooting sources](/ingest-data/ingest-troubleshooting.md) page.
+
+### Cluster OOMing 
+
+### Cluster Maxed CPU 
