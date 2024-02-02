@@ -685,10 +685,8 @@ where
                     // these results would go into the `max_iter + 1`th iteration.
                     let (in_limit, over_limit) =
                         oks.inner.branch_when(move |Product { inner: ps, .. }| {
-                            // We get None in the first iteration, because the `PointStamp` doesn't yet have
-                            // the `level`th element. It will get created when applying the summary for the
-                            // first time.
-                            let iteration_index = *ps.vector.get(level).unwrap_or(&0);
+                            // The iteration number, or if missing a zero (as trailing zeros are truncated).
+                            let iteration_index = *ps.get(level).unwrap_or(&0);
                             // The pointstamp starts counting from 0, so we need to add 1.
                             iteration_index + 1 >= limit.max_iters.into()
                         });
@@ -1000,14 +998,12 @@ impl RenderTimestamp for Product<mz_repr::Timestamp, PointStamp<u64>> {
         // It is necessary to step back both coordinates of a product,
         // and when one is a `PointStamp` that also means all coordinates
         // of the pointstamp.
-        let mut inner = self.inner.clone();
-        for item in inner.vector.iter_mut() {
+        let inner = self.inner.clone();
+        let mut vec = inner.into_vec();
+        for item in vec.iter_mut() {
             *item = item.saturating_sub(1);
         }
-        while inner.vector.last() == Some(&0) {
-            inner.vector.pop();
-        }
-        Product::new(self.outer.saturating_sub(1), inner)
+        Product::new(self.outer.saturating_sub(1), PointStamp::new(vec))
     }
 }
 
