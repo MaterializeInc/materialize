@@ -3389,12 +3389,25 @@ pub enum ExplainStage {
 impl ExplainStage {
     /// Return the tracing path that corresponds to a given stage.
     pub fn path(&self) -> Option<&'static str> {
+        use NamedPlan::*;
         match self {
-            ExplainStage::RawPlan => Some("optimize/raw"),
-            ExplainStage::DecorrelatedPlan => Some("optimize/hir_to_mir"),
-            ExplainStage::OptimizedPlan => Some("optimize/global"),
-            ExplainStage::PhysicalPlan => Some("optimize/finalize_dataflow"),
-            ExplainStage::Trace => None,
+            Self::RawPlan => Some(Raw.path()),
+            Self::DecorrelatedPlan => Some(Decorrelated.path()),
+            Self::OptimizedPlan => Some(Optimized.path()),
+            Self::PhysicalPlan => Some(Physical.path()),
+            Self::Trace => None,
+        }
+    }
+
+    // Whether instead of the plan associated with this [`ExplainStage`] we
+    // should show the [`NamedPlan::FastPath`] plan if available.
+    pub fn show_fast_path(&self) -> bool {
+        match self {
+            Self::RawPlan => false,
+            Self::DecorrelatedPlan => false,
+            Self::OptimizedPlan => true,
+            Self::PhysicalPlan => true,
+            Self::Trace => false,
         }
     }
 }
@@ -3402,15 +3415,39 @@ impl ExplainStage {
 impl AstDisplay for ExplainStage {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ExplainStage::RawPlan => f.write_str("RAW PLAN"),
-            ExplainStage::DecorrelatedPlan => f.write_str("DECORRELATED PLAN"),
-            ExplainStage::OptimizedPlan => f.write_str("OPTIMIZED PLAN"),
-            ExplainStage::PhysicalPlan => f.write_str("PHYSICAL PLAN"),
-            ExplainStage::Trace => f.write_str("OPTIMIZER TRACE"),
+            Self::RawPlan => f.write_str("RAW PLAN"),
+            Self::DecorrelatedPlan => f.write_str("DECORRELATED PLAN"),
+            Self::OptimizedPlan => f.write_str("OPTIMIZED PLAN"),
+            Self::PhysicalPlan => f.write_str("PHYSICAL PLAN"),
+            Self::Trace => f.write_str("OPTIMIZER TRACE"),
         }
     }
 }
 impl_display!(ExplainStage);
+
+/// An enum of named plans that identifies specific stages in an optimizer trace
+/// where these plans can be found.
+pub enum NamedPlan {
+    Raw,
+    Decorrelated,
+    Optimized,
+    Physical,
+    FastPath,
+}
+
+impl NamedPlan {
+    /// Return the tracing path under which the plan can be found in an
+    /// optimizer trace.
+    pub fn path(&self) -> &'static str {
+        match self {
+            Self::Raw => "optimize/raw",
+            Self::Decorrelated => "optimize/hir_to_mir",
+            Self::Optimized => "optimize/global",
+            Self::Physical => "optimize/finalize_dataflow",
+            Self::FastPath => "optimize/fast_path",
+        }
+    }
+}
 
 /// What is being explained.
 /// The bools mean whether this is an EXPLAIN BROKEN.

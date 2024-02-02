@@ -145,7 +145,7 @@ use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParam
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
 use crate::coord::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::peek::{FastPathPlan, PendingPeek};
+use crate::coord::peek::PendingPeek;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::error::AdapterError;
@@ -499,7 +499,6 @@ pub struct PeekStageExplain {
     validity: PlanValidity,
     select_id: GlobalId,
     finishing: RowSetFinishing,
-    fast_path_plan: Option<FastPathPlan>,
     df_meta: DataflowMetainfo,
     used_indexes: UsedIndexes,
     explain_ctx: ExplainContext,

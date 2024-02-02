@@ -15,13 +15,14 @@ use mz_controller_types::ClusterId;
 use mz_expr::CollectionPlan;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::explain::{trace_plan, ExprHumanizerExt, TransientItem, UsedIndexes};
+use mz_repr::explain::{ExprHumanizerExt, TransientItem, UsedIndexes};
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_sql::catalog::CatalogCluster;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_catalog::memory::objects::CatalogItem;
 use mz_sql::plan;
 use mz_sql::plan::QueryWhen;
+use mz_sql_parser::ast::NamedPlan;
 use mz_transform::EmptyStatisticsOracle;
 use tracing::Instrument;
 use tracing::{event, warn, Level};
@@ -443,11 +444,6 @@ impl Coordinator {
 
                     let raw_expr = plan.source.clone();
 
-                    // Trace the pipeline input under `optimize/raw`.
-                    tracing::debug_span!(target: "optimizer", "raw").in_scope(|| {
-                        trace_plan(&raw_expr);
-                    });
-
                     // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
                     let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
                     let local_mir_plan = local_mir_plan.resolve(ctx.session(), stats);
@@ -488,7 +484,6 @@ impl Coordinator {
                                 validity,
                                 select_id: optimizer.select_id(),
                                 finishing: optimizer.finishing().clone(),
-                                fast_path_plan: Default::default(),
                                 df_meta: Default::default(),
                                 used_indexes: Default::default(),
                                 explain_ctx,
@@ -664,23 +659,15 @@ impl Coordinator {
                             global_mir_plan.resolve(timestamp_context.clone(), ctx.session_mut());
                         let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
 
-                        // Trace the resulting plan for the top-level `optimize` path.
-                        match global_lir_plan.peek_plan() {
-                            peek::PeekPlan::FastPath(plan) => {
-                                let arity = global_lir_plan.typ().arity();
-                                let finishing = if !optimizer.finishing().is_trivial(arity) {
-                                    Some(optimizer.finishing().clone())
-                                } else {
-                                    None
-                                };
-                                used_indexes = plan.used_indexes(&finishing);
-
-                                // TODO(aalexandrov): rework `OptimizerTrace` with support
-                                // for diverging plan types towards the end and add a
-                                // `PlanTrace` for the `FastPathPlan` type.
-                                trace_plan(&"fast_path_plan (missing)".to_string());
-                            }
-                            peek::PeekPlan::SlowPath(plan) => trace_plan(&plan.desc),
+                        // Update used_indexes for FastPath plans.
+                        if let peek::PeekPlan::FastPath(plan) = global_lir_plan.peek_plan() {
+                            let arity = global_lir_plan.typ().arity();
+                            let finishing = if !optimizer.finishing().is_trivial(arity) {
+                                Some(optimizer.finishing())
+                            } else {
+                                None
+                            };
+                            used_indexes = plan.used_indexes(finishing);
                         }
 
                         Ok((global_lir_plan, used_indexes))
@@ -689,15 +676,11 @@ impl Coordinator {
                 let stage = match pipeline() {
                     Ok((global_lir_plan, used_indexes)) => match peek_ctx {
                         PeekContext::Explain(explain_ctx) => {
-                            let (peek_plan, df_meta) = global_lir_plan.unapply();
+                            let (_, df_meta, _) = global_lir_plan.unapply();
                             PeekStage::Explain(PeekStageExplain {
                                 validity,
                                 select_id: optimizer.select_id(),
                                 finishing: optimizer.finishing().clone(),
-                                fast_path_plan: match peek_plan {
-                                    peek::PeekPlan::FastPath(plan) => Some(plan),
-                                    peek::PeekPlan::SlowPath(_) => None,
-                                },
                                 df_meta,
                                 used_indexes,
                                 explain_ctx,
@@ -733,7 +716,6 @@ impl Coordinator {
                                 validity,
                                 select_id: optimizer.select_id(),
                                 finishing: optimizer.finishing().clone(),
-                                fast_path_plan: Default::default(),
                                 df_meta: Default::default(),
                                 used_indexes: Default::default(),
                                 explain_ctx,
@@ -775,8 +757,8 @@ impl Coordinator {
         let session = ctx.session_mut();
         let conn_id = session.conn_id().clone();
 
-        let source_arity = global_lir_plan.typ().arity();
-        let (peek_plan, df_meta) = global_lir_plan.unapply();
+        let (peek_plan, df_meta, typ) = global_lir_plan.unapply();
+        let source_arity = typ.arity();
 
         self.emit_optimizer_notices(&*session, &df_meta.optimizer_notices);
 
@@ -869,7 +851,6 @@ impl Coordinator {
             df_meta,
             select_id,
             finishing,
-            fast_path_plan,
             used_indexes,
             explain_ctx:
                 ExplainContext {
@@ -903,13 +884,12 @@ impl Coordinator {
             Some(finishing)
         };
 
-        let trace = optimizer_trace.drain_all(
+        let mut trace = optimizer_trace.drain_all(
             format,
             &config,
             &expr_humanizer,
             finishing,
             used_indexes,
-            fast_path_plan,
             df_meta,
         )?;
 
@@ -934,12 +914,27 @@ impl Coordinator {
             Some(path) => {
                 // For everything else, return the plan for the stage identified
                 // by the corresponding path.
-                let row = trace
-                    .into_iter()
-                    .find(|entry| entry.path == path)
+
+                // A helper struct hat removes the first (and by assumption -
+                // only) plan that matches the given path from the collected
+                // trace.
+                let mut remove_plan = |path: &'static str| {
+                    let index = trace.iter().position(|entry| entry.path == path);
+                    index.map(|index| trace.remove(index))
+                };
+
+                // For certain stages we want to return the resulting fast path
+                // plan instead of the selected stage if it is present.
+                let plan = if stage.show_fast_path() && !config.no_fast_path {
+                    remove_plan(NamedPlan::FastPath.path()).or_else(|| remove_plan(path))
+                } else {
+                    remove_plan(path)
+                };
+
+                let row = plan
                     .map(|entry| Row::pack_slice(&[Datum::from(entry.plan.as_str())]))
                     .ok_or_else(|| {
-                        let stmt_kind = plan::ExplaineeStatementKind::CreateMaterializedView;
+                        let stmt_kind = plan::ExplaineeStatementKind::Select;
                         if !stmt_kind.supports(&stage) {
                             // Print a nicer error for unsupported stages.
                             AdapterError::Unstructured(anyhow::anyhow!(format!(

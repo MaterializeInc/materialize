@@ -28,7 +28,8 @@ use mz_compute_types::ComputeInstanceId;
 use mz_controller_types::ClusterId;
 use mz_expr::explain::{fmt_text_constant_rows, HumanizedExplain, HumanizerMode};
 use mz_expr::{
-    EvalError, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
+    permutation_for_arrangement, EvalError, Id, MirRelationExpr, MirScalarExpr,
+    OptimizedMirRelationExpr, RowSetFinishing,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::str::{separated, StrExt};
@@ -73,7 +74,7 @@ pub enum PeekResponseUnary {
     Canceled,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PeekDataflowPlan<T = mz_repr::Timestamp> {
     pub(crate) desc: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
     pub(crate) id: GlobalId,
@@ -86,21 +87,26 @@ impl<T> PeekDataflowPlan<T> {
     pub fn new(
         desc: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
         id: GlobalId,
-        key: Vec<MirScalarExpr>,
-        permutation: BTreeMap<usize, usize>,
-        thinned_arity: usize,
+        typ: &RelationType,
     ) -> Self {
+        let arity = typ.arity();
+        let key = typ
+            .default_key()
+            .into_iter()
+            .map(MirScalarExpr::Column)
+            .collect::<Vec<_>>();
+        let (permutation, thinning) = permutation_for_arrangement(&key, arity);
         Self {
             desc,
             id,
             key,
             permutation,
-            thinned_arity,
+            thinned_arity: thinning.len(),
         }
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
 pub enum FastPathPlan {
     /// The view evaluates to a constant result that can be returned.
     ///
@@ -256,7 +262,7 @@ pub struct PlannedPeek {
 }
 
 /// Possible ways in which the coordinator could produce the result for a goal view.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum PeekPlan<T = mz_repr::Timestamp> {
     FastPath(FastPathPlan),
     /// The view must be installed as a dataflow and then read.
@@ -408,24 +414,16 @@ pub fn create_fast_path_plan<T: Timestamp>(
 }
 
 impl FastPathPlan {
-    pub fn used_indexes(&self, finishing: &Option<RowSetFinishing>) -> UsedIndexes {
+    pub fn used_indexes(&self, finishing: Option<&RowSetFinishing>) -> UsedIndexes {
         match self {
             FastPathPlan::Constant(..) => UsedIndexes::default(),
             FastPathPlan::PeekExisting(_coll_id, idx_id, literal_constraints, _mfp) => {
                 if literal_constraints.is_some() {
                     UsedIndexes::new([(*idx_id, vec![IndexUsageType::Lookup(*idx_id)])].into())
+                } else if finishing.map_or(false, |f| f.limit.is_some() && f.order_by.is_empty()) {
+                    UsedIndexes::new([(*idx_id, vec![IndexUsageType::FastPathLimit])].into())
                 } else {
-                    if let Some(finishing) = finishing {
-                        if finishing.limit.is_some() && finishing.order_by.is_empty() {
-                            UsedIndexes::new(
-                                [(*idx_id, vec![IndexUsageType::FastPathLimit])].into(),
-                            )
-                        } else {
-                            UsedIndexes::new([(*idx_id, vec![IndexUsageType::FullScan])].into())
-                        }
-                    } else {
-                        UsedIndexes::new([(*idx_id, vec![IndexUsageType::FullScan])].into())
-                    }
+                    UsedIndexes::new([(*idx_id, vec![IndexUsageType::FullScan])].into())
                 }
             }
             FastPathPlan::PeekPersist(..) => UsedIndexes::default(),

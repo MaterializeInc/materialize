@@ -21,7 +21,6 @@ use mz_repr::explain::{
     Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer, UsedIndexes,
 };
 use mz_sql::plan::{HirRelationExpr, HirScalarExpr};
-use mz_sql_parser::ast::ExplainStage;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::RawOptimizerNotice;
 use tracing::dispatcher;
@@ -53,36 +52,40 @@ impl std::fmt::Debug for OptimizerTrace {
 impl OptimizerTrace {
     /// Create a new [`OptimizerTrace`].
     ///
-    /// The instance will will only accumulate [`TraceEntry`] instances along
+    /// The instance will only accumulate [`TraceEntry`] instances along
     /// the prefix of the given `path` if `path` is present, or it will
     /// accumulate all [`TraceEntry`] instances otherwise.
-    pub fn new(broken: bool, path: Option<&'static str>) -> OptimizerTrace {
+    pub fn new(broken: bool, filter: Option<&'static str>) -> OptimizerTrace {
         if broken {
             let subscriber = DelegateSubscriber::default()
                 // Collect `explain_plan` types that are not used in the regular explain
-                // path, but are useful when instrumenting code for debugging purpuses.
-                .with(PlanTrace::<String>::new(path))
-                .with(PlanTrace::<HirScalarExpr>::new(path))
-                .with(PlanTrace::<MirScalarExpr>::new(path))
+                // path, but are useful when instrumenting code for debugging purposes.
+                .with(PlanTrace::<String>::new(filter))
+                .with(PlanTrace::<HirScalarExpr>::new(filter))
+                .with(PlanTrace::<MirScalarExpr>::new(filter))
                 // Collect `explain_plan` types that are used in the regular explain path.
-                .with(PlanTrace::<HirRelationExpr>::new(path))
-                .with(PlanTrace::<MirRelationExpr>::new(path))
-                .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(path))
-                .with(PlanTrace::<DataflowDescription<Plan>>::new(path));
+                .with(PlanTrace::<HirRelationExpr>::new(filter))
+                .with(PlanTrace::<MirRelationExpr>::new(filter))
+                .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(filter))
+                .with(PlanTrace::<DataflowDescription<Plan>>::new(filter))
+                // Don't filter for FastPathPlan entries (there can be at most one).
+                .with(PlanTrace::<FastPathPlan>::new(None));
 
             OptimizerTrace(dispatcher::Dispatch::new(subscriber))
         } else {
             let subscriber = tracing_subscriber::registry()
                 // Collect `explain_plan` types that are not used in the regular explain
-                // path, but are useful when instrumenting code for debugging purpuses.
-                .with(PlanTrace::<String>::new(path))
-                .with(PlanTrace::<HirScalarExpr>::new(path))
-                .with(PlanTrace::<MirScalarExpr>::new(path))
+                // path, but are useful when instrumenting code for debugging purposes.
+                .with(PlanTrace::<String>::new(filter))
+                .with(PlanTrace::<HirScalarExpr>::new(filter))
+                .with(PlanTrace::<MirScalarExpr>::new(filter))
                 // Collect `explain_plan` types that are used in the regular explain path.
-                .with(PlanTrace::<HirRelationExpr>::new(path))
-                .with(PlanTrace::<MirRelationExpr>::new(path))
-                .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(path))
-                .with(PlanTrace::<DataflowDescription<Plan>>::new(path));
+                .with(PlanTrace::<HirRelationExpr>::new(filter))
+                .with(PlanTrace::<MirRelationExpr>::new(filter))
+                .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(filter))
+                .with(PlanTrace::<DataflowDescription<Plan>>::new(filter))
+                // Don't filter for FastPathPlan entries (there can be at most one).
+                .with(PlanTrace::<FastPathPlan>::new(None));
 
             OptimizerTrace(dispatcher::Dispatch::new(subscriber))
         }
@@ -97,7 +100,6 @@ impl OptimizerTrace {
         humanizer: &dyn ExprHumanizer,
         row_set_finishing: Option<RowSetFinishing>,
         used_indexes: UsedIndexes,
-        fast_path_plan: Option<FastPathPlan>,
         dataflow_metainfo: DataflowMetainfo,
     ) -> Result<Vec<TraceEntry<String>>, ExplainError> {
         let mut results = vec![];
@@ -119,8 +121,8 @@ impl OptimizerTrace {
 
         // Drain trace entries of types produced by local optimizer stages.
         results.extend(itertools::chain!(
-            self.drain_explainable_entries::<HirRelationExpr>(&format, &mut context, &None)?,
-            self.drain_explainable_entries::<MirRelationExpr>(&format, &mut context, &None)?,
+            self.drain_explainable_entries::<HirRelationExpr>(&format, &mut context)?,
+            self.drain_explainable_entries::<MirRelationExpr>(&format, &mut context)?,
         ));
 
         // Drain trace entries of types produced by global optimizer stages.
@@ -136,23 +138,13 @@ impl OptimizerTrace {
                 config.redacted,
             )?,
         };
-        let fast_path_plan = match fast_path_plan {
-            Some(mut plan) if !context.config.no_fast_path => {
-                Some(Explainable::new(&mut plan).explain(&format, &context)?)
-            }
-            _ => None,
-        };
         results.extend(itertools::chain!(
             self.drain_explainable_entries::<DataflowDescription<OptimizedMirRelationExpr>>(
                 &format,
                 &mut context,
-                &fast_path_plan
             )?,
-            self.drain_explainable_entries::<DataflowDescription<Plan>>(
-                &format,
-                &mut context,
-                &fast_path_plan
-            )?,
+            self.drain_explainable_entries::<DataflowDescription<Plan>>(&format, &mut context)?,
+            self.drain_explainable_entries::<FastPathPlan>(&format, &mut context)?,
         ));
 
         // Drain trace entries of type String, HirScalarExpr, MirScalarExpr
@@ -177,7 +169,6 @@ impl OptimizerTrace {
         &self,
         format: &ExplainFormat,
         context: &mut ExplainContext,
-        fast_path_plan: &Option<String>,
     ) -> Result<Vec<TraceEntry<String>>, ExplainError>
     where
         T: Clone + Debug + 'static,
@@ -190,32 +181,13 @@ impl OptimizerTrace {
                 .map(|mut entry| {
                     // update the context with the current time
                     context.duration = entry.full_duration;
-                    match fast_path_plan {
-                        Some(fast_path_plan)
-                            if !context.config.no_fast_path && {
-                                [
-                                    ExplainStage::OptimizedPlan.path().expect("path"),
-                                    ExplainStage::PhysicalPlan.path().expect("path"),
-                                ]
-                                .contains(&entry.path.as_str())
-                            } =>
-                        {
-                            Ok(TraceEntry {
-                                instant: entry.instant,
-                                span_duration: entry.span_duration,
-                                full_duration: entry.full_duration,
-                                path: entry.path,
-                                plan: fast_path_plan.clone(),
-                            })
-                        }
-                        _ => Ok(TraceEntry {
-                            instant: entry.instant,
-                            span_duration: entry.span_duration,
-                            full_duration: entry.full_duration,
-                            path: entry.path,
-                            plan: Explainable::new(&mut entry.plan).explain(format, context)?,
-                        }),
-                    }
+                    Ok(TraceEntry {
+                        instant: entry.instant,
+                        span_duration: entry.span_duration,
+                        full_duration: entry.full_duration,
+                        path: entry.path,
+                        plan: Explainable::new(&mut entry.plan).explain(format, context)?,
+                    })
                 })
                 .collect()
         } else {
