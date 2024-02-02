@@ -8,20 +8,23 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeSet;
+use std::str::FromStr;
 use std::sync::Arc;
 
+use http::Uri;
+use itertools::Either;
 use maplit::btreemap;
 use mz_controller_types::ClusterId;
 use mz_expr::CollectionPlan;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::{trace_plan, ExprHumanizerExt, TransientItem, UsedIndexes};
-use mz_repr::{Datum, GlobalId, Row, Timestamp};
+use mz_repr::{Datum, GlobalId, Row, RowArena, Timestamp};
 use mz_sql::catalog::CatalogCluster;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_catalog::memory::objects::CatalogItem;
-use mz_sql::plan;
 use mz_sql::plan::QueryWhen;
+use mz_sql::plan::{self, HirScalarExpr};
 use mz_transform::EmptyStatisticsOracle;
 use tracing::Instrument;
 use tracing::{event, warn, Level};
@@ -35,16 +38,19 @@ use crate::coord::timestamp_selection::{
     TimestampContext, TimestampDetermination, TimestampProvider,
 };
 use crate::coord::{
-    Coordinator, ExecuteContext, ExplainContext, Message, PeekStage, PeekStageExplain,
-    PeekStageFinish, PeekStageOptimizeLir, PeekStageOptimizeMir, PeekStageRealTimeRecency,
-    PeekStageTimestamp, PeekStageValidate, PlanValidity, RealTimeRecencyContext, TargetCluster,
+    Coordinator, CopyToContext, ExecuteContext, ExplainContext, Message, PeekStage,
+    PeekStageCopyTo, PeekStageExplain, PeekStageFinish, PeekStageOptimizeLir, PeekStageOptimizeMir,
+    PeekStageRealTimeRecency, PeekStageTimestamp, PeekStageValidate, PlanValidity,
+    RealTimeRecencyContext, TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
+use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
 use crate::optimize::{self, Optimize};
 use crate::session::{RequireLinearization, Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
+use crate::util::ResultExt;
 
 impl Coordinator {
     /// Sequence a peek, determining a timestamp and the most efficient dataflow interaction.
@@ -68,6 +74,65 @@ impl Coordinator {
             PeekStage::Validate(PeekStageValidate {
                 plan,
                 target_cluster,
+                copy_to_ctx: None,
+                explain_ctx: None,
+            }),
+        )
+        .await;
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(crate) async fn sequence_copy_to(
+        &mut self,
+        ctx: ExecuteContext,
+        plan::CopyToPlan {
+            select_plan,
+            desc,
+            to,
+            connection,
+            format_params,
+        }: plan::CopyToPlan,
+        target_cluster: TargetCluster,
+    ) {
+        let eval_uri = |to: HirScalarExpr| -> Result<Uri, AdapterError> {
+            let style = ExprPrepStyle::OneShot {
+                logical_time: EvalTime::NotAvailable,
+                session: ctx.session(),
+                catalog_state: self.catalog().state(),
+            };
+            let mut to = to.lower_uncorrelated()?;
+            prep_scalar_expr(&mut to, style)?;
+            let temp_storage = RowArena::new();
+            let evaled = to.eval(&[], &temp_storage)?;
+            if evaled == Datum::Null {
+                coord_bail!("COPY TO target value can not be null");
+            }
+            let to_url = match Uri::from_str(evaled.unwrap_str()) {
+                Ok(url) => {
+                    if url.scheme_str() != Some("s3") {
+                        coord_bail!("only 's3://...' urls are supported as COPY TO target");
+                    }
+                    url
+                }
+                Err(e) => coord_bail!("could not parse COPY TO target url: {}", e),
+            };
+            Ok(to_url)
+        };
+
+        let uri = return_if_err!(eval_uri(to), ctx);
+
+        self.execute_peek_stage(
+            ctx,
+            OpenTelemetryContext::obtain(),
+            PeekStage::Validate(PeekStageValidate {
+                plan: select_plan,
+                target_cluster,
+                copy_to_ctx: Some(CopyToContext {
+                    desc,
+                    uri,
+                    connection,
+                    format_params,
+                }),
                 explain_ctx: None,
             }),
         )
@@ -107,6 +172,7 @@ impl Coordinator {
             PeekStage::Validate(PeekStageValidate {
                 plan,
                 target_cluster,
+                copy_to_ctx: None,
                 explain_ctx: Some(ExplainContext {
                     broken,
                     config,
@@ -176,6 +242,11 @@ impl Coordinator {
                     ctx.retire(res);
                     return;
                 }
+                CopyTo(stage) => {
+                    let result = self.peek_stage_copy_to(&mut ctx, stage);
+                    ctx.retire(result);
+                    return;
+                }
                 Explain(stage) => {
                     let result = self.peek_stage_explain(&mut ctx, stage);
                     ctx.retire(result);
@@ -193,6 +264,7 @@ impl Coordinator {
         PeekStageValidate {
             plan,
             target_cluster,
+            copy_to_ctx,
             explain_ctx,
         }: PeekStageValidate,
     ) -> Result<PeekStageTimestamp, AdapterError> {
@@ -203,22 +275,45 @@ impl Coordinator {
             .instance_snapshot(cluster.id())
             .expect("compute instance does not exist");
         let view_id = self.allocate_transient_id()?;
-        let index_id = self.allocate_transient_id()?;
         let optimizer_config = if let Some(explain_ctx) = explain_ctx.as_ref() {
             optimize::OptimizerConfig::from((self.catalog().system_config(), &explain_ctx.config))
         } else {
             optimize::OptimizerConfig::from(self.catalog().system_config())
         };
 
-        // Build an optimizer for this SELECT.
-        let optimizer = optimize::peek::Optimizer::new(
-            Arc::clone(&catalog),
-            compute_instance,
-            plan.finishing.clone(),
-            view_id,
-            index_id,
-            optimizer_config,
-        );
+        let optimizer = match copy_to_ctx {
+            None => {
+                // Collect optimizer parameters specific to the peek::Optimizer.
+                let compute_instance = self
+                    .instance_snapshot(cluster.id())
+                    .expect("compute instance does not exist");
+                let view_id = self.allocate_transient_id()?;
+                let index_id = self.allocate_transient_id()?;
+
+                // Build an optimizer for this SELECT.
+                Either::Left(optimize::peek::Optimizer::new(
+                    Arc::clone(&catalog),
+                    compute_instance,
+                    plan.finishing.clone(),
+                    view_id,
+                    index_id,
+                    optimizer_config,
+                ))
+            }
+            Some(copy_to_ctx) => {
+                // Build an optimizer for this COPY TO.
+                Either::Right(optimize::copy_to::Optimizer::new(
+                    Arc::clone(&catalog),
+                    compute_instance,
+                    view_id,
+                    copy_to_ctx.desc,
+                    copy_to_ctx.uri,
+                    copy_to_ctx.connection,
+                    copy_to_ctx.format_params,
+                    optimizer_config,
+                ))
+            }
+        };
 
         let target_replica_name = session.vars().cluster_replica();
         let mut target_replica = target_replica_name
@@ -390,10 +485,15 @@ impl Coordinator {
         // expensive optimizations.
         let internal_cmd_tx = self.internal_cmd_tx.clone();
 
+        let cluster_id = match optimizer.as_ref() {
+            Either::Left(optimizer) => optimizer.cluster_id(),
+            Either::Right(optimizer) => optimizer.cluster_id(),
+        };
+
         // TODO: Is there a way to avoid making two dataflow_builders (the second is in
         // optimize_peek)?
         let id_bundle = self
-            .dataflow_builder(optimizer.cluster_id())
+            .dataflow_builder(cluster_id)
             .sufficient_collections(&source_ids);
         // Although we have added `sources.depends_on()` to the validity already, also add the
         // sufficient collections for safety.
@@ -405,7 +505,7 @@ impl Coordinator {
                     ctx.session(),
                     &id_bundle,
                     &plan.when,
-                    optimizer.cluster_id(),
+                    cluster_id,
                     &timeline_context,
                     oracle_read_ts.clone(),
                     None,
@@ -428,7 +528,11 @@ impl Coordinator {
         mz_ore::task::spawn_blocking(
             || "optimize peek (MIR)",
             move || {
-                let pipeline = || -> Result<optimize::peek::GlobalMirPlan, AdapterError> {
+                let pipeline = ||
+                 -> Result<
+                    Either<optimize::peek::GlobalMirPlan, optimize::copy_to::GlobalMirPlan>,
+                    AdapterError,
+                > {
                     // In `explain_~` contexts, set the trace-derived dispatch
                     // as default while optimizing.
                     let _dispatch_guard = if let Some(explain_ctx) = explain_ctx.as_ref() {
@@ -448,12 +552,28 @@ impl Coordinator {
                         trace_plan(&raw_expr);
                     });
 
-                    // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
-                    let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
-                    let local_mir_plan = local_mir_plan.resolve(ctx.session(), stats);
-                    let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
+                    match optimizer.as_mut() {
+                        // Optimize SELECT statement.
+                        Either::Left(optimizer) => {
+                            // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
+                            let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
+                            let local_mir_plan = local_mir_plan.resolve(ctx.session(), stats);
+                            let global_mir_plan =
+                                optimizer.catch_unwind_optimize(local_mir_plan)?;
 
-                    Ok(global_mir_plan)
+                            Ok(Either::Left(global_mir_plan))
+                        }
+                        // Optimize COPY TO statement.
+                        Either::Right(optimizer) => {
+                            // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
+                            let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
+                            let local_mir_plan = local_mir_plan.resolve(ctx.session(), stats);
+                            let global_mir_plan =
+                                optimizer.catch_unwind_optimize(local_mir_plan)?;
+
+                            Ok(Either::Right(global_mir_plan))
+                        }
+                    }
                 };
 
                 let stage = match pipeline() {
@@ -478,6 +598,8 @@ impl Coordinator {
                             // execution with the error.
                             return ctx.retire(Err(err.into()));
                         };
+
+                        let optimizer = optimizer.unwrap_left();
 
                         if explain_ctx.broken {
                             // In `EXPLAIN BROKEN` contexts, just log the error
@@ -605,8 +727,13 @@ impl Coordinator {
         // expensive optimizations.
         let internal_cmd_tx = self.internal_cmd_tx.clone();
 
+        let cluster_id = match optimizer.as_ref() {
+            Either::Left(optimizer) => optimizer.cluster_id(),
+            Either::Right(optimizer) => optimizer.cluster_id(),
+        };
+
         let id_bundle = id_bundle.unwrap_or_else(|| {
-            self.index_oracle(optimizer.cluster_id())
+            self.index_oracle(cluster_id)
                 .sufficient_collections(&source_ids)
         });
 
@@ -614,7 +741,7 @@ impl Coordinator {
             .sequence_peek_timestamp(
                 ctx.session_mut(),
                 &plan.when,
-                optimizer.cluster_id(),
+                cluster_id,
                 timeline_context,
                 oracle_read_ts,
                 &id_bundle,
@@ -631,7 +758,7 @@ impl Coordinator {
             || "optimize peek (LIR)",
             move || {
                 let pipeline =
-                    || -> Result<(optimize::peek::GlobalLirPlan, UsedIndexes), AdapterError> {
+                    || -> Result<(Either<optimize::peek::GlobalLirPlan, optimize::copy_to::GlobalLirPlan>, UsedIndexes), AdapterError> {
                         // In `explain_~` contexts, set the trace-derived dispatch
                         // as default while optimizing.
                         let _dispatch_guard = if let Some(explain_ctx) = explain_ctx.as_ref() {
@@ -644,50 +771,72 @@ impl Coordinator {
                         let _span_guard =
                             tracing::debug_span!(target: "optimizer", "optimize").entered();
 
-                        // Collect the list of indexes used by the dataflow at this point
-                        let mut used_indexes = {
-                            let df_desc = global_mir_plan.df_desc();
-                            let df_meta = global_mir_plan.df_meta();
-                            UsedIndexes::new(
-                                df_desc
-                                    .index_imports
-                                    .iter()
-                                    .map(|(id, _index_import)| {
-                                        (*id, df_meta.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
-                                    })
-                                    .collect(),
-                            )
-                        };
+                        match optimizer.as_mut() {
+                            // Optimize SELECT statement.
+                            Either::Left(optimizer) => {
+                                let global_mir_plan = global_mir_plan.unwrap_left();
 
-                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                        let global_mir_plan =
-                            global_mir_plan.resolve(timestamp_context.clone(), ctx.session_mut());
-                        let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
-
-                        // Trace the resulting plan for the top-level `optimize` path.
-                        match global_lir_plan.peek_plan() {
-                            peek::PeekPlan::FastPath(plan) => {
-                                let arity = global_lir_plan.typ().arity();
-                                let finishing = if !optimizer.finishing().is_trivial(arity) {
-                                    Some(optimizer.finishing().clone())
-                                } else {
-                                    None
+                                // Collect the list of indexes used by the dataflow at this point
+                                let mut used_indexes = {
+                                    let df_desc = global_mir_plan.df_desc();
+                                    let df_meta = global_mir_plan.df_meta();
+                                    UsedIndexes::new(
+                                    df_desc
+                                        .index_imports
+                                        .iter()
+                                        .map(|(id, _index_import)| {
+                                            (*id, df_meta.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
+                                        })
+                                        .collect(),
+                                )
                                 };
-                                used_indexes = plan.used_indexes(&finishing);
 
-                                // TODO(aalexandrov): rework `OptimizerTrace` with support
-                                // for diverging plan types towards the end and add a
-                                // `PlanTrace` for the `FastPathPlan` type.
-                                trace_plan(&"fast_path_plan (missing)".to_string());
+                                // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                                let global_mir_plan = global_mir_plan
+                                    .resolve(timestamp_context.clone(), ctx.session_mut());
+                                let global_lir_plan =
+                                    optimizer.catch_unwind_optimize(global_mir_plan)?;
+
+                                // Trace the resulting plan for the top-level `optimize` path.
+                                match global_lir_plan.peek_plan() {
+                                    peek::PeekPlan::FastPath(plan) => {
+                                        let arity = global_lir_plan.typ().arity();
+                                        let finishing = if !optimizer.finishing().is_trivial(arity)
+                                        {
+                                            Some(optimizer.finishing().clone())
+                                        } else {
+                                            None
+                                        };
+                                        used_indexes = plan.used_indexes(&finishing);
+
+                                        // TODO(aalexandrov): rework `OptimizerTrace` with support
+                                        // for diverging plan types towards the end and add a
+                                        // `PlanTrace` for the `FastPathPlan` type.
+                                        trace_plan(&"fast_path_plan (missing)".to_string());
+                                    }
+                                    peek::PeekPlan::SlowPath(plan) => trace_plan(&plan.desc),
+                                }
+
+                                Ok((Either::Left(global_lir_plan), used_indexes))
                             }
-                            peek::PeekPlan::SlowPath(plan) => trace_plan(&plan.desc),
-                        }
+                            // Optimize COPY TO statement.
+                            Either::Right(optimizer) => {
+                                let global_mir_plan = global_mir_plan.unwrap_right();
 
-                        Ok((global_lir_plan, used_indexes))
+                                // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                                let global_mir_plan = global_mir_plan
+                                    .resolve(timestamp_context.clone(), ctx.session_mut())?;
+                                let global_lir_plan =
+                                    optimizer.catch_unwind_optimize(global_mir_plan)?;
+
+                                Ok((Either::Right(global_lir_plan), UsedIndexes::default()))
+                            }
+                        }
                     };
 
                 let stage = match pipeline() {
-                    Ok((global_lir_plan, used_indexes)) => {
+                    Ok((Either::Left(global_lir_plan), used_indexes)) => {
+                        let optimizer = optimizer.unwrap_left();
                         if let Some(explain_ctx) = explain_ctx {
                             let (peek_plan, df_meta) = global_lir_plan.unapply();
                             PeekStage::Explain(PeekStageExplain {
@@ -716,9 +865,22 @@ impl Coordinator {
                             })
                         }
                     }
+                    Ok((Either::Right(global_lir_plan), _)) => {
+                        let optimizer = optimizer.unwrap_right();
+                        PeekStage::CopyTo(PeekStageCopyTo {
+                            validity,
+                            optimizer,
+                            global_lir_plan,
+                        })
+                    }
                     // Internal optimizer errors are handled differently
                     // depending on the caller.
                     Err(err) => {
+                        let Some(optimizer) = optimizer.left() else {
+                            // In `COPY TO` contexts, immediately retire the
+                            // execution with the error.
+                            return ctx.retire(Err(err.into()));
+                        };
                         let Some(explain_ctx) = explain_ctx else {
                             // In `sequence_~` contexts, immediately retire the
                             // execution with the error.
@@ -861,6 +1023,34 @@ impl Coordinator {
                 resp: Box::new(resp),
             }),
         }
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    fn peek_stage_copy_to(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        PeekStageCopyTo {
+            validity: _,
+            optimizer,
+            global_lir_plan,
+        }: PeekStageCopyTo,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let session = ctx.session_mut();
+        let (df_desc, df_meta) = global_lir_plan.unapply();
+
+        self.emit_optimizer_notices(&*session, &df_meta.optimizer_notices);
+
+        // Ship the dataflow
+        self.controller
+            .active_compute()
+            .create_dataflow(optimizer.cluster_id(), df_desc)
+            .unwrap_or_terminate("cannot fail to create dataflows");
+
+        // TODO(mouli): implement!
+        Err(AdapterError::Internal(format!(
+            "COPY TO '{}' is not yet implemented",
+            optimizer.copy_to_uri()
+        )))
     }
 
     fn peek_stage_explain(
