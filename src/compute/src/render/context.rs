@@ -12,6 +12,7 @@
 
 use std::collections::BTreeMap;
 use std::rc::Weak;
+use std::sync::mpsc;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
@@ -33,8 +34,10 @@ use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
+use tracing::error;
 
 use crate::arrangement::manager::SpecializedTraceHandle;
+use crate::compute_state::{ComputeState, HydrationEvent};
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::errors::ErrorLogger;
 use crate::render::join::LinearJoinSpec;
@@ -79,6 +82,10 @@ where
     pub bindings: BTreeMap<Id, CollectionBundle<S, T>>,
     /// A token that operators can probe to know whether the dataflow is shutting down.
     pub(super) shutdown_token: ShutdownToken,
+    /// A logger that operators can use to report hydration events.
+    ///
+    /// `None` if no hydration events should be logged in this context.
+    pub(super) hydration_logger: Option<HydrationLogger>,
     /// Specification for rendering linear joins.
     pub(super) linear_join_spec: LinearJoinSpec,
 }
@@ -91,6 +98,7 @@ where
     pub fn for_dataflow_in<Plan>(
         dataflow: &DataflowDescription<Plan, CollectionMetadata>,
         scope: S,
+        compute_state: &ComputeState,
     ) -> Self {
         use mz_ore::collections::CollectionExt as IteratorExt;
         let dataflow_id = scope.addr().into_first();
@@ -98,6 +106,18 @@ where
             .as_of
             .clone()
             .unwrap_or_else(|| Antichain::from_elem(Timestamp::minimum()));
+
+        // Skip operator hydration logging for transient dataflows. We do this to avoid overhead
+        // for slow-path peeks, but it also affects subscribes. For now that seems fine, but we may
+        // want to reconsider in the future.
+        let hydration_logger = if dataflow.is_transient() {
+            None
+        } else {
+            Some(HydrationLogger {
+                export_ids: dataflow.export_ids().collect(),
+                tx: compute_state.hydration_tx.clone(),
+            })
+        };
 
         Self {
             scope,
@@ -107,7 +127,8 @@ where
             until: dataflow.until.clone(),
             bindings: BTreeMap::new(),
             shutdown_token: Default::default(),
-            linear_join_spec: Default::default(),
+            hydration_logger,
+            linear_join_spec: compute_state.linear_join_spec,
         }
     }
 }
@@ -194,6 +215,33 @@ impl ShutdownToken {
     /// Returns a reference to the wrapped `Weak`.
     pub(crate) fn get_inner(&self) -> Option<&Weak<()>> {
         self.0.as_ref()
+    }
+}
+
+/// A logger for operator hydration events emitted for a dataflow export.
+#[derive(Clone)]
+pub(super) struct HydrationLogger {
+    export_ids: Vec<GlobalId>,
+    tx: mpsc::Sender<HydrationEvent>,
+}
+
+impl HydrationLogger {
+    /// Log a hydration event for the identified LIR node.
+    ///
+    /// The expectation is that rendering code arranges for `hydrated = false` to be logged for
+    /// each LIR node when a dataflow is first created. Then `hydrated = true` should be logged as
+    /// operators become hydrated.
+    pub fn log(&self, lir_id: u64, hydrated: bool) {
+        for &export_id in &self.export_ids {
+            let event = HydrationEvent {
+                export_id,
+                lir_id,
+                hydrated,
+            };
+            if self.tx.send(event).is_err() {
+                error!("hydration event receiver dropped unexpectely");
+            }
+        }
     }
 }
 

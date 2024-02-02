@@ -255,10 +255,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     }
 }
 
-impl<P, S, T> DataflowDescription<P, S, T>
-where
-    P: CollectionPlan,
-{
+impl<P, S, T> DataflowDescription<P, S, T> {
     /// Assigns the `as_of` frontier to the supplied argument.
     ///
     /// This method allows the dataflow to indicate a frontier up through
@@ -360,7 +357,12 @@ where
         assert!(builds.next().is_none());
         build
     }
+}
 
+impl<P, S, T> DataflowDescription<P, S, T>
+where
+    P: CollectionPlan,
+{
     /// Computes the set of identifiers upon which the specified collection
     /// identifier depends.
     ///

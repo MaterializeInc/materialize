@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::ops::DerefMut;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use bytesize::ByteSize;
@@ -27,7 +27,7 @@ use mz_compute_client::protocol::response::{
     ComputeResponse, CopyToResponse, PeekResponse, SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::Plan;
+use mz_compute_types::plan::{NodeId, Plan};
 use mz_expr::SafeMfpPlan;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::UIntGauge;
@@ -109,6 +109,13 @@ pub struct ComputeState {
     tracing_handle: Arc<TracingHandle>,
     /// Other configuration for compute
     pub context: ComputeInstanceContext,
+
+    /// Receiver of operator hydration events.
+    pub hydration_rx: mpsc::Receiver<HydrationEvent>,
+    /// Transmitter of operator hydration events.
+    ///
+    /// Copies of this sender are passed to the hydration logging operators.
+    pub hydration_tx: mpsc::Sender<HydrationEvent>,
 }
 
 impl ComputeState {
@@ -122,6 +129,7 @@ impl ComputeState {
     ) -> Self {
         let traces = TraceManager::new(metrics.for_traces(worker_id));
         let command_history = ComputeCommandHistory::new(metrics.for_history(worker_id));
+        let (hydration_tx, hydration_rx) = mpsc::channel();
 
         Self {
             collections: Default::default(),
@@ -139,6 +147,8 @@ impl ComputeState {
             metrics,
             tracing_handle,
             context,
+            hydration_rx,
+            hydration_tx,
         }
     }
 
@@ -534,6 +544,14 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 id,
                 upper: Antichain::new(),
             });
+        }
+    }
+
+    /// Report operator hydration events.
+    pub fn report_operator_hydration(&mut self) {
+        let worker_id = self.timely_worker.index();
+        for event in self.compute_state.hydration_rx.try_iter() {
+            // TODO: send compute response
         }
     }
 
@@ -1283,4 +1301,14 @@ impl CollectionState {
     fn is_subscribe(&self) -> bool {
         self.sink_token.is_some() && self.sink_write_frontier.is_none()
     }
+}
+
+/// An event reporting the hydration status of an LIR node in a dataflow.
+pub struct HydrationEvent {
+    /// The ID of the export this dataflow maintains.
+    pub export_id: GlobalId,
+    /// The ID of the LIR node.
+    pub lir_id: NodeId,
+    /// Whether the node is hydrated.
+    pub hydrated: bool,
 }

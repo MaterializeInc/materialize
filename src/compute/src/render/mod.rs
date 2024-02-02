@@ -138,7 +138,9 @@ use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::logging::compute::{LogDataflowErrors, LogImportFrontiers};
-use crate::render::context::{ArrangementFlavor, Context, ShutdownToken, SpecializedArrangement};
+use crate::render::context::{
+    ArrangementFlavor, Context, ShutdownToken, SpecializedArrangement, SpecializedArrangementImport,
+};
 use crate::typedefs::{ErrSpine, KeyBatcher};
 
 pub mod context;
@@ -260,8 +262,8 @@ pub fn build_compute_dataflow<A: Allocate>(
         // in order to support additional timestamp coordinates for iteration.
         if recursive {
             scope.clone().iterative::<PointStamp<u64>, _, _>(|region| {
-                let mut context = Context::for_dataflow_in(&dataflow, region.clone());
-                context.linear_join_spec = compute_state.linear_join_spec;
+                let mut context =
+                    Context::for_dataflow_in(&dataflow, region.clone(), compute_state);
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let bundle = crate::render::CollectionBundle::from_collections(
@@ -312,8 +314,8 @@ pub fn build_compute_dataflow<A: Allocate>(
             });
         } else {
             scope.clone().region_named(&build_name, |region| {
-                let mut context = Context::for_dataflow_in(&dataflow, region.clone());
-                context.linear_join_spec = compute_state.linear_join_spec;
+                let mut context =
+                    Context::for_dataflow_in(&dataflow, region.clone(), compute_state);
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let bundle = crate::render::CollectionBundle::from_collections(
@@ -747,7 +749,9 @@ where
     /// The return type reflects the uncertainty about the data representation, perhaps
     /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
     pub fn render_plan(&mut self, plan: Plan) -> CollectionBundle<G> {
-        match plan {
+        let lir_id = plan.node_id();
+
+        let mut bundle = match plan {
             Plan::Constant { rows, node_id: _ } => {
                 // Produce both rows and errs to avoid conditional dataflow construction.
                 let (rows, errs) = match rows {
@@ -956,7 +960,88 @@ where
                 let input = self.render_plan(*input);
                 input.ensure_collections(keys, input_key, input_mfp, self.until.clone())
             }
+        };
+
+        self.log_operator_hydration(&mut bundle, lir_id);
+        bundle
+    }
+
+    fn log_operator_hydration(&self, bundle: &mut CollectionBundle<G>, lir_id: u64) {
+        match &mut bundle.collection {
+            Some((oks, _)) => {
+                let stream = self.log_operator_hydration_inner(&oks.inner, lir_id);
+                *oks = stream.as_collection();
+            }
+            None => {
+                use ArrangementFlavor::*;
+                use SpecializedArrangement as A;
+                use SpecializedArrangementImport as AI;
+
+                let arrangement = bundle.arranged.values_mut().next().unwrap();
+                match arrangement {
+                    Local(A::RowRow(a), _) => {
+                        a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
+                    }
+                    Local(A::RowUnit(a), _) => {
+                        a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
+                    }
+                    Trace(_, AI::RowRow(a), _) => {
+                        a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
+                    }
+                    Trace(_, AI::RowUnit(a), _) => {
+                        a.stream = self.log_operator_hydration_inner(&a.stream, lir_id);
+                    }
+                }
+            }
         }
+    }
+
+    fn log_operator_hydration_inner<D>(&self, stream: &Stream<G, D>, lir_id: u64) -> Stream<G, D>
+    where
+        D: Clone + 'static,
+    {
+        let Some(logger) = self.hydration_logger.clone() else {
+            return stream.clone(); // hydration logging disabled
+        };
+
+        // Convert the dataflow as-of into a frontier we can compare with input frontiers.
+        //
+        // We (somewhat arbitrarily) define operators in iterative scopes to be hydrated when their
+        // frontier advances to an outer time that's greater than the `as_of`. Comparing
+        // `refine(as_of) < input_frontier` would find the moment when the first iteration was
+        // complete, which is not what we want. We want `refine(as_of + 1) <= input_frontier`
+        // instead.
+        let mut hydration_frontier = Antichain::new();
+        for time in self.as_of_frontier.iter() {
+            if let Some(time) = time.try_step_forward() {
+                hydration_frontier.insert(Refines::to_inner(time));
+            }
+        }
+
+        let name = format!("LogOperationHydration ({lir_id})");
+        stream.unary_frontier(Pipeline, &name, |_cap, _info| {
+            let mut hydrated = false;
+            logger.log(lir_id, hydrated);
+
+            let mut buffer = Vec::new();
+            move |input, output| {
+                // Pass through inputs.
+                input.for_each(|cap, data| {
+                    data.swap(&mut buffer);
+                    output.session(&cap).give_vec(&mut buffer);
+                });
+
+                if hydrated {
+                    return;
+                }
+
+                let frontier = input.frontier().frontier();
+                if PartialOrder::less_equal(&hydration_frontier.borrow(), &frontier) {
+                    hydrated = true;
+                    logger.log(lir_id, hydrated);
+                }
+            }
+        })
     }
 }
 
