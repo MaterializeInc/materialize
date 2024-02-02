@@ -1,39 +1,38 @@
-# Platform v2: Logical Architecture
-
-> [!WARNING]
-> This is a first draft! I wanted to get the general idea out as fast as I
-> could, so please hold any line-level/nitty gritty comments for now and
-> consider the big picture.
->
-> Thanks!
+# Platform v2: Logical Architecture of the Query/Control Layer
 
 ## Context
 
 As part of the platform v2 work (specifically use-case isolation) we want to
-develop a scalable and isolated serving layer that is made up of multiple
+develop a scalable and isolated query/control layer that is made up of multiple
 processes that interact with distributed primitives at the moments where
 coordination is required.
 
-In our current architecture, the Coordinator is a component that employs a
-"single-threaded" event loop to sequentialize, among other things, processing
-of all user queries and their responses. This is a blocker for having a
-scalable and isolated serving layer because serving work for all workloads is
+The query/control layer is the point where different parts come together. For
+our purposes, it comprises the Adapter, which is responsible for translating
+user queries into commands for other parts and the Controllers, which are
+responsible for driving around clusters and what runs on them. A central
+component here is the Coordinator, which mediates between the other components
+and owns the durable state of an environment and ensures _correctness_
+(roughly, _strict serializable_).
+
+With our current architecture, ensuring correctness requires that the
+Coordinator employ a "single-threaded" event loop to sequentialize, among other
+things, processing of all user queries and their responses. This is a blocker
+for having a scalable and isolated query/control layer: all workloads are
 competing for execution time on the single event loop.
 
-I propose a change to our Coordination Layer that makes it decoupled and
-isolated, along with a roadmap for getting to the full vision of isolated
-serving-layer processes that will allow us to incrementally provide user value,
-along the milestones laid out in [Use-Case Isolation: Milestones
-(internal)](https://www.notion.so/materialize/Use-case-Isolation-Milestones-b64e53900c0c498eae4bd38df6adb7c8).
+We talk about threads, tasks, and loops below, but those should be understood
+more as logical concepts, rather than physical implementation details. Though
+there is of course a connection and we talk about the current physical
+implementation. We _will_ propose a separate design doc that lays our the
+post-platform-v2 physical architecture, having to do with processes and threads
+and how they interact. The logical architecture described here is what will
+enable that physical architecture and we focus on the arguments for why it does
+provide correctness.
 
 ## Goals
 
-- shrink number of types of operations that are sequentialized through the
-  singleton Coordinator event loop
-- decouple processing of peeks from the singleton event loop
-- decouple processing of table writes from the singleton event loop
-- decouple processing of webhook appends from the singleton event loop
-- decouple processing of cluster/controller events from the singleton event loop
+- describe a logical design that allows for a more decoupled query-control layer
 
 ## Non-Goals
 
@@ -43,16 +42,17 @@ along the milestones laid out in [Use-Case Isolation: Milestones
 
 ## Overview
 
-In order to understand (and be able to judge) the proposal below we first need
-to understand what the Coordinator is doing and why it currently has a
-singleton event loop. I will therefore first explore the Coordinator in
-Background. Then I will give my proposed logical architecture design. To close
-things out, I will describe a roadmap, highlighting interesting incremental
-value that we can deliver along the way.
+In order to understand the proposal below we first need to understand what the
+Coordinator (a central component of the query/control layer) is doing and why
+it currently requires a singleton event loop for correctness. I will therefore
+first explore the Coordinator in Background. Then I will give my proposed
+logical architecture design. To close things out, I will describe a roadmap,
+highlighting interesting incremental value that we can deliver along the way.
 
 The choice of splitting the design into a logical and a physical architecture
 is meant to mirror [architecture-db.md](./../platform/architecture-db.md), but
-we are focusing on the ADAPTER.
+we are focusing on the query/control layer, also called ADAPTER in those earlier
+design docs.
 
 It is interesting to note that the proposed design is very much in line with
 the design principles laid out a while ago in
@@ -129,12 +129,12 @@ Catalog contents or changes to the Catalog to Controller commands.
 
 ### External Commands
 
-We can also differentiate external commands using similar categories:
+We can differentiate external commands using similar categories:
 
 1. DDL: Commands that modify the Catalog, which potentially can cause Controller
    Commands to be synthesized.
-2. DML: Commands that modify non-Catalog state. Think largely `INSERT`-style queries
-   that insert data into user collections.
+2. DML: Commands that modify non-Catalog state. Think largely `INSERT`-style
+   queries that insert data into user collections.
 3. DQL: Commands that only query data. Either from the Catalog or user
    collections/tables.
 
@@ -159,11 +159,10 @@ the even loop, which will eventually send results back over pgwire.
 ### Sequencing for Correctness
 
 The current design uses the sequencing of the single event loop, along with the
-priorities of which messages to process, to uphold our correctness guarantees
-(think strict serializability): external commands and the internal commands
-their processing spawns are brought into a total order, and
-Coordinator/Controller state can only be modified by one operation at a time.
-This "trivially" makes for a linearizable system.
+priorities of which messages to process, to uphold our correctness guarantees:
+external commands and the internal commands their processing spawns are brought
+into a total order, and Coordinator/Controller state can only be modified by one
+operation at a time. This "trivially" makes for a linearizable system.
 
 For example, think of a scenario where multiple concurrent clients/connections
 create collections (`DDL`) and query or write to those collections (`DQL` and
@@ -260,8 +259,8 @@ Assumptions:
 
 We use terms and ideas from
 [architecture-db.md](./../platform/architecture-db.md) and
-[formalism.md](./../platform/formalism.md) so if you haven't read those
-recently now's a good time to brush up on them.
+[formalism.md](./../platform/formalism.md) so if you haven't read those recently
+now's a good time to brush up on them.
 
 This section can be seen as an extension of
 [architecture-db.md](./../platform/architecture-db.md) but we drill down into
@@ -376,8 +375,7 @@ decoupling using pTVCs and timestamps.
 
 ### ADAPTER
 
-ADAPTER spawns threads/processes/tasks for handling client connections as they
-show up.
+ADAPTER spawns tasks for handling client connections as they show up.
 
 Additionally, it spawns one task per controller that runs a loop that
 synthesizes commands for the controller based on differential CATALOG changes.
@@ -414,6 +412,9 @@ Previous design documents describe physical implementations of the newly require
 
  - [Differential CATALOG state](./20230806_durable_catalog_state.md)
  - [TIMESTAMP ORACLE as a service](./20230921_distributed_ts_oracle.md)
+
+As a follow-up, we will propose a design doc for the post-platform-v2 physical,
+distributed architecture.
 
 ## Roadmap for Use-Case Isolation and Platform v2 in General
 
@@ -461,8 +462,7 @@ query/control layer. The current implementation can not scale up by adding more
 resources to the single process/machine because the single event loop is a
 bottleneck. Once responsibilities are decouple we _can_ scale up vertically.
 
-### Milestone 3: A Horizontally Scalable Query/Control Layer, aka. Full Physical
-Use-Case Isolation
+### Milestone 3: A Horizontally Scalable Query/Control Layer, aka. Full Physical Use-Case Isolation
 
 Once the controllers are decoupled from the Coordinator via the Catalog pTVC, we
 can start moving them out into their own processes or move them along-side the
@@ -476,4 +476,3 @@ TBD!
 ## Open questions
 
 ### Are those observations/assumptions around uppers and freshness correct?
-
