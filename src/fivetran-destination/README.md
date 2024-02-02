@@ -20,10 +20,18 @@ for instructions.
 
 ### Binary distribution
 
-To build the destination into a static Rust binary for distribution, run:
+To build the destination into a static Rust binary for distribution, first make sure you have
+updated the `misc/fivetran_sdk` submodule, this is how we include the protobuf definitions for the
+SDK. From the root of the Materialize repository run:
 
 ```shell
-cargo build --bin mz-fivetran-destination
+git submodule update --init --recursize misc/fivetran_sdk
+```
+
+Once you have the `fivetran_sdk` submodule updated, run:
+
+```shell
+cargo build --release --bin mz-fivetran-destination
 ```
 
 Cargo will emit the built binary at
