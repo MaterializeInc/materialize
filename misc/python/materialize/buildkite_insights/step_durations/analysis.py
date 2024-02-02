@@ -10,12 +10,14 @@
 # by the Apache License, Version 2.0.
 
 import argparse
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 import pandas as pd
 
+from materialize import MZ_ROOT
 from materialize.buildkite_insights.util import buildkite_api
 from materialize.buildkite_insights.util.data_io import (
     read_results_from_file,
@@ -56,6 +58,8 @@ MZ_PIPELINES = [
     "www",
 ]
 
+PATH_TO_TEMP_DIR = MZ_ROOT / "temp"
+
 
 @dataclass
 class StepData:
@@ -67,7 +71,18 @@ class StepData:
 
 
 def get_file_name(pipeline_slug: str) -> str:
-    return f"{pipeline_slug}_builds.json"
+    return f"{PATH_TO_TEMP_DIR}/{pipeline_slug}_builds.json"
+
+
+def ensure_temp_dir_exists() -> None:
+    subprocess.run(
+        [
+            "mkdir",
+            "-p",
+            f"{PATH_TO_TEMP_DIR}",
+        ],
+        check=True,
+    )
 
 
 def get_data(
@@ -77,6 +92,8 @@ def get_data(
     branch: str | None,
     build_state: str | None,
 ) -> list[Any]:
+    ensure_temp_dir_exists()
+
     if no_fetch:
         return read_results_from_file(get_file_name(pipeline_slug))
 
