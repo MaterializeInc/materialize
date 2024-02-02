@@ -18,7 +18,7 @@ use async_compression::tokio::bufread::{GzipDecoder, ZstdDecoder};
 use futures::{SinkExt, TryStreamExt};
 use itertools::Itertools;
 use mz_ore::error::ErrorExt;
-use mz_sql_parser::ast::Ident;
+use mz_sql_parser::ast::{Ident, UnresolvedItemName};
 use postgres_protocol::escape;
 use prost::bytes::{BufMut, BytesMut};
 use tokio::fs::File;
@@ -433,15 +433,11 @@ async fn delete_files(
     let prefix = format!("fivetran_temp_{}_", mz_ore::id_gen::temp_id());
     let mut temp_table_name = Ident::new_lossy(prefix);
     temp_table_name.append_lossy(&table.name);
-    let temp_table_name = temp_table_name.into_string();
 
-    let qualified_table_name = format!(
-        "{}.{}",
-        escape::escape_identifier(schema),
-        escape::escape_identifier(&table.name)
-    );
+    let qualified_table_name =
+        UnresolvedItemName::qualified(&[Ident::new(schema)?, Ident::new(&table.name)?]);
     // Note: temporary items are all created in the same schema.
-    let qualified_temp_table_name = escape::escape_identifier(&temp_table_name);
+    let qualified_temp_table_name = UnresolvedItemName::qualified(&[temp_table_name]);
 
     let columns = table
         .columns
