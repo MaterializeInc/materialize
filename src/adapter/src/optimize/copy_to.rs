@@ -12,17 +12,17 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use mz_compute_types::dataflows::IndexDesc;
+use http::Uri;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, S3OneshotSinkConnection};
 use mz_compute_types::ComputeInstanceId;
-use mz_expr::{
-    permutation_for_arrangement, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
-    RowSetFinishing,
-};
+use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
+use mz_pgcopy::CopyFormatParams;
 use mz_repr::explain::trace_plan;
-use mz_repr::{GlobalId, RelationType, Timestamp};
+use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_sql::plan::HirRelationExpr;
+use mz_storage_types::connections::inline::ReferencedConnection;
+use mz_storage_types::connections::Connection;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
@@ -31,14 +31,12 @@ use timely::progress::Antichain;
 use tracing::{span, warn, Level};
 
 use crate::catalog::Catalog;
-use crate::coord::peek::{create_fast_path_plan, PeekDataflowPlan, PeekPlan};
-use crate::coord::CopyToContext;
 use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, EvalTime,
     ExprPrepStyle,
 };
 use crate::optimize::{
-    MirDataflowDescription, Optimize, OptimizeMode, OptimizerConfig, OptimizerError,
+    LirDataflowDescription, MirDataflowDescription, Optimize, OptimizerConfig, OptimizerError,
 };
 use crate::session::Session;
 use crate::TimestampContext;
@@ -50,12 +48,17 @@ pub struct Optimizer {
     catalog: Arc<Catalog>,
     /// A snapshot of the cluster that will run the dataflows.
     compute_instance: ComputeInstanceSnapshot,
-    /// Optional row-set finishing to be applied to the final result.
-    finishing: RowSetFinishing,
     /// A transient GlobalId to be used when constructing the dataflow.
     select_id: GlobalId,
-    /// A transient GlobalId to be used when constructing a PeekPlan.
-    index_id: GlobalId,
+    /// The [`RelationDesc`] for the optimized statement.
+    desc: RelationDesc,
+    /// The destination [`Uri`].
+    copy_to_uri: Uri,
+    /// The connection to be used by the the `COPY TO` sink.
+    copy_to_connection: Connection<ReferencedConnection>,
+    /// Formatting parameters for the `COPY TO` sink.
+    #[allow(dead_code)] // TODO(#7256): remove if not used when the epic is closed.
+    copy_to_format_params: CopyFormatParams<'static>,
     // Optimizer config.
     config: OptimizerConfig,
 }
@@ -64,18 +67,22 @@ impl Optimizer {
     pub fn new(
         catalog: Arc<Catalog>,
         compute_instance: ComputeInstanceSnapshot,
-        finishing: RowSetFinishing,
         select_id: GlobalId,
-        index_id: GlobalId,
+        desc: RelationDesc,
+        copy_to_uri: http::Uri,
+        copy_to_connection: Connection<ReferencedConnection>,
+        copy_to_format_params: CopyFormatParams<'static>,
         config: OptimizerConfig,
     ) -> Self {
         Self {
             typecheck_ctx: empty_context(),
             catalog,
             compute_instance,
-            finishing,
             select_id,
-            index_id,
+            desc,
+            copy_to_uri,
+            copy_to_connection,
+            copy_to_format_params,
             config,
         }
     }
@@ -84,16 +91,8 @@ impl Optimizer {
         self.compute_instance.instance_id()
     }
 
-    pub fn finishing(&self) -> &RowSetFinishing {
-        &self.finishing
-    }
-
-    pub fn select_id(&self) -> GlobalId {
-        self.select_id
-    }
-
-    pub fn index_id(&self) -> GlobalId {
-        self.index_id
+    pub fn copy_to_uri(&self) -> &Uri {
+        &self.copy_to_uri
     }
 }
 
@@ -124,10 +123,9 @@ pub struct LocalMirPlan<T = Unresolved> {
 
 /// Marker type for [`LocalMirPlan`] structs representing an optimization result
 /// with attached environment context required for the next optimization stage.
-pub struct ResolvedLocal<'a> {
+pub struct ResolvedLocal<'s> {
     stats: Box<dyn StatisticsOracle>,
-    session: &'a Session,
-    copy_to_context: Option<&'a CopyToContext>,
+    session: &'s Session,
 }
 
 /// The (sealed intermediate) result after:
@@ -139,18 +137,7 @@ pub struct ResolvedLocal<'a> {
 pub struct GlobalMirPlan<T = Unresolved> {
     df_desc: MirDataflowDescription,
     df_meta: DataflowMetainfo,
-    typ: RelationType, // TODO: read this from the index_exports.
     context: T,
-}
-
-impl<T> GlobalMirPlan<T> {
-    pub fn df_desc(&self) -> &MirDataflowDescription {
-        &self.df_desc
-    }
-
-    pub fn df_meta(&self) -> &DataflowMetainfo {
-        &self.df_meta
-    }
 }
 
 impl Debug for GlobalMirPlan<Unresolved> {
@@ -158,7 +145,6 @@ impl Debug for GlobalMirPlan<Unresolved> {
         f.debug_struct("GlobalMirPlan")
             .field("df_desc", &self.df_desc)
             .field("df_meta", &self.df_meta)
-            .field("typ", &self.typ)
             .finish()
     }
 }
@@ -170,29 +156,16 @@ impl Debug for GlobalMirPlan<Unresolved> {
 /// The actual timestamp value is set in the [`MirDataflowDescription`] of the
 /// surrounding [`GlobalMirPlan`] when we call `resolve()`.
 #[derive(Clone)]
-pub struct ResolvedGlobal<'a> {
-    session: &'a Session,
-    copy_to_context: Option<&'a CopyToContext>,
+pub struct ResolvedGlobal<'s> {
+    session: &'s Session,
 }
 
 /// The (final) result after MIR ⇒ LIR lowering and optimizing the resulting
 /// `DataflowDescription` with `LIR` plans.
 #[derive(Debug)]
 pub struct GlobalLirPlan {
-    peek_plan: PeekPlan,
+    df_desc: LirDataflowDescription,
     df_meta: DataflowMetainfo,
-    typ: RelationType,
-}
-
-impl GlobalLirPlan {
-    pub fn peek_plan(&self) -> &PeekPlan {
-        &self.peek_plan
-    }
-
-    /// Return the output type for this [`GlobalLirPlan`].
-    pub fn typ(&self) -> &RelationType {
-        &self.typ
-    }
 }
 
 impl Optimize<HirRelationExpr> for Optimizer {
@@ -234,51 +207,31 @@ impl Optimize<MirRelationExpr> for Optimizer {
 impl LocalMirPlan<Unresolved> {
     /// Produces the [`LocalMirPlan`] with [`ResolvedLocal`] contextual
     /// information required for the next stage.
-    pub fn resolve<'a>(
+    pub fn resolve(
         self,
-        session: &'a Session,
+        session: &Session,
         stats: Box<dyn StatisticsOracle>,
-        copy_to_context: Option<&'a CopyToContext>,
-    ) -> LocalMirPlan<ResolvedLocal<'a>> {
+    ) -> LocalMirPlan<ResolvedLocal> {
         LocalMirPlan {
             expr: self.expr,
-            context: ResolvedLocal {
-                session,
-                stats,
-                copy_to_context,
-            },
+            context: ResolvedLocal { session, stats },
         }
     }
 }
 
-impl<'a> Optimize<LocalMirPlan<ResolvedLocal<'a>>> for Optimizer {
+impl<'s> Optimize<LocalMirPlan<ResolvedLocal<'s>>> for Optimizer {
     type To = GlobalMirPlan<Unresolved>;
 
     fn optimize(
         &mut self,
-        plan: LocalMirPlan<ResolvedLocal<'a>>,
+        plan: LocalMirPlan<ResolvedLocal<'s>>,
     ) -> Result<Self::To, OptimizerError> {
         let LocalMirPlan {
             expr,
-            context:
-                ResolvedLocal {
-                    stats,
-                    session,
-                    copy_to_context,
-                },
+            context: ResolvedLocal { stats, session },
         } = plan;
 
         let expr = OptimizedMirRelationExpr(expr);
-
-        // We create a dataflow and optimize it, to determine if we can avoid building it.
-        // This can happen if the result optimizes to a constant, or to a `Get` expression
-        // around a maintained arrangement.
-        let typ = expr.typ();
-        let key = typ
-            .default_key()
-            .iter()
-            .map(|k| MirScalarExpr::Column(*k))
-            .collect();
 
         // The assembled dataflow contains a view and an index of that view.
         let mut df_builder =
@@ -289,6 +242,37 @@ impl<'a> Optimize<LocalMirPlan<ResolvedLocal<'a>>> for Optimizer {
 
         df_builder.import_view_into_dataflow(&self.select_id, &expr, &mut df_desc)?;
         df_builder.reoptimize_imported_views(&mut df_desc, &self.config)?;
+
+        // Creating an S3 sink as currently only s3 sinks are supported. It
+        // might be possible in the future for COPY TO to write to different
+        // sinks, which should be set here depending upon the url scheme.
+        let connection = match &self.copy_to_connection {
+            Connection::Aws(aws_connection) => {
+                ComputeSinkConnection::S3Oneshot(S3OneshotSinkConnection {
+                    aws_connection: aws_connection.clone(),
+                    prefix: self.copy_to_uri.to_string(),
+                })
+            }
+            _ => {
+                // Currently only s3 sinks are supported. It was already validated in planning that this
+                // is an aws connection.
+                let msg = "only aws connection is supported in COPY TO";
+                return Err(OptimizerError::Internal(msg.to_string()));
+            }
+        };
+        let sink_desc = ComputeSinkDesc {
+            from_desc: self.desc.clone(),
+            from: self.select_id,
+            connection,
+            with_snapshot: true,
+            // This will get updated  when the GlobalMirPlan is resolved with as_of below.
+            up_to: Default::default(),
+            // No `FORCE NOT NULL` for copy_to.
+            non_null_assertions: Vec::new(),
+            // No `REFRESH` for copy_to.
+            refresh_schedule: None,
+        };
+        df_desc.export_sink(self.select_id, sink_desc);
 
         // Resolve all unmaterializable function calls except mz_now(), because
         // we don't yet have a timestamp.
@@ -302,49 +286,6 @@ impl<'a> Optimize<LocalMirPlan<ResolvedLocal<'a>>> for Optimizer {
             |s| prep_scalar_expr(s, style),
         )?;
 
-        // TODO: Instead of conditioning here we should really
-        // reconsider how to render multi-plan peek dataflows. The main
-        // difficulty here is rendering the optional finishing bit.
-        if self.config.mode != OptimizeMode::Explain {
-            df_desc.export_index(
-                self.index_id,
-                IndexDesc {
-                    on_id: self.select_id,
-                    key,
-                },
-                typ.clone(),
-            );
-        }
-
-        // Adding s3 sink if initiated from copy to.
-        if let Some(copy_to_context) = copy_to_context {
-            let mz_storage_types::connections::Connection::Aws(aws_connection) =
-                &copy_to_context.connection
-            else {
-                // Currently only s3 sinks are supported. It was already validated in planning that this
-                // is an aws connection.
-                panic!("only aws connection is supported in COPY TO");
-            };
-            // Creating an S3 sink as currently only s3 sinks are supported. It might be possible in the future
-            // for COPY TO to write to different sinks, which should be set here depending upon the
-            // url scheme.
-            let sink_desc = ComputeSinkDesc {
-                from_desc: copy_to_context.desc.clone(),
-                from: self.select_id,
-                connection: ComputeSinkConnection::S3Oneshot(S3OneshotSinkConnection {
-                    aws_connection: aws_connection.clone(),
-                    prefix: copy_to_context.to.to_string(),
-                }),
-                with_snapshot: true,
-                up_to: Default::default(), // this will get updated  when the GlobalMirPlan is resolved with as_of below
-                // No `FORCE NOT NULL` for copy_to
-                non_null_assertions: vec![],
-                // No `REFRESH` for copy_to
-                refresh_schedule: None,
-            };
-            df_desc.export_sink(self.select_id, sink_desc);
-        }
-
         let df_meta = mz_transform::optimize_dataflow(
             &mut df_desc,
             &df_builder,
@@ -356,7 +297,6 @@ impl<'a> Optimize<LocalMirPlan<ResolvedLocal<'a>>> for Optimizer {
         Ok(GlobalMirPlan {
             df_desc,
             df_meta,
-            typ,
             context: Unresolved,
         })
     }
@@ -369,12 +309,11 @@ impl GlobalMirPlan<Unresolved> {
     /// We need to resolve timestamps before the `GlobalMirPlan ⇒ GlobalLirPlan`
     /// optimization stage in order to profit from possible single-time
     /// optimizations in the `Plan::finalize_dataflow` call.
-    pub fn resolve<'a>(
+    pub fn resolve(
         mut self,
         timestamp_ctx: TimestampContext<Timestamp>,
-        session: &'a Session,
-        copy_to_context: Option<&'a CopyToContext>,
-    ) -> GlobalMirPlan<ResolvedGlobal<'a>> {
+        session: &Session,
+    ) -> Result<GlobalMirPlan<ResolvedGlobal>, OptimizerError> {
         // Set the `as_of` and `until` timestamps for the dataflow.
         self.df_desc.set_as_of(timestamp_ctx.antichain());
 
@@ -396,37 +335,30 @@ impl GlobalMirPlan<Unresolved> {
             } else {
                 warn!(as_of = %as_of, "as_of + 1 overflow");
             }
+        } else {
+            let msg = "Cannot execute a COPY TO without an `as_of` timestamp";
+            return Err(OptimizerError::Internal(msg.to_string()));
         }
 
-        GlobalMirPlan {
+        Ok(GlobalMirPlan {
             df_desc: self.df_desc,
             df_meta: self.df_meta,
-            typ: self.typ,
-            context: ResolvedGlobal {
-                session,
-                copy_to_context,
-            },
-        }
+            context: ResolvedGlobal { session },
+        })
     }
 }
 
-impl<'a> Optimize<GlobalMirPlan<ResolvedGlobal<'a>>> for Optimizer {
+impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
     type To = GlobalLirPlan;
 
-    // TODO: make Coordinator::plan_peek part of this `optimize` call.
     fn optimize(
         &mut self,
-        plan: GlobalMirPlan<ResolvedGlobal<'a>>,
+        plan: GlobalMirPlan<ResolvedGlobal<'s>>,
     ) -> Result<Self::To, OptimizerError> {
         let GlobalMirPlan {
             mut df_desc,
             df_meta,
-            typ,
-            context:
-                ResolvedGlobal {
-                    session,
-                    copy_to_context,
-                },
+            context: ResolvedGlobal { session },
         } = plan;
 
         // Get the single timestamp representing the `as_of` time.
@@ -448,98 +380,29 @@ impl<'a> Optimize<GlobalMirPlan<ResolvedGlobal<'a>>> for Optimizer {
             |s| prep_scalar_expr(s, style),
         )?;
 
-        // TODO: use the following code once we can be sure that the
-        // index_exports always exist.
-        //
-        // let typ = self.df_desc
-        //     .index_exports
-        //     .first_key_value()
-        //     .map(|(_key, (_desc, typ))| typ.clone())
-        //     .expect("GlobalMirPlan type");
+        // Ensure all expressions are normalized before finalizing.
+        for build in df_desc.objects_to_build.iter_mut() {
+            normalize_lets(&mut build.plan.0)?
+        }
 
-        let peek_plan = match (
-            create_fast_path_plan(
-                &mut df_desc,
-                self.select_id,
-                Some(&self.finishing),
-                self.config.persist_fast_path_limit,
-            )?,
-            copy_to_context,
-        ) {
-            (Some(plan), None) => {
-                // An ugly way to prevent panics when explaining the physical
-                // plan of a fast-path query.
-                //
-                // TODO: get rid of this.
-                if self.config.mode == OptimizeMode::Explain {
-                    // Finalize the dataflow. This includes:
-                    // - MIR ⇒ LIR lowering
-                    // - LIR ⇒ LIR transforms
-                    let _ = Plan::<Timestamp>::finalize_dataflow(
-                        df_desc,
-                        self.config.enable_consolidate_after_union_negate,
-                        self.config.enable_specialized_arrangements,
-                        self.config.enable_reduce_mfp_fusion,
-                    )
-                    .map_err(OptimizerError::Internal)?;
-                }
+        // Finalize the dataflow. This includes:
+        // - MIR ⇒ LIR lowering
+        // - LIR ⇒ LIR transforms
+        let df_desc = Plan::finalize_dataflow(
+            df_desc,
+            self.config.enable_consolidate_after_union_negate,
+            self.config.enable_specialized_arrangements,
+            self.config.enable_reduce_mfp_fusion,
+        )
+        .map_err(OptimizerError::Internal)?;
 
-                // Build the PeekPlan
-                let peek_plan = PeekPlan::FastPath(plan);
-
-                peek_plan
-            }
-            // Should be slow path for copy to
-            (_, Some(_)) | (None, _) => {
-                // Ensure all expressions are normalized before finalizing.
-                for build in df_desc.objects_to_build.iter_mut() {
-                    normalize_lets(&mut build.plan.0)?
-                }
-
-                // Finalize the dataflow. This includes:
-                // - MIR ⇒ LIR lowering
-                // - LIR ⇒ LIR transforms
-                let df_desc = Plan::finalize_dataflow(
-                    df_desc,
-                    self.config.enable_consolidate_after_union_negate,
-                    self.config.enable_specialized_arrangements,
-                    self.config.enable_reduce_mfp_fusion,
-                )
-                .map_err(OptimizerError::Internal)?;
-
-                // Build the PeekPlan
-                let peek_plan = {
-                    let arity = typ.arity();
-                    let key = typ
-                        .default_key()
-                        .into_iter()
-                        .map(MirScalarExpr::Column)
-                        .collect::<Vec<_>>();
-                    let (permutation, thinning) = permutation_for_arrangement(&key, arity);
-                    PeekPlan::SlowPath(PeekDataflowPlan::new(
-                        df_desc.clone(),
-                        self.index_id(),
-                        key,
-                        permutation,
-                        thinning.len(),
-                    ))
-                };
-
-                peek_plan
-            }
-        };
-
-        Ok(GlobalLirPlan {
-            peek_plan,
-            df_meta,
-            typ,
-        })
+        Ok(GlobalLirPlan { df_desc, df_meta })
     }
 }
 
 impl GlobalLirPlan {
     /// Unwraps the parts of the final result of the optimization pipeline.
-    pub fn unapply(self) -> (PeekPlan, DataflowMetainfo) {
-        (self.peek_plan, self.df_meta)
+    pub fn unapply(self) -> (LirDataflowDescription, DataflowMetainfo) {
+        (self.df_desc, self.df_meta)
     }
 }
