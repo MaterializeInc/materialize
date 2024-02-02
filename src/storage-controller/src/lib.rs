@@ -27,6 +27,7 @@ use mz_cluster_client::ReplicaId;
 
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::soft_assert_or_log;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ReadHandle;
@@ -2956,7 +2957,7 @@ where
 
                 // We have to re-borrow.
                 let collection = self.collection(id).expect("known to exist");
-                assert!(
+                soft_assert_or_log!(
                     collection.implied_capability == dependency_since,
                     "monkey patching the implied_capability to {:?} did not work, is still {:?}",
                     dependency_since,
@@ -2967,7 +2968,7 @@ where
             // Fill in the storage dependencies.
             let collection = self.collection_mut(id).expect("known to exist");
 
-            assert!(
+            soft_assert_or_log!(
                 PartialOrder::less_than(&collection.implied_capability, &collection.write_frontier)
                     // Whenever a collection is being initialized, this state is
                     // acceptable.
@@ -2982,7 +2983,7 @@ where
                 .storage_dependencies
                 .extend(storage_dependencies.iter().cloned());
 
-            assert!(
+            soft_assert_or_log!(
                 !PartialOrder::less_than(
                     &collection.read_capabilities.frontier(),
                     &collection.implied_capability.borrow()
