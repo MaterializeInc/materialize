@@ -45,7 +45,6 @@ use crate::internal::compact::Compactor;
 use crate::internal::encoding::{parse_id, Schemas};
 use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::{retry_external, Machine};
-use crate::internal::state::State;
 use crate::internal::state_versions::StateVersions;
 use crate::metrics::Metrics;
 use crate::read::{LeasedReaderId, ReadHandle, READER_LEASE_DURATION};
@@ -676,25 +675,6 @@ impl PersistClient {
         &self,
         shard_id: &ShardId,
     ) -> Result<impl serde::Serialize, anyhow::Error> {
-        self.shard_state::<T>(shard_id)
-            .await
-            .and_then(|state| state.ok_or_else(|| anyhow::anyhow!("{} does not exist", shard_id)))
-    }
-
-    /// Returns the most recent applier version that was used to write to this shard.
-    pub async fn shard_version<T: Timestamp + Lattice + Codec64>(
-        &self,
-        shard_id: &ShardId,
-    ) -> Result<Option<semver::Version>, anyhow::Error> {
-        self.shard_state::<T>(shard_id)
-            .await
-            .map(|state| state.map(|state| state.applier_version))
-    }
-
-    async fn shard_state<T: Timestamp + Lattice + Codec64>(
-        &self,
-        shard_id: &ShardId,
-    ) -> Result<Option<State<T>>, anyhow::Error> {
         let state_versions = StateVersions::new(
             self.cfg.clone(),
             Arc::clone(&self.consensus),
@@ -706,13 +686,13 @@ impl PersistClient {
         // shard that might or might not exist.
         let versions = state_versions.fetch_all_live_diffs(shard_id).await;
         if versions.0.is_empty() {
-            return Ok(None);
+            return Err(anyhow::anyhow!("{} does not exist", shard_id));
         }
         let state = state_versions
             .fetch_current_state::<T>(shard_id, versions.0)
             .await;
         let state = state.check_ts_codec(shard_id)?;
-        Ok(Some(state))
+        Ok(state)
     }
 
     /// Test helper for a [Self::open] call that is expected to succeed.

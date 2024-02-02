@@ -9,6 +9,8 @@
 
 pub(crate) mod metrics;
 pub(crate) mod state_update;
+#[cfg(test)]
+mod tests;
 
 use std::cmp::max;
 use std::collections::BTreeMap;
@@ -200,10 +202,7 @@ impl UnopenedPersistCatalogState {
         );
 
         // Check the upgrade shard to see ensure that we don't fence anyone out of persist.
-        let upgrade_version = persist_client
-            .shard_version::<Timestamp>(&upgrade_shard_id)
-            .await
-            .expect("invalid usage");
+        let upgrade_version = Self::upgrade_version(&persist_client, upgrade_shard_id).await;
         if let Some(upgrade_version) = upgrade_version {
             if mz_persist_client::cfg::is_data_version_invalid(&upgrade_version, &version) {
                 return Err(DurableCatalogError::IncompatiblePersistVersion {
@@ -290,6 +289,24 @@ impl UnopenedPersistCatalogState {
             organization_id,
             metrics,
         })
+    }
+
+    async fn upgrade_version(
+        persist_client: &PersistClient,
+        upgrade_shard_id: ShardId,
+    ) -> Option<semver::Version> {
+        let shard_state = persist_client
+            .inspect_shard::<Timestamp>(&upgrade_shard_id)
+            .await
+            .ok()?;
+        let json_state = serde_json::to_value(shard_state).expect("state serialization error");
+        let upgrade_version = json_state
+            .get("applier_version")
+            .cloned()
+            .expect("missing applier_version");
+        let upgrade_version =
+            serde_json::from_value(upgrade_version).expect("version deserialization error");
+        Some(upgrade_version)
     }
 
     #[tracing::instrument(level = "info", skip(self))]
