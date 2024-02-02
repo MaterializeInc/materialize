@@ -78,7 +78,6 @@ impl Coordinator {
         let ops = vec![catalog::Op::CreateCluster {
             id,
             name: name.clone(),
-            linked_object_id: None,
             introspection_sources,
             owner_id: *session.current_role_id(),
             config,

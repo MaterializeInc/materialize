@@ -2342,16 +2342,6 @@ pub static MZ_CLUSTERS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_CLUSTER_LINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
-    name: "mz_cluster_links",
-    schema: MZ_INTERNAL_SCHEMA,
-    desc: RelationDesc::empty()
-        .with_column("cluster_id", ScalarType::String.nullable(false))
-        .with_column("object_id", ScalarType::String.nullable(false)),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-});
-
 pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_secrets",
     schema: MZ_CATALOG_SCHEMA,
@@ -6130,14 +6120,6 @@ ON mz_catalog.mz_materialized_views (id)",
     is_retained_metrics_object: false,
 };
 
-pub const MZ_CLUSTER_LINKS_IND: BuiltinIndex = BuiltinIndex {
-    name: "mz_cluster_links_ind",
-    schema: MZ_INTERNAL_SCHEMA,
-    sql: "IN CLUSTER mz_introspection
-ON mz_internal.mz_cluster_links (cluster_id)",
-    is_retained_metrics_object: false,
-};
-
 pub const MZ_SOURCE_STATUSES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_source_statuses_ind",
     schema: MZ_INTERNAL_SCHEMA,
@@ -6557,7 +6539,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_OPERATORS),
         Builtin::Table(&MZ_AGGREGATES),
         Builtin::Table(&MZ_CLUSTERS),
-        Builtin::Table(&MZ_CLUSTER_LINKS),
         Builtin::Table(&MZ_SECRETS),
         Builtin::Table(&MZ_CONNECTIONS),
         Builtin::Table(&MZ_SSH_TUNNEL_CONNECTIONS),
@@ -6756,7 +6737,6 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Index(&MZ_SOURCES_IND),
         Builtin::Index(&MZ_SINKS_IND),
         Builtin::Index(&MZ_MATERIALIZED_VIEWS_IND),
-        Builtin::Index(&MZ_CLUSTER_LINKS_IND),
         Builtin::Index(&MZ_SOURCE_STATUSES_IND),
         Builtin::Index(&MZ_SOURCE_STATUS_HISTORY_IND),
         Builtin::Index(&MZ_SINK_STATUSES_IND),

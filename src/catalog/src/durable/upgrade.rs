@@ -35,9 +35,10 @@
 //!    change could then impact a previous migration. You need to write separate upgrade functions
 //!    for the stash catalog and the persist catalog.
 //! 9. Call your upgrade function in [`stash::upgrade()`] and [`persist::upgrade()`].
-//! 10. Run `cargo test --package mz-catalog --lib \
-//!     durable::upgrade::tests::generate_missing_snapshots -- --ignored` to generate a test file
-//!     for the new version.
+//! 10. To generate a test file for the new version:
+//!     ```ignore
+//!     cargo test --package mz-catalog --lib durable::upgrade::tests::generate_missing_encodings -- --ignored
+//!     ```
 //!
 //! When in doubt, reach out to the Surfaces team, and we'll be more than happy to help :)
 
@@ -160,14 +161,14 @@ macro_rules! objects {
     }
 }
 
-objects!(v42, v43, v44, v45);
+objects!(v42, v43, v44, v45, v46);
 
 /// The current version of the `Catalog`.
 ///
 /// We will initialize new `Catalog`es with this version, and migrate existing `Catalog`es to this
 /// version. Whenever the `Catalog` changes, e.g. the protobufs we serialize in the `Catalog`
 /// change, we need to bump this version.
-pub(crate) const CATALOG_VERSION: u64 = 45;
+pub(crate) const CATALOG_VERSION: u64 = 46;
 
 /// The minimum `Catalog` version number that we support migrating from.
 ///
@@ -194,6 +195,7 @@ pub(crate) mod stash {
     mod v42_to_v43;
     mod v43_to_v44;
     mod v44_to_v45;
+    mod v45_to_v46;
 
     #[tracing::instrument(name = "stash::upgrade", level = "debug", skip_all)]
     pub(crate) async fn upgrade(stash: &mut Stash) -> Result<(), StashError> {
@@ -220,6 +222,7 @@ pub(crate) mod stash {
                             42 => v42_to_v43::upgrade(),
                             43 => v43_to_v44::upgrade(),
                             44 => v44_to_v45::upgrade(&tx).await?,
+                            45 => v45_to_v46::upgrade(&tx).await?,
 
                             // Up-to-date, no migration needed!
                             CATALOG_VERSION => return Ok(CATALOG_VERSION),
@@ -296,6 +299,7 @@ pub(crate) mod persist {
     mod v42_to_v43;
     mod v43_to_v44;
     mod v44_to_v45;
+    mod v45_to_v46;
 
     /// Describes a single action to take during a migration from `V1` to `V2`.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -379,6 +383,10 @@ pub(crate) mod persist {
                 }
                 44 => {
                     run_versioned_upgrade(unopened_catalog_state, version, v44_to_v45::upgrade)
+                        .await
+                }
+                45 => {
+                    run_versioned_upgrade(unopened_catalog_state, version, v45_to_v46::upgrade)
                         .await
                 }
 

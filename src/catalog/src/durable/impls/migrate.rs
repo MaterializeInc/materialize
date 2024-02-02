@@ -402,7 +402,7 @@ mod tests {
 
     use crate::durable::impls::migrate::{Direction, TargetImplementation};
     use crate::durable::{
-        migrate_from_stash_to_persist_state, rollback_from_persist_to_stash_state,
+        rollback_from_persist_to_stash_state, test_migrate_from_stash_to_persist_state,
         test_stash_config, Metrics, OpenableDurableCatalogState,
     };
 
@@ -415,11 +415,10 @@ mod tests {
         let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
         {
-            let mut catalog = migrate_from_stash_to_persist_state(
+            let mut catalog = test_migrate_from_stash_to_persist_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await;
             assert_eq!(

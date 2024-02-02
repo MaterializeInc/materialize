@@ -145,7 +145,7 @@ use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParam
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
 use crate::coord::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::peek::{FastPathPlan, PendingPeek};
+use crate::coord::peek::PendingPeek;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::error::AdapterError;
@@ -499,7 +499,6 @@ pub struct PeekStageExplain {
     validity: PlanValidity,
     select_id: GlobalId,
     finishing: RowSetFinishing,
-    fast_path_plan: Option<FastPathPlan>,
     df_meta: DataflowMetainfo,
     used_indexes: UsedIndexes,
     explain_ctx: ExplainContext,
@@ -843,7 +842,6 @@ pub struct Config {
     pub cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
     pub availability_zones: Vec<String>,
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
-    pub default_storage_cluster_size: Option<String>,
     pub builtin_cluster_replica_size: String,
     pub system_parameter_defaults: BTreeMap<String, String>,
     pub storage_usage_client: StorageUsageClient,
@@ -2432,6 +2430,10 @@ impl Coordinator {
                 .catalog
                 .system_config()
                 .coord_slow_message_reporting_threshold();
+            let warn_threshold = self
+                .catalog()
+                .system_config()
+                .coord_slow_message_warn_threshold();
 
             loop {
                 // Before adding a branch to this select loop, please ensure that the branch is
@@ -2554,9 +2556,8 @@ impl Coordinator {
                 }
 
                 // If something is _really_ slow, print a trace id for debugging, if OTEL is enabled.
-                let trace_id_threshold = Duration::from_secs(5).min(prometheus_threshold * 25);
-                if duration > trace_id_threshold && otel_context.is_valid() {
-                    let trace_id = otel_context.trace_id();
+                if duration > warn_threshold {
+                    let trace_id = otel_context.is_valid().then(|| otel_context.trace_id());
                     tracing::warn!(
                         ?msg_kind,
                         ?trace_id,
@@ -2746,7 +2747,6 @@ pub fn serve(
         secrets_controller,
         cloud_resource_controller,
         cluster_replica_sizes,
-        default_storage_cluster_size,
         builtin_cluster_replica_size,
         system_parameter_defaults,
         availability_zones,
@@ -2807,7 +2807,6 @@ pub fn serve(
                     now: now.clone(),
                     skip_migrations: false,
                     cluster_replica_sizes,
-                    default_storage_cluster_size,
                     builtin_cluster_replica_size,
                     system_parameter_defaults,
                     remote_system_parameters,

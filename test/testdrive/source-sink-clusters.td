@@ -29,7 +29,7 @@ contains:CLUSTER "storage" has no replicas available to service request
 > CREATE SOURCE loadgen IN CLUSTER storage FROM LOAD GENERATOR COUNTER
 
 ! ALTER SOURCE loadgen SET (SIZE = '1')
-contains:altering size of sources and sinks no longer supported
+contains:Expected one of IGNORE or TIMELINE or TIMESTAMP or RETAIN, found SIZE
 
 # Create indexes and materialized views in a storage cluster is allowed.
 > CREATE INDEX t_idx IN CLUSTER storage ON t (a)
@@ -104,7 +104,7 @@ bb
   FORMAT JSON ENVELOPE DEBEZIUM
 
 ! ALTER SINK sink1 SET (SIZE = '1')
-contains:ALTER SINK not yet supported
+contains:Expected one of SNAPSHOT
 
 > CREATE SINK sink2
   IN CLUSTER storage

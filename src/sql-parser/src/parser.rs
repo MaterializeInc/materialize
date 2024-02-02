@@ -2716,24 +2716,22 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_source_option_name(&mut self) -> Result<CreateSourceOptionName, ParserError> {
-        let name =
-            match self.expect_one_of_keywords(&[IGNORE, SIZE, TIMELINE, TIMESTAMP, RETAIN])? {
-                IGNORE => {
-                    self.expect_keyword(KEYS)?;
-                    CreateSourceOptionName::IgnoreKeys
-                }
-                SIZE => CreateSourceOptionName::Size,
-                TIMELINE => CreateSourceOptionName::Timeline,
-                TIMESTAMP => {
-                    self.expect_keyword(INTERVAL)?;
-                    CreateSourceOptionName::TimestampInterval
-                }
-                RETAIN => {
-                    self.expect_keyword(HISTORY)?;
-                    CreateSourceOptionName::RetainHistory
-                }
-                _ => unreachable!(),
-            };
+        let name = match self.expect_one_of_keywords(&[IGNORE, TIMELINE, TIMESTAMP, RETAIN])? {
+            IGNORE => {
+                self.expect_keyword(KEYS)?;
+                CreateSourceOptionName::IgnoreKeys
+            }
+            TIMELINE => CreateSourceOptionName::Timeline,
+            TIMESTAMP => {
+                self.expect_keyword(INTERVAL)?;
+                CreateSourceOptionName::TimestampInterval
+            }
+            RETAIN => {
+                self.expect_keyword(HISTORY)?;
+                CreateSourceOptionName::RetainHistory
+            }
+            _ => unreachable!(),
+        };
         Ok(name)
     }
 
@@ -2957,8 +2955,7 @@ impl<'a> Parser<'a> {
 
     /// Parse the name of a CREATE SINK optional parameter
     fn parse_create_sink_option_name(&mut self) -> Result<CreateSinkOptionName, ParserError> {
-        let name = match self.expect_one_of_keywords(&[SIZE, SNAPSHOT])? {
-            SIZE => CreateSinkOptionName::Size,
+        let name = match self.expect_one_of_keywords(&[SNAPSHOT])? {
             SNAPSHOT => CreateSinkOptionName::Snapshot,
             _ => unreachable!(),
         };

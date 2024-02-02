@@ -150,7 +150,6 @@ impl DurableType<RoleKey, RoleValue> for Role {
 pub struct Cluster {
     pub id: ClusterId,
     pub name: String,
-    pub linked_object_id: Option<GlobalId>,
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
     pub config: ClusterConfig,
@@ -162,7 +161,6 @@ impl DurableType<ClusterKey, ClusterValue> for Cluster {
             ClusterKey { id: self.id },
             ClusterValue {
                 name: self.name,
-                linked_object_id: self.linked_object_id,
                 owner_id: self.owner_id,
                 privileges: self.privileges,
                 config: self.config,
@@ -174,7 +172,6 @@ impl DurableType<ClusterKey, ClusterValue> for Cluster {
         Self {
             id: key.id,
             name: value.name,
-            linked_object_id: value.linked_object_id,
             owner_id: value.owner_id,
             privileges: value.privileges,
             config: value.config,
@@ -800,7 +797,6 @@ pub struct ClusterKey {
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterValue {
     pub(crate) name: String,
-    pub(crate) linked_object_id: Option<GlobalId>,
     pub(crate) owner_id: RoleId,
     pub(crate) privileges: Vec<MzAclItem>,
     pub(crate) config: ClusterConfig,

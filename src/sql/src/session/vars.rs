@@ -951,6 +951,14 @@ const COORD_SLOW_MESSAGE_REPORTING_THRESHOLD: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
+const COORD_SLOW_MESSAGE_WARN_THRESHOLD: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("coord_slow_message_warn_threshold"),
+    // Note(parkmycar): This value was chosen arbitrarily.
+    value: Duration::from_secs(5),
+    description: "Sets the threshold at which we will warn! for a coordinator message being slow.",
+    internal: true,
+};
+
 /// Controls the connect_timeout setting when connecting to PG via `mz_postgres_util`.
 const PG_SOURCE_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_source_connect_timeout"),
@@ -1507,6 +1515,16 @@ pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: ServerVar<bool> = ServerVar {
     value: false,
     description:
         "Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history",
+    internal: true,
+};
+
+const ENABLE_DEPENDENCY_READ_HOLD_ASSERTS: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_dependency_read_hold_asserts"),
+    value: true,
+    description:
+        "Whether to have the storage client check if a subsource's implied capability is less than \
+        its write frontier. This should only be set to false in cases where customer envs cannot
+        boot (Materialize).",
     internal: true,
 };
 
@@ -2953,6 +2971,7 @@ impl SystemVars {
             .with_var(&SENTRY_FILTERS)
             .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
             .with_var(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
+            .with_var(&COORD_SLOW_MESSAGE_WARN_THRESHOLD)
             .with_var(&grpc_client::CONNECT_TIMEOUT)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
@@ -2983,6 +3002,7 @@ impl SystemVars {
             .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
             .with_var(&ENABLE_COLUMNATION_LGALLOC)
             .with_var(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
+            .with_var(&ENABLE_DEPENDENCY_READ_HOLD_ASSERTS)
             .with_var(&TIMESTAMP_ORACLE_IMPL)
             .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE)
             .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT)
@@ -3757,6 +3777,10 @@ impl SystemVars {
         *self.expect_value(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
     }
 
+    pub fn coord_slow_message_warn_threshold(&self) -> Duration {
+        *self.expect_value(&COORD_SLOW_MESSAGE_WARN_THRESHOLD)
+    }
+
     pub fn grpc_client_http2_keep_alive_interval(&self) -> Duration {
         *self.expect_value(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
     }
@@ -3879,6 +3903,10 @@ impl SystemVars {
     /// Returns the `pg_timestamp_oracle_connection_pool_ttl_stagger` configuration parameter.
     pub fn pg_timestamp_oracle_connection_pool_ttl_stagger(&self) -> Duration {
         *self.expect_value(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER)
+    }
+
+    pub fn enable_dependency_read_hold_asserts(&self) -> bool {
+        *self.expect_value(&ENABLE_DEPENDENCY_READ_HOLD_ASSERTS)
     }
 }
 
