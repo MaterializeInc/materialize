@@ -2236,23 +2236,6 @@ impl Coordinator {
             return min_as_of;
         }
 
-        // // Advancing the `as_of` to the write frontier means that we lose some historical data.
-        // // That might be acceptable for the default 1-second index compaction window, but not for
-        // // retained-metrics indexes. So we need to regress the write frontier by the retention
-        // // duration of the index.
-        // //
-        // // NOTE: If we ever allow custom index compaction windows, we'll need to apply those here
-        // // as well.
-        // let lag = if is_retained_metrics_index {
-        //     let retention = self.catalog().state().system_config().metrics_retention();
-        //     Timestamp::new(u64::try_from(retention.as_millis()).unwrap_or_else(|_| {
-        //         tracing::error!("absurd metrics retention duration: {retention:?}");
-        //         u64::MAX
-        //     }))
-        // } else {
-        //     DEFAULT_LOGICAL_COMPACTION_WINDOW_TS
-        // };
-
         let max_compaction_frontier = if let Some(lag) = compaction_lag {
             let time = write_frontier.clone().into_option().expect("checked above");
             let time = time.saturating_sub(lag);
