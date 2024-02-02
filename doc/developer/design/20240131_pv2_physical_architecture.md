@@ -1,4 +1,4 @@
-# Platform v2: Physical, Distributed Architecture
+# Platform v2: Physical, Distributed Architecture of the Query/Control Layer
 
 > [!WARNING]
 > Currently, mostly a draft! For exploration and discussion. I'm explaining the
