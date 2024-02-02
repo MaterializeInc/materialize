@@ -365,9 +365,7 @@ pub enum RealTimeRecencyContext {
         timeline_context: TimelineContext,
         oracle_read_ts: Option<Timestamp>,
         source_ids: BTreeSet<GlobalId>,
-        in_immediate_multi_stmt_txn: bool,
         optimizer: optimize::peek::Optimizer,
-        global_mir_plan: optimize::peek::GlobalMirPlan,
         peek_ctx: PeekContext,
     },
 }
@@ -392,9 +390,10 @@ pub enum PeekContext {
 #[derive(Debug)]
 pub enum PeekStage {
     Validate(PeekStageValidate),
-    Timestamp(PeekStageTimestamp),
-    OptimizeMir(PeekStageOptimizeMir),
+    LinearizeTimestamp(PeekStageLinearizeTimestamp),
     RealTimeRecency(PeekStageRealTimeRecency),
+    TimestampReadHold(PeekStageTimestampReadHold),
+    OptimizeMir(PeekStageOptimizeMir),
     OptimizeLir(PeekStageOptimizeLir),
     Finish(PeekStageFinish),
     Explain(PeekStageExplain),
@@ -404,9 +403,10 @@ impl PeekStage {
     fn validity(&mut self) -> Option<&mut PlanValidity> {
         match self {
             PeekStage::Validate(_) => None,
-            PeekStage::Timestamp(PeekStageTimestamp { validity, .. })
-            | PeekStage::OptimizeMir(PeekStageOptimizeMir { validity, .. })
+            PeekStage::LinearizeTimestamp(PeekStageLinearizeTimestamp { validity, .. })
             | PeekStage::RealTimeRecency(PeekStageRealTimeRecency { validity, .. })
+            | PeekStage::TimestampReadHold(PeekStageTimestampReadHold { validity, .. })
+            | PeekStage::OptimizeMir(PeekStageOptimizeMir { validity, .. })
             | PeekStage::OptimizeLir(PeekStageOptimizeLir { validity, .. })
             | PeekStage::Finish(PeekStageFinish { validity, .. }) => Some(validity),
             PeekStage::Explain(PeekStageExplain { validity, .. }) => Some(validity),
@@ -418,34 +418,17 @@ impl PeekStage {
 pub struct PeekStageValidate {
     plan: mz_sql::plan::SelectPlan,
     target_cluster: TargetCluster,
-    /// Context from where this peek initiated.
     peek_ctx: PeekContext,
 }
 
 #[derive(Debug)]
-pub struct PeekStageTimestamp {
+pub struct PeekStageLinearizeTimestamp {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
     source_ids: BTreeSet<GlobalId>,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
-    in_immediate_multi_stmt_txn: bool,
     optimizer: optimize::peek::Optimizer,
-    /// Context from where this peek initiated.
-    peek_ctx: PeekContext,
-}
-
-#[derive(Debug)]
-pub struct PeekStageOptimizeMir {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    source_ids: BTreeSet<GlobalId>,
-    target_replica: Option<ReplicaId>,
-    timeline_context: TimelineContext,
-    oracle_read_ts: Option<Timestamp>,
-    in_immediate_multi_stmt_txn: bool,
-    optimizer: optimize::peek::Optimizer,
-    /// Context from where this peek initiated.
     peek_ctx: PeekContext,
 }
 
@@ -454,14 +437,35 @@ pub struct PeekStageRealTimeRecency {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
     source_ids: BTreeSet<GlobalId>,
-    id_bundle: CollectionIdBundle,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
     oracle_read_ts: Option<Timestamp>,
-    in_immediate_multi_stmt_txn: bool,
     optimizer: optimize::peek::Optimizer,
-    global_mir_plan: optimize::peek::GlobalMirPlan,
-    /// Context from where this peek initiated.
+    peek_ctx: PeekContext,
+}
+
+#[derive(Debug)]
+pub struct PeekStageTimestampReadHold {
+    validity: PlanValidity,
+    plan: mz_sql::plan::SelectPlan,
+    source_ids: BTreeSet<GlobalId>,
+    target_replica: Option<ReplicaId>,
+    timeline_context: TimelineContext,
+    oracle_read_ts: Option<Timestamp>,
+    real_time_recency_ts: Option<mz_repr::Timestamp>,
+    optimizer: optimize::peek::Optimizer,
+    peek_ctx: PeekContext,
+}
+
+#[derive(Debug)]
+pub struct PeekStageOptimizeMir {
+    validity: PlanValidity,
+    plan: mz_sql::plan::SelectPlan,
+    source_ids: BTreeSet<GlobalId>,
+    id_bundle: CollectionIdBundle,
+    target_replica: Option<ReplicaId>,
+    determination: TimestampDetermination<mz_repr::Timestamp>,
+    optimizer: optimize::peek::Optimizer,
     peek_ctx: PeekContext,
 }
 
@@ -469,15 +473,12 @@ pub struct PeekStageRealTimeRecency {
 pub struct PeekStageOptimizeLir {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
-    id_bundle: Option<CollectionIdBundle>,
+    id_bundle: CollectionIdBundle,
     target_replica: Option<ReplicaId>,
-    timeline_context: TimelineContext,
-    oracle_read_ts: Option<Timestamp>,
+    determination: TimestampDetermination<mz_repr::Timestamp>,
     source_ids: BTreeSet<GlobalId>,
-    real_time_recency_ts: Option<mz_repr::Timestamp>,
     optimizer: optimize::peek::Optimizer,
     global_mir_plan: optimize::peek::GlobalMirPlan,
-    /// Context from where this peek initiated.
     peek_ctx: PeekContext,
 }
 
@@ -489,7 +490,6 @@ pub struct PeekStageFinish {
     target_replica: Option<ReplicaId>,
     source_ids: BTreeSet<GlobalId>,
     determination: TimestampDetermination<mz_repr::Timestamp>,
-    timestamp_context: TimestampContext<mz_repr::Timestamp>,
     optimizer: optimize::peek::Optimizer,
     global_lir_plan: optimize::peek::GlobalLirPlan,
 }

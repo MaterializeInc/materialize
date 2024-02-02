@@ -4199,7 +4199,7 @@ impl Coordinator {
         &self,
         session: &Session,
         source_ids: &BTreeSet<GlobalId>,
-        query_as_of: Antichain<Timestamp>,
+        query_as_of: &Antichain<Timestamp>,
         is_oneshot: bool,
     ) -> Result<Box<dyn mz_transform::StatisticsOracle>, AdapterError> {
         if !session.vars().enable_session_cardinality_estimates() {
@@ -4217,7 +4217,7 @@ impl Coordinator {
 
         let cached_stats = mz_ore::future::timeout(
             timeout,
-            CachedStatisticsOracle::new(source_ids, &query_as_of, self.controller.storage.as_ref()),
+            CachedStatisticsOracle::new(source_ids, query_as_of, self.controller.storage.as_ref()),
         )
         .await;
 
