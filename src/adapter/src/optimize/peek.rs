@@ -33,7 +33,7 @@ use crate::optimize::dataflows::{
     ExprPrepStyle,
 };
 use crate::optimize::{
-    MirDataflowDescription, Optimize, OptimizeMode, OptimizerConfig, OptimizerError,
+    trace_plan, MirDataflowDescription, Optimize, OptimizeMode, OptimizerConfig, OptimizerError,
 };
 use crate::session::Session;
 use crate::TimestampContext;
@@ -193,9 +193,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
 
     fn optimize(&mut self, expr: HirRelationExpr) -> Result<Self::To, OptimizerError> {
         // Trace the pipeline input under `optimize/raw`.
-        debug_span!(target: "optimizer", "raw").in_scope(|| {
-            trace_plan(&expr);
-        });
+        trace_plan!(at: "raw", &expr);
 
         // HIR ⇒ MIR lowering and decorrelation
         let expr = expr.lower(&self.config)?;
@@ -409,10 +407,8 @@ impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
             self.config.persist_fast_path_limit,
         )? {
             Some(plan) if self.config.enable_fast_path => {
-                // Trace the pipeline input under `optimize/raw`.
-                debug_span!(target: "optimizer", "fast_path").in_scope(|| {
-                    trace_plan(&plan);
-                });
+                // Trace the FastPathPlan.
+                trace_plan!(at: "fast_path", &plan);
 
                 // Trace the final plan
                 trace_plan(&plan);

@@ -269,3 +269,13 @@ impl From<anyhow::Error> for OptimizerError {
         OptimizerError::Internal(value.to_string())
     }
 }
+
+macro_rules! trace_plan {
+    (at: $span:literal, $plan:expr) => {
+        tracing::debug_span!(target: "optimizer", $span).in_scope(|| {
+            mz_repr::explain::trace_plan($plan);
+        });
+    }
+}
+
+use trace_plan;
