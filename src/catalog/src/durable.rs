@@ -388,6 +388,22 @@ pub async fn migrate_from_stash_to_persist_state(
     )
 }
 
+/// Creates an openable durable catalog state that migrates the current state from the stash to
+/// persist that is meant to be used in tests.
+pub async fn test_migrate_from_stash_to_persist_state(
+    stash_config: StashConfig,
+    persist_client: PersistClient,
+    organization_id: Uuid,
+) -> CatalogMigrator {
+    let openable_stash = stash_backed_catalog_state(stash_config);
+    let openable_persist = test_persist_backed_catalog_state(persist_client, organization_id).await;
+    CatalogMigrator::new(
+        openable_stash,
+        openable_persist,
+        Direction::MigrateToPersist,
+    )
+}
+
 /// Creates an openable durable catalog state that rolls back the current state from persist to
 /// the stash.
 pub async fn rollback_from_persist_to_stash_state(
@@ -399,6 +415,18 @@ pub async fn rollback_from_persist_to_stash_state(
     let openable_stash = stash_backed_catalog_state(stash_config);
     let openable_persist =
         persist_backed_catalog_state(persist_client, organization_id, persist_metrics).await;
+    CatalogMigrator::new(openable_stash, openable_persist, Direction::RollbackToStash)
+}
+
+/// Creates an openable durable catalog state that rolls back the current state from persist to
+/// the stash that is meant to be used in tests.
+pub async fn test_rollback_from_persist_to_stash_state(
+    stash_config: StashConfig,
+    persist_client: PersistClient,
+    organization_id: Uuid,
+) -> CatalogMigrator {
+    let openable_stash = stash_backed_catalog_state(stash_config);
+    let openable_persist = test_persist_backed_catalog_state(persist_client, organization_id).await;
     CatalogMigrator::new(openable_stash, openable_persist, Direction::RollbackToStash)
 }
 
