@@ -24,7 +24,8 @@ use mz_compute_client::protocol::command::{
 };
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
-    ComputeResponse, CopyToResponse, PeekResponse, SubscribeResponse,
+    ComputeResponse, CopyToResponse, OperatorHydrationStatus, PeekResponse, StatusResponse,
+    SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::{NodeId, Plan};
@@ -551,7 +552,21 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     pub fn report_operator_hydration(&mut self) {
         let worker_id = self.timely_worker.index();
         for event in self.compute_state.hydration_rx.try_iter() {
-            // TODO: send compute response
+            // The compute protocol forbids reporting `Status` about collections that have advanced
+            // to the empty frontier, so we ignore updates for those.
+            let collection = self.compute_state.collections.get(&event.export_id);
+            if collection.map_or(true, |c| c.reported_frontier.is_empty()) {
+                continue;
+            }
+
+            let status = OperatorHydrationStatus {
+                collection_id: event.export_id,
+                lir_id: event.lir_id,
+                worker_id,
+                hydrated: event.hydrated,
+            };
+            let response = ComputeResponse::Status(StatusResponse::OperatorHydration(status));
+            self.send_compute_response(response);
         }
     }
 

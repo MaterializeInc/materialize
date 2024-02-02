@@ -25,7 +25,7 @@ message ProtoComputeResponse {
     message ProtoPeekResponseKind {
         mz_proto.ProtoU128 id = 1;
         ProtoPeekResponse resp = 2;
-    map<string, string> otel_ctx = 3;
+        map<string, string> otel_ctx = 3;
     }
 
     message ProtoSubscribeResponseKind {
@@ -43,6 +43,7 @@ message ProtoComputeResponse {
         ProtoPeekResponseKind peek_response = 2;
         ProtoSubscribeResponseKind subscribe_response = 3;
         ProtoCopyToResponseKind copy_to_response = 4;
+        ProtoStatusResponse status = 5;
     }
 }
 
@@ -100,4 +101,17 @@ message ProtoSubscribeBatch {
     mz_repr.antichain.ProtoU64Antichain upper = 2;
     reserved 3;
     ProtoSubscribeBatchContents updates = 4;
+}
+
+message ProtoStatusResponse {
+    oneof kind {
+        ProtoOperatorHydrationStatus operator_hydration = 1;
+    }
+}
+
+message ProtoOperatorHydrationStatus {
+    mz_repr.global_id.ProtoGlobalId collection_id = 1;
+    uint64 lir_id = 2;
+    uint64 worker_id = 3;
+    bool hydrated = 4;
 }

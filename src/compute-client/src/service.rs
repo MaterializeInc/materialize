@@ -500,6 +500,10 @@ where
                     None
                 }
             }
+            response @ ComputeResponse::Status(_) => {
+                // Pass through status responses.
+                Some(Ok(response))
+            }
         }
     }
 }

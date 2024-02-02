@@ -1496,6 +1496,10 @@ where
             ComputeResponse::SubscribeResponse(id, response) => {
                 self.handle_subscribe_response(id, response, replica_id)
             }
+            ComputeResponse::Status(_) => {
+                // TODO
+                None
+            }
         }
     }
 
