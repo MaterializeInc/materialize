@@ -449,6 +449,9 @@ pub struct Source {
     pub desc: RelationDesc,
     pub timeline: Timeline,
     pub resolved_ids: ResolvedIds,
+    /// This value is ignored for subsources, i.e. for
+    /// [`DataSourceDesc::Source`]. Instead, it uses the primary sources logical
+    /// compaction window.
     pub custom_logical_compaction_window: Option<CompactionWindow>,
     /// Whether the source's logical compaction window is controlled by
     /// METRICS_RETENTION
