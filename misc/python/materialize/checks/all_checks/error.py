@@ -203,7 +203,10 @@ class DecodeErrorUpsertValue(Check):
                 key1: {"f1": 2}
                 key2: {"f1": 3}
 
+                > CREATE CLUSTER decode_error_upsert_value_cluster SIZE '1';
+
                 > CREATE SOURCE decode_error_upsert_value
+                  IN CLUSTER decode_error_upsert_value_cluster
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-decode-error-upsert-value-${testdrive.seed}')
                   KEY FORMAT TEXT
                   VALUE FORMAT AVRO USING SCHEMA '${schema}'

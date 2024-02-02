@@ -149,7 +149,6 @@ pub struct Cluster {
     pub config: ClusterConfig,
     #[serde(skip)]
     pub log_indexes: BTreeMap<LogVariant, GlobalId>,
-    pub linked_object_id: Option<GlobalId>,
     /// Objects bound to this cluster. Does not include introspection source
     /// indexes.
     pub bound_objects: BTreeSet<GlobalId>,
@@ -254,7 +253,6 @@ impl From<Cluster> for durable::Cluster {
         durable::Cluster {
             id: cluster.id,
             name: cluster.name,
-            linked_object_id: cluster.linked_object_id,
             owner_id: cluster.owner_id,
             privileges: cluster.privileges.into_all_values().collect(),
             config: cluster.config.into(),
@@ -1912,16 +1910,6 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
 
     fn id(&self) -> ClusterId {
         self.id
-    }
-
-    fn linked_object_id(&self) -> Option<GlobalId> {
-        assert!(
-            self.linked_object_id.is_none(),
-            "cluster {} still linked to {:?}",
-            self.id,
-            self.linked_object_id
-        );
-        self.linked_object_id
     }
 
     fn bound_objects(&self) -> &BTreeSet<GlobalId> {

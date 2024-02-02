@@ -225,7 +225,6 @@ impl Catalog {
                 temporary_schemas: BTreeMap::new(),
                 clusters_by_id: BTreeMap::new(),
                 clusters_by_name: BTreeMap::new(),
-                clusters_by_linked_object_id: BTreeMap::new(),
                 roles_by_name: BTreeMap::new(),
                 roles_by_id: BTreeMap::new(),
                 config: mz_sql::catalog::CatalogConfig {
@@ -241,7 +240,6 @@ impl Catalog {
                 },
                 oid_counter: FIRST_USER_OID,
                 cluster_replica_sizes: config.cluster_replica_sizes,
-                default_storage_cluster_size: config.default_storage_cluster_size,
                 availability_zones: config.availability_zones,
                 system_configuration: {
                     let mut s = SystemVars::new(config.active_connection_count)
@@ -630,7 +628,6 @@ impl Catalog {
             for mz_catalog::durable::Cluster {
                 id,
                 name,
-                linked_object_id,
                 owner_id,
                 privileges,
                 config,
@@ -670,7 +667,6 @@ impl Catalog {
                 state.insert_cluster(
                     id,
                     name,
-                    linked_object_id,
                     all_indexes,
                     owner_id,
                     PrivilegeMap::from_mz_acl_items(privileges),
@@ -801,29 +797,6 @@ impl Catalog {
                         })
                     })?;
 
-                // Ensure linked clusters do not exist in memory.
-                //
-                // There's no great place to do this because we want to use the
-                // previous connection between a linked object an its cluster to
-                // simplify an AST migration.
-                //
-                // We also don't want to blithely update the catalog state by
-                // re-loading the new cluster definitions because the subprocess
-                // for that allocates new GlobalIds.
-                //
-                // However, this change is idempotent so is fine to re-run here.
-                //
-                // We can remove this in a subsequent version of Materialize
-                // where we remove the `clusters_by_linked_object_id` attribute
-                // from catalog state.
-                for mut cluster in txn.get_clusters() {
-                    cluster.linked_object_id = None;
-                    txn.update_cluster(cluster.id, cluster)?;
-                }
-                state.clusters_by_linked_object_id.clear();
-                for (_, cluster) in state.clusters_by_id.iter_mut() {
-                    cluster.linked_object_id = None;
-                }
                 txn.set_catalog_content_version(config.build_info.version.to_string())?;
             }
 
@@ -990,13 +963,6 @@ impl Catalog {
             }
             for (id, cluster) in &catalog.state.clusters_by_id {
                 builtin_table_updates.push(catalog.state.pack_cluster_update(&cluster.name, 1));
-                if let Some(linked_object_id) = cluster.linked_object_id {
-                    builtin_table_updates.push(catalog.state.pack_cluster_link_update(
-                        &cluster.name,
-                        linked_object_id,
-                        1,
-                    ));
-                }
                 for (replica_name, replica_id) in
                     cluster.replicas().map(|r| (&r.name, r.replica_id))
                 {

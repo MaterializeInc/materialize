@@ -278,7 +278,6 @@ mz_arrangement_batcher_allocations_raw_s2_primary_idx       mz_arrangement_batch
 mz_arrangement_batcher_capacity_raw_s2_primary_idx          mz_arrangement_batcher_capacity_raw          mz_introspection    {operator_id,worker_id}
 mz_arrangement_batcher_records_raw_s2_primary_idx           mz_arrangement_batcher_records_raw           mz_introspection    {operator_id,worker_id}
 mz_arrangement_batcher_size_raw_s2_primary_idx              mz_arrangement_batcher_size_raw              mz_introspection    {operator_id,worker_id}
-mz_cluster_links_ind                                        mz_cluster_links                             mz_introspection    {cluster_id}
 mz_cluster_replica_history_ind                              mz_cluster_replica_history                   mz_introspection    {dropped_at}
 mz_cluster_replica_metrics_ind                              mz_cluster_replica_metrics                   mz_introspection    {replica_id}
 mz_cluster_replica_sizes_ind                                mz_cluster_replica_sizes                     mz_introspection    {size}

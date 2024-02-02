@@ -16,16 +16,15 @@ use chrono::{DateTime, Utc};
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_catalog::builtin::{
     MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_CONNECTIONS,
-    MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_LINKS,
-    MZ_CLUSTER_REPLICAS, MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES,
-    MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_COMMENTS, MZ_CONNECTIONS, MZ_DATABASES,
-    MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS,
-    MZ_INTERNAL_CLUSTER_REPLICAS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES,
-    MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS,
-    MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS,
-    MZ_SESSIONS, MZ_SINKS, MZ_SOURCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
-    MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS,
-    MZ_WEBHOOKS_SOURCES,
+    MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS,
+    MZ_CLUSTER_REPLICA_METRICS, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS,
+    MZ_COMMENTS, MZ_CONNECTIONS, MZ_DATABASES, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS,
+    MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_INTERNAL_CLUSTER_REPLICAS, MZ_KAFKA_CONNECTIONS,
+    MZ_KAFKA_SINKS, MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEWS,
+    MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLES,
+    MZ_ROLE_MEMBERS, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCES,
+    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
+    MZ_TABLES, MZ_TYPES, MZ_TYPE_PG_METADATA, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::memory::error::{Error, ErrorKind};
@@ -292,23 +291,6 @@ impl CatalogState {
         updates
     }
 
-    pub(super) fn pack_cluster_link_update(
-        &self,
-        cluster_name: &str,
-        object_id: GlobalId,
-        diff: Diff,
-    ) -> BuiltinTableUpdate {
-        let cluster_id = self.clusters_by_name[cluster_name];
-        BuiltinTableUpdate {
-            id: self.resolve_builtin_table(&MZ_CLUSTER_LINKS),
-            row: Row::pack_slice(&[
-                Datum::String(&cluster_id.to_string()),
-                Datum::String(&object_id.to_string()),
-            ]),
-            diff,
-        }
-    }
-
     pub(super) fn pack_cluster_replica_status_update(
         &self,
         cluster_id: ClusterId,
@@ -357,7 +339,7 @@ impl CatalogState {
         let mut updates =
             match entry.item() {
                 CatalogItem::Log(_) => self.pack_source_update(
-                    id, oid, schema_id, name, "log", None, None, None, None, None, None, owner_id,
+                    id, oid, schema_id, name, "log", None, None, None, None, None, owner_id,
                     privileges, diff, None,
                 ),
                 CatalogItem::Index(index) => {
@@ -380,7 +362,6 @@ impl CatalogState {
                         name,
                         source_type,
                         connection_id,
-                        self.get_storage_object_size(id),
                         envelope,
                         key_format,
                         value_format,
@@ -522,7 +503,6 @@ impl CatalogState {
         name: &str,
         source_desc_name: &str,
         connection_id: Option<GlobalId>,
-        size: Option<&str>,
         envelope: Option<&str>,
         key_format: Option<&str>,
         value_format: Option<&str>,
@@ -548,9 +528,9 @@ impl CatalogState {
                 Datum::String(name),
                 Datum::String(source_desc_name),
                 Datum::from(connection_id.map(|id| id.to_string()).as_deref()),
-                // TODO: this will always be null when we remove the notion of
-                // linked clusters.
-                Datum::from(size),
+                // This is the "source size", which is a remnant from linked
+                // clusters.
+                Datum::Null,
                 Datum::from(envelope),
                 Datum::from(key_format),
                 Datum::from(value_format),
@@ -961,7 +941,8 @@ impl CatalogState {
                 Datum::String(name),
                 Datum::String(sink.connection.name()),
                 Datum::from(sink.connection_id().map(|id| id.to_string()).as_deref()),
-                Datum::from(self.get_storage_object_size(id)),
+                // size column now deprecated w/o linked clusters
+                Datum::Null,
                 Datum::from(envelope),
                 Datum::from(format),
                 Datum::String(&sink.cluster_id.to_string()),

@@ -53,7 +53,7 @@ goofus,gallant
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   WITH (badoption=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-contains:Expected one of SIZE or SNAPSHOT
+contains:Expected one of SNAPSHOT
 
 > SHOW SINKS
 name               type   size  cluster
@@ -266,13 +266,13 @@ $ kafka-create-topic topic=snk9 partitions=4
 
 > SET cluster TO default
 
-# create sink with vestigial size specified
+# linked clusters totally deprecated
 ! CREATE SINK sink_with_size FROM src
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
   WITH (SIZE = '2')
-contains:specifying sink SIZE deprecated; use IN CLUSTER
+contains:Expected one of SNAPSHOT, found SIZE
 
 # create sink with SNAPSHOT set
 > CREATE CLUSTER sink_with_options_cluster SIZE '${arg.default-storage-size}';

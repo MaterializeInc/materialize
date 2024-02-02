@@ -453,7 +453,6 @@ impl Listeners {
                 environment_id: config.environment_id,
                 cors_allowed_origin: AllowOrigin::list([]),
                 cluster_replica_sizes: Default::default(),
-                default_storage_cluster_size: None,
                 bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
                 bootstrap_builtin_cluster_replica_size: config.builtin_cluster_replica_size,
                 system_parameter_defaults: config.system_parameter_defaults,

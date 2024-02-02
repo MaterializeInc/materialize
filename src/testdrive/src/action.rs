@@ -456,9 +456,6 @@ impl State {
                         UNION ALL
                             SELECT cluster_id, id
                             FROM mz_internal.mz_subscriptions
-                        UNION ALL
-                            SELECT cluster_id, object_id
-                            FROM mz_internal.mz_cluster_links
                     )
                     AS t (cluster_id, object_id)
                 WHERE cluster_id IS NOT NULL AND object_id LIKE 'u%'

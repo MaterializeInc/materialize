@@ -35,9 +35,10 @@
 //!    change could then impact a previous migration. You need to write separate upgrade functions
 //!    for the stash catalog and the persist catalog.
 //! 9. Call your upgrade function in [`stash::upgrade()`] and [`persist::upgrade()`].
-//! 10. Run `cargo test --package mz-catalog --lib \
-//!     durable::upgrade::tests::generate_missing_snapshots -- --ignored` to generate a test file
-//!     for the new version.
+//! 10. To generate a test file for the new version:
+//!     ```ignore
+//!     cargo test --package mz-catalog --lib durable::upgrade::tests::generate_missing_encodings -- --ignored
+//!     ```
 //!
 //! When in doubt, reach out to the Surfaces team, and we'll be more than happy to help :)
 
@@ -160,14 +161,14 @@ macro_rules! objects {
     }
 }
 
-objects!(v42, v43, v44, v45);
+objects!(v42, v43, v44, v45, v46);
 
 /// The current version of the `Catalog`.
 ///
 /// We will initialize new `Catalog`es with this version, and migrate existing `Catalog`es to this
 /// version. Whenever the `Catalog` changes, e.g. the protobufs we serialize in the `Catalog`
 /// change, we need to bump this version.
-pub(crate) const CATALOG_VERSION: u64 = 45;
+pub(crate) const CATALOG_VERSION: u64 = 46;
 
 /// The minimum `Catalog` version number that we support migrating from.
 ///
@@ -194,6 +195,7 @@ pub(crate) mod stash {
     mod v42_to_v43;
     mod v43_to_v44;
     mod v44_to_v45;
+    mod v45_to_v46;
 
     #[tracing::instrument(name = "stash::upgrade", level = "debug", skip_all)]
     pub(crate) async fn upgrade(stash: &mut Stash) -> Result<(), StashError> {
@@ -220,6 +222,7 @@ pub(crate) mod stash {
                             42 => v42_to_v43::upgrade(),
                             43 => v43_to_v44::upgrade(),
                             44 => v44_to_v45::upgrade(&tx).await?,
+                            45 => v45_to_v46::upgrade(&tx).await?,
 
                             // Up-to-date, no migration needed!
                             CATALOG_VERSION => return Ok(CATALOG_VERSION),
@@ -285,7 +288,7 @@ pub(crate) mod persist {
     use crate::durable::impls::persist::state_update::{
         IntoStateUpdateKindRaw, StateUpdateKindRaw,
     };
-    use crate::durable::impls::persist::{Timestamp, UnopenedPersistCatalogState};
+    use crate::durable::impls::persist::{StateUpdateKind, Timestamp, UnopenedPersistCatalogState};
     use crate::durable::initialize::USER_VERSION_KEY;
     use crate::durable::objects::serialization::proto;
     use crate::durable::upgrade::{
@@ -296,6 +299,7 @@ pub(crate) mod persist {
     mod v42_to_v43;
     mod v43_to_v44;
     mod v44_to_v45;
+    mod v45_to_v46;
 
     /// Describes a single action to take during a migration from `V1` to `V2`.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -340,6 +344,8 @@ pub(crate) mod persist {
             "cannot upgrade uninitialized catalog"
         );
 
+        // Consolidate to avoid migrating old state.
+        persist_handle.consolidate();
         let mut version = persist_handle
             .get_user_version()
             .await?
@@ -379,6 +385,10 @@ pub(crate) mod persist {
                     run_versioned_upgrade(unopened_catalog_state, version, v44_to_v45::upgrade)
                         .await
                 }
+                45 => {
+                    run_versioned_upgrade(unopened_catalog_state, version, v45_to_v46::upgrade)
+                        .await
+                }
 
                 // Up-to-date, no migration needed!
                 CATALOG_VERSION => Ok(CATALOG_VERSION),
@@ -403,7 +413,7 @@ pub(crate) mod persist {
             .snapshot
             .iter()
             .map(|update| {
-                soft_assert_eq_or_log!(1, update.diff, "snapshot is consolidated");
+                soft_assert_eq_or_log!(1, update.diff, "snapshot is consolidated, {update:?}");
                 V1::try_from(update.clone().kind).expect("invalid catalog data persisted")
             })
             .collect();
@@ -433,18 +443,14 @@ pub(crate) mod persist {
 
     /// Generates a [`proto::StateUpdateKind`] to update the user version.
     fn version_update_kind(version: u64) -> StateUpdateKindRaw {
-        // We can use the current protobuf versions because Configs can never be migrated and are
-        // always wire compatible.
-        proto::StateUpdateKind {
-            kind: Some(proto::state_update_kind::Kind::Config(
-                proto::state_update_kind::Config {
-                    key: Some(proto::ConfigKey {
-                        key: USER_VERSION_KEY.to_string(),
-                    }),
-                    value: Some(proto::ConfigValue { value: version }),
-                },
-            )),
-        }
+        // We can use the current version because Configs can never be migrated and are always wire
+        // compatible.
+        StateUpdateKind::Config(
+            proto::ConfigKey {
+                key: USER_VERSION_KEY.to_string(),
+            },
+            proto::ConfigValue { value: version },
+        )
         .into()
     }
 }
