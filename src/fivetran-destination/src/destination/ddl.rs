@@ -7,59 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::{bail, Context};
-use mz_ore::error::ErrorExt;
 use mz_pgrepr::Type;
 use postgres_protocol::escape;
 
 use crate::destination::config;
+use crate::error::{Context, OpError, OpErrorKind};
 use crate::fivetran_sdk::{
-    AlterTableRequest, AlterTableResponse, Column, CreateTableRequest, CreateTableResponse,
-    DescribeTableRequest, DescribeTableResponse, Table,
+    AlterTableRequest, Column, CreateTableRequest, DescribeTableRequest, Table,
 };
 use crate::utils;
 
-pub async fn handle_describe_table_request(
+pub async fn handle_describe_table(
     request: DescribeTableRequest,
-) -> Result<DescribeTableResponse, anyhow::Error> {
-    use crate::fivetran_sdk::describe_table_response::Response;
-
-    let response = match describe_table(request).await {
-        Ok(None) => Response::NotFound(true),
-        Ok(Some(table)) => Response::Table(table),
-        Err(e) => Response::Failure(e.display_with_causes().to_string()),
-    };
-    Ok(DescribeTableResponse {
-        response: Some(response),
-    })
-}
-
-pub async fn handle_create_table_request(
-    request: CreateTableRequest,
-) -> Result<CreateTableResponse, anyhow::Error> {
-    use crate::fivetran_sdk::create_table_response::Response;
-
-    let response = match create_table(request).await {
-        Ok(()) => Response::Success(true),
-        Err(e) => Response::Failure(e.display_with_causes().to_string()),
-    };
-    Ok(CreateTableResponse {
-        response: Some(response),
-    })
-}
-
-#[allow(clippy::unused_async)]
-pub async fn handle_alter_table_request(
-    _: AlterTableRequest,
-) -> Result<AlterTableResponse, anyhow::Error> {
-    use crate::fivetran_sdk::alter_table_response::Response;
-
-    Ok(AlterTableResponse {
-        response: Some(Response::Failure("ALTER TABLE is not supported".into())),
-    })
-}
-
-async fn describe_table(request: DescribeTableRequest) -> Result<Option<Table>, anyhow::Error> {
+) -> Result<Option<Table>, OpError> {
     let (dbname, client) = config::connect(request.configuration).await?;
 
     let table_id = {
@@ -79,7 +39,12 @@ async fn describe_table(request: DescribeTableRequest) -> Result<Option<Table>, 
         match &*rows {
             [] => return Ok(None),
             [row] => row.get::<_, String>("id"),
-            _ => bail!("internal error: describe table query returned multiple results"),
+            _ => {
+                let err = OpErrorKind::InvariantViolated(
+                    "describe table query returned multiple results".to_string(),
+                );
+                return Err(err.into());
+            }
         }
     };
 
@@ -125,10 +90,9 @@ async fn describe_table(request: DescribeTableRequest) -> Result<Option<Table>, 
     }))
 }
 
-async fn create_table(request: CreateTableRequest) -> Result<(), anyhow::Error> {
-    let Some(table) = request.table else {
-        bail!("internal error: CreateTableRequest missing \"table\" field");
-    };
+pub async fn handle_create_table(request: CreateTableRequest) -> Result<(), OpError> {
+    let table = request.table.ok_or(OpErrorKind::FieldMissing("table"))?;
+
     // TODO(parkmycar): Make sure table name is <= 255 characters.
 
     let mut defs = vec![];
@@ -165,4 +129,9 @@ async fn create_table(request: CreateTableRequest) -> Result<(), anyhow::Error> 
     client.batch_execute(&sql).await?;
 
     Ok(())
+}
+
+#[allow(clippy::unused_async)]
+pub async fn handle_alter_table(_: AlterTableRequest) -> Result<(), OpError> {
+    Err(OpErrorKind::Unsupported("alter_table".to_string()).into())
 }

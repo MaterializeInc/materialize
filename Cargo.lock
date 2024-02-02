@@ -4429,7 +4429,6 @@ dependencies = [
 name = "mz-fivetran-destination"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "async-compression",
  "clap",
  "csv-async",
@@ -4449,6 +4448,7 @@ dependencies = [
  "serde",
  "serde_json",
  "socket2 0.5.3",
+ "thiserror",
  "tokio",
  "tokio-postgres",
  "tokio-stream",

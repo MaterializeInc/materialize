@@ -1,2 +1,2 @@
 {}
-// FAIL: database "test" does not exist
+// FAIL: database \"test\" does not exist
