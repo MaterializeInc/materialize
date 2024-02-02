@@ -1518,6 +1518,16 @@ pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
+const ENABLE_DEPENDENCY_READ_HOLD_ASSERTS: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_dependency_read_hold_asserts"),
+    value: true,
+    description:
+        "Whether to have the storage client check if a subsource's implied capability is less than \
+        its write frontier. This should only be set to false in cases where customer envs cannot
+        boot (Materialize).",
+    internal: true,
+};
+
 /// Configuration for gRPC client connections.
 mod grpc_client {
     use super::*;
@@ -2992,6 +3002,7 @@ impl SystemVars {
             .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
             .with_var(&ENABLE_COLUMNATION_LGALLOC)
             .with_var(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
+            .with_var(&ENABLE_DEPENDENCY_READ_HOLD_ASSERTS)
             .with_var(&TIMESTAMP_ORACLE_IMPL)
             .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE)
             .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT)
@@ -3892,6 +3903,10 @@ impl SystemVars {
     /// Returns the `pg_timestamp_oracle_connection_pool_ttl_stagger` configuration parameter.
     pub fn pg_timestamp_oracle_connection_pool_ttl_stagger(&self) -> Duration {
         *self.expect_value(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER)
+    }
+
+    pub fn enable_dependency_read_hold_asserts(&self) -> bool {
+        *self.expect_value(&ENABLE_DEPENDENCY_READ_HOLD_ASSERTS)
     }
 }
 

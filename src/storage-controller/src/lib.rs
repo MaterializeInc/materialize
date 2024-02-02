@@ -2911,6 +2911,7 @@ where
         storage_dependencies: &[GlobalId],
     ) -> Result<(), StorageError> {
         let dependency_since = self.determine_collection_since_joins(storage_dependencies)?;
+        let enable_asserts = self.config().parameters.enable_dependency_read_hold_asserts;
 
         for id in collections {
             let collection = self.collection(id).expect("known to exist");
@@ -2938,7 +2939,7 @@ where
                         ReadPolicy::NoPolicy { initial_since } =>
                             PartialOrder::less_than(initial_since, &dependency_since),
                         _ => false,
-                    },
+                    } || !enable_asserts,
                     "subsources should not have external read holds installed until \
                                     their ingestion is created, but {:?} has read policy {:?}",
                     id,
@@ -2957,7 +2958,7 @@ where
                 // We have to re-borrow.
                 let collection = self.collection(id).expect("known to exist");
                 assert!(
-                    collection.implied_capability == dependency_since,
+                    collection.implied_capability == dependency_since || !enable_asserts,
                     "monkey patching the implied_capability to {:?} did not work, is still {:?}",
                     dependency_since,
                     collection.implied_capability,
@@ -2971,7 +2972,8 @@ where
                 PartialOrder::less_than(&collection.implied_capability, &collection.write_frontier)
                     // Whenever a collection is being initialized, this state is
                     // acceptable.
-                    || *collection.write_frontier == [T::minimum()],
+                    || *collection.write_frontier == [T::minimum()]
+                    || !enable_asserts,
                 "{id}:  the implied capability {:?} should be less than the write_frontier {:?}. Collection state dump: {:#?}",
                 collection.implied_capability,
                 collection.write_frontier,
@@ -2986,7 +2988,7 @@ where
                 !PartialOrder::less_than(
                     &collection.read_capabilities.frontier(),
                     &collection.implied_capability.borrow()
-                ),
+                ) || !enable_asserts,
                 "{id}: at this point, there can be no read holds for any time that is not \
                     beyond the implied capability  but we have implied_capability {:?}, \
                     read_capabilities {:?}",
