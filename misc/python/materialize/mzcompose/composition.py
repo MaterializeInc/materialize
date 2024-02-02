@@ -53,6 +53,7 @@ from materialize.mzcompose.test_result import (
     TestResult,
     try_determine_errors_from_cmd_execution,
 )
+from materialize.parallel_workload.worker_exception import WorkerFailedException
 from materialize.ui import (
     CommandFailureCausedUIError,
     UIError,
@@ -542,6 +543,12 @@ class Composition:
         elif isinstance(e, FailedTestExecutionError):
             errors = e.errors
             assert len(errors) > 0, "Failed test execution does not contain any errors"
+        elif isinstance(e, WorkerFailedException):
+            errors = [
+                TestFailureDetails(
+                    error_message, details=str(e.cause), location=None, line_number=None
+                )
+            ]
 
         return errors
 
