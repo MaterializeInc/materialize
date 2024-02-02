@@ -386,10 +386,13 @@ synthesizes `AdvanceCatalogFrontier` commands when the catalog timestamp
 advances. These commands are the commands that deterministically derive from
 CATALOG state (see Background section, above).
 
-When processing client requests, ADAPTER uses TIMESTAMP ORACLE to get the
-latest read timestamp for CATALOG, then fetches a CATALOG snapshot as of at
-least that timestamp, and continues to process the request using the catalog
-snapshot as the source of truth.
+When processing client requests, ADAPTER uses TIMESTAMP ORACLE to get the latest
+read timestamp for CATALOG, then fetches a CATALOG snapshot as of at least that
+timestamp, and continues to process the request using the catalog snapshot as
+the source of truth. It's important to note that the catalog timestamp is not
+correlated with the timestamp of data collections that are being queried. Most
+of the time, the catalog read timestamp will not advance, it will only advance
+when DDL cause the catalog to change.
 
 When handling DDL-style client queries, ADAPTER uses TIMESTAMP ORACLE to get a
 write timestamp and tries to append the required changes to the CATALOG. If
