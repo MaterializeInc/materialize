@@ -35,7 +35,7 @@ use crate::coord::timestamp_selection::{
     TimestampContext, TimestampDetermination, TimestampProvider,
 };
 use crate::coord::{
-    Coordinator, ExecuteContext, ExplainContext, Message, PeekContext, PeekStage, PeekStageExplain,
+    Coordinator, ExecuteContext, ExplainContext, Message, PeekStage, PeekStageExplain,
     PeekStageFinish, PeekStageOptimizeLir, PeekStageOptimizeMir, PeekStageRealTimeRecency,
     PeekStageTimestamp, PeekStageValidate, PlanValidity, RealTimeRecencyContext, TargetCluster,
 };
@@ -68,7 +68,7 @@ impl Coordinator {
             PeekStage::Validate(PeekStageValidate {
                 plan,
                 target_cluster,
-                peek_ctx: PeekContext::Select,
+                explain_ctx: None,
             }),
         )
         .await;
@@ -107,7 +107,7 @@ impl Coordinator {
             PeekStage::Validate(PeekStageValidate {
                 plan,
                 target_cluster,
-                peek_ctx: PeekContext::Explain(ExplainContext {
+                explain_ctx: Some(ExplainContext {
                     broken,
                     config,
                     format,
@@ -193,7 +193,7 @@ impl Coordinator {
         PeekStageValidate {
             plan,
             target_cluster,
-            peek_ctx,
+            explain_ctx,
         }: PeekStageValidate,
     ) -> Result<PeekStageTimestamp, AdapterError> {
         // Collect optimizer parameters.
@@ -204,7 +204,7 @@ impl Coordinator {
             .expect("compute instance does not exist");
         let view_id = self.allocate_transient_id()?;
         let index_id = self.allocate_transient_id()?;
-        let optimizer_config = if let PeekContext::Explain(explain_ctx) = &peek_ctx {
+        let optimizer_config = if let Some(explain_ctx) = explain_ctx.as_ref() {
             optimize::OptimizerConfig::from((self.catalog().system_config(), &explain_ctx.config))
         } else {
             optimize::OptimizerConfig::from(self.catalog().system_config())
@@ -276,7 +276,7 @@ impl Coordinator {
             timeline_context,
             in_immediate_multi_stmt_txn,
             optimizer,
-            peek_ctx,
+            explain_ctx,
         })
     }
 
@@ -295,7 +295,7 @@ impl Coordinator {
             timeline_context,
             in_immediate_multi_stmt_txn,
             optimizer,
-            peek_ctx,
+            explain_ctx,
         }: PeekStageTimestamp,
     ) {
         let isolation_level = ctx.session.vars().transaction_isolation().clone();
@@ -315,7 +315,7 @@ impl Coordinator {
                     oracle_read_ts,
                     in_immediate_multi_stmt_txn,
                     optimizer,
-                    peek_ctx,
+                    explain_ctx,
                 }
             };
 
@@ -383,7 +383,7 @@ impl Coordinator {
             oracle_read_ts,
             in_immediate_multi_stmt_txn,
             mut optimizer,
-            peek_ctx,
+            explain_ctx,
         }: PeekStageOptimizeMir,
     ) {
         // Generate data structures that can be moved to another task where we will perform possibly
@@ -431,7 +431,7 @@ impl Coordinator {
                 let pipeline = || -> Result<optimize::peek::GlobalMirPlan, AdapterError> {
                     // In `explain_~` contexts, set the trace-derived dispatch
                     // as default while optimizing.
-                    let _dispatch_guard = if let PeekContext::Explain(explain_ctx) = &peek_ctx {
+                    let _dispatch_guard = if let Some(explain_ctx) = explain_ctx.as_ref() {
                         let dispatch = tracing::Dispatch::from(&explain_ctx.optimizer_trace);
                         Some(tracing::dispatcher::set_default(&dispatch))
                     } else {
@@ -468,12 +468,12 @@ impl Coordinator {
                         in_immediate_multi_stmt_txn,
                         optimizer,
                         global_mir_plan,
-                        peek_ctx,
+                        explain_ctx,
                     }),
                     // Internal optimizer errors are handled differently
                     // depending on the caller.
                     Err(err) => {
-                        let PeekContext::Explain(explain_ctx) = peek_ctx else {
+                        let Some(explain_ctx) = explain_ctx else {
                             // In `sequence_~` contexts, immediately retire the
                             // execution with the error.
                             return ctx.retire(Err(err.into()));
@@ -526,7 +526,7 @@ impl Coordinator {
             in_immediate_multi_stmt_txn,
             optimizer,
             global_mir_plan,
-            peek_ctx,
+            explain_ctx,
         }: PeekStageRealTimeRecency,
     ) -> Option<(ExecuteContext, PeekStageOptimizeLir)> {
         match self.recent_timestamp(ctx.session(), source_ids.iter().cloned()) {
@@ -546,7 +546,7 @@ impl Coordinator {
                         in_immediate_multi_stmt_txn,
                         optimizer,
                         global_mir_plan,
-                        peek_ctx,
+                        explain_ctx,
                     },
                 );
                 task::spawn(|| "real_time_recency_peek", async move {
@@ -576,7 +576,7 @@ impl Coordinator {
                     real_time_recency_ts: None,
                     optimizer,
                     global_mir_plan,
-                    peek_ctx,
+                    explain_ctx,
                 },
             )),
         }
@@ -598,7 +598,7 @@ impl Coordinator {
             real_time_recency_ts,
             mut optimizer,
             global_mir_plan,
-            peek_ctx,
+            explain_ctx,
         }: PeekStageOptimizeLir,
     ) {
         // Generate data structures that can be moved to another task where we will perform possibly
@@ -620,7 +620,7 @@ impl Coordinator {
                 &id_bundle,
                 &source_ids,
                 real_time_recency_ts,
-                (&peek_ctx).into(),
+                (&explain_ctx).into(),
             )
             .await;
 
@@ -634,7 +634,7 @@ impl Coordinator {
                     || -> Result<(optimize::peek::GlobalLirPlan, UsedIndexes), AdapterError> {
                         // In `explain_~` contexts, set the trace-derived dispatch
                         // as default while optimizing.
-                        let _dispatch_guard = if let PeekContext::Explain(explain_ctx) = &peek_ctx {
+                        let _dispatch_guard = if let Some(explain_ctx) = explain_ctx.as_ref() {
                             let dispatch = tracing::Dispatch::from(&explain_ctx.optimizer_trace);
                             Some(tracing::dispatcher::set_default(&dispatch))
                         } else {
@@ -687,8 +687,8 @@ impl Coordinator {
                     };
 
                 let stage = match pipeline() {
-                    Ok((global_lir_plan, used_indexes)) => match peek_ctx {
-                        PeekContext::Explain(explain_ctx) => {
+                    Ok((global_lir_plan, used_indexes)) => {
+                        if let Some(explain_ctx) = explain_ctx {
                             let (peek_plan, df_meta) = global_lir_plan.unapply();
                             PeekStage::Explain(PeekStageExplain {
                                 validity,
@@ -702,23 +702,24 @@ impl Coordinator {
                                 used_indexes,
                                 explain_ctx,
                             })
+                        } else {
+                            PeekStage::Finish(PeekStageFinish {
+                                validity,
+                                plan,
+                                id_bundle,
+                                target_replica,
+                                source_ids,
+                                determination,
+                                timestamp_context,
+                                optimizer,
+                                global_lir_plan,
+                            })
                         }
-                        PeekContext::Select => PeekStage::Finish(PeekStageFinish {
-                            validity,
-                            plan,
-                            id_bundle,
-                            target_replica,
-                            source_ids,
-                            determination,
-                            timestamp_context,
-                            optimizer,
-                            global_lir_plan,
-                        }),
-                    },
+                    }
                     // Internal optimizer errors are handled differently
                     // depending on the caller.
                     Err(err) => {
-                        let PeekContext::Explain(explain_ctx) = peek_ctx else {
+                        let Some(explain_ctx) = explain_ctx else {
                             // In `sequence_~` contexts, immediately retire the
                             // execution with the error.
                             return ctx.retire(Err(err.into()));
