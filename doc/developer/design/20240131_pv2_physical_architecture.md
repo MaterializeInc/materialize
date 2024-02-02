@@ -16,9 +16,10 @@ develop a scalable and isolated query/control that is made up of multiple
 processes that interact with distributed primitives at the moments where
 coordination is required.
 
-In [Platform v2: Logical
-Architecture](/doc/developer/design/20231127_decoupled_isolated_coordinator.md)
-we lay out the logical architecture. Here, we will lay out the physical
+In Platform v2: Logical Architecture of the Query/Control Layer [(in-progress
+PR)](https://github.com/MaterializeInc/materialize/pull/23543) we lay out the
+logical architecture and reason about how we _can_ provide correctness in a
+more decoupled/distributed setting. Here, we will lay out the physical
 architecture: what kinds of processes make up an environment, how are they
 connected, how are queries routed, etc.
 
