@@ -231,17 +231,12 @@ impl TransactionalProducer {
             "compression.type",
             connection.compression_type.to_librdkafka_option().into(),
         );
-        // Increase limits for the Kafka producer's internal buffering of messages. Currently we
-        // don't have a great backpressure mechanism to tell indexes or views to slow down, so the
-        // only thing we can do with a message that we can't immediately send is to put it in a
-        // buffer and there's no point having buffers within the dataflow layer and Kafka. If the
-        // sink starts falling behind and the buffers start consuming too much memory the best
-        // thing to do is to drop the sink. Sets the buffer size to be 16 GB (note that this
-        // setting is in KB)
-        options.insert("queue.buffering.max.kbytes", format!("{}", 16 << 20));
-        // Set the max messages buffered by the producer at any time to 10MM which is the maximum
-        // allowed value.
-        options.insert("queue.buffering.max.messages", format!("{}", 10_000_000));
+        // Set the maximum buffer size limit. We don't want to impose anything lower than the max
+        // here as the operator has nothing better to do with the data than to buffer them.
+        options.insert("queue.buffering.max.kbytes", "2147483647".into());
+        // Disable the default buffer limit of 100k messages. We don't want to impose any limit
+        // here as the operator has nothing better to do with the data than to buffer them.
+        options.insert("queue.buffering.max.messages", "0".into());
         // Make the Kafka producer wait at least 10 ms before sending out MessageSets
         options.insert("queue.buffering.max.ms", format!("{}", 10));
         // Time out transactions after 60 seconds
