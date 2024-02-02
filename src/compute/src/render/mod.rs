@@ -1083,12 +1083,7 @@ impl Pairer {
         I1: IntoIterator<Item = Datum<'a>>,
         I2: IntoIterator<Item = Datum<'a>>,
     {
-        let binding = SharedRow::get();
-        let mut row_builder = binding.borrow_mut();
-        let mut row_packer = row_builder.packer();
-        row_packer.extend(first);
-        row_packer.extend(second);
-        row_builder.clone()
+        SharedRow::pack(first.into_iter().chain(second))
     }
 
     /// Splits a datum iterator into a pair of `Row` instances.
@@ -1096,11 +1091,8 @@ impl Pairer {
         let mut datum_iter = datum_iter.into_iter();
         let binding = SharedRow::get();
         let mut row_builder = binding.borrow_mut();
-        let mut row_packer = row_builder.packer();
-        row_packer.extend(datum_iter.by_ref().take(self.split_arity));
-        let first = row_builder.clone();
-        row_packer = row_builder.packer();
-        row_packer.extend(datum_iter);
-        (first, row_builder.clone())
+        let first = row_builder.pack_using(datum_iter.by_ref().take(self.split_arity));
+        let second = row_builder.pack_using(datum_iter);
+        (first, second)
     }
 }

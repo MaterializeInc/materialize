@@ -130,13 +130,9 @@ where
                     let mut datum_vec = mz_repr::DatumVec::new();
                     let collection = ok_input
                         .map(move |row| {
-                            let binding = SharedRow::get();
-                            let mut row_builder = binding.borrow_mut();
                             let group_row = {
                                 let datums = datum_vec.borrow_with(&row);
-                                let iterator = group_key.iter().map(|i| datums[*i]);
-                                row_builder.packer().extend(iterator);
-                                row_builder.clone()
+                                SharedRow::pack(group_key.iter().map(|i| datums[*i]))
                             };
                             (group_row, row)
                         })
@@ -370,13 +366,7 @@ where
             let stage = build_topk_negated_stage::<S, RowValSpine<Result<Row, Row>, _, _>>(
                 &input, order_key, offset, limit, arity,
             )
-            .as_collection(|k, v| {
-                let binding = SharedRow::get();
-                let mut row_builder = binding.borrow_mut();
-                let mut row_packer = row_builder.packer();
-                row_packer.extend(k);
-                (row_builder.clone(), v.clone())
-            });
+            .as_collection(|k, v| (SharedRow::pack(k), v.clone()));
 
             let error_logger = self.error_logger();
             let (oks, errs) =
@@ -384,10 +374,7 @@ where
                     Err(v) => {
                         let mut hk_iter = hk.iter();
                         let h = hk_iter.next().unwrap().unwrap_uint64();
-                        let binding = SharedRow::get();
-                        let mut row_builder = binding.borrow_mut();
-                        row_builder.packer().extend(hk_iter);
-                        let k = row_builder.clone();
+                        let k = SharedRow::pack(hk_iter);
                         let message = "Negative multiplicities in TopK";
                         error_logger.log(message, &format!("k={k:?}, h={h}, v={v:?}"));
                         Err(EvalError::Internal(message.to_string()).into())
@@ -403,12 +390,9 @@ where
                 .as_collection(|k, v| {
                     let binding = SharedRow::get();
                     let mut row_builder = binding.borrow_mut();
-                    let mut row_packer = row_builder.packer();
-                    row_packer.extend(k);
-                    let key = row_builder.clone();
-                    row_packer = row_builder.packer();
-                    row_packer.extend(v);
-                    (key, row_builder.clone())
+                    let key = row_builder.pack_using(k);
+                    let val = row_builder.pack_using(v);
+                    (key, val)
                 }),
                 None,
             )
@@ -439,13 +423,10 @@ where
             .map({
                 let mut datum_vec = mz_repr::DatumVec::new();
                 move |row| {
-                    let binding = SharedRow::get();
-                    let mut row_builder = binding.borrow_mut();
+                    // Scoped to allow borrow of `row` to drop.
                     let group_key = {
                         let datums = datum_vec.borrow_with(&row);
-                        let iterator = group_key.iter().map(|i| datums[*i]);
-                        row_builder.packer().extend(iterator);
-                        row_builder.clone()
+                        SharedRow::pack(group_key.iter().map(|i| datums[*i]))
                     };
                     (group_key, row)
                 }
@@ -540,18 +521,12 @@ where
                     }
                 });
 
-                // The `row_builder` below will be used to construct either errors or
-                // output values in the following.
-                let binding = SharedRow::get();
-                let mut row_builder = binding.borrow_mut();
-
                 if let Some(err) = Tr::ValOwned::into_error() {
                     for (datums, diff) in source.iter() {
                         if diff.is_positive() {
                             continue;
                         }
-                        row_builder.packer().extend(*datums);
-                        target.push((err(row_builder.clone()), -1));
+                        target.push((err(SharedRow::pack(*datums)), -1));
                         return;
                     }
                 }
@@ -565,13 +540,19 @@ where
                     return;
                 }
 
+                // The `row_builder` below will be used to construct output values in the following.
+                let binding = SharedRow::get();
+                let mut row_builder = binding.borrow_mut();
+
                 // First go ahead and emit all records. Note that we ensure target
                 // has the capacity to hold at least these records, and avoid any
                 // dependencies on the user-provided (potentially unbounded) limit.
                 target.reserve(source.len());
                 for (datums, diff) in source.iter() {
-                    row_builder.packer().extend(*datums);
-                    target.push((Tr::ValOwned::ok(row_builder.clone()), diff.clone()));
+                    target.push((
+                        Tr::ValOwned::ok(row_builder.pack_using(*datums)),
+                        diff.clone(),
+                    ));
                 }
                 // local copies that may count down to zero.
                 let mut offset = offset;
