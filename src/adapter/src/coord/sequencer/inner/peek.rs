@@ -8,48 +8,43 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeSet;
-use std::str::FromStr;
 use std::sync::Arc;
 
-use http::Uri;
 use maplit::btreemap;
 use mz_controller_types::ClusterId;
 use mz_expr::CollectionPlan;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::{trace_plan, ExprHumanizerExt, TransientItem, UsedIndexes};
-use mz_repr::{Datum, GlobalId, Row, RowArena, Timestamp};
+use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_sql::catalog::CatalogCluster;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_catalog::memory::objects::CatalogItem;
+use mz_sql::plan;
 use mz_sql::plan::QueryWhen;
-use mz_sql::plan::{self, HirScalarExpr};
 use mz_transform::EmptyStatisticsOracle;
 use tracing::Instrument;
 use tracing::{event, warn, Level};
 
 use crate::command::ExecuteResponse;
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::peek::{self, PeekDataflowPlan, PeekPlan, PlannedPeek};
+use crate::coord::peek::{self, PeekDataflowPlan, PlannedPeek};
 use crate::coord::sequencer::inner::{check_log_reads, return_if_err};
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{
     TimestampContext, TimestampDetermination, TimestampProvider,
 };
 use crate::coord::{
-    Coordinator, CopyToContext, ExecuteContext, ExplainContext, Message, PeekContext, PeekStage,
-    PeekStageCopyToFinish, PeekStageExplain, PeekStageFinish, PeekStageOptimizeLir,
-    PeekStageOptimizeMir, PeekStageRealTimeRecency, PeekStageTimestamp, PeekStageValidate,
-    PlanValidity, RealTimeRecencyContext, TargetCluster,
+    Coordinator, ExecuteContext, ExplainContext, Message, PeekContext, PeekStage, PeekStageExplain,
+    PeekStageFinish, PeekStageOptimizeLir, PeekStageOptimizeMir, PeekStageRealTimeRecency,
+    PeekStageTimestamp, PeekStageValidate, PlanValidity, RealTimeRecencyContext, TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
-use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
 use crate::optimize::{self, Optimize};
 use crate::session::{RequireLinearization, Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
-use crate::util::ResultExt;
 
 impl Coordinator {
     /// Sequence a peek, determining a timestamp and the most efficient dataflow interaction.
@@ -74,63 +69,6 @@ impl Coordinator {
                 plan,
                 target_cluster,
                 peek_ctx: PeekContext::Select,
-            }),
-        )
-        .await;
-    }
-
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) async fn sequence_peek_copy_to(
-        &mut self,
-        ctx: ExecuteContext,
-        plan::CopyToPlan {
-            select_plan,
-            desc,
-            to,
-            connection,
-            format_params,
-        }: plan::CopyToPlan,
-        target_cluster: TargetCluster,
-    ) {
-        let eval_uri = |to: HirScalarExpr| -> Result<Uri, AdapterError> {
-            let style = ExprPrepStyle::OneShot {
-                logical_time: EvalTime::NotAvailable,
-                session: ctx.session(),
-                catalog_state: self.catalog().state(),
-            };
-            let mut to = to.lower_uncorrelated()?;
-            prep_scalar_expr(&mut to, style)?;
-            let temp_storage = RowArena::new();
-            let evaled = to.eval(&[], &temp_storage)?;
-            if evaled == Datum::Null {
-                coord_bail!("COPY TO target value can not be null");
-            }
-            let to_url = match Uri::from_str(evaled.unwrap_str()) {
-                Ok(url) => {
-                    if url.scheme_str() != Some("s3") {
-                        coord_bail!("only 's3://...' urls are supported as COPY TO target");
-                    }
-                    url
-                }
-                Err(e) => coord_bail!("could not parse COPY TO target url: {}", e),
-            };
-            Ok(to_url)
-        };
-
-        let uri = return_if_err!(eval_uri(to), ctx);
-
-        self.execute_peek_stage(
-            ctx,
-            OpenTelemetryContext::obtain(),
-            PeekStage::Validate(PeekStageValidate {
-                plan: select_plan,
-                target_cluster,
-                peek_ctx: PeekContext::CopyTo(CopyToContext {
-                    desc,
-                    to: uri,
-                    connection,
-                    format_params,
-                }),
             }),
         )
         .await;
@@ -240,11 +178,6 @@ impl Coordinator {
                 }
                 Explain(stage) => {
                     let result = self.peek_stage_explain(&mut ctx, stage);
-                    ctx.retire(result);
-                    return;
-                }
-                CopyToFinish(stage) => {
-                    let result = self.peek_stage_copy_to_finish(&mut ctx, stage).await;
                     ctx.retire(result);
                     return;
                 }
@@ -517,8 +450,7 @@ impl Coordinator {
 
                     // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
                     let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
-                    let local_mir_plan =
-                        local_mir_plan.resolve(ctx.session(), stats, peek_ctx.copy_to_context());
+                    let local_mir_plan = local_mir_plan.resolve(ctx.session(), stats);
                     let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
 
                     Ok(global_mir_plan)
@@ -728,11 +660,8 @@ impl Coordinator {
                         };
 
                         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                        let global_mir_plan = global_mir_plan.resolve(
-                            timestamp_context.clone(),
-                            ctx.session_mut(),
-                            peek_ctx.copy_to_context(),
-                        );
+                        let global_mir_plan =
+                            global_mir_plan.resolve(timestamp_context.clone(), ctx.session_mut());
                         let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
 
                         // Trace the resulting plan for the top-level `optimize` path.
@@ -785,14 +714,6 @@ impl Coordinator {
                             optimizer,
                             global_lir_plan,
                         }),
-                        PeekContext::CopyTo(copy_to_context) => {
-                            PeekStage::CopyToFinish(PeekStageCopyToFinish {
-                                validity,
-                                optimizer,
-                                global_lir_plan,
-                                copy_to_context,
-                            })
-                        }
                     },
                     // Internal optimizer errors are handled differently
                     // depending on the caller.
@@ -909,7 +830,6 @@ impl Coordinator {
             ctx.session().vars().max_query_result_size(),
             self.catalog().system_config().max_result_size(),
         );
-
         // Implement the peek, and capture the response.
         let resp = self
             .implement_peek_plan(
@@ -1041,44 +961,6 @@ impl Coordinator {
         }
 
         Ok(Self::send_immediate_rows(rows))
-    }
-
-    #[tracing::instrument(level = "debug", skip_all)]
-    async fn peek_stage_copy_to_finish(
-        &mut self,
-        ctx: &mut ExecuteContext,
-        PeekStageCopyToFinish {
-            validity: _,
-            optimizer,
-            global_lir_plan,
-            copy_to_context,
-        }: PeekStageCopyToFinish,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let session = ctx.session_mut();
-        let (peek_plan, df_meta) = global_lir_plan.unapply();
-        let PeekPlan::SlowPath(PeekDataflowPlan {
-            desc: dataflow,
-            id: _,
-            ..
-        }) = peek_plan
-        else {
-            // While optimizing we had made sure to always go for the slow path in case of copy to
-            unreachable!()
-        };
-
-        self.emit_optimizer_notices(&*session, &df_meta.optimizer_notices);
-
-        // Ship the dataflow
-        self.controller
-            .active_compute()
-            .create_dataflow(optimizer.cluster_id(), dataflow)
-            .unwrap_or_terminate("cannot fail to create dataflows");
-
-        // TODO(mouli): implement!
-        Err(AdapterError::Internal(format!(
-            "COPY TO '{}' is not yet implemented",
-            copy_to_context.to
-        )))
     }
 
     /// Determines the query timestamp and acquires read holds on dependent sources

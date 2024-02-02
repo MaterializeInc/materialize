@@ -1394,7 +1394,6 @@ impl From<&PeekContext> for RequireLinearization {
     fn from(ctx: &PeekContext) -> Self {
         match ctx {
             PeekContext::Select => RequireLinearization::Required,
-            PeekContext::CopyTo(_) => RequireLinearization::Required,
             PeekContext::Explain(..) => RequireLinearization::NotRequired,
         }
     }
