@@ -233,9 +233,12 @@ impl<'s> Optimize<LocalMirPlan<ResolvedLocal<'s>>> for Optimizer {
 
         let expr = OptimizedMirRelationExpr(expr);
 
-        // The assembled dataflow contains a view and an index of that view.
-        let mut df_builder =
-            DataflowBuilder::new(self.catalog.state(), self.compute_instance.clone());
+        // The assembled dataflow contains a view and a sink on that view.
+        let mut df_builder = {
+            let catalog = self.catalog.state();
+            let compute = self.compute_instance.clone();
+            DataflowBuilder::new(catalog, compute).with_config(&self.config)
+        };
 
         let debug_name = format!("oneshot-select-{}", self.select_id);
         let mut df_desc = MirDataflowDescription::new(debug_name.to_string());

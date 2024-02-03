@@ -193,8 +193,11 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     refresh_schedule: None,
                 };
 
-                let mut df_builder =
-                    DataflowBuilder::new(self.catalog.state(), self.compute_instance.clone());
+                let mut df_builder = {
+                    let catalog = self.catalog.state();
+                    let compute = self.compute_instance.clone();
+                    DataflowBuilder::new(catalog, compute).with_config(&self.config)
+                };
 
                 let (df_desc, df_meta) =
                     df_builder.build_sink_dataflow(sink_name, sink_id, sink_desc)?;
@@ -236,8 +239,11 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     refresh_schedule: None,
                 };
 
-                let mut df_builder =
-                    DataflowBuilder::new(self.catalog.state(), self.compute_instance.clone());
+                let mut df_builder = {
+                    let catalog = self.catalog.state();
+                    let compute = self.compute_instance.clone();
+                    DataflowBuilder::new(catalog, compute).with_config(&self.config)
+                };
 
                 let mut df_desc = MirDataflowDescription::new(sink_name);
 
