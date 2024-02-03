@@ -1821,12 +1821,10 @@ impl Coordinator {
                 ctx.retire(result);
             }
             plan::Explainee::ReplanMaterializedView(_) => {
-                let msg = "EXPLAIN REPLAN MATERIALIZED VIEW is currently not supported";
-                ctx.retire(Err(AdapterError::Unsupported(msg)));
+                self.explain_replan_materialized_view(ctx, plan).await;
             }
             plan::Explainee::ReplanIndex(_) => {
-                let msg = "EXPLAIN REPLAN INDEX is currently not supported";
-                ctx.retire(Err(AdapterError::Unsupported(msg)));
+                self.explain_replan_index(ctx, plan).await;
             }
         };
     }

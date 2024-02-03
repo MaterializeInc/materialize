@@ -99,6 +99,60 @@ impl Coordinator {
         .await;
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(crate) async fn explain_replan_index(
+        &mut self,
+        ctx: ExecuteContext,
+        plan::ExplainPlanPlan {
+            stage,
+            format,
+            config,
+            explainee,
+        }: plan::ExplainPlanPlan,
+    ) {
+        let plan::Explainee::ReplanIndex(id) = explainee else {
+            unreachable!() // Asserted in `sequence_explain_plan`.
+        };
+        let CatalogItem::Index(item) = self.catalog().get_entry(&id).item() else {
+            unreachable!() // Asserted in `plan_explain_plan`.
+        };
+
+        let state = self.catalog().state();
+        let plan_result = state.deserialize_plan(id, item.create_sql.clone(), true);
+        let (plan, resolved_ids) = return_if_err!(plan_result, ctx);
+
+        let plan::Plan::CreateIndex(plan) = plan else {
+            unreachable!() // We are parsing the `create_sql` of an `Index` item.
+        };
+
+        // It is safe to assume that query optimization will always succeed, so
+        // for now we statically assume `broken = false`.
+        let broken = false;
+
+        // Create an OptimizerTrace instance to collect plans emitted when
+        // executing the optimizer pipeline.
+        let optimizer_trace = OptimizerTrace::new(broken, stage.path());
+
+        self.execute_create_index_stage(
+            ctx,
+            CreateIndexStage::Validate(CreateIndexValidate {
+                plan,
+                resolved_ids,
+                explain_ctx: Some(ExplainContext {
+                    broken,
+                    config,
+                    format,
+                    stage,
+                    replan: Some(id),
+                    desc: None,
+                    optimizer_trace,
+                }),
+            }),
+            OpenTelemetryContext::obtain(),
+        )
+        .await;
+    }
+
     /// Processes as many `create index` stages as possible.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) async fn execute_create_index_stage(
