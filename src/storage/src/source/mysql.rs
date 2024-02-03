@@ -8,6 +8,47 @@
 // by the Apache License, Version 2.0.
 
 //! Code to render the ingestion dataflow of a [`MySqlSourceConnection`].
+//!
+//! This dataflow is split into Snapshot and Replication operators.
+//!
+//! # Snapshot
+//!
+//! The snapshot operator is responsible for taking a consistent snapshot of the tables involved
+//! in the ingestion from the MySQL server. Each table that is being ingested is snapshot is
+//! assigned a specific worker, which performs a `SELECT * FROM table` and emits updates for all
+//! the rows in the given table.
+//!
+//! For all tables that are snapshotted the snapshot operator also emits a rewind request to
+//! the replication operator containing the GTID-set based frontier which will be used to
+//! ensure that the requested portion of the replication stream is subtracted from the snapshot.
+//!
+//! See the [snapshot] module for more information.
+//!
+//! # Replication
+//!
+//! The replication operator is responsible for ingesting the MySQL replication stream which must
+//! happen from a single worker.
+//!
+//! See the [replication] module for more information.
+//!
+//! # Error handling
+//!
+//! There are two kinds of errors that can happen during ingestion that are represented as two
+//! separate error types:
+//!
+//! [`DefiniteError`]s are errors that happen during processing of a specific collection record.
+//! These are the only errors that can ever end up in the error collection of a subsource.
+//!
+//! [`TransientError`]s are any errors that can happen for reasons that are unrelated to the data
+//! itself. This could be authentication failures, connection failures, etc. The only operators
+//! that can emit such errors are the `MySqlReplicationReader` and the `MySqlSnapshotReader`
+//! operators, which are the ones that talk to the external world. Both of these operators are
+//! built with the `AsyncOperatorBuilder::build_fallible` method which allows transient errors
+//! to be propagated upwards with the standard `?` operator without risking downgrading the
+//! capability and producing bogus frontiers.
+//!
+//! The error streams from both of those operators are published to the source status and also
+//! trigger a restart of the dataflow.
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
@@ -20,19 +61,24 @@ use mysql_async::Row as MySqlRow;
 use mysql_common::value::convert::from_value;
 use mysql_common::Value;
 use serde::{Deserialize, Serialize};
-use timely::dataflow::operators::{Concat, Map};
+use timely::dataflow::channels::pushers::TeeCore;
+use timely::dataflow::operators::{CapabilitySet, Concat, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use uuid::Uuid;
 
-use mz_mysql_util::{MySqlError, MySqlTableDesc};
+use mz_mysql_util::{
+    ensure_full_row_binlog_format, ensure_gtid_consistency, ensure_replication_commit_order,
+    MySqlError, MySqlTableDesc,
+};
 use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, Diff, Row, ScalarType};
 use mz_sql_parser::ast::{Ident, UnresolvedItemName};
 use mz_storage_types::errors::SourceErrorDetails;
-use mz_storage_types::sources::mysql::{GTIDState, GtidPartition};
+use mz_storage_types::sources::mysql::{GtidPartition, GtidState};
 use mz_storage_types::sources::{MySqlSourceConnection, SourceTimestamp};
-use mz_timely_util::builder_async::PressOnDropButton;
+use mz_timely_util::builder_async::{AsyncOutputHandle, PressOnDropButton};
+use mz_timely_util::order::Extrema;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::SourceRender;
@@ -174,15 +220,15 @@ pub enum DefiniteError {
     #[error("received a gtid set from the server that violates our requirements: {0}")]
     UnsupportedGtidState(String),
     #[error("received out of order gtids for source {0} at transaction-id {1}")]
-    BinlogGtidMonotonicityViolation(String, GTIDState),
+    BinlogGtidMonotonicityViolation(String, GtidState),
     #[error("received a null value in a non-null column: {0}")]
     NullValueInNonNullColumn(String),
     #[error("mysql server does not have the binlog available at the requested gtid set")]
     BinlogNotAvailable,
     #[error("mysql server binlog frontier at {0} is beyond required frontier {1}")]
     BinlogMissingResumePoint(String, String),
-    #[error("server gtid error: {0}")]
-    ServerGTIDError(String),
+    #[error("mysql server configuration error: {0}")]
+    ServerConfigurationError(String),
 }
 
 impl From<DefiniteError> for SourceReaderError {
@@ -193,7 +239,6 @@ impl From<DefiniteError> for SourceReaderError {
     }
 }
 
-/// TODO: This should use a partitioned timestamp implementation instead of the snapshot gtid set.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct RewindRequest {
     /// The table that should be rewound.
@@ -279,7 +324,7 @@ pub(crate) fn pack_mysql_row(
 /// UUID range of all possible GTID source-ids from a MySQL server.
 /// The active partitions are all singleton partitions representing a single
 /// source-id timestamp, and the future partitions represent the missing
-/// UUID ranges that we have not yet seen and are held at timestamp GTIDState::Absent.
+/// UUID ranges that we have not yet seen and are held at timestamp GtidState::Absent.
 ///
 /// This is used to keep track of all partitions and is updated as we receive
 /// new GTID updates from the server, and is used to create a full 'frontier'
@@ -304,7 +349,7 @@ impl From<Antichain<GtidPartition>> for GtidReplicationPartitions {
         let mut active = BTreeMap::new();
         let mut future = Vec::new();
         for part in frontier.iter() {
-            if part.timestamp() == &GTIDState::Absent {
+            if part.timestamp() == &GtidState::Absent {
                 future.push(part.clone());
             } else {
                 let source_id = part.interval().singleton().unwrap().clone();
@@ -386,4 +431,45 @@ impl GtidReplicationPartitions {
 
         Ok(())
     }
+}
+
+async fn return_definite_error(
+    err: DefiniteError,
+    outputs: &[usize],
+    data_handle: &mut AsyncOutputHandle<
+        GtidPartition,
+        Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>,
+        TeeCore<GtidPartition, Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
+    >,
+    data_cap_set: &CapabilitySet<GtidPartition>,
+    definite_error_handle: &mut AsyncOutputHandle<
+        GtidPartition,
+        Vec<ReplicationError>,
+        TeeCore<GtidPartition, Vec<ReplicationError>>,
+    >,
+    definite_error_cap_set: &CapabilitySet<GtidPartition>,
+) -> () {
+    for output_index in outputs {
+        let update = (
+            (*output_index, Err(err.clone())),
+            GtidPartition::new_range(Uuid::minimum(), Uuid::maximum(), GtidState::MAX),
+            1,
+        );
+        data_handle.give(&data_cap_set[0], update).await;
+    }
+    definite_error_handle
+        .give(
+            &definite_error_cap_set[0],
+            ReplicationError::Definite(Rc::new(err)),
+        )
+        .await;
+    ()
+}
+
+async fn validate_mysql_repl_settings(conn: &mut mysql_async::Conn) -> Result<(), MySqlError> {
+    ensure_gtid_consistency(conn).await?;
+    ensure_full_row_binlog_format(conn).await?;
+    ensure_replication_commit_order(conn).await?;
+
+    Ok(())
 }

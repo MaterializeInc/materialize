@@ -173,7 +173,7 @@ impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {
 
 /// Represents a MySQL transaction id
 #[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub enum GTIDState {
+pub enum GtidState {
     // NOTE: The ordering of the variants is important for the derived order implementation
     /// Represents a MySQL server source-id that has not yet presented a GTID
     Absent,
@@ -186,38 +186,38 @@ pub enum GTIDState {
     Active(NonZeroU64),
 }
 
-impl fmt::Display for GTIDState {
+impl fmt::Display for GtidState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            GTIDState::Absent => write!(f, "Absent"),
-            GTIDState::Active(id) => write!(f, "{}", id),
+            GtidState::Absent => write!(f, "Absent"),
+            GtidState::Active(id) => write!(f, "{}", id),
         }
     }
 }
 
-impl GTIDState {
-    pub const MAX: GTIDState = GTIDState::Active(NonZeroU64::MAX);
+impl GtidState {
+    pub const MAX: GtidState = GtidState::Active(NonZeroU64::MAX);
 }
 
-impl Timestamp for GTIDState {
+impl Timestamp for GtidState {
     // No need to describe complex summaries
     type Summary = ();
 
     fn minimum() -> Self {
-        GTIDState::Absent
+        GtidState::Absent
     }
 }
 
-impl TotalOrder for GTIDState {}
+impl TotalOrder for GtidState {}
 
-impl PartialOrder for GTIDState {
+impl PartialOrder for GtidState {
     fn less_equal(&self, other: &Self) -> bool {
         self <= other
     }
 }
 
-impl PathSummary<GTIDState> for () {
-    fn results_in(&self, src: &GTIDState) -> Option<GTIDState> {
+impl PathSummary<GtidState> for () {
+    fn results_in(&self, src: &GtidState) -> Option<GtidState> {
         Some(*src)
     }
 
@@ -226,7 +226,7 @@ impl PathSummary<GTIDState> for () {
     }
 }
 
-impl Refines<()> for GTIDState {
+impl Refines<()> for GtidState {
     fn to_inner(_other: ()) -> Self {
         Self::minimum()
     }
@@ -253,20 +253,20 @@ impl Refines<()> for GTIDState {
 /// or a range of UUIDs to represent multiple sources.
 ///
 /// The value of the partition is the NEXT transaction_id that we expect to see for the
-/// corresponding source(s), represented a GTIDState::Next(transaction_id).
+/// corresponding source(s), represented a GtidState::Next(transaction_id).
 ///
-/// GTIDState::Absent represents that no transactions have been seen for the
+/// GtidState::Absent represents that no transactions have been seen for the
 /// corresponding source(s).
 ///
 /// A complete Antichain of this type represents a frontier of the future transactions
 /// that we might see.
-pub type GtidPartition = Partitioned<Uuid, GTIDState>;
+pub type GtidPartition = Partitioned<Uuid, GtidState>;
 
 impl SourceTimestamp for GtidPartition {
     fn encode_row(&self) -> Row {
         let ts = match self.timestamp() {
-            GTIDState::Absent => Datum::Null,
-            GTIDState::Active(id) => Datum::UInt64(id.get()),
+            GtidState::Absent => Datum::Null,
+            GtidState::Active(id) => Datum::UInt64(id.get()),
         };
         Row::pack(&[
             Datum::Uuid(self.interval().lower),
@@ -280,16 +280,16 @@ impl SourceTimestamp for GtidPartition {
         match (datums.next(), datums.next(), datums.next(), datums.next()) {
             (Some(Datum::Uuid(lower)), Some(Datum::Uuid(upper)), Some(Datum::UInt64(ts)), None) => {
                 match ts {
-                    0 => Partitioned::new_range(lower, upper, GTIDState::Absent),
+                    0 => Partitioned::new_range(lower, upper, GtidState::Absent),
                     ts => Partitioned::new_range(
                         lower,
                         upper,
-                        GTIDState::Active(NonZeroU64::new(ts).unwrap()),
+                        GtidState::Active(NonZeroU64::new(ts).unwrap()),
                     ),
                 }
             }
             (Some(Datum::Uuid(lower)), Some(Datum::Uuid(upper)), Some(Datum::Null), None) => {
-                Partitioned::new_range(lower, upper, GTIDState::Absent)
+                Partitioned::new_range(lower, upper, GtidState::Absent)
             }
             _ => panic!("invalid row {row:?}"),
         }
@@ -302,7 +302,7 @@ impl SourceTimestamp for GtidPartition {
 ///
 /// This includes singlular partitions that represent each UUID seen in the GTID Set, and range
 /// partitions that represent the missing UUIDs between the singular partitions, which are
-/// each set to GTIDState::Absent.
+/// each set to GtidState::Absent.
 ///
 /// TODO(roshan): Add compatibility for MySQL 8.3 'Tagged' GTIDs
 pub fn gtid_set_frontier(gtid_set_str: &str) -> Result<Antichain<GtidPartition>, io::Error> {
@@ -378,7 +378,7 @@ pub fn gtid_set_frontier(gtid_set_str: &str) -> Result<Antichain<GtidPartition>,
                 partitions.insert(GtidPartition::new_range(
                     gap_lower,
                     gap_upper,
-                    GTIDState::Absent,
+                    GtidState::Absent,
                 ));
             } else {
                 return Err(io::Error::new(
@@ -394,7 +394,7 @@ pub fn gtid_set_frontier(gtid_set_str: &str) -> Result<Antichain<GtidPartition>,
         // Insert a partition representing the 'next' GTID that might be seen from this source
         partitions.insert(GtidPartition::new_singleton(
             uuid,
-            GTIDState::Active(NonZeroU64::new(end + 1).unwrap()),
+            GtidState::Active(NonZeroU64::new(end + 1).unwrap()),
         ));
     }
 
@@ -403,7 +403,7 @@ pub fn gtid_set_frontier(gtid_set_str: &str) -> Result<Antichain<GtidPartition>,
         partitions.insert(GtidPartition::new_range(
             gap_lower,
             Uuid::max(),
-            GTIDState::Absent,
+            GtidState::Absent,
         ));
     }
 
@@ -428,34 +428,34 @@ mod tests {
                 GtidPartition::new_range(
                     Uuid::nil(),
                     Uuid::parse_str("14c1b43a-eb64-11eb-8a9a-0242ac130001").unwrap(),
-                    GTIDState::Absent,
+                    GtidState::Absent,
                 ),
                 GtidPartition::new_singleton(
                     Uuid::parse_str("14c1b43a-eb64-11eb-8a9a-0242ac130002").unwrap(),
-                    GTIDState::Active(NonZeroU64::new(2).unwrap()),
+                    GtidState::Active(NonZeroU64::new(2).unwrap()),
                 ),
                 GtidPartition::new_range(
                     Uuid::parse_str("14c1b43a-eb64-11eb-8a9a-0242ac130003").unwrap(),
                     Uuid::parse_str("2174B383-5441-11E8-B90A-C80AA9429561").unwrap(),
-                    GTIDState::Absent,
+                    GtidState::Absent,
                 ),
                 GtidPartition::new_singleton(
                     Uuid::parse_str("2174B383-5441-11E8-B90A-C80AA9429562").unwrap(),
-                    GTIDState::Active(NonZeroU64::new(4).unwrap()),
+                    GtidState::Active(NonZeroU64::new(4).unwrap()),
                 ),
                 GtidPartition::new_range(
                     Uuid::parse_str("2174B383-5441-11E8-B90A-C80AA9429563").unwrap(),
                     Uuid::parse_str("3E11FA47-71CA-11E1-9E33-C80AA9429561").unwrap(),
-                    GTIDState::Absent,
+                    GtidState::Absent,
                 ),
                 GtidPartition::new_singleton(
                     Uuid::parse_str("3E11FA47-71CA-11E1-9E33-C80AA9429562").unwrap(),
-                    GTIDState::Active(NonZeroU64::new(20).unwrap()),
+                    GtidState::Active(NonZeroU64::new(20).unwrap()),
                 ),
                 GtidPartition::new_range(
                     Uuid::parse_str("3E11FA47-71CA-11E1-9E33-C80AA9429563").unwrap(),
                     Uuid::max(),
-                    GTIDState::Absent,
+                    GtidState::Absent,
                 ),
             ]),
         )
@@ -503,7 +503,7 @@ mod tests {
             Antichain::from_elem(GtidPartition::new_range(
                 Uuid::nil(),
                 Uuid::max(),
-                GTIDState::Absent,
+                GtidState::Absent,
             ))
         );
     }
