@@ -19,7 +19,7 @@ use crate::fivetran_sdk::{
     ConfigurationFormResponse, ConfigurationTest, FormField, TestRequest, TestResponse, TextField,
 };
 
-pub const FIVETRAN_DESTINATION_APPLICATION_NAME: &str = "mz_fivetran_destination";
+pub const FIVETRAN_DESTINATION_APPLICATION_NAME: &str = "materialize_fivetran_destination";
 
 pub fn handle_configuration_form_request() -> ConfigurationFormResponse {
     ConfigurationFormResponse {
