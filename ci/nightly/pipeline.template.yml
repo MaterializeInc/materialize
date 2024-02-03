@@ -818,7 +818,7 @@ steps:
 
       - id: checks-upgrade-matrix
         label: "Random upgrades over the entire matrix %N"
-        timeout_in_minutes: 150
+        timeout_in_minutes: 180
         parallelism: 4
         agents:
           queue: linux-aarch64
