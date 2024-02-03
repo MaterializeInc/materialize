@@ -15,6 +15,7 @@ use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use bytes::Bytes;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -766,7 +767,7 @@ where
             encoded_size_bytes: part.encoded_size_bytes,
             leased_seqno: Some(self.lease_seqno()),
             filter_pushdown_audit: false,
-            key_lower: part.key_lower,
+            key_lower: Bytes::from(part.key_lower),
         }
     }
 
@@ -978,7 +979,8 @@ where
             .next()
             .await
             .expect("fetching a leased part")?;
-        let iter = iter.map(|(k, v, t, d)| ((K::decode(k), V::decode(v)), t, d));
+        let iter =
+            iter.map(|((mut k, mut v), t, d)| ((K::decode(&mut k), V::decode(&mut v)), t, d));
         Some(iter)
     }
 }

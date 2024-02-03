@@ -148,9 +148,9 @@ impl PartStats {
         let mut key = schemas.key.encoder(builder.key)?;
         let mut val = schemas.val.encoder(builder.val)?;
         for x in part {
-            for ((k, v), t, d) in x.iter() {
-                let k = K::decode(k)?;
-                let v = V::decode(v)?;
+            for ((mut k, mut v), t, d) in x.iter() {
+                let k = K::decode(&mut k)?;
+                let v = V::decode(&mut v)?;
                 key.encode(&k);
                 val.encode(&v);
                 builder.ts.push(i64::from_le_bytes(t));

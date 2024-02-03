@@ -20,7 +20,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use bytes::BufMut;
+use bytes::{Buf, BufMut};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::{build_info, BuildInfo};
@@ -736,8 +736,9 @@ impl Codec for ShardId {
     fn encode<B: BufMut>(&self, buf: &mut B) {
         buf.put(self.to_string().as_bytes())
     }
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        let shard_id = String::from_utf8(buf.to_owned()).map_err(|err| err.to_string())?;
+    fn decode<B: Buf>(buf: &mut B) -> Result<Self, String> {
+        let buf = buf.copy_to_bytes(buf.remaining()).to_vec();
+        let shard_id = String::from_utf8(buf).map_err(|err| err.to_string())?;
         shard_id.parse()
     }
 }
@@ -927,8 +928,12 @@ mod tests {
         let part = BlobTraceBatchPart::decode(&value).expect("failed to decode part");
         let mut updates = Vec::new();
         for chunk in part.updates.iter() {
-            for ((k, v), t, d) in chunk.iter() {
-                updates.push(((K::decode(k), V::decode(v)), T::decode(t), D::decode(d)));
+            for ((mut k, mut v), t, d) in chunk.iter() {
+                updates.push((
+                    (K::decode(&mut k), V::decode(&mut v)),
+                    T::decode(t),
+                    D::decode(d),
+                ));
             }
         }
         (part, updates)

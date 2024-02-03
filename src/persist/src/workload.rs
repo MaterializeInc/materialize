@@ -238,8 +238,8 @@ pub fn flat_blob(data: &DataGenerator) -> Vec<u8> {
     let mut buf = Vec::with_capacity(usize::cast_from(data.goodput_bytes()));
     for batch in data.batches() {
         for ((k, v), t, d) in batch.iter() {
-            buf.extend_from_slice(k);
-            buf.extend_from_slice(v);
+            buf.extend_from_slice(&k[..]);
+            buf.extend_from_slice(&v[..]);
             buf.extend_from_slice(&t);
             buf.extend_from_slice(&d);
         }

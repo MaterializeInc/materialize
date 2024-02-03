@@ -621,6 +621,7 @@ impl StateUpdateKindRaw {
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
     use mz_persist_types::Codec;
     use mz_storage_types::sources::SourceData;
     use proptest::prelude::*;
@@ -640,7 +641,7 @@ mod tests {
             let source_data = SourceData::from(raw.clone());
             let mut encoded = Vec::new();
             source_data.encode(&mut encoded);
-            let decoded = SourceData::decode(&encoded).expect("should be valid SourceData");
+            let decoded = SourceData::decode(&mut Bytes::from(encoded)).expect("should be valid SourceData");
             prop_assert_eq!(&source_data, &decoded);
             let decoded = StateUpdateKindRaw::from(decoded);
             prop_assert_eq!(&raw, &decoded);

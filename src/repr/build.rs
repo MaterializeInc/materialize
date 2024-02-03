@@ -14,6 +14,8 @@ fn main() {
 
     prost_build::Config::new()
         .btree_map(["."])
+        .bytes([".mz_repr.row"])
+        .bytes_str_unchecked([".mz_repr.row"])
         .extern_path(".mz_proto", "::mz_proto")
         .compile_protos(
             &[
@@ -39,5 +41,5 @@ fn main() {
             ],
             &[".."],
         )
-        .unwrap_or_else(|e| panic!("{e}"))
+        .unwrap_or_else(|e| panic!("{e}"));
 }

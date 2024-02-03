@@ -21,7 +21,7 @@ use arrow2::buffer::Buffer;
 use arrow2::datatypes::DataType as ArrowLogicalType;
 use arrow2::io::parquet::write::Encoding;
 use arrow2::types::NativeType;
-use bytes::BufMut;
+use bytes::{Buf, BufMut};
 
 use crate::columnar::sealed::ColumnRef;
 use crate::columnar::{
@@ -79,9 +79,15 @@ impl Codec for () {
         // No-op.
     }
 
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        if !buf.is_empty() {
-            return Err(format!("decode expected empty buf got {} bytes", buf.len()));
+    fn decode<B>(buf: &mut B) -> Result<Self, String>
+    where
+        B: Buf,
+    {
+        if buf.has_remaining() {
+            return Err(format!(
+                "decode expected empty buf got {} bytes",
+                buf.remaining()
+            ));
         }
         Ok(())
     }
@@ -203,8 +209,12 @@ impl Codec for String {
         buf.put(self.as_bytes())
     }
 
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        String::from_utf8(buf.to_owned()).map_err(|err| err.to_string())
+    fn decode<B>(buf: &mut B) -> Result<Self, String>
+    where
+        B: Buf,
+    {
+        let buf = buf.copy_to_bytes(buf.remaining()).to_vec();
+        String::from_utf8(buf).map_err(|err| err.to_string())
     }
 }
 
@@ -244,8 +254,11 @@ impl Codec for Vec<u8> {
         buf.put(self.as_slice())
     }
 
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        Ok(buf.to_owned())
+    fn decode<B>(buf: &mut B) -> Result<Self, String>
+    where
+        B: Buf,
+    {
+        Ok(buf.copy_to_bytes(buf.remaining()).to_vec())
     }
 }
 

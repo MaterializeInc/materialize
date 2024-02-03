@@ -11,7 +11,7 @@
 //!
 //! See row.proto for details.
 
-use bytes::BufMut;
+use bytes::{Buf, BufMut, Bytes};
 use chrono::Timelike;
 use dec::Decimal;
 use enum_dispatch::enum_dispatch;
@@ -67,7 +67,10 @@ impl Codec for Row {
     /// This perfectly round-trips through [Row::encode]. It can read rows
     /// encoded by historical versions of Materialize back to v(TODO: Figure out
     /// our policy).
-    fn decode(buf: &[u8]) -> Result<Row, String> {
+    fn decode<B>(buf: &mut B) -> Result<Row, String>
+    where
+        B: Buf,
+    {
         let proto_row = ProtoRow::decode(buf).map_err(|err| err.to_string())?;
         Row::try_from(&proto_row)
     }
@@ -780,8 +783,8 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
             Datum::Timestamp(x) => DatumType::Timestamp(x.into_proto()),
             Datum::TimestampTz(x) => DatumType::TimestampTz(x.into_proto()),
             Datum::Interval(x) => DatumType::Interval(x.into_proto()),
-            Datum::Bytes(x) => DatumType::Bytes(x.to_vec()),
-            Datum::String(x) => DatumType::String(x.to_owned()),
+            Datum::Bytes(x) => DatumType::Bytes(Bytes::from(x.to_vec())),
+            Datum::String(x) => DatumType::String(x.into()),
             Datum::Array(x) => DatumType::Array(ProtoArray {
                 elements: Some(ProtoRow {
                     datums: x.elements().iter().map(|x| x.into()).collect(),
@@ -802,7 +805,7 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
                 elements: x
                     .iter()
                     .map(|(k, v)| ProtoDictElement {
-                        key: k.to_owned(),
+                        key: k.into(),
                         val: Some(v.into()),
                     })
                     .collect(),
@@ -811,7 +814,10 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
                 // TODO: Do we need this defensive clone?
                 let mut x = x.0.clone();
                 if let Some((bcd, scale)) = x.to_packed_bcd() {
-                    DatumType::Numeric(ProtoNumeric { bcd, scale })
+                    DatumType::Numeric(ProtoNumeric {
+                        bcd: Bytes::from(bcd),
+                        scale,
+                    })
                 } else if x.is_nan() {
                     DatumType::Other(ProtoDatumOther::NumericNaN.into())
                 } else if x.is_infinite() {
@@ -830,7 +836,7 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
                 }
             }
             Datum::JsonNull => DatumType::Other(ProtoDatumOther::JsonNull.into()),
-            Datum::Uuid(x) => DatumType::Uuid(x.as_bytes().to_vec()),
+            Datum::Uuid(x) => DatumType::Uuid(Bytes::from(x.as_bytes().to_vec())),
             Datum::MzTimestamp(x) => DatumType::MzTimestamp(x.into()),
             Datum::Dummy => DatumType::Other(ProtoDatumOther::Dummy.into()),
             Datum::Null => DatumType::Other(ProtoDatumOther::Null.into()),
@@ -1039,6 +1045,7 @@ impl RustType<ProtoRow> for Row {
 
 #[cfg(test)]
 mod tests {
+    use bytes::{Bytes, BytesMut};
     use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
     use mz_persist_types::Codec;
     use proptest::prelude::*;
@@ -1136,7 +1143,8 @@ mod tests {
 
         let mut encoded = Vec::new();
         row.encode(&mut encoded);
-        assert_eq!(Row::decode(&encoded), Ok(row));
+        let mut buf = Bytes::from(encoded);
+        assert_eq!(Row::decode(&mut buf), Ok(row));
     }
 
     fn schema_and_row() -> (RelationDesc, Row) {
@@ -1234,6 +1242,19 @@ mod tests {
         proptest!(|(scalar_type in any::<ScalarType>())| {
             // The proptest! macro interferes with rustfmt.
             scalar_type_columnar_roundtrip(scalar_type)
+        });
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn row_roundtrips_through_proto() {
+        proptest!(|(row in any::<Row>())| {
+            let mut buf = BytesMut::new();
+
+            row.encode(&mut buf);
+            let round = Row::decode(&mut buf.freeze()).expect("failed to decode!");
+
+            prop_assert_eq!(row, round);
         });
     }
 }

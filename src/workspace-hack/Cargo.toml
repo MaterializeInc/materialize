@@ -83,9 +83,9 @@ postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-fe
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 predicates = { version = "2.1.4" }
 proc-macro2 = { version = "1.0.69", features = ["span-locations"] }
-prost = { version = "0.11.9", features = ["no-recursion-limit"] }
+prost = { git = "https://github.com/MaterializeInc/prost.git", rev = "a91ecc16959d4a69c9e0c5a9169ab02dc4a4a571", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.11.4", default-features = false, features = ["serde"] }
-prost-types = { version = "0.11.9" }
+prost-types = { git = "https://github.com/MaterializeInc/prost.git", rev = "a91ecc16959d4a69c9e0c5a9169ab02dc4a4a571" }
 quote = { version = "1.0.28" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }
@@ -198,9 +198,9 @@ postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-fe
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 predicates = { version = "2.1.4" }
 proc-macro2 = { version = "1.0.69", features = ["span-locations"] }
-prost = { version = "0.11.9", features = ["no-recursion-limit"] }
+prost = { git = "https://github.com/MaterializeInc/prost.git", rev = "a91ecc16959d4a69c9e0c5a9169ab02dc4a4a571", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.11.4", default-features = false, features = ["serde"] }
-prost-types = { version = "0.11.9" }
+prost-types = { git = "https://github.com/MaterializeInc/prost.git", rev = "a91ecc16959d4a69c9e0c5a9169ab02dc4a4a571" }
 quote = { version = "1.0.28" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.3.0" }

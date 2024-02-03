@@ -736,11 +736,12 @@ where
                 break;
             };
             timings.part_fetching += fetch_start.elapsed();
-            for (k, v, t, d) in updates.take(cfg.compaction_yield_after_n_updates) {
+            for ((k, v), t, d) in updates.take(cfg.compaction_yield_after_n_updates) {
+                // TODO(parkmycar): Push the Bytes all the way down.
                 key_vec.clear();
-                key_vec.extend_from_slice(k);
+                key_vec.extend_from_slice(&k[..]);
                 val_vec.clear();
-                val_vec.extend_from_slice(v);
+                val_vec.extend_from_slice(&v[..]);
                 batch.add(&real_schemas, &key_vec, &val_vec, &t, &d).await?;
             }
             tokio::task::yield_now().await;

@@ -16,7 +16,7 @@ use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::str::FromStr;
 use std::time::Duration;
 
-use bytes::BufMut;
+use bytes::{Buf, BufMut};
 
 use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
@@ -1090,7 +1090,7 @@ impl Codec for SourceData {
             .expect("no required fields means no initialization errors");
     }
 
-    fn decode(buf: &[u8]) -> Result<Self, String> {
+    fn decode<B: Buf>(buf: &mut B) -> Result<Self, String> {
         let proto = ProtoSourceData::decode(buf).map_err(|err| err.to_string())?;
         proto.into_rust().map_err(|err| err.to_string())
     }
@@ -1236,6 +1236,7 @@ impl Schema<SourceData> for RelationDesc {
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
     use mz_repr::{is_no_stats_type, ScalarType};
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
@@ -1303,7 +1304,7 @@ mod tests {
         let mut decoded: Vec<SourceData> = encoded
             .lines()
             .map(|s| base64::decode_config(s, base64_config).expect("valid base64"))
-            .map(|b| SourceData::decode(&b).expect("valid proto"))
+            .map(|b| SourceData::decode(&mut Bytes::from(b)).expect("valid proto"))
             .collect();
 
         // If there are fewer than the minimum examples, generate some new ones arbitrarily

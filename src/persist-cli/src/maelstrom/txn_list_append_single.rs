@@ -714,6 +714,9 @@ impl Service for TransactorService {
 }
 
 mod codec_impls {
+    use std::io::Cursor;
+
+    use bytes::Buf;
     use mz_persist_types::codec_impls::{SimpleDecoder, SimpleEncoder, SimpleSchema};
     use mz_persist_types::columnar::{ColumnPush, Schema};
     use mz_persist_types::dyn_struct::{ColumnsMut, ColumnsRef, DynStructCfg};
@@ -736,9 +739,9 @@ mod codec_impls {
             buf.put(bytes.as_slice());
         }
 
-        fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        fn decode<B: Buf>(buf: &mut B) -> Result<Self, String> {
             Ok(MaelstromKey(
-                serde_json::from_slice(buf).map_err(|err| err.to_string())?,
+                serde_json::from_reader(buf.reader()).map_err(|err| err.to_string())?,
             ))
         }
     }
@@ -779,9 +782,9 @@ mod codec_impls {
             buf.put(bytes.as_slice());
         }
 
-        fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        fn decode<B: Buf>(buf: &mut B) -> Result<Self, String> {
             Ok(MaelstromVal(
-                serde_json::from_slice(buf).map_err(|err| err.to_string())?,
+                serde_json::from_reader(buf.reader()).map_err(|err| err.to_string())?,
             ))
         }
     }
@@ -800,7 +803,8 @@ mod codec_impls {
 
         fn decoder<'a>(&self, cols: ColumnsRef<'a>) -> Result<Self::Decoder<'a>, String> {
             SimpleSchema::<MaelstromVal, Vec<u8>>::decoder(cols, |val, ret| {
-                *ret = MaelstromVal::decode(val).expect("should be valid MaelstromVal")
+                let mut buf = Cursor::new(val);
+                *ret = MaelstromVal::decode(&mut buf).expect("should be valid MaelstromVal")
             })
         }
 

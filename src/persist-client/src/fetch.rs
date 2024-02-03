@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::anyhow;
+use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
@@ -377,7 +378,7 @@ pub struct LeasedBatchPart<T> {
     pub(crate) filter_pushdown_audit: bool,
     /// A lower bound on the key. If a tight lower bound is not available, the
     /// empty vec (as the minimum vec) is a conservative choice.
-    pub(crate) key_lower: Vec<u8>,
+    pub(crate) key_lower: Bytes,
 }
 
 impl<T> LeasedBatchPart<T>
@@ -598,7 +599,7 @@ where
     type Item = ((Result<K, String>, Result<V, String>), T, D);
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some((k, v, mut t, d)) = self.part_cursor.pop(&self.part) {
+        while let Some((mut k, mut v, mut t, d)) = self.part_cursor.pop(&self.part) {
             if !self.ts_filter.filter_ts(&mut t) {
                 continue;
             }
@@ -609,7 +610,7 @@ where
             // records. If so, opportunistically consolidate those out.
             while let Some((k_next, v_next, mut t_next, d_next)) = self.part_cursor.peek(&self.part)
             {
-                if (k, v) != (k_next, v_next) {
+                if (&k, &v) != (&k_next, &v_next) {
                     break;
                 }
 
@@ -630,8 +631,8 @@ where
                 continue;
             }
 
-            let k = self.metrics.codecs.key.decode(|| K::decode(k));
-            let v = self.metrics.codecs.val.decode(|| V::decode(v));
+            let k = self.metrics.codecs.key.decode(|| K::decode(&mut k));
+            let v = self.metrics.codecs.val.decode(|| V::decode(&mut v));
             return Some(((k, v), t, d));
         }
         None
@@ -735,7 +736,7 @@ impl Cursor {
     pub fn peek<'a, T: Timestamp + Codec64>(
         &mut self,
         encoded: &'a EncodedPart<T>,
-    ) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {
+    ) -> Option<(Bytes, Bytes, T, [u8; 8])> {
         while let Some(part) = encoded.part.updates.get(self.part_idx) {
             let ((k, v), t, d) = match part.get(self.idx) {
                 Some(x) => x,
@@ -767,7 +768,7 @@ impl Cursor {
     pub fn pop<'a, T: Timestamp + Codec64>(
         &mut self,
         part: &'a EncodedPart<T>,
-    ) -> Option<(&'a [u8], &'a [u8], T, [u8; 8])> {
+    ) -> Option<(Bytes, Bytes, T, [u8; 8])> {
         let update = self.peek(part);
         if update.is_some() {
             self.idx += 1;
@@ -804,7 +805,7 @@ pub struct SerdeLeasedBatchPart {
     reader_id: LeasedReaderId,
     stats: Option<LazyPartStats>,
     filter_pushdown_audit: bool,
-    key_lower: Vec<u8>,
+    key_lower: Bytes,
 }
 
 impl SerdeLeasedBatchPart {

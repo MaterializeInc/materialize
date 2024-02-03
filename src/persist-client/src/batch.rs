@@ -575,7 +575,9 @@ where
             if let Some((max_run_k, max_run_v, max_run_t)) = &mut self.max_kvt_in_run {
                 // start a new run if our part contains an update that exists in the
                 // range already covered by the existing parts of the current run
-                if (min_part_k, min_part_v, &min_part_t) < (max_run_k, max_run_v, max_run_t) {
+                if (&min_part_k[..], &min_part_v[..], &min_part_t)
+                    < (max_run_k, max_run_v, max_run_t)
+                {
                     self.runs.push(self.parts_written);
                 }
 
@@ -583,8 +585,8 @@ where
                 // started a new one, this part contains the greatest KVT in the run
                 max_run_k.clear();
                 max_run_v.clear();
-                max_run_k.extend_from_slice(max_part_k);
-                max_run_v.extend_from_slice(max_part_v);
+                max_run_k.extend_from_slice(&max_part_k[..]);
+                max_run_v.extend_from_slice(&max_part_v[..]);
                 *max_run_t = max_part_t;
             } else {
                 self.max_kvt_in_run = Some((max_part_k.to_vec(), max_part_v.to_vec(), max_part_t));

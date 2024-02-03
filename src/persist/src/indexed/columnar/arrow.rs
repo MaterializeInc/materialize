@@ -15,10 +15,12 @@ use std::io::{Read, Seek, Write};
 use std::sync::Arc;
 
 use arrow2::array::{Array, BinaryArray, PrimitiveArray};
+use arrow2::buffer::Buffer;
 use arrow2::chunk::Chunk;
 use arrow2::datatypes::{DataType, Field, Schema};
 use arrow2::io::ipc::read::{read_file_metadata, FileMetadata, FileReader};
 use arrow2::io::ipc::write::{FileWriter, WriteOptions};
+use bytes::Bytes;
 use differential_dataflow::trace::Description;
 use mz_persist_types::Codec64;
 use once_cell::sync::Lazy;
@@ -167,13 +169,13 @@ pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> Chunk<Box<dyn Array>> {
         convert::identity::<Box<dyn Array>>(Box::new(BinaryArray::new(
             DataType::Binary,
             x.key_offsets.clone(),
-            x.key_data.clone(),
+            Buffer::from(x.key_data.to_vec()),
             None,
         ))),
         Box::new(BinaryArray::new(
             DataType::Binary,
             x.val_offsets.clone(),
-            x.val_data.clone(),
+            Buffer::from(x.val_data.to_vec()),
             None,
         )),
         Box::new(PrimitiveArray::new(
@@ -203,14 +205,14 @@ pub fn decode_arrow_batch_kvtd(x: &Chunk<Box<dyn Array>>) -> Result<ColumnarReco
         .ok_or_else(|| "column 0 doesn't match schema".to_string())?
         .clone();
     let key_offsets = key_array.offsets().clone();
-    let key_data = key_array.values().clone();
+    let key_data = Bytes::from(key_array.values().to_vec());
     let val_array = val_col
         .as_any()
         .downcast_ref::<BinaryArray<i32>>()
         .ok_or_else(|| "column 1 doesn't match schema".to_string())?
         .clone();
     let val_offsets = val_array.offsets().clone();
-    let val_data = val_array.values().clone();
+    let val_data = Bytes::from(val_array.values().to_vec());
     let timestamps = ts_col
         .as_any()
         .downcast_ref::<PrimitiveArray<i64>>()

@@ -17,6 +17,7 @@ use std::ops::{Deref, DerefMut};
 use std::slice;
 use std::time::Duration;
 
+use bytes::Bytes;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_dyncfg::Config;
@@ -178,6 +179,8 @@ pub struct HollowBatchPart {
     pub encoded_size_bytes: usize,
     /// A lower bound on the keys in the part. (By default, this the minimum
     /// possible key: `vec![]`.)
+    ///
+    /// TODO(parkmycar): Make this Bytes
     #[serde(serialize_with = "serialize_part_bytes")]
     pub key_lower: Vec<u8>,
     /// Aggregate statistics about data contained in this part.

@@ -143,16 +143,16 @@ impl TraceBatchMeta {
             .iter()
             .flat_map(|batch| batch.updates.iter().flat_map(|u| u.iter()))
         {
-            let ((_key, _val), _ts, diff) = update;
+            let ((_key, _val), _ts, diff) = &update;
 
             // TODO: Don't assume diff is an i64, take a D type param instead.
-            let diff: u64 = Codec64::decode(diff);
+            let diff: u64 = Codec64::decode(*diff);
 
             // Check data invariants.
             if diff == 0 {
                 return Err(format!(
                     "update with 0 diff: {:?}",
-                    PrettyRecord::<u64, i64>(update, PhantomData)
+                    PrettyRecord::<u64, i64>::new(&update)
                 )
                 .into());
             }
@@ -176,10 +176,10 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
         let uncompacted = PartialOrder::less_equal(self.desc.since(), self.desc.lower());
 
         for update in self.updates.iter().flat_map(|u| u.iter()) {
-            let ((_key, _val), ts, diff) = update;
+            let ((_key, _val), ts, diff) = &update;
             // TODO: Don't assume diff is an i64, take a D type param instead.
-            let ts = T::decode(ts);
-            let diff: i64 = Codec64::decode(diff);
+            let ts = T::decode(*ts);
+            let diff: i64 = Codec64::decode(*diff);
 
             // Check ts against desc.
             if !self.desc.lower().less_equal(&ts) {
@@ -206,7 +206,7 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
             if diff == 0 {
                 return Err(format!(
                     "update with 0 diff: {:?}",
-                    PrettyRecord::<u64, i64>(update, PhantomData)
+                    PrettyRecord::<u64, i64>::new(&update)
                 )
                 .into());
             }
@@ -244,6 +244,17 @@ struct PrettyRecord<'a, T, D>(
     ((&'a [u8], &'a [u8]), [u8; 8], [u8; 8]),
     PhantomData<(T, D)>,
 );
+
+impl<'a, T, D> PrettyRecord<'a, T, D> {
+    pub fn new<A, B>(record: &'a ((A, B), [u8; 8], [u8; 8])) -> Self
+    where
+        A: AsRef<[u8]>,
+        B: AsRef<[u8]>,
+    {
+        let ((a, b), t, d) = record;
+        PrettyRecord(((a.as_ref(), b.as_ref()), *t, *d), PhantomData)
+    }
+}
 
 impl<T, D> fmt::Debug for PrettyRecord<'_, T, D>
 where

@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use bytes::Bytes;
 use once_cell::sync::Lazy;
 use std::collections::BTreeSet;
 use std::fs;
@@ -63,7 +64,7 @@ fn test_proto_serialization_stability() {
         let decoded = encoded_str
             .lines()
             .map(|s| base64::decode_config(s, base64_config).expect("valid base64"))
-            .map(|b| SourceData::decode(&b).expect("valid proto"))
+            .map(|b| SourceData::decode(&mut Bytes::from(b)).expect("valid proto"))
             .map(StateUpdateKindRaw::from)
             .map(|raw| {
                 AllVersionsStateUpdateKind::try_from_raw(&snapshot_file, raw)

@@ -16,7 +16,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
-use bytes::BufMut;
+use bytes::{Buf, BufMut};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
@@ -311,6 +311,12 @@ struct BatchPartUpdate {
 #[derive(PartialOrd, Ord, PartialEq, Eq)]
 struct PrettyBytes<'a>(&'a [u8]);
 
+impl<'a> PrettyBytes<'a> {
+    pub fn new<B: AsRef<[u8]>>(buf: &'a B) -> Self {
+        PrettyBytes(buf.as_ref())
+    }
+}
+
 impl fmt::Debug for PrettyBytes<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match std::str::from_utf8(self.0) {
@@ -351,8 +357,8 @@ pub async fn blob_batch_part(
             break;
         }
         out.updates.push(BatchPartUpdate {
-            k: format!("{:?}", PrettyBytes(k)),
-            v: format!("{:?}", PrettyBytes(v)),
+            k: format!("{:?}", PrettyBytes::new(&k)),
+            v: format!("{:?}", PrettyBytes::new(&v)),
             t,
             d: i64::from_le_bytes(d),
         });
@@ -638,13 +644,9 @@ impl Codec for K {
         KVTD_CODECS.lock().expect("lockable").0.clone()
     }
 
-    fn encode<B>(&self, _buf: &mut B)
-    where
-        B: BufMut,
-    {
-    }
+    fn encode<B: BufMut>(&self, _buf: &mut B) {}
 
-    fn decode(_buf: &[u8]) -> Result<Self, String> {
+    fn decode<B: Buf>(_buf: &mut B) -> Result<Self, String> {
         Ok(Self)
     }
 }
@@ -656,13 +658,9 @@ impl Codec for V {
         KVTD_CODECS.lock().expect("lockable").1.clone()
     }
 
-    fn encode<B>(&self, _buf: &mut B)
-    where
-        B: BufMut,
-    {
-    }
+    fn encode<B: BufMut>(&self, _buf: &mut B) {}
 
-    fn decode(_buf: &[u8]) -> Result<Self, String> {
+    fn decode<B: Buf>(_buf: &mut B) -> Result<Self, String> {
         Ok(Self)
     }
 }
@@ -674,13 +672,9 @@ impl Codec for T {
         KVTD_CODECS.lock().expect("lockable").2.clone()
     }
 
-    fn encode<B>(&self, _buf: &mut B)
-    where
-        B: BufMut,
-    {
-    }
+    fn encode<B: BufMut>(&self, _buf: &mut B) {}
 
-    fn decode(_buf: &[u8]) -> Result<Self, String> {
+    fn decode<B: Buf>(_buf: &mut B) -> Result<Self, String> {
         Ok(Self)
     }
 }

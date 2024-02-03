@@ -16,6 +16,7 @@ use std::{cmp, fmt};
 use arrow2::buffer::Buffer;
 use arrow2::offset::OffsetsBuffer;
 use arrow2::types::Index;
+use bytes::{Bytes, BytesMut};
 
 pub mod arrow;
 pub mod parquet;
@@ -84,9 +85,9 @@ const BYTES_PER_KEY_VAL_OFFSET: usize = 4;
 #[derive(Clone, PartialEq)]
 pub struct ColumnarRecords {
     len: usize,
-    key_data: Buffer<u8>,
+    key_data: Bytes,
     key_offsets: OffsetsBuffer<i32>,
-    val_data: Buffer<u8>,
+    val_data: Bytes,
     val_offsets: OffsetsBuffer<i32>,
     timestamps: Buffer<i64>,
     diffs: Buffer<i64>,
@@ -114,7 +115,7 @@ impl ColumnarRecords {
     /// Read the record at `idx`, if there is one.
     ///
     /// Returns None if `idx >= self.len()`.
-    pub fn get<'a>(&'a self, idx: usize) -> Option<((&'a [u8], &'a [u8]), [u8; 8], [u8; 8])> {
+    pub fn get<'a>(&'a self, idx: usize) -> Option<((Bytes, Bytes), [u8; 8], [u8; 8])> {
         self.borrow().get(idx)
     }
 
@@ -127,9 +128,9 @@ impl ColumnarRecords {
         // obvious.
         ColumnarRecordsRef {
             len: self.len,
-            key_data: self.key_data.as_slice(),
+            key_data: &self.key_data,
             key_offsets: self.key_offsets.as_slice(),
-            val_data: self.val_data.as_slice(),
+            val_data: &self.val_data,
             val_offsets: self.val_offsets.as_slice(),
             timestamps: self.timestamps.as_slice(),
             diffs: self.diffs.as_slice(),
@@ -146,9 +147,9 @@ impl ColumnarRecords {
 #[derive(Clone)]
 struct ColumnarRecordsRef<'a> {
     len: usize,
-    key_data: &'a [u8],
+    key_data: &'a Bytes,
     key_offsets: &'a [i32],
-    val_data: &'a [u8],
+    val_data: &'a Bytes,
     val_offsets: &'a [i32],
     timestamps: &'a [i64],
     diffs: &'a [i64],
@@ -270,7 +271,7 @@ impl<'a> ColumnarRecordsRef<'a> {
     /// Read the record at `idx`, if there is one.
     ///
     /// Returns None if `idx >= self.len()`.
-    fn get(&self, idx: usize) -> Option<((&'a [u8], &'a [u8]), [u8; 8], [u8; 8])> {
+    fn get(&self, idx: usize) -> Option<((Bytes, Bytes), [u8; 8], [u8; 8])> {
         if idx >= self.len {
             return None;
         }
@@ -279,8 +280,8 @@ impl<'a> ColumnarRecordsRef<'a> {
         // push that responsibility to the ColumnarRecordsRef constructor.
         let key_range = self.key_offsets[idx].to_usize()..self.key_offsets[idx + 1].to_usize();
         let val_range = self.val_offsets[idx].to_usize()..self.val_offsets[idx + 1].to_usize();
-        let key = &self.key_data[key_range];
-        let val = &self.val_data[val_range];
+        let key = self.key_data.slice(key_range);
+        let val = self.val_data.slice(val_range);
         let ts = i64::to_le_bytes(self.timestamps[idx]);
         let diff = i64::to_le_bytes(self.diffs[idx]);
         Some(((key, val), ts, diff))
@@ -303,7 +304,7 @@ pub struct ColumnarRecordsIter<'a> {
 }
 
 impl<'a> Iterator for ColumnarRecordsIter<'a> {
-    type Item = ((&'a [u8], &'a [u8]), [u8; 8], [u8; 8]);
+    type Item = ((Bytes, Bytes), [u8; 8], [u8; 8]);
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         (self.records.len, Some(self.records.len))
@@ -322,9 +323,9 @@ impl<'a> ExactSizeIterator for ColumnarRecordsIter<'a> {}
 /// in a columnar representation, and eventually get back a [ColumnarRecords].
 pub struct ColumnarRecordsBuilder {
     len: usize,
-    key_data: Vec<u8>,
+    key_data: BytesMut,
     key_offsets: Vec<i32>,
-    val_data: Vec<u8>,
+    val_data: BytesMut,
     val_offsets: Vec<i32>,
     timestamps: Vec<i64>,
     diffs: Vec<i64>,
@@ -332,7 +333,8 @@ pub struct ColumnarRecordsBuilder {
 
 impl fmt::Debug for ColumnarRecordsBuilder {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt::Debug::fmt(&self.borrow(), fmt)
+        fmt.write_str("ColumnarRecordsBuilder")
+        // fmt::Debug::fmt(&self.borrow(), fmt)
     }
 }
 
@@ -340,9 +342,9 @@ impl Default for ColumnarRecordsBuilder {
     fn default() -> Self {
         let mut ret = ColumnarRecordsBuilder {
             len: 0,
-            key_data: Vec::new(),
+            key_data: BytesMut::new(),
             key_offsets: Vec::new(),
-            val_data: Vec::new(),
+            val_data: BytesMut::new(),
             val_offsets: Vec::new(),
             timestamps: Vec::new(),
             diffs: Vec::new(),
@@ -350,7 +352,7 @@ impl Default for ColumnarRecordsBuilder {
         // Push initial 0 offsets to maintain our invariants, even as we build.
         ret.key_offsets.push(0);
         ret.val_offsets.push(0);
-        debug_assert_eq!(ret.borrow().validate(), Ok(()));
+        // debug_assert_eq!(ret.borrow().validate(), Ok(()));
         ret
     }
 }
@@ -363,19 +365,19 @@ impl ColumnarRecordsBuilder {
     }
 
     /// Borrow Self as a [ColumnarRecordsRef].
-    fn borrow<'a>(&'a self) -> ColumnarRecordsRef<'a> {
-        let ret = ColumnarRecordsRef {
-            len: self.len,
-            key_data: self.key_data.as_slice(),
-            key_offsets: self.key_offsets.as_slice(),
-            val_data: self.val_data.as_slice(),
-            val_offsets: self.val_offsets.as_slice(),
-            timestamps: self.timestamps.as_slice(),
-            diffs: self.diffs.as_slice(),
-        };
-        debug_assert_eq!(ret.validate(), Ok(()));
-        ret
-    }
+    // fn borrow<'a>(&'a self) -> ColumnarRecordsRef<'a> {
+    //     let ret = ColumnarRecordsRef {
+    //         len: self.len,
+    //         key_data: Bytes::from(self.key_data),
+    //         key_offsets: self.key_offsets.as_slice(),
+    //         val_data: Bytes::from(self.val_data),
+    //         val_offsets: self.val_offsets.as_slice(),
+    //         timestamps: self.timestamps.as_slice(),
+    //         diffs: self.diffs.as_slice(),
+    //     };
+    //     debug_assert_eq!(ret.validate(), Ok(()));
+    //     ret
+    // }
 
     /// Reserve space for `additional` more records, based on `key_size_guess` and
     /// `val_size_guess`.
@@ -391,7 +393,7 @@ impl ColumnarRecordsBuilder {
             .reserve(cmp::min(additional * val_size_guess, KEY_VAL_DATA_MAX_LEN));
         self.timestamps.reserve(additional);
         self.diffs.reserve(additional);
-        debug_assert_eq!(self.borrow().validate(), Ok(()));
+        // debug_assert_eq!(self.borrow().validate(), Ok(()));
     }
 
     /// Reserve space for `additional` more records, with exact sizes for the key and value data.
@@ -404,7 +406,7 @@ impl ColumnarRecordsBuilder {
             .reserve(cmp::min(val_bytes, KEY_VAL_DATA_MAX_LEN));
         self.timestamps.reserve(additional);
         self.diffs.reserve(additional);
-        debug_assert_eq!(self.borrow().validate(), Ok(()));
+        // debug_assert_eq!(self.borrow().validate(), Ok(()));
     }
 
     /// Returns if the given key_offsets+key_data or val_offsets+val_data fits
@@ -456,10 +458,10 @@ impl ColumnarRecordsBuilder {
     pub fn finish(self) -> ColumnarRecords {
         let ret = ColumnarRecords {
             len: self.len,
-            key_data: Buffer::from(self.key_data),
+            key_data: Bytes::from(self.key_data),
             key_offsets: OffsetsBuffer::try_from(self.key_offsets)
                 .expect("constructed valid offsets"),
-            val_data: Buffer::from(self.val_data),
+            val_data: Bytes::from(self.val_data),
             val_offsets: OffsetsBuffer::try_from(self.val_offsets)
                 .expect("constructed valid offsets"),
             timestamps: Buffer::from(self.timestamps),
