@@ -158,13 +158,11 @@ pub struct OptimizerConfig {
     /// Persist fast-path peek. Required by the `create_fast_path_plan` call in
     /// [`peek::Optimizer`].
     pub persist_fast_path_limit: usize,
-    /// Enable outer join lowering implemented in #22343.
+    /// Bound from [`SystemVars::enable_new_outer_join_lowering`].
     pub enable_new_outer_join_lowering: bool,
-    /// Enable eager delta joins.
+    /// Bound from [`SystemVars::enable_eager_delta_joins`].
     pub enable_eager_delta_joins: bool,
-    /// Enable fusion of MFPs in reductions.
-    ///
-    /// The fusion happens in MIR ⇒ LIR lowering.
+    /// Bound from [`SystemVars::enable_reduce_mfp_fusion`].
     pub enable_reduce_mfp_fusion: bool,
 }
 

@@ -87,7 +87,7 @@ impl DataflowBuilder<'_> {
         self.catalog
             .get_indexes_on(id, self.compute.instance_id())
             .filter(|(idx_id, _idx)| self.compute.contains_collection(idx_id))
-            .filter(|(idx_id, _idx)| !self.ignored_indexes.contains(idx_id))
+            .filter(|(idx_id, _idx)| self.replan.map_or(true, |id| idx_id < &id))
     }
 }
 
