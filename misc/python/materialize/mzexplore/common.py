@@ -72,6 +72,8 @@ class ExplainFlag(Enum):
     HUMANIZED_EXPRS = auto()
     # Enable outer join lowering implemented in #22343.
     ENABLE_NEW_OUTER_JOIN_LOWERING = auto()
+    # Enable eager delta joins implemented in #23318.
+    ENABLE_EAGER_DELTA_JOINS = auto()
 
     def __str__(self):
         return self.name.lower()

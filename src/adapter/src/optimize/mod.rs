@@ -222,6 +222,9 @@ impl OverrideFrom<ExplainContext> for OptimizerConfig {
         if let Some(explain_flag) = ctx.config.enable_new_outer_join_lowering {
             self.enable_new_outer_join_lowering = explain_flag;
         }
+        if let Some(explain_flag) = ctx.config.enable_eager_delta_joins {
+            self.enable_eager_delta_joins = explain_flag;
+        }
 
         // Return final result.
         self
