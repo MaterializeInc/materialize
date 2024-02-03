@@ -95,6 +95,21 @@ who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 delta = "1.17.1 -> 1.19.0"
 
+[[audits.openssl]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.10.63"
+
+[[audits.openssl-src]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "safe-to-deploy"
+version = "300.2.2+3.2.1"
+
+[[audits.openssl-sys]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.9.99"
+
 [[audits.opentelemetry]]
 who = "Gus Wynn <gus@materialize.com>"
 criteria = "maintained-and-necessary"
@@ -143,12 +158,32 @@ version = "10.7.0"
 [[audits.rdkafka]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
+version = "0.29.0@git:73b84a9e07367575f057d8e0414304f34a7eaf09"
+
+[[audits.rdkafka]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "safe-to-deploy"
 version = "0.29.0@git:843ccffbd75f4dac93b2e34cf091bd7770b9a3de"
+
+[[audits.rdkafka]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.29.0@git:a7dc07032f73dac50cbb1c2b0cbe87d94cbc4b4c"
 
 [[audits.rdkafka-sys]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
 version = "4.3.0+1.9.2@git:843ccffbd75f4dac93b2e34cf091bd7770b9a3de"
+
+[[audits.rdkafka-sys]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "safe-to-deploy"
+version = "4.3.0+2.3.0@git:73b84a9e07367575f057d8e0414304f34a7eaf09"
+
+[[audits.rdkafka-sys]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "safe-to-deploy"
+version = "4.3.0+2.3.0@git:a7dc07032f73dac50cbb1c2b0cbe87d94cbc4b4c"
 
 [[audits.redox_syscall]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
