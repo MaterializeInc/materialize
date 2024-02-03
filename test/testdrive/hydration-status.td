@@ -8,8 +8,9 @@
 # by the Apache License, Version 2.0.
 
 # Test reporting of dataflow hydration status through
-# `mz_internal.mz_compute_hydration_statuses` and
-# `mz_internal.mz_hydration_statuses`.
+# `mz_internal.mz_compute_hydration_statuses`,
+# `mz_internal.mz_hydration_statuses`, and
+# `mz_internal.mz_compute_operator_hydration_statuses`.
 #
 # Note that all of the below tests only assert that the `hydrated` flag
 # eventually becomes `true`, not that it starts off as `false`. That's because
@@ -29,15 +30,21 @@
 
 > SELECT DISTINCT left(h.object_id, 1), h.hydrated
   FROM mz_internal.mz_compute_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   WHERE r.name LIKE 'hydrated_test%';
 s true
 
 > SELECT DISTINCT left(h.object_id, 1), h.hydrated
   FROM mz_internal.mz_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
   WHERE r.name LIKE 'hydrated_test%';
 s true
+
+# No operator-level hydration status logging for introspection dataflows.
+> SELECT DISTINCT left(h.object_id, 1), h.hydrated
+  FROM mz_internal.mz_compute_operator_hydration_statuses h
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  WHERE r.name LIKE 'hydrated_test%';
 
 # Test adding new compute dataflows.
 
@@ -48,8 +55,8 @@ s true
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_compute_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
@@ -59,11 +66,23 @@ mv_const hydrated_test_1 true
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
+idx      hydrated_test_1 true
+mv       hydrated_test_1 true
+mv_const hydrated_test_1 true
+
+> SELECT o.name, r.name, bool_and(h.hydrated)
+  FROM mz_internal.mz_compute_operator_hydration_statuses h
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
+  WHERE
+      r.name LIKE 'hydrated_test%' AND
+      o.id NOT LIKE 's%'
+  GROUP BY o.name, r.name;
 idx      hydrated_test_1 true
 mv       hydrated_test_1 true
 mv_const hydrated_test_1 true
@@ -74,8 +93,8 @@ mv_const hydrated_test_1 true
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_compute_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
@@ -88,8 +107,8 @@ mv_const hydrated_test_2 true
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
@@ -99,6 +118,23 @@ mv       hydrated_test_1 true
 mv       hydrated_test_2 true
 mv_const hydrated_test_1 true
 mv_const hydrated_test_2 true
+
+# `mv_const` doesn't show up for the second replica because its output was
+# already fully computed so it wasn't installed on the replica and no operators
+# exist.
+> SELECT o.name, r.name, bool_and(h.hydrated)
+  FROM mz_internal.mz_compute_operator_hydration_statuses h
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
+  WHERE
+      r.name LIKE 'hydrated_test%' AND
+      o.id NOT LIKE 's%'
+  GROUP BY o.name, r.name;
+idx      hydrated_test_1 true
+idx      hydrated_test_2 true
+mv       hydrated_test_1 true
+mv       hydrated_test_2 true
+mv_const hydrated_test_1 true
 
 # Test dropping replicas.
 
@@ -106,8 +142,8 @@ mv_const hydrated_test_2 true
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_compute_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
@@ -117,32 +153,52 @@ mv_const hydrated_test_2 true
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
 idx      hydrated_test_2 true
 mv       hydrated_test_2 true
 mv_const hydrated_test_2 true
+
+> SELECT o.name, r.name, bool_and(h.hydrated)
+  FROM mz_internal.mz_compute_operator_hydration_statuses h
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
+  WHERE
+      r.name LIKE 'hydrated_test%' AND
+      o.id NOT LIKE 's%'
+  GROUP BY o.name, r.name;
+idx      hydrated_test_2 true
+mv       hydrated_test_2 true
 
 > DROP CLUSTER REPLICA test.hydrated_test_2
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_compute_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
+
+> SELECT o.name, r.name, bool_and(h.hydrated)
+  FROM mz_internal.mz_compute_operator_hydration_statuses h
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
+  WHERE
+      r.name LIKE 'hydrated_test%' AND
+      o.id NOT LIKE 's%'
+  GROUP BY o.name, r.name;
 
 # Test dropping dataflows.
 
@@ -150,8 +206,8 @@ mv_const hydrated_test_2 true
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_compute_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
@@ -161,8 +217,8 @@ mv_const hydrated_test_3 true
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
@@ -170,13 +226,24 @@ idx      hydrated_test_3 true
 mv       hydrated_test_3 true
 mv_const hydrated_test_3 true
 
+> SELECT o.name, r.name, bool_and(h.hydrated)
+  FROM mz_internal.mz_compute_operator_hydration_statuses h
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
+  WHERE
+      r.name LIKE 'hydrated_test%' AND
+      o.id NOT LIKE 's%'
+  GROUP BY o.name, r.name;
+idx      hydrated_test_3 true
+mv       hydrated_test_3 true
+
 > DROP INDEX idx;
 > DROP MATERIALIZED VIEW mv_const;
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_compute_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
@@ -184,11 +251,21 @@ mv  hydrated_test_3 true
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
+mv  hydrated_test_3 true
+
+> SELECT o.name, r.name, bool_and(h.hydrated)
+  FROM mz_internal.mz_compute_operator_hydration_statuses h
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
+  WHERE
+      r.name LIKE 'hydrated_test%' AND
+      o.id NOT LIKE 's%'
+  GROUP BY o.name, r.name;
 mv  hydrated_test_3 true
 
 # Test adding new storage dataflows.
@@ -214,8 +291,8 @@ mv  hydrated_test_3 true
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
@@ -234,8 +311,8 @@ users         hydrated_test_3 true
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
@@ -246,8 +323,8 @@ users         hydrated_test_3 true
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
@@ -268,11 +345,72 @@ users         hydrated_test_4 true
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
-  JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
-  JOIN mz_objects o ON (o.id = h.object_id)
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
   WHERE
       r.name LIKE 'hydrated_test%' AND
       o.id NOT LIKE 's%';
+
+# Test hydration status reporting with WMR dataflows.
+
+> CREATE MATERIALIZED VIEW mv_wmr AS
+  WITH MUTUALLY RECURSIVE
+      x (a int) AS (
+          SELECT * FROM t
+          UNION ALL
+          SELECT a + 1 FROM x WHERE a < 10
+      )
+  SELECT * FROM x;
+> CREATE MATERIALIZED VIEW mv_wmr_const AS
+  WITH MUTUALLY RECURSIVE
+      x (a int) AS (
+          VALUES (1)
+          UNION ALL
+          SELECT a + 1 FROM x WHERE a < 10
+      )
+  SELECT * FROM x;
+> CREATE MATERIALIZED VIEW mv_wmr_stuck AS
+  WITH MUTUALLY RECURSIVE
+      x (a int) AS (
+          VALUES (1)
+          UNION ALL
+          SELECT a + 1 FROM x
+      )
+  SELECT * FROM x;
+
+> SELECT o.name, r.name, h.hydrated
+  FROM mz_internal.mz_compute_hydration_statuses h
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
+  WHERE
+      r.name LIKE 'hydrated_test%' AND
+      o.id NOT LIKE 's%';
+mv_wmr       hydrated_test_4 true
+mv_wmr_const hydrated_test_4 true
+mv_wmr_stuck hydrated_test_4 false
+
+> SELECT o.name, r.name, h.hydrated
+  FROM mz_internal.mz_hydration_statuses h
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
+  WHERE
+      r.name LIKE 'hydrated_test%' AND
+      o.id NOT LIKE 's%';
+mv_wmr       hydrated_test_4 true
+mv_wmr_const hydrated_test_4 true
+mv_wmr_stuck hydrated_test_4 false
+
+> SELECT o.name, r.name, bool_and(h.hydrated)
+  FROM mz_internal.mz_compute_operator_hydration_statuses h
+  LEFT JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
+  LEFT JOIN mz_objects o ON (o.id = h.object_id)
+  WHERE
+      r.name LIKE 'hydrated_test%' AND
+      o.id NOT LIKE 's%'
+  GROUP BY o.name, r.name;
+mv_wmr       hydrated_test_4 true
+mv_wmr_const hydrated_test_4 true
+mv_wmr_stuck hydrated_test_4 false
 
 # Cleanup
 > DROP CLUSTER test CASCADE;
