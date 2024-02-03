@@ -57,9 +57,7 @@ pub async fn ensure_gtid_consistency(conn: &mut Conn) -> Result<(), MySqlError> 
 pub async fn ensure_replication_commit_order(conn: &mut Conn) -> Result<(), MySqlError> {
     // Determine if this is a replica by checking if there are any rows in the replica connection table
     let res: u8 = conn
-        .query_first(
-            "SELECT COUNT(*) FROM performance_schema.replication_connection_configuration LIMIT 1",
-        )
+        .query_first("SELECT COUNT(*) FROM performance_schema.replication_connection_configuration")
         .await?
         .unwrap();
     if res > 0 {
