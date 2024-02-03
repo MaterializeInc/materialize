@@ -29,7 +29,7 @@ mz-ccsr = { path = "../ccsr" }
 mz-ore = { path = "../ore", features = ["network"] }
 mz-repr = { path = "../repr" }
 ordered-float = { version = "4.2.0", features = ["serde"] }
-prost = { version = "0.11.3", features = ["no-recursion-limit"] }
+prost = { version = "0.11.10", features = ["no-recursion-limit"] }
 prost-reflect = "0.11.4"
 serde_json = "1.0.89"
 timely = { version = "0.12.0", default-features = false, features = ["bincode"] }
@@ -43,7 +43,7 @@ criterion = { version = "0.4.0", features = ["async_tokio"] }
 tokio = { version = "1.32.0", features = ["macros"] }
 
 [build-dependencies]
-prost-build = "0.11.2"
+prost-build = "0.11.10"
 protobuf-src = "1.1.0"
 
 [package.metadata.cargo-udeps.ignore]

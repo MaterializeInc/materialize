@@ -107,7 +107,7 @@ members = [
 exclude = [
     # All WASM crates are split into their own workspace to avoid needles cache
     #  invalidations for the core Mz crates.
-    "misc/wasm/*"
+    "misc/wasm/*",
 ]
 
 # Use Cargo's new feature resolver, which can handle target-specific features.
@@ -212,6 +212,10 @@ openssh = { git = "https://github.com/MaterializeInc/openssh.git" }
 # Removes dependencies required for WASM support that create duplicated deps.
 reqwest-middleware = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
 reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
+
+prost = { git = "https://github.com/MaterializeInc/prost.git", rev = "a91ecc16959d4a69c9e0c5a9169ab02dc4a4a571" }
+prost-build = { git = "https://github.com/MaterializeInc/prost.git", rev = "a91ecc16959d4a69c9e0c5a9169ab02dc4a4a571" }
+prost-types = { git = "https://github.com/MaterializeInc/prost.git", rev = "a91ecc16959d4a69c9e0c5a9169ab02dc4a4a571" }
 
 [patch."https://github.com/frankmcsherry/columnation"]
 # Projects that do not reliably release to crates.io.

@@ -15,13 +15,13 @@ mz-ore = { path = "../ore", default-features = false, features = ["proptest"] }
 mz-proto = { path = "../proto" }
 proptest = { version = "1.0.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.3.0", features = ["boxed_union"]}
-prost = { version = "0.11.3", features = ["no-recursion-limit"] }
+prost = { version = "0.11.10", features = ["no-recursion-limit"] }
 serde = { version = "1.0.152", features = ["derive", "rc"] }
 tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack" }
 
 [build-dependencies]
-prost-build = "0.11.2"
+prost-build = "0.11.10"
 protobuf-src = "1.1.0"
 
 [package.metadata.cargo-udeps.ignore]
