@@ -25,7 +25,7 @@ updated the `misc/fivetran_sdk` submodule, this is how we include the protobuf d
 SDK. From the root of the Materialize repository run:
 
 ```shell
-git submodule update --init --recursize misc/fivetran_sdk
+git submodule update --init --recursive misc/fivetran_sdk
 ```
 
 Once you have the `fivetran_sdk` submodule updated, run:
