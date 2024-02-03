@@ -95,6 +95,7 @@ impl Coordinator {
                     config,
                     format,
                     stage,
+                    replan: None,
                     desc: None,
                     optimizer_trace,
                 }),
@@ -246,7 +247,7 @@ impl Coordinator {
         let internal_view_id = return_if_err!(self.allocate_transient_id(), ctx);
         let debug_name = self.catalog().resolve_full_name(name, None).to_string();
         let optimizer_config = if let Some(explain_ctx) = explain_ctx.as_ref() {
-            optimize::OptimizerConfig::from((self.catalog().system_config(), &explain_ctx.config))
+            optimize::OptimizerConfig::from((self.catalog().system_config(), explain_ctx))
         } else {
             optimize::OptimizerConfig::from(self.catalog().system_config())
         };

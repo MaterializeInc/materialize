@@ -179,6 +179,7 @@ impl Coordinator {
                     config,
                     format,
                     stage,
+                    replan: None,
                     desc: Some(desc),
                     optimizer_trace,
                 }),
@@ -285,7 +286,7 @@ impl Coordinator {
             .expect("compute instance does not exist");
         let view_id = self.allocate_transient_id()?;
         let optimizer_config = if let Some(explain_ctx) = explain_ctx.as_ref() {
-            optimize::OptimizerConfig::from((self.catalog().system_config(), &explain_ctx.config))
+            optimize::OptimizerConfig::from((self.catalog().system_config(), explain_ctx))
         } else {
             optimize::OptimizerConfig::from(self.catalog().system_config())
         };
@@ -1007,6 +1008,7 @@ impl Coordinator {
                     stage,
                     desc,
                     optimizer_trace,
+                    ..
                 },
             ..
         }: PeekStageExplain,

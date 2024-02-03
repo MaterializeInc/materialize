@@ -89,6 +89,7 @@ impl Coordinator {
                     config,
                     format,
                     stage,
+                    replan: None,
                     desc: None,
                     optimizer_trace,
                 }),
@@ -200,7 +201,7 @@ impl Coordinator {
             return_if_err!(self.catalog_mut().allocate_user_id().await, ctx)
         };
         let optimizer_config = if let Some(explain_ctx) = explain_ctx.as_ref() {
-            optimize::OptimizerConfig::from((self.catalog().system_config(), &explain_ctx.config))
+            optimize::OptimizerConfig::from((self.catalog().system_config(), explain_ctx))
         } else {
             optimize::OptimizerConfig::from(self.catalog().system_config())
         };
