@@ -204,8 +204,6 @@ struct TransactionalProducer {
     staged_bytes: u64,
     /// The timeout to use for network operations.
     socket_timeout: Duration,
-    /// The maximum duration of a transaction.
-    transaction_timeout: Duration,
 }
 
 impl TransactionalProducer {
@@ -276,7 +274,6 @@ impl TransactionalProducer {
             staged_messages: 0,
             staged_bytes: 0,
             socket_timeout: timeout_config.socket_timeout,
-            transaction_timeout: timeout_config.transaction_timeout,
         };
 
         let timeout = timeout_config.socket_timeout;
@@ -308,7 +305,7 @@ impl TransactionalProducer {
             .await
     }
 
-    async fn begin_transaction(&mut self) -> Result<(), ContextCreationError> {
+    async fn begin_transaction<'a>(&'a mut self) -> Result<(), ContextCreationError> {
         self.spawn_blocking(|p| p.begin_transaction()).await
     }
 
@@ -317,13 +314,13 @@ impl TransactionalProducer {
     /// retrying is equivalent to adjusting the maximum number of queued items in rdkafka so it is
     /// adviced that callers only handle this error in order to apply backpressure to the rest of
     /// the system.
-    async fn send(
+    fn send(
         &mut self,
         key: Option<&[u8]>,
         value: Option<&[u8]>,
         time: Timestamp,
         diff: Diff,
-    ) -> Result<(), ContextCreationError> {
+    ) -> Result<(), KafkaError> {
         assert_eq!(diff, 1, "invalid sink update");
 
         let headers = OwnedHeaders::new().insert(Header {
@@ -346,19 +343,7 @@ impl TransactionalProducer {
         self.staged_messages += 1;
         self.statistics.inc_bytes_staged_by(record_size);
         self.staged_bytes += record_size;
-        match self.producer.send(record) {
-            Ok(()) => Ok(()),
-            Err((err, record)) => match err.rdkafka_error_code() {
-                Some(RDKafkaErrorCode::QueueFull) => {
-                    // If the internal rdkafka queue is full we have no other option than to flush
-                    // TODO(petrosagg): remove this logic once we fix #24864
-                    let timeout = self.transaction_timeout;
-                    self.spawn_blocking(move |p| p.flush(timeout)).await?;
-                    self.producer.send(record).map_err(|(err, _)| err.into())
-                }
-                _ => Err(err.into()),
-            },
-        }
+        self.producer.send(record).map_err(|(e, _)| e)
     }
 
     /// Commits all the staged updates of the currently open transaction plus a progress record
@@ -555,9 +540,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                                         producer.begin_transaction().await?;
                                         transaction_begun = true;
                                     }
-                                    producer
-                                        .send(key.as_deref(), value.as_deref(), time, diff)
-                                        .await?;
+                                    producer.send(key.as_deref(), value.as_deref(), time, diff)?;
                                 }
                                 Ordering::Greater => continue,
                             }
@@ -599,9 +582,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                         );
                         extra_updates.sort_unstable_by(|a, b| a.1.cmp(&b.1));
                         for ((key, value), time, diff) in extra_updates.drain(..) {
-                            producer
-                                .send(key.as_deref(), value.as_deref(), time, diff)
-                                .await?;
+                            producer.send(key.as_deref(), value.as_deref(), time, diff)?;
                         }
 
                         info!("{name}: committing transaction for {}", progress.pretty());
