@@ -2025,13 +2025,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_role_vars,
-        desc: "setting default session variables for a role",
-        default: true,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_jemalloc_profiling,
         desc: "jemalloc heap memory profiling",
         default: true,

@@ -5371,7 +5371,7 @@ pub fn describe_alter_role(
 }
 
 pub fn plan_alter_role(
-    scx: &StatementContext,
+    _scx: &StatementContext,
     AlterRoleStatement { name, option }: AlterRoleStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let option = match option {
@@ -5380,9 +5380,6 @@ pub fn plan_alter_role(
             PlannedAlterRoleOption::Attributes(attrs)
         }
         AlterRoleOption::Variable(variable) => {
-            // Make sure the LaunchDarkly flag is enabled.
-            scx.require_feature_flag(&vars::ENABLE_ROLE_VARS)?;
-
             let var = plan_role_variable(variable)?;
             PlannedAlterRoleOption::Variable(var)
         }
