@@ -151,6 +151,11 @@ criteria = "safe-to-deploy"
 version = "0.29.0@git:843ccffbd75f4dac93b2e34cf091bd7770b9a3de"
 
 [[audits.rdkafka]]
+who = "Petros Angelatos <petrosagg@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.29.0@git:86d97d28ec1bc217eb8711a8a3a34251ab2eff16"
+
+[[audits.rdkafka]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
 version = "0.29.0@git:a7dc07032f73dac50cbb1c2b0cbe87d94cbc4b4c"
@@ -164,6 +169,11 @@ version = "4.3.0+1.9.2@git:843ccffbd75f4dac93b2e34cf091bd7770b9a3de"
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
 version = "4.3.0+2.3.0@git:73b84a9e07367575f057d8e0414304f34a7eaf09"
+
+[[audits.rdkafka-sys]]
+who = "Petros Angelatos <petrosagg@gmail.com>"
+criteria = "safe-to-deploy"
+version = "4.3.0+2.3.0@git:86d97d28ec1bc217eb8711a8a3a34251ab2eff16"
 
 [[audits.rdkafka-sys]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"

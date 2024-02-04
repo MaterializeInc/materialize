@@ -7465,7 +7465,7 @@ dependencies = [
 [[package]]
 name = "rdkafka"
 version = "0.29.0"
-source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#a7dc07032f73dac50cbb1c2b0cbe87d94cbc4b4c"
+source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#86d97d28ec1bc217eb8711a8a3a34251ab2eff16"
 dependencies = [
  "futures-channel",
  "futures-util",
@@ -7482,7 +7482,7 @@ dependencies = [
 [[package]]
 name = "rdkafka-sys"
 version = "4.3.0+2.3.0"
-source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#a7dc07032f73dac50cbb1c2b0cbe87d94cbc4b4c"
+source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#86d97d28ec1bc217eb8711a8a3a34251ab2eff16"
 dependencies = [
  "cmake",
  "libc",
