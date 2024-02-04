@@ -29,13 +29,15 @@ use mz_expr::explain::{fmt_text_constant_rows, HumanizedExplain, HumanizerMode};
 use mz_expr::{Id, MirScalarExpr};
 use mz_ore::str::{separated, IndentLike, StrExt};
 use mz_repr::explain::text::DisplayText;
-use mz_repr::explain::{CompactScalarSeq, CompactScalars, Indices, PlanRenderingContext};
+use mz_repr::explain::{
+    CompactScalarSeq, CompactScalars, ExplainConfig, Indices, PlanRenderingContext,
+};
 
 use crate::plan::join::delta_join::{DeltaPathPlan, DeltaStagePlan};
 use crate::plan::join::linear_join::LinearStagePlan;
 use crate::plan::join::{DeltaJoinPlan, JoinClosure, LinearJoinPlan};
 use crate::plan::reduce::{AccumulablePlan, BasicPlan, CollationPlan, HierarchicalPlan};
-use crate::plan::{AvailableCollections, Plan};
+use crate::plan::{AvailableCollections, NodeId, Plan};
 
 impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
     fn fmt_text(
@@ -46,12 +48,13 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
         use Plan::*;
 
         let mode = HumanizedExplain::new(ctx.config.redacted);
+        let annotations = PlanAnnotations::new(ctx.config.clone(), self);
 
         match &self {
             Constant { rows, node_id: _ } => match rows {
                 Ok(rows) => {
                     if !rows.is_empty() {
-                        writeln!(f, "{}Constant", ctx.indent)?;
+                        writeln!(f, "{}Constant{}", ctx.indent, annotations)?;
                         ctx.indented(|ctx| {
                             fmt_text_constant_rows(
                                 f,
@@ -61,14 +64,20 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                             )
                         })?;
                     } else {
-                        writeln!(f, "{}Constant <empty>", ctx.indent)?;
+                        writeln!(f, "{}Constant <empty>{}", ctx.indent, annotations)?;
                     }
                 }
                 Err(err) => {
                     if mode.redacted() {
-                        writeln!(f, "{}Error █", ctx.indent)?;
+                        writeln!(f, "{}Error █{}", ctx.indent, annotations)?;
                     } else {
-                        writeln!(f, "{}Error {}", ctx.indent, err.to_string().quoted())?;
+                        writeln!(
+                            f,
+                            "{}Error {}{}",
+                            ctx.indent,
+                            err.to_string().quoted(),
+                            annotations
+                        )?;
                     }
                 }
             },
@@ -92,11 +101,15 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 use crate::plan::GetPlan;
                 match plan {
                     GetPlan::PassArrangements => {
-                        writeln!(f, "{}Get::PassArrangements {}", ctx.indent, id)?;
+                        writeln!(
+                            f,
+                            "{}Get::PassArrangements {}{}",
+                            ctx.indent, id, annotations
+                        )?;
                         ctx.indent += 1;
                     }
                     GetPlan::Arrangement(key, val, mfp) => {
-                        writeln!(f, "{}Get::Arrangement {}", ctx.indent, id)?;
+                        writeln!(f, "{}Get::Arrangement {}{}", ctx.indent, id, annotations)?;
                         ctx.indent += 1;
                         mode.expr(mfp, None).fmt_text(f, ctx)?;
                         {
@@ -110,7 +123,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                         }
                     }
                     GetPlan::Collection(mfp) => {
-                        writeln!(f, "{}Get::Collection {}", ctx.indent, id)?;
+                        writeln!(f, "{}Get::Collection {}{}", ctx.indent, id, annotations)?;
                         ctx.indent += 1;
                         mode.expr(mfp, None).fmt_text(f, ctx)?;
                     }
@@ -143,7 +156,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                     head = body.as_ref();
                 }
 
-                writeln!(f, "{}Return", ctx.indent)?;
+                writeln!(f, "{}Return{}", ctx.indent, annotations)?;
                 ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 writeln!(f, "{}With", ctx.indent)?;
                 ctx.indented(|ctx| {
@@ -164,7 +177,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 let bindings = izip!(ids.iter(), values, limits).collect_vec();
                 let head = body.as_ref();
 
-                writeln!(f, "{}Return", ctx.indent)?;
+                writeln!(f, "{}Return{}", ctx.indent, annotations)?;
                 ctx.indented(|ctx| head.fmt_text(f, ctx))?;
                 writeln!(f, "{}With Mutually Recursive", ctx.indent)?;
                 ctx.indented(|ctx| {
@@ -185,7 +198,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 input_key_val,
                 node_id: _,
             } => {
-                writeln!(f, "{}Mfp", ctx.indent)?;
+                writeln!(f, "{}Mfp{}", ctx.indent, annotations)?;
                 ctx.indented(|ctx| {
                     mode.expr(mfp, None).fmt_text(f, ctx)?;
                     if let Some((key, val)) = input_key_val {
@@ -212,7 +225,11 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
             } => {
                 let exprs = mode.seq(exprs, None);
                 let exprs = CompactScalars(exprs);
-                writeln!(f, "{}FlatMap {}({})", ctx.indent, func, exprs)?;
+                writeln!(
+                    f,
+                    "{}FlatMap {}({}){}",
+                    ctx.indent, func, exprs, annotations
+                )?;
                 ctx.indented(|ctx| {
                     if !mfp_after.is_identity() {
                         writeln!(f, "{}mfp_after", ctx.indent)?;
@@ -234,11 +251,11 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 use crate::plan::join::JoinPlan;
                 match plan {
                     JoinPlan::Linear(plan) => {
-                        writeln!(f, "{}Join::Linear", ctx.indent)?;
+                        writeln!(f, "{}Join::Linear{}", ctx.indent, annotations)?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                     JoinPlan::Delta(plan) => {
-                        writeln!(f, "{}Join::Delta", ctx.indent)?;
+                        writeln!(f, "{}Join::Delta{}", ctx.indent, annotations)?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                 }
@@ -260,22 +277,22 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 use crate::plan::reduce::ReducePlan;
                 match plan {
                     ReducePlan::Distinct => {
-                        writeln!(f, "{}Reduce::Distinct", ctx.indent)?;
+                        writeln!(f, "{}Reduce::Distinct{}", ctx.indent, annotations)?;
                     }
                     ReducePlan::Accumulable(plan) => {
-                        writeln!(f, "{}Reduce::Accumulable", ctx.indent)?;
+                        writeln!(f, "{}Reduce::Accumulable{}", ctx.indent, annotations)?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                     ReducePlan::Hierarchical(plan) => {
-                        writeln!(f, "{}Reduce::Hierarchical", ctx.indent)?;
+                        writeln!(f, "{}Reduce::Hierarchical{}", ctx.indent, annotations)?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                     ReducePlan::Basic(plan) => {
-                        writeln!(f, "{}Reduce::Basic", ctx.indent)?;
+                        writeln!(f, "{}Reduce::Basic{}", ctx.indent, annotations)?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                     ReducePlan::Collation(plan) => {
-                        writeln!(f, "{}Reduce::Collation", ctx.indent)?;
+                        writeln!(f, "{}Reduce::Collation{}", ctx.indent, annotations)?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                 }
@@ -375,11 +392,11 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                         }
                     }
                 }
-                writeln!(f)?;
+                writeln!(f, "{}", annotations)?;
                 ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
             Negate { input, node_id: _ } => {
-                writeln!(f, "{}Negate", ctx.indent)?;
+                writeln!(f, "{}Negate{}", ctx.indent, annotations)?;
                 ctx.indented(|ctx| input.fmt_text(f, ctx))?;
             }
             Threshold {
@@ -394,7 +411,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                         write!(f, "{}Threshold::Basic", ctx.indent)?;
                         write!(f, " ensure_arrangement=")?;
                         ensure_arrangement.fmt_text(f, ctx)?;
-                        writeln!(f, "")?;
+                        writeln!(f, "{}", annotations)?;
                     }
                 };
                 ctx.indented(|ctx| input.fmt_text(f, ctx))?;
@@ -407,11 +424,11 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 if *consolidate_output {
                     writeln!(
                         f,
-                        "{}Union consolidate_output={}",
-                        ctx.indent, consolidate_output
+                        "{}Union consolidate_output={}{}",
+                        ctx.indent, consolidate_output, annotations
                     )?;
                 } else {
-                    writeln!(f, "{}Union", ctx.indent)?;
+                    writeln!(f, "{}Union{}", ctx.indent, annotations)?;
                 }
                 ctx.indented(|ctx| {
                     for input in inputs.iter() {
@@ -427,7 +444,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
                 input_mfp,
                 node_id: _,
             } => {
-                writeln!(f, "{}ArrangeBy", ctx.indent)?;
+                writeln!(f, "{}ArrangeBy{}", ctx.indent, annotations)?;
                 ctx.indented(|ctx| {
                     if let Some(key) = input_key {
                         let key = mode.seq(key, None);
@@ -846,6 +863,37 @@ impl<'a> fmt::Display for Permutation<'a> {
             write!(f, "{{{}}}", separated(", ", pairs))
         } else {
             write!(f, "id")
+        }
+    }
+}
+
+/// Annotations for physical plans.
+struct PlanAnnotations {
+    config: ExplainConfig,
+    node_id: NodeId,
+}
+
+// The current implementation deviates from the `AnnotatedPlan` used in `Mir~`-based plans. This is
+// fine, since at the moment the only attribute we are going to explain is the `node_id`, which at
+// the moment is kept inline with the `Plan` variants. If at some point in the future we want to
+// start deriving and printing attributes that are derived ad-hoc, however, we might want to adopt
+// `AnnotatedPlan` here as well.
+impl PlanAnnotations {
+    fn new(config: ExplainConfig, plan: &Plan) -> Self {
+        let node_id = plan.node_id();
+        Self { config, node_id }
+    }
+}
+
+impl fmt::Display for PlanAnnotations {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.config.node_ids {
+            f.debug_struct(" //")
+                .field("node_id", &self.node_id)
+                .finish()
+        } else {
+            // No physical plan annotations enabled.
+            Ok(())
         }
     }
 }
