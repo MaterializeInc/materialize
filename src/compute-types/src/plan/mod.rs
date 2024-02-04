@@ -19,6 +19,7 @@ use mz_expr::{
     CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr,
     OptimizedMirRelationExpr, TableFunc,
 };
+use mz_ore::soft_assert_eq_no_log;
 use mz_ore::str::Indent;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::explain::text::text_string_at;
@@ -414,6 +415,45 @@ pub enum Plan<T = mz_repr::Timestamp> {
 }
 
 impl<T> Plan<T> {
+    /// Iterates through references to child expressions.
+    pub fn children(&self) -> impl Iterator<Item = &Self> {
+        let mut first = None;
+        let mut second = None;
+        let mut rest = None;
+        let mut last = None;
+
+        use Plan::*;
+        match self {
+            Constant { .. } | Get { .. } => (),
+            Let { value, body, .. } => {
+                first = Some(&**value);
+                second = Some(&**body);
+            }
+            LetRec { values, body, .. } => {
+                rest = Some(values);
+                last = Some(&**body);
+            }
+            Mfp { input, .. }
+            | FlatMap { input, .. }
+            | Reduce { input, .. }
+            | TopK { input, .. }
+            | Negate { input, .. }
+            | Threshold { input, .. }
+            | ArrangeBy { input, .. } => {
+                first = Some(&**input);
+            }
+            Join { inputs, .. } | Union { inputs, .. } => {
+                rest = Some(inputs);
+            }
+        }
+
+        first
+            .into_iter()
+            .chain(second)
+            .chain(rest.into_iter().flatten())
+            .chain(last)
+    }
+
     /// Iterates through mutable references to child expressions.
     pub fn children_mut(&mut self) -> impl Iterator<Item = &mut Self> {
         let mut first = None;
@@ -451,6 +491,28 @@ impl<T> Plan<T> {
             .chain(second)
             .chain(rest.into_iter().flatten())
             .chain(last)
+    }
+}
+
+impl<T> Plan<T> {
+    /// Return this plan's `NodeId`.
+    pub fn node_id(&self) -> NodeId {
+        use Plan::*;
+        match self {
+            Constant { node_id, .. }
+            | Get { node_id, .. }
+            | Let { node_id, .. }
+            | LetRec { node_id, .. }
+            | Mfp { node_id, .. }
+            | FlatMap { node_id, .. }
+            | Join { node_id, .. }
+            | Reduce { node_id, .. }
+            | TopK { node_id, .. }
+            | Negate { node_id, .. }
+            | Threshold { node_id, .. }
+            | Union { node_id, .. }
+            | ArrangeBy { node_id, .. } => *node_id,
+        }
     }
 }
 
@@ -1175,6 +1237,9 @@ impl<T: timely::progress::Timestamp> Plan<T> {
             let config = TransformConfig { monotonic_ids };
             Self::refine_single_time_consolidation(&mut dataflow, &config)?;
         }
+
+        soft_assert_eq_no_log!(dataflow.check_invariants(), Ok(()));
+
         mz_repr::explain::trace_plan(&dataflow);
 
         Ok(dataflow)
