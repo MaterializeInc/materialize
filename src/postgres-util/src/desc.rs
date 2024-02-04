@@ -12,7 +12,7 @@
 use std::collections::BTreeSet;
 
 use anyhow::bail;
-use mz_proto::{RustType, TryFromProtoError};
+use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
@@ -158,9 +158,7 @@ pub struct PostgresColumnDesc {
     pub name: String,
     /// The column's monotonic position in its table, i.e. "this was the _i_th
     /// column created" irrespective of the current number of columns.
-    // TODO(migration): remove option in version v.51 (released in v0.49 + 1
-    // additional release)
-    pub col_num: Option<u16>,
+    pub col_num: u16,
     /// The OID of the column's type.
     pub type_oid: Oid,
     /// The modifier for the column's type.
@@ -193,7 +191,7 @@ impl RustType<ProtoPostgresColumnDesc> for PostgresColumnDesc {
     fn into_proto(&self) -> ProtoPostgresColumnDesc {
         ProtoPostgresColumnDesc {
             name: self.name.clone(),
-            col_num: self.col_num.map(|c| c.into()),
+            col_num: Some(self.col_num.into()),
             type_oid: self.type_oid,
             type_mod: self.type_mod,
             nullable: self.nullable,
@@ -203,9 +201,12 @@ impl RustType<ProtoPostgresColumnDesc> for PostgresColumnDesc {
     fn from_proto(proto: ProtoPostgresColumnDesc) -> Result<Self, TryFromProtoError> {
         Ok(PostgresColumnDesc {
             name: proto.name,
-            col_num: proto
-                .col_num
-                .map(|c| c.try_into().expect("values roundtrip")),
+            col_num: {
+                let v: u32 = proto
+                    .col_num
+                    .into_rust_if_some("ProtoPostgresColumnDesc::col_num")?;
+                u16::try_from(v).expect("u16 must roundtrip")
+            },
             type_oid: proto.type_oid,
             type_mod: proto.type_mod,
             nullable: proto.nullable,
@@ -228,7 +229,7 @@ impl Arbitrary for PostgresColumnDesc {
             .prop_map(
                 |(name, col_num, type_oid, type_mod, nullable)| PostgresColumnDesc {
                     name,
-                    col_num: Some(col_num),
+                    col_num,
                     type_oid,
                     type_mod,
                     nullable,
