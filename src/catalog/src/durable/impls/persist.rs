@@ -436,7 +436,7 @@ impl UnopenedPersistCatalogState {
         if matches!(mode, Mode::Writable) {
             catalog
                 .increment_catalog_upgrade_shard_version(self.organization_id)
-                .await?;
+                .await;
         }
 
         Ok(Box::new(catalog))
@@ -864,10 +864,7 @@ impl PersistCatalogState {
     }
 
     /// Increment the version in the upgrade shard to the code's current version.
-    async fn increment_catalog_upgrade_shard_version(
-        &mut self,
-        organization_id: Uuid,
-    ) -> Result<(), CatalogError> {
+    async fn increment_catalog_upgrade_shard_version(&mut self, organization_id: Uuid) {
         let upgrade_shard_id = shard_id(organization_id, UPGRADE_SEED);
         let mut write_handle: WriteHandle<(), (), Timestamp, Diff> = self
             .persist_client
@@ -883,23 +880,23 @@ impl PersistCatalogState {
             .await
             .expect("invalid usage");
         const EMPTY_UPDATES: &[(((), ()), Timestamp, Diff)] = &[];
-        let upper = write_handle.fetch_recent_upper().await.clone();
-        let next_upper = upper
-            .iter()
-            .map(|timestamp| timestamp.step_forward())
-            .collect();
-        write_handle
-            .compare_and_append(EMPTY_UPDATES, upper, next_upper)
-            .await
-            .expect("invalid usage")
-            .map_err(|upper_mismatch| {
-                DurableCatalogError::Fence(format!(
-                    "current upgrade upper {:?} fenced by new upgrade upper {:?}",
-                    upper_mismatch.expected, upper_mismatch.current
-                ))
-            })?;
-
-        Ok(())
+        let mut upper = write_handle.fetch_recent_upper().await.clone();
+        loop {
+            let next_upper = upper
+                .iter()
+                .map(|timestamp| timestamp.step_forward())
+                .collect();
+            match write_handle
+                .compare_and_append(EMPTY_UPDATES, upper, next_upper)
+                .await
+                .expect("invalid usage")
+            {
+                Ok(()) => break,
+                Err(upper_mismatch) => {
+                    upper = upper_mismatch.current;
+                }
+            }
+        }
     }
 
     /// Fetch the current upper of the catalog state.
