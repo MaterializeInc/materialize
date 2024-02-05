@@ -143,22 +143,25 @@ automatically offloading state to disk (aka spilling to disk).
 {{< note >}}
 Enabling spill to disk trades off performance for cost, so you should expect
 slower ingestion and rehydration speeds in clusters with this feature enabled.
-See the [reference documentation](/sql/create-cluster/#disk) for more details.
+See the [reference documentation](/sql/create-cluster/#disk-enabled-sizes) for
+more details.
 {{< /note >}}
 
-To create a new cluster with spill to disk enabled, use the [`DISK` option](/sql/create-cluster/#disk):
+To create a new cluster with spill to disk enabled, use a
+[disk-enabled size](/sql/create-cluster/#disk-enabled-sizes), for example:
 
 ```sql
 CREATE CLUSTER cluster_with_disk (
-  SIZE = '<size>',
+  SIZE = '100cc',
   DISK = true
 );
 ```
 
-Alternatively, you can attach disk storage to an existing cluster using the [`ALTER CLUSTER`](/sql/alter-cluster/) command:
+Alternatively, you can change an existing cluster to
+a disk-enabled size using the [`ALTER CLUSTER`](/sql/alter-cluster/) command:
 
 ```sql
-ALTER CLUSTER cluster_with_disk SET (DISK = true);
+ALTER CLUSTER cluster_with_disk SET (SIZE = '100cc');
 ```
 
 Once a cluster is configured to spill to disk, any Kafka source being maintained

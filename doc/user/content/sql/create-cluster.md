@@ -71,8 +71,8 @@ example, you could place your development workloads in a cluster named
 
 ### Size
 
-The `SIZE` option determines the amount of compute resources (CPU, memory, and
-disk) available to the cluster. Valid sizes are:
+The `SIZE` option determines the amount of compute resources (CPU and memory)
+available to the cluster. Valid sizes are:
 
 * `3xsmall`
 * `2xsmall`
@@ -100,34 +100,46 @@ The values in the `mz_internal.mz_cluster_replica_sizes` table may change at any
 time. You should not rely on them for any kind of capacity planning.
 {{< /warning >}}
 
-### Disk
+#### Disk-enabled sizes
 
-{{< public-preview />}}
+{{< private-preview />}}
 
-{{< warning >}}
-**Pricing for this feature is likely to change.**
+Disk-enabled sizes allow clusters to spill data to a scratch disk when a the
+data does not fit in memory.
 
-Clusters with disks currently consume credits at the same rate as clusters
-without disks. In the future, clusters with disks will likely consume credits
-at a faster rate than clusters without disks.
-{{< /warning >}}
-
-The `DISK` option attaches a scratch disk to the cluster.
-
-Attaching a disk allows you to trade off performance for cost. A cluster of a
-given size has access to several times more disk than memory, allowing the
-processing of larger data sets at that replica size. Operations on a disk,
-however, are much slower than operations in memory, and so a workload that
-spills to disk will perform more slowly than a workload that does not. Note that
-exact storage medium for the attached disk is not specified, and its performance
+Using a disk-enabled size allows you to trade off performance for cost. A
+cluster of a given disk-enabled size can process data sets that are larger than
+would be possible with access to memory alone. Operations on a disk, however,
+are slower than operations in memory, and so a workload that spills to disk will
+perform more slowly than a workload that does not. Note that exact storage
+medium for the attached disk is not specified, and its performance
 characteristics are subject to change.
 
-Consider attaching a disk to clusters that contain sources that use the
-[upsert envelope](/sql/create-source/#upsert-envelope) or the
-[Debezium envelope](/sql/create-source/#debezium-envelope). When you place
-these sources on a cluster with an attached disk, they will automatically spill
-state to disk. These sources will therefore use less memory but may ingest
-data more slowly. See [Sizing a source](/sql/create-source/#sizing-a-source) for details.
+The following cluster sizes have disk attached:
+
+* `25cc`
+* `50cc`
+* `100cc`
+* `200cc`
+* `300cc`
+* `400cc`
+* `600cc`
+* `800cc`
+* `1200cc`
+* `1600cc`
+* `3200cc`
+* `6400cc`
+* `128C`
+* `256C`
+* `512C`
+
+The resource allocations are proportional to the number in the size name. For
+example, a cluster of size `600cc` has 2x as much CPU, memory, and disk as a
+cluster of size `300cc`, and 1.5x as much CPU, memory, and disk as a cluster of
+size `400cc`.
+
+The correspondence between disk-enabled sizes and traditional sizes is shown
+in the [credit usage table](#credit-usage).
 
 ### Replication factor
 
@@ -174,20 +186,23 @@ To increase a cluster's capacity, you should instead increase the cluster's
 Each [replica](#replication-factor) of the cluster consumes credits at a rate
 determined by the cluster's size:
 
-Size    | Credits per replica per hour
---------|-----------------------------
-3xsmall | 0.25
-2xsmall | 0.5
-xsmall  | 1
-small   | 2
-medium  | 4
-large   | 8
-xlarge  | 16
-2xlarge | 32
-3xlarge | 64
-4xlarge | 128
-5xlarge | 256
-6xlarge | 512
+Size      | Disk-enabled size  | Credits per replica per hour
+----------|--------------------|---------
+`3xsmall` | `25cc`             | 0.25
+`2xsmall` | `50cc`             | 0.5
+`xsmall`  | `100cc`            | 1
+`small`   | `200cc`            | 2
+&nbsp;    | `300cc`            | 3
+`medium`  | `400cc`            | 4
+&nbsp;    | `600cc`            | 6
+`large`   | `800cc`            | 8
+&nbsp;    | `1200cc`           | 12
+`xlarge`  | `1600cc`           | 16
+`2xlarge` | `3200cc`           | 32
+`3xlarge` | `6400cc`           | 64
+`4xlarge` | `128C`             | 128
+`5xlarge` | `256C`             | 256
+`6xlarge` | `512C`             | 512
 
 Credit usage is measured at a one second granularity. For a given replica,
 credit usage begins when a `CREATE CLUSTER` or [`ALTER CLUSTER`] statement
