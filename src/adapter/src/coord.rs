@@ -84,9 +84,7 @@ use futures::future::{BoxFuture, FutureExt, LocalBoxFuture};
 use futures::StreamExt;
 use http::Uri;
 use itertools::{Either, Itertools};
-use mz_adapter_types::compaction::{
-    CompactionWindow, ReadCapability, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
-};
+use mz_adapter_types::compaction::{CompactionWindow, ReadCapability};
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
 use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
@@ -1645,34 +1643,27 @@ impl Coordinator {
                             .remove(&entry.id())
                             .expect("all index dependants were collected");
 
-                        let lag = if let Some(window) = idx.custom_logical_compaction_window {
-                            match window {
-                                CompactionWindow::Default => {
-                                    Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS)
-                                }
-                                CompactionWindow::DisableCompaction => None,
-                                CompactionWindow::Duration(d) => Some(d),
-                            }
-                        } else if idx.is_retained_metrics_object {
+                        let compaction_window = if idx.is_retained_metrics_object {
                             let retention =
                                 self.catalog().state().system_config().metrics_retention();
-                            Some(Timestamp::new(
-                                u64::try_from(retention.as_millis()).unwrap_or_else(|_| {
+                            match u64::try_from(retention.as_millis()) {
+                                Ok(d) => CompactionWindow::Duration(Timestamp::new(d)),
+                                Err(_) => {
                                     tracing::error!(
                                         "absurd metrics retention duration: {retention:?}"
                                     );
-                                    u64::MAX
-                                }),
-                            ))
+                                    CompactionWindow::DisableCompaction
+                                }
+                            }
                         } else {
-                            Some(DEFAULT_LOGICAL_COMPACTION_WINDOW_TS)
+                            idx.custom_logical_compaction_window.unwrap_or_default()
                         };
 
                         let as_of = self.bootstrap_index_as_of(
                             &df_desc,
                             idx.cluster_id,
                             dependent_matviews,
-                            lag,
+                            compaction_window,
                         );
                         df_desc.set_as_of(as_of);
 
@@ -2236,8 +2227,7 @@ impl Coordinator {
         dataflow: &DataflowDescription<Plan>,
         cluster_id: ComputeInstanceId,
         dependent_matviews: BTreeSet<GlobalId>,
-        // If `None`, we never compact.
-        compaction_lag: Option<Timestamp>,
+        compaction_window: CompactionWindow,
     ) -> Antichain<Timestamp> {
         // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
         // the `since`s of all dependencies.
@@ -2266,13 +2256,9 @@ impl Coordinator {
             return min_as_of;
         }
 
-        let max_compaction_frontier = if let Some(lag) = compaction_lag {
-            let time = write_frontier.clone().into_option().expect("checked above");
-            let time = time.saturating_sub(lag);
-            Antichain::from_elem(time)
-        } else {
-            Antichain::from_elem(Timestamp::MIN)
-        };
+        let time = write_frontier.clone().into_option().expect("checked above");
+        let max_compaction_frontier = Antichain::from_elem(compaction_window.lag_from(time));
+
         // We must not select an `as_of` that is beyond any times that have not yet been written to
         // downstream materialized views. If we would, we might skip times in the output of these
         // materialized views, violating correctness. So our chosen `as_of` must be at most the
@@ -2320,7 +2306,7 @@ impl Coordinator {
             min_as_of = ?min_as_of.elements(),
             max_as_of = ?max_as_of.elements(),
             write_frontier = ?write_frontier.elements(),
-            ?compaction_lag,
+            ?compaction_window,
             max_compaction_frontier = ?max_compaction_frontier.elements(),
             "bootstrapping index `as_of`",
         );
