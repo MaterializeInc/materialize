@@ -374,7 +374,20 @@ impl TransactionalProducer {
         let record = BaseRecord::to(&self.progress_topic)
             .payload(&payload)
             .key(&self.progress_key);
-        self.producer.send(record).map_err(|(e, _)| e)?;
+        match self.producer.send(record) {
+            Ok(()) => {}
+            Err((err, record)) => match err.rdkafka_error_code() {
+                Some(RDKafkaErrorCode::QueueFull) => {
+                    // If the internal rdkafka queue is full we have no other option than to flush
+                    // TODO(petrosagg): remove this logic once we fix the issue that cannot be
+                    // named
+                    let timeout = self.transaction_timeout;
+                    self.spawn_blocking(move |p| p.flush(timeout)).await?;
+                    self.producer.send(record).map_err(|(err, _)| err)?;
+                }
+                _ => return Err(err.into()),
+            },
+        }
 
         let timeout = self.socket_timeout;
         match self
