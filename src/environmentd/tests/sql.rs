@@ -3580,6 +3580,7 @@ async fn test_explain_as_of() {
 
 // Test that RETAIN HISTORY results in the since and upper being separated by the specified amount.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[ignore] // TODO: Reenable when #24957 is fixed
 async fn test_retain_history() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
