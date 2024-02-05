@@ -33,7 +33,7 @@ use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::PartialOrder;
 use uuid::Uuid;
 
-use crate::controller::error::CollectionMissing;
+use crate::controller::error::{CollectionMissing, CollectionUpdateError};
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
     CollectionState, ComputeControllerResponse, IntrospectionUpdates, ReplicaId,
@@ -83,20 +83,6 @@ pub(super) enum PeekError {
 }
 
 impl From<CollectionMissing> for PeekError {
-    fn from(error: CollectionMissing) -> Self {
-        Self::CollectionMissing(error.0)
-    }
-}
-
-#[derive(Error, Debug)]
-pub(super) enum ReadPolicyError {
-    #[error("collection does not exist: {0}")]
-    CollectionMissing(GlobalId),
-    #[error("collection is write-only: {0}")]
-    WriteOnlyCollection(GlobalId),
-}
-
-impl From<CollectionMissing> for ReadPolicyError {
     fn from(error: CollectionMissing) -> Self {
         Self::CollectionMissing(error.0)
     }
@@ -1158,16 +1144,23 @@ where
     ///
     /// Identifiers not present in `policies` retain their existing read policies.
     ///
-    /// It is an error to attempt to set a read policy for a collection that is not readable in the
-    /// context of compute. At this time, only indexes are readable compute collections.
+    /// Attempts to set a read policy for a collection that is not readable in the context of
+    /// compute are ignored. At this time, only indexes are readable compute collections.
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn set_read_policy(
         &mut self,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
-    ) -> Result<(), ReadPolicyError> {
+    ) -> Result<(), CollectionUpdateError> {
         let mut read_capability_changes = BTreeMap::default();
         for (id, new_policy) in policies.into_iter() {
             let collection = self.compute.collection_mut(id)?;
+
+            if let Some(read_policy) = &mut collection.read_policy {
+                *read_policy = new_policy.clone();
+            } else {
+                // Write-only collection; ignore policy update.
+                continue;
+            }
 
             let old_capability = &collection.implied_capability;
             let new_capability = new_policy.frontier(collection.write_frontier.borrow());
@@ -1177,12 +1170,6 @@ where
                 update.extend(new_capability.iter().map(|t| (t.clone(), 1)));
                 read_capability_changes.insert(id, update);
                 collection.implied_capability = new_capability;
-            }
-
-            if let Some(read_policy) = &mut collection.read_policy {
-                *read_policy = new_policy;
-            } else {
-                return Err(ReadPolicyError::WriteOnlyCollection(id));
             }
         }
         if !read_capability_changes.is_empty() {

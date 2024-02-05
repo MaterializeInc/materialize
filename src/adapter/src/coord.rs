@@ -2648,22 +2648,20 @@ impl Coordinator {
     }
 
     /// Call into the compute controller to install a finalized dataflow, and
-    /// initialize the read policies for its exported readable objects.
+    /// initialize the read policies for its exported objects.
     pub(crate) async fn ship_dataflow(
         &mut self,
         dataflow: DataflowDescription<Plan>,
         instance: ComputeInstanceId,
     ) {
-        // We must only install read policies for indexes, not for sinks.
-        // Sinks are write-only compute collections that don't have read policies.
-        let index_ids = dataflow.exported_index_ids().collect();
+        let export_ids = dataflow.export_ids().collect();
 
         self.controller
             .active_compute()
             .create_dataflow(instance, dataflow)
             .unwrap_or_terminate("dataflow creation cannot fail");
 
-        self.initialize_compute_read_policies(index_ids, instance, CompactionWindow::Default)
+        self.initialize_compute_read_policies(export_ids, instance, CompactionWindow::Default)
             .await;
     }
 }
