@@ -151,12 +151,20 @@ class FetchAction(Action):
         return True
 
 
+class SelectOneAction(Action):
+    def run(self, exe: Executor) -> bool:
+        exe.execute("SELECT 1", explainable=True)
+        exe.cur.fetchall()
+        return True
+
+
 class SelectAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
         result.extend(
             [
                 "in the same timedomain",
+                'is not allowed from the "mz_introspection" cluster',
             ]
         )
         if exe.db.complexity == Complexity.DDL:
@@ -236,6 +244,7 @@ class SQLsmithAction(Action):
         result.extend(
             [
                 "in the same timedomain",
+                'is not allowed from the "mz_introspection" cluster',
             ]
         )
         if exe.db.complexity == Complexity.DDL:
@@ -300,6 +309,11 @@ class SQLsmithAction(Action):
 
 
 class InsertAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "cannot be run inside a transaction block",
+        ] + super().errors_to_ignore(exe)
+
     def run(self, exe: Executor) -> bool:
         table = None
         if exe.insert_table != None:
@@ -329,6 +343,16 @@ class InsertAction(Action):
             )
         all_column_values = ", ".join(f"({v})" for v in column_values)
         query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
+        if self.rng.choice([True, False]):
+            returning_exprs = []
+            if self.rng.choice([True, False]):
+                returning_exprs.append("0")
+            elif self.rng.choice([True, False]):
+                returning_exprs.append("*")
+            else:
+                returning_exprs.append(column_names)
+            if returning_exprs:
+                query += f" RETURNING {', '.join(returning_exprs)}"
         exe.execute(query)
         table.num_rows += len(column_values)
         exe.insert_table = table.table_id
@@ -1590,6 +1614,7 @@ class ActionList:
 read_action_list = ActionList(
     [
         (SelectAction, 100),
+        (SelectOneAction, 1),
         (SQLsmithAction, 30),
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
         (CommitRollbackAction, 30),
@@ -1610,6 +1635,7 @@ fetch_action_list = ActionList(
 write_action_list = ActionList(
     [
         (InsertAction, 50),
+        (SelectOneAction, 1),  # can be mixed with writes
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
         (HttpPostAction, 50),
         (CommitRollbackAction, 10),

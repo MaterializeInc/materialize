@@ -19,6 +19,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::{FuturesUnordered, StreamExt};
 use futures::FutureExt;
+use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::error::ErrorExt;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
@@ -49,7 +50,7 @@ use crate::internal::state::{
 use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::internal::watch::StateWatch;
-use crate::read::LeasedReaderId;
+use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
 use crate::rpc::PubSubSender;
 use crate::write::WriterId;
 use crate::{Diagnostics, PersistConfig, ShardId};
@@ -858,8 +859,7 @@ where
 
         // The latest state still doesn't have a new frontier for us:
         // watch+sleep in a loop until it does.
-        let retry =
-            retry.unwrap_or_else(|| self.applier.cfg.dynamic.next_listen_batch_retry_params());
+        let retry = retry.unwrap_or_else(|| next_listen_batch_retry_params(&self.applier.cfg));
         let sleeps = self
             .applier
             .metrics
@@ -1055,7 +1055,7 @@ where
         reader_id: LeasedReaderId,
         gc: GarbageCollector<K, V, T, D>,
     ) {
-        let sleep_duration = machine.applier.cfg.dynamic.reader_lease_duration() / 2;
+        let sleep_duration = READER_LEASE_DURATION.get(&machine.applier.cfg) / 2;
         loop {
             let before_sleep = Instant::now();
             tokio::time::sleep(sleep_duration).await;
@@ -1103,6 +1103,32 @@ where
                 return;
             }
         }
+    }
+}
+
+pub(crate) const NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF: Config<Duration> = Config::new(
+    "persist_next_listen_batch_retryer_initial_backoff",
+    Duration::from_millis(1200), // pubsub is on by default!
+    "The initial backoff when polling for new batches from a Listen or Subscribe.",
+);
+
+pub(crate) const NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER: Config<u32> = Config::new(
+    "persist_next_listen_batch_retryer_multiplier",
+    2,
+    "The backoff multiplier when polling for new batches from a Listen or Subscribe.",
+);
+
+pub(crate) const NEXT_LISTEN_BATCH_RETRYER_CLAMP: Config<Duration> = Config::new(
+    "persist_next_listen_batch_retryer_clamp",
+    Duration::from_millis(100), // pubsub is on by default!
+    "The backoff clamp duration when polling for new batches from a Listen or Subscribe.",
+);
+
+fn next_listen_batch_retry_params(cfg: &ConfigSet) -> RetryParameters {
+    RetryParameters {
+        initial_backoff: NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.get(cfg),
+        multiplier: NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.get(cfg),
+        clamp: NEXT_LISTEN_BATCH_RETRYER_CLAMP.get(cfg),
     }
 }
 
@@ -1202,16 +1228,20 @@ pub mod datadriven {
 
     use crate::batch::{
         validate_truncate_batch, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
+        BLOB_TARGET_SIZE,
     };
-    use crate::cfg::PersistFeatureFlag;
     use crate::fetch::{fetch_batch_part, Cursor};
-    use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
+    use crate::internal::compact::{
+        CompactConfig, CompactReq, Compactor, STREAMING_COMPACTION_ENABLED,
+    };
     use crate::internal::datadriven::DirectiveArgs;
     use crate::internal::encoding::Schemas;
     use crate::internal::gc::GcReq;
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
     use crate::internal::state_versions::EncodedRollup;
-    use crate::read::{Listen, ListenEvent};
+    use crate::read::{
+        Listen, ListenEvent, READER_LEASE_DURATION, STREAMING_SNAPSHOT_AND_FETCH_ENABLED,
+    };
     use crate::rpc::NoopPubSubSender;
     use crate::tests::new_test_client;
     use crate::{GarbageCollector, PersistClient};
@@ -1240,16 +1270,11 @@ pub mod datadriven {
             // can override it with an arg.
             client
                 .cfg
-                .dynamic
-                .set_blob_target_size(PersistConfig::DEFAULT_BLOB_TARGET_SIZE);
+                .set_config(&BLOB_TARGET_SIZE, *BLOB_TARGET_SIZE.default());
+            client.cfg.set_config(&STREAMING_COMPACTION_ENABLED, true);
             client
                 .cfg
-                .dynamic
-                .set_feature_flag(PersistFeatureFlag::STREAMING_COMPACTION, true);
-            client
-                .cfg
-                .dynamic
-                .set_feature_flag(PersistFeatureFlag::STREAMING_SNAPSHOT_AND_FETCH, true);
+                .set_config(&STREAMING_SNAPSHOT_AND_FETCH_ENABLED, true);
             let state_versions = Arc::new(StateVersions::new(
                 client.cfg.clone(),
                 Arc::clone(&client.consensus),
@@ -1656,7 +1681,7 @@ pub mod datadriven {
 
         let cfg = datadriven.client.cfg.clone();
         if let Some(target_size) = target_size {
-            cfg.dynamic.set_blob_target_size(target_size);
+            cfg.set_config(&BLOB_TARGET_SIZE, target_size);
         };
         if let Some(memory_bound) = memory_bound {
             cfg.dynamic.set_compaction_memory_bound_bytes(memory_bound);
@@ -1896,7 +1921,7 @@ pub mod datadriven {
             .register_leased_reader(
                 &reader_id,
                 "tests",
-                datadriven.client.cfg.dynamic.reader_lease_duration(),
+                READER_LEASE_DURATION.get(&datadriven.client.cfg),
                 (datadriven.client.cfg.now)(),
             )
             .await;
@@ -2112,7 +2137,7 @@ pub mod tests {
     use timely::progress::Antichain;
 
     use crate::internal::gc::{GarbageCollector, GcReq};
-    use crate::internal::state::HandleDebugState;
+    use crate::internal::state::{HandleDebugState, ROLLUP_THRESHOLD};
     use crate::tests::new_test_client;
     use crate::ShardId;
 
@@ -2123,7 +2148,7 @@ pub mod tests {
 
         let client = new_test_client().await;
         // set a low rollup threshold so GC/truncation is more aggressive
-        client.cfg.dynamic.set_rollup_threshold(5);
+        client.cfg.set_config(&ROLLUP_THRESHOLD, 5);
         let (mut write, _) = client
             .expect_open::<String, (), u64, i64>(ShardId::new())
             .await;

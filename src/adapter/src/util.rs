@@ -10,7 +10,8 @@
 use std::fmt::Debug;
 
 use mz_compute_client::controller::error::{
-    CollectionUpdateError, DataflowCreationError, InstanceMissing, PeekError, SubscribeTargetError,
+    CollectionUpdateError, DataflowCreationError, InstanceMissing, PeekError, ReadPolicyError,
+    SubscribeTargetError,
 };
 use mz_controller_types::ClusterId;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -327,12 +328,12 @@ impl ShouldHalt for mz_catalog::durable::DurableCatalogError {
 impl ShouldHalt for StorageError {
     fn should_halt(&self) -> bool {
         match self {
+            StorageError::ResourceExhausted(_) => true,
             StorageError::UpdateBeyondUpper(_)
             | StorageError::ReadBeforeSince(_)
             | StorageError::InvalidUppers(_)
             | StorageError::InvalidUsage(_)
-            | StorageError::ResourceExhausted(_) => true,
-            StorageError::SourceIdReused(_)
+            | StorageError::SourceIdReused(_)
             | StorageError::SinkIdReused(_)
             | StorageError::IdentifierMissing(_)
             | StorageError::IdentifierInvalid(_)
@@ -350,8 +351,8 @@ impl ShouldHalt for StorageError {
 impl ShouldHalt for DataflowCreationError {
     fn should_halt(&self) -> bool {
         match self {
-            DataflowCreationError::SinceViolation(_) => true,
-            DataflowCreationError::InstanceMissing(_)
+            DataflowCreationError::SinceViolation(_)
+            | DataflowCreationError::InstanceMissing(_)
             | DataflowCreationError::CollectionMissing(_)
             | DataflowCreationError::MissingAsOf => false,
         }
@@ -370,10 +371,20 @@ impl ShouldHalt for CollectionUpdateError {
 impl ShouldHalt for PeekError {
     fn should_halt(&self) -> bool {
         match self {
-            PeekError::SinceViolation(_) => true,
-            PeekError::InstanceMissing(_)
+            PeekError::SinceViolation(_)
+            | PeekError::InstanceMissing(_)
             | PeekError::CollectionMissing(_)
             | PeekError::ReplicaMissing(_) => false,
+        }
+    }
+}
+
+impl ShouldHalt for ReadPolicyError {
+    fn should_halt(&self) -> bool {
+        match self {
+            ReadPolicyError::InstanceMissing(_)
+            | ReadPolicyError::CollectionMissing(_)
+            | ReadPolicyError::WriteOnlyCollection(_) => false,
         }
     }
 }

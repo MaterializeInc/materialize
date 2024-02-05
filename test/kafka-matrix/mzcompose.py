@@ -16,15 +16,16 @@ from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
 
-REDPANDA_VERSIONS = ["v23.2.15", "v23.1.20", "v22.3.25"]
+REDPANDA_VERSIONS = ["v22.3.25", "v23.1.21", "v23.2.23", "v23.3.3"]
 
 CONFLUENT_PLATFORM_VERSIONS = [
-    "6.2.12",
-    "7.0.11",
-    "7.1.9",
-    "7.2.7",
-    "7.3.5",
-    "7.4.2",
+    "6.2.14",
+    "7.0.13",
+    "7.1.11",
+    "7.2.9",
+    "7.3.7",
+    "7.4.4",
+    "7.5.2",
     "latest",
 ]
 
@@ -55,15 +56,17 @@ def workflow_default(c: Composition) -> None:
         with c.override(Redpanda(version=redpanda_version)):
             c.down(destroy_volumes=True)
             c.up("redpanda", "materialized")
-            c.run("testdrive", *TD_CMD)
+            c.run_testdrive_files(*TD_CMD)
 
     for confluent_version in CONFLUENT_PLATFORM_VERSIONS:
         print(f"--- Testing Confluent Platform {confluent_version}")
+        # No arm64 images available for Confluent Platform versions 6.*
+        platform = "linux/amd64" if confluent_version.startswith("6.") else None
         with c.override(
-            Zookeeper(tag=confluent_version),
-            Kafka(tag=confluent_version),
-            SchemaRegistry(tag=confluent_version),
+            Zookeeper(tag=confluent_version, platform=platform),
+            Kafka(tag=confluent_version, platform=platform),
+            SchemaRegistry(tag=confluent_version, platform=platform),
         ):
             c.down(destroy_volumes=True)
             c.up("zookeeper", "kafka", "schema-registry", "materialized")
-            c.run("testdrive", *TD_CMD)
+            c.run_testdrive_files(*TD_CMD)

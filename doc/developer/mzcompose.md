@@ -67,7 +67,7 @@ SERVICES = [
 def workflow_test(c: Composition):
     c.up("zookeeper", "kafka", "schema-registry", "materialized")
 
-    c.run("testdrive", "*.td")
+    c.run_testdrive_files("*.td")
 ```
 
 Additional examples can be found here:
@@ -187,6 +187,6 @@ To run a Testdrive test or tests:
 ```python
 def workflow_simple_test(c: Composition):
    ...
-   w.run("testdrive", "*.td")
+   c.run_testdrive_files("*.td")
    ...
 ```

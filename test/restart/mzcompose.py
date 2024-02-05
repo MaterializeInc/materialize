@@ -88,7 +88,7 @@ def workflow_retain_history(c: Composition) -> None:
 
 def workflow_github_8021(c: Composition) -> None:
     c.up("materialized")
-    c.run("testdrive", "github-8021.td")
+    c.run_testdrive_files("github-8021.td")
 
     # Ensure MZ can boot
     c.kill("materialized")
@@ -181,7 +181,7 @@ def workflow_audit_log(c: Composition) -> None:
 def workflow_timelines(c: Composition) -> None:
     for _ in range(3):
         c.up("zookeeper", "kafka", "schema-registry", "materialized")
-        c.run("testdrive", "timelines.td")
+        c.run_testdrive_files("timelines.td")
         c.rm(
             "zookeeper",
             "kafka",

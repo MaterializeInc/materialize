@@ -32,9 +32,10 @@ pub const SINCE_GRANULARITY: mz_repr::Timestamp = mz_repr::Timestamp::new(1000);
 
 // A common type (that is usable by the sql crate and also can implement various methods on types in
 // storage) to express compaction windows.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Default, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum CompactionWindow {
     /// Unspecified by the user, use a system-provided default.
+    #[default]
     Default,
     /// Disable compaction.
     DisableCompaction,

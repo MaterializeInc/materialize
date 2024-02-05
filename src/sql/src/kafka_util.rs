@@ -224,3 +224,28 @@ where
     .await
     .map_err(|e| sql_err!("{}", e))?
 }
+
+/// Validates that we can connect to the broker and obtain metadata about the topic.
+pub async fn ensure_topic_exists<C>(
+    consumer: Arc<BaseConsumer<C>>,
+    topic: &str,
+    fetch_metadata_timeout: Duration,
+) -> Result<(), PlanError>
+where
+    C: ConsumerContext + 'static,
+{
+    task::spawn_blocking(|| format!("kafka_ensure_topic_exists:{topic}"), {
+        let topic = topic.to_string();
+        move || {
+            mz_kafka_util::client::get_partitions(
+                consumer.as_ref().client(),
+                &topic,
+                fetch_metadata_timeout,
+            )
+            .map_err(|e| sql_err!("{}", e))?;
+            Ok(())
+        }
+    })
+    .await
+    .map_err(|e| sql_err!("{}", e))?
+}

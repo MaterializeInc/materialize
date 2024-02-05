@@ -11,9 +11,7 @@
 from materialize.mzcompose import (
     DEFAULT_CONFLUENT_PLATFORM_VERSION,
 )
-from materialize.mzcompose.service import (
-    Service,
-)
+from materialize.mzcompose.service import Service, ServiceConfig
 
 
 class Zookeeper(Service):
@@ -25,18 +23,22 @@ class Zookeeper(Service):
         port: int = 2181,
         volumes: list[str] = [],
         environment: list[str] = ["ZOOKEEPER_CLIENT_PORT=2181"],
+        platform: str | None = None,
     ) -> None:
+        config: ServiceConfig = {
+            "image": f"{image}:{tag}",
+            "ports": [port],
+            "volumes": volumes,
+            "environment": environment,
+            "healthcheck": {
+                "test": ["CMD", "nc", "-z", "localhost", "2181"],
+                "interval": "1s",
+                "start_period": "120s",
+            },
+        }
+        if platform:
+            config["platform"] = platform
         super().__init__(
             name=name,
-            config={
-                "image": f"{image}:{tag}",
-                "ports": [port],
-                "volumes": volumes,
-                "environment": environment,
-                "healthcheck": {
-                    "test": ["CMD", "nc", "-z", "localhost", "2181"],
-                    "interval": "1s",
-                    "start_period": "120s",
-                },
-            },
+            config=config,
         )

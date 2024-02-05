@@ -2761,7 +2761,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                           {
                                             "unique_key": true,
                                             "key_length": 1,
-                                            "arranged": true,
+                                            "arranged": false,
                                             "cardinality": null,
                                             "filters": {
                                               "literal_equality": false,
@@ -2783,7 +2783,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                           {
                                             "unique_key": true,
                                             "key_length": 1,
-                                            "arranged": true,
+                                            "arranged": false,
                                             "cardinality": null,
                                             "filters": {
                                               "literal_equality": false,
@@ -2807,7 +2807,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                           {
                                             "unique_key": true,
                                             "key_length": 1,
-                                            "arranged": true,
+                                            "arranged": false,
                                             "cardinality": null,
                                             "filters": {
                                               "literal_equality": false,
@@ -2829,7 +2829,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                           {
                                             "unique_key": false,
                                             "key_length": 1,
-                                            "arranged": true,
+                                            "arranged": false,
                                             "cardinality": null,
                                             "filters": {
                                               "literal_equality": false,
@@ -2853,7 +2853,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                           {
                                             "unique_key": true,
                                             "key_length": 1,
-                                            "arranged": true,
+                                            "arranged": false,
                                             "cardinality": null,
                                             "filters": {
                                               "literal_equality": false,
@@ -2875,7 +2875,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                           {
                                             "unique_key": false,
                                             "key_length": 1,
-                                            "arranged": true,
+                                            "arranged": false,
                                             "cardinality": null,
                                             "filters": {
                                               "literal_equality": false,
@@ -3171,7 +3171,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                   {
                                     "unique_key": false,
                                     "key_length": 1,
-                                    "arranged": true,
+                                    "arranged": false,
                                     "cardinality": null,
                                     "filters": {
                                       "literal_equality": false,
@@ -3193,7 +3193,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                   {
                                     "unique_key": false,
                                     "key_length": 1,
-                                    "arranged": true,
+                                    "arranged": false,
                                     "cardinality": null,
                                     "filters": {
                                       "literal_equality": false,
@@ -3217,7 +3217,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                   {
                                     "unique_key": false,
                                     "key_length": 1,
-                                    "arranged": true,
+                                    "arranged": false,
                                     "cardinality": null,
                                     "filters": {
                                       "literal_equality": false,
@@ -3239,7 +3239,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                   {
                                     "unique_key": false,
                                     "key_length": 1,
-                                    "arranged": true,
+                                    "arranged": false,
                                     "cardinality": null,
                                     "filters": {
                                       "literal_equality": false,
@@ -3263,7 +3263,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                   {
                                     "unique_key": false,
                                     "key_length": 1,
-                                    "arranged": true,
+                                    "arranged": false,
                                     "cardinality": null,
                                     "filters": {
                                       "literal_equality": false,
@@ -3285,7 +3285,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                   {
                                     "unique_key": false,
                                     "key_length": 1,
-                                    "arranged": true,
+                                    "arranged": false,
                                     "cardinality": null,
                                     "filters": {
                                       "literal_equality": false,
@@ -4660,7 +4660,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                               {
                                 "unique_key": false,
                                 "key_length": 1,
-                                "arranged": true,
+                                "arranged": false,
                                 "cardinality": null,
                                 "filters": {
                                   "literal_equality": false,
@@ -4682,7 +4682,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                               {
                                 "unique_key": false,
                                 "key_length": 1,
-                                "arranged": true,
+                                "arranged": false,
                                 "cardinality": null,
                                 "filters": {
                                   "literal_equality": false,
@@ -4706,7 +4706,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                               {
                                 "unique_key": false,
                                 "key_length": 1,
-                                "arranged": true,
+                                "arranged": false,
                                 "cardinality": null,
                                 "filters": {
                                   "literal_equality": false,
@@ -4728,7 +4728,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                               {
                                 "unique_key": false,
                                 "key_length": 1,
-                                "arranged": true,
+                                "arranged": false,
                                 "cardinality": null,
                                 "filters": {
                                   "literal_equality": false,
@@ -4752,7 +4752,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                               {
                                 "unique_key": false,
                                 "key_length": 1,
-                                "arranged": true,
+                                "arranged": false,
                                 "cardinality": null,
                                 "filters": {
                                   "literal_equality": false,
@@ -4774,7 +4774,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                               {
                                 "unique_key": false,
                                 "key_length": 1,
-                                "arranged": true,
+                                "arranged": false,
                                 "cardinality": null,
                                 "filters": {
                                   "literal_equality": false,
@@ -4839,41 +4839,89 @@ WHERE a = c and d = e and b = f
                     {
                       "ArrangeBy": {
                         "input": {
-                          "Get": {
-                            "id": {
-                              "Global": {
-                                "User": 1
+                          "Filter": {
+                            "input": {
+                              "Get": {
+                                "id": {
+                                  "Global": {
+                                    "User": 1
+                                  }
+                                },
+                                "typ": {
+                                  "column_types": [
+                                    {
+                                      "scalar_type": "Int32",
+                                      "nullable": true
+                                    },
+                                    {
+                                      "scalar_type": "Int32",
+                                      "nullable": true
+                                    }
+                                  ],
+                                  "keys": []
+                                },
+                                "access_strategy": {
+                                  "Index": [
+                                    [
+                                      {
+                                        "User": 4
+                                      },
+                                      "FullScan"
+                                    ]
+                                  ]
+                                }
                               }
                             },
-                            "typ": {
-                              "column_types": [
-                                {
-                                  "scalar_type": "Int32",
-                                  "nullable": true
-                                },
-                                {
-                                  "scalar_type": "Int32",
-                                  "nullable": true
-                                }
-                              ],
-                              "keys": []
-                            },
-                            "access_strategy": {
-                              "Index": [
-                                [
-                                  {
-                                    "User": 4
+                            "predicates": [
+                              {
+                                "CallUnary": {
+                                  "func": {
+                                    "Not": null
                                   },
-                                  "DifferentialJoin"
-                                ]
-                              ]
-                            }
+                                  "expr": {
+                                    "CallUnary": {
+                                      "func": {
+                                        "IsNull": null
+                                      },
+                                      "expr": {
+                                        "Column": 0
+                                      }
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "CallUnary": {
+                                  "func": {
+                                    "Not": null
+                                  },
+                                  "expr": {
+                                    "CallUnary": {
+                                      "func": {
+                                        "IsNull": null
+                                      },
+                                      "expr": {
+                                        "Column": 1
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            ]
                           }
                         },
                         "keys": [
                           [
                             {
                               "Column": 0
+                            }
+                          ],
+                          [
+                            {
+                              "Column": 0
+                            },
+                            {
+                              "Column": 1
                             }
                           ]
                         ]
@@ -4907,7 +4955,17 @@ WHERE a = c and d = e and b = f
                                   {
                                     "User": 9
                                   },
-                                  "DifferentialJoin"
+                                  {
+                                    "DeltaJoin": false
+                                  }
+                                ],
+                                [
+                                  {
+                                    "User": 10
+                                  },
+                                  {
+                                    "DeltaJoin": false
+                                  }
                                 ]
                               ]
                             }
@@ -4917,6 +4975,11 @@ WHERE a = c and d = e and b = f
                           [
                             {
                               "Column": 0
+                            }
+                          ],
+                          [
+                            {
+                              "Column": 1
                             }
                           ]
                         ]
@@ -5036,29 +5099,7 @@ WHERE a = c and d = e and b = f
                     ]
                   ],
                   "implementation": {
-                    "Differential": [
-                      [
-                        0,
-                        [
-                          {
-                            "Column": 0
-                          }
-                        ],
-                        {
-                          "unique_key": false,
-                          "key_length": 1,
-                          "arranged": true,
-                          "cardinality": null,
-                          "filters": {
-                            "literal_equality": false,
-                            "like": false,
-                            "is_null": false,
-                            "literal_inequality": 0,
-                            "any_filter": false
-                          },
-                          "input": 0
-                        }
-                      ],
+                    "DeltaQuery": [
                       [
                         [
                           1,
@@ -5107,6 +5148,104 @@ WHERE a = c and d = e and b = f
                             "input": 2
                           }
                         ]
+                      ],
+                      [
+                        [
+                          0,
+                          [
+                            {
+                              "Column": 0
+                            }
+                          ],
+                          {
+                            "unique_key": false,
+                            "key_length": 1,
+                            "arranged": true,
+                            "cardinality": null,
+                            "filters": {
+                              "literal_equality": false,
+                              "like": false,
+                              "is_null": false,
+                              "literal_inequality": 0,
+                              "any_filter": false
+                            },
+                            "input": 0
+                          }
+                        ],
+                        [
+                          2,
+                          [
+                            {
+                              "Column": 0
+                            },
+                            {
+                              "Column": 1
+                            }
+                          ],
+                          {
+                            "unique_key": false,
+                            "key_length": 2,
+                            "arranged": false,
+                            "cardinality": null,
+                            "filters": {
+                              "literal_equality": false,
+                              "like": false,
+                              "is_null": false,
+                              "literal_inequality": 0,
+                              "any_filter": false
+                            },
+                            "input": 2
+                          }
+                        ]
+                      ],
+                      [
+                        [
+                          1,
+                          [
+                            {
+                              "Column": 1
+                            }
+                          ],
+                          {
+                            "unique_key": false,
+                            "key_length": 1,
+                            "arranged": true,
+                            "cardinality": null,
+                            "filters": {
+                              "literal_equality": false,
+                              "like": false,
+                              "is_null": false,
+                              "literal_inequality": 0,
+                              "any_filter": false
+                            },
+                            "input": 1
+                          }
+                        ],
+                        [
+                          0,
+                          [
+                            {
+                              "Column": 0
+                            },
+                            {
+                              "Column": 1
+                            }
+                          ],
+                          {
+                            "unique_key": false,
+                            "key_length": 2,
+                            "arranged": false,
+                            "cardinality": null,
+                            "filters": {
+                              "literal_equality": false,
+                              "like": false,
+                              "is_null": false,
+                              "literal_inequality": 0,
+                              "any_filter": false
+                            },
+                            "input": 0
+                          }
+                        ]
                       ]
                     ]
                   }
@@ -5125,23 +5264,6 @@ WHERE a = c and d = e and b = f
                         },
                         "expr": {
                           "Column": 0
-                        }
-                      }
-                    }
-                  }
-                },
-                {
-                  "CallUnary": {
-                    "func": {
-                      "Not": null
-                    },
-                    "expr": {
-                      "CallUnary": {
-                        "func": {
-                          "IsNull": null
-                        },
-                        "expr": {
-                          "Column": 1
                         }
                       }
                     }

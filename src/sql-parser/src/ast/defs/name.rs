@@ -18,10 +18,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde::{Deserialize, Serialize};
-
-use mz_ore::str::{MaxLenString, StrExt};
+use mz_ore::str::StrExt;
 use mz_sql_lexer::keywords::Keyword;
+use mz_sql_lexer::lexer::{IdentString, MAX_IDENTIFIER_LENGTH};
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
@@ -33,7 +33,7 @@ pub struct Ident(pub(crate) String);
 
 impl Ident {
     /// Maximum length of an identifier in Materialize.
-    pub const MAX_LENGTH: usize = 255;
+    pub const MAX_LENGTH: usize = MAX_IDENTIFIER_LENGTH;
 
     /// Create a new [`Ident`] with the given value, checking our invariants.
     ///
@@ -51,18 +51,28 @@ impl Ident {
     ///
     /// let too_long_id = Ident::new(too_long);
     /// assert!(too_long_id.is_err());
+    ///
+    /// let invalid_name_dot = Ident::new(".");
+    /// assert!(invalid_name_dot.is_err());
+    ///
+    /// let invalid_name_dot_dot = Ident::new("..");
+    /// assert!(invalid_name_dot_dot.is_err());
     /// ```
     ///
-    pub fn new<S>(value: S) -> Result<Self, IdentError>
+    pub fn new<S>(s: S) -> Result<Self, IdentError>
     where
-        S: Into<String>,
+        S: TryInto<IdentString>,
+        <S as TryInto<IdentString>>::Error: fmt::Display,
     {
-        let s = value.into();
-        if s.len() > Self::MAX_LENGTH {
-            return Err(IdentError::TooLong(s));
+        let s = s
+            .try_into()
+            .map_err(|e| IdentError::TooLong(e.to_string()))?;
+
+        if &*s == "." || &*s == ".." {
+            return Err(IdentError::Invalid(s.into_inner()));
         }
 
-        Ok(Ident(s))
+        Ok(Ident(s.into_inner()))
     }
 
     /// Create a new [`Ident`] modifying the given value as necessary to meet our invariants.
@@ -293,14 +303,6 @@ impl Ident {
     }
 }
 
-impl From<MaxLenString<{ Ident::MAX_LENGTH }>> for Ident {
-    fn from(value: MaxLenString<{ Ident::MAX_LENGTH }>) -> Self {
-        // Note: using unchecked here is okay because the length of `MaxLenString` is guaranteed to
-        // be less than or equal to our MAX_LENGTH.
-        Ident::new_unchecked(value.into_inner())
-    }
-}
-
 /// More-or-less a direct translation of the Postgres function for doing the same thing:
 ///
 ///   <https://github.com/postgres/postgres/blob/master/src/backend/utils/adt/ruleutils.c#L10730-L10812>
@@ -335,6 +337,9 @@ pub enum IdentError {
         suffix: String,
         attempts: usize,
     },
+
+    #[error("invalid identifier: {}", .0.quoted())]
+    Invalid(String),
 }
 
 /// A name of a table, view, custom type, etc. that lives in a schema, possibly multi-part, i.e. db.schema.obj

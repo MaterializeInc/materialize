@@ -47,7 +47,10 @@ from materialize.scalability.regression_assessment import RegressionAssessment
 from materialize.scalability.result_analyzer import ResultAnalyzer
 from materialize.scalability.result_analyzers import DefaultResultAnalyzer
 from materialize.scalability.schema import Schema, TransactionIsolation
-from materialize.scalability.workload import Workload, WorkloadSelfTest
+from materialize.scalability.workload import (
+    Workload,
+)
+from materialize.scalability.workload_markers import WorkloadMarker
 from materialize.scalability.workloads import *  # noqa: F401 F403
 from materialize.scalability.workloads_test import *  # noqa: F401 F403
 from materialize.util import YesNoOnce, all_subclasses
@@ -119,6 +122,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--workload-group-marker",
+        type=str,
+        help="Workload group to run. Required if --workload is not set.",
+    )
+
+    parser.add_argument(
         "--count",
         metavar="COUNT",
         type=int,
@@ -154,6 +163,20 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         type=str,
         help="URL to connect to for remote targets",
         action="append",
+    )
+
+    parser.add_argument(
+        "--use-balancerd",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Whether to communicate through balancerd (only applicable to Materialize containers)",
+    )
+
+    parser.add_argument(
+        "--verbose",
+        default=False,
+        type=bool,
+        action=argparse.BooleanOptionalAction,
     )
 
     parser.add_argument("--cluster-name", type=str, help="Cluster to SET CLUSTER to")
@@ -201,6 +224,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         min_concurrency=args.min_concurrency,
         max_concurrency=args.max_concurrency,
         count=args.count,
+        verbose=args.verbose,
     )
 
     executor = BenchmarkExecutor(
@@ -251,6 +275,7 @@ def validate_and_adjust_targets(
 def get_baseline_and_other_endpoints(
     c: Composition, args: argparse.Namespace, regression_against_target: str
 ) -> tuple[Endpoint | None, list[Endpoint]]:
+    use_balancerd = args.use_balancerd
     baseline_endpoint: Endpoint | None = None
     other_endpoints: list[Endpoint] = []
     for i, specified_target in enumerate(args.target):
@@ -267,6 +292,7 @@ def get_baseline_and_other_endpoints(
                 composition=c,
                 specified_target=specified_target,
                 resolved_target=specified_target,
+                use_balancerd=use_balancerd,
             )
         else:
             resolved_target = specified_target
@@ -278,6 +304,7 @@ def get_baseline_and_other_endpoints(
                 composition=c,
                 specified_target=specified_target,
                 resolved_target=resolved_target,
+                use_balancerd=use_balancerd,
                 image=f"materialize/materialized:{resolved_target}",
                 alternative_image="materialize/materialized:latest",
             )
@@ -292,15 +319,22 @@ def get_baseline_and_other_endpoints(
 
 
 def get_workload_classes(args: argparse.Namespace) -> list[type[Workload]]:
-    workload_classes = (
-        [globals()[workload] for workload in args.workload]
-        if args.workload
-        else [
-            workload_cls
-            for workload_cls in all_subclasses(Workload)
-            if not issubclass(workload_cls, WorkloadSelfTest)
+    if args.workload:
+        workload_classes = [globals()[workload] for workload in args.workload]
+    else:
+        assert (
+            args.workload_group_marker is not None
+        ), "--workload-group-marker must be set"
+
+        workload_group_marker_class: type[WorkloadMarker] = globals()[
+            args.workload_group_marker
         ]
-    )
+
+        workload_classes: list[type[Workload]] = [
+            workload_cls for workload_cls in all_subclasses(workload_group_marker_class)
+        ]
+
+    assert len(workload_classes) > 0, "No workload class matched"
 
     # sort classes to ensure a stable order
     workload_classes.sort(key=lambda cls: cls.__name__)

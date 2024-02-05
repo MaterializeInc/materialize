@@ -38,7 +38,22 @@ version = "1.2.6"
 [[audits.differential-dataflow]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:c5b9baca0283f4d96f7e6f914de8578fb5c521de"
+version = "0.12.0@git:15b7b8dcf606580b4cf50e3f1b408da91b27b4c1"
+
+[[audits.dynfmt]]
+who = "Sean Loiselle <sean@materialize.io>"
+criteria = "safe-to-deploy"
+version = "0.1.5"
+notes = """
+The proposed usage of this crate's unsafe code is limited to inlining string
+literals from the Materialize source code. No proposed usage of this crate allows
+user input to be inlined (i.e. allowing injection attacks).
+"""
+
+[[audits.erased-serde]]
+who = "Sean Loiselle <sean@materialize.io>"
+criteria = "safe-to-deploy"
+version = "0.3.26"
 
 [[audits.funty]]
 who = "Roshan Jobanputra <roshan@materialize.com>"
@@ -125,6 +140,16 @@ who = "Roshan Jobanputra <roshan@materialize.com>"
 criteria = "safe-to-deploy"
 version = "10.7.0"
 
+[[audits.rdkafka]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "safe-to-deploy"
+version = "0.29.0@git:843ccffbd75f4dac93b2e34cf091bd7770b9a3de"
+
+[[audits.rdkafka-sys]]
+who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
+criteria = "safe-to-deploy"
+version = "4.3.0+1.9.2@git:843ccffbd75f4dac93b2e34cf091bd7770b9a3de"
+
 [[audits.redox_syscall]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
@@ -204,6 +229,11 @@ version = "0.3.18"
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "maintained-and-necessary"
 delta = "0.7.1 -> 0.9.0"
+
+[[audits.uuid]]
+who = "Roshan Jobanputra <roshan@materialize.com>"
+criteria = "safe-to-deploy"
+version = "1.7.0"
 
 [[audits.web-time]]
 who = "Gus Wynn <gus@materialize.com>"
@@ -728,6 +758,12 @@ criteria = "safe-to-deploy"
 user-id = 1 # Alex Crichton (alexcrichton)
 start = "2019-04-12"
 end = "2024-11-16"
+
+[[trusted.rustflags]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2022-01-03"
+end = "2025-01-26"
 
 [[trusted.rustix]]
 criteria = "safe-to-deploy"

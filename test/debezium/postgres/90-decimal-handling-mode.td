@@ -15,7 +15,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE decimal_handling_mode_precise (f1 DECIMAL(10,3) PRIMARY KEY);
 INSERT INTO decimal_handling_mode_precise VALUES (1234567.890);
 
-$ schema-registry-wait subject=postgres.public.decimal_handling_mode_precise-value
+$ schema-registry-wait topic=postgres.public.decimal_handling_mode_precise
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'
@@ -62,7 +62,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE decimal_handling_mode_double (f1 DECIMAL(10,3) PRIMARY KEY);
 INSERT INTO decimal_handling_mode_double VALUES (2234567.890);
 
-$ schema-registry-wait subject=postgres.public.decimal_handling_mode_double-value
+$ schema-registry-wait topic=postgres.public.decimal_handling_mode_double
 
 > CREATE SOURCE decimal_handling_mode_double
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.decimal_handling_mode_double')
@@ -102,7 +102,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE decimal_handling_mode_string (f1 DECIMAL(10,3) PRIMARY KEY);
 INSERT INTO decimal_handling_mode_string VALUES (3234567.890);
 
-$ schema-registry-wait subject=postgres.public.decimal_handling_mode_string-value
+$ schema-registry-wait topic=postgres.public.decimal_handling_mode_string
 
 > CREATE SOURCE decimal_handling_mode_string
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.decimal_handling_mode_string')

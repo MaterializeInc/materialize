@@ -1,0 +1,223 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+reset-server
+
+# regtype
+
+query T
+SELECT 1::regtype
+----
+1
+
+query T
+SELECT 1::int4::regtype
+----
+1
+
+query T
+SELECT 1::oid::regtype
+----
+1
+
+query T
+SELECT 1::oid::regtype::oid
+----
+1
+
+query T
+SELECT '1'::regtype
+----
+1
+
+query T
+SELECT '1'::pg_catalog.regtype
+----
+1
+
+query T
+SELECT '1'::regtype::text
+----
+1
+
+query T
+SELECT 'date'::regtype::text
+----
+date
+
+query T
+SELECT 1082::regtype::text
+----
+date
+
+query T
+SELECT 'date'::regtype
+----
+1082
+
+query T
+SELECT 'date'::regtype::oid
+----
+1082
+
+query error type "dne" does not exist
+SELECT 'dne'::regtype
+
+query B
+SELECT 1082 = 'date'::regtype
+----
+true
+
+statement ok
+CREATE TABLE text_to_regtype (a text);
+
+statement ok
+INSERT INTO text_to_regtype VALUES (NULL), ('date');
+
+query I
+SELECT a::regtype FROM text_to_regtype ORDER BY a
+----
+1082
+NULL
+
+# Regression for 9194
+# This shouldn't be an error but seems to be impacted by
+# some evaluation order issue akin to #17189
+# TODO: this has an optimization bug.
+query error
+select 'date'::regtype::oid::text::regtype
+
+query T
+SELECT 'date'::regtype::oid::text;
+----
+1082
+
+query I
+SELECT '1082'::text::regtype;
+----
+1082
+
+# These overflow their stack in debug mode.
+# query T
+# SELECT 'date'::regtype::text::regtype
+# ----
+# 1082
+#
+# query T
+# SELECT 'date'::regtype::text::regtype::text
+# ----
+# date
+
+query T
+SELECT NULL::regtype::text
+----
+NULL
+
+# ensure that all existing types can be cast to their respective names
+statement OK
+select oid, oid::regtype::text from (select oid from mz_catalog.mz_types)
+
+
+statement OK
+create schema s
+
+statement ok
+CREATE TYPE t AS LIST (ELEMENT TYPE = int4);
+
+statement ok
+CREATE TYPE s.t AS LIST (ELEMENT TYPE = int4);
+
+statement ok
+CREATE DATABASE d;
+
+statement ok
+CREATE TYPE d.public.t AS LIST (ELEMENT TYPE = int4);
+
+query T
+SELECT 't'::regtype::oid::int
+----
+20697
+
+query T
+SELECT 's.t'::regtype::oid::int
+----
+20698
+
+query T
+SELECT 't'::regtype = 's.t'::regtype
+----
+false
+
+query T
+SELECT 'public.t'::regtype::text;
+----
+t
+
+query T
+SELECT 't'::regtype::text;
+----
+t
+
+query T
+SELECT 's.t'::regtype::text;
+----
+s.t
+
+statement ok
+SET search_path = s, public
+
+query T
+SELECT 's.t'::regtype::text;
+----
+t
+
+statement ok
+SET search_path = public
+
+query T
+SELECT 's.t'::regtype::text;
+----
+s.t
+
+query T
+SELECT 'd.public.t'::regtype::text;
+----
+d.public.t
+
+# Check that we handle functions and types w/ same name
+query T
+SELECT '1178'::regproc::text;
+----
+pg_catalog.date
+
+query T
+SELECT '1082'::regtype::text;
+----
+date
+
+query error db error: ERROR: more than one function named "date"
+SELECT 'date'::regproc::text;
+
+query T
+SELECT 'date'::regtype::text;
+----
+date
+
+statement ok
+CREATE TYPE array_length AS LIST (ELEMENT TYPE = int4);
+
+query T
+SELECT 'array_length'::regproc::text;
+----
+array_length
+
+query T
+SELECT 'array_length'::regtype::text;
+----
+array_length

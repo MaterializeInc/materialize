@@ -584,7 +584,6 @@ name
 ----
 mz_aggregates
 mz_aws_connections
-mz_cluster_links
 mz_cluster_replica_metrics
 mz_cluster_replica_sizes
 mz_cluster_replica_statuses
@@ -647,10 +646,13 @@ mz_notices
 mz_notices_redacted
 mz_object_fully_qualified_names
 mz_object_lifetimes
+mz_object_oid_alias
 mz_object_transitive_dependencies
 mz_peek_durations_histogram
 mz_peek_durations_histogram_per_worker
 mz_prepared_statement_history_redacted
+mz_recent_activity_log
+mz_recent_activity_log_redacted
 mz_records_per_dataflow
 mz_records_per_dataflow_operator
 mz_records_per_dataflow_operator_per_worker
@@ -700,7 +702,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-49
+48
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

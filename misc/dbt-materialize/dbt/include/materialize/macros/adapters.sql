@@ -37,19 +37,27 @@
     in cluster {{ cluster }}
   {% endif %}
 
-  -- Contracts and constraints
+  {# Scheduled refreshes #}
+  {%- set refresh_interval = config.get('refresh_interval') -%}
+  {%- if refresh_interval -%}
+    with (
+      {{ materialize__get_refresh_interval_sql(relation, refresh_interval) }}
+    )
+  {%- endif %}
+
+  {# Contracts and constraints #}
   {% set contract_config = config.get('contract') %}
   {% if contract_config.enforced %}
     {{ get_assert_columns_equivalent(sql) }}
 
     {% set ns = namespace(c_constraints=False, m_constraints=False) %}
-    -- Column-level constraints
+    {# Column-level constraints #}
     {% set raw_columns = model['columns'] %}
     {% for c_id, c_details in raw_columns.items() if c_details['constraints'] != [] %}
       {% set ns.c_constraints = True %}
     {%- endfor %}
 
-    -- Model-level constraints
+    {# Model-level constraints #}
 
     -- NOTE(morsapaes): not_null constraints are not originally supported in
     -- dbt-core at model-level, since model-level constraints are intended for
@@ -150,6 +158,28 @@
     {% endfor %}
   {% endif %}
 {% endmacro %}
+
+{% macro materialize__get_refresh_interval_sql(relation, refresh_interval_dict) -%}
+  {%- set refresh_interval = adapter.parse_refresh_interval(refresh_interval_dict) -%}
+    {% if refresh_interval.at -%}
+      refresh at '{{ refresh_interval.at }}'
+    {%- endif %}
+    {% if refresh_interval.at_creation -%}
+      refresh at creation
+    {%- endif %}
+    {% if refresh_interval.every -%}
+      {% if refresh_interval.at or refresh_interval.at_creation -%}
+        ,
+      {%- endif %}
+      refresh every '{{ refresh_interval.every }}'
+      {% if refresh_interval.aligned_to -%}
+        aligned to '{{ refresh_interval.aligned_to }}'
+      {%- endif %}
+    {%- endif %}
+    {% if refresh_interval.on_commit -%}
+      refresh on commit
+    {%- endif %}
+{%- endmacro %}
 
 {% macro materialize__alter_column_comment_single(relation, column_name, quote, comment) %}
   {% set escaped_comment = postgres_escape_comment(comment) %}

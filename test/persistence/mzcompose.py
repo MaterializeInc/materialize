@@ -63,7 +63,7 @@ def workflow_kafka_sources(
 
     c.up("materialized")
 
-    c.run("testdrive", f"--seed={seed}", f"kafka-sources/*{td_test}*-before.td")
+    c.run_testdrive_files(f"--seed={seed}", f"kafka-sources/*{td_test}*-before.td")
 
     c.kill("materialized")
     c.up("materialized")
@@ -72,7 +72,7 @@ def workflow_kafka_sources(
     c.kill("materialized")
     c.up("materialized")
 
-    c.run("testdrive", f"--seed={seed}", f"kafka-sources/*{td_test}*-after.td")
+    c.run_testdrive_files(f"--seed={seed}", f"kafka-sources/*{td_test}*-after.td")
 
     # Do one more restart, just in case and just confirm that Mz is able to come up
     c.kill("materialized")
@@ -92,8 +92,7 @@ def workflow_user_tables(
 
     c.up("materialized")
 
-    c.run(
-        "testdrive",
+    c.run_testdrive_files(
         f"--seed={seed}",
         f"user-tables/table-persistence-before-{td_test}.td",
     )
@@ -104,8 +103,7 @@ def workflow_user_tables(
     c.kill("materialized")
     c.up("materialized")
 
-    c.run(
-        "testdrive",
+    c.run_testdrive_files(
         f"--seed={seed}",
         f"user-tables/table-persistence-after-{td_test}.td",
     )
@@ -136,8 +134,7 @@ def run_one_failpoint(c: Composition, failpoint: str, action: str) -> None:
 
     c.up("materialized")
 
-    c.run(
-        "testdrive",
+    c.run_testdrive_files(
         f"--seed={seed}",
         f"--var=failpoint={failpoint}",
         f"--var=action={action}",
@@ -149,7 +146,7 @@ def run_one_failpoint(c: Composition, failpoint: str, action: str) -> None:
     c.kill("materialized")
     c.up("materialized")
 
-    c.run("testdrive", f"--seed={seed}", "failpoints/after.td")
+    c.run_testdrive_files(f"--seed={seed}", "failpoints/after.td")
 
     c.kill("materialized")
     c.rm("materialized", "testdrive", destroy_volumes=True)
@@ -162,7 +159,7 @@ def workflow_compaction(c: Composition) -> None:
     ):
         c.up("materialized")
 
-        c.run("testdrive", "compaction/compaction.td")
+        c.run_testdrive_files("compaction/compaction.td")
 
         c.kill("materialized")
 

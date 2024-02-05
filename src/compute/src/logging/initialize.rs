@@ -25,7 +25,6 @@ use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::logging::compute::ComputeEvent;
 use crate::logging::reachability::ReachabilityEvent;
 use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
-use crate::metrics::LoggingMetrics;
 
 /// Initialize logging dataflows.
 ///
@@ -34,7 +33,6 @@ use crate::metrics::LoggingMetrics;
 pub fn initialize<A: Allocate + 'static>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
-    metrics: LoggingMetrics,
 ) -> (super::compute::Logger, BTreeMap<LogVariant, TraceBundle>) {
     let interval_ms = std::cmp::max(1, config.interval.as_millis())
         .try_into()
@@ -51,7 +49,6 @@ pub fn initialize<A: Allocate + 'static>(
     let mut context = LoggingContext {
         worker,
         config,
-        metrics,
         interval_ms,
         now,
         start_offset,
@@ -80,7 +77,6 @@ pub fn initialize<A: Allocate + 'static>(
 struct LoggingContext<'a, A: Allocate> {
     worker: &'a mut timely::worker::Worker<A>,
     config: &'a LoggingConfig,
-    metrics: LoggingMetrics,
     interval_ms: u64,
     now: Instant,
     start_offset: Duration,
@@ -114,7 +110,6 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
         traces.extend(super::compute::construct(
             self.worker,
             self.config,
-            self.metrics.clone(),
             self.c_event_queue.clone(),
             Rc::clone(&self.shared_state),
         ));

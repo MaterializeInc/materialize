@@ -134,6 +134,7 @@ wrappers = [
   "criterion",
   "crossbeam-epoch",
   "crossbeam-utils",
+  "dynfmt",
   "fail",
   "findshlibs",
   "indicatif",

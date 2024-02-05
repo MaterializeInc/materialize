@@ -108,8 +108,7 @@ Typically, you create sources, views, and indexes when deploying Materialize, bu
 createSourceSQL := `
     CREATE SOURCE IF NOT EXISTS counter
     FROM LOAD GENERATOR COUNTER
-    (TICK INTERVAL '500ms')
-    WITH (SIZE = '3xsmall');
+    (TICK INTERVAL '500ms');
 `
 
 _, err = conn.Exec(ctx, createSourceSQL)

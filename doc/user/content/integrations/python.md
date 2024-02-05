@@ -118,7 +118,7 @@ conn = psycopg2.connect(dsn)
 conn.autocommit = True
 
 with conn.cursor() as cur:
-    cur.execute("CREATE SOURCE counter FROM LOAD GENERATOR COUNTER WITH (SIZE = '3xsmall');")
+    cur.execute("CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;")
 
 with conn.cursor() as cur:
     cur.execute("SHOW SOURCES")

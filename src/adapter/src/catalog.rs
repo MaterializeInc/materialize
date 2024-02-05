@@ -672,7 +672,6 @@ impl Catalog {
                 now,
                 skip_migrations: true,
                 cluster_replica_sizes: Default::default(),
-                default_storage_cluster_size: None,
                 builtin_cluster_replica_size: "1".into(),
                 system_parameter_defaults: Default::default(),
                 remote_system_parameters: None,
@@ -1114,18 +1113,6 @@ impl Catalog {
         candidate
     }
 
-    /// Gets the linked cluster associated with the provided object ID, if it
-    /// exists.
-    pub fn get_linked_cluster(&self, object_id: GlobalId) -> Option<&Cluster> {
-        self.state.get_linked_cluster(object_id)
-    }
-
-    /// Gets the size associated with the provided source or sink ID, if a
-    /// linked cluster exists.
-    pub fn get_storage_object_size(&self, object_id: GlobalId) -> Option<&str> {
-        self.state.get_storage_object_size(object_id)
-    }
-
     pub fn concretize_replica_location(
         &self,
         location: mz_catalog::durable::ReplicaLocation,
@@ -1146,11 +1133,6 @@ impl Catalog {
 
     pub fn cluster_replica_sizes(&self) -> &ClusterReplicaSizeMap {
         &self.state.cluster_replica_sizes
-    }
-
-    /// Returns the default size to use for linked clusters.
-    pub fn default_linked_cluster_size(&self) -> String {
-        self.state.default_linked_cluster_size()
     }
 
     /// Returns the privileges of an object by its ID.
@@ -1246,9 +1228,13 @@ impl Catalog {
 
         // Drop in-memory planning metadata.
         let dropped_notices = self.drop_plans_and_metainfos(&drop_ids);
-        if self.state().system_config().enable_mz_notices() {
+        if self.state.system_config().enable_mz_notices() {
             // Generate retractions for the Builtin tables.
-            self.pack_optimizer_notices(&mut builtin_table_updates, dropped_notices.iter(), -1);
+            self.state().pack_optimizer_notices(
+                &mut builtin_table_updates,
+                dropped_notices.iter(),
+                -1,
+            );
         }
 
         Ok(TransactionResult {
@@ -1549,7 +1535,6 @@ impl Catalog {
                 Op::CreateCluster {
                     id,
                     name,
-                    linked_object_id,
                     introspection_sources,
                     owner_id,
                     config,
@@ -1579,7 +1564,6 @@ impl Catalog {
                     tx.insert_user_cluster(
                         id,
                         &name,
-                        linked_object_id,
                         introspection_sources.clone(),
                         owner_id,
                         privileges.clone(),
@@ -1604,20 +1588,12 @@ impl Catalog {
                     state.insert_cluster(
                         id,
                         name.clone(),
-                        linked_object_id,
                         introspection_sources,
                         owner_id,
                         PrivilegeMap::from_mz_acl_items(privileges),
                         config,
                     );
                     builtin_table_updates.push(state.pack_cluster_update(&name, 1));
-                    if let Some(linked_object_id) = linked_object_id {
-                        builtin_table_updates.push(state.pack_cluster_link_update(
-                            &name,
-                            linked_object_id,
-                            1,
-                        ));
-                    }
                     for id in introspection_source_ids {
                         builtin_table_updates.extend(state.pack_item_update(id, 1));
                     }
@@ -1787,21 +1763,18 @@ impl Catalog {
                             &state
                                 .resolve_full_name(&name, session.map(|session| session.conn_id())),
                         );
-                        let size = state.get_storage_object_size(id).map(|s| s.to_string());
                         let details = match &item {
                             CatalogItem::Source(s) => {
-                                EventDetails::CreateSourceSinkV2(mz_audit_log::CreateSourceSinkV2 {
+                                EventDetails::CreateSourceSinkV3(mz_audit_log::CreateSourceSinkV3 {
                                     id: id.to_string(),
                                     name,
-                                    size,
                                     external_type: s.source_type().to_string(),
                                 })
                             }
                             CatalogItem::Sink(s) => {
-                                EventDetails::CreateSourceSinkV2(mz_audit_log::CreateSourceSinkV2 {
+                                EventDetails::CreateSourceSinkV3(mz_audit_log::CreateSourceSinkV3 {
                                     id: id.to_string(),
                                     name,
-                                    size,
                                     external_type: s.sink_type().to_string(),
                                 })
                             }
@@ -1992,13 +1965,6 @@ impl Catalog {
                             }
                             tx.remove_cluster(id)?;
                             builtin_table_updates.push(state.pack_cluster_update(name, -1));
-                            if let Some(linked_object_id) = cluster.linked_object_id {
-                                builtin_table_updates.push(state.pack_cluster_link_update(
-                                    name,
-                                    linked_object_id,
-                                    -1,
-                                ));
-                            }
                             for id in cluster.log_indexes.values() {
                                 builtin_table_updates.extend(state.pack_item_update(*id, -1));
                             }
@@ -2020,13 +1986,6 @@ impl Catalog {
                                 .remove(&id)
                                 .expect("can only drop known clusters");
                             state.clusters_by_name.remove(&cluster.name);
-
-                            if let Some(linked_object_id) = cluster.linked_object_id {
-                                state
-                                    .clusters_by_linked_object_id
-                                    .remove(&linked_object_id)
-                                    .expect("can only drop known clusters");
-                            }
 
                             for id in cluster.log_indexes.values() {
                                 state.drop_item(*id);
@@ -3590,7 +3549,6 @@ pub enum Op {
     CreateCluster {
         id: ClusterId,
         name: String,
-        linked_object_id: Option<GlobalId>,
         introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
         owner_id: RoleId,
         config: ClusterConfig,
@@ -4264,10 +4222,6 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn get_item_comments(&self, id: &GlobalId) -> Option<&BTreeMap<Option<usize>, String>> {
         let comment_id = self.state.get_comment_id(ObjectId::Item(*id));
         self.state.comments.get_object_comments(comment_id)
-    }
-
-    fn get_linked_cluster(&self, id: GlobalId) -> Option<ClusterId> {
-        self.state.get_linked_cluster(id).map(|cluster| cluster.id)
     }
 }
 

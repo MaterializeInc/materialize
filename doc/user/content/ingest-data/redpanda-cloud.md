@@ -105,8 +105,7 @@ The process to connect Materialize to Redpanda Cloud consists of the following s
 
       CREATE SOURCE <topic-name>
         FROM KAFKA CONNECTION redpanda_cloud (TOPIC '<topic-name>')
-        FORMAT JSON
-        WITH (SIZE = '3xsmall');
+        FORMAT JSON;
     ```
 
     e. If the command executes without an error and outputs _CREATE SOURCE_, it

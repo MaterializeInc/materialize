@@ -97,7 +97,7 @@ for direct use and also used internally in the `batch`, `compare_and_append`,
 and `append` sugar methods). This is true even when writing data that is far
 bigger than this cap.
 
-- `B` is [blob_target_size]
+- `B` is `BLOB_TARGET_SIZE`
 - `N` is [batch_builder_max_outstanding_parts]
 - `2N` because there is a moment that we have both a ColumnarRecords and its
   encoded representation in memory.
@@ -105,12 +105,11 @@ bigger than this cap.
   outstanding.
 
 [BatchBuilder]: crate::batch::BatchBuilder
-[blob_target_size]: crate::cfg::DynamicConfig::blob_target_size
 [batch_builder_max_outstanding_parts]: crate::cfg::DynamicConfig::batch_builder_max_outstanding_parts
 
 A persist reader uses as most `3B` memory per [Listen] and per [Subscribe].
 
-- `B` is [blob_target_size]
+- `B` is `BLOB_TARGET_SIZE`
 - We have one part fetched that is being iterated
 - In the future, we'll pipeline the fetch of a second part. Like writing there
   is a moment where both a ColumnarRecords and its encoded representation are in

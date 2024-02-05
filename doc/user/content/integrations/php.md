@@ -117,7 +117,7 @@ Typically, you create sources, views, and indexes when deploying Materialize, al
 // Include the Postgres connection details
 require 'connect.php';
 
-$sql = "CREATE SOURCE counter FROM LOAD GENERATOR COUNTER WITH (SIZE = '3xsmall');";
+$sql = "CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;";
 
 $statement = $connection->prepare($sql);
 $statement->execute();

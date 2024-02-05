@@ -159,12 +159,15 @@ impl SourceRender for PostgresSourceConnection {
             }
         }
 
+        let metrics = config.metrics.get_postgres_metrics(config.id);
+
         let (snapshot_updates, rewinds, snapshot_err, snapshot_token) = snapshot::render(
             scope.clone(),
             config.clone(),
             self.clone(),
             subsource_resume_uppers.clone(),
             table_info.clone(),
+            metrics.snapshot_metrics.clone(),
         );
 
         let (repl_updates, uppers, repl_err, repl_token) = replication::render(
@@ -175,6 +178,7 @@ impl SourceRender for PostgresSourceConnection {
             table_info,
             &rewinds,
             resume_uppers,
+            metrics,
         );
 
         let updates = snapshot_updates.concat(&repl_updates).map(|(output, res)| {
@@ -202,7 +206,6 @@ impl SourceRender for PostgresSourceConnection {
             let update = HealthStatusUpdate::halting(err_string.clone(), None);
 
             let namespace = match err {
-                // Is there a better way to reach into an Rc?
                 ReplicationError::Transient(err)
                     if matches!(
                         &*err,
@@ -322,6 +325,7 @@ async fn ensure_replication_slot(client: &Client, slot: &str) -> Result<(), Tran
         Ok(_) => Ok(()),
         // If the slot already exists that's still ok
         Err(PostgresError::Postgres(err)) if err.code() == Some(&SqlState::DUPLICATE_OBJECT) => {
+            tracing::trace!("replication slot {slot} already existed");
             Ok(())
         }
         Err(err) => Err(TransientError::PostgresError(err)),

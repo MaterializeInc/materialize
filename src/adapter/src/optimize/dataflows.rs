@@ -150,6 +150,7 @@ impl<'a> DataflowBuilder<'a> {
         }
     }
 
+    #[allow(dead_code)] // We will need this for `EXPLAIN REPLAN <item>` statements.
     pub fn ignore_indexes(&mut self, indexes: impl Iterator<Item = GlobalId>) {
         self.ignored_indexes.extend(indexes);
     }

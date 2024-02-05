@@ -12,7 +12,6 @@
 #![cfg(feature = "tracing_")]
 
 use std::fmt::{Debug, Display};
-use std::ops::DerefMut;
 use std::sync::Mutex;
 
 use tracing::{span, subscriber, Dispatch, Level};
@@ -25,10 +24,12 @@ pub struct PlanTrace<T> {
     /// A specific concrete path to find in this trace. If present,
     /// [`PlanTrace::push`] will only collect traces if the current path is a
     /// prefix of find.
-    find: Option<&'static str>,
+    filter: Option<&'static str>,
     /// A path of segments identifying the spans in the current ancestor-or-self
     /// chain. The current path is used when accumulating new `entries`.
     path: Mutex<String>,
+    /// The the first time when entering a span (None no span was entered yet).
+    start: Mutex<Option<std::time::Instant>>,
     /// A path of times at which the spans in the current ancestor-or-self chain
     /// were started. The duration since the last time is used when accumulating
     /// new `entries`.
@@ -177,7 +178,6 @@ where
     ) {
         // add segment to path
         let mut path = self.path.lock().expect("path shouldn't be poisoned");
-        let path = path.deref_mut();
         let segment = attrs.get_str("path.segment");
         let segment = segment.unwrap_or_else(|| attrs.metadata().name().to_string());
         if !path.is_empty() {
@@ -187,19 +187,23 @@ where
     }
 
     fn on_enter(&self, _id: &span::Id, _ctx: layer::Context<'_, S>) {
+        let now = std::time::Instant::now();
+        // set start value on first ever on_enter
+        let mut start = self.start.lock().expect("start shouldn't be poisoned");
+        start.get_or_insert(now);
         // push to time stack
         let mut times = self.times.lock().expect("times shouldn't be poisoned");
-        times.deref_mut().push(std::time::Instant::now());
+        times.push(now);
     }
 
     fn on_exit(&self, _id: &span::Id, _ctx: layer::Context<'_, S>) {
         // truncate last segment from path
         let mut path = self.path.lock().expect("path shouldn't be poisoned");
-        let path = path.deref_mut();
-        path.truncate(path.rfind('/').unwrap_or(path.len()));
+        let new_len = path.rfind('/').unwrap_or(0);
+        path.truncate(new_len);
         // pop from time stack
         let mut times = self.times.lock().expect("times shouldn't be poisoned");
-        times.deref_mut().pop();
+        times.pop();
     }
 }
 
@@ -224,12 +228,13 @@ where
 impl<T: 'static> PlanTrace<T> {
     /// Create a new trace for plans of type `T` that will only accumulate
     /// [`TraceEntry`] instances along the prefix of the given `path`.
-    pub fn new(path: Option<&'static str>) -> Self {
+    pub fn new(filter: Option<&'static str>) -> Self {
         Self {
-            find: path,
+            filter,
             path: Mutex::new(String::with_capacity(256)),
-            times: Mutex::new(vec![]),
-            entries: Mutex::new(vec![]),
+            start: Mutex::new(None),
+            times: Mutex::new(Default::default()),
+            entries: Mutex::new(Default::default()),
         }
     }
 
@@ -256,14 +261,15 @@ impl<T: 'static> PlanTrace<T> {
     ///
     /// This is a noop if
     /// 1. the call is within a context without an enclosing span, or if
-    /// 2. [`PlanTrace::find`] is set not equal to [`PlanTrace::current_path`].
+    /// 2. [`PlanTrace::filter`] is set not equal to [`PlanTrace::current_path`].
     fn push(&self, plan: &T)
     where
         T: Clone,
     {
         if let Some(current_path) = self.current_path() {
             let times = self.times.lock().expect("times shouldn't be poisoned");
-            if let (Some(full_start), Some(span_start)) = (times.first(), times.last()) {
+            let start = self.start.lock().expect("start shouldn't is poisoned");
+            if let (Some(full_start), Some(span_start)) = (start.as_ref(), times.last()) {
                 let mut entries = self.entries.lock().expect("entries shouldn't be poisoned");
                 let time = std::time::Instant::now();
                 entries.push(TraceEntry {
@@ -279,14 +285,14 @@ impl<T: 'static> PlanTrace<T> {
 
     /// Helper method: get a copy of the current path.
     ///
-    /// If [`PlanTrace::find`] is set, this will also check the current path
+    /// If [`PlanTrace::filter`] is set, this will also check the current path
     /// against the `find` entry and return `None` if the two differ.
     fn current_path(&self) -> Option<String> {
         let path = self.path.lock().expect("path shouldn't be poisoned");
         let path = path.as_str();
-        match self.find {
+        match self.filter {
             Some(find) => {
-                if find == path {
+                if path == find {
                     Some(path.to_owned())
                 } else {
                     None

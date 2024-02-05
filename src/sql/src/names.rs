@@ -21,6 +21,7 @@ use mz_ore::str::StrExt;
 use mz_repr::role_id::RoleId;
 use mz_repr::ColumnName;
 use mz_repr::GlobalId;
+use mz_sql_parser::ast::Expr;
 use mz_sql_parser::ident;
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
@@ -1524,7 +1525,8 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
 
         let result = Query {
             ctes,
-            body: self.fold_set_expr(q.body),
+            // Queries can be recursive, so need the ability to grow the stack.
+            body: mz_ore::stack::maybe_grow(|| self.fold_set_expr(q.body)),
             limit: q.limit.map(|l| self.fold_limit(l)),
             offset: q.offset.map(|l| self.fold_expr(l)),
             order_by: q
@@ -1850,22 +1852,26 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         &mut self,
         node: mz_sql_parser::ast::Function<Raw>,
     ) -> mz_sql_parser::ast::Function<Aug> {
-        mz_sql_parser::ast::Function {
-            name: self.resolve_item_name(
-                node.name,
-                // When resolving a function name, only function items should be
-                // considered.
-                ItemResolutionConfig {
-                    functions: true,
-                    types: false,
-                    relations: false,
-                },
-            ),
-            args: self.fold_function_args(node.args),
-            filter: node.filter.map(|expr| Box::new(self.fold_expr(*expr))),
-            over: node.over.map(|over| self.fold_window_spec(over)),
-            distinct: node.distinct,
-        }
+        // Functions implemented as SQL statements can have very deeply nested
+        // and recursive structures, so need the ability to grow the stack.
+        mz_ore::stack::maybe_grow(|| {
+            mz_sql_parser::ast::Function {
+                name: self.resolve_item_name(
+                    node.name,
+                    // When resolving a function name, only function items should be
+                    // considered.
+                    ItemResolutionConfig {
+                        functions: true,
+                        types: false,
+                        relations: false,
+                    },
+                ),
+                args: self.fold_function_args(node.args),
+                filter: node.filter.map(|expr| Box::new(self.fold_expr(*expr))),
+                over: node.over.map(|over| self.fold_window_spec(over)),
+                distinct: node.distinct,
+            }
+        })
     }
 
     fn fold_table_factor(
@@ -1980,6 +1986,11 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 },
             )),
         }
+    }
+
+    fn fold_expr(&mut self, node: Expr<Raw>) -> Expr<Aug> {
+        // Exprs can be recursive, so need the ability to grow the stack.
+        mz_ore::stack::maybe_grow(|| mz_sql_parser::ast::fold::fold_expr(self, node))
     }
 }
 

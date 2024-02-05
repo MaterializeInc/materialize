@@ -461,7 +461,6 @@ impl Usage {
                     now,
                     skip_migrations: false,
                     cluster_replica_sizes: cluster_replica_sizes.clone(),
-                    default_storage_cluster_size: None,
                     builtin_cluster_replica_size: "1".into(),
                     system_parameter_defaults: Default::default(),
                     remote_system_parameters: None,

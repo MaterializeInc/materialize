@@ -23,8 +23,8 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::{PersistConfig, RetryParameters};
-use mz_persist_client::fetch::FetchedPart;
 use mz_persist_client::fetch::SerdeLeasedBatchPart;
+use mz_persist_client::fetch::{FetchedBlob, FetchedPart};
 use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
 use mz_persist_txn::operator::txns_progress;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -182,9 +182,9 @@ where
         // Override the tuning to reduce crdb load. The pubsub fallback
         // responsibility is then replaced by manual "one state" wakeups in the
         // txns_progress operator.
-        let cfg = persist_clients.cfg().clone();
+        let cfg = persist_clients.cfg().configs.clone();
         let subscribe_sleep = match metadata.txns_shard {
-            Some(_) => Some(move || cfg.dynamic.txns_data_shard_retry_params()),
+            Some(_) => Some(move || mz_persist_txn::operator::txns_data_shard_retry_params(&cfg)),
             None => None,
         };
 
@@ -376,7 +376,7 @@ fn filter_may_match(
 
 pub fn decode_and_mfp<G>(
     cfg: PersistConfig,
-    fetched: &Stream<G, FetchedPart<SourceData, (), Timestamp, Diff>>,
+    fetched: &Stream<G, FetchedBlob<SourceData, (), Timestamp, Diff>>,
     name: &str,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
@@ -414,10 +414,10 @@ where
             fetched_input.for_each(|time, data| {
                 data.swap(&mut buffer);
                 let capability = time.retain();
-                for fetched_part in buffer.drain(..) {
+                for fetched_blob in buffer.drain(..) {
                     pending_work.push_back(PendingWork {
                         capability: capability.clone(),
-                        fetched_part,
+                        part: PendingPart::Blob(fetched_blob),
                     })
                 }
             });
@@ -461,7 +461,27 @@ struct PendingWork {
     /// The time at which the work should happen.
     capability: Capability<(mz_repr::Timestamp, Subtime)>,
     /// Pending fetched part.
-    fetched_part: FetchedPart<SourceData, (), Timestamp, Diff>,
+    part: PendingPart,
+}
+
+enum PendingPart {
+    Blob(FetchedBlob<SourceData, (), Timestamp, Diff>),
+    Part(FetchedPart<SourceData, (), Timestamp, Diff>),
+}
+
+impl PendingPart {
+    /// Returns the contained `FetchedPart`, first parsing it from a
+    /// `FetchedBlob` if necessary.
+    fn part_mut(&mut self) -> &mut FetchedPart<SourceData, (), Timestamp, Diff> {
+        match self {
+            PendingPart::Blob(x) => {
+                *self = PendingPart::Part(x.parse());
+                // Won't recurse any further.
+                self.part_mut()
+            }
+            PendingPart::Part(x) => x,
+        }
+    }
 }
 
 impl PendingWork {
@@ -497,8 +517,9 @@ impl PendingWork {
         >,
         YFn: Fn(Instant, usize) -> bool,
     {
-        let is_filter_pushdown_audit = self.fetched_part.is_filter_pushdown_audit();
-        while let Some(((key, val), time, diff)) = self.fetched_part.next() {
+        let fetched_part = self.part.part_mut();
+        let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
+        while let Some(((key, val), time, diff)) = fetched_part.next() {
             if until.less_equal(&time) {
                 continue;
             }

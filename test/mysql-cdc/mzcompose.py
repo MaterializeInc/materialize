@@ -26,7 +26,17 @@ SERVICES = [
             "--binlog-format=row",
             "--log-slave-updates",
             "--binlog-row-image=full",
+            "--server-id=1",
         ]
+    ),
+    MySql(
+        name="mysql-replica",
+        additional_args=[
+            "--gtid_mode=ON",
+            "--enforce_gtid_consistency=ON",
+            "--skip-replica-start",
+            "--server-id=2",
+        ],
     ),
     Testdrive(default_timeout="60s"),
 ]
@@ -43,8 +53,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up("materialized", "mysql")
 
-    c.run(
-        "testdrive",
+    c.run_testdrive_files(
         f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
         *args.filter,
+    )
+
+
+def workflow_replica_connection(c: Composition, parser: WorkflowArgumentParser) -> None:
+    c.up("materialized", "mysql", "mysql-replica")
+    c.run_testdrive_files(
+        f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+        "override/10-replica-connection.td",
     )

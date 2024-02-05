@@ -7,18 +7,50 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from psycopg import Cursor
+
+from materialize.scalability.endpoint import Endpoint
 from materialize.scalability.operation import Operation
+from materialize.scalability.operation_data import OperationData
+from materialize.scalability.schema import Schema
 
 
 class Workload:
+    def init_operations(self) -> list[Operation]:
+        return []
+
     def operations(self) -> list[Operation]:
         raise NotImplementedError
+
+    def execute_operation(
+        self,
+        operation: Operation,
+        cursor: Cursor,
+        worker_id: int,
+        transaction_index: int,
+        verbose: bool,
+    ) -> None:
+        data = OperationData(cursor, worker_id)
+        self.amend_data_before_execution(data)
+
+        if verbose:
+            print(f"#{transaction_index}: {operation} (worker_id={worker_id})")
+
+        operation.execute(data)
+
+    def amend_data_before_execution(self, data: OperationData) -> None:
+        pass
 
     def name(self) -> str:
         return self.__class__.__name__
 
 
-class WorkloadSelfTest(Workload):
-    """Used to self-test the framework, so need to be excluded from regular benchmark runs."""
+class WorkloadWithContext(Workload):
+    endpoint: Endpoint
+    schema: Schema
 
-    pass
+    def set_endpoint(self, endpoint: Endpoint) -> None:
+        self.endpoint = endpoint
+
+    def set_schema(self, schema: Schema) -> None:
+        self.schema = schema

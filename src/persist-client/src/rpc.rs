@@ -23,6 +23,7 @@ use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
+use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::{HashMap, HashSet};
 use mz_ore::metrics::MetricsRegistry;
@@ -52,6 +53,22 @@ use crate::internal::service::{
 };
 use crate::metrics::Metrics;
 use crate::ShardId;
+
+/// Determines whether PubSub clients should connect to the PubSub server.
+pub(crate) const PUBSUB_CLIENT_ENABLED: Config<bool> = Config::new(
+    "persist_pubsub_client_enabled",
+    true,
+    "Whether to connect to the Persist PubSub service.",
+);
+
+/// For connected clients, determines whether to push state diffs to the PubSub
+/// server. For the server, determines whether to broadcast state diffs to
+/// subscribed clients.
+pub(crate) const PUBSUB_PUSH_DIFF_ENABLED: Config<bool> = Config::new(
+    "persist_pubsub_push_diff_enabled",
+    true,
+    "Whether to push state diffs to Persist PubSub.",
+);
 
 /// Top-level Trait to create a PubSubClient.
 ///
@@ -197,7 +214,7 @@ impl GrpcPubSubClient {
         loop {
             metrics.pubsub_client.grpc_connection.connected.set(0);
 
-            if !config.persist_cfg.dynamic.pubsub_client_enabled() {
+            if !PUBSUB_CLIENT_ENABLED.get(&config.persist_cfg) {
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 continue;
             }
@@ -312,7 +329,7 @@ impl GrpcPubSubClient {
         metrics: &Metrics,
     ) -> Result<(), Error> {
         loop {
-            if !config.persist_cfg.dynamic.pubsub_client_enabled() {
+            if !PUBSUB_CLIENT_ENABLED.get(&config.persist_cfg) {
                 return Ok(());
             }
 
@@ -988,7 +1005,7 @@ impl proto_persist_pub_sub_server::ProtoPersistPubSub for PersistGrpcPubSubServe
         let (tx, rx) = tokio::sync::mpsc::channel(self.cfg.pubsub_server_connection_channel_size);
 
         let caller = caller_id.clone();
-        let dynamic_cfg = Arc::clone(&self.cfg.dynamic);
+        let cfg = self.cfg.configs.clone();
         let server_state = Arc::clone(&self.state);
         // this spawn here to cleanup after connection error / disconnect, otherwise the stream
         // would not be polled after the connection drops. in our case, we want to clear the
@@ -1014,10 +1031,10 @@ impl proto_persist_pub_sub_server::ProtoPersistPubSub for PersistGrpcPubSubServe
                         Some(proto_pub_sub_message::Message::PushDiff(req)) => {
                             let shard_id = req.shard_id.parse().expect("valid shard id");
                             let diff = VersionedData {
-                                seqno: req.seqno.into_rust().expect("WIP"),
+                                seqno: req.seqno.into_rust().expect("valid seqno"),
                                 data: req.diff.clone(),
                             };
-                            if dynamic_cfg.pubsub_push_diff_enabled() {
+                            if PUBSUB_PUSH_DIFF_ENABLED.get(&cfg) {
                                 connection.push_diff(&shard_id, &diff);
                             }
                         }
@@ -1301,13 +1318,13 @@ mod grpc {
     use tokio_stream::wrappers::TcpListenerStream;
     use tokio_stream::StreamExt;
 
-    use crate::cfg::{PersistConfig, PersistParameters};
+    use crate::cfg::PersistConfig;
     use crate::internal::service::proto_pub_sub_message::Message;
     use crate::internal::service::ProtoPubSubMessage;
     use crate::metrics::Metrics;
     use crate::rpc::{
         GrpcPubSubClient, PersistGrpcPubSubServer, PersistPubSubClient, PersistPubSubClientConfig,
-        PubSubState,
+        PubSubState, PUBSUB_CLIENT_ENABLED,
     };
     use crate::ShardId;
 
@@ -1712,9 +1729,7 @@ mod grpc {
     fn test_persist_config() -> PersistConfig {
         let mut cfg = PersistConfig::new_for_tests();
         cfg.pubsub_reconnect_backoff = Duration::ZERO;
-        let mut params = PersistParameters::default();
-        params.pubsub_client_enabled = Some(true);
-        params.apply(&cfg);
+        cfg.set_config(&PUBSUB_CLIENT_ENABLED, true);
         cfg
     }
 }

@@ -47,9 +47,9 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// It instructs the replica to initialize the timely dataflow runtime using the given
     /// `config`.
     ///
-    /// This command is special in that it is the only one that is broadcast to all processes of a
-    /// multi-process replica. All subsequent commands are only sent to the first process, which
-    /// then distributes them to the other processes using a dataflow. This method of command
+    /// This command is special in that it is broadcast to all workers of a multi-worker replica.
+    /// All subsequent commands, except `UpdateConfiguration`, are only sent to the first worker,
+    /// which then distributes them to the other workers using a dataflow. This method of command
     /// distribution requires the timely dataflow runtime to be initialized, which is why the
     /// `CreateTimely` command exists.
     ///
@@ -64,10 +64,10 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     },
 
     /// `CreateInstance` must be sent after `CreateTimely` to complete the [Creation Stage] of the
-    /// compute protocol. Unlike `CreateTimely`, and like all other commands, it is only sent to
-    /// the first process of the replica, and then distributed through the timely runtime.
-    /// `CreateInstance` instructs the replica to initialize its state to a point where it is ready
-    /// to start maintaining dataflows.
+    /// compute protocol. Unlike `CreateTimely`, it is only sent to the first worker of the
+    /// replica, and then distributed through the timely runtime. `CreateInstance` instructs the
+    /// replica to initialize its state to a point where it is ready to start maintaining
+    /// dataflows.
     ///
     /// Upon receiving a `CreateInstance` command, the replica must further initialize logging
     /// dataflows according to the given [`LoggingConfig`].
@@ -86,6 +86,12 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
 
     /// `UpdateConfiguration` instructs the replica to update its configuration, according to the
     /// given [`ComputeParameters`].
+    ///
+    /// This command is special in that, like `CreateTimely`, it is broadcast to all workers of the
+    /// replica. However, unlike `CreateTimely`, it is ignored by all workers except the first one,
+    /// which distributes the command to the other workers through the timely runtime.
+    /// `UpdateConfiguration` commands are broadcast only to allow the intermediary parts of the
+    /// networking fabric to observe them and learn of configuration updates.
     ///
     /// Parameter updates transmitted through this command must be applied by the replica as soon
     /// as it receives the command, and they must be applied globally to all replica state, even

@@ -237,11 +237,7 @@ where
     })
 }
 
-fn jsonb_object_agg<'a, I>(
-    datums: I,
-    temp_storage: &'a RowArena,
-    order_by: &[ColumnOrder],
-) -> Datum<'a>
+fn dict_agg<'a, I>(datums: I, temp_storage: &'a RowArena, order_by: &[ColumnOrder]) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -1276,6 +1272,13 @@ pub enum AggregateFunc {
     JsonbObjectAgg {
         order_by: Vec<ColumnOrder>,
     },
+    /// Zips a `Datum::List` whose first element is a `Datum::List` guaranteed
+    /// to be non-empty and whose len % 2 == 0 into a `Datum::Map`. The other
+    /// elements are columns used by `order_by`.
+    MapAgg {
+        order_by: Vec<ColumnOrder>,
+        value_type: ScalarType,
+    },
     /// Accumulates `Datum::Array`s of `ScalarType::Record` whose first element is a `Datum::Array`
     /// into a single `Datum::Array` (the remaining fields are used by `order_by`).
     ArrayConcat {
@@ -1387,6 +1390,15 @@ impl Arbitrary for AggregateFunc {
                 .boxed(),
             vec(proptest_any::<ColumnOrder>(), 1..4)
                 .prop_map(|order_by| AggregateFunc::JsonbObjectAgg { order_by })
+                .boxed(),
+            (
+                vec(proptest_any::<ColumnOrder>(), 1..4),
+                proptest_any::<ScalarType>(),
+            )
+                .prop_map(|(order_by, value_type)| AggregateFunc::MapAgg {
+                    order_by,
+                    value_type,
+                })
                 .boxed(),
             vec(proptest_any::<ColumnOrder>(), 1..4)
                 .prop_map(|order_by| AggregateFunc::ArrayConcat { order_by })
@@ -1504,6 +1516,13 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                 AggregateFunc::JsonbObjectAgg { order_by } => {
                     Kind::JsonbObjectAgg(order_by.into_proto())
                 }
+                AggregateFunc::MapAgg {
+                    order_by,
+                    value_type,
+                } => Kind::MapAgg(proto_aggregate_func::ProtoMapAgg {
+                    order_by: Some(order_by.into_proto()),
+                    value_type: Some(value_type.into_proto()),
+                }),
                 AggregateFunc::ArrayConcat { order_by } => Kind::ArrayConcat(order_by.into_proto()),
                 AggregateFunc::ListConcat { order_by } => Kind::ListConcat(order_by.into_proto()),
                 AggregateFunc::StringAgg { order_by } => Kind::StringAgg(order_by.into_proto()),
@@ -1607,6 +1626,12 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
             },
             Kind::JsonbObjectAgg(order_by) => AggregateFunc::JsonbObjectAgg {
                 order_by: order_by.into_rust()?,
+            },
+            Kind::MapAgg(pma) => AggregateFunc::MapAgg {
+                order_by: pma.order_by.into_rust_if_some("ProtoMapAgg::order_by")?,
+                value_type: pma
+                    .value_type
+                    .into_rust_if_some("ProtoMapAgg::value_type")?,
             },
             Kind::ArrayConcat(order_by) => AggregateFunc::ArrayConcat {
                 order_by: order_by.into_rust()?,
@@ -1738,8 +1763,8 @@ impl AggregateFunc {
             AggregateFunc::Any => any(datums),
             AggregateFunc::All => all(datums),
             AggregateFunc::JsonbAgg { order_by } => jsonb_agg(datums, temp_storage, order_by),
-            AggregateFunc::JsonbObjectAgg { order_by } => {
-                jsonb_object_agg(datums, temp_storage, order_by)
+            AggregateFunc::MapAgg { order_by, .. } | AggregateFunc::JsonbObjectAgg { order_by } => {
+                dict_agg(datums, temp_storage, order_by)
             }
             AggregateFunc::ArrayConcat { order_by } => array_concat(datums, temp_storage, order_by),
             AggregateFunc::ListConcat { order_by } => list_concat(datums, temp_storage, order_by),
@@ -1852,6 +1877,10 @@ impl AggregateFunc {
             AggregateFunc::SumUInt32 => ScalarType::UInt64,
             AggregateFunc::SumUInt64 => ScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::ZERO),
+            },
+            AggregateFunc::MapAgg { value_type, .. } => ScalarType::Map {
+                value_type: Box::new(value_type.clone()),
+                custom_id: None,
             },
             AggregateFunc::ArrayConcat { .. } | AggregateFunc::ListConcat { .. } => {
                 match input_type.scalar_type {
@@ -2247,6 +2276,12 @@ fn unnest_list<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
         .map(move |e| (Row::pack_slice(&[e]), 1))
 }
 
+fn unnest_map<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
+    a.unwrap_map()
+        .iter()
+        .map(move |(k, v)| (Row::pack_slice(&[Datum::from(k), v]), 1))
+}
+
 impl<'a, M> fmt::Display for HumanizedExpr<'a, AggregateFunc, M>
 where
     M: HumanizerMode,
@@ -2308,6 +2343,10 @@ where
                     "jsonb_object_agg[order_by=[{}]]",
                     separated(", ", order_by)
                 )
+            }
+            AggregateFunc::MapAgg { order_by, .. } => {
+                let order_by = order_by.iter().map(|col| self.child(col));
+                write!(f, "map_agg[order_by=[{}]]", separated(", ", order_by))
             }
             AggregateFunc::ArrayConcat { order_by } => {
                 let order_by = order_by.iter().map(|col| self.child(col));
@@ -2597,6 +2636,9 @@ pub enum TableFunc {
     UnnestList {
         el_typ: ScalarType,
     },
+    UnnestMap {
+        value_type: ScalarType,
+    },
     /// Given `n` input expressions, wraps them into `n / width` rows, each of
     /// `width` columns.
     ///
@@ -2634,6 +2676,7 @@ impl RustType<ProtoTableFunc> for TableFunc {
                 TableFunc::Repeat => Kind::Repeat(()),
                 TableFunc::UnnestArray { el_typ } => Kind::UnnestArray(el_typ.into_proto()),
                 TableFunc::UnnestList { el_typ } => Kind::UnnestList(el_typ.into_proto()),
+                TableFunc::UnnestMap { value_type } => Kind::UnnestMap(value_type.into_proto()),
                 TableFunc::Wrap { types, width } => Kind::Wrap(ProtoWrap {
                     types: types.into_proto(),
                     width: width.into_proto(),
@@ -2674,6 +2717,9 @@ impl RustType<ProtoTableFunc> for TableFunc {
             },
             Kind::UnnestList(x) => TableFunc::UnnestList {
                 el_typ: x.into_rust()?,
+            },
+            Kind::UnnestMap(value_type) => TableFunc::UnnestMap {
+                value_type: value_type.into_rust()?,
             },
             Kind::Wrap(x) => TableFunc::Wrap {
                 width: x.width.into_rust()?,
@@ -2759,6 +2805,7 @@ impl TableFunc {
             TableFunc::Repeat => Ok(Box::new(repeat(datums[0]).into_iter())),
             TableFunc::UnnestArray { .. } => Ok(Box::new(unnest_array(datums[0]))),
             TableFunc::UnnestList { .. } => Ok(Box::new(unnest_list(datums[0]))),
+            TableFunc::UnnestMap { .. } => Ok(Box::new(unnest_map(datums[0]))),
             TableFunc::Wrap { width, .. } => Ok(Box::new(wrap(datums, *width))),
             TableFunc::TabletizedScalar { .. } => {
                 let r = Row::pack_slice(datums);
@@ -2876,6 +2923,14 @@ impl TableFunc {
                 let keys = vec![];
                 (column_types, keys)
             }
+            TableFunc::UnnestMap { value_type } => {
+                let column_types = vec![
+                    ScalarType::String.nullable(false),
+                    value_type.clone().nullable(true),
+                ];
+                let keys = vec![vec![0]];
+                (column_types, keys)
+            }
             TableFunc::Wrap { types, .. } => {
                 let column_types = types.clone();
                 let keys = vec![];
@@ -2910,6 +2965,7 @@ impl TableFunc {
             TableFunc::Repeat => 0,
             TableFunc::UnnestArray { .. } => 1,
             TableFunc::UnnestList { .. } => 1,
+            TableFunc::UnnestMap { .. } => 2,
             TableFunc::Wrap { width, .. } => *width,
             TableFunc::TabletizedScalar { relation, .. } => relation.column_types.len(),
         }
@@ -2931,7 +2987,8 @@ impl TableFunc {
             | TableFunc::CsvExtract(_)
             | TableFunc::Repeat
             | TableFunc::UnnestArray { .. }
-            | TableFunc::UnnestList { .. } => true,
+            | TableFunc::UnnestList { .. }
+            | TableFunc::UnnestMap { .. } => true,
             TableFunc::Wrap { .. } => false,
             TableFunc::TabletizedScalar { .. } => false,
         }
@@ -2957,6 +3014,7 @@ impl TableFunc {
             TableFunc::Repeat => false,
             TableFunc::UnnestArray { .. } => true,
             TableFunc::UnnestList { .. } => true,
+            TableFunc::UnnestMap { .. } => true,
             TableFunc::Wrap { .. } => true,
             TableFunc::TabletizedScalar { .. } => true,
         }
@@ -2981,6 +3039,7 @@ impl fmt::Display for TableFunc {
             TableFunc::Repeat => f.write_str("repeat_row"),
             TableFunc::UnnestArray { .. } => f.write_str("unnest_array"),
             TableFunc::UnnestList { .. } => f.write_str("unnest_list"),
+            TableFunc::UnnestMap { .. } => f.write_str("unnest_map"),
             TableFunc::Wrap { width, .. } => write!(f, "wrap{}", width),
             TableFunc::TabletizedScalar { name, .. } => f.write_str(name),
         }

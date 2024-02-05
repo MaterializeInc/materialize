@@ -54,8 +54,6 @@ pub struct StateConfig {
     pub skip_migrations: bool,
     /// Map of strings to corresponding compute replica sizes.
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
-    /// Default storage cluster size. Must be a key from cluster_replica_sizes.
-    pub default_storage_cluster_size: Option<String>,
     /// Builtin cluster replica size.
     pub builtin_cluster_replica_size: String,
     /// Dynamic defaults for system parameters.
@@ -222,6 +220,24 @@ impl Default for ClusterReplicaSizeMap {
                 selectors: BTreeMap::default(),
             },
         );
+
+        for size in ["1cc", "1C"] {
+            inner.insert(
+                size.to_string(),
+                ReplicaAllocation {
+                    memory_limit: None,
+                    cpu_limit: None,
+                    disk_limit: None,
+                    scale: 1,
+                    workers: 1,
+                    credits_per_hour: 1.into(),
+                    cpu_exclusive: false,
+                    disabled: false,
+                    selectors: BTreeMap::default(),
+                },
+            );
+        }
+
         Self(inner)
     }
 }

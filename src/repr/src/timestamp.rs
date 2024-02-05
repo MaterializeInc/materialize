@@ -17,7 +17,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 
 use crate::adt::numeric::Numeric;
-use crate::strconv::parse_timestamp;
+use crate::strconv::parse_timestamptz;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.timestamp.rs"));
 
@@ -358,7 +358,7 @@ impl std::str::FromStr for Timestamp {
                 .parse::<u64>()
                 .map_err(|_| "could not parse as number of milliseconds since epoch".to_string())
                 .or_else(|err_num_of_millis| {
-                    parse_timestamp(s)
+                    parse_timestamptz(s)
                         .map_err(|parse_error| {
                             format!(
                                 "{}; could not parse as date and time: {}",

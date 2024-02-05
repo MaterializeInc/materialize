@@ -123,6 +123,8 @@ true
 
         return Td(
             f"""
+> SET auto_route_introspection_queries TO false
+
 > BEGIN
 
 > SELECT 1;
@@ -238,6 +240,8 @@ class InsertBatch(DML):
 
 > CREATE TABLE t1 (f1 INTEGER)
   /* A */
+
+> SET auto_route_introspection_queries TO false
 
 > BEGIN
 
@@ -653,7 +657,7 @@ class Retraction(Dataflow):
     def before(self) -> Action:
         return TdAction(
             f"""
-> DROP TABLE IF EXISTS ten;
+> DROP TABLE IF EXISTS ten CASCADE;
 
 > CREATE TABLE ten (f1 INTEGER);
 
@@ -821,7 +825,7 @@ class FullOuterJoin(Dataflow):
 
 > DROP MATERIALIZED VIEW IF EXISTS v1 CASCADE;
 
-> DROP TABLE IF EXISTS ten CASCADE;
+> DROP TABLE IF EXISTS ten;
 
 > CREATE TABLE ten (f1 INTEGER);
 
@@ -1433,6 +1437,8 @@ class QueryLatency(Coordinator):
 
         return Td(
             f"""
+> SET auto_route_introspection_queries TO false
+
 > BEGIN
 
 > SELECT 1;
@@ -1464,6 +1470,8 @@ SELECT 1;
 
         return Td(
             f"""
+> SET auto_route_introspection_queries TO false
+
 > BEGIN
 
 > SELECT 1;

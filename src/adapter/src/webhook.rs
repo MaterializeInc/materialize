@@ -14,10 +14,10 @@ use std::sync::Arc;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
-use mz_repr::{ColumnType, Datum, Diff, Row, RowArena};
+use mz_repr::{Datum, Diff, Row, RowArena};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::SecretsReader;
-use mz_sql::plan::{WebhookHeaders, WebhookValidation, WebhookValidationSecret};
+use mz_sql::plan::{WebhookBodyFormat, WebhookHeaders, WebhookValidation, WebhookValidationSecret};
 use mz_storage_client::controller::MonotonicAppender;
 use mz_storage_types::controller::StorageError;
 use tokio::sync::Semaphore;
@@ -30,21 +30,30 @@ pub enum AppendWebhookError {
     // A secret that we need for validation has gone missing.
     #[error("could not read a required secret")]
     MissingSecret,
-    #[error("the provided request body is not UTF-8")]
-    NonUtf8Body,
+    #[error("the provided request body is not UTF-8: {msg}")]
+    InvalidUtf8Body { msg: String },
+    #[error("the provided request body is not valid JSON: {msg}")]
+    InvalidJsonBody { msg: String },
+    #[error("webhook source '{database}.{schema}.{name}' does not exist")]
+    UnknownWebhook {
+        database: String,
+        schema: String,
+        name: String,
+    },
+    #[error("failed to validate the request")]
+    ValidationFailed,
     // Note: we should _NEVER_ add more detail to this error, including the actual error we got
     // when running validation. This is because the error messages might contain info about the
     // arguments provided to the validation expression, we could contains user SECRETs. So by
     // including any more detail we might accidentally expose SECRETs.
-    #[error("validation failed")]
+    #[error("validation error")]
     ValidationError,
     #[error("internal channel closed")]
     ChannelClosed,
+    #[error("internal error: {0:?}")]
+    InternalError(#[from] anyhow::Error),
     #[error("internal storage failure! {0:?}")]
     StorageError(#[from] StorageError),
-    // Note: we should _NEVER_ add more detail to this error, see above as to why.
-    #[error("internal error when validating request")]
-    InternalError,
 }
 
 /// Contains all of the components necessary for running webhook validation.
@@ -108,7 +117,7 @@ impl AppendWebhookValidator {
         )
         .map_err(|err| {
             tracing::error!(?err, "failed to evaluate current time");
-            AppendWebhookError::InternalError
+            AppendWebhookError::ValidationError
         })?;
 
         // Create a closure to run our validation, this allows lifetimes and unwind boundaries to
@@ -130,7 +139,7 @@ impl AppendWebhookValidator {
                     Datum::Bytes(&body[..])
                 } else {
                     let s = std::str::from_utf8(&body[..])
-                        .map_err(|_| AppendWebhookError::NonUtf8Body)?;
+                        .map_err(|m| AppendWebhookError::InvalidUtf8Body { msg: m.to_string() })?;
                     Datum::String(s)
                 };
                 datums.push(datum);
@@ -203,7 +212,7 @@ impl AppendWebhookValidator {
                 // be extra careful and guard against issues taking down the entire process.
                 mz_ore::panic::catch_unwind(validate).map_err(|_| {
                     tracing::error!("panic while validating webhook request!");
-                    AppendWebhookError::InternalError
+                    AppendWebhookError::ValidationError
                 })
             },
         )
@@ -211,7 +220,7 @@ impl AppendWebhookValidator {
         .context("joining on validation")
         .map_err(|e| {
             tracing::error!("Failed to run validation for webhook, {e}");
-            AppendWebhookError::InternalError
+            AppendWebhookError::ValidationError
         })??;
 
         valid
@@ -224,7 +233,7 @@ pub struct AppendWebhookResponse {
     /// Channel to monotonically append rows to a webhook source.
     pub tx: WebhookAppender,
     /// Column type for the `body` column.
-    pub body_ty: ColumnType,
+    pub body_format: WebhookBodyFormat,
     /// Types of the columns for the headers of a request.
     pub header_tys: WebhookHeaders,
     /// Expression used to validate a webhook request.

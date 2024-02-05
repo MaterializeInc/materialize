@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import json
+import time
 from textwrap import dedent
 from typing import TYPE_CHECKING, Any
 
@@ -39,7 +41,11 @@ class StartMz(MzcomposeAction):
         additional_system_parameter_defaults: dict[str, str] = {},
         mz_service: str | None = None,
         catalog_store: str | None = None,
+        platform: str | None = None,
+        healthcheck: list[str] | None = None,
     ) -> None:
+        if healthcheck is None:
+            healthcheck = ["CMD", "curl", "-f", "localhost:6878/api/readyz"]
         self.tag = tag
         self.environment_extra = environment_extra
         self.system_parameter_defaults = system_parameter_defaults
@@ -49,7 +55,9 @@ class StartMz(MzcomposeAction):
             if scenario.base_version() >= MzVersion.parse_mz("v0.82.0-dev")
             else "stash"
         )
+        self.healthcheck = healthcheck
         self.mz_service = mz_service
+        self.platform = platform
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
@@ -80,10 +88,21 @@ class StartMz(MzcomposeAction):
             additional_system_parameter_defaults=self.additional_system_parameter_defaults,
             sanity_restart=False,
             catalog_store=self.catalog_store,
+            platform=self.platform,
+            healthcheck=self.healthcheck,
         )
 
         with c.override(mz):
             c.up("materialized" if self.mz_service is None else self.mz_service)
+
+            # If we start up Materialize with MZ_DEPLOY_GENERATION, then it
+            # stays in a stuck state when the preflight-check is completed. So
+            # we can't connect to it yet to run any commands.
+            if any(
+                env.startswith("MZ_DEPLOY_GENERATION=")
+                for env in self.environment_extra
+            ):
+                return
 
             # This should live in ssh.py and alter_connection.py, but accessing the
             # ssh bastion host from inside a check is not possible currently.
@@ -362,3 +381,50 @@ class DropCreateDefaultReplica(MzcomposeAction):
             port=6877,
             user="mz_system",
         )
+
+
+class WaitReadyMz(MzcomposeAction):
+    """Wait until environmentd is ready, see https://github.com/MaterializeInc/cloud/blob/main/doc/design/20230418_upgrade_orchestration.md#get-apileaderstatus"""
+
+    def __init__(self, mz_service: str = "materialized") -> None:
+        self.mz_service = mz_service
+
+    def execute(self, e: Executor) -> None:
+        c = e.mzcompose_composition()
+
+        while True:
+            result = json.loads(
+                c.exec(
+                    self.mz_service,
+                    "curl",
+                    "localhost:6878/api/leader/status",
+                    capture=True,
+                ).stdout
+            )
+            if result["status"] == "ReadyToPromote":
+                return
+            assert result["status"] == "Initializing", f"Unexpected status {result}"
+            print("Not ready yet, waiting 1 s")
+            time.sleep(1)
+
+
+class PromoteMz(MzcomposeAction):
+    """Promote environmentd to leader, see https://github.com/MaterializeInc/cloud/blob/main/doc/design/20230418_upgrade_orchestration.md#post-apileaderpromote"""
+
+    def __init__(self, mz_service: str = "materialized") -> None:
+        self.mz_service = mz_service
+
+    def execute(self, e: Executor) -> None:
+        c = e.mzcompose_composition()
+
+        result = json.loads(
+            c.exec(
+                self.mz_service,
+                "curl",
+                "-X",
+                "POST",
+                "http://127.0.0.1:6878/api/leader/promote",
+                capture=True,
+            ).stdout
+        )
+        assert result["result"] == "Success", f"Unexpected result {result}"

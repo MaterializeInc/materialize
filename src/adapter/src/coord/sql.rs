@@ -208,7 +208,7 @@ impl Coordinator {
         self.drop_compute_sinks(drop_sinks);
 
         // Release this transaction's compaction hold on collections.
-        if let Some(txn_reads) = self.txn_reads.remove(conn_id) {
+        if let Some(txn_reads) = self.txn_read_holds.remove(conn_id) {
             self.release_read_hold(&txn_reads);
         }
     }

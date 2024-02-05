@@ -1182,9 +1182,7 @@ impl<'a> Iterator for ProtoStateFieldDiffsIter<'a> {
 mod tests {
     use std::ops::ControlFlow::Continue;
 
-    use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::metrics::MetricsRegistry;
-    use mz_ore::now::SYSTEM_TIME;
 
     use crate::internal::state::TypedState;
     use crate::ShardId;
@@ -1276,10 +1274,7 @@ mod tests {
             _ => unreachable!(),
         };
 
-        let metrics = Metrics::new(
-            &PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
-            &MetricsRegistry::new(),
-        );
+        let metrics = Metrics::new(&PersistConfig::new_for_tests(), &MetricsRegistry::new());
         assert_eq!(
             apply_diffs_spine(&metrics, diffs, &mut state.collections.trace),
             Ok(())
@@ -1319,10 +1314,7 @@ mod tests {
             let replacement = batch(&replacement);
             let batches = spine.iter().map(batch).collect::<Vec<_>>();
 
-            let metrics = Metrics::new(
-                &PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
-                &MetricsRegistry::new(),
-            );
+            let metrics = Metrics::new(&PersistConfig::new_for_tests(), &MetricsRegistry::new());
             let actual = apply_compaction_lenient(&metrics, batches, &replacement);
             let expected = match expected {
                 Ok(batches) => Ok(batches.iter().map(batch).collect::<Vec<_>>()),

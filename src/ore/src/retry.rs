@@ -712,29 +712,29 @@ mod tests {
     fn test_retry_fail_max_duration() {
         let mut states = vec![];
         let res = Retry::default()
-            .initial_backoff(Duration::from_millis(5))
-            .max_duration(Duration::from_millis(10))
+            .initial_backoff(Duration::from_millis(10))
+            .max_duration(Duration::from_millis(20))
             .retry(|state| {
                 states.push(state);
                 Err::<(), _>("injected")
             });
         assert_eq!(res, Err("injected"));
 
-        // The first try should indicate a next backoff of exactly 5ms.
+        // The first try should indicate a next backoff of exactly 10ms.
         assert_eq!(
             states[0],
             RetryState {
                 i: 0,
-                next_backoff: Some(Duration::from_millis(5))
+                next_backoff: Some(Duration::from_millis(10))
             },
         );
 
-        // The next try should indicate a next backoff of between 0 and 5ms. The
+        // The next try should indicate a next backoff of between 0 and 10ms. The
         // exact value depends on how long it took for the first try itself to
         // execute.
         assert_eq!(states[1].i, 1);
         let backoff = states[1].next_backoff.unwrap();
-        assert!(backoff > Duration::from_millis(0) && backoff < Duration::from_millis(5));
+        assert!(backoff > Duration::from_millis(0) && backoff < Duration::from_millis(10));
 
         // The final try should indicate that the operation is complete with
         // a next backoff of None.
@@ -749,6 +749,7 @@ mod tests {
 
     #[mz_test_macro::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
+    #[ignore] // TODO: Reenable when #24933 is fixed
     async fn test_retry_async_fail_max_duration() {
         let mut states = vec![];
         let res = Retry::default()

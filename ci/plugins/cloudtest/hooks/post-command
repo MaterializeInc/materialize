@@ -9,7 +9,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-set -euo pipefail
+# -x to debug mysterious failures without any logging
+set -euxo pipefail
 
 . misc/shlib/shlib.bash
 . test/cloudtest/config.bash
@@ -74,6 +75,7 @@ done
 kubectl get events > kubectl-get-events.log || true
 kubectl get all > kubectl-get-all.log || true
 kubectl describe all > kubectl-describe-all.log || true
+kubectl get pods -o wide > kubectl-pods-with-nodes.log || true
 
 kubectl -n kube-system get events > kubectl-get-events-kube-system.log || true
 kubectl -n kube-system get all > kubectl-get-all-kube-system.log || true

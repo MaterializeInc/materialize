@@ -52,7 +52,7 @@ use mz_repr::role_id::RoleId;
 use mz_repr::GlobalId;
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema,
-    CatalogType,
+    CatalogType, RoleMembership, RoleVars,
 };
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::{
@@ -225,7 +225,6 @@ impl Catalog {
                 temporary_schemas: BTreeMap::new(),
                 clusters_by_id: BTreeMap::new(),
                 clusters_by_name: BTreeMap::new(),
-                clusters_by_linked_object_id: BTreeMap::new(),
                 roles_by_name: BTreeMap::new(),
                 roles_by_id: BTreeMap::new(),
                 config: mz_sql::catalog::CatalogConfig {
@@ -241,7 +240,6 @@ impl Catalog {
                 },
                 oid_counter: FIRST_USER_OID,
                 cluster_replica_sizes: config.cluster_replica_sizes,
-                default_storage_cluster_size: config.default_storage_cluster_size,
                 availability_zones: config.availability_zones,
                 system_configuration: {
                     let mut s = SystemVars::new(config.active_connection_count)
@@ -382,6 +380,35 @@ impl Catalog {
                 schemas_by_name.insert(name.clone(), id);
             }
 
+            let default_privileges = txn.get_default_privileges();
+            for mz_catalog::durable::DefaultPrivilege { object, acl_item } in default_privileges {
+                state.default_privileges.grant(object, acl_item);
+            }
+
+            let system_privileges = txn.get_system_privileges();
+            state.system_privileges.grant_all(system_privileges);
+
+            Catalog::load_system_configuration(
+                &mut state,
+                &mut txn,
+                &config.system_parameter_defaults,
+                config.remote_system_parameters.as_ref(),
+            )?;
+
+            // Now that LD is loaded, set the intended catalog timeout.
+            // TODO: Move this into the catalog constructor.
+            txn.set_connection_timeout(state.system_config().crdb_connect_timeout());
+
+            // Add any new builtin Clusters, Cluster Replicas, or Roles that may be newly defined.
+            if !is_read_only {
+                add_new_builtin_clusters_migration(&mut txn)?;
+                add_new_builtin_cluster_replicas_migration(
+                    &mut txn,
+                    config.builtin_cluster_replica_size,
+                )?;
+                add_new_builtin_roles_migration(&mut txn)?;
+            }
+
             let roles = txn.get_roles();
             for mz_catalog::durable::Role {
                 id,
@@ -404,34 +431,6 @@ impl Catalog {
                         vars,
                     },
                 );
-            }
-
-            let default_privileges = txn.get_default_privileges();
-            for mz_catalog::durable::DefaultPrivilege { object, acl_item } in default_privileges {
-                state.default_privileges.grant(object, acl_item);
-            }
-
-            let system_privileges = txn.get_system_privileges();
-            state.system_privileges.grant_all(system_privileges);
-
-            Catalog::load_system_configuration(
-                &mut state,
-                &mut txn,
-                &config.system_parameter_defaults,
-                config.remote_system_parameters.as_ref(),
-            )?;
-
-            // Now that LD is loaded, set the intended catalog timeout.
-            // TODO: Move this into the catalog constructor.
-            txn.set_connection_timeout(state.system_config().crdb_connect_timeout());
-
-            // Add any new builtin Clusters or Cluster Replicas that may be newly defined.
-            if !is_read_only {
-                add_new_builtin_clusters_migration(&mut txn)?;
-                add_new_builtin_cluster_replicas_migration(
-                    &mut txn,
-                    config.builtin_cluster_replica_size,
-                )?;
             }
 
             let comments = txn.get_comments();
@@ -594,11 +593,6 @@ impl Catalog {
                         }
 
                         Builtin::Source(coll) => {
-                            let introspection_type = match &coll.data_source {
-                                Some(i) => i.clone(),
-                                None => continue,
-                            };
-
                             let oid = state.allocate_oid()?;
                             let mut acl_items = vec![rbac::owner_privilege(
                                 mz_sql::catalog::ObjectType::Source,
@@ -612,7 +606,7 @@ impl Catalog {
                                 name.clone(),
                                 CatalogItem::Source(Source {
                                     create_sql: None,
-                                    data_source: DataSourceDesc::Introspection(introspection_type),
+                                    data_source: DataSourceDesc::Introspection(coll.data_source),
                                     desc: coll.desc.clone(),
                                     timeline: Timeline::EpochMilliseconds,
                                     resolved_ids: ResolvedIds(BTreeSet::new()),
@@ -634,7 +628,6 @@ impl Catalog {
             for mz_catalog::durable::Cluster {
                 id,
                 name,
-                linked_object_id,
                 owner_id,
                 privileges,
                 config,
@@ -674,7 +667,6 @@ impl Catalog {
                 state.insert_cluster(
                     id,
                     name,
-                    linked_object_id,
                     all_indexes,
                     owner_id,
                     PrivilegeMap::from_mz_acl_items(privileges),
@@ -805,29 +797,6 @@ impl Catalog {
                         })
                     })?;
 
-                // Ensure linked clusters do not exist in memory.
-                //
-                // There's no great place to do this because we want to use the
-                // previous connection between a linked object an its cluster to
-                // simplify an AST migration.
-                //
-                // We also don't want to blithely update the catalog state by
-                // re-loading the new cluster definitions because the subprocess
-                // for that allocates new GlobalIds.
-                //
-                // However, this change is idempotent so is fine to re-run here.
-                //
-                // We can remove this in a subsequent version of Materialize
-                // where we remove the `clusters_by_linked_object_id` attribute
-                // from catalog state.
-                for mut cluster in txn.get_clusters() {
-                    cluster.linked_object_id = None;
-                    txn.update_cluster(cluster.id, cluster)?;
-                }
-                state.clusters_by_linked_object_id.clear();
-                for (_, cluster) in state.clusters_by_id.iter_mut() {
-                    cluster.linked_object_id = None;
-                }
                 txn.set_catalog_content_version(config.build_info.version.to_string())?;
             }
 
@@ -994,13 +963,6 @@ impl Catalog {
             }
             for (id, cluster) in &catalog.state.clusters_by_id {
                 builtin_table_updates.push(catalog.state.pack_cluster_update(&cluster.name, 1));
-                if let Some(linked_object_id) = cluster.linked_object_id {
-                    builtin_table_updates.push(catalog.state.pack_cluster_link_update(
-                        &cluster.name,
-                        linked_object_id,
-                        1,
-                    ));
-                }
                 for (replica_name, replica_id) in
                     cluster.replicas().map(|r| (&r.name, r.replica_id))
                 {
@@ -1740,6 +1702,24 @@ fn add_new_builtin_clusters_migration(
                     // TODO: Should builtin clusters be managed or unmanaged?
                     variant: mz_catalog::durable::ClusterVariant::Unmanaged,
                 },
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn add_new_builtin_roles_migration(
+    txn: &mut mz_catalog::durable::Transaction<'_>,
+) -> Result<(), mz_catalog::durable::CatalogError> {
+    let role_names: BTreeSet<_> = txn.get_roles().map(|role| role.name).collect();
+    for builtin_role in BUILTIN_ROLES {
+        if !role_names.contains(builtin_role.name) {
+            txn.insert_role(
+                builtin_role.id,
+                builtin_role.name.to_string(),
+                builtin_role.attributes.clone(),
+                RoleMembership::new(),
+                RoleVars::default(),
             )?;
         }
     }

@@ -313,8 +313,16 @@ impl Coordinator {
                 catalog::Op::ResetSystemConfiguration { name }
                 | catalog::Op::UpdateSystemConfiguration { name, .. } => {
                     update_tracing_config |= vars::is_tracing_var(name);
-                    update_compute_config |= vars::is_compute_config_var(name);
-                    update_storage_config |= vars::is_storage_config_var(name);
+                    update_compute_config |= self
+                        .catalog
+                        .state()
+                        .system_config()
+                        .is_compute_config_var(name);
+                    update_storage_config |= self
+                        .catalog
+                        .state()
+                        .system_config()
+                        .is_storage_config_var(name);
                     update_pg_timestamp_oracle_config |=
                         vars::is_pg_timestamp_oracle_config_var(name);
                     update_metrics_retention |= name == vars::METRICS_RETENTION.name();
@@ -750,18 +758,27 @@ impl Coordinator {
                 continue;
             }
 
-            if self.drop_compute_read_policy(&sink.global_id) {
-                by_cluster
-                    .entry(sink.cluster_id)
-                    .or_default()
-                    .push(sink.global_id);
-
-                // Mark the sink as dropped so we don't try to drop it again.
-                if let Some(sink) = self.active_subscribes.get_mut(&sink.global_id) {
-                    sink.dropping = true;
+            if !self
+                .controller
+                .compute
+                .enable_aggressive_readhold_downgrades()
+            {
+                // If aggressive downgrades are disabled, compute sinks have read policies that we
+                // must drop.
+                if !self.drop_compute_read_policy(&sink.global_id) {
+                    tracing::error!("Instructed to drop a compute sink that isn't one");
+                    continue;
                 }
-            } else {
-                tracing::error!("Instructed to drop a compute sink that isn't one");
+            }
+
+            by_cluster
+                .entry(sink.cluster_id)
+                .or_default()
+                .push(sink.global_id);
+
+            // Mark the sink as dropped so we don't try to drop it again.
+            if let Some(sink) = self.active_subscribes.get_mut(&sink.global_id) {
+                sink.dropping = true;
             }
         }
         let mut compute = self.controller.active_compute();
@@ -809,12 +826,21 @@ impl Coordinator {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         let mut source_ids = Vec::new();
         for (cluster_id, id) in mviews {
-            if self.drop_compute_read_policy(&id) {
-                by_cluster.entry(cluster_id).or_default().push(id);
-                source_ids.push(id);
-            } else {
-                tracing::error!("Instructed to drop a materialized view that isn't one");
+            if !self
+                .controller
+                .compute
+                .enable_aggressive_readhold_downgrades()
+            {
+                // If aggressive downgrades are disabled, MV dataflows have read policies that we
+                // must drop.
+                if !self.drop_compute_read_policy(&id) {
+                    tracing::error!("Instructed to drop a materialized view that isn't one");
+                    continue;
+                }
             }
+
+            by_cluster.entry(cluster_id).or_default().push(id);
+            source_ids.push(id);
         }
 
         // Drop compute sinks.
@@ -1067,17 +1093,11 @@ impl Coordinator {
                 Op::CreateRole { .. } => {
                     new_roles += 1;
                 }
-                Op::CreateCluster {
-                    linked_object_id, ..
-                } => {
-                    // Linked compute clusters don't count against the limit,
-                    // since we have a separate sources and sinks limit.
-                    //
-                    // TODO(benesch): remove the `max_sources` and `max_sinks`
-                    // limit, and set a higher max cluster limit?
-                    if linked_object_id.is_none() {
-                        new_clusters += 1;
-                    }
+                Op::CreateCluster { .. } => {
+                    // TODO(benesch): having deprecated linked clusters, remove
+                    // the `max_sources` and `max_sinks` limit, and set a higher
+                    // max cluster limit?
+                    new_clusters += 1;
                 }
                 Op::CreateClusterReplica {
                     cluster_id, config, ..
@@ -1335,10 +1355,7 @@ impl Coordinator {
             //
             // TODO(benesch): remove the `max_sources` and `max_sinks` limit,
             // and set a higher max cluster limit?
-            self.catalog()
-                .user_clusters()
-                .filter(|c| c.linked_object_id.is_none())
-                .count(),
+            self.catalog().user_clusters().count(),
             new_clusters,
             SystemVars::max_clusters,
             "cluster",

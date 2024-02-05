@@ -594,3 +594,70 @@ async fn test_set_catalog(openable_state: impl OpenableDurableCatalogState) {
 
     Box::new(state).expire().await;
 }
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_stash_large_collection_retractions() {
+    let debug_factory = DebugStashFactory::new().await;
+    let openable_state = test_stash_backed_catalog_state(&debug_factory);
+    test_large_collection_retractions(openable_state).await;
+    debug_factory.drop().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_large_collection_retractions() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let organization_id = Uuid::new_v4();
+    let openable_state =
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id).await;
+    test_large_collection_retractions(openable_state).await;
+}
+
+async fn test_large_collection_retractions(openable_state: impl OpenableDurableCatalogState) {
+    let new_audit_logs = vec![VersionedEvent::V1(EventV1 {
+        id: 2,
+        event_type: EventType::Create,
+        object_type: mz_audit_log::ObjectType::Cluster,
+        details: EventDetails::IdNameV1(IdNameV1 {
+            id: "c".to_string(),
+            name: "d".to_string(),
+        }),
+        user: None,
+        occurred_at: 0,
+    })];
+    let new_storage_usages = vec![VersionedStorageUsage::V1(StorageUsageV1 {
+        id: 4,
+        shard_id: None,
+        size_bytes: 5,
+        collection_timestamp: 6,
+    })];
+
+    let mut state = Box::new(openable_state)
+        .open(SYSTEM_TIME(), &test_bootstrap_args(), None, None)
+        .await
+        .unwrap();
+    let (mut txn, old_audit_logs, old_storage_usages) =
+        state.whole_migration_transaction().await.unwrap();
+    // This will issue retractions for everything in the catalog.
+    txn.set_catalog(
+        Snapshot::empty(),
+        old_audit_logs,
+        old_storage_usages,
+        new_audit_logs.clone(),
+        new_storage_usages.clone(),
+    )
+    .unwrap();
+    txn.commit().await.unwrap();
+
+    let audit_logs = state.get_audit_logs().await.unwrap();
+    let storage_usages = state
+        .get_and_prune_storage_usage(None, mz_repr::Timestamp::new(0), false)
+        .await
+        .unwrap();
+
+    assert_eq!(audit_logs, new_audit_logs);
+    assert_eq!(storage_usages, new_storage_usages);
+
+    Box::new(state).expire().await;
+}

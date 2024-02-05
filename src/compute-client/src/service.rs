@@ -15,10 +15,13 @@
 
 use std::collections::BTreeMap;
 use std::iter;
+use std::num::NonZeroUsize;
 
 use async_trait::async_trait;
+use bytesize::ByteSize;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
+use mz_ore::cast::CastFrom;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
@@ -97,17 +100,21 @@ where
 ///   * One instance on the controller side, dispatching between cluster processes.
 ///   * One instance in each cluster process, dispatching between timely worker threads.
 ///
-/// Note that because compute commands, except `CreateTimely`, are only sent to the first process,
-/// the cluster-side instances of `PartitionedComputeState` are not guaranteed to see all compute
-/// commands. Or more specifically: The instance running inside process 0 sees all commands,
-/// whereas the instances running inside the other processes only see `CreateTimely`. The
-/// `PartitionedComputeState` implementation must be able to cope with this limited visiblity. It
-/// does so by performing most of its state management based on observed compute responses rather
-/// than commands.
+/// Note that because compute commands, except `CreateTimely` and `UpdateConfiguration`, are only
+/// sent to the first process, the cluster-side instances of `PartitionedComputeState` are not
+/// guaranteed to see all compute commands. Or more specifically: The instance running inside
+/// process 0 sees all commands, whereas the instances running inside the other processes only see
+/// `CreateTimely` and `UpdateConfiguration`. The `PartitionedComputeState` implementation must be
+/// able to cope with this limited visiblity. It does so by performing most of its state management
+/// based on observed compute responses rather than commands.
 #[derive(Debug)]
 pub struct PartitionedComputeState<T> {
     /// Number of partitions the state machine represents.
     parts: usize,
+    /// The maximum result size this state machine can return.
+    ///
+    /// This is updated upon receiving [`ComputeCommand::UpdateConfiguration`]s.
+    max_result_size: u64,
     /// Upper frontiers for indexes and sinks, both collected as a `MutableAntichain` across all
     /// partitions and individually listed for each partition.
     ///
@@ -168,6 +175,7 @@ where
     fn new(parts: usize) -> PartitionedComputeState<T> {
         PartitionedComputeState {
             parts,
+            max_result_size: u64::MAX,
             uppers: BTreeMap::new(),
             peek_responses: BTreeMap::new(),
             pending_subscribes: BTreeMap::new(),
@@ -182,6 +190,7 @@ where
     fn reset(&mut self) {
         let PartitionedComputeState {
             parts: _,
+            max_result_size: _,
             uppers,
             peek_responses,
             pending_subscribes,
@@ -193,11 +202,17 @@ where
 
     /// Observes commands that move past, and prepares state for responses.
     pub fn observe_command(&mut self, command: &ComputeCommand<T>) {
-        if let ComputeCommand::CreateTimely { .. } = command {
-            self.reset();
-        } else {
-            // We are not guaranteed to observe other compute commands than `CreateTimely`. We must
-            // therefore not add any logic here that relies on doing so.
+        match command {
+            ComputeCommand::CreateTimely { .. } => self.reset(),
+            ComputeCommand::UpdateConfiguration(config) => {
+                if let Some(max_result_size) = config.max_result_size {
+                    self.max_result_size = max_result_size;
+                }
+            }
+            _ => {
+                // We are not guaranteed to observe other compute commands. We
+                // must therefore not add any logic here that relies on doing so.
+            }
         }
     }
 
@@ -231,7 +246,7 @@ where
         self.observe_command(&command);
 
         // As specified by the compute protocol:
-        //  * Forward `CreateTimely` commands to all shards.
+        //  * Forward `CreateTimely` and `UpdateConfiguration` commands to all shards.
         //  * Forward all other commands to the first shard only.
         match command {
             ComputeCommand::CreateTimely { config, epoch } => {
@@ -241,6 +256,9 @@ where
                     .into_iter()
                     .map(|config| Some(ComputeCommand::CreateTimely { config, epoch }))
                     .collect()
+            }
+            command @ ComputeCommand::UpdateConfiguration(_) => {
+                vec![Some(command); self.parts]
             }
             command => {
                 let mut r = vec![None; self.parts];
@@ -311,7 +329,32 @@ where
                             (PeekResponse::Error(e), _) => PeekResponse::Error(e),
                             (PeekResponse::Rows(mut rows), PeekResponse::Rows(r)) => {
                                 rows.extend(r.into_iter());
-                                PeekResponse::Rows(rows)
+
+                                let total_size: u64 = rows
+                                    .iter()
+                                    // Note: if the type of count changes in the future to be a
+                                    // signed integer, then we'll need to consolidate rows before
+                                    // taking this summation.
+                                    .map(|(row, count): &(Row, NonZeroUsize)| {
+                                        let size = row
+                                            .byte_len()
+                                            .saturating_add(std::mem::size_of_val(count));
+                                        u64::cast_from(size)
+                                    })
+                                    .sum();
+
+                                if total_size > self.max_result_size {
+                                    // Note: We match on this specific error message in tests
+                                    // so it's important that nothing else returns the same
+                                    // string.
+                                    let err = format!(
+                                        "total result exceeds max size of {}",
+                                        ByteSize::b(self.max_result_size)
+                                    );
+                                    PeekResponse::Error(err)
+                                } else {
+                                    PeekResponse::Rows(rows)
+                                }
                             }
                         };
                     }

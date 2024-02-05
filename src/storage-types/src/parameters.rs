@@ -71,6 +71,8 @@ pub struct StorageParameters {
     // defined by this interval. This is known to be somewhat inaccurate,
     // but people mostly care about either rates, or the values to within 1 minute.
     pub statistics_collection_interval: Duration,
+    pub pg_snapshot_config: PgSourceSnapshotConfig,
+    pub enable_dependency_read_hold_asserts: bool,
 }
 
 pub const STATISTICS_INTERVAL_DEFAULT: Duration = Duration::from_secs(60);
@@ -100,6 +102,8 @@ impl Default for StorageParameters {
             kafka_timeout_config: Default::default(),
             statistics_interval: STATISTICS_INTERVAL_DEFAULT,
             statistics_collection_interval: STATISTICS_COLLECTION_INTERVAL_DEFAULT,
+            pg_snapshot_config: Default::default(),
+            enable_dependency_read_hold_asserts: true,
         }
     }
 }
@@ -195,6 +199,8 @@ impl StorageParameters {
             kafka_timeout_config,
             statistics_interval,
             statistics_collection_interval,
+            pg_snapshot_config,
+            enable_dependency_read_hold_asserts,
         }: StorageParameters,
     ) {
         self.persist.update(persist);
@@ -219,6 +225,8 @@ impl StorageParameters {
         // We set this in the statistics scraper tasks only once at startup.
         self.statistics_interval = statistics_interval;
         self.statistics_collection_interval = statistics_collection_interval;
+        self.pg_snapshot_config = pg_snapshot_config;
+        self.enable_dependency_read_hold_asserts = enable_dependency_read_hold_asserts;
     }
 }
 
@@ -256,6 +264,8 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             kafka_timeout_config: Some(self.kafka_timeout_config.into_proto()),
             statistics_interval: Some(self.statistics_interval.into_proto()),
             statistics_collection_interval: Some(self.statistics_collection_interval.into_proto()),
+            pg_snapshot_config: Some(self.pg_snapshot_config.into_proto()),
+            enable_dependency_read_hold_asserts: self.enable_dependency_read_hold_asserts,
         }
     }
 
@@ -316,6 +326,10 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             statistics_collection_interval: proto
                 .statistics_collection_interval
                 .into_rust_if_some("ProtoStorageParameters::statistics_collection_interval")?,
+            pg_snapshot_config: proto
+                .pg_snapshot_config
+                .into_rust_if_some("ProtoStorageParameters::pg_snapshot_config")?,
+            enable_dependency_read_hold_asserts: proto.enable_dependency_read_hold_asserts,
         })
     }
 }
@@ -338,6 +352,58 @@ impl RustType<ProtoPgSourceTcpTimeouts> for mz_postgres_util::TcpTimeoutConfig {
             keepalives_idle: proto.keepalives_idle.into_rust()?,
             keepalives_interval: proto.keepalives_interval.into_rust()?,
             tcp_user_timeout: proto.tcp_user_timeout.into_rust()?,
+        })
+    }
+}
+
+/// Configuration for how storage performs Postgres snapshots.
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PgSourceSnapshotConfig {
+    /// Whether or not to collect a strict `count(*)` for each table during snapshotting.
+    /// This is more accurate but way more expensive compared to an estimate in `pg_class`.
+    pub collect_strict_count: bool,
+    /// If a table is not vacuumed or analyzed (usually if it has a low number of writes, or low
+    /// number of rows in general) in postgres, the estimate count in `pg_class` is just `-1.
+    /// This config controls whether we should fallback to `count(*)` in that case. It does
+    /// nothing if `collect_strict_count=true`.
+    pub fallback_to_strict_count: bool,
+    /// Whether or not we wait for `count(*)` to finish before beginning to read the snapshot for
+    /// the given table.
+    pub wait_for_count: bool,
+}
+
+impl PgSourceSnapshotConfig {
+    pub const fn new() -> Self {
+        PgSourceSnapshotConfig {
+            // We want accurate values, if its not too expensive.
+            collect_strict_count: true,
+            fallback_to_strict_count: true,
+            // For now, wait to start snapshotting until after we have the count.
+            wait_for_count: true,
+        }
+    }
+}
+
+impl Default for PgSourceSnapshotConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RustType<ProtoPgSourceSnapshotConfig> for PgSourceSnapshotConfig {
+    fn into_proto(&self) -> ProtoPgSourceSnapshotConfig {
+        ProtoPgSourceSnapshotConfig {
+            collect_strict_count: self.collect_strict_count,
+            fallback_to_strict_count: self.fallback_to_strict_count,
+            wait_for_count: self.wait_for_count,
+        }
+    }
+
+    fn from_proto(proto: ProtoPgSourceSnapshotConfig) -> Result<Self, TryFromProtoError> {
+        Ok(PgSourceSnapshotConfig {
+            collect_strict_count: proto.collect_strict_count,
+            fallback_to_strict_count: proto.fallback_to_strict_count,
+            wait_for_count: proto.wait_for_count,
         })
     }
 }

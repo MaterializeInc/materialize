@@ -415,7 +415,9 @@ pub enum Format<T: AstInfo> {
         columns: CsvColumns,
         delimiter: char,
     },
-    Json,
+    Json {
+        array: bool,
+    },
     Text,
 }
 
@@ -621,7 +623,12 @@ impl<T: AstInfo> AstDisplay for Format<T> {
                     f.write_str("'");
                 }
             }
-            Self::Json => f.write_str("JSON"),
+            Self::Json { array } => {
+                f.write_str("JSON");
+                if *array {
+                    f.write_str(" ARRAY");
+                }
+            }
             Self::Text => f.write_str("TEXT"),
         }
     }
@@ -1275,7 +1282,6 @@ impl_display!(KeyConstraint);
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CreateSourceOptionName {
     IgnoreKeys,
-    Size,
     Timeline,
     TimestampInterval,
     RetainHistory,
@@ -1285,7 +1291,6 @@ impl AstDisplay for CreateSourceOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
             CreateSourceOptionName::IgnoreKeys => "IGNORE KEYS",
-            CreateSourceOptionName::Size => "SIZE",
             CreateSourceOptionName::Timeline => "TIMELINE",
             CreateSourceOptionName::TimestampInterval => "TIMESTAMP INTERVAL",
             CreateSourceOptionName::RetainHistory => "RETAIN HISTORY",

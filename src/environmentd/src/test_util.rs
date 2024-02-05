@@ -36,12 +36,13 @@ use mz_ore::tracing::{
     TracingHandle,
 };
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::cfg::{PersistConfig, PersistParameters};
+use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PersistGrpcPubSubServer;
 use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_server_core::TlsCertConfig;
 use mz_sql::catalog::EnvironmentId;
+use mz_sql::session::vars::all_dyn_configs;
 use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
@@ -103,6 +104,7 @@ pub struct TestHarness {
     system_parameter_defaults: BTreeMap<String, String>,
     internal_console_redirect_url: Option<String>,
     metrics_registry: Option<MetricsRegistry>,
+    code_version: semver::Version,
     pub environment_id: EnvironmentId,
 }
 
@@ -136,6 +138,7 @@ impl Default for TestHarness {
                 startup_log_filter: CloneableEnvFilter::from_str("error").expect("must parse"),
                 ..Default::default()
             },
+            code_version: crate::BUILD_INFO.semver_version(),
             environment_id: EnvironmentId::for_tests(),
         }
     }
@@ -266,6 +269,11 @@ impl TestHarness {
         self.metrics_registry = Some(registry);
         self
     }
+
+    pub fn with_code_version(mut self, version: semver::Version) -> Self {
+        self.code_version = version;
+        self
+    }
 }
 
 pub struct Listeners {
@@ -337,14 +345,14 @@ impl Listeners {
         // Messing with the clock causes persist to expire leases, causing hangs and
         // panics. Is it possible/desirable to put this back somehow?
         let persist_now = SYSTEM_TIME.clone();
-        let mut persist_cfg = PersistConfig::new(&crate::BUILD_INFO, persist_now);
+        let mut persist_cfg =
+            PersistConfig::new(&crate::BUILD_INFO, persist_now.clone(), all_dyn_configs());
+        persist_cfg.build_version = config.code_version;
         // Tune down the number of connections to make this all work a little easier
         // with local postgres.
         persist_cfg.consensus_connection_pool_max_size = 1;
         // Stress persist more by writing rollups frequently
-        let mut persist_parameters = PersistParameters::default();
-        persist_parameters.rollup_threshold = Some(5);
-        persist_parameters.apply(&persist_cfg);
+        persist_cfg.set_rollup_threshold(5);
 
         let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_cfg, &metrics_registry);
         let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
@@ -445,7 +453,6 @@ impl Listeners {
                 environment_id: config.environment_id,
                 cors_allowed_origin: AllowOrigin::list([]),
                 cluster_replica_sizes: Default::default(),
-                default_storage_cluster_size: None,
                 bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
                 bootstrap_builtin_cluster_replica_size: config.builtin_cluster_replica_size,
                 system_parameter_defaults: config.system_parameter_defaults,
@@ -465,8 +472,7 @@ impl Listeners {
                 deploy_generation: config.deploy_generation,
                 http_host_name: Some(host_name),
                 internal_console_redirect_url: config.internal_console_redirect_url,
-                // TODO(txn-lazy): Get "lazy" flipped on before turning "lazy" on in prod.
-                persist_txn_tables_cli: Some(PersistTxnTablesImpl::Eager),
+                persist_txn_tables_cli: Some(PersistTxnTablesImpl::Lazy),
             })
             .await?;
 

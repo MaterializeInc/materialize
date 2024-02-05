@@ -812,10 +812,10 @@ SELECT * FROM mv_assertion_plus_refresh_every ORDER BY x;
 
 # Sleep for the refresh interval, so that we get a refresh.
 # Actually, we sleep one more second than the refresh interval, because we don't have real-time recency guarantees:
-# When we query the MV at a particular wall clock time time `t`, there is not guarantee that we see a refresh that
+# When we query the MV at a particular wall clock time time `t`, there is no guarantee that we see a refresh that
 # happened at, say, `t - 1ms`. Note that the test was actually failing sometimes when it was sleeping for only 8s.
-# A proper solution might be to add `AS OF now()` to this SELECT, but calling `now()` seems to not be currently allowed
-# in `AS OF`.
+# A proper solution might be to add `AS OF now()` to the following SELECT, but calling `now()` seems to not be currently
+# allowed in `AS OF`.
 statement ok
 SELECT mz_unsafe.mz_sleep(8+1);
 
@@ -955,16 +955,24 @@ SELECT * FROM const_mv
 ----
 1
 
-## We should be able to immediately query a constant MV even if the first refresh is in the future
+## We should be able to immediately query a constant MV under serializable isolation even if the
+## first refresh is in the future. The since will be advanced to [3000-01-01 23:59] and the upper
+## will be advanced to [].
 statement ok
 CREATE MATERIALIZED VIEW const_mv2
 WITH (REFRESH AT '3000-01-01 23:59')
 AS SELECT 2;
 
+statement ok
+SET transaction_isolation = 'serializable'
+
 query I
 SELECT * FROM const_mv2
 ----
 2
+
+statement ok
+SET transaction_isolation = 'strict serializable'
 
 ## MV that has refreshes only in the past
 query error db error: ERROR: all the specified refreshes of the materialized view would be too far in the past, and thus they would never happen
@@ -990,17 +998,10 @@ NULL  -1  -2
 30  30  30
 100  100  100
 
-# Wait until the second refresh, which is the last one
-query III
-SELECT * FROM mv3;
-----
-NULL  -1  -2
-4  NULL  6
-7  8  NULL
-1  2  3
-10  11  12
-30  30  30
-100  100  100
+# Wait until we are past the second refresh, which is the last one.
+# (See the explanation for the `+1` above at a similar `mz_sleep`.)
+statement ok
+SELECT mz_unsafe.mz_sleep(2+1);
 
 # This insert will happen after the last refresh.
 statement ok
@@ -1017,3 +1018,24 @@ NULL  -1  -2
 10  11  12
 30  30  30
 100  100  100
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/24288
+# The sleep makes _optimization_ take a few seconds, so we need to grab read holds in purification right away after
+# choosing a timestamp for mz_now.
+statement ok
+create materialized view mv4 with (refresh at creation) as
+select * from
+  (select mz_unsafe.mz_sleep(3)),
+  (select * from t2);
+
+# EXPLAIN and EXPLAIN TIMESTAMP on an MV that hasn't had its first refresh yet shouldn't block
+# See also `test_explain_timestamp_blocking`
+statement ok
+CREATE MATERIALIZED VIEW mv5 WITH (REFRESH AT mz_now()::text::int8 + 1000000) AS
+SELECT x+y+z from t2;
+
+statement ok
+EXPLAIN SELECT * FROM mv5;
+
+statement ok
+EXPLAIN TIMESTAMP FOR SELECT * FROM mv5;

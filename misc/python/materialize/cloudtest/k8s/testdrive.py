@@ -8,12 +8,15 @@
 # by the Apache License, Version 2.0.
 
 import os
+import subprocess
 from inspect import Traceback
 
 from kubernetes.client import V1Container, V1EnvVar, V1ObjectMeta, V1Pod, V1PodSpec
 
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_pod import K8sPod
+from materialize.mzcompose.test_result import extract_error_chunks_from_stderr
+from materialize.ui import CommandFailureCausedUIError
 
 
 class TestdriveBase:
@@ -47,6 +50,7 @@ class TestdriveBase:
         default_timeout: str = "300s",
         kafka_options: str | None = None,
         log_filter: str = "off",
+        suppress_command_error_output: bool = False,
     ) -> None:
         command: list[str] = [
             "testdrive",
@@ -75,9 +79,15 @@ class TestdriveBase:
         self._run_internal(
             command,
             input,
+            suppress_command_error_output,
         )
 
-    def _run_internal(self, command: list[str], input: str | None = None) -> None:
+    def _run_internal(
+        self,
+        command: list[str],
+        input: str | None = None,
+        suppress_command_error_output: bool = False,
+    ) -> None:
         raise NotImplementedError
 
 
@@ -91,6 +101,7 @@ class TestdrivePod(K8sPod, TestdriveBase):
         materialize_internal_url: str | None = None,
         kafka_addr: str | None = None,
         schema_registry_url: str | None = None,
+        apply_node_selectors: bool = False,
     ) -> None:
         K8sPod.__init__(self, namespace)
         TestdriveBase.__init__(
@@ -121,16 +132,37 @@ class TestdrivePod(K8sPod, TestdriveBase):
             env=env,
         )
 
-        pod_spec = V1PodSpec(containers=[container])
+        node_selector = None
+        if apply_node_selectors:
+            node_selector = {"supporting-services": "true"}
+
+        pod_spec = V1PodSpec(containers=[container], node_selector=node_selector)
         self.pod = V1Pod(metadata=metadata, spec=pod_spec)
 
-    def _run_internal(self, command: list[str], input: str | None = None) -> None:
+    def _run_internal(
+        self,
+        command: list[str],
+        input: str | None = None,
+        suppress_command_error_output: bool = False,
+    ) -> None:
         self.wait(condition="condition=Ready", resource="pod/testdrive")
-        self.kubectl(
-            "exec",
-            "-it",
-            "testdrive",
-            "--",
-            *command,
-            input=input,
-        )
+        try:
+            self.kubectl(
+                "exec",
+                "-it",
+                "testdrive",
+                "--",
+                *command,
+                input=input,
+                capture_output=True,
+                suppress_command_error_output=suppress_command_error_output,
+            )
+        except subprocess.CalledProcessError as e:
+            error_chunks = extract_error_chunks_from_stderr(e.stderr)
+            error_text = "\n".join(error_chunks)
+            raise CommandFailureCausedUIError(
+                f"Running {' '.join(command)} in testdrive failed with:\n{error_text}",
+                e.cmd,
+                e.stdout,
+                e.stderr,
+            )

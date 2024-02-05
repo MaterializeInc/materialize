@@ -27,7 +27,7 @@ from materialize.scalability.io import paths
 from materialize.scalability.operation import Operation
 from materialize.scalability.result_analyzer import ResultAnalyzer
 from materialize.scalability.schema import Schema
-from materialize.scalability.workload import Workload
+from materialize.scalability.workload import Workload, WorkloadWithContext
 from materialize.scalability.workload_result import WorkloadResult
 from materialize.scalability.workloads import *  # noqa: F401 F403
 from materialize.scalability.workloads_test import *  # noqa: F401 F403
@@ -72,7 +72,10 @@ class BenchmarkExecutor:
     ):
         if self.baseline_endpoint is not None:
             baseline_result = self.run_workload_for_endpoint(
-                self.baseline_endpoint, workload_cls()
+                self.baseline_endpoint,
+                self.create_workload_instance(
+                    workload_cls, endpoint=self.baseline_endpoint
+                ),
             )
         else:
             baseline_result = None
@@ -93,7 +96,8 @@ class BenchmarkExecutor:
     ) -> ComparisonOutcome | None:
         workload_name = workload_cls.__name__
         other_endpoint_result = self.run_workload_for_endpoint(
-            other_endpoint, workload_cls()
+            other_endpoint,
+            self.create_workload_instance(workload_cls, endpoint=other_endpoint),
         )
 
         if self.baseline_endpoint is None or baseline_result is None:
@@ -178,6 +182,11 @@ class BenchmarkExecutor:
             print(init_sql)
             init_cursor.execute(init_sql.encode("utf8"))
 
+        for init_operation in workload.init_operations():
+            workload.execute_operation(
+                init_operation, init_cursor, -1, -1, self.config.verbose
+            )
+
         print(
             f"Creating a cursor pool with {concurrency} entries against endpoint: {endpoint.url()}"
         )
@@ -251,13 +260,16 @@ class BenchmarkExecutor:
         self, args: tuple[Workload, int, threading.local, list[Cursor], Operation, int]
     ) -> dict[str, Any]:
         workload, concurrency, local, cursor_pool, operation, transaction_index = args
+        worker_id = local.worker_id
         assert (
-            len(cursor_pool) >= local.worker_id + 1
-        ), f"len(cursor_pool) is {len(cursor_pool)} but local.worker_id is {local.worker_id}"
-        cursor = cursor_pool[local.worker_id]
+            len(cursor_pool) >= worker_id + 1
+        ), f"len(cursor_pool) is {len(cursor_pool)} but local.worker_id is {worker_id}"
+        cursor = cursor_pool[worker_id]
 
         start = time.time()
-        operation.execute(cursor)
+        workload.execute_operation(
+            operation, cursor, worker_id, transaction_index, self.config.verbose
+        )
         wallclock = time.time() - start
 
         return {
@@ -268,6 +280,17 @@ class BenchmarkExecutor:
             df_details_cols.TRANSACTION_INDEX: transaction_index,
         }
 
+    def create_workload_instance(
+        self, workload_cls: type[Workload], endpoint: Endpoint
+    ) -> Workload:
+        workload = workload_cls()
+
+        if isinstance(workload, WorkloadWithContext):
+            workload.set_endpoint(endpoint)
+            workload.set_schema(self.schema)
+
+        return workload
+
     def initialize_worker(self, local: threading.local, lock: threading.Lock):
         """Give each other worker thread a unique ID"""
         lock.acquire()
@@ -277,8 +300,9 @@ class BenchmarkExecutor:
         lock.release()
 
     def _get_concurrencies(self) -> list[int]:
+        range_end = 1024 if self.config.exponent_base < 2.0 else 32
         concurrencies: list[int] = [
-            round(self.config.exponent_base**c) for c in range(0, 1024)
+            round(self.config.exponent_base**c) for c in range(0, range_end)
         ]
         concurrencies = sorted(set(concurrencies))
         return [

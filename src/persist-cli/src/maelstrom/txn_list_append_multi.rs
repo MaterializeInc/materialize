@@ -386,7 +386,8 @@ impl Service for TransactorService {
         // should_timeout to for blobs, so use the same handle for both.
         let unreliable = UnreliableHandle::new(seed, should_happen, should_timeout);
 
-        let mut config = PersistConfig::new(&mz_persist_client::BUILD_INFO, SYSTEM_TIME.clone());
+        let mut config =
+            PersistConfig::new_default_configs(&mz_persist_client::BUILD_INFO, SYSTEM_TIME.clone());
         let metrics = Arc::new(PersistMetrics::new(&config, &MetricsRegistry::new()));
 
         // Construct requested Blob.

@@ -1566,6 +1566,19 @@ impl Row {
         row
     }
 
+    /// Use `self` to pack `iter`, and then clone the result.
+    ///
+    /// This is a convenience method meant to reduce boilerplate around row
+    /// formation.
+    pub fn pack_using<'a, I, D>(&mut self, iter: I) -> Row
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'a>>,
+    {
+        self.packer().extend(iter);
+        self.clone()
+    }
+
     /// Like [`Row::pack`], but the provided iterator is allowed to produce an
     /// error, in which case the packing operation is aborted and the error
     /// returned.
@@ -2069,6 +2082,11 @@ impl RowPacker<'_> {
         // SAFETY: iterator offsets always lie on a datum boundary.
         unsafe { self.truncate(offset) }
     }
+
+    /// Returns the total amount of bytes used by the underlying row.
+    pub fn byte_len(&self) -> usize {
+        self.row.byte_len()
+    }
 }
 
 impl<'a> IntoIterator for &'a Row {
@@ -2374,6 +2392,19 @@ impl SharedRow {
         // Clear row
         row.borrow_mut().packer();
         Self(row)
+    }
+
+    /// Gets the shared row and uses it to pack `iter`.
+    pub fn pack<'a, I, D>(iter: I) -> Row
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'a>>,
+    {
+        let binding = Self::SHARED_ROW.with(Rc::clone);
+        let mut row_builder = binding.borrow_mut();
+        let mut row_packer = row_builder.packer();
+        row_packer.extend(iter);
+        row_builder.clone()
     }
 }
 

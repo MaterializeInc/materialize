@@ -193,6 +193,15 @@ class PgPreExecutionInconsistencyIgnoreFilter(
         ):
             return YesIgnore("#22014: timestamp precision with null")
 
+        if (
+            db_operation.pattern in {"$ + $", "$ - $"}
+            and db_operation.params[0].get_declared_type_category()
+            == DataTypeCategory.DATE_TIME
+            and db_operation.params[1].get_declared_type_category()
+            == DataTypeCategory.DATE_TIME
+        ):
+            return YesIgnore("#24578: different representation")
+
         if db_operation.pattern in {"$ ~ $", "$ ~* $", "$ !~ $", "$ !~* $"}:
             return YesIgnore(
                 "Materialize regular expressions are similar to, but not identical to, PostgreSQL regular expressions."
@@ -215,6 +224,15 @@ class PgPreExecutionInconsistencyIgnoreFilter(
             True,
         ):
             return YesIgnore("Consequence of #23571")
+
+        if db_operation.pattern == "CAST ($ AS $)":
+            casting_target = expression.args[1]
+            assert isinstance(casting_target, EnumConstant)
+
+            if casting_target.value == "DECIMAL(39)":
+                return YesIgnore(
+                    "#24678: different specification of default DECIMAL type"
+                )
 
         return NoIgnore()
 
@@ -280,6 +298,15 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             or "cannot delete from scalar" in pg_error_msg
         ):
             return YesIgnore("Not supported by pg")
+
+        if (
+            "cannot cast type boolean to bigint" in pg_error_msg
+            or "cannot cast type bigint to boolean" in pg_error_msg
+        ):
+            return YesIgnore("Not supported by pg")
+
+        if 'invalid input syntax for type time: ""' in pg_error_msg:
+            return YesIgnore("#24736: different handling of empty time string")
 
         return NoIgnore()
 
@@ -473,6 +500,17 @@ class PgPostExecutionInconsistencyIgnoreFilter(
 
         if query_template.matches_any_expression(matches_nullif, True):
             return YesIgnore("#22267: nullif")
+
+        if query_template.matches_any_expression(
+            partial(matches_op_by_pattern, pattern="CAST ($ AS $)"),
+            True,
+        ):
+            # cut ".000" endings
+            value1_str = re.sub(r"\.0+$", "", str(error.value1))
+            value2_str = re.sub(r"\.0+$", "", str(error.value2))
+
+            if value1_str == value2_str:
+                return YesIgnore("#24687: different representation of DECIMAL type")
 
         return NoIgnore()
 

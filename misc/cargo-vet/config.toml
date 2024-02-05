@@ -775,7 +775,7 @@ version = "0.7.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.librocksdb-sys]]
-version = "0.11.0+8.3.2@git:3305d514d509c6b95b0c925c78157e5e4ae4b7ba"
+version = "0.11.0+8.3.2@git:ab3684f999a5586d7a5e94bd65defd78af15d40f"
 criteria = "safe-to-deploy"
 
 [[exemptions.libz-sys]]
@@ -1194,14 +1194,6 @@ criteria = "safe-to-deploy"
 version = "0.3.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.rdkafka]]
-version = "0.29.0@git:8ea07c4d2b96636ff093e670bc921892aee0d56a"
-criteria = "safe-to-deploy"
-
-[[exemptions.rdkafka-sys]]
-version = "4.3.0+1.9.2@git:8ea07c4d2b96636ff093e670bc921892aee0d56a"
-criteria = "safe-to-deploy"
-
 [[exemptions.redox_syscall]]
 version = "0.2.10"
 criteria = "safe-to-deploy"
@@ -1239,7 +1231,7 @@ version = "0.8.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.rocksdb]]
-version = "0.21.0@git:3305d514d509c6b95b0c925c78157e5e4ae4b7ba"
+version = "0.21.0@git:ab3684f999a5586d7a5e94bd65defd78af15d40f"
 criteria = "safe-to-deploy"
 
 [[exemptions.ropey]]
@@ -1395,7 +1387,7 @@ version = "1.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.shlex]]
-version = "1.1.0"
+version = "1.3.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.signature]]
@@ -1704,10 +1696,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.utf-8]]
 version = "0.7.6"
-criteria = "safe-to-deploy"
-
-[[exemptions.uuid]]
-version = "1.2.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.vcpkg]]

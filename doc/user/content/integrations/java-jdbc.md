@@ -271,7 +271,7 @@ public class App {
 
     public void source() {
 
-        String SQL = "CREATE SOURCE counter FROM LOAD GENERATOR COUNTER WITH (SIZE = '3xsmall');";
+        String SQL = "CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;";
 
         try (Connection conn = connect()) {
             Statement st = conn.createStatement();

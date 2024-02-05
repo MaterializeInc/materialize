@@ -33,7 +33,6 @@ import urllib.parse
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
 from inspect import Traceback, getframeinfo, getmembers, isfunction, stack
 from tempfile import TemporaryFile
 from typing import Any, TextIO, cast
@@ -46,8 +45,19 @@ from pg8000 import Connection, Cursor
 from materialize import MZ_ROOT, mzbuild, spawn, ui
 from materialize.mzcompose import loader
 from materialize.mzcompose.service import Service
+from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import minio_blob_uri
-from materialize.ui import CommandFailureCausedUIError, UIError
+from materialize.mzcompose.test_result import (
+    FailedTestExecutionError,
+    TestFailureDetails,
+    TestResult,
+    try_determine_errors_from_cmd_execution,
+)
+from materialize.ui import (
+    CommandFailureCausedUIError,
+    UIError,
+)
+from materialize.xcompile import Arch
 
 
 class UnknownCompositionError(UIError):
@@ -83,28 +93,6 @@ class WorkflowArgumentParser(argparse.ArgumentParser):
 class Composition:
     """A loaded mzcompose.py file."""
 
-    @dataclass
-    class TestResult:
-        duration: float
-        error: str | None
-        error_details: str | None
-        error_location: str | None
-
-        def is_failure(self) -> bool:
-            return self.error is not None
-
-        def get_error_file(self) -> str | None:
-            if self.error_location is None:
-                return None
-
-            file_name = self.error_location
-            file_name = re.sub(r":\d+", "", file_name)
-
-            if "/" in file_name:
-                file_name = file_name[file_name.rindex("/") + 1 :]
-
-            return file_name
-
     def __init__(
         self,
         repo: mzbuild.Repository,
@@ -121,7 +109,7 @@ class Composition:
         self.project_name = project_name
         self.silent = silent
         self.workflows: dict[str, Callable[..., None]] = {}
-        self.test_results: OrderedDict[str, Composition.TestResult] = OrderedDict()
+        self.test_results: OrderedDict[str, TestResult] = OrderedDict()
         self.files = {}
 
         if name in self.repo.compositions:
@@ -198,6 +186,22 @@ class Composition:
                 if image_name not in self.repo.images:
                     raise UIError(f"mzcompose: unknown image {image_name}")
                 image = self.repo.images[image_name]
+                if "platform" in config:
+                    # Intentionally not copying the image.rd so that the
+                    # repository details of dependencies are also switched to
+                    # the wanted architecture. An alternative would be to
+                    # iterate over all the dependencies and change their arch
+                    # too, but this is messy. Architecting a cleaner approach
+                    # is probably not worth it since the platform-checks
+                    # scenarios for the x86-64-aarch64 migration are supposed
+                    # to be temporary.
+                    # image.rd = copy.deepcopy(image.rd)
+                    if config["platform"] == "linux/amd64":
+                        image.rd.arch = Arch.X86_64
+                    elif config["platform"] == "linux/arm64/v8":
+                        image.rd.arch = Arch.AARCH64
+                    else:
+                        raise ValueError(f"Unknown platform {config['platform']}")
                 images.append(image)
 
             if "propagate_uid_gid" in config:
@@ -257,6 +261,7 @@ class Composition:
         *args: str,
         capture: bool | TextIO = False,
         capture_stderr: bool | TextIO = False,
+        capture_and_print: bool = False,
         stdin: str | None = None,
         check: bool = True,
         max_tries: int = 1,
@@ -270,15 +275,21 @@ class Composition:
                 opened file to capture stdout into the file directly.
             capture_stderr: Whether to capture the child's stderr stream, can
                 be an opened file to capture stderr into the file directly.
+            capture_and_print: Print during execution and capture the stdout and
+                stderr of the `docker compose` invocation.
             input: A string to provide as stdin for the command.
         """
 
         if not self.silent and not silent:
-            print(f"--- docker compose {' '.join(args)}", file=sys.stderr)
+            print(f"$ docker compose {' '.join(args)}", file=sys.stderr)
 
         stdout = None
         if capture:
             stdout = subprocess.PIPE if capture == True else capture
+        elif capture_stderr:
+            # this is necessary for the stderr to work
+            stdout = subprocess.PIPE
+
         stderr = None
         if capture_stderr:
             stderr = subprocess.PIPE if capture_stderr == True else capture_stderr
@@ -296,28 +307,57 @@ class Composition:
             yaml.dump(self.compose, file)
             self.files[thread_id] = file
 
+        cmd = [
+            "docker",
+            "compose",
+            f"-f/dev/fd/{file.fileno()}",
+            "--project-directory",
+            self.path,
+            *project_name_args,
+            *args,
+        ]
+
         ret = None
+        stdout_result = ""
         for retry in range(1, max_tries + 1):
             file.seek(0)
             try:
-                ret = subprocess.run(
-                    [
-                        "docker",
-                        "compose",
-                        f"-f/dev/fd/{file.fileno()}",
-                        "--project-directory",
-                        self.path,
-                        *project_name_args,
-                        *args,
-                    ],
-                    close_fds=False,
-                    check=check,
-                    stdout=stdout,
-                    stderr=stderr,
-                    input=stdin,
-                    text=True,
-                    bufsize=1,
-                )
+                if capture_and_print:
+                    p = subprocess.Popen(
+                        cmd,
+                        close_fds=False,
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1,
+                    )
+                    if stdin != None:
+                        p.stdin.write(stdin)  # type: ignore
+                    if p.stdin != None:
+                        p.stdin.close()
+                    for line in p.stdout:  # type: ignore
+                        print(line, end="")
+                        stdout_result += line
+                    p.wait()
+                    retcode = p.poll()
+                    assert retcode != None
+                    if check and retcode:
+                        raise subprocess.CalledProcessError(
+                            retcode, p.args, output=stdout_result
+                        )
+                    return subprocess.CompletedProcess(p.args, retcode, stdout_result)
+                else:
+                    ret = subprocess.run(
+                        cmd,
+                        close_fds=False,
+                        check=check,
+                        stdout=stdout,
+                        stderr=stderr,
+                        input=stdin,
+                        text=True,
+                        bufsize=1,
+                    )
             except subprocess.CalledProcessError as e:
                 if e.stdout:
                     print(e.stdout)
@@ -330,7 +370,8 @@ class Composition:
                     raise CommandFailureCausedUIError(
                         f"running docker compose failed (exit status {e.returncode})",
                         cmd=e.cmd,
-                        stderr=e.stderr if capture_stderr == True else None,
+                        stdout=e.stdout,
+                        stderr=e.stderr,
                     )
             break
 
@@ -390,7 +431,10 @@ class Composition:
                 # trivial help message.
                 parser.parse_args()
                 func(self)
-            self.sanity_restart_mz()
+            if os.getenv("CI_FINAL_PREFLIGHT_CHECK_VERSION") != None:
+                self.final_preflight_check()
+            else:
+                self.sanity_restart_mz()
         finally:
             loader.composition_path = None
 
@@ -480,7 +524,7 @@ class Composition:
             def workflow_default(c: Composition):
                 for tc in test_cases:
                     with c.test_case(tc.name):
-                        c.run("testdrive", *tc.files)
+                        c.run_testdrive_files(*tc.files)
             ```
 
         Args:
@@ -490,41 +534,43 @@ class Composition:
         if name in self.test_results:
             raise UIError(f"test case {name} executed twice")
         ui.header(f"Running test case {name}")
-        error = None
-        error_details = None
-        error_location = None
+        errors = []
         start_time = time.time()
         try:
             yield
+            end_time = time.time()
             ui.header(f"mzcompose: test case {name} succeeded")
         except Exception as e:
-            error = f"{str(type(e))}: {e}"
-            ui.header(f"mzcompose: test case {name} failed: {error}")
+            end_time = time.time()
+            error_message = f"{str(type(e))}: {e}"
+            ui.header(f"mzcompose: test case {name} failed: {error_message}")
+            errors = [
+                TestFailureDetails(
+                    error_message, details=None, location=None, line_number=None
+                )
+            ]
 
             if isinstance(e, CommandFailureCausedUIError):
-                error_details = e.stderr
-                error_location = self.try_determine_error_location_from_cmd(e.cmd)
+                if e.stderr is not None:
+                    # This is to avoid that captured stderr is missing in the logs.
+                    print(e.stderr, file=sys.stderr, flush=True)
 
-                if error_location is not None:
-                    error = f"Executing {error_location} failed"
+                try:
+                    extracted_errors = try_determine_errors_from_cmd_execution(e)
+                except:
+                    extracted_errors = []
+                errors = extracted_errors if len(extracted_errors) > 0 else errors
+            elif isinstance(e, FailedTestExecutionError):
+                errors = e.errors
+                assert (
+                    len(errors) > 0
+                ), "Failed test execution does not contain any errors"
 
             if not isinstance(e, UIError):
                 traceback.print_exc()
 
-        duration = time.time() - start_time
-        self.test_results[name] = Composition.TestResult(
-            duration, error, error_details, error_location
-        )
-
-    def try_determine_error_location_from_cmd(self, cmd: list[str]) -> str | None:
-        root_path_as_string = f"{MZ_ROOT}/"
-        for cmd_part in cmd:
-            if type(cmd_part) == str and cmd_part.startswith("--source="):
-                return cmd_part.removeprefix("--source=").replace(
-                    root_path_as_string, ""
-                )
-
-        return None
+        duration = end_time - start_time
+        self.test_results[name] = TestResult(duration, errors)
 
     def sql_connection(
         self,
@@ -606,6 +652,7 @@ class Composition:
         env_extra: dict[str, str] = {},
         capture: bool = False,
         capture_stderr: bool = False,
+        capture_and_print: bool = False,
         stdin: str | None = None,
         entrypoint: str | None = None,
         check: bool = True,
@@ -626,6 +673,8 @@ class Composition:
             rm: Remove container after run.
             capture: Capture the stdout of the `docker compose` invocation.
             capture_stderr: Capture the stderr of the `docker compose` invocation.
+            capture_and_print: Print during execution and capture the
+                stdout+stderr of the `docker compose` invocation.
         """
         # Restart any dependencies whose definitions have changed. The trick,
         # taken from Buildkite's Docker Compose plugin, is to run an `up`
@@ -641,8 +690,22 @@ class Composition:
             *args,
             capture=capture,
             capture_stderr=capture_stderr,
+            capture_and_print=capture_and_print,
             stdin=stdin,
             check=check,
+        )
+
+    def run_testdrive_files(
+        self,
+        *args: str,
+        rm: bool = False,
+    ) -> subprocess.CompletedProcess:
+        return self.run(
+            "testdrive",
+            *args,
+            rm=rm,
+            # needed for sufficient error information in the junit.xml while still printing to stdout during execution
+            capture_and_print=True,
         )
 
     def exec(
@@ -652,6 +715,7 @@ class Composition:
         detach: bool = False,
         capture: bool = False,
         capture_stderr: bool = False,
+        capture_and_print: bool = False,
         stdin: str | None = None,
         check: bool = True,
         workdir: str | None = None,
@@ -684,6 +748,7 @@ class Composition:
             *args,
             capture=capture,
             capture_stderr=capture_stderr,
+            capture_and_print=capture_and_print,
             stdin=stdin,
             check=check,
         )
@@ -801,6 +866,86 @@ class Composition:
 
         return None
 
+    def final_preflight_check(self) -> None:
+        """Check if Mz can do the preflight-check and upgrade/rollback with specified version."""
+        version = os.getenv("CI_FINAL_PREFLIGHT_CHECK_VERSION")
+        if version == None:
+            return
+        rollback = ui.env_is_truthy("CI_FINAL_PREFLIGHT_CHECK_ROLLBACK")
+        if "materialized" in self.compose["services"]:
+            ui.header("Final Preflight Check")
+            ps = self.invoke("ps", "materialized", "--quiet", capture=True)
+            if len(ps.stdout) == 0:
+                print("Service materialized not running, will not upgrade it.")
+                return
+
+            self.kill("materialized")
+            with self.override(
+                Materialized(
+                    image=f"materialize/materialized:{version}",
+                    environment_extra=["MZ_DEPLOY_GENERATION=1"],
+                    healthcheck=[
+                        "CMD",
+                        "curl",
+                        "-f",
+                        "localhost:6878/api/leader/status",
+                    ],
+                )
+            ):
+                self.up("materialized")
+                while True:
+                    result = json.loads(
+                        self.exec(
+                            "materialized",
+                            "curl",
+                            "localhost:6878/api/leader/status",
+                            capture=True,
+                        ).stdout
+                    )
+                    if result["status"] == "ReadyToPromote":
+                        return
+                    assert (
+                        result["status"] == "Initializing"
+                    ), f"Unexpected status {result}"
+                    print("Not ready yet, waiting 1 s")
+                    time.sleep(1)
+                if rollback:
+                    with self.override(Materialized()):
+                        self.up("materialized")
+                else:
+                    result = json.loads(
+                        self.exec(
+                            "materialized",
+                            "curl",
+                            "-X",
+                            "POST",
+                            "localhost:6878/api/leader/promote",
+                            capture=True,
+                        ).stdout
+                    )
+                    assert result["result"] == "Success", f"Unexpected result {result}"
+            self.sql("SELECT 1")
+
+            NUM_RETRIES = 60
+            for i in range(NUM_RETRIES + 1):
+                error = self.validate_sources_sinks_clusters()
+                if not error:
+                    break
+                if i == NUM_RETRIES:
+                    raise ValueError(error)
+                # Sources and cluster replicas need a few seconds to start up
+                print(f"Retrying ({i+1}/{NUM_RETRIES})...")
+                time.sleep(1)
+
+            # In case the test has to continue, reset state
+            self.kill("materialized")
+            self.up("materialized")
+
+        else:
+            ui.header(
+                "Persist Catalog Forward Compatibility Check skipped because Mz not in services"
+            )
+
     def sanity_restart_mz(self) -> None:
         """Restart Materialized if it is part of the composition to find
         problems with persisted objects, functions as a sanity check."""
@@ -858,7 +1003,9 @@ class Composition:
             sanity_restart_mz: Try restarting materialize first if it is part
                 of the composition, as a sanity check.
         """
-        if sanity_restart_mz:
+        if os.getenv("CI_FINAL_PREFLIGHT_CHECK_VERSION") != None:
+            self.final_preflight_check()
+        elif sanity_restart_mz:
             self.sanity_restart_mz()
         self.capture_logs()
         self.invoke(
@@ -1086,12 +1233,12 @@ class Composition:
             ]
 
         if persistent:
-            self.exec(service, *args, stdin=input, capture_stderr=True)
+            self.exec(service, *args, stdin=input, capture_and_print=True)
         else:
             assert (
                 mz_service is None
             ), "testdrive(mz_service = ...) can only be used with persistent Testdrive containers."
-            self.run(service, *args, stdin=input, capture_stderr=True)
+            self.run(service, *args, stdin=input, capture_and_print=True)
 
     def enable_minio_versioning(self) -> None:
         self.up("minio")

@@ -169,7 +169,7 @@ pub struct Controller<T = mz_repr::Timestamp> {
     immediate_watch_sets: Vec<Box<dyn Any>>,
 }
 
-impl<T> Controller<T> {
+impl<T: Timestamp> Controller<T> {
     pub fn active_compute(&mut self) -> ActiveComputeController<T> {
         self.compute.activate(&mut *self.storage)
     }
@@ -182,6 +182,11 @@ impl<T> Controller<T> {
     pub fn set_default_arrangement_exert_proportionality(&mut self, value: u32) {
         self.compute
             .set_default_arrangement_exert_proportionality(value);
+    }
+
+    pub fn set_enable_compute_aggressive_readhold_downgrades(&mut self, value: bool) {
+        self.compute
+            .set_enable_aggressive_readhold_downgrades(value);
     }
 
     /// Returns the connection context installed in the controller.

@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import json
-import os
 import re
 import time
 from collections.abc import Callable
@@ -23,6 +22,7 @@ from pg8000 import Cursor
 from pg8000.dbapi import ProgrammingError
 from pg8000.exceptions import DatabaseError
 
+from materialize import buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
@@ -65,14 +65,6 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    shard = os.environ.get("BUILDKITE_PARALLEL_JOB")
-    shard_count = os.environ.get("BUILDKITE_PARALLEL_JOB_COUNT")
-
-    if shard:
-        shard = int(shard)
-    if shard_count:
-        shard_count = int(shard_count)
-
     for i, name in enumerate(c.workflows):
         # incident-70 requires more memory, runs in separate CI step
         # concurrent-connections is too flaky
@@ -82,7 +74,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "test-concurrent-connections",
         ):
             continue
-        if shard is None or shard_count is None or i % int(shard_count) == shard:
+        if buildkite.accepted_by_shard(i):
             with c.test_case(name):
                 c.workflow(name)
 
@@ -130,7 +122,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
         user="mz_system",
     )
 
-    c.run("testdrive", *args.glob)
+    c.run_testdrive_files(*args.glob)
 
     # Add a replica to that cluster and verify that tests still pass.
     c.up("clusterd3")
@@ -150,16 +142,16 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
         port=6877,
         user="mz_system",
     )
-    c.run("testdrive", *args.glob)
+    c.run_testdrive_files(*args.glob)
 
     # Kill one of the nodes in the first replica of the compute cluster and
     # verify that tests still pass.
     c.kill("clusterd1")
-    c.run("testdrive", *args.glob)
+    c.run_testdrive_files(*args.glob)
 
     # Leave only replica 2 up and verify that tests still pass.
     c.sql("DROP CLUSTER REPLICA cluster1.replica1", port=6877, user="mz_system")
-    c.run("testdrive", *args.glob)
+    c.run_testdrive_files(*args.glob)
 
     c.sql("DROP CLUSTER cluster1 CASCADE", port=6877, user="mz_system")
 
@@ -1342,7 +1334,7 @@ def workflow_test_upsert(c: Composition) -> None:
         c.down(destroy_volumes=True)
         c.up("materialized", "zookeeper", "kafka", "schema-registry")
 
-        c.run("testdrive", "upsert/01-create-sources.td")
+        c.run_testdrive_files("upsert/01-create-sources.td")
         # Sleep to make sure the errors have made it to persist.
         # This isn't necessary for correctness,
         # as we should be able to crash at any point and re-start.
@@ -1352,7 +1344,7 @@ def workflow_test_upsert(c: Composition) -> None:
         print("Sleeping for ten seconds")
         time.sleep(10)
         c.exec("materialized", "bash", "-c", "kill -9 `pidof clusterd`")
-        c.run("testdrive", "upsert/02-after-clusterd-restart.td")
+        c.run_testdrive_files("upsert/02-after-clusterd-restart.td")
 
 
 def workflow_test_remote_storage(c: Composition) -> None:
@@ -1373,24 +1365,24 @@ def workflow_test_remote_storage(c: Composition) -> None:
             "schema-registry",
         )
 
-        c.run("testdrive", "storage/01-create-sources.td")
+        c.run_testdrive_files("storage/01-create-sources.td")
 
         c.kill("materialized")
         c.up("materialized")
         c.kill("clusterd1")
         c.up("clusterd1")
         c.up("clusterd2")
-        c.run("testdrive", "storage/02-after-environmentd-restart.td")
+        c.run_testdrive_files("storage/02-after-environmentd-restart.td")
 
         # just kill one of the clusterd's and make sure we can recover.
         # `clusterd2` will die on its own.
         c.kill("clusterd1")
-        c.run("testdrive", "storage/03-while-clusterd-down.td")
+        c.run_testdrive_files("storage/03-while-clusterd-down.td")
 
         # Bring back both clusterd's
         c.up("clusterd1")
         c.up("clusterd2")
-        c.run("testdrive", "storage/04-after-clusterd-restart.td")
+        c.run_testdrive_files("storage/04-after-clusterd-restart.td")
 
 
 def workflow_test_drop_quickstart_cluster(c: Composition) -> None:
@@ -1419,7 +1411,7 @@ def workflow_test_resource_limits(c: Composition) -> None:
     ):
         c.up("materialized", "postgres")
 
-        c.run("testdrive", "resources/resource-limits.td")
+        c.run_testdrive_files("resources/resource-limits.td")
 
 
 def workflow_pg_snapshot_resumption(c: Composition) -> None:
@@ -1437,21 +1429,21 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
     ):
         c.up("materialized", "postgres", "storage")
 
-        c.run("testdrive", "pg-snapshot-resumption/01-configure-postgres.td")
-        c.run("testdrive", "pg-snapshot-resumption/02-create-sources.td")
-        c.run("testdrive", "pg-snapshot-resumption/03-ensure-source-down.td")
+        c.run_testdrive_files("pg-snapshot-resumption/01-configure-postgres.td")
+        c.run_testdrive_files("pg-snapshot-resumption/02-create-sources.td")
+        c.run_testdrive_files("pg-snapshot-resumption/03-ensure-source-down.td")
 
         # Temporarily disabled because it is timing out.
         # https://github.com/MaterializeInc/materialize/issues/14533
         # # clusterd should crash
-        # c.run("testdrive", "pg-snapshot-resumption/04-while-clusterd-down.td")
+        # c.run_testdrive_files("pg-snapshot-resumption/04-while-clusterd-down.td")
 
         with c.override(
             # turn off the failpoint
             Clusterd(name="storage")
         ):
             c.up("storage")
-            c.run("testdrive", "pg-snapshot-resumption/05-verify-data.td")
+            c.run_testdrive_files("pg-snapshot-resumption/05-verify-data.td")
 
 
 def workflow_sink_failure(c: Composition) -> None:
@@ -1469,15 +1461,15 @@ def workflow_sink_failure(c: Composition) -> None:
     ):
         c.up("materialized", "zookeeper", "kafka", "schema-registry", "storage")
 
-        c.run("testdrive", "sink-failure/01-configure-sinks.td")
-        c.run("testdrive", "sink-failure/02-ensure-sink-down.td")
+        c.run_testdrive_files("sink-failure/01-configure-sinks.td")
+        c.run_testdrive_files("sink-failure/02-ensure-sink-down.td")
 
         with c.override(
             # turn off the failpoint
             Clusterd(name="storage")
         ):
             c.up("storage")
-            c.run("testdrive", "sink-failure/03-verify-data.td")
+            c.run_testdrive_files("sink-failure/03-verify-data.td")
 
 
 def workflow_test_bootstrap_vars(c: Composition) -> None:
@@ -1495,7 +1487,7 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
     ):
         c.up("materialized")
 
-        c.run("testdrive", "resources/bootstrapped-system-vars.td")
+        c.run_testdrive_files("resources/bootstrapped-system-vars.td")
 
     with c.override(
         Testdrive(no_reset=True),
@@ -1506,7 +1498,7 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
         ),
     ):
         c.up("materialized")
-        c.run("testdrive", "resources/bootstrapped-system-vars.td")
+        c.run_testdrive_files("resources/bootstrapped-system-vars.td")
 
 
 def workflow_test_system_table_indexes(c: Composition) -> None:
@@ -1750,10 +1742,12 @@ def workflow_pg_snapshot_partial_failure(c: Composition) -> None:
     ):
         c.up("materialized", "postgres", "storage")
 
-        c.run("testdrive", "pg-snapshot-partial-failure/01-configure-postgres.td")
-        c.run("testdrive", "pg-snapshot-partial-failure/02-create-sources.td")
+        c.run_testdrive_files("pg-snapshot-partial-failure/01-configure-postgres.td")
+        c.run_testdrive_files("pg-snapshot-partial-failure/02-create-sources.td")
 
-        c.run("testdrive", "pg-snapshot-partial-failure/03-verify-good-sub-source.td")
+        c.run_testdrive_files(
+            "pg-snapshot-partial-failure/03-verify-good-sub-source.td"
+        )
 
         c.kill("storage")
         # Restart the storage instance with the failpoint off...
@@ -1761,9 +1755,9 @@ def workflow_pg_snapshot_partial_failure(c: Composition) -> None:
             # turn off the failpoint
             Clusterd(name="storage")
         ):
-            c.run("testdrive", "pg-snapshot-partial-failure/04-add-more-data.td")
+            c.run_testdrive_files("pg-snapshot-partial-failure/04-add-more-data.td")
             c.up("storage")
-            c.run("testdrive", "pg-snapshot-partial-failure/05-verify-data.td")
+            c.run_testdrive_files("pg-snapshot-partial-failure/05-verify-data.td")
 
 
 def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
@@ -2103,8 +2097,7 @@ def workflow_test_query_without_default_cluster(c: Composition) -> None:
     ):
         c.up("materialized", "postgres")
 
-        c.run(
-            "testdrive",
+        c.run_testdrive_files(
             "query-without-default-cluster/query-without-default-cluster.td",
         )
 
@@ -2360,8 +2353,6 @@ def workflow_test_replica_metrics(c: Composition) -> None:
 
     maintenance = metrics.get_value("mz_arrangement_maintenance_seconds_total")
     assert maintenance > 0, f"unexpected arrangement maintanence time: {maintenance}"
-    delayed_time = metrics.get_value("mz_dataflow_delayed_time_seconds_total")
-    assert delayed_time < 1, f"unexpected delayed time: {delayed_time}"
 
     mv_correction_insertions = metrics.get_value(
         "mz_persist_sink_correction_insertions_total"
@@ -2406,6 +2397,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     c.up("materialized")
+    c.up("testdrive", persistent=True)
 
     def fetch_metrics() -> Metrics:
         resp = c.exec(
@@ -2542,6 +2534,20 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
         DROP INDEX idx;
         DROP MATERIALIZED VIEW mv;
         """
+    )
+
+    # Wait for the controller to asynchronously drop the dataflows and update
+    # metrics. We can inspect the controller's view of things in
+    # `mz_compute_hydration_statuses`, which is updated at the same time as
+    # these metrics are.
+    c.testdrive(
+        input=dedent(
+            """
+            > SELECT *
+              FROM mz_internal.mz_compute_hydration_statuses
+              WHERE object_id LIKE 'u%'
+            """
+        )
     )
 
     # Check that the per-collection metrics have been cleaned up.
@@ -2871,7 +2877,7 @@ def workflow_test_index_source_stuck(
         c.up("materialized")
         c.up("clusterd1")
         c.up("clusterd2")
-        c.run("testdrive", "index-source-stuck/run.td")
+        c.run_testdrive_files("index-source-stuck/run.td")
 
 
 def workflow_test_github_cloud_7998(
@@ -2889,21 +2895,21 @@ def workflow_test_github_cloud_7998(
         c.up("materialized")
         c.up("clusterd1")
 
-        c.run("testdrive", "github-cloud-7998/setup.td")
+        c.run_testdrive_files("github-cloud-7998/setup.td")
 
         # Make the compute cluster unavailable.
         c.kill("clusterd1")
-        c.run("testdrive", "github-cloud-7998/check.td")
+        c.run_testdrive_files("github-cloud-7998/check.td")
 
         # Trigger an environment bootstrap.
         c.kill("materialized")
         c.up("materialized")
-        c.run("testdrive", "github-cloud-7998/check.td")
+        c.run_testdrive_files("github-cloud-7998/check.td")
 
         # Run a second bootstrap check, just to be sure.
         c.kill("materialized")
         c.up("materialized")
-        c.run("testdrive", "github-cloud-7998/check.td")
+        c.run_testdrive_files("github-cloud-7998/check.td")
 
 
 def workflow_test_github_23246(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -2973,7 +2979,7 @@ def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -
             user="mz_system",
         )
 
-        c.run("testdrive", "statement-logging/statement-logging.td")
+        c.run_testdrive_files("statement-logging/statement-logging.td")
 
 
 class PropagatingThread(Thread):
@@ -3060,15 +3066,128 @@ def workflow_blue_green_deployment(
         c.up("clusterd1")
         c.up("clusterd2")
         c.up("clusterd3")
-        c.run("testdrive", "blue-green-deployment/setup.td")
+        c.run_testdrive_files("blue-green-deployment/setup.td")
 
         threads = [PropagatingThread(target=fn) for fn in (selects, subscribe)]
         for thread in threads:
             thread.start()
         time.sleep(10)  # some time to make sure the queries run fine
         try:
-            c.run("testdrive", "blue-green-deployment/deploy.td")
+            c.run_testdrive_files("blue-green-deployment/deploy.td")
         finally:
             running = False
             for thread in threads:
                 thread.join()
+
+
+def workflow_test_subscribe_hydration_status(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Test that hydration status tracking works for subscribe dataflows."""
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+    c.up("testdrive", persistent=True)
+
+    # Start a subscribe.
+    cursor = c.sql_cursor()
+    cursor.execute("BEGIN")
+    cursor.execute("DECLARE c CURSOR FOR SUBSCRIBE mz_tables")
+    cursor.execute("FETCH 1 c")
+
+    # Verify that the subscribe dataflow eventually shows as hydrated.
+    c.testdrive(
+        input=dedent(
+            """
+            > SELECT h.hydrated
+              FROM mz_internal.mz_subscriptions s
+              JOIN mz_internal.mz_compute_hydration_statuses h ON (h.object_id = s.id)
+              JOIN mz_tables t ON (s.referenced_object_ids = list[t.id])
+              WHERE t.name = 'mz_tables'
+            true
+            """
+        )
+    )
+
+    # Cancel the subscribe.
+    cursor.execute("ROLLBACK")
+
+    # Verify that the subscribe's hydration status is removed.
+    c.testdrive(
+        input=dedent(
+            """
+            > SELECT h.hydrated
+              FROM mz_internal.mz_subscriptions s
+              JOIN mz_internal.mz_hydration_statuses h ON (h.object_id = s.id)
+              JOIN mz_tables t ON (s.referenced_object_ids = list[t.id])
+              WHERE t.name = 'mz_tables'
+            """
+        )
+    )
+
+
+def workflow_test_compute_aggressive_readhold_downgrades_disabled(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Test that frontiers of MVs don't become stuck with aggressive read
+    hold downgrading disabled.
+    """
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_compute_aggressive_readhold_downgrades": "false",
+            },
+        ),
+        Testdrive(no_reset=True),
+    ):
+        c.up("materialized")
+        c.up("testdrive", persistent=True)
+
+        c.sql(
+            """
+            CREATE TABLE t (a int);
+            CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+            SELECT * FROM mv;
+            """
+        )
+
+        # Wait for `t`'s read frontier to be available.
+        c.testdrive(
+            input=dedent(
+                """
+                > SELECT true
+                  FROM mz_internal.mz_frontiers
+                  JOIN mz_tables ON (id = object_id)
+                  WHERE name = 't'
+                true
+                """
+            )
+        )
+
+        # Retrieve the current read frontier.
+        output = c.sql_query(
+            """
+            SELECT read_frontier
+            FROM mz_internal.mz_frontiers
+            JOIN mz_tables ON (id = object_id)
+            WHERE name = 't'
+            """
+        )
+        read_frontier = int(output[0][0])
+
+        # Verify that `t`'s read frontier advances.
+        c.testdrive(
+            input=dedent(
+                f"""
+                > SELECT read_frontier > {read_frontier}
+                  FROM mz_internal.mz_frontiers
+                  JOIN mz_tables ON (id = object_id)
+                  WHERE name = 't'
+                true
+                """
+            )
+        )

@@ -13,6 +13,7 @@
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Debug;
 use std::mem;
 use std::sync::Arc;
 
@@ -21,7 +22,7 @@ use derivative::Derivative;
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_controller_types::ClusterId;
-use mz_ore::now::EpochMillis;
+use mz_ore::now::{EpochMillis, NowFn};
 use mz_pgwire_common::Format;
 use mz_repr::role_id::RoleId;
 use mz_repr::user::ExternalUserMetadata;
@@ -48,9 +49,11 @@ use uuid::Uuid;
 
 use crate::catalog::CatalogState;
 use crate::client::RecordFirstRowStream;
+use crate::coord::catalog_oracle::InMemoryTimestampOracle;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::statement_logging::PreparedStatementLoggingInfo;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
+use crate::coord::PeekContext;
 use crate::error::AdapterError;
 use crate::AdapterNotice;
 
@@ -59,7 +62,10 @@ const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
 /// A session holds per-connection state.
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct Session<T = mz_repr::Timestamp> {
+pub struct Session<T = mz_repr::Timestamp>
+where
+    T: Debug + Clone + Send + Sync,
+{
     conn_id: ConnectionId,
     /// A globally unique identifier for the session. Not to be confused
     /// with `conn_id`, which may be reused.
@@ -100,6 +106,7 @@ pub struct Session<T = mz_repr::Timestamp> {
     // on. We express this by gating access with this token.
     #[derivative(Debug = "ignore")]
     qcell_owner: QCellOwner,
+    session_oracles: BTreeMap<Timeline, InMemoryTimestampOracle<T, NowFn<T>>>,
 }
 
 impl<T: TimestampManipulation> Session<T> {
@@ -171,7 +178,7 @@ impl<T: TimestampManipulation> Session<T> {
     ) -> Session<T> {
         let (notices_tx, notices_rx) = mpsc::unbounded_channel();
         let default_cluster = INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER.get(&user.name);
-        let mut vars = SessionVars::new(build_info, user);
+        let mut vars = SessionVars::new_unchecked(build_info, user);
         if let Some(default_cluster) = default_cluster {
             vars.set_cluster(default_cluster.clone());
         }
@@ -190,6 +197,7 @@ impl<T: TimestampManipulation> Session<T> {
             secret_key: rand::thread_rng().gen(),
             external_metadata_rx: None,
             qcell_owner: QCellOwner::new(),
+            session_oracles: BTreeMap::new(),
         }
     }
 
@@ -659,7 +667,7 @@ impl<T: TimestampManipulation> Session<T> {
     pub fn reset(&mut self) {
         let _ = self.clear_transaction();
         self.prepared_statements.clear();
-        self.vars = SessionVars::new(self.vars.build_info(), self.vars.user().clone());
+        self.vars.reset_all();
     }
 
     /// Returns the user who owns this session.
@@ -781,6 +789,39 @@ impl<T: TimestampManipulation> Session<T> {
             .as_ref()
             .expect("role_metadata invariant violated")
             .current_role
+    }
+
+    /// Ensures that a timestamp oracle exists for `timeline` and returns a mutable reference to
+    /// the timestamp oracle.
+    pub fn ensure_timestamp_oracle(
+        &mut self,
+        timeline: Timeline,
+    ) -> &mut InMemoryTimestampOracle<T, NowFn<T>> {
+        self.session_oracles
+            .entry(timeline)
+            .or_insert_with(|| InMemoryTimestampOracle::new(T::minimum(), NowFn::from(T::minimum)))
+    }
+
+    /// Ensures that a timestamp oracle exists for reads and writes from/to a local input and
+    /// returns a mutable reference to the timestamp oracle.
+    pub fn ensure_local_timestamp_oracle(&mut self) -> &mut InMemoryTimestampOracle<T, NowFn<T>> {
+        self.ensure_timestamp_oracle(Timeline::EpochMilliseconds)
+    }
+
+    /// Returns a reference to the timestamp oracle for `timeline`.
+    pub fn get_timestamp_oracle(
+        &self,
+        timeline: &Timeline,
+    ) -> Option<&InMemoryTimestampOracle<T, NowFn<T>>> {
+        self.session_oracles.get(timeline)
+    }
+
+    /// If the current session is using the Strong Session Serializable isolation level advance the
+    /// session local timestamp oracle to `write_ts`.
+    pub fn apply_write(&mut self, timestamp: T) {
+        if self.vars().transaction_isolation() == &IsolationLevel::StrongSessionSerializable {
+            self.ensure_local_timestamp_oracle().apply_write(timestamp);
+        }
     }
 }
 
@@ -1044,10 +1085,12 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                     TransactionOps::Peeks {
                         determination,
                         cluster_id,
+                        requires_linearization,
                     } => match add_ops {
                         TransactionOps::Peeks {
                             determination: add_timestamp_determination,
                             cluster_id: add_cluster_id,
+                            requires_linearization: add_requires_linearization,
                         } => {
                             assert_eq!(*cluster_id, add_cluster_id);
                             match (
@@ -1074,6 +1117,14 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                                 }
                                 (_, TimestampContext::NoTimestamp) => {}
                             };
+                            if matches!(requires_linearization, RequireLinearization::NotRequired)
+                                && matches!(
+                                    add_requires_linearization,
+                                    RequireLinearization::Required
+                                )
+                            {
+                                *requires_linearization = add_requires_linearization;
+                            }
                         }
                         // Iff peeks thus far do not have a timestamp (i.e.
                         // they are constant), we can switch to a write
@@ -1262,7 +1313,7 @@ impl<T> From<&TransactionStatus<T>> for TransactionCode {
 /// This is needed because we currently do not allow mixing reads and writes in
 /// a transaction. Use this to record what we have done, and what may need to
 /// happen at commit.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum TransactionOps<T> {
     /// The transaction has been initiated, but no statement has yet been executed
     /// in it.
@@ -1276,6 +1327,8 @@ pub enum TransactionOps<T> {
         determination: TimestampDetermination<T>,
         /// The cluster used to execute peeks.
         cluster_id: ClusterId,
+        /// Whether this peek needs to be linearized.
+        requires_linearization: RequireLinearization,
     },
     /// This transaction has done a `SUBSCRIBE` and must do nothing else.
     Subscribe,
@@ -1326,4 +1379,22 @@ pub struct WriteOp {
     pub id: GlobalId,
     /// The data rows.
     pub rows: Vec<(Row, Diff)>,
+}
+
+/// Whether a transaction requires linearization.
+#[derive(Debug)]
+pub enum RequireLinearization {
+    /// Linearization is required.
+    Required,
+    /// Linearization is not required.
+    NotRequired,
+}
+
+impl From<&PeekContext> for RequireLinearization {
+    fn from(ctx: &PeekContext) -> Self {
+        match ctx {
+            PeekContext::Select => RequireLinearization::Required,
+            PeekContext::Explain(..) => RequireLinearization::NotRequired,
+        }
+    }
 }

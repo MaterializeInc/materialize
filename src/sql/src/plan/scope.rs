@@ -96,10 +96,27 @@ pub struct ScopeItem {
     _private: (),
 }
 
+/// An ungrouped column in a scope.
+///
+/// We can't simply drop these items from scope. These items need to *exist*
+/// because they might shadow variables in outer scopes that would otherwise be
+/// valid to reference, but accessing them needs to produce an error.
+#[derive(Debug, Clone)]
+pub struct ScopeUngroupedColumn {
+    /// The name of the table that produced this ungrouped column, if any.
+    pub table_name: Option<PartialItemName>,
+    /// The name of the ungrouped column.
+    pub column_name: ColumnName,
+    /// Whether the original scope item allowed unqualified references.
+    pub allow_unqualified_references: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct Scope {
-    // The items in this scope.
+    /// The items in this scope.
     pub items: Vec<ScopeItem>,
+    /// The ungrouped columns in the scope.
+    pub ungrouped_columns: Vec<ScopeUngroupedColumn>,
     // Whether this scope starts a new chain of lateral outer scopes.
     //
     // It's easiest to understand with an example. Consider this query:
@@ -176,6 +193,7 @@ impl Scope {
     pub fn empty() -> Self {
         Scope {
             items: vec![],
+            ungrouped_columns: vec![],
             lateral_barrier: false,
         }
     }
@@ -202,7 +220,7 @@ impl Scope {
         self.items.len()
     }
 
-    /// Returns all items in the scope.
+    /// Iterates over all items in the scope.
     ///
     /// Items are returned in order of preference, where the innermost scope has
     /// the highest preference. For example, given scopes `A(B(C))`, items are
@@ -221,10 +239,10 @@ impl Scope {
     /// have separate types like `QueryScope` and `JoinScope` that more
     /// naturally encode the concept of a "lateral level", or at least something
     /// along those lines.
-    pub fn all_items<'a>(
+    fn all_items<'a>(
         &'a self,
         outer_scopes: &'a [Scope],
-    ) -> impl Iterator<Item = (ColumnRef, usize, &ScopeItem)> + 'a {
+    ) -> impl Iterator<Item = ScopeCursor<'a>> + 'a {
         let mut lat_level = 0;
         iter::once(self)
             .chain(outer_scopes)
@@ -233,11 +251,22 @@ impl Scope {
                 if scope.lateral_barrier {
                     lat_level += 1;
                 }
-                scope
+                let items = scope
                     .items
                     .iter()
                     .enumerate()
-                    .map(move |(column, item)| (ColumnRef { level, column }, lat_level, item))
+                    .map(move |(column, item)| ScopeCursor {
+                        lat_level,
+                        inner: ScopeCursorInner::Item {
+                            column: ColumnRef { level, column },
+                            item,
+                        },
+                    });
+                let ungrouped_columns = scope.ungrouped_columns.iter().map(move |uc| ScopeCursor {
+                    lat_level,
+                    inner: ScopeCursorInner::UngroupedColumn(uc),
+                });
+                items.chain(ungrouped_columns)
             })
     }
 
@@ -258,10 +287,15 @@ impl Scope {
         let mut seen_level = None;
         let items: Vec<_> = self
             .all_items(outer_scopes)
-            .filter(move |(_column, lat_level, item)| {
-                item.is_from_table(table) && *seen_level.get_or_insert(*lat_level) == *lat_level
+            .filter_map(move |c| match c.inner {
+                ScopeCursorInner::Item { column, item }
+                    if item.is_from_table(table)
+                        && *seen_level.get_or_insert(c.lat_level) == c.lat_level =>
+                {
+                    Some((column, item))
+                }
+                _ => None,
             })
-            .map(|(column, _lat_level, item)| (column, item))
             .collect();
         if !items.iter().map(|(column, _)| column.level).all_equal() {
             return Err(PlanError::AmbiguousTable(table.clone()));
@@ -281,22 +315,20 @@ impl Scope {
         column_name: &ColumnName,
     ) -> Result<ColumnRef, PlanError>
     where
-        M: FnMut(ColumnRef, usize, &ScopeItem) -> bool,
+        M: FnMut(&ScopeCursor) -> bool,
     {
         let mut results = self
             .all_items(outer_scopes)
-            .filter(|(column, lat_level, item)| {
-                (matches)(*column, *lat_level, item) && item.column_name == *column_name
-            });
+            .filter(|c| (matches)(c) && c.column_name() == column_name);
         match results.next() {
             None => {
                 let similar = self
                     .all_items(outer_scopes)
-                    .filter(|(column, lat_level, item)| (matches)(*column, *lat_level, item))
-                    .filter_map(|(_col, _lat, item)| {
-                        item.column_name
+                    .filter(|c| (matches)(c))
+                    .filter_map(|c| {
+                        c.column_name()
                             .is_similar(column_name)
-                            .then(|| item.column_name.clone())
+                            .then(|| c.column_name().clone())
                     })
                     .collect();
                 Err(PlanError::UnknownColumn {
@@ -305,11 +337,8 @@ impl Scope {
                     similar,
                 })
             }
-            Some((column, lat_level, item)) => {
-                if results
-                    .find(|(_column, lat_level2, _item)| lat_level == *lat_level2)
-                    .is_some()
-                {
+            Some(c) => {
+                if results.find(|c2| c.lat_level == c2.lat_level).is_some() {
                     if let Some(table_name) = table_name {
                         return Err(PlanError::AmbiguousTable(table_name.clone()));
                     } else {
@@ -317,14 +346,21 @@ impl Scope {
                     }
                 }
 
-                if item.lateral_error_if_referenced {
-                    return Err(PlanError::WrongJoinTypeForLateralColumn {
-                        table: table_name.cloned(),
-                        column: column_name.clone(),
-                    });
+                match c.inner {
+                    ScopeCursorInner::UngroupedColumn(uc) => Err(PlanError::UngroupedColumn {
+                        table: uc.table_name.clone(),
+                        column: uc.column_name.clone(),
+                    }),
+                    ScopeCursorInner::Item { column, item } => {
+                        if item.lateral_error_if_referenced {
+                            return Err(PlanError::WrongJoinTypeForLateralColumn {
+                                table: table_name.cloned(),
+                                column: column_name.clone(),
+                            });
+                        }
+                        Ok(column)
+                    }
                 }
-
-                Ok(column)
             }
         }
     }
@@ -339,7 +375,7 @@ impl Scope {
         let table_name = None;
         self.resolve_internal(
             outer_scopes,
-            |_column, _lat_level, item| item.allow_unqualified_references,
+            |c| c.allow_unqualified_references(),
             table_name,
             column_name,
         )
@@ -373,17 +409,17 @@ impl Scope {
         let mut seen_at_level = None;
         self.resolve_internal(
             outer_scopes,
-            |_column, lat_level, item| {
+            |c| {
                 // Once we've matched a table name at a lateral level, even if
                 // the column name did not match, we can never match an item
                 // from another lateral level.
                 if let Some(seen_at_level) = seen_at_level {
-                    if seen_at_level != lat_level {
+                    if seen_at_level != c.lat_level {
                         return false;
                     }
                 }
-                if item.table_name.as_ref().map(|n| n.matches(table_name)) == Some(true) {
-                    seen_at_level = Some(lat_level);
+                if c.table_name().as_ref().map(|n| n.matches(table_name)) == Some(true) {
+                    seen_at_level = Some(c.lat_level);
                     true
                 } else {
                     false
@@ -433,6 +469,7 @@ impl Scope {
         }
         Ok(Scope {
             items: self.items.into_iter().chain(right.items).collect(),
+            ungrouped_columns: vec![],
             lateral_barrier: false,
         })
     }
@@ -440,6 +477,7 @@ impl Scope {
     pub fn project(&self, columns: &[usize]) -> Self {
         Scope {
             items: columns.iter().map(|&i| self.items[i].clone()).collect(),
+            ungrouped_columns: vec![],
             lateral_barrier: false,
         }
     }
@@ -449,5 +487,45 @@ impl Scope {
             .iter()
             .filter_map(|name| name.table_name.as_ref())
             .collect::<BTreeSet<&PartialItemName>>()
+    }
+}
+
+/// A pointer to a scope item or an ungrouped column along side its lateral
+/// level. Used internally while iterating.
+#[derive(Debug, Clone)]
+struct ScopeCursor<'a> {
+    lat_level: usize,
+    inner: ScopeCursorInner<'a>,
+}
+
+#[derive(Debug, Clone)]
+enum ScopeCursorInner<'a> {
+    Item {
+        column: ColumnRef,
+        item: &'a ScopeItem,
+    },
+    UngroupedColumn(&'a ScopeUngroupedColumn),
+}
+
+impl ScopeCursor<'_> {
+    fn table_name(&self) -> Option<&PartialItemName> {
+        match &self.inner {
+            ScopeCursorInner::Item { item, .. } => item.table_name.as_ref(),
+            ScopeCursorInner::UngroupedColumn(uc) => uc.table_name.as_ref(),
+        }
+    }
+
+    fn column_name(&self) -> &ColumnName {
+        match &self.inner {
+            ScopeCursorInner::Item { item, .. } => &item.column_name,
+            ScopeCursorInner::UngroupedColumn(uc) => &uc.column_name,
+        }
+    }
+
+    fn allow_unqualified_references(&self) -> bool {
+        match &self.inner {
+            ScopeCursorInner::Item { item, .. } => item.allow_unqualified_references,
+            ScopeCursorInner::UngroupedColumn(uc) => uc.allow_unqualified_references,
+        }
     }
 }

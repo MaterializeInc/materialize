@@ -788,7 +788,11 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let secrets_reader = secrets_controller.reader();
     let now = SYSTEM_TIME.clone();
 
-    let persist_config = PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone());
+    let persist_config = PersistConfig::new(
+        &mz_environmentd::BUILD_INFO,
+        now.clone(),
+        mz_sql::session::vars::all_dyn_configs(),
+    );
     let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_config, &metrics_registry);
     let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
 
@@ -862,16 +866,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         Some(json) => serde_json::from_str(&json).context("parsing replica size map")?,
     };
 
-    // Ensure default storage cluster size actually exists in the passed map
-    if let Some(default_storage_cluster_size) = &args.default_storage_host_size {
-        if !cluster_replica_sizes
-            .0
-            .contains_key(default_storage_cluster_size)
-        {
-            bail!("default storage cluster size is unknown");
-        }
-    }
-
     emit_boot_diagnostics!(&BUILD_INFO);
     sys::adjust_rlimits();
 
@@ -924,7 +918,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 now,
                 environment_id: args.environment_id,
                 cluster_replica_sizes,
-                default_storage_cluster_size: args.default_storage_host_size,
                 bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
                 bootstrap_builtin_cluster_replica_size: args.bootstrap_builtin_cluster_replica_size,
                 system_parameter_defaults: args

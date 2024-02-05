@@ -47,10 +47,10 @@ use crate::extensions::reduce::{MzReduce, ReduceExt};
 use crate::render::context::{CollectionBundle, Context, SpecializedArrangement};
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{get_monoid, ReductionMonoid};
-use crate::render::ArrangementFlavor;
+use crate::render::{ArrangementFlavor, Pairer};
+use crate::row_spine::DatumSeq;
 use crate::typedefs::{
-    KeyBatcher, KeySpine, KeyValSpine, RowErrSpine, RowRowArrangement, RowRowSpine, RowSpine,
-    RowValSpine,
+    KeyBatcher, RowErrSpine, RowRowArrangement, RowRowSpine, RowSpine, RowValSpine,
 };
 
 impl<G, T> Context<G, T>
@@ -213,7 +213,8 @@ where
                 arranged_output
             }
             ReducePlan::Accumulable(expr) => {
-                let (arranged_output, errs) = self.build_accumulable(collection, expr, mfp_after);
+                let (arranged_output, errs) =
+                    self.build_accumulable(collection, expr, key_arity, mfp_after);
                 errors.push(errs);
                 SpecializedArrangement::RowRow(arranged_output)
             }
@@ -223,18 +224,19 @@ where
                 SpecializedArrangement::RowRow(output)
             }
             ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(expr)) => {
-                let (output, errs) = self.build_bucketed(collection, expr, mfp_after);
+                let (output, errs) = self.build_bucketed(collection, expr, key_arity, mfp_after);
                 errors.push(errs);
                 SpecializedArrangement::RowRow(output)
             }
             ReducePlan::Basic(BasicPlan::Single(index, aggr)) => {
-                let (output, errs) =
-                    self.build_basic_aggregate(collection, index, &aggr, true, mfp_after);
+                let (output, errs) = self
+                    .build_basic_aggregate(collection, index, &aggr, true, key_arity, mfp_after);
                 errors.push(errs.expect("validation should have occurred as it was requested"));
                 SpecializedArrangement::RowRow(output)
             }
             ReducePlan::Basic(BasicPlan::Multiple(aggrs)) => {
-                let (output, errs) = self.build_basic_aggregates(collection, aggrs, mfp_after);
+                let (output, errs) =
+                    self.build_basic_aggregates(collection, aggrs, key_arity, mfp_after);
                 errors.push(errs);
                 SpecializedArrangement::RowRow(output)
             }
@@ -502,17 +504,16 @@ where
                 assert!(v.is_empty());
                 (k, ())
             });
-            let (arrangement, errs) = self
-                .build_distinct::<RowSpine<_, _>, RowValSpine<_, _, _>, _>(
-                    collection,
-                    " [val: empty]",
-                    mfp_after,
-                );
+            let (arrangement, errs) = self.build_distinct::<RowSpine<_, _>, RowErrSpine<_, _>, _>(
+                collection,
+                " [val: empty]",
+                mfp_after,
+            );
             (SpecializedArrangement::RowUnit(arrangement), errs)
         } else {
             let collection = collection.inspect(|((_, v), _, _)| assert!(v.is_empty()));
             let (arrangement, errs) = self
-                .build_distinct::<RowRowSpine<_, _>, RowValSpine<_, _, _>, _>(
+                .build_distinct::<RowRowSpine<_, _>, RowErrSpine<_, _>, _>(
                     collection, "", mfp_after,
                 );
             (SpecializedArrangement::RowRow(arrangement), errs)
@@ -622,6 +623,7 @@ where
         &self,
         input: Collection<S, (Row, Row), Diff>,
         aggrs: Vec<(usize, AggregateExpr)>,
+        key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
     where
@@ -638,8 +640,14 @@ where
         let mut err_output = None;
         let mut to_collect = Vec::new();
         for (index, aggr) in aggrs {
-            let (result, errs) =
-                self.build_basic_aggregate(input.clone(), index, &aggr, err_output.is_none(), None);
+            let (result, errs) = self.build_basic_aggregate(
+                input.clone(),
+                index,
+                &aggr,
+                err_output.is_none(),
+                key_arity,
+                None,
+            );
             if errs.is_some() {
                 err_output = errs
             }
@@ -720,6 +728,7 @@ where
         index: usize,
         aggr: &AggregateExpr,
         validating: bool,
+        key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
         RowRowArrangement<S>,
@@ -747,23 +756,26 @@ where
 
         // If `distinct` is set, we restrict ourselves to the distinct `(key, val)`.
         if distinct {
+            // We map `(Row, Row)` to `Row` to take advantage of `Row*Spine` types.
+            let pairer = Pairer::new(key_arity);
+            let keyed = partial.map(move |(key, val)| pairer.merge(&key, &val));
             if validating {
                 let (oks, errs) = self
-                    .build_reduce_inaccumulable_distinct::<_, KeyValSpine<_, Result<(), String>, _, _>>(partial, None)
+                    .build_reduce_inaccumulable_distinct::<_, RowValSpine<Result<(), String>, _, _>>(keyed, None)
                     .as_collection(|k, v| (k.into_owned(), v.into_owned()))
-                    .map_fallible("Demux Errors", move |(key, result)| match result {
-                        Ok(()) => Ok(key),
+                    .map_fallible("Demux Errors", move |(key_val, result)| match result {
+                        Ok(()) => Ok(pairer.split(&key_val)),
                         Err(m) => Err(EvalError::Internal(m).into()),
                     });
                 err_output = Some(errs);
                 partial = oks;
             } else {
                 partial = self
-                    .build_reduce_inaccumulable_distinct::<_, KeySpine<_, _, _>>(
-                        partial,
+                    .build_reduce_inaccumulable_distinct::<_, RowSpine<_, _>>(
+                        keyed,
                         Some(" [val: empty]"),
                     )
-                    .as_collection(|k, _| k.into_owned());
+                    .as_collection(move |key_val_iter, _| pairer.split(key_val_iter));
             }
         }
 
@@ -874,21 +886,17 @@ where
 
     fn build_reduce_inaccumulable_distinct<S, Tr>(
         &self,
-        input: Collection<S, (Row, Row), Diff>,
+        input: Collection<S, Row, Diff>,
         name_tag: Option<&str>,
     ) -> Arranged<S, TraceAgent<Tr>>
     where
         S: Scope<Timestamp = G::Timestamp>,
         Tr::ValOwned: MaybeValidatingRow<(), String>,
         Tr: Trace
-            + for<'a> TraceReader<
-                Key<'a> = &'a (Row, Row),
-                KeyOwned = (Row, Row),
-                Time = G::Timestamp,
-                Diff = Diff,
-            > + 'static,
+            + for<'a> TraceReader<Key<'a> = DatumSeq<'a>, Time = G::Timestamp, Diff = Diff>
+            + 'static,
         Tr::Batch: Batch,
-        Tr::Batcher: Batcher<Item = (((Row, Row), Tr::ValOwned), G::Timestamp, Diff)>,
+        Tr::Batcher: Batcher<Item = ((Row, Tr::ValOwned), G::Timestamp, Diff)>,
         Arranged<S, TraceAgent<Tr>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
@@ -900,9 +908,7 @@ where
 
         let input: KeyCollection<_, _, _> = input.into();
         input
-            .mz_arrange::<KeySpine<(Row, Row), _, _>>(
-                "Arranged ReduceInaccumulable Distinct [val: empty]",
-            )
+            .mz_arrange::<RowSpine<_, _>>("Arranged ReduceInaccumulable Distinct [val: empty]")
             .mz_reduce_abelian::<_, Tr>(&output_name, move |_, source, t| {
                 if let Some(err) = Tr::ValOwned::into_error() {
                     for (value, count) in source.iter() {
@@ -939,6 +945,7 @@ where
             skips,
             buckets,
         }: BucketedPlan,
+        key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
     where
@@ -966,17 +973,16 @@ where
             });
 
             // Repeatedly apply hierarchical reduction with a progressively coarser key.
+            let pairer = Pairer::new(1);
             for b in buckets.into_iter() {
                 let input = stage.map(move |(hash_key, values)| {
                     let mut hash_key_iter = hash_key.iter();
                     let hash = hash_key_iter.next().unwrap().unwrap_uint64() % b;
-
-                    let binding = SharedRow::get();
-                    let mut row_builder = binding.borrow_mut();
-                    let mut row_packer = row_builder.packer();
-                    row_packer.push(Datum::UInt64(hash));
-                    row_packer.extend(hash_key_iter);
-                    (row_builder.clone(), values)
+                    let hash_key = pairer.merge(
+                        std::iter::once(Datum::from(hash)),
+                        hash_key_iter.take(key_arity),
+                    );
+                    (hash_key, values)
                 });
 
                 // We only want the first stage to perform validation of whether invalid accumulations
@@ -984,22 +990,17 @@ where
                 // stream or produce correct data in the output stream.
                 let negated_output = if err_output.is_none() {
                     let (oks, errs) = self
-                        .build_bucketed_negated_output::<_, Result<Row, Row>>(
+                        .build_bucketed_negated_output::<_, RowValSpine<Result<Row, Row>, _, _>>(
                             &input,
                             aggr_funcs.clone(),
                         )
+                        .as_collection(|k, v| (SharedRow::pack(k), v.clone()))
                         .map_fallible("Checked Invalid Accumulations", |(hash_key, result)| {
                             match result {
                                 Err(hash_key) => {
                                     let mut hash_key_iter = hash_key.iter();
                                     let _hash = hash_key_iter.next();
-
-                                    let binding = SharedRow::get();
-                                    let mut row_builder = binding.borrow_mut();
-                                    let mut row_packer = row_builder.packer();
-                                    row_packer.extend(hash_key_iter);
-                                    let key = row_builder.clone();
-
+                                    let key = SharedRow::pack(hash_key_iter);
                                     let message = format!(
                                         "Invalid data in source, saw non-positive accumulation \
                                          for key {key:?} in hierarchical mins-maxes aggregate"
@@ -1012,7 +1013,17 @@ where
                     err_output = Some(errs.leave_region());
                     oks
                 } else {
-                    self.build_bucketed_negated_output::<_, Row>(&input, aggr_funcs.clone())
+                    self.build_bucketed_negated_output::<_, RowRowSpine<_, _>>(
+                        &input,
+                        aggr_funcs.clone(),
+                    )
+                    .as_collection(|k, v| {
+                        let binding = SharedRow::get();
+                        let mut row_builder = binding.borrow_mut();
+                        let key = row_builder.pack_using(k);
+                        let val = row_builder.pack_using(v);
+                        (key, val)
+                    })
                 };
 
                 stage = negated_output
@@ -1022,15 +1033,10 @@ where
             }
 
             // Discard the hash from the key and return to the format of the input data.
-            let partial = stage.map(|(hash_key, values)| {
+            let partial = stage.map(move |(hash_key, values)| {
                 let mut hash_key_iter = hash_key.iter();
                 let _hash = hash_key_iter.next();
-
-                let binding = SharedRow::get();
-                let mut row_builder = binding.borrow_mut();
-                let mut row_packer = row_builder.packer();
-                row_packer.extend(hash_key_iter);
-                (row_builder.clone(), values)
+                (SharedRow::pack(hash_key_iter.take(key_arity)), values)
             });
 
             // Allocations for the two closures.
@@ -1152,14 +1158,20 @@ where
     /// `validating` indicates whether we want this stage to perform error detection
     /// for invalid accumulations. Once a stage is clean of such errors, subsequent
     /// stages can skip validation.
-    fn build_bucketed_negated_output<S, R>(
+    fn build_bucketed_negated_output<S, Tr>(
         &self,
         input: &Collection<S, (Row, Row), Diff>,
         aggrs: Vec<AggregateFunc>,
-    ) -> Collection<S, (Row, R), Diff>
+    ) -> Arranged<S, TraceAgent<Tr>>
     where
         S: Scope<Timestamp = G::Timestamp>,
-        R: MaybeValidatingRow<Row, Row>,
+        Tr::ValOwned: MaybeValidatingRow<Row, Row>,
+        Tr: Trace
+            + for<'a> TraceReader<Key<'a> = DatumSeq<'a>, Time = G::Timestamp, Diff = Diff>
+            + 'static,
+        Tr::Batch: Batch,
+        Tr::Batcher: Batcher<Item = ((Row, Tr::ValOwned), G::Timestamp, Diff)>,
+        Arranged<S, TraceAgent<Tr>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
         // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
@@ -1167,60 +1179,52 @@ where
         let arranged_input =
             input.mz_arrange::<RowRowSpine<_, _>>("Arranged MinsMaxesHierarchical input");
 
-        arranged_input
-            .mz_reduce_abelian::<_, RowValSpine<_, _, _>>(
-                "Reduced Fallibly MinsMaxesHierarchical",
-                move |key, source, target| {
-                    let binding = SharedRow::get();
-                    let mut row_builder = binding.borrow_mut();
-                    let mut row_packer = row_builder.packer();
-                    if let Some(err) = R::into_error() {
-                        // Should negative accumulations reach us, we should loudly complain.
-                        for (value, count) in source.iter() {
-                            if count.is_positive() {
-                                continue;
-                            }
-                            error_logger.log(
-                                "Non-positive accumulation in MinsMaxesHierarchical",
-                                &format!("key={key:?}, value={value:?}, count={count}"),
-                            );
-                            // After complaining, output an error here so that we can eventually
-                            // report it in an error stream.
-                            row_packer.extend(key);
-                            target.push((err(row_builder.clone()), -1));
-                            return;
-                        }
-                    }
-                    let mut source_iters = source
-                        .iter()
-                        .map(|(values, _cnt)| *values)
-                        .collect::<Vec<_>>();
-                    for func in aggrs.iter() {
-                        let column_iter =
-                            (0..source_iters.len()).map(|i| source_iters[i].next().unwrap());
-                        row_packer.push(func.eval(column_iter, &RowArena::new()));
-                    }
-                    // We only want to arrange the parts of the input that are not part of the output.
-                    // More specifically, we want to arrange it so that `input.concat(&output.negate())`
-                    // gives us the intended value of this aggregate function. Also we assume that regardless
-                    // of the multiplicity of the final result in the input, we only want to have one copy
-                    // in the output.
-                    target.reserve(source.len().saturating_add(1));
-                    target.push((R::ok(row_builder.clone()), -1));
-                    for (values, cnt) in source.iter() {
-                        row_packer = row_builder.packer();
-                        row_packer.extend(*values);
-                        target.push((R::ok(row_builder.clone()), *cnt));
-                    }
-                },
-            )
-            .as_collection(|k, v| {
+        arranged_input.mz_reduce_abelian::<_, Tr>(
+            "Reduced Fallibly MinsMaxesHierarchical",
+            move |key, source, target| {
                 let binding = SharedRow::get();
                 let mut row_builder = binding.borrow_mut();
                 let mut row_packer = row_builder.packer();
-                row_packer.extend(k);
-                (row_builder.clone(), v.clone())
-            })
+                if let Some(err) = Tr::ValOwned::into_error() {
+                    // Should negative accumulations reach us, we should loudly complain.
+                    for (value, count) in source.iter() {
+                        if count.is_positive() {
+                            continue;
+                        }
+                        error_logger.log(
+                            "Non-positive accumulation in MinsMaxesHierarchical",
+                            &format!("key={key:?}, value={value:?}, count={count}"),
+                        );
+                        // After complaining, output an error here so that we can eventually
+                        // report it in an error stream.
+                        row_packer.extend(key);
+                        target.push((err(row_builder.clone()), -1));
+                        return;
+                    }
+                }
+                let mut source_iters = source
+                    .iter()
+                    .map(|(values, _cnt)| *values)
+                    .collect::<Vec<_>>();
+                for func in aggrs.iter() {
+                    let column_iter =
+                        (0..source_iters.len()).map(|i| source_iters[i].next().unwrap());
+                    row_packer.push(func.eval(column_iter, &RowArena::new()));
+                }
+                // We only want to arrange the parts of the input that are not part of the output.
+                // More specifically, we want to arrange it so that `input.concat(&output.negate())`
+                // gives us the intended value of this aggregate function. Also we assume that regardless
+                // of the multiplicity of the final result in the input, we only want to have one copy
+                // in the output.
+                target.reserve(source.len().saturating_add(1));
+                target.push((Tr::ValOwned::ok(row_builder.clone()), -1));
+                for (values, cnt) in source.iter() {
+                    row_packer = row_builder.packer();
+                    row_packer.extend(*values);
+                    target.push((Tr::ValOwned::ok(row_builder.clone()), *cnt));
+                }
+            },
+        )
     }
 
     /// Build the dataflow to compute and arrange multiple hierarchical aggregations
@@ -1246,8 +1250,9 @@ where
                 let mut values = Vec::with_capacity(skips.len());
                 let mut row_iter = row.iter();
                 for skip in skips.iter() {
-                    row_builder.packer().push(row_iter.nth(*skip).unwrap());
-                    values.push(row_builder.clone());
+                    values.push(
+                        row_builder.pack_using(std::iter::once(row_iter.nth(*skip).unwrap())),
+                    );
                 }
 
                 (key, values)
@@ -1352,6 +1357,7 @@ where
             simple_aggrs,
             distinct_aggrs,
         }: AccumulablePlan,
+        key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
     where
@@ -1419,23 +1425,18 @@ where
 
         // Next, collect all aggregations that require distinctness.
         for (accumulable_index, datum_index, aggr) in distinct_aggrs.into_iter() {
+            let pairer = Pairer::new(key_arity);
             let collection = collection
                 .map(move |(key, row)| {
-                    let binding = SharedRow::get();
-                    let mut row_builder = binding.borrow_mut();
                     let value = row.iter().nth(datum_index).unwrap();
-                    row_builder.packer().push(value);
-                    (key, row_builder.clone())
+                    (pairer.merge(&key, std::iter::once(value)), ())
                 })
-                .map(|k| (k, ()))
-                .mz_arrange::<KeySpine<(Row, Row), _, _>>(
-                    "Arranged Accumulable Distinct [val: empty]",
-                )
-                .mz_reduce_abelian::<_, KeySpine<_, _, _>>(
+                .mz_arrange::<RowSpine<_, _>>("Arranged Accumulable Distinct [val: empty]")
+                .mz_reduce_abelian::<_, RowSpine<_, _>>(
                     "Reduced Accumulable Distinct [val: empty]",
                     move |_k, _s, t| t.push(((), 1)),
                 )
-                .as_collection(|k, _| k.clone())
+                .as_collection(move |key_val_iter, _| pairer.split(key_val_iter))
                 .explode_one({
                     let zero_diffs = zero_diffs.clone();
                     move |(key, row)| {
@@ -1564,22 +1565,21 @@ fn evaluate_mfp_after<'a, 'b>(
 ) -> Option<Row> {
     let binding = SharedRow::get();
     let mut row_builder = binding.borrow_mut();
-    let mut row_packer = row_builder.packer();
     // Apply MFP if it exists and pack a Row of
     // aggregate values from `datums_local`.
     if let Some(mfp) = mfp_after {
         // It must ignore errors here, but they are scanned
         // for elsewhere if the MFP can error.
-        let Ok(Some(iter)) = mfp.evaluate_iter(datums_local, temp_storage) else {
-            return None;
-        };
-        // The `mfp_after` must preserve the key columns,
-        // so we can skip them to form aggregation results.
-        row_packer.extend(iter.skip(key_len));
+        if let Ok(Some(iter)) = mfp.evaluate_iter(datums_local, temp_storage) {
+            // The `mfp_after` must preserve the key columns,
+            // so we can skip them to form aggregation results.
+            Some(row_builder.pack_using(iter.skip(key_len)))
+        } else {
+            None
+        }
     } else {
-        row_packer.extend(&datums_local[key_len..]);
+        Some(row_builder.pack_using(&datums_local[key_len..]))
     }
-    Some(row_builder.clone())
 }
 
 fn accumulable_zero(aggr_func: &AggregateFunc) -> Accum {
@@ -2375,6 +2375,7 @@ mod monoids {
             | AggregateFunc::Dummy
             | AggregateFunc::JsonbAgg { .. }
             | AggregateFunc::JsonbObjectAgg { .. }
+            | AggregateFunc::MapAgg { .. }
             | AggregateFunc::ArrayConcat { .. }
             | AggregateFunc::ListConcat { .. }
             | AggregateFunc::StringAgg { .. }

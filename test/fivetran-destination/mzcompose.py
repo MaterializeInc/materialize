@@ -78,6 +78,11 @@ SERVICES = [
     ),
 ]
 
+# Tests that are currently broken because the Fivetran Tester seems to do the wrong thing.
+#
+# 'test-truncate': https://materializeinc.slack.com/archives/C060KAR4802/p1706651239233319
+BROKEN_TESTS = ["test-truncate"]
+
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("filter", nargs="?")
@@ -90,6 +95,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             if args.filter and args.filter not in path.name:
                 print(f"Test case {path.name!r} does not match filter; skipping...")
                 continue
+            if path.name in BROKEN_TESTS:
+                print(f"Test case {path.name!r} is currently broken; skipping...")
+                continue
             with c.test_case(path.name):
                 _run_test_case(c, path)
 
@@ -100,34 +108,60 @@ def _run_test_case(c: Composition, path: Path):
     for test_file in sorted(p for p in path.iterdir()):
         test_file = test_file.relative_to(ROOT)
         if test_file.suffix == ".td":
-            c.run("testdrive", str(test_file))
+            c.run_testdrive_files(str(test_file))
         elif test_file.suffix == ".json":
             _run_destination_tester(c, test_file)
         elif test_file.name != "00-README":
             assert False, f"unexpected test file: {test_file}"
 
 
+# Run the Fivetran Destination Tester with a single file.
 def _run_destination_tester(c: Composition, test_file: Path):
-    data_dir = ROOT / "data"
-    for data_file in data_dir.iterdir():
-        if data_file.name in ("configuration.json", ".gitignore"):
-            continue
-        data_file.unlink()
-    shutil.copy(test_file, data_dir)
+    # The Fivetran Destination tester operates on an entire directory at a time. We run
+    # individual test cases by copying everything into a single "data" directory which
+    # automatically gets cleaned up at the start and end of every run.
+    with DataDirGuard(ROOT / "data") as data_dir:
+        test_file = ROOT / test_file
+        shutil.copy(test_file, data_dir.path())
 
-    expected_failure = None
-    last_line = test_file.read_text().splitlines()[-1]
-    if last_line.startswith("// FAIL: "):
-        expected_failure = last_line.removeprefix("// FAIL: ")
-    if expected_failure:
-        ret = c.run("fivetran-destination-tester", check=False, capture=True)
-        print("stdout:")
-        print(ret.stdout)
-        assert (
-            ret.returncode != 0
-        ), f"destination tester did not fail with expected message {expected_failure!r}"
-        assert (
-            expected_failure in ret.stdout
-        ), f"destination tester did not fail with expected message {expected_failure!r}"
-    else:
-        c.run("fivetran-destination-tester")
+        last_line = test_file.read_text().splitlines()[-1]
+        if last_line.startswith("// FAIL: "):
+            expected_failure = last_line.removeprefix("// FAIL: ")
+        else:
+            expected_failure = None
+
+        if expected_failure:
+            ret = c.run("fivetran-destination-tester", check=False, capture=True)
+            print("stdout:")
+            print(ret.stdout)
+            assert (
+                ret.returncode != 0
+            ), f"destination tester did not fail with expected message {expected_failure!r}"
+            assert (
+                expected_failure in ret.stdout
+            ), f"destination tester did not fail with expected message {expected_failure!r}"
+        else:
+            c.run("fivetran-destination-tester")
+
+
+# Type that implements the Context Protocol that makes it easy to automatically clean up our data
+# directory before and after every test run.
+class DataDirGuard:
+    def __init__(self, dir: Path):
+        self._dir = dir
+
+    def clean(self):
+        for file in self._dir.iterdir():
+            if file.name in ("configuration.json", ".gitignore"):
+                continue
+            file.unlink()
+
+    def path(self) -> Path:
+        return self._dir
+
+    def __enter__(self):
+        self.clean()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.clean()

@@ -232,7 +232,7 @@ where
                     table
                         .columns
                         .iter()
-                        .find(|col| col.col_num == Some(col_num))
+                        .find(|col| col.col_num == col_num)
                         .expect("key exists as column")
                         .name
                         .clone(),

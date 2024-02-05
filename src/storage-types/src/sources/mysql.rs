@@ -9,17 +9,28 @@
 
 //! Types related to mysql sources
 
-use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
-use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
+use std::fmt;
+use std::io;
+use std::num::NonZeroU64;
+
+use mz_timely_util::order::Step;
 use once_cell::sync::Lazy;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
+use timely::order::{PartialOrder, TotalOrder};
+use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
+use timely::progress::Antichain;
+use uuid::Uuid;
+
+use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
+use mz_repr::{ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
+use mz_timely_util::order::Partitioned;
 
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
     ReferencedConnection,
 };
-use crate::sources::SourceConnection;
+use crate::sources::{SourceConnection, SourceTimestamp};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -157,5 +168,343 @@ impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {
                 .map(mz_mysql_util::MySqlTableDesc::from_proto)
                 .collect::<Result<_, _>>()?,
         })
+    }
+}
+
+/// Represents a MySQL transaction id
+#[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum GtidState {
+    // NOTE: The ordering of the variants is important for the derived order implementation
+    /// Represents a MySQL server source-id that has not yet presented a GTID
+    Absent,
+
+    /// Represents an active MySQL server transaction-id for a given source.
+    ///
+    /// When used in a frontier / antichain, this represents the next transaction_id value that
+    /// we expect to see for the corresponding source_id(s).
+    /// When used as a timestamp, it represents an exact transaction_id value.
+    Active(NonZeroU64),
+}
+
+impl fmt::Display for GtidState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            GtidState::Absent => write!(f, "Absent"),
+            GtidState::Active(id) => write!(f, "{}", id),
+        }
+    }
+}
+
+impl GtidState {
+    pub const MAX: GtidState = GtidState::Active(NonZeroU64::MAX);
+}
+
+impl Timestamp for GtidState {
+    // No need to describe complex summaries
+    type Summary = ();
+
+    fn minimum() -> Self {
+        GtidState::Absent
+    }
+}
+
+impl TotalOrder for GtidState {}
+
+impl PartialOrder for GtidState {
+    fn less_equal(&self, other: &Self) -> bool {
+        self <= other
+    }
+}
+
+impl PathSummary<GtidState> for () {
+    fn results_in(&self, src: &GtidState) -> Option<GtidState> {
+        Some(*src)
+    }
+
+    fn followed_by(&self, _other: &Self) -> Option<Self> {
+        Some(())
+    }
+}
+
+impl Refines<()> for GtidState {
+    fn to_inner(_other: ()) -> Self {
+        Self::minimum()
+    }
+
+    fn to_outer(self) -> () {}
+
+    fn summarize(_path: Self::Summary) -> <() as Timestamp>::Summary {}
+}
+
+/// This type is used to represent the the progress of each MySQL GTID 'source_id' in the
+/// ingestion dataflow.
+///
+/// A MySQL GTID consists of a source_id (UUID) and transaction_id (non-zero u64).
+///
+/// For the purposes of this documentation effort, the term "source" refers to a MySQL
+/// server that is being replicated from:
+/// <https://dev.mysql.com/doc/refman/8.0/en/replication-gtids-concepts.html>
+///
+/// Each source_id represents a unique MySQL server, and the transaction_id
+/// monotonically increases for each source, representing the position of the transaction
+/// relative to other transactions on the same source.
+///
+/// Paritioining is by source_id which can be a singular UUID to represent a single source_id
+/// or a range of UUIDs to represent multiple sources.
+///
+/// The value of the partition is the NEXT transaction_id that we expect to see for the
+/// corresponding source(s), represented a GtidState::Next(transaction_id).
+///
+/// GtidState::Absent represents that no transactions have been seen for the
+/// corresponding source(s).
+///
+/// A complete Antichain of this type represents a frontier of the future transactions
+/// that we might see.
+pub type GtidPartition = Partitioned<Uuid, GtidState>;
+
+impl SourceTimestamp for GtidPartition {
+    fn encode_row(&self) -> Row {
+        let ts = match self.timestamp() {
+            GtidState::Absent => Datum::Null,
+            GtidState::Active(id) => Datum::UInt64(id.get()),
+        };
+        Row::pack(&[
+            Datum::Uuid(self.interval().lower),
+            Datum::Uuid(self.interval().upper),
+            ts,
+        ])
+    }
+
+    fn decode_row(row: &Row) -> Self {
+        let mut datums = row.iter();
+        match (datums.next(), datums.next(), datums.next(), datums.next()) {
+            (Some(Datum::Uuid(lower)), Some(Datum::Uuid(upper)), Some(Datum::UInt64(ts)), None) => {
+                match ts {
+                    0 => Partitioned::new_range(lower, upper, GtidState::Absent),
+                    ts => Partitioned::new_range(
+                        lower,
+                        upper,
+                        GtidState::Active(NonZeroU64::new(ts).unwrap()),
+                    ),
+                }
+            }
+            (Some(Datum::Uuid(lower)), Some(Datum::Uuid(upper)), Some(Datum::Null), None) => {
+                Partitioned::new_range(lower, upper, GtidState::Absent)
+            }
+            _ => panic!("invalid row {row:?}"),
+        }
+    }
+}
+
+/// Parses a GTID Set string received from a MySQL server (e.g. from @@gtid_purged or @@gtid_executed).
+///
+/// Returns the frontier of all future GTIDs that are not contained in the provided GTID set.
+///
+/// This includes singlular partitions that represent each UUID seen in the GTID Set, and range
+/// partitions that represent the missing UUIDs between the singular partitions, which are
+/// each set to GtidState::Absent.
+///
+/// TODO(roshan): Add compatibility for MySQL 8.3 'Tagged' GTIDs
+pub fn gtid_set_frontier(gtid_set_str: &str) -> Result<Antichain<GtidPartition>, io::Error> {
+    let mut partitions = Antichain::new();
+    let mut gap_lower = Some(Uuid::nil());
+    for mut gtid_str in gtid_set_str.split(',') {
+        if gtid_str.is_empty() {
+            continue;
+        };
+        gtid_str = gtid_str.trim();
+        let (uuid, intervals) = gtid_str.split_once(':').ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("invalid gtid: {}", gtid_str),
+            )
+        })?;
+
+        let uuid = Uuid::parse_str(uuid).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid uuid in gtid: {}: {}", uuid, e),
+            )
+        })?;
+
+        // From the MySQL docs:
+        // "When GTID sets are returned from server variables, UUIDs are in alphabetical order,
+        // and numeric intervals are merged and in ascending order."
+        // For our purposes, we need to ensure that all intervals are consecutive which means there
+        // should be at most one interval per GTID.
+        // TODO: should this same restriction be done when parsing a @@GTID_PURGED value? In that
+        // case the intervals might not be guaranteed to be consecutive, depending on how purging
+        // is implemented?
+        let mut intervals = intervals.split(':');
+        let end = match (intervals.next(), intervals.next()) {
+            (Some(interval_str), None) => {
+                let mut vals_iter = interval_str.split('-').map(str::parse::<u64>);
+                let start = vals_iter
+                    .next()
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("couldn't parse int: {}", interval_str),
+                        )
+                    })?
+                    .map_err(|e| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("couldn't parse int: {}: {}", interval_str, e),
+                        )
+                    })?;
+                match vals_iter.next() {
+                    Some(Ok(end)) => end,
+                    None => start,
+                    _ => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("invalid gtid interval: {}", interval_str),
+                        ))
+                    }
+                }
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("gtid with non-consecutive intervals found! {}", gtid_str),
+                ))
+            }
+        };
+        // Create a partition representing all the UUIDs in the gap between the previous one and this one
+        if let Some(gap_upper) = uuid.backward_checked(1) {
+            let gap_lower = gap_lower.expect("uuids are in alphabetical order");
+            if gap_upper >= gap_lower {
+                partitions.insert(GtidPartition::new_range(
+                    gap_lower,
+                    gap_upper,
+                    GtidState::Absent,
+                ));
+            } else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "gtid set not presented in alphabetical uuid order: {}",
+                        gtid_set_str
+                    ),
+                ));
+            }
+        }
+        gap_lower = uuid.forward_checked(1);
+        // Insert a partition representing the 'next' GTID that might be seen from this source
+        partitions.insert(GtidPartition::new_singleton(
+            uuid,
+            GtidState::Active(NonZeroU64::new(end + 1).unwrap()),
+        ));
+    }
+
+    // Add the final range partition if there is a gap between the last partition and the maximum
+    if let Some(gap_lower) = gap_lower {
+        partitions.insert(GtidPartition::new_range(
+            gap_lower,
+            Uuid::max(),
+            GtidState::Absent,
+        ));
+    }
+
+    Ok(partitions)
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use std::num::NonZeroU64;
+
+    #[mz_ore::test]
+    fn test_gtid_set_frontier_valid() {
+        let gtid_set_str =
+            "14c1b43a-eb64-11eb-8a9a-0242ac130002:1, 2174B383-5441-11E8-B90A-C80AA9429562:1-3, 3E11FA47-71CA-11E1-9E33-C80AA9429562:1-19";
+        let result = gtid_set_frontier(gtid_set_str).unwrap();
+        assert_eq!(result.len(), 7);
+        assert_eq!(
+            result,
+            Antichain::from_iter(vec![
+                GtidPartition::new_range(
+                    Uuid::nil(),
+                    Uuid::parse_str("14c1b43a-eb64-11eb-8a9a-0242ac130001").unwrap(),
+                    GtidState::Absent,
+                ),
+                GtidPartition::new_singleton(
+                    Uuid::parse_str("14c1b43a-eb64-11eb-8a9a-0242ac130002").unwrap(),
+                    GtidState::Active(NonZeroU64::new(2).unwrap()),
+                ),
+                GtidPartition::new_range(
+                    Uuid::parse_str("14c1b43a-eb64-11eb-8a9a-0242ac130003").unwrap(),
+                    Uuid::parse_str("2174B383-5441-11E8-B90A-C80AA9429561").unwrap(),
+                    GtidState::Absent,
+                ),
+                GtidPartition::new_singleton(
+                    Uuid::parse_str("2174B383-5441-11E8-B90A-C80AA9429562").unwrap(),
+                    GtidState::Active(NonZeroU64::new(4).unwrap()),
+                ),
+                GtidPartition::new_range(
+                    Uuid::parse_str("2174B383-5441-11E8-B90A-C80AA9429563").unwrap(),
+                    Uuid::parse_str("3E11FA47-71CA-11E1-9E33-C80AA9429561").unwrap(),
+                    GtidState::Absent,
+                ),
+                GtidPartition::new_singleton(
+                    Uuid::parse_str("3E11FA47-71CA-11E1-9E33-C80AA9429562").unwrap(),
+                    GtidState::Active(NonZeroU64::new(20).unwrap()),
+                ),
+                GtidPartition::new_range(
+                    Uuid::parse_str("3E11FA47-71CA-11E1-9E33-C80AA9429563").unwrap(),
+                    Uuid::max(),
+                    GtidState::Absent,
+                ),
+            ]),
+        )
+    }
+
+    #[mz_ore::test]
+    fn test_gtid_set_frontier_non_alphabetical_uuids() {
+        let gtid_set_str =
+            "3E11FA47-71CA-11E1-9E33-C80AA9429562:1-19, 2174B383-5441-11E8-B90A-C80AA9429562:1-3";
+        let result = gtid_set_frontier(gtid_set_str);
+        assert!(result.is_err());
+    }
+
+    #[mz_ore::test]
+    fn test_gtid_set_frontier_non_consecutive() {
+        let gtid_set_str =
+            "2174B383-5441-11E8-B90A-C80AA9429562:1-3:5-8, 3E11FA47-71CA-11E1-9E33-C80AA9429562:1-19";
+        let result = gtid_set_frontier(gtid_set_str);
+        assert!(result.is_err());
+    }
+
+    #[mz_ore::test]
+    fn test_gtid_set_frontier_invalid_uuid() {
+        let gtid_set_str =
+            "14c1b43a-eb64-11eb-8a9a-0242ac130002:1-5,24DA167-0C0C-11E8-8442-00059A3C7B00:1";
+        let result = gtid_set_frontier(gtid_set_str);
+        assert!(result.is_err());
+    }
+
+    #[mz_ore::test]
+    fn test_gtid_set_frontier_invalid_interval() {
+        let gtid_set_str =
+            "14c1b43a-eb64-11eb-8a9a-0242ac130002:1-5,14c1b43a-eb64-11eb-8a9a-0242ac130003:1-3:4";
+        let result = gtid_set_frontier(gtid_set_str);
+        assert!(result.is_err());
+    }
+
+    #[mz_ore::test]
+    fn test_gtid_set_frontier_empty_string() {
+        let gtid_set_str = "";
+        let result = gtid_set_frontier(gtid_set_str).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result,
+            Antichain::from_elem(GtidPartition::new_range(
+                Uuid::nil(),
+                Uuid::max(),
+                GtidState::Absent,
+            ))
+        );
     }
 }

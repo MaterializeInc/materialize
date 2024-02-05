@@ -18,7 +18,7 @@ CREATE TABLE alter_add_column (f1 INTEGER PRIMARY KEY);
 ALTER TABLE alter_add_column REPLICA IDENTITY FULL;
 INSERT INTO alter_add_column VALUES (123);
 
-$ schema-registry-wait subject=postgres.public.alter_add_column-value
+$ schema-registry-wait topic=postgres.public.alter_add_column
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'

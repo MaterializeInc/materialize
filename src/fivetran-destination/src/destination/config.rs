@@ -19,6 +19,8 @@ use crate::fivetran_sdk::{
     ConfigurationFormResponse, ConfigurationTest, FormField, TestRequest, TestResponse, TextField,
 };
 
+pub const FIVETRAN_DESTINATION_APPLICATION_NAME: &str = "materialize_fivetran_destination";
+
 pub fn handle_configuration_form_request() -> ConfigurationFormResponse {
     ConfigurationFormResponse {
         schema_selection_supported: true,
@@ -72,6 +74,7 @@ pub async fn handle_test_request(request: TestRequest) -> Result<TestResponse, a
     let result = match request.name.as_str() {
         "connect" => test_connect(request.configuration).await,
         "permissions" => test_permissions(request.configuration).await,
+        "ping" => Ok(()),
         name => bail!("unknown test {}", name.quoted()),
     };
     let response = match result {
@@ -131,6 +134,7 @@ pub async fn connect(
         .port(6875)
         .password(app_password)
         .dbname(&dbname)
+        .application_name(FIVETRAN_DESTINATION_APPLICATION_NAME)
         .connect(tls_connector)
         .await
         .context("connecting to Materialize")?;

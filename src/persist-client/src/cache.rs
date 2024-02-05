@@ -678,7 +678,6 @@ mod tests {
 
     use futures::stream::{FuturesUnordered, StreamExt};
     use mz_build_info::DUMMY_BUILD_INFO;
-    use mz_ore::now::SYSTEM_TIME;
     use mz_ore::task::spawn;
 
     use super::*;
@@ -687,7 +686,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn client_cache() {
         let cache = PersistClientCache::new(
-            PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone()),
+            PersistConfig::new_for_tests(),
             &MetricsRegistry::new(),
             |_, _| PubSubClientConnection::noop(),
         );

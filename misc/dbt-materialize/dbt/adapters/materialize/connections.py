@@ -18,8 +18,6 @@ from dataclasses import dataclass
 from typing import Optional
 
 import psycopg2
-from psycopg2.extensions import string_types
-from psycopg2.extras import register_uuid
 
 import dbt.adapters.postgres.connections
 import dbt.exceptions
@@ -31,12 +29,6 @@ from dbt.semver import versions_compatible
 SUPPORTED_MATERIALIZE_VERSIONS = ">=0.68.0"
 
 logger = AdapterLogger("Materialize")
-
-# NOTE(morsapaes): registering the UUID type produces nicer error messages when
-# data contracts fail on a UUID type. See comment in the
-# `data_type_code_to_name` method for details. We may be able to remove this
-# when dbt-core#8900 lands.
-register_uuid()
 
 # Override the psycopg2 connect function in order to inject Materialize-specific
 # session parameter defaults.
@@ -137,40 +129,6 @@ class MaterializeConnectionManager(PostgresConnectionManager):
                 return
             # probably bad, re-raise it
             raise
-
-    # NOTE(benesch): this is a backport, with modifications, of dbt-core#8887.
-    # TODO(benesch): consider removing this when v1.8 ships with this code.
-    @classmethod
-    def data_type_code_to_name(cls, type_code: int) -> str:
-        if type_code in string_types:
-            return string_types[type_code].name
-        else:
-            # The type is unknown to psycopg2, so make up a unique name based on
-            # the type's OID. Here are the consequences for data contracts that
-            # reference unknown types:
-            #
-            #   * Data contracts that are valid work flawlessly. Take the
-            #     `mz_timestamp` type, for example, which is unknown to psycopg2
-            #     because it is a special Materialize type. It has OID 16552. If
-            #     the data contract specifies a column of type `mz_timestamp`
-            #     and the model's column is actually of type `mz_timestamp`, the
-            #     contract will validate successfully and the user will have no
-            #     idea that under the hood dbt validated these two strings
-            #     against one another:
-            #
-            #         expected: `custom type unknown to dbt (OID 16552)`
-            #           actual: `custom type unknown to dbt (OID 16552)`
-            #
-            #   * Data contracts that are invalid produce an ugly error message.
-            #     If the contract specifies the `timestamp` type but the model's
-            #     column is actually of type `mz_timestamp`, dbt will complain
-            #     with an error message like "expected type DATETIME, got custom
-            #     type unknown to dbt (OID 16552)".
-            #
-            #     Still, this is much better than the built-in behavior with dbt
-            #     1.7, which is to raise "Unhandled error while executing:
-            #     16552". See dbt-core#8353 for details.
-            return f"custom type unknown to dbt (OID {type_code})"
 
     # Disable transactions. Materialize transactions do not support arbitrary
     # queries in transactions and therefore many of dbt's internal macros

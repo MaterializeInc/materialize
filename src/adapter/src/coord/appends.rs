@@ -390,7 +390,8 @@ impl Coordinator {
 
                         // Notify the external clients of the result.
                         for response in responses {
-                            let (ctx, result) = response.finalize();
+                            let (mut ctx, result) = response.finalize();
+                            ctx.session_mut().apply_write(timestamp);
                             ctx.retire(result);
                         }
 
@@ -447,7 +448,8 @@ impl Coordinator {
     ) {
         self.apply_local_write(timestamp).await;
         for response in responses {
-            let (ctx, result) = response.finalize();
+            let (mut ctx, result) = response.finalize();
+            ctx.session_mut().apply_write(timestamp);
             ctx.retire(result);
         }
 

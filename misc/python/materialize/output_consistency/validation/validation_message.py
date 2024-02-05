@@ -86,6 +86,7 @@ class ValidationError(ValidationMessage):
         sql_error2: str | None = None,
         description: str | None = None,
         col_index: int | None = None,
+        concerned_expression: str | None = None,
         location: str | None = None,
     ):
         super().__init__(message, description)
@@ -100,6 +101,7 @@ class ValidationError(ValidationMessage):
         self.sql_error1 = sql_error1
         self.sql_error2 = sql_error2
         self.col_index = col_index
+        self.concerned_expression = concerned_expression
         self.location = location
 
     def __str__(self) -> str:

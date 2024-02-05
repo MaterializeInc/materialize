@@ -277,10 +277,8 @@ simple
 SELECT 1;
 SELECT * FROM t;
 ----
-1
-COMPLETE 1
-1
-COMPLETE 1
+db error: ERROR: querying the following items "materialize.public.t" is not allowed from the "mz_introspection" cluster
+DETAIL: The transaction is executing on the mz_introspection cluster, maybe having been routed there by the first statement in the transaction.
 
 statement ok
 CREATE SCHEMA other
@@ -794,8 +792,8 @@ CREATE DEFAULT INDEX ON s
 statement ok
 BEGIN
 
-statement error db error: ERROR: ALTER INDEX s_primary_idx SET \(LOGICAL COMPACTION WINDOW = 0\) cannot be run inside a transaction block
-ALTER INDEX s_primary_idx SET (LOGICAL COMPACTION WINDOW = 0)
+statement error db error: ERROR: ALTER INDEX s_primary_idx SET \(RETAIN HISTORY = FOR 0\) cannot be run inside a transaction block
+ALTER INDEX s_primary_idx SET (RETAIN HISTORY = FOR 0)
 
 query error db error: ERROR: current transaction is aborted, commands ignored until end of transaction block
 SELECT 1

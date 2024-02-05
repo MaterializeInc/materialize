@@ -45,8 +45,8 @@ use mz_sql::names::{
     ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier,
 };
 use mz_sql::plan::{
-    CreateSourcePlan, HirRelationExpr, Ingestion as PlanIngestion, WebhookHeaders,
-    WebhookValidation,
+    CreateSourcePlan, HirRelationExpr, Ingestion as PlanIngestion, WebhookBodyFormat,
+    WebhookHeaders, WebhookValidation,
 };
 use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
@@ -149,7 +149,6 @@ pub struct Cluster {
     pub config: ClusterConfig,
     #[serde(skip)]
     pub log_indexes: BTreeMap<LogVariant, GlobalId>,
-    pub linked_object_id: Option<GlobalId>,
     /// Objects bound to this cluster. Does not include introspection source
     /// indexes.
     pub bound_objects: BTreeSet<GlobalId>,
@@ -254,7 +253,6 @@ impl From<Cluster> for durable::Cluster {
         durable::Cluster {
             id: cluster.id,
             name: cluster.name,
-            linked_object_id: cluster.linked_object_id,
             owner_id: cluster.owner_id,
             privileges: cluster.privileges.into_all_values().collect(),
             config: cluster.config.into(),
@@ -394,6 +392,8 @@ pub enum DataSourceDesc {
     Webhook {
         /// Optional components used to validation a webhook request.
         validate_using: Option<WebhookValidation>,
+        /// Describes how we deserialize the body of a webhook request.
+        body_format: WebhookBodyFormat,
         /// Describes whether or not to include headers and how to map them.
         headers: WebhookHeaders,
         /// The cluster which this source is associated with.
@@ -449,6 +449,9 @@ pub struct Source {
     pub desc: RelationDesc,
     pub timeline: Timeline,
     pub resolved_ids: ResolvedIds,
+    /// This value is ignored for subsources, i.e. for
+    /// [`DataSourceDesc::Source`]. Instead, it uses the primary sources logical
+    /// compaction window.
     pub custom_logical_compaction_window: Option<CompactionWindow>,
     /// Whether the source's logical compaction window is controlled by
     /// METRICS_RETENTION
@@ -494,9 +497,11 @@ impl Source {
                 }
                 mz_sql::plan::DataSourceDesc::Webhook {
                     validate_using,
+                    body_format,
                     headers,
                 } => DataSourceDesc::Webhook {
                     validate_using,
+                    body_format,
                     headers,
                     cluster_id: plan
                         .in_cluster
@@ -1078,10 +1083,6 @@ impl CatalogItem {
     }
 
     /// The custom compaction window, if any has been set.
-    // Note[btv]: As of 2023-04-10, this is only set
-    // for objects with `is_retained_metrics_object`. That
-    // may not always be true in the future, if we enable user-settable
-    // compaction windows.
     pub fn custom_logical_compaction_window(&self) -> Option<CompactionWindow> {
         match self {
             CatalogItem::Table(table) => table.custom_logical_compaction_window,
@@ -1914,16 +1915,6 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
         self.id
     }
 
-    fn linked_object_id(&self) -> Option<GlobalId> {
-        assert!(
-            self.linked_object_id.is_none(),
-            "cluster {} still linked to {:?}",
-            self.id,
-            self.linked_object_id
-        );
-        self.linked_object_id
-    }
-
     fn bound_objects(&self) -> &BTreeSet<GlobalId> {
         &self.bound_objects
     }
@@ -1954,6 +1945,13 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
 
     fn is_managed(&self) -> bool {
         self.is_managed()
+    }
+
+    fn managed_size(&self) -> Option<&str> {
+        match &self.config.variant {
+            ClusterVariant::Managed(ClusterVariantManaged { size, .. }) => Some(size),
+            _ => None,
+        }
     }
 }
 

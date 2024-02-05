@@ -207,6 +207,7 @@ use std::fmt::Write;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
+use mz_dyncfg::ConfigSet;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::error::UpperMismatch;
 use mz_persist_client::stats::PartStats;
@@ -258,6 +259,14 @@ mod proto {
             ProtoBatch::decode(buf).expect("valid (legacy) ProtoBatch")
         }
     }
+}
+
+/// Adds the full set of all persist-txn `Config`s.
+pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
+    configs
+        .add(&crate::operator::DATA_SHARD_RETRYER_INITIAL_BACKOFF)
+        .add(&crate::operator::DATA_SHARD_RETRYER_MULTIPLIER)
+        .add(&crate::operator::DATA_SHARD_RETRYER_CLAMP)
 }
 
 /// The in-mem representation of an update in the txns shard.

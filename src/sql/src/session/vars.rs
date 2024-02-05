@@ -83,11 +83,11 @@ use mz_adapter_types::timestamp_oracle::{
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER,
 };
 use mz_build_info::BuildInfo;
+use mz_dyncfg::{ConfigSet, ConfigType, ConfigUpdates as PersistConfigUpdates, ConfigVal};
 use mz_ore::cast;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
-use mz_persist_client::batch::UntrimmableColumns;
-use mz_persist_client::cfg::{PersistConfig, PersistFeatureFlag};
+use mz_persist_client::cfg::{CRDB_CONNECT_TIMEOUT, CRDB_TCP_USER_TIMEOUT};
 use mz_pgwire_common::Severity;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
@@ -579,108 +579,6 @@ static ALLOWED_CLUSTER_REPLICA_SIZES: Lazy<ServerVar<Vec<Ident>>> = Lazy::new(||
     internal: false,
 });
 
-/// Controls [`mz_persist_client::cfg::DynamicConfig::blob_target_size`].
-const PERSIST_BLOB_TARGET_SIZE: ServerVar<usize> = ServerVar {
-    name: UncasedStr::new("persist_blob_target_size"),
-    value: PersistConfig::DEFAULT_BLOB_TARGET_SIZE,
-    description: "A target maximum size of persist blob payloads in bytes (Materialize).",
-    internal: true,
-};
-
-/// Controls [`mz_persist_client::cfg::DynamicConfig::blob_cache_mem_limit_bytes`].
-const PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES: ServerVar<usize> = ServerVar {
-    name: UncasedStr::new("persist_blob_cache_mem_limit_bytes"),
-    value: PersistConfig::DEFAULT_BLOB_CACHE_MEM_LIMIT_BYTES,
-    description:
-        "Capacity of in-mem blob cache in bytes. Only takes effect on restart (Materialize).",
-    internal: true,
-};
-
-/// Controls [`mz_persist_client::cfg::DynamicConfig::compaction_minimum_timeout`].
-const PERSIST_COMPACTION_MINIMUM_TIMEOUT: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("persist_compaction_minimum_timeout"),
-    value: PersistConfig::DEFAULT_COMPACTION_MINIMUM_TIMEOUT,
-    description: "The minimum amount of time to allow a persist compaction request to run before \
-                  timing it out (Materialize).",
-    internal: true,
-};
-
-/// Controls [`mz_persist_client::cfg::DynamicConfig::consensus_connection_pool_ttl`].
-const PERSIST_CONSENSUS_CONNECTION_POOL_TTL: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("persist_consensus_connection_pool_ttl"),
-    value: PersistConfig::DEFAULT_CONSENSUS_CONNPOOL_TTL,
-    description: "The minimum TTL of a Consensus connection to Postgres/CRDB before it is proactively terminated",
-    internal: true,
-};
-
-/// Controls [`mz_persist_client::cfg::DynamicConfig::consensus_connection_pool_ttl`].
-const PERSIST_READER_LEASE_DURATION: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("persist_reader_lease_duration"),
-    value: PersistConfig::DEFAULT_READ_LEASE_DURATION,
-    description: "The time after which we'll clean up stale read leases",
-    internal: true,
-};
-
-/// Controls [`mz_persist_client::cfg::DynamicConfig::consensus_connection_pool_ttl_stagger`].
-const PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("persist_consensus_connection_pool_ttl_stagger"),
-    value: PersistConfig::DEFAULT_CONSENSUS_CONNPOOL_TTL_STAGGER,
-    description: "The minimum time between TTLing Consensus connections to Postgres/CRDB.",
-    internal: true,
-};
-
-/// Controls initial backoff of [`mz_persist_client::cfg::DynamicConfig::next_listen_batch_retry_params`].
-const PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("persist_next_listen_batch_retryer_initial_backoff"),
-    value: PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.initial_backoff,
-    description: "The initial backoff when polling for new batches from a Listen or Subscribe.",
-    internal: true,
-};
-
-/// Controls backoff multiplier of [`mz_persist_client::cfg::DynamicConfig::next_listen_batch_retry_params`].
-const PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER: ServerVar<u32> = ServerVar {
-    name: UncasedStr::new("persist_next_listen_batch_retryer_multiplier"),
-    value: PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.multiplier,
-    description: "The backoff multiplier when polling for new batches from a Listen or Subscribe.",
-    internal: true,
-};
-
-/// Controls backoff clamp of [`mz_persist_client::cfg::DynamicConfig::next_listen_batch_retry_params`].
-const PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("persist_next_listen_batch_retryer_clamp"),
-    value: PersistConfig::DEFAULT_NEXT_LISTEN_BATCH_RETRYER.clamp,
-    description:
-        "The backoff clamp duration when polling for new batches from a Listen or Subscribe.",
-    internal: true,
-};
-
-/// Controls initial backoff of [`mz_persist_client::cfg::DynamicConfig::txns_data_shard_retry_params`].
-const PERSIST_TXNS_DATA_SHARD_RETRYER_INITIAL_BACKOFF: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("persist_txns_data_shard_retryer_initial_backoff"),
-    value: PersistConfig::DEFAULT_TXNS_DATA_SHARD_RETRYER.initial_backoff,
-    description:
-        "The initial backoff when polling for new batches from a txns data shard persist_source.",
-    internal: true,
-};
-
-/// Controls backoff multiplier of [`mz_persist_client::cfg::DynamicConfig::txns_data_shard_retry_params`].
-const PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER: ServerVar<u32> = ServerVar {
-    name: UncasedStr::new("persist_txns_data_shard_retryer_multiplier"),
-    value: PersistConfig::DEFAULT_TXNS_DATA_SHARD_RETRYER.multiplier,
-    description:
-        "The backoff multiplier when polling for new batches from a txns data shard persist_source.",
-    internal: true,
-};
-
-/// Controls backoff clamp of [`mz_persist_client::cfg::DynamicConfig::txns_data_shard_retry_params`].
-const PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("persist_txns_data_shard_retryer_clamp"),
-    value: PersistConfig::DEFAULT_TXNS_DATA_SHARD_RETRYER.clamp,
-    description:
-        "The backoff clamp duration when polling for new batches from a txns data shard persist_source.",
-    internal: true,
-};
-
 const PERSIST_FAST_PATH_LIMIT: ServerVar<usize> = ServerVar {
     name: UncasedStr::new("persist_fast_path_limit"),
     value: 0,
@@ -1044,11 +942,20 @@ static WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<ServerVar<usize>> = Lazy::new(|| 
 
 const COORD_SLOW_MESSAGE_REPORTING_THRESHOLD: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("coord_slow_message_reporting_threshold"),
-    // Note(parkmycar): This value was chosen arbitrarily.
-    value: Duration::from_millis(100),
+    // Default to recording all messages, but left here so we can dynamically increase if this
+    // causes unexpected problems.
+    value: Duration::from_millis(0),
     description:
         "Sets the threshold at which we will report the handling of a coordinator message \
     for being slow.",
+    internal: true,
+};
+
+const COORD_SLOW_MESSAGE_WARN_THRESHOLD: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("coord_slow_message_warn_threshold"),
+    // Note(parkmycar): This value was chosen arbitrarily.
+    value: Duration::from_secs(5),
+    description: "Sets the threshold at which we will warn! for a coordinator message being slow.",
     internal: true,
 };
 
@@ -1107,6 +1014,34 @@ const PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("pg_source_snapshot_statement_timeout"),
     value: mz_postgres_util::DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT,
     description: "Sets the `statement_timeout` value to use during the snapshotting phase of PG sources (Materialize)",
+    internal: true,
+};
+
+/// Please see `PgSourceSnapshotConfig`.
+const PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("pg_source_snapshot_collect_strict_count"),
+    value: mz_storage_types::parameters::PgSourceSnapshotConfig::new().collect_strict_count,
+    description: "Please see <https://dev.materialize.com/api/rust-private\
+        /mz_storage_types/parameters\
+        /struct.PgSourceSnapshotConfig.html#structfield.collect_strict_count>",
+    internal: true,
+};
+/// Please see `PgSourceSnapshotConfig`.
+const PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("pg_source_snapshot_fallback_to_strict_count"),
+    value: mz_storage_types::parameters::PgSourceSnapshotConfig::new().fallback_to_strict_count,
+    description: "Please see <https://dev.materialize.com/api/rust-private\
+        /mz_storage_types/parameters\
+        /struct.PgSourceSnapshotConfig.html#structfield.fallback_to_strict_count>",
+    internal: true,
+};
+/// Please see `PgSourceSnapshotConfig`.
+const PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("pg_source_snapshot_wait_for_count"),
+    value: mz_storage_types::parameters::PgSourceSnapshotConfig::new().wait_for_count,
+    description: "Please see <https://dev.materialize.com/api/rust-private\
+        /mz_storage_types/parameters\
+        /struct.PgSourceSnapshotConfig.html#structfield.wait_for_count>",
     internal: true,
 };
 
@@ -1198,29 +1133,6 @@ const KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
-/// Controls the connection timeout to Cockroach.
-///
-/// Used by persist as [`mz_persist_client::cfg::DynamicConfig::consensus_connect_timeout`].
-const CRDB_CONNECT_TIMEOUT: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("crdb_connect_timeout"),
-    value: PersistConfig::DEFAULT_CRDB_CONNECT_TIMEOUT,
-    description: "The time to connect to CockroachDB before timing out and retrying.",
-    internal: true,
-};
-
-/// Controls the TCP user timeout to Cockroach.
-///
-/// Used by persist as [`mz_persist_client::cfg::DynamicConfig::consensus_tcp_user_timeout`].
-const CRDB_TCP_USER_TIMEOUT: ServerVar<Duration> = ServerVar {
-    name: UncasedStr::new("crdb_tcp_user_timeout"),
-    value: PersistConfig::DEFAULT_CRDB_TCP_USER_TIMEOUT,
-    description:
-        "The TCP timeout for connections to CockroachDB. Specifies the amount of time that \
-        transmitted data may remain unacknowledged before the TCP connection is forcibly \
-        closed.",
-    internal: true,
-};
-
 /// The maximum number of in-flight bytes emitted by persist_sources feeding compute dataflows.
 const COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES: ServerVar<Option<usize>> = ServerVar {
     name: UncasedStr::new("compute_dataflow_max_inflight_bytes"),
@@ -1306,109 +1218,10 @@ const STORAGE_STATISTICS_COLLECTION_INTERVAL: ServerVar<Duration> = ServerVar {
     internal: true,
 };
 
-/// Controls [`mz_persist_client::cfg::PersistConfig::sink_minimum_batch_updates`].
-const PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
-    name: UncasedStr::new("persist_sink_minimum_batch_updates"),
-    value: PersistConfig::DEFAULT_SINK_MINIMUM_BATCH_UPDATES,
-    description: "In the compute persist sink, workers with less than the minimum number of updates \
-                  will flush their records to single downstream worker to be batched up there... in \
-                  the hopes of grouping our updates into fewer, larger batches.",
-    internal: true
-};
-
-/// Controls [`mz_persist_client::cfg::PersistConfig::storage_sink_minimum_batch_updates`].
-const STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES: ServerVar<usize> = ServerVar {
-    name: UncasedStr::new("storage_persist_sink_minimum_batch_updates"),
-    // Reasonable default based on our experience in production.
-    value: 1024,
-    description: "In the storage persist sink, workers with less than the minimum number of updates \
-                  will flush their records to single downstream worker to be batched up there... in \
-                  the hopes of grouping our updates into fewer, larger batches.",
-    internal: true
-};
-
-/// Controls [`mz_persist_client::cfg::PersistConfig::storage_source_decode_fuel`].
-const STORAGE_SOURCE_DECODE_FUEL: ServerVar<usize> = ServerVar {
-    name: UncasedStr::new("storage_source_decode_fuel"),
-    value: PersistConfig::DEFAULT_STORAGE_SOURCE_DECODE_FUEL,
-    description: "The maximum amount of work to do in the persist_source mfp_and_decode \
-                  operator before yielding.",
-    internal: true,
-};
-
 const STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS: ServerVar<bool> = ServerVar {
     name: UncasedStr::new("storage_record_source_sink_namespaced_errors"),
     value: true,
     description: "Whether or not to record namespaced errors in the status history tables",
-    internal: true,
-};
-
-/// Controls [`mz_persist_client::cfg::DynamicConfig::stats_audit_percent`].
-const PERSIST_STATS_AUDIT_PERCENT: ServerVar<usize> = ServerVar {
-    name: UncasedStr::new("persist_stats_audit_percent"),
-    value: PersistConfig::DEFAULT_STATS_AUDIT_PERCENT,
-    description: "Percent of filtered data to opt in to correctness auditing (Materialize).",
-    internal: true,
-};
-
-/// Controls [`mz_persist_client::cfg::DynamicConfig::stats_collection_enabled`].
-const PERSIST_STATS_COLLECTION_ENABLED: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("persist_stats_collection_enabled"),
-    value: PersistConfig::DEFAULT_STATS_COLLECTION_ENABLED,
-    description: "Whether to calculate and record statistics about the data stored in persist \
-                  to be used at read time, see persist_stats_filter_enabled (Materialize).",
-    internal: true,
-};
-
-/// Controls [`mz_persist_client::cfg::DynamicConfig::stats_filter_enabled`].
-const PERSIST_STATS_FILTER_ENABLED: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("persist_stats_filter_enabled"),
-    value: PersistConfig::DEFAULT_STATS_FILTER_ENABLED,
-    description: "Whether to use recorded statistics about the data stored in persist \
-                  to filter at read time, see persist_stats_collection_enabled (Materialize).",
-    internal: true,
-};
-
-/// Controls [`mz_persist_client::cfg::DynamicConfig::stats_budget_bytes`].
-const PERSIST_STATS_BUDGET_BYTES: ServerVar<usize> = ServerVar {
-    name: UncasedStr::new("persist_stats_budget_bytes"),
-    value: PersistConfig::DEFAULT_STATS_BUDGET_BYTES,
-    description: "The budget (in bytes) of how many stats to maintain per batch part.",
-    internal: true,
-};
-
-/// Controls [`mz_persist_client::cfg::DynamicConfig::stats_untrimmable_columns`].
-static PERSIST_STATS_UNTRIMMABLE_COLUMNS: Lazy<ServerVar<UntrimmableColumns>> =
-    Lazy::new(|| ServerVar {
-        name: UncasedStr::new("persist_stats_untrimmable_columns"),
-        value: PersistConfig::DEFAULT_STATS_UNTRIMMABLE_COLUMNS.clone(),
-        description: "Which columns to always retain during persist stats trimming. The expected \
-        format is JSON (ex. `{\"equals\": [\"foo\"], \"prefixes\": [], \"suffixes\": [\"_bar\"]}`) \
-        and all strings must be lowercase.",
-        internal: true,
-    });
-
-/// Controls [`mz_persist_client::cfg::DynamicConfig::pubsub_client_enabled`].
-const PERSIST_PUBSUB_CLIENT_ENABLED: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("persist_pubsub_client_enabled"),
-    value: PersistConfig::DEFAULT_PUBSUB_CLIENT_ENABLED,
-    description: "Whether to connect to the Persist PubSub service.",
-    internal: true,
-};
-
-/// Controls [`mz_persist_client::cfg::DynamicConfig::pubsub_push_diff_enabled`].
-const PERSIST_PUBSUB_PUSH_DIFF_ENABLED: ServerVar<bool> = ServerVar {
-    name: UncasedStr::new("persist_pubsub_push_diff_enabled"),
-    value: PersistConfig::DEFAULT_PUBSUB_PUSH_DIFF_ENABLED,
-    description: "Whether to push state diffs to Persist PubSub.",
-    internal: true,
-};
-
-/// Controls [`mz_persist_client::cfg::DynamicConfig::rollup_threshold`].
-const PERSIST_ROLLUP_THRESHOLD: ServerVar<usize> = ServerVar {
-    name: UncasedStr::new("persist_rollup_threshold"),
-    value: PersistConfig::DEFAULT_ROLLUP_THRESHOLD,
-    description: "The number of seqnos between rollups.",
     internal: true,
 };
 
@@ -1571,6 +1384,26 @@ pub const ENABLE_DEFAULT_CONNECTION_VALIDATION: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
+pub static STATEMENT_LOGGING_MAX_DATA_CREDIT: Lazy<ServerVar<Option<usize>>> = Lazy::new(|| {
+    ServerVar {
+    name: UncasedStr::new("statement_logging_max_data_credit"),
+    value: None,
+    // The idea is that during periods of low logging, tokens can accumulate up to this value,
+    // and then be depleted during periods of high logging.
+    description: "The maximum number of bytes that can be logged for statement logging in short burts, or NULL if unlimited (Materialize).",
+    internal: true,
+}
+});
+
+pub static STATEMENT_LOGGING_TARGET_DATA_RATE: Lazy<ServerVar<Option<usize>>> = Lazy::new(|| {
+    ServerVar {
+    name: UncasedStr::new("statement_logging_target_data_rate"),
+    value: None,
+    description: "The maximum sustained data rate of statement logging, in bytes per second, or NULL if unlimited (Materialize).",
+    internal: true,
+}
+});
+
 pub static STATEMENT_LOGGING_MAX_SAMPLE_RATE: Lazy<ServerVar<Numeric>> = Lazy::new(|| ServerVar {
     name: UncasedStr::new("statement_logging_max_sample_rate"),
     value: 0.0.into(),
@@ -1682,6 +1515,16 @@ pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: ServerVar<bool> = ServerVar {
     value: false,
     description:
         "Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history",
+    internal: true,
+};
+
+const ENABLE_DEPENDENCY_READ_HOLD_ASSERTS: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_dependency_read_hold_asserts"),
+    value: true,
+    description:
+        "Whether to have the storage client check if a subsource's implied capability is less than \
+        its write frontier. This should only be set to false in cases where customer envs cannot
+        boot (Materialize).",
     internal: true,
 };
 
@@ -2000,8 +1843,9 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+
         name: enable_logical_compaction_window,
-        desc: "LOGICAL COMPACTION WINDOW",
+        desc: "RETAIN HISTORY",
         default: false,
         internal: true,
         enable_for_item_parsing: true,
@@ -2154,6 +1998,13 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_notices_for_index_already_exists,
+        desc: "emitting notices for IndexAlreadyExists (doesn't affect EXPLAIN)",
+        default: true,
+        internal: true,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_notices_for_index_too_wide_for_literal_constraints,
         desc: "emitting notices for IndexTooWideForLiteralConstraints (doesn't affect EXPLAIN)",
         default: false,
@@ -2171,13 +2022,6 @@ feature_flags!(
         name: enable_explain_broken,
         desc: "EXPLAIN ... BROKEN <query> syntax",
         default: false,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_role_vars,
-        desc: "setting default session variables for a role",
-        default: true,
         internal: true,
         enable_for_item_parsing: true,
     },
@@ -2322,7 +2166,35 @@ feature_flags!(
         internal: true,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_compute_aggressive_readhold_downgrades,
+        desc: "let the compute controller aggressively downgrade read holds for sink dataflows",
+        default: true,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_session_timelines,
+        desc: "strong session serializable isolation levels",
+        default: false,
+        internal: true,
+        enable_for_item_parsing: false,
+    },
 );
+
+/// Returns a new ConfigSet containing every `Config` in Materialize.
+///
+/// Each time this is called, it returns a new ConfigSet disconnected from any
+/// others. It may be cloned and passed around, and updates to any of these
+/// copies will be reflected in the clones. Values from a `ConfigSet` may be
+/// copied to a disconnected `ConfigSet` via `ConfigUpdates`, which can be
+/// passed over the network to do the same across processes.
+pub fn all_dyn_configs() -> ConfigSet {
+    let mut configs = ConfigSet::default();
+    configs = mz_persist_client::cfg::all_dyn_configs(configs);
+    configs = mz_persist_txn::all_dyn_configs(configs);
+    configs
+}
 
 /// Represents the input to a variable.
 ///
@@ -2380,7 +2252,8 @@ pub struct SessionVars {
 }
 
 impl SessionVars {
-    pub fn new(build_info: &'static BuildInfo, user: User) -> SessionVars {
+    /// Creates a new [`SessionVars`] without considering the System or Role defaults.
+    pub fn new_unchecked(build_info: &'static BuildInfo, user: User) -> SessionVars {
         let s = SessionVars {
             vars: BTreeMap::new(),
             build_info,
@@ -2524,6 +2397,13 @@ impl SessionVars {
         // has an analogous extension [0].
         // [0]: https://github.com/cockroachdb/cockroach/blob/369c4057a/pkg/sql/pgwire/conn.go#L1840
         .chain(std::iter::once(self.build_info as &dyn Var))
+    }
+
+    /// Resets all variables to their default value.
+    pub fn reset_all(&mut self) {
+        for (_name, var) in &mut self.vars {
+            var.reset(false);
+        }
     }
 
     /// Returns a [`Var`] representing the configuration parameter with the
@@ -2918,6 +2798,14 @@ pub struct SystemVars {
     allow_unsafe: bool,
     vars: BTreeMap<&'static UncasedStr, Box<dyn SystemVarMut>>,
     active_connection_count: Arc<Mutex<ConnectionCounter>>,
+    /// NB: This is intentionally disconnected from the one that is plumbed
+    /// around to various components (initially, just persist). This is so we
+    /// can explictly control and reason about when changes to config values are
+    /// propagated to the rest of the system.
+    ///
+    /// TODO(cfg): Rename this when components other than persist are pulled
+    /// into it.
+    persist_configs: ConfigSet,
 }
 
 impl Clone for SystemVars {
@@ -2926,6 +2814,7 @@ impl Clone for SystemVars {
             allow_unsafe: self.allow_unsafe,
             vars: self.vars.iter().map(|(k, v)| (*k, v.clone_var())).collect(),
             active_connection_count: Arc::clone(&self.active_connection_count),
+            persist_configs: self.persist_configs.clone(),
         }
     }
 }
@@ -2975,6 +2864,7 @@ impl SystemVars {
             vars: Default::default(),
             active_connection_count,
             allow_unsafe: false,
+            persist_configs: all_dyn_configs(),
         };
 
         let mut vars = vars
@@ -3020,14 +2910,6 @@ impl SystemVars {
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_CLUSTER_MEMORY_FRACTION)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_MEMORY_BYTES)
             .with_var(&upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_ALLOW_STALL)
-            .with_var(&PERSIST_BLOB_TARGET_SIZE)
-            .with_var(&PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES)
-            .with_var(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
-            .with_var(&PERSIST_CONSENSUS_CONNECTION_POOL_TTL)
-            .with_var(&PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
-            .with_var(&PERSIST_READER_LEASE_DURATION)
-            .with_var(&CRDB_CONNECT_TIMEOUT)
-            .with_var(&CRDB_TCP_USER_TIMEOUT)
             .with_var(&COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES)
             .with_var(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION)
@@ -3036,27 +2918,10 @@ impl SystemVars {
             .with_var(&STORAGE_STATISTICS_COLLECTION_INTERVAL)
             .with_var(&STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION)
             .with_var(&STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO)
-            .with_var(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
-            .with_var(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
-            .with_var(&STORAGE_SOURCE_DECODE_FUEL)
             .with_var(&STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS)
-            .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
-            .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER)
-            .with_var(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP)
-            .with_var(&PERSIST_TXNS_DATA_SHARD_RETRYER_INITIAL_BACKOFF)
-            .with_var(&PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER)
-            .with_var(&PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP)
             .with_var(&PERSIST_FAST_PATH_LIMIT)
             .with_var(&PERSIST_TXN_TABLES)
             .with_var(&CATALOG_KIND_IMPL)
-            .with_var(&PERSIST_STATS_AUDIT_PERCENT)
-            .with_var(&PERSIST_STATS_COLLECTION_ENABLED)
-            .with_var(&PERSIST_STATS_FILTER_ENABLED)
-            .with_var(&PERSIST_STATS_BUDGET_BYTES)
-            .with_var(&PERSIST_STATS_UNTRIMMABLE_COLUMNS)
-            .with_var(&PERSIST_PUBSUB_CLIENT_ENABLED)
-            .with_var(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
-            .with_var(&PERSIST_ROLLUP_THRESHOLD)
             .with_var(&METRICS_RETENTION)
             .with_var(&UNSAFE_MOCK_AUDIT_EVENT_TIMESTAMP)
             .with_var(&ENABLE_RBAC_CHECKS)
@@ -3066,6 +2931,9 @@ impl SystemVars {
             .with_var(&PG_SOURCE_KEEPALIVES_RETRIES)
             .with_var(&PG_SOURCE_TCP_USER_TIMEOUT)
             .with_var(&PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT)
+            .with_var(&PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT)
+            .with_var(&PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT)
+            .with_var(&PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT)
             .with_var(&SSH_CHECK_INTERVAL)
             .with_var(&SSH_CONNECT_TIMEOUT)
             .with_var(&SSH_KEEPALIVES_IDLE)
@@ -3097,6 +2965,7 @@ impl SystemVars {
             .with_var(&SENTRY_FILTERS)
             .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
             .with_var(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
+            .with_var(&COORD_SLOW_MESSAGE_WARN_THRESHOLD)
             .with_var(&grpc_client::CONNECT_TIMEOUT)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
@@ -3119,20 +2988,56 @@ impl SystemVars {
                 &STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE,
                 ValueConstraint::Domain(&NumericInRange(0.0..=1.0)),
             )
+            .with_var(&STATEMENT_LOGGING_TARGET_DATA_RATE)
+            .with_var(&STATEMENT_LOGGING_MAX_DATA_CREDIT)
             .with_var(&OPTIMIZER_STATS_TIMEOUT)
             .with_var(&OPTIMIZER_ONESHOT_STATS_TIMEOUT)
             .with_var(&PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE)
             .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
             .with_var(&ENABLE_COLUMNATION_LGALLOC)
             .with_var(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
+            .with_var(&ENABLE_DEPENDENCY_READ_HOLD_ASSERTS)
             .with_var(&TIMESTAMP_ORACLE_IMPL)
             .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE)
             .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT)
             .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL)
             .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER);
 
-        for flag in PersistFeatureFlag::ALL {
-            vars = vars.with_var(&flag.into())
+        for cfg in vars.persist_configs.entries() {
+            let name = UncasedStr::new(cfg.name());
+            let var: Box<dyn SystemVarMut> = match cfg.default() {
+                ConfigVal::Bool(default) => Box::new(SystemVar::new(&ServerVar {
+                    name,
+                    value: <bool as ConfigType>::get(default),
+                    description: cfg.desc(),
+                    internal: true,
+                })),
+                ConfigVal::U32(default) => Box::new(SystemVar::new(&ServerVar {
+                    name,
+                    value: <u32 as ConfigType>::get(default),
+                    description: cfg.desc(),
+                    internal: true,
+                })),
+                ConfigVal::Usize(default) => Box::new(SystemVar::new(&ServerVar {
+                    name,
+                    value: <usize as ConfigType>::get(default),
+                    description: cfg.desc(),
+                    internal: true,
+                })),
+                ConfigVal::String(default) => Box::new(SystemVar::new(&ServerVar {
+                    name,
+                    value: <String as ConfigType>::get(default),
+                    description: cfg.desc(),
+                    internal: true,
+                })),
+                ConfigVal::Duration(default) => Box::new(SystemVar::new(&ServerVar {
+                    name,
+                    value: <Duration as ConfigType>::get(default),
+                    description: cfg.desc(),
+                    internal: true,
+                })),
+            };
+            vars.vars.insert(name, var);
         }
 
         vars.refresh_internal_state();
@@ -3192,6 +3097,17 @@ impl SystemVars {
             .vars
             .get(var.name)
             .unwrap_or_else(|| panic!("provided var {var:?} should be in state"));
+
+        var.value_any()
+            .downcast_ref()
+            .expect("provided var type should matched stored var")
+    }
+
+    fn expect_config_value<V: ConfigType + 'static>(&self, name: &UncasedStr) -> &V {
+        let var = self
+            .vars
+            .get(name)
+            .unwrap_or_else(|| panic!("provided var {name} should be in state"));
 
         var.value_any()
             .downcast_ref()
@@ -3556,46 +3472,6 @@ impl SystemVars {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_WRITE_BUFFER_MANAGER_ALLOW_STALL)
     }
 
-    /// Returns the `persist_blob_target_size` configuration parameter.
-    pub fn persist_blob_target_size(&self) -> usize {
-        *self.expect_value(&PERSIST_BLOB_TARGET_SIZE)
-    }
-
-    /// Returns the `persist_blob_cache_mem_limit_bytes` configuration parameter.
-    pub fn persist_blob_cache_mem_limit_bytes(&self) -> usize {
-        *self.expect_value(&PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES)
-    }
-
-    /// Returns the `persist_next_listen_batch_retryer_initial_backoff` configuration parameter.
-    pub fn persist_next_listen_batch_retryer_initial_backoff(&self) -> Duration {
-        *self.expect_value(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
-    }
-
-    /// Returns the `persist_next_listen_batch_retryer_multiplier` configuration parameter.
-    pub fn persist_next_listen_batch_retryer_multiplier(&self) -> u32 {
-        *self.expect_value(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER)
-    }
-
-    /// Returns the `persist_next_listen_batch_retryer_clamp` configuration parameter.
-    pub fn persist_next_listen_batch_retryer_clamp(&self) -> Duration {
-        *self.expect_value(&PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP)
-    }
-
-    /// Returns the `persist_txns_data_shard_retryer_initial_backoff` configuration parameter.
-    pub fn persist_txns_data_shard_retryer_initial_backoff(&self) -> Duration {
-        *self.expect_value(&PERSIST_TXNS_DATA_SHARD_RETRYER_INITIAL_BACKOFF)
-    }
-
-    /// Returns the `persist_txns_data_shard_retryer_multiplier` configuration parameter.
-    pub fn persist_txns_data_shard_retryer_multiplier(&self) -> u32 {
-        *self.expect_value(&PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER)
-    }
-
-    /// Returns the `persist_txns_data_shard_retryer_clamp` configuration parameter.
-    pub fn persist_txns_data_shard_retryer_clamp(&self) -> Duration {
-        *self.expect_value(&PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP)
-    }
-
     pub fn persist_fast_path_limit(&self) -> usize {
         *self.expect_value(&PERSIST_FAST_PATH_LIMIT)
     }
@@ -3606,25 +3482,6 @@ impl SystemVars {
 
     pub fn catalog_kind(&self) -> Option<CatalogKind> {
         *self.expect_value(&CATALOG_KIND_IMPL)
-    }
-
-    pub fn persist_reader_lease_duration(&self) -> Duration {
-        *self.expect_value(&PERSIST_READER_LEASE_DURATION)
-    }
-
-    /// Returns the `persist_compaction_minimum_timeout` configuration parameter.
-    pub fn persist_compaction_minimum_timeout(&self) -> Duration {
-        *self.expect_value(&PERSIST_COMPACTION_MINIMUM_TIMEOUT)
-    }
-
-    /// Returns the `persist_consensus_connection_pool_ttl` configuration parameter.
-    pub fn persist_consensus_connection_pool_ttl(&self) -> Duration {
-        *self.expect_value(&PERSIST_CONSENSUS_CONNECTION_POOL_TTL)
-    }
-
-    /// Returns the `persist_consensus_connection_pool_ttl_stagger` configuration parameter.
-    pub fn persist_consensus_connection_pool_ttl_stagger(&self) -> Duration {
-        *self.expect_value(&PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
     }
 
     /// Returns the `pg_source_connect_timeout` configuration parameter.
@@ -3655,6 +3512,19 @@ impl SystemVars {
     /// Returns the `pg_source_snapshot_statement_timeout` configuration parameter.
     pub fn pg_source_snapshot_statement_timeout(&self) -> Duration {
         *self.expect_value(&PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT)
+    }
+
+    /// Returns the `pg_source_snapshot_collect_strict_count` configuration parameter.
+    pub fn pg_source_snapshot_collect_strict_count(&self) -> bool {
+        *self.expect_value(&PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT)
+    }
+    /// Returns the `pg_source_snapshot_fallback_to_strict_count` configuration parameter.
+    pub fn pg_source_snapshot_fallback_to_strict_count(&self) -> bool {
+        *self.expect_value(&PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT)
+    }
+    /// Returns the `pg_source_snapshot_collect_strict_count` configuration parameter.
+    pub fn pg_source_snapshot_wait_for_count(&self) -> bool {
+        *self.expect_value(&PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT)
     }
 
     /// Returns the `ssh_check_interval` configuration parameter.
@@ -3704,12 +3574,16 @@ impl SystemVars {
 
     /// Returns the `crdb_connect_timeout` configuration parameter.
     pub fn crdb_connect_timeout(&self) -> Duration {
-        *self.expect_value(&CRDB_CONNECT_TIMEOUT)
+        *self.expect_config_value(UncasedStr::new(
+            mz_persist_client::cfg::CRDB_CONNECT_TIMEOUT.name(),
+        ))
     }
 
     /// Returns the `crdb_tcp_user_timeout` configuration parameter.
     pub fn crdb_tcp_user_timeout(&self) -> Duration {
-        *self.expect_value(&CRDB_TCP_USER_TIMEOUT)
+        *self.expect_config_value(UncasedStr::new(
+            mz_persist_client::cfg::CRDB_TCP_USER_TIMEOUT.name(),
+        ))
     }
 
     /// Returns the `compute_dataflow_max_inflight_bytes` configuration parameter.
@@ -3752,71 +3626,42 @@ impl SystemVars {
         *self.expect_value(&STORAGE_STATISTICS_COLLECTION_INTERVAL)
     }
 
-    /// Returns the `persist_sink_minimum_batch_updates` configuration parameter.
-    pub fn persist_sink_minimum_batch_updates(&self) -> usize {
-        *self.expect_value(&PERSIST_SINK_MINIMUM_BATCH_UPDATES)
-    }
-
-    /// Returns the `storage_persist_sink_minimum_batch_updates` configuration parameter.
-    pub fn storage_persist_sink_minimum_batch_updates(&self) -> usize {
-        *self.expect_value(&STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES)
-    }
-
-    pub fn storage_source_decode_fuel(&self) -> usize {
-        *self.expect_value(&STORAGE_SOURCE_DECODE_FUEL)
-    }
-
     /// Returns the `storage_record_source_sink_namespaced_errors` configuration parameter.
     pub fn storage_record_source_sink_namespaced_errors(&self) -> bool {
         *self.expect_value(&STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS)
     }
 
-    /// Returns the `persist_stats_audit_percent` configuration parameter.
-    pub fn persist_stats_audit_percent(&self) -> usize {
-        *self.expect_value(&PERSIST_STATS_AUDIT_PERCENT)
-    }
-
-    /// Returns the `persist_stats_collection_enabled` configuration parameter.
-    pub fn persist_stats_collection_enabled(&self) -> bool {
-        *self.expect_value(&PERSIST_STATS_COLLECTION_ENABLED)
-    }
-
     /// Returns the `persist_stats_filter_enabled` configuration parameter.
     pub fn persist_stats_filter_enabled(&self) -> bool {
-        *self.expect_value(&PERSIST_STATS_FILTER_ENABLED)
+        *self.expect_config_value(UncasedStr::new(
+            mz_persist_client::stats::STATS_FILTER_ENABLED.name(),
+        ))
     }
 
-    /// Returns the `persist_stats_budget_bytes` configuration parameter.
-    pub fn persist_stats_budget_bytes(&self) -> usize {
-        *self.expect_value(&PERSIST_STATS_BUDGET_BYTES)
-    }
-
-    /// Returns the `persist_stats_untrimmable_columns` configuration parameter.
-    pub fn persist_stats_untrimmable_columns(&self) -> UntrimmableColumns {
-        self.expect_value(&PERSIST_STATS_UNTRIMMABLE_COLUMNS)
-            .clone()
-    }
-
-    /// Returns the `persist_pubsub_client_enabled` configuration parameter.
-    pub fn persist_pubsub_client_enabled(&self) -> bool {
-        *self.expect_value(&PERSIST_PUBSUB_CLIENT_ENABLED)
-    }
-
-    /// Returns the `persist_pubsub_push_diff_enabled` configuration parameter.
-    pub fn persist_pubsub_push_diff_enabled(&self) -> bool {
-        *self.expect_value(&PERSIST_PUBSUB_PUSH_DIFF_ENABLED)
-    }
-
-    /// Returns the `persist_rollup_threshold` configuration parameter.
-    pub fn persist_rollup_threshold(&self) -> usize {
-        *self.expect_value(&PERSIST_ROLLUP_THRESHOLD)
-    }
-
-    pub fn persist_flags(&self) -> BTreeMap<String, bool> {
-        PersistFeatureFlag::ALL
-            .iter()
-            .map(|f| (f.name.to_owned(), *self.expect_value(&f.into())))
-            .collect()
+    pub fn persist_configs(&self) -> PersistConfigUpdates {
+        let mut updates = PersistConfigUpdates::default();
+        for entry in self.persist_configs.entries() {
+            let name = UncasedStr::new(entry.name());
+            match entry.val() {
+                ConfigVal::Bool(x) => {
+                    <bool as ConfigType>::set(x, *self.expect_config_value::<bool>(name))
+                }
+                ConfigVal::U32(x) => {
+                    <u32 as ConfigType>::set(x, *self.expect_config_value::<u32>(name))
+                }
+                ConfigVal::Usize(x) => {
+                    <usize as ConfigType>::set(x, *self.expect_config_value::<usize>(name))
+                }
+                ConfigVal::String(x) => {
+                    <String as ConfigType>::set(x, self.expect_config_value::<String>(name).clone())
+                }
+                ConfigVal::Duration(x) => {
+                    <Duration as ConfigType>::set(x, *self.expect_config_value::<Duration>(name))
+                }
+            };
+            updates.add(entry);
+        }
+        updates
     }
 
     /// Returns the `metrics_retention` configuration parameter.
@@ -3926,6 +3771,10 @@ impl SystemVars {
         *self.expect_value(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
     }
 
+    pub fn coord_slow_message_warn_threshold(&self) -> Duration {
+        *self.expect_value(&COORD_SLOW_MESSAGE_WARN_THRESHOLD)
+    }
+
     pub fn grpc_client_http2_keep_alive_interval(&self) -> Duration {
         *self.expect_value(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
     }
@@ -3981,6 +3830,14 @@ impl SystemVars {
     /// Returns the `privatelink_status_update_quota_per_minute` configuration parameter.
     pub fn privatelink_status_update_quota_per_minute(&self) -> u32 {
         *self.expect_value(&PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE)
+    }
+
+    pub fn statement_logging_target_data_rate(&self) -> Option<usize> {
+        *self.expect_value(&STATEMENT_LOGGING_TARGET_DATA_RATE)
+    }
+
+    pub fn statement_logging_max_data_credit(&self) -> Option<usize> {
+        *self.expect_value(&STATEMENT_LOGGING_MAX_DATA_CREDIT)
     }
 
     /// Returns the `statement_logging_max_sample_rate` configuration parameter.
@@ -4040,6 +3897,10 @@ impl SystemVars {
     /// Returns the `pg_timestamp_oracle_connection_pool_ttl_stagger` configuration parameter.
     pub fn pg_timestamp_oracle_connection_pool_ttl_stagger(&self) -> Duration {
         *self.expect_value(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER)
+    }
+
+    pub fn enable_dependency_read_hold_asserts(&self) -> bool {
+        *self.expect_value(&ENABLE_DEPENDENCY_READ_HOLD_ASSERTS)
     }
 }
 
@@ -4154,17 +4015,6 @@ where
             Err(VarError::RequiresUnsafeMode(self.name()))
         } else {
             Ok(())
-        }
-    }
-}
-
-impl From<&'static PersistFeatureFlag> for ServerVar<bool> {
-    fn from(value: &'static PersistFeatureFlag) -> Self {
-        Self {
-            name: UncasedStr::new(value.name),
-            value: value.default,
-            description: value.description,
-            internal: true,
         }
     }
 }
@@ -5511,6 +5361,44 @@ pub enum IsolationLevel {
     ReadCommitted,
     RepeatableRead,
     Serializable,
+    /* TODO(jkosh44) Move this comment to user facing docs when this isolation level becomes available to users.
+     * The Strong Session Serializable isolation level combines the Serializable isolation level
+     * (https://jepsen.io/consistency/models/serializable) with the Sequential consistency model
+     * (https://jepsen.io/consistency/models/sequential). See
+     * http://dbmsmusings.blogspot.com/2019/06/correctness-anomalies-under.html and
+     * https://cs.uwaterloo.ca/~kmsalem/pubs/DaudjeeICDE04.pdf. Operations within a single session
+     * are linearizable, but operations across sessions are not linearizable.
+     *
+     * Operations in sessions that use Strong Session Serializable are not linearizable with
+     * operations in sessions that use Strict Serializable. For example, consider the following
+     * sequence of events in order:
+     *
+     *   1. Session s0 executes read at timestamp t0 under Strong Session Serializable.
+     *   2. Session s1 executes read at timestamp t1 under Strict Serializable.
+     *
+     * If t0 > t1, then this is not considered a consistency violation. This matches with the
+     * semantics of Serializable, which can execute queries arbitrarily in the future without
+     * violating the consistency of Strict Serializable queries.
+     *
+     * All operations within a session that use Strong Session Serializable are only
+     * linearizable within operations within the same session that also use Strong Session
+     * Serializable. For example, consider the following sequence of events in order:
+     *
+     *   1. Session s0 executes read at timestamp t0 under Strong Session Serializable.
+     *   2. Session s0 executes read at timestamp t1 under I.
+     *
+     * If I is Strong Session Serializable then t0 > t1 is guaranteed. If I is any other isolation
+     * level then t0 < t1 is not considered a consistency violation. This matches the semantics of
+     * Serializable, which can execute queries arbitrarily in the future without violating the
+     * consistency of Strict Serializable queries within the same session.
+     *
+     * The items left TODO before this is considered ready for prod are:
+     *
+     * - Add more tests.
+     * - Linearize writes to system tables under this isolation (most of these are the side effect
+     *   of some DDL).
+     */
+    StrongSessionSerializable,
     StrictSerializable,
 }
 
@@ -5521,6 +5409,7 @@ impl IsolationLevel {
             Self::ReadCommitted => "read committed",
             Self::RepeatableRead => "repeatable read",
             Self::Serializable => "serializable",
+            Self::StrongSessionSerializable => "strong session serializable",
             Self::StrictSerializable => "strict serializable",
         }
     }
@@ -5531,6 +5420,7 @@ impl IsolationLevel {
             Self::ReadCommitted.as_str(),
             Self::RepeatableRead.as_str(),
             Self::Serializable.as_str(),
+            // TODO(jkosh44) Add StrongSessionSerializable when it becomes available to users.
             Self::StrictSerializable.as_str(),
         ]
     }
@@ -5562,6 +5452,8 @@ impl Value for IsolationLevel {
             || s == Self::Serializable.as_str()
         {
             Ok(Self::Serializable)
+        } else if s == Self::StrongSessionSerializable.as_str() {
+            Ok(Self::StrongSessionSerializable)
         } else if s == Self::StrictSerializable.as_str() {
             Ok(Self::StrictSerializable)
         } else {
@@ -5585,32 +5477,9 @@ impl From<TransactionIsolationLevel> for IsolationLevel {
             TransactionIsolationLevel::ReadCommitted => Self::ReadCommitted,
             TransactionIsolationLevel::RepeatableRead => Self::RepeatableRead,
             TransactionIsolationLevel::Serializable => Self::Serializable,
+            TransactionIsolationLevel::StrongSessionSerializable => Self::StrongSessionSerializable,
             TransactionIsolationLevel::StrictSerializable => Self::StrictSerializable,
         }
-    }
-}
-
-impl Value for UntrimmableColumns {
-    fn type_name() -> String {
-        "UntrimmableColumns".to_string()
-    }
-
-    fn parse<'a>(
-        param: &'a (dyn Var + Send + Sync),
-        input: VarInput,
-    ) -> Result<Self::Owned, VarError> {
-        let s = extract_single_value(param, input)?;
-        let cols: UntrimmableColumns =
-            serde_json::from_str(s).map_err(|e| VarError::InvalidParameterValue {
-                parameter: param.into(),
-                values: vec![s.to_string()],
-                reason: format!("{}", e),
-            })?;
-        Ok(cols)
-    }
-
-    fn format(&self) -> String {
-        serde_json::to_string(self).expect("serializable")
     }
 }
 
@@ -5644,48 +5513,53 @@ pub fn is_tracing_var(name: &str) -> bool {
         || name == SENTRY_FILTERS.name()
 }
 
-/// Returns whether the named variable is a compute configuration parameter
-/// (things that go in `ComputeParameters` and are sent to replicas via `UpdateConfiguration`
-/// commands).
-pub fn is_compute_config_var(name: &str) -> bool {
-    name == MAX_RESULT_SIZE.name()
-        || name == COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
-        || name == LINEAR_JOIN_YIELDING.name()
-        || name == ENABLE_MZ_JOIN_CORE.name()
-        || name == ENABLE_JEMALLOC_PROFILING.name()
-        || name == ENABLE_SPECIALIZED_ARRANGEMENTS.name()
-        || name == ENABLE_COLUMNATION_LGALLOC.name()
-        || is_persist_config_var(name)
-        || is_tracing_var(name)
-}
+impl SystemVars {
+    /// Returns whether the named variable is a compute configuration parameter
+    /// (things that go in `ComputeParameters` and are sent to replicas via `UpdateConfiguration`
+    /// commands).
+    pub fn is_compute_config_var(&self, name: &str) -> bool {
+        name == MAX_RESULT_SIZE.name()
+            || name == COMPUTE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
+            || name == LINEAR_JOIN_YIELDING.name()
+            || name == ENABLE_MZ_JOIN_CORE.name()
+            || name == ENABLE_JEMALLOC_PROFILING.name()
+            || name == ENABLE_SPECIALIZED_ARRANGEMENTS.name()
+            || name == ENABLE_COLUMNATION_LGALLOC.name()
+            || self.is_persist_config_var(name)
+            || is_tracing_var(name)
+    }
 
-/// Returns whether the named variable is a storage configuration parameter.
-pub fn is_storage_config_var(name: &str) -> bool {
-    name == PG_SOURCE_CONNECT_TIMEOUT.name()
-        || name == PG_SOURCE_KEEPALIVES_IDLE.name()
-        || name == PG_SOURCE_KEEPALIVES_INTERVAL.name()
-        || name == PG_SOURCE_KEEPALIVES_RETRIES.name()
-        || name == PG_SOURCE_TCP_USER_TIMEOUT.name()
-        || name == PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT.name()
-        || name == ENABLE_STORAGE_SHARD_FINALIZATION.name()
-        || name == SSH_CHECK_INTERVAL.name()
-        || name == SSH_CONNECT_TIMEOUT.name()
-        || name == SSH_KEEPALIVES_IDLE.name()
-        || name == KAFKA_SOCKET_KEEPALIVE.name()
-        || name == KAFKA_SOCKET_TIMEOUT.name()
-        || name == KAFKA_TRANSACTION_TIMEOUT.name()
-        || name == KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT.name()
-        || name == KAFKA_FETCH_METADATA_TIMEOUT.name()
-        || name == KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT.name()
-        || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
-        || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
-        || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
-        || name == STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION.name()
-        || name == STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO.name()
-        || name == STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS.name()
-        || is_upsert_rocksdb_config_var(name)
-        || is_persist_config_var(name)
-        || is_tracing_var(name)
+    /// Returns whether the named variable is a storage configuration parameter.
+    pub fn is_storage_config_var(&self, name: &str) -> bool {
+        name == PG_SOURCE_CONNECT_TIMEOUT.name()
+            || name == PG_SOURCE_KEEPALIVES_IDLE.name()
+            || name == PG_SOURCE_KEEPALIVES_INTERVAL.name()
+            || name == PG_SOURCE_KEEPALIVES_RETRIES.name()
+            || name == PG_SOURCE_TCP_USER_TIMEOUT.name()
+            || name == PG_SOURCE_SNAPSHOT_STATEMENT_TIMEOUT.name()
+            || name == PG_SOURCE_SNAPSHOT_COLLECT_STRICT_COUNT.name()
+            || name == PG_SOURCE_SNAPSHOT_FALLBACK_TO_STRICT_COUNT.name()
+            || name == PG_SOURCE_SNAPSHOT_WAIT_FOR_COUNT.name()
+            || name == ENABLE_STORAGE_SHARD_FINALIZATION.name()
+            || name == SSH_CHECK_INTERVAL.name()
+            || name == SSH_CONNECT_TIMEOUT.name()
+            || name == SSH_KEEPALIVES_IDLE.name()
+            || name == KAFKA_SOCKET_KEEPALIVE.name()
+            || name == KAFKA_SOCKET_TIMEOUT.name()
+            || name == KAFKA_TRANSACTION_TIMEOUT.name()
+            || name == KAFKA_SOCKET_CONNECTION_SETUP_TIMEOUT.name()
+            || name == KAFKA_FETCH_METADATA_TIMEOUT.name()
+            || name == KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT.name()
+            || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES.name()
+            || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_TO_CLUSTER_SIZE_FRACTION.name()
+            || name == STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES_DISK_ONLY.name()
+            || name == STORAGE_DATAFLOW_DELAY_SOURCES_PAST_REHYDRATION.name()
+            || name == STORAGE_SHRINK_UPSERT_UNUSED_BUFFERS_BY_RATIO.name()
+            || name == STORAGE_RECORD_SOURCE_SINK_NAMESPACED_ERRORS.name()
+            || is_upsert_rocksdb_config_var(name)
+            || self.is_persist_config_var(name)
+            || is_tracing_var(name)
+    }
 }
 
 /// Returns whether the named variable is a caching configuration parameter.
@@ -5708,35 +5582,11 @@ fn is_upsert_rocksdb_config_var(name: &str) -> bool {
         || name == upsert_rocksdb::UPSERT_ROCKSDB_SHRINK_ALLOCATED_BUFFERS_BY_RATIO.name()
 }
 
-/// Returns whether the named variable is a persist configuration parameter.
-fn is_persist_config_var(name: &str) -> bool {
-    name == PERSIST_BLOB_TARGET_SIZE.name()
-        || name == PERSIST_BLOB_CACHE_MEM_LIMIT_BYTES.name()
-        || name == PERSIST_COMPACTION_MINIMUM_TIMEOUT.name()
-        || name == PERSIST_CONSENSUS_CONNECTION_POOL_TTL.name()
-        || name == PERSIST_CONSENSUS_CONNECTION_POOL_TTL_STAGGER.name()
-        || name == PERSIST_READER_LEASE_DURATION.name()
-        || name == CRDB_CONNECT_TIMEOUT.name()
-        || name == CRDB_TCP_USER_TIMEOUT.name()
-        || name == PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
-        || name == STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
-        || name == STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES.name()
-        || name == STORAGE_SOURCE_DECODE_FUEL.name()
-        || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.name()
-        || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER.name()
-        || name == PERSIST_NEXT_LISTEN_BATCH_RETRYER_CLAMP.name()
-        || name == PERSIST_TXNS_DATA_SHARD_RETRYER_INITIAL_BACKOFF.name()
-        || name == PERSIST_TXNS_DATA_SHARD_RETRYER_MULTIPLIER.name()
-        || name == PERSIST_TXNS_DATA_SHARD_RETRYER_CLAMP.name()
-        || name == PERSIST_FAST_PATH_LIMIT.name()
-        || name == PERSIST_STATS_AUDIT_PERCENT.name()
-        || name == PERSIST_STATS_COLLECTION_ENABLED.name()
-        || name == PERSIST_STATS_FILTER_ENABLED.name()
-        || name == PERSIST_STATS_BUDGET_BYTES.name()
-        || name == PERSIST_STATS_UNTRIMMABLE_COLUMNS.name()
-        || name == PERSIST_PUBSUB_CLIENT_ENABLED.name()
-        || name == PERSIST_PUBSUB_PUSH_DIFF_ENABLED.name()
-        || PersistFeatureFlag::ALL.iter().any(|f| f.name == name)
+impl SystemVars {
+    /// Returns whether the named variable is a persist configuration parameter.
+    fn is_persist_config_var(&self, name: &str) -> bool {
+        self.persist_configs.entries().any(|e| name == e.name())
+    }
 }
 
 /// Returns whether the named variable is a Postgres/CRDB timestamp oracle

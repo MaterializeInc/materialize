@@ -102,7 +102,7 @@ pub fn bench_persist(c: &mut Criterion) {
 }
 
 fn create_mem_mem_client() -> Result<PersistClient, ExternalError> {
-    let cfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+    let cfg = PersistConfig::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
     let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
     let consensus = Arc::new(MemConsensus::default());
     let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
@@ -133,7 +133,7 @@ async fn create_file_pg_client(
     let dir = tempfile::tempdir().map_err(anyhow::Error::new)?;
     let file = FileBlobConfig::from(dir.path());
 
-    let cfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+    let cfg = PersistConfig::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
     let blob = Arc::new(FileBlob::open(file).await?);
     let postgres_consensus = Arc::new(PostgresConsensus::open(pg).await?);
     let consensus = Arc::clone(&postgres_consensus);
@@ -168,7 +168,7 @@ async fn create_s3_pg_client(
         None => return Ok(None),
     };
 
-    let cfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+    let cfg = PersistConfig::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
     let blob = Arc::new(S3Blob::open(s3).await?);
     let postgres_consensus = Arc::new(PostgresConsensus::open(pg).await?);
     let consensus = Arc::clone(&postgres_consensus);

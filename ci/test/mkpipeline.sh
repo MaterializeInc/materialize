@@ -46,5 +46,5 @@ steps:
     command: bin/ci-builder run stable bin/pyactivate -m ci.mkpipeline test $@
     priority: 2
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64-small
 EOF

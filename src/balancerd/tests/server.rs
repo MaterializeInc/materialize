@@ -11,9 +11,11 @@
 
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::StreamExt;
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_balancerd::{BalancerConfig, BalancerService, FronteggResolver, Resolver, BUILD_INFO};
 use mz_environmentd::test_util::{self, make_pg_tls, Ca};
@@ -25,7 +27,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
-use mz_ore::task;
+use mz_ore::{assert_contains, task};
 use mz_server_core::TlsCertConfig;
 use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
 use uuid::Uuid;
@@ -122,6 +124,7 @@ async fn test_balancer() {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            Some(envd_server.inner.balancer_sql_local_addr().to_string()),
             resolver,
             envd_server.inner.http_local_addr().to_string(),
             cert_config.clone(),
@@ -139,20 +142,29 @@ async fn test_balancer() {
             balancer_pgwire_listen.port()
         ));
 
-        let (pg_client, conn) = tokio_postgres::connect(
-            &conn_str,
-            make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-                Ok(b.set_verify(SslVerifyMode::NONE))
-            })),
-        )
-        .await
-        .unwrap();
+        let tls = make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        }));
+
+        let (pg_client, conn) = tokio_postgres::connect(&conn_str, tls.clone())
+            .await
+            .unwrap();
         task::spawn(|| "balancer-pg_client", async move {
-            conn.await.expect("balancer-pg_client")
+            let _ = conn.await;
         });
 
         let res: i32 = pg_client.query_one("SELECT 2", &[]).await.unwrap().get(0);
         assert_eq!(res, 2);
+
+        // Assert cancellation is propagated.
+        let cancel = pg_client.cancel_token();
+        let copy = pg_client
+            .copy_out("copy (subscribe (select * from mz_kafka_sinks)) to stdout")
+            .await
+            .unwrap();
+        let _ = cancel.cancel_query(tls).await;
+        let e = pin!(copy).next().await.unwrap().unwrap_err();
+        assert_contains!(e.to_string(), "canceling statement due to user request");
 
         if !is_frontegg_resolver {
             continue;

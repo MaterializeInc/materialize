@@ -41,5 +41,7 @@ class DataType:
         return sql_adjuster.adjust_type(self.type_name)
 
     def value_to_sql(self, string_value: str, sql_adjuster: SqlDialectAdjuster) -> str:
-        adjusted_string_value = sql_adjuster.adjust_value(string_value, self.type_name)
+        adjusted_string_value = sql_adjuster.adjust_value(
+            string_value, self.internal_identifier, self.type_name
+        )
         return f"{adjusted_string_value}::{self.get_type_name(sql_adjuster)}"

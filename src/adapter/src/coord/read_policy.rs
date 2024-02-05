@@ -33,6 +33,7 @@ use timely::progress::Antichain;
 
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::{TimelineContext, TimelineState};
+use crate::session::Session;
 use crate::util::ResultExt;
 
 /// Relevant information for acquiring or releasing a bundle of read holds.
@@ -417,6 +418,25 @@ impl crate::coord::Coordinator {
         }
 
         read_holds
+    }
+
+    /// Attempt to acquire read holds on the indicated collections at the indicated `time`.
+    /// This is similar to [Self::acquire_read_holds], but instead of returning the read holds,
+    /// it arranges for them to be automatically released at the end of the transaction.
+    ///
+    /// If we are unable to acquire a read hold at the provided `time` for a specific id, then we
+    /// will acquire a read hold at the lowest possible time for that id.
+    pub(crate) fn acquire_read_holds_auto_cleanup(
+        &mut self,
+        session: &Session,
+        time: Timestamp,
+        id_bundle: &CollectionIdBundle,
+    ) {
+        let read_holds = self.acquire_read_holds(time, id_bundle);
+        self.txn_read_holds
+            .entry(session.conn_id().clone())
+            .or_insert_with(ReadHolds::new)
+            .extend(read_holds);
     }
 
     /// Attempt to update the timestamp of the read holds on the indicated collections from the

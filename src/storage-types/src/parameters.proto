@@ -11,15 +11,15 @@ syntax = "proto3";
 
 import "tracing/src/params.proto";
 import "proto/src/proto.proto";
-import "persist-client/src/cfg.proto";
+import "dyncfg/src/dyncfg.proto";
 import "rocksdb-types/src/config.proto";
 import "service/src/params.proto";
 
 package mz_storage_types.parameters;
 
 message ProtoStorageParameters {
-    reserved 2, 3;
-    mz_persist_client.cfg.ProtoPersistParameters persist = 1;
+    reserved 1, 2, 3, 25;
+    mz_dyncfg.ConfigUpdates persist = 26;
     uint64 keep_n_source_status_history_entries = 4;
     mz_rocksdb_types.config.ProtoRocksDbTuningParameters upsert_rocksdb_tuning_config = 5;
     bool finalize_shards = 6;
@@ -39,6 +39,8 @@ message ProtoStorageParameters {
     ProtoKafkaTimeouts kafka_timeout_config = 21;
     mz_proto.ProtoDuration statistics_interval = 22;
     mz_proto.ProtoDuration statistics_collection_interval = 23;
+    ProtoPgSourceSnapshotConfig pg_snapshot_config = 24;
+    bool enable_dependency_read_hold_asserts = 27;
 }
 
 
@@ -48,6 +50,12 @@ message ProtoPgSourceTcpTimeouts {
     optional mz_proto.ProtoDuration keepalives_idle = 3;
     optional mz_proto.ProtoDuration keepalives_interval = 4;
     optional mz_proto.ProtoDuration tcp_user_timeout = 5;
+}
+
+message ProtoPgSourceSnapshotConfig {
+    bool collect_strict_count = 1;
+    bool fallback_to_strict_count = 2;
+    bool wait_for_count = 3;
 }
 
 message ProtoKafkaTimeouts {

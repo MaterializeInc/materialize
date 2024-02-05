@@ -2465,6 +2465,25 @@ impl AggregateExpr {
                 }
             }
 
+            AggregateFunc::MapAgg { value_type, .. } => {
+                let record = self
+                    .expr
+                    .clone()
+                    .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::MapBuild {
+                        value_type: value_type.clone(),
+                    },
+                    exprs: (0..2)
+                        .map(|i| {
+                            record
+                                .clone()
+                                .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(i)))
+                        })
+                        .collect(),
+                }
+            }
+
             // StringAgg takes nested records of strings and outputs a string
             AggregateFunc::StringAgg { .. } => self
                 .expr

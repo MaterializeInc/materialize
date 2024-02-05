@@ -135,7 +135,11 @@ async fn main() {
         enable_version_flag: true,
     });
     if let Err(err) = run(args).await {
-        eprintln!("catalog: fatal: {}", err.display_with_causes());
+        eprintln!(
+            "catalog-debug: fatal: {}\nbacktrace: {}",
+            err.display_with_causes(),
+            err.backtrace()
+        );
         process::exit(1);
     }
 }
@@ -160,7 +164,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         CatalogKind::Persist => {
             // It's important that the version in this `BUILD_INFO` is kept in sync with the build
             // info used to write data to the persist catalog.
-            let persist_config = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
+            let persist_config =
+                PersistConfig::new_default_configs(&BUILD_INFO, SYSTEM_TIME.clone());
             let persist_clients =
                 PersistClientCache::new(persist_config, &metrics_registry, |_, _| {
                     PubSubClientConnection::noop()
@@ -409,7 +414,6 @@ async fn upgrade_check(
             now,
             skip_migrations: false,
             cluster_replica_sizes,
-            default_storage_cluster_size: None,
             builtin_cluster_replica_size: "1".into(),
             system_parameter_defaults: Default::default(),
             remote_system_parameters: None,

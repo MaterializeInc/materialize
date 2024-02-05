@@ -140,6 +140,14 @@ impl FrontendStartupMessage {
                 }
                 dst.put_i8(0);
             }
+            FrontendStartupMessage::CancelRequest {
+                conn_id,
+                secret_key,
+            } => {
+                dst.put_i32(VERSION_CANCEL);
+                dst.put_u32(*conn_id);
+                dst.put_u32(*secret_key);
+            }
             _ => panic!("unsupported"),
         }
 

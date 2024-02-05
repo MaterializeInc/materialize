@@ -37,7 +37,7 @@ use mz_catalog::memory::objects::{
     CommentsMap, Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
     Role, Schema, Secret, Sink, Source, Table, Type, View,
 };
-use mz_catalog::{LINKED_CLUSTER_REPLICA_NAME, SYSTEM_CONN_ID};
+use mz_catalog::SYSTEM_CONN_ID;
 use mz_controller::clusters::{
     ClusterStatus, ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ProcessId,
     ReplicaAllocation, ReplicaConfig, ReplicaLocation, UnmanagedReplicaLocation,
@@ -47,17 +47,15 @@ use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::{to_datetime, EpochMillis, NOW_ZERO};
-use mz_ore::option::FallibleMapExt;
 use mz_ore::soft_assert_no_log;
 use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
-use mz_repr::explain::ExprHumanizer;
 use mz_repr::namespaces::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, MZ_UNSAFE_SCHEMA,
     PG_CATALOG_SCHEMA,
 };
 use mz_repr::role_id::RoleId;
-use mz_repr::{GlobalId, RelationDesc, ScalarType};
+use mz_repr::{GlobalId, RelationDesc};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogConfig, CatalogDatabase,
@@ -113,8 +111,6 @@ pub struct CatalogState {
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) clusters_by_id: BTreeMap<ClusterId, Cluster>,
     pub(super) clusters_by_name: BTreeMap<String, ClusterId>,
-    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
-    pub(super) clusters_by_linked_object_id: BTreeMap<GlobalId, ClusterId>,
     pub(super) roles_by_name: BTreeMap<String, RoleId>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) roles_by_id: BTreeMap<RoleId, Role>,
@@ -123,8 +119,6 @@ pub struct CatalogState {
     #[serde(skip)]
     pub(super) oid_counter: u32,
     pub(super) cluster_replica_sizes: ClusterReplicaSizeMap,
-    #[serde(skip)]
-    pub(super) default_storage_cluster_size: Option<String>,
     #[serde(skip)]
     pub(crate) availability_zones: Vec<String>,
     #[serde(skip)]
@@ -162,7 +156,6 @@ impl CatalogState {
             temporary_schemas: Default::default(),
             clusters_by_id: Default::default(),
             clusters_by_name: Default::default(),
-            clusters_by_linked_object_id: Default::default(),
             roles_by_name: Default::default(),
             roles_by_id: Default::default(),
             config: CatalogConfig {
@@ -180,7 +173,6 @@ impl CatalogState {
             },
             oid_counter: Default::default(),
             cluster_replica_sizes: Default::default(),
-            default_storage_cluster_size: Default::default(),
             availability_zones: Default::default(),
             system_configuration: Default::default(),
             egress_ips: Default::default(),
@@ -509,9 +501,6 @@ impl CatalogState {
                 dependents.extend_from_slice(&self.item_dependents(subsource_id, seen));
             }
             dependents.push(object_id);
-            if let Some(linked_cluster_id) = self.clusters_by_linked_object_id.get(&item_id) {
-                dependents.extend_from_slice(&self.cluster_dependents(*linked_cluster_id, seen));
-            }
         }
         dependents
     }
@@ -697,24 +686,6 @@ impl CatalogState {
 
     pub(super) fn try_get_cluster_mut(&mut self, cluster_id: ClusterId) -> Option<&mut Cluster> {
         self.clusters_by_id.get_mut(&cluster_id)
-    }
-
-    pub(super) fn get_linked_cluster(&self, object_id: GlobalId) -> Option<&Cluster> {
-        self.clusters_by_linked_object_id
-            .get(&object_id)
-            .map(|id| &self.clusters_by_id[id])
-    }
-
-    pub(super) fn get_storage_object_size(&self, object_id: GlobalId) -> Option<&str> {
-        let cluster = self.get_linked_cluster(object_id)?;
-        let replica_id = cluster
-            .replica_id(LINKED_CLUSTER_REPLICA_NAME)
-            .expect("Must exist");
-        let replica = cluster.replica(replica_id).expect("Must exist");
-        match &replica.config.location {
-            ReplicaLocation::Unmanaged(_) => None,
-            ReplicaLocation::Managed(ManagedReplicaLocation { size, .. }) => Some(size),
-        }
     }
 
     pub(super) fn try_get_role(&self, id: &RoleId) -> Option<&Role> {
@@ -913,9 +884,11 @@ impl CatalogState {
                     mz_sql::plan::DataSourceDesc::Source => DataSourceDesc::Source,
                     mz_sql::plan::DataSourceDesc::Webhook {
                         validate_using,
+                        body_format,
                         headers,
                     } => DataSourceDesc::Webhook {
                         validate_using,
+                        body_format,
                         headers,
                         cluster_id: in_cluster
                             .expect("webhook sources must use an existing cluster"),
@@ -986,7 +959,8 @@ impl CatalogState {
                 conn_id: None,
                 resolved_ids,
                 cluster_id: index.cluster_id,
-                custom_logical_compaction_window,
+                custom_logical_compaction_window: custom_logical_compaction_window
+                    .or(index.compaction_window),
                 is_retained_metrics_object,
             }),
             Plan::CreateSink(CreateSinkPlan {
@@ -1244,7 +1218,6 @@ impl CatalogState {
         &mut self,
         id: ClusterId,
         name: String,
-        linked_object_id: Option<GlobalId>,
         introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
         owner_id: RoleId,
         privileges: PrivilegeMap,
@@ -1313,7 +1286,6 @@ impl CatalogState {
             Cluster {
                 name: name.clone(),
                 id,
-                linked_object_id,
                 bound_objects: BTreeSet::new(),
                 log_indexes,
                 replica_id_by_name_: BTreeMap::new(),
@@ -1324,12 +1296,6 @@ impl CatalogState {
             },
         );
         assert!(self.clusters_by_name.insert(name, id).is_none());
-        if let Some(linked_object_id) = linked_object_id {
-            assert!(self
-                .clusters_by_linked_object_id
-                .insert(linked_object_id, id)
-                .is_none());
-        }
     }
 
     pub(super) fn rename_cluster(&mut self, id: ClusterId, to_name: String) {
@@ -1991,24 +1957,6 @@ impl CatalogState {
         &self.availability_zones
     }
 
-    /// Returns the default storage cluster size .
-    ///
-    /// If a default size was given as configuration, it is always used,
-    /// otherwise the smallest size is used instead.
-    pub fn default_linked_cluster_size(&self) -> String {
-        match &self.default_storage_cluster_size {
-            Some(default_storage_cluster_size) => default_storage_cluster_size.clone(),
-            None => {
-                let (size, _allocation) = self
-                    .cluster_replica_sizes
-                    .enabled_allocations()
-                    .min_by_key(|(_, a)| (a.scale, a.workers, a.memory_limit))
-                    .expect("should have at least one valid cluster replica size");
-                size.clone()
-            }
-        }
-    }
-
     pub fn concretize_replica_location(
         &self,
         location: mz_catalog::durable::ReplicaLocation,
@@ -2269,97 +2217,5 @@ impl ConnectionResolver for CatalogState {
             AwsPrivatelink(conn) => AwsPrivatelink(conn),
             MySql(conn) => MySql(conn.into_inline_connection(self)),
         }
-    }
-}
-
-impl ExprHumanizer for CatalogState {
-    fn humanize_id(&self, id: GlobalId) -> Option<String> {
-        self.entry_by_id
-            .get(&id)
-            .map(|entry| entry.name())
-            .map(|name| self.resolve_full_name(name, None).to_string())
-    }
-
-    fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
-        self.entry_by_id
-            .get(&id)
-            .map(|entry| entry.name())
-            .map(|name| name.item.clone())
-    }
-
-    fn humanize_scalar_type(&self, typ: &ScalarType) -> String {
-        use ScalarType::*;
-
-        match typ {
-            Array(t) => format!("{}[]", self.humanize_scalar_type(t)),
-            List {
-                custom_id: Some(global_id),
-                ..
-            }
-            | Map {
-                custom_id: Some(global_id),
-                ..
-            } => {
-                let item = self.get_entry(global_id);
-                self.resolve_full_name(item.name(), None).to_string()
-            }
-            List { element_type, .. } => {
-                format!("{} list", self.humanize_scalar_type(element_type))
-            }
-            Map { value_type, .. } => format!(
-                "map[{}=>{}]",
-                self.humanize_scalar_type(&ScalarType::String),
-                self.humanize_scalar_type(value_type)
-            ),
-            Record {
-                custom_id: Some(id),
-                ..
-            } => {
-                let item = self.get_entry(id);
-                self.resolve_full_name(item.name(), None).to_string()
-            }
-            Record { fields, .. } => format!(
-                "record({})",
-                fields
-                    .iter()
-                    .map(|f| format!("{}: {}", f.0, self.humanize_column_type(&f.1)))
-                    .join(",")
-            ),
-            PgLegacyChar => "\"char\"".into(),
-            UInt16 => "uint2".into(),
-            UInt32 => "uint4".into(),
-            UInt64 => "uint8".into(),
-            ty => {
-                let name = QualifiedItemName {
-                    qualifiers: ItemQualifiers {
-                        database_spec: ResolvedDatabaseSpecifier::Ambient,
-                        schema_spec: SchemaSpecifier::Id(*self.get_pg_catalog_schema_id()),
-                    },
-                    item: mz_pgrepr::Type::from(ty).name().to_string(),
-                };
-
-                self.resolve_full_name(&name, None).to_string()
-            }
-        }
-    }
-
-    fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>> {
-        self.entry_by_id
-            .get(&id)
-            .try_map(|entry| {
-                Ok::<_, SqlCatalogError>(
-                    entry
-                        .desc(&self.resolve_full_name(entry.name(), None))?
-                        .iter_names()
-                        .cloned()
-                        .map(|col_name| col_name.to_string())
-                        .collect(),
-                )
-            })
-            .unwrap_or(None)
-    }
-
-    fn id_exists(&self, id: GlobalId) -> bool {
-        self.entry_by_id.get(&id).is_some()
     }
 }

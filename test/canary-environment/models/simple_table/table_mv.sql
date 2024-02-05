@@ -10,4 +10,4 @@
 -- depends_on: {{ ref('table') }}
 {{ config(materialized='materializedview', cluster='qa_canary_environment_compute', indexes=[{'default': True}]) }}
 
-SELECT max(c) FROM {{ source('public_table','table' }}
+SELECT max(c) FROM {{ source('simple_table','table') }}

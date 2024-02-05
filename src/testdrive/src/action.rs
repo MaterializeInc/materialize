@@ -456,9 +456,6 @@ impl State {
                         UNION ALL
                             SELECT cluster_id, id
                             FROM mz_internal.mz_subscriptions
-                        UNION ALL
-                            SELECT cluster_id, object_id
-                            FROM mz_internal.mz_cluster_links
                     )
                     AS t (cluster_id, object_id)
                 WHERE cluster_id IS NOT NULL AND object_id LIKE 'u%'
@@ -733,6 +730,7 @@ impl Run for PosCommand {
                     "http-request" => http::run_request(builtin, state).await,
                     "kafka-add-partitions" => kafka::run_add_partitions(builtin, state).await,
                     "kafka-create-topic" => kafka::run_create_topic(builtin, state).await,
+                    "kafka-wait-topic" => kafka::run_wait_topic(builtin, state).await,
                     "kafka-delete-topic-flaky" => kafka::run_delete_topic(builtin, state).await,
                     "kafka-ingest" => kafka::run_ingest(builtin, state).await,
                     "kafka-verify-data" => kafka::run_verify_data(builtin, state).await,
@@ -1055,7 +1053,7 @@ pub async fn create_state(
         persist_blob_url: config.persist_blob_url.clone(),
         build_info: config.build_info,
         persist_clients: PersistClientCache::new(
-            PersistConfig::new(config.build_info, SYSTEM_TIME.clone()),
+            PersistConfig::new_default_configs(config.build_info, SYSTEM_TIME.clone()),
             &MetricsRegistry::new(),
             |_, _| PubSubClientConnection::noop(),
         ),

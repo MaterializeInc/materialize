@@ -508,21 +508,11 @@ where
     pub fn as_collection(&self) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>) {
         match &self {
             ArrangementFlavor::Local(oks, errs) => (
-                oks.as_collection(move |borrow| {
-                    let binding = SharedRow::get();
-                    let mut row_buf = binding.borrow_mut();
-                    row_buf.packer().extend(&**borrow);
-                    row_buf.clone()
-                }),
+                oks.as_collection(move |borrow| SharedRow::pack(&**borrow)),
                 errs.as_collection(|k, &()| k.clone()),
             ),
             ArrangementFlavor::Trace(_, oks, errs) => (
-                oks.as_collection(move |borrow| {
-                    let binding = SharedRow::get();
-                    let mut row_buf = binding.borrow_mut();
-                    row_buf.packer().extend(&**borrow);
-                    row_buf.clone()
-                }),
+                oks.as_collection(move |borrow| SharedRow::pack(&**borrow)),
                 errs.as_collection(|k, &()| k.clone()),
             ),
         }

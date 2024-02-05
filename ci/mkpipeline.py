@@ -225,7 +225,7 @@ def set_default_agents_queue(pipeline: Any) -> None:
             and "group" not in step
             and "trigger" not in step
         ):
-            step["agents"] = {"queue": "linux-x86_64"}
+            step["agents"] = {"queue": "linux-aarch64-small"}
 
     for step in pipeline["steps"]:
         visit(step)
@@ -469,17 +469,15 @@ def trim_builds(pipeline: Any, coverage: bool) -> None:
                 step["concurrency"] = 1
                 step["concurrency_group"] = f"build-x86_64/{hash(deps)}"
         if step.get("id") == "build-aarch64":
-            branch = os.environ["BUILDKITE_BRANCH"]
             deps = deps_publish(Arch.AARCH64)
-            if branch == "main" or branch.startswith("v") and "." in branch:
-                if deps.check():
-                    step["skip"] = True
-                else:
-                    # Make sure that builds in different pipelines for the same
-                    # hash at least don't run concurrently, leading to wasted
-                    # resources.
-                    step["concurrency"] = 1
-                    step["concurrency_group"] = f"build-aarch64/{hash(deps)}"
+            if deps.check():
+                step["skip"] = True
+            else:
+                # Make sure that builds in different pipelines for the same
+                # hash at least don't run concurrently, leading to wasted
+                # resources.
+                step["concurrency"] = 1
+                step["concurrency_group"] = f"build-aarch64/{hash(deps)}"
 
     for step in pipeline["steps"]:
         visit(step)

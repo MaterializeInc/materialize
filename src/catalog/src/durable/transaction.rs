@@ -277,7 +277,7 @@ impl<'a> Transaction<'a> {
         Ok(id)
     }
 
-    pub(crate) fn insert_role(
+    pub fn insert_role(
         &mut self,
         id: RoleId,
         name: String,
@@ -304,7 +304,6 @@ impl<'a> Transaction<'a> {
         &mut self,
         cluster_id: ClusterId,
         cluster_name: &str,
-        linked_object_id: Option<GlobalId>,
         introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
@@ -313,7 +312,6 @@ impl<'a> Transaction<'a> {
         self.insert_cluster(
             cluster_id,
             cluster_name,
-            linked_object_id,
             introspection_source_indexes,
             owner_id,
             privileges,
@@ -333,7 +331,6 @@ impl<'a> Transaction<'a> {
         self.insert_cluster(
             cluster_id,
             cluster_name,
-            None,
             introspection_source_indexes,
             MZ_SYSTEM_ROLE_ID,
             privileges,
@@ -345,7 +342,6 @@ impl<'a> Transaction<'a> {
         &mut self,
         cluster_id: ClusterId,
         cluster_name: &str,
-        linked_object_id: Option<GlobalId>,
         introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
@@ -355,7 +351,6 @@ impl<'a> Transaction<'a> {
             ClusterKey { id: cluster_id },
             ClusterValue {
                 name: cluster_name.to_string(),
-                linked_object_id,
                 owner_id,
                 privileges,
                 config,
@@ -1455,7 +1450,48 @@ impl<'a> Transaction<'a> {
     /// that errors can bubble up during initialization.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn commit(self) -> Result<(), CatalogError> {
-        let (txn_batch, durable_catalog) = self.into_parts();
+        let (mut txn_batch, durable_catalog) = self.into_parts();
+        let TransactionBatch {
+            databases,
+            schemas,
+            items,
+            comments,
+            roles,
+            clusters,
+            cluster_replicas,
+            introspection_sources,
+            id_allocator,
+            configs,
+            settings,
+            timestamps,
+            system_gid_mapping,
+            system_configurations,
+            default_privileges,
+            system_privileges,
+            audit_log_updates,
+            storage_usage_updates,
+            connection_timeout: _,
+        } = &mut txn_batch;
+        // Consolidate in memory becuase it will likely be faster than consolidating after the
+        // transaction has been made durable.
+        differential_dataflow::consolidation::consolidate_updates(databases);
+        differential_dataflow::consolidation::consolidate_updates(schemas);
+        differential_dataflow::consolidation::consolidate_updates(items);
+        differential_dataflow::consolidation::consolidate_updates(comments);
+        differential_dataflow::consolidation::consolidate_updates(roles);
+        differential_dataflow::consolidation::consolidate_updates(clusters);
+        differential_dataflow::consolidation::consolidate_updates(cluster_replicas);
+        differential_dataflow::consolidation::consolidate_updates(introspection_sources);
+        differential_dataflow::consolidation::consolidate_updates(id_allocator);
+        differential_dataflow::consolidation::consolidate_updates(configs);
+        differential_dataflow::consolidation::consolidate_updates(settings);
+        differential_dataflow::consolidation::consolidate_updates(timestamps);
+        differential_dataflow::consolidation::consolidate_updates(system_gid_mapping);
+        differential_dataflow::consolidation::consolidate_updates(system_configurations);
+        differential_dataflow::consolidation::consolidate_updates(default_privileges);
+        differential_dataflow::consolidation::consolidate_updates(system_privileges);
+        differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
+        differential_dataflow::consolidation::consolidate_updates(storage_usage_updates);
         durable_catalog.commit_transaction(txn_batch).await
     }
 }

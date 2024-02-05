@@ -14,6 +14,7 @@ use std::num::TryFromIntError;
 
 use dec::TryFromDecimalError;
 use itertools::Itertools;
+use mz_catalog::builtin::MZ_INTROSPECTION_CLUSTER;
 use mz_compute_client::controller::error as compute_error;
 use mz_expr::EvalError;
 use mz_ore::error::ErrorExt;
@@ -159,12 +160,6 @@ pub enum AdapterError {
         cluster_name: String,
         replica_name: String,
     },
-    /// The named webhook source does not exist.
-    UnknownWebhookSource {
-        database: String,
-        schema: String,
-        name: String,
-    },
     /// The named setting does not exist.
     UnrecognizedConfigurationParam(String),
     /// A generic error occurred.
@@ -308,6 +303,9 @@ impl AdapterError {
                     earliest_possible,
                 ))
             }
+            AdapterError::UnallowedOnCluster { cluster, .. } => (cluster == MZ_INTROSPECTION_CLUSTER.name).then(||
+                format!("The transaction is executing on the {cluster} cluster, maybe having been routed there by the first statement in the transaction.")
+            ),
             _ => None,
         }
     }
@@ -356,10 +354,12 @@ impl AdapterError {
                     .into(),
             ),
             AdapterError::PlanError(e) => e.hint(),
-            AdapterError::UnallowedOnCluster { .. } => Some(
-                "Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query."
-                    .into(),
-            ),
+            AdapterError::UnallowedOnCluster { cluster, .. } => {
+                (cluster != MZ_INTROSPECTION_CLUSTER.name).then(||
+                    "Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query."
+                    .to_string()
+                )
+            }
             AdapterError::InvalidAlter(_, e) => e.hint(),
             AdapterError::Optimizer(e) => e.hint(),
             AdapterError::ConnectionValidation(e) => e.hint(),
@@ -462,7 +462,6 @@ impl AdapterError {
             AdapterError::UnknownPreparedStatement(_) => SqlState::UNDEFINED_PSTATEMENT,
             AdapterError::UnknownLoginRole(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
             AdapterError::UnknownClusterReplica { .. } => SqlState::UNDEFINED_OBJECT,
-            AdapterError::UnknownWebhookSource { .. } => SqlState::UNDEFINED_OBJECT,
             AdapterError::UnrecognizedConfigurationParam(_) => SqlState::UNDEFINED_OBJECT,
             AdapterError::Unsupported(..) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::Unstructured(_) => SqlState::INTERNAL_ERROR,
@@ -648,14 +647,6 @@ impl fmt::Display for AdapterError {
             } => write!(
                 f,
                 "cluster replica '{cluster_name}.{replica_name}' does not exist"
-            ),
-            AdapterError::UnknownWebhookSource {
-                database,
-                schema,
-                name,
-            } => write!(
-                f,
-                "webhook source '{database}.{schema}.{name}' does not exist"
             ),
             AdapterError::UnrecognizedConfigurationParam(setting_name) => write!(
                 f,

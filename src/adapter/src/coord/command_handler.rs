@@ -22,9 +22,9 @@ use mz_compute_client::protocol::response::PeekResponse;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::role_id::RoleId;
-use mz_repr::Timestamp;
+use mz_repr::{ScalarType, Timestamp};
 use mz_sql::ast::{
-    CopyRelation, CopyStatement, InsertSource, Query, Raw, SetExpr, Statement, SubscribeStatement,
+    ConstantVisitor, CopyRelation, CopyStatement, Raw, Statement, SubscribeStatement,
 };
 use mz_sql::catalog::RoleAttributes;
 use mz_sql::names::{Aug, PartialItemName, ResolvedIds};
@@ -40,7 +40,9 @@ use mz_sql::session::user::User;
 use mz_sql::session::vars::{
     EndTransactionAction, OwnedVarInput, Value, Var, STATEMENT_LOGGING_SAMPLE_RATE,
 };
-use mz_sql_parser::ast::{CreateMaterializedViewStatement, ExplainPlanStatement, Explainee};
+use mz_sql_parser::ast::{
+    CreateMaterializedViewStatement, ExplainPlanStatement, Explainee, InsertStatement,
+};
 use mz_storage_types::sources::Timeline;
 use opentelemetry::trace::TraceContextExt;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -60,7 +62,7 @@ use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
 };
-use crate::{catalog, metrics, ExecuteContext};
+use crate::{catalog, metrics, AppendWebhookError, ExecuteContext};
 
 use super::ExecuteContextExtra;
 
@@ -517,17 +519,11 @@ impl Coordinator {
                         // Always safe.
                     }
 
-                    Statement::Insert(ref insert_statement)
-                        if matches!(
-                            insert_statement.source,
-                            InsertSource::Query(Query {
-                                body: SetExpr::Values(..),
-                                ..
-                            }) | InsertSource::DefaultValues
-                        ) =>
-                    {
-                        // Inserting from default? values statements
-                        // is always safe.
+                    Statement::Insert(InsertStatement {
+                        source, returning, ..
+                    }) if returning.is_empty() && ConstantVisitor::insert_source(source) => {
+                        // Inserting from constant values statements that do not need to execute on
+                        // any cluster (no RETURNING) is always safe.
                     }
 
                     Statement::AlterObjectRename(_) | Statement::AlterObjectSwap(_) => {
@@ -693,7 +689,11 @@ impl Coordinator {
 
             Statement::CreateMaterializedView(mut cmvs) => {
                 let mz_now = match self
-                    .resolve_mz_now_for_create_materialized_view(&cmvs, &resolved_ids)
+                    .resolve_mz_now_for_create_materialized_view(
+                        &cmvs,
+                        &resolved_ids,
+                        Some(ctx.session_mut()),
+                    )
                     .await
                 {
                     Ok(mz_now) => mz_now,
@@ -736,7 +736,7 @@ impl Coordinator {
             }) => {
                 let mut cmvs = *box_cmvs;
                 let mz_now = match self
-                    .resolve_mz_now_for_create_materialized_view(&cmvs, &resolved_ids)
+                    .resolve_mz_now_for_create_materialized_view(&cmvs, &resolved_ids, None)
                     .await
                 {
                     Ok(mz_now) => mz_now,
@@ -774,10 +774,16 @@ impl Coordinator {
         }
     }
 
-    async fn resolve_mz_now_for_create_materialized_view(
-        &self,
+    /// Chooses a timestamp for `mz_now()`, if `mz_now()` occurs in the `with_options` of the materialized view.
+    /// If `acquire_read_holds` is true, it also grabs read holds on input collections that might possibly be involved
+    /// in the MV.
+    ///
+    /// Note that this is NOT what handles `mz_now()` in the query part of the MV. (handles it only in `with_options`).
+    async fn resolve_mz_now_for_create_materialized_view<'a>(
+        &mut self,
         cmvs: &CreateMaterializedViewStatement<Aug>,
         resolved_ids: &ResolvedIds,
+        acquire_read_holds_for: Option<&mut Session>,
     ) -> Result<Option<Timestamp>, AdapterError> {
         // (This won't be the same timestamp as the system table inserts, unfortunately.)
         if cmvs
@@ -797,19 +803,20 @@ impl Coordinator {
             let timeline = timeline_context
                 .timeline()
                 .unwrap_or(&Timeline::EpochMilliseconds);
-            Ok(Some(self.get_timestamp_oracle(timeline).read_ts().await))
+            let timestamp = self.get_timestamp_oracle(timeline).read_ts().await;
             // TODO: It might be good to take into account `least_valid_read` in addition to
             // the oracle's `read_ts`, but there are two problems:
             // 1. At this point, we don't know which indexes would be used. We could do an
             // overestimation here by grabbing the ids of all indexes that are on ids
-            // involved in the query. (We'd have to recursively follow view definitions,
-            // similarly to `validate_timeline_context`.)
+            // involved in the query (`sufficient_collections_all_clusters`).
             // 2. For a peek, when the `least_valid_read` is later than the oracle's
             // `read_ts`, then the peek doesn't return before it completes at the chosen
             // timestamp. However, for a CRATE MATERIALIZED VIEW statement, it's not clear
             // whether we want to make it block until the chosen time. If it doesn't block,
-            // then the initial refresh wouldn't be linearized with the CREATE MATERIALIZED
-            // VIEW statement.
+            // then a REFRESH AT CREATION wouldn't be linearized with the CREATE MATERIALIZED
+            // VIEW statement, in the sense that a query from the MV after its creation might
+            // see input changes that happened after the CRATE MATERIALIZED VIEW statement
+            // returned.
             //
             // Note: The Adapter is usually keeping a read hold of all objects at the oracle
             // read timestamp, so `least_valid_read` usually won't actually be later than
@@ -821,6 +828,19 @@ impl Coordinator {
             // specified to be at `mz_now()` (which is usually the initial refresh)
             // (similarly to how we don't perform refreshes that were specified to be in the
             // past).
+
+            if let Some(session) = acquire_read_holds_for {
+                let catalog = self.catalog().for_session(session);
+                let cluster = mz_sql::plan::resolve_cluster_for_materialized_view(&catalog, cmvs)?;
+
+                let ids = self
+                    .index_oracle(cluster)
+                    .sufficient_collections(resolved_ids.0.iter());
+
+                self.acquire_read_holds_auto_cleanup(session, timestamp, &ids);
+            }
+
+            Ok(Some(timestamp))
         } else {
             Ok(None)
         }
@@ -963,7 +983,7 @@ impl Coordinator {
         database: String,
         schema: String,
         name: String,
-        tx: oneshot::Sender<Result<AppendWebhookResponse, AdapterError>>,
+        tx: oneshot::Sender<Result<AppendWebhookResponse, AppendWebhookError>>,
     ) {
         /// Attempts to resolve a Webhook source from a provided `database.schema.name` path.
         ///
@@ -988,11 +1008,12 @@ impl Coordinator {
                 return Err(name);
             };
 
-            let (body_ty, header_tys, validator) = match entry.item() {
+            let (body_format, header_tys, validator) = match entry.item() {
                 CatalogItem::Source(Source {
                     data_source:
                         DataSourceDesc::Webhook {
                             validate_using,
+                            body_format,
                             headers,
                             ..
                         },
@@ -1009,10 +1030,14 @@ impl Coordinator {
                         desc.arity()
                     );
 
-                    let body = desc
+                    // Double check that the body column of the webhook source matches the type
+                    // we're about to deserialize as.
+                    let body_column = desc
                         .get_by_name(&"body".into())
                         .map(|(_idx, ty)| ty.clone())
                         .ok_or(name.clone())?;
+                    assert!(!body_column.nullable, "webhook body column is nullable!?");
+                    assert_eq!(body_column.scalar_type, ScalarType::from(*body_format));
 
                     // Create a validator that can be called to validate a webhook request.
                     let validator = validate_using.as_ref().map(|v| {
@@ -1022,7 +1047,7 @@ impl Coordinator {
                             coord.caching_secrets_reader.clone(),
                         )
                     });
-                    (body, headers.clone(), validator)
+                    (*body_format, headers.clone(), validator)
                 }
                 _ => return Err(name),
             };
@@ -1041,14 +1066,14 @@ impl Coordinator {
 
             Ok(AppendWebhookResponse {
                 tx,
-                body_ty,
+                body_format,
                 header_tys,
                 validator,
             })
         }
 
         let response = resolve(self, database, schema, name).map_err(|name| {
-            AdapterError::UnknownWebhookSource {
+            AppendWebhookError::UnknownWebhook {
                 database: name.database.expect("provided"),
                 schema: name.schema.expect("provided"),
                 name: name.item,

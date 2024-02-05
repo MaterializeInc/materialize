@@ -118,8 +118,16 @@ known_errors = [
     "window functions are not allowed in table function arguments",  # TODO: Remove when #20979 is implemented
     "window functions are not allowed in OR argument",  # wrong error message
     "window functions are not allowed in AND argument",  # wrong error message
+    "window functions are not allowed in aggregate function",
     "invalid IANA Time Zone Database identifier",
     "Top-level LIMIT must be a constant expression",
     "LIMIT must not be negative",
     "materialized view objects cannot depend on log sources",  # explain create materialized view
+    "aggregate functions are not allowed in OR argument",
+    "aggregate functions are not allowed in AND argument",
+    "aggregate functions are not allowed in WHERE clause",
+    "aggregate functions are not allowed in table function arguments",
+    "aggregate functions are not allowed in LIMIT",
+    "nested aggregate functions are not allowed",
+    "function map_build(text list) does not exist",
 ]

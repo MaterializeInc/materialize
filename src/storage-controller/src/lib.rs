@@ -95,17 +95,12 @@ pub static ALL_COLLECTIONS: &[&str] = &[
 
 #[derive(Debug)]
 enum PersistTxns<T> {
-    NeverEnabled,
     EnabledEager {
         txns_id: ShardId,
         txns_client: PersistClient,
     },
     EnabledLazy {
         txns_read: TxnsRead<T>,
-        txns_client: PersistClient,
-    },
-    DisabledPreviouslyEnabled {
-        txns_id: ShardId,
         txns_client: PersistClient,
     },
 }
@@ -117,9 +112,7 @@ impl<T: Timestamp + Lattice + Codec64> PersistTxns<T> {
                 assert_eq!(txns_id, txns_read.txns_id());
                 txns_read
             }
-            PersistTxns::NeverEnabled
-            | PersistTxns::EnabledEager { .. }
-            | PersistTxns::DisabledPreviouslyEnabled { .. } => {
+            PersistTxns::EnabledEager { .. } => {
                 panic!("set if txns are enabled and lazy")
             }
         }
@@ -451,8 +444,6 @@ where
                         // normally.
                         PersistTxns::EnabledEager { .. } => None,
                         PersistTxns::EnabledLazy { txns_read, .. } => Some(*txns_read.txns_id()),
-                        PersistTxns::NeverEnabled
-                        | PersistTxns::DisabledPreviouslyEnabled { .. } => None,
                     },
                     DataSource::Ingestion(_)
                     | DataSource::Introspection(_)
@@ -1241,7 +1232,7 @@ where
         &self,
         id: GlobalId,
         as_of: Antichain<Self::Timestamp>,
-    ) -> Result<SnapshotStats<Self::Timestamp>, StorageError> {
+    ) -> Result<SnapshotStats, StorageError> {
         let metadata = &self.collection(id)?.collection_metadata;
         // See the comments in Self::snapshot for what's going on here.
         let as_of = match metadata.txns_shard.as_ref() {
@@ -1886,11 +1877,6 @@ where
     async fn init_txns(&mut self, init_ts: T) -> Result<(), StorageError> {
         assert_eq!(self.txns_init_run, false);
         let (txns_id, txns_client) = match &self.txns {
-            PersistTxns::NeverEnabled => {
-                info!("init_txns at {:?}: disabled", init_ts);
-                self.txns_init_run = true;
-                return Ok(());
-            }
             PersistTxns::EnabledEager {
                 txns_id,
                 txns_client,
@@ -1911,13 +1897,6 @@ where
                     txns_read.txns_id()
                 );
                 (txns_read.txns_id(), txns_client)
-            }
-            PersistTxns::DisabledPreviouslyEnabled {
-                txns_id,
-                txns_client,
-            } => {
-                info!("init_txns at {:?}: disabled txns_id={}", init_ts, txns_id);
-                (txns_id, txns_client)
             }
         };
 
@@ -2091,61 +2070,39 @@ where
             .open(persist_location.clone())
             .await
             .expect("location should be valid");
-        let (persist_txn_tables, lazy_persist_txn_tables) = match persist_txn_tables {
-            PersistTxnTablesImpl::Off => (false, false),
-            PersistTxnTablesImpl::Eager => (true, false),
-            PersistTxnTablesImpl::Lazy => (true, true),
-        };
         let txns_metrics = Arc::new(TxnMetrics::new(&metrics_registry));
-        let (persist_table_worker, txns) = if persist_txn_tables {
-            let txns_id = PERSIST_TXNS_SHARD
-                .insert_key_without_overwrite(&mut stash, (), ShardId::new().into_proto())
-                .await
-                .expect("could not get txns shard id")
-                .parse::<ShardId>()
-                .expect("should be valid shard id");
-            let txns = TxnsHandle::open(
-                T::minimum(),
-                txns_client.clone(),
-                Arc::clone(&txns_metrics),
-                txns_id,
-                Arc::new(RelationDesc::empty()),
-                Arc::new(UnitSchema),
-            )
-            .await;
-            let worker = persist_handles::PersistTableWriteWorker::new_txns(
-                tx.clone(),
-                txns,
-                lazy_persist_txn_tables,
-            );
-            let txns = if lazy_persist_txn_tables {
+        let txns_id = PERSIST_TXNS_SHARD
+            .insert_key_without_overwrite(&mut stash, (), ShardId::new().into_proto())
+            .await
+            .expect("could not get txns shard id")
+            .parse::<ShardId>()
+            .expect("should be valid shard id");
+        let txns = TxnsHandle::open(
+            T::minimum(),
+            txns_client.clone(),
+            Arc::clone(&txns_metrics),
+            txns_id,
+            Arc::new(RelationDesc::empty()),
+            Arc::new(UnitSchema),
+        )
+        .await;
+        let persist_table_worker = persist_handles::PersistTableWriteWorker::new_txns(
+            tx.clone(),
+            txns,
+            persist_txn_tables,
+        );
+        let txns = match persist_txn_tables {
+            PersistTxnTablesImpl::Lazy => {
                 let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
                 PersistTxns::EnabledLazy {
                     txns_read,
                     txns_client,
                 }
-            } else {
-                PersistTxns::EnabledEager {
-                    txns_id,
-                    txns_client,
-                }
-            };
-            (worker, txns)
-        } else {
-            let worker = persist_handles::PersistTableWriteWorker::new_legacy(tx.clone());
-            let txns_id = PERSIST_TXNS_SHARD
-                .peek_key_one(&mut stash, ())
-                .await
-                .expect("could not get txns shard id")
-                .map(|x| x.parse::<ShardId>().expect("should be valid shard id"));
-            let txns = match txns_id {
-                Some(txns_id) => PersistTxns::DisabledPreviouslyEnabled {
-                    txns_id,
-                    txns_client,
-                },
-                None => PersistTxns::NeverEnabled,
-            };
-            (worker, txns)
+            }
+            PersistTxnTablesImpl::Eager => PersistTxns::EnabledEager {
+                txns_id,
+                txns_client,
+            },
         };
         let persist_monotonic_worker =
             persist_handles::PersistMonotonicWriteWorker::new(tx.clone());
@@ -2954,6 +2911,7 @@ where
         storage_dependencies: &[GlobalId],
     ) -> Result<(), StorageError> {
         let dependency_since = self.determine_collection_since_joins(storage_dependencies)?;
+        let enable_asserts = self.config().parameters.enable_dependency_read_hold_asserts;
 
         for id in collections {
             let collection = self.collection(id).expect("known to exist");
@@ -2981,7 +2939,7 @@ where
                         ReadPolicy::NoPolicy { initial_since } =>
                             PartialOrder::less_than(initial_since, &dependency_since),
                         _ => false,
-                    },
+                    } || !enable_asserts,
                     "subsources should not have external read holds installed until \
                                     their ingestion is created, but {:?} has read policy {:?}",
                     id,
@@ -3000,7 +2958,7 @@ where
                 // We have to re-borrow.
                 let collection = self.collection(id).expect("known to exist");
                 assert!(
-                    collection.implied_capability == dependency_since,
+                    collection.implied_capability == dependency_since || !enable_asserts,
                     "monkey patching the implied_capability to {:?} did not work, is still {:?}",
                     dependency_since,
                     collection.implied_capability,
@@ -3014,7 +2972,8 @@ where
                 PartialOrder::less_than(&collection.implied_capability, &collection.write_frontier)
                     // Whenever a collection is being initialized, this state is
                     // acceptable.
-                    || *collection.write_frontier == [T::minimum()],
+                    || *collection.write_frontier == [T::minimum()]
+                    || !enable_asserts,
                 "{id}:  the implied capability {:?} should be less than the write_frontier {:?}. Collection state dump: {:#?}",
                 collection.implied_capability,
                 collection.write_frontier,
@@ -3029,7 +2988,7 @@ where
                 !PartialOrder::less_than(
                     &collection.read_capabilities.frontier(),
                     &collection.implied_capability.borrow()
-                ),
+                ) || !enable_asserts,
                 "{id}: at this point, there can be no read holds for any time that is not \
                     beyond the implied capability  but we have implied_capability {:?}, \
                     read_capabilities {:?}",

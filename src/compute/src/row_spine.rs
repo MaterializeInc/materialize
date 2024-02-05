@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 pub use self::container::DatumContainer;
+pub use self::container::DatumSeq;
 pub use self::spines::{RowRowSpine, RowSpine, RowValSpine};
 
 /// Spines specialized to contain `Row` types in keys and values.
@@ -102,6 +103,8 @@ mod container {
     /// A slice container with four bytes overhead per slice.
     pub struct DatumContainer {
         batches: Vec<DatumBatch>,
+        /// Stored out of line from batches to allow more effective binary search.
+        offsets: Vec<usize>,
     }
 
     impl DatumContainer {
@@ -112,6 +115,10 @@ mod container {
             callback(
                 self.batches.len() * std::mem::size_of::<DatumBatch>(),
                 self.batches.capacity() * std::mem::size_of::<DatumBatch>(),
+            );
+            callback(
+                self.offsets.len() * std::mem::size_of::<usize>(),
+                self.offsets.capacity() * std::mem::size_of::<usize>(),
             );
             for batch in self.batches.iter() {
                 use crate::extensions::arrange;
@@ -128,57 +135,66 @@ mod container {
         fn copy(&mut self, item: Self::ReadItem<'_>) {
             if let Some(batch) = self.batches.last_mut() {
                 let success = batch.try_push(item.bytes);
-                if !success {
-                    // double the lengths from `batch`.
-                    let item_cap = 2 * batch.offsets.len();
-                    let byte_cap = std::cmp::max(2 * batch.storage.capacity(), item.bytes.len());
-                    let mut new_batch = DatumBatch::with_capacities(item_cap, byte_cap);
-                    assert!(new_batch.try_push(item.bytes));
-                    self.batches.push(new_batch);
+                if success {
+                    return;
                 }
             }
+
+            // By default, we use zero capacities if we have no batches already present.
+            let (mut item_cap, mut byte_cap) = self
+                .batches
+                .last()
+                .map(|b| (b.offsets.len(), b.storage.capacity()))
+                .unwrap_or((0, 0));
+            // Double the previous "capacities" hoping that these track likely use.
+            // The byte capacity should be great because it drives `copy` acceptance,
+            // but the item capacity is a bit of a guess and there may be resizing.
+            item_cap = 2 * item_cap;
+            byte_cap = 2 * byte_cap;
+            // New byte capacity should be in the range 2MB - 128MB, and at least the item length.
+            byte_cap = std::cmp::max(byte_cap, 2 << 20);
+            byte_cap = std::cmp::min(byte_cap, 128 << 20);
+            byte_cap = std::cmp::max(byte_cap, item.bytes.len());
+            let mut new_batch = DatumBatch::with_capacities(item_cap, byte_cap);
+            assert!(new_batch.try_push(item.bytes));
+            self.offsets.push(self.len());
+            self.batches.push(new_batch);
         }
 
-        fn with_capacity(size: usize) -> Self {
+        fn with_capacity(_size: usize) -> Self {
+            // This structure starts at a reasonable capacity and never resized its allocations.
+            // We judged it relatively harmless to restart at that capacity and grow, rather than
+            // navigate the two different capacities (items and bytes) and some glitchy start-up
+            // logic around mis-sized capacities (if the first copy would fail).
             Self {
-                batches: vec![DatumBatch::with_capacities(size, size)],
+                batches: Vec::new(),
+                offsets: Vec::new(),
             }
         }
 
-        fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
-            let mut item_cap = 1;
-            let mut byte_cap = 0;
-            for batch in cont1.batches.iter() {
-                item_cap += batch.offsets.len() - 1;
-                byte_cap += batch.storage.len();
-            }
-            for batch in cont2.batches.iter() {
-                item_cap += batch.offsets.len() - 1;
-                byte_cap += batch.storage.len();
-            }
-            Self {
-                batches: vec![DatumBatch::with_capacities(item_cap, byte_cap)],
-            }
+        fn merge_capacity(_cont1: &Self, _cont2: &Self) -> Self {
+            // Same explanation as `with_capacity`: we believe the default behavior is good enough.
+            Self::with_capacity(0)
         }
 
-        fn index(&self, mut index: usize) -> Self::ReadItem<'_> {
-            for batch in self.batches.iter() {
-                if index < batch.len() {
-                    return DatumSeq {
-                        bytes: batch.index(index),
-                    };
-                }
-                index -= batch.len();
+        fn index(&self, index: usize) -> Self::ReadItem<'_> {
+            // Determine which batch the index belongs to.
+            // Binary search gives different answers based on whether it finds
+            // the result or not, and we need to tidy up those results to point
+            // at the first batch for which the offset is less or equal to `index`.
+            let batch_idx = match self.offsets.binary_search(&index) {
+                Ok(x) => x,
+                Err(x) => x - 1,
+            };
+
+            DatumSeq {
+                bytes: self.batches[batch_idx].index(index - self.offsets[batch_idx]),
             }
-            panic!("Index out of bounds");
         }
 
         fn len(&self) -> usize {
-            let mut result = 0;
-            for batch in self.batches.iter() {
-                result += batch.len();
-            }
-            result
+            self.offsets.last().map(|x| *x).unwrap_or(0)
+                + self.batches.last().map(|x| x.len()).unwrap_or(0)
         }
     }
 
@@ -392,11 +408,13 @@ mod offset_opt {
         type ReadItem<'a> = Wrapper<usize>;
 
         fn copy(&mut self, item: Self::ReadItem<'_>) {
-            #[allow(clippy::if_same_then_else)]
             if !self.spilled.is_empty() {
                 self.spilled.push(*item);
-            } else if !self.strided.push(*item) {
-                self.spilled.push(*item);
+            } else {
+                let inserted = self.strided.push(*item);
+                if !inserted {
+                    self.spilled.push(*item);
+                }
             }
         }
 

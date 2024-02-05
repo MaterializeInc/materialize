@@ -34,7 +34,7 @@ use crate::command::Command;
 use crate::coord::appends::Deferred;
 use crate::coord::statement_logging::StatementLoggingId;
 use crate::coord::{
-    Coordinator, CreateConnectionValidationReady, Message, PeekStage, PeekStageFinish,
+    Coordinator, CreateConnectionValidationReady, Message, PeekStage, PeekStageOptimizeLir,
     PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
 };
 use crate::session::Session;
@@ -155,7 +155,7 @@ impl Coordinator {
                     stage,
                 } => {
                     otel_ctx.attach_as_parent();
-                    self.sequence_peek_stage(ctx, otel_ctx, stage).await;
+                    self.execute_peek_stage(ctx, otel_ctx, stage).await;
                 }
                 Message::CreateIndexStageReady {
                     ctx,
@@ -849,8 +849,7 @@ impl Coordinator {
             RealTimeRecencyContext::Peek {
                 ctx,
                 root_otel_ctx,
-                copy_to,
-                when,
+                plan,
                 target_replica,
                 timeline_context,
                 oracle_read_ts,
@@ -858,15 +857,15 @@ impl Coordinator {
                 in_immediate_multi_stmt_txn: _,
                 optimizer,
                 global_mir_plan,
+                peek_ctx,
             } => {
-                self.sequence_peek_stage(
+                self.execute_peek_stage(
                     ctx,
                     root_otel_ctx,
-                    PeekStage::Finish(PeekStageFinish {
+                    PeekStage::OptimizeLir(PeekStageOptimizeLir {
                         validity,
-                        copy_to,
+                        plan,
                         id_bundle: None,
-                        when,
                         target_replica,
                         timeline_context,
                         oracle_read_ts,
@@ -874,6 +873,7 @@ impl Coordinator {
                         real_time_recency_ts: Some(real_time_recency_ts),
                         optimizer,
                         global_mir_plan,
+                        peek_ctx,
                     }),
                 )
                 .await;

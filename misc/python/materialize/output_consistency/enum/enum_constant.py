@@ -11,6 +11,9 @@ from __future__ import annotations
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
 from materialize.output_consistency.enum.enum_data_type import EnumDataType
+from materialize.output_consistency.execution.sql_dialect_adjuster import (
+    SqlDialectAdjuster,
+)
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
@@ -39,6 +42,7 @@ class EnumConstant(Expression):
         super().__init__(characteristics, ValueStorageLayout.ANY, False, False)
         self.value = value
         self.add_quotes = add_quotes
+        self.data_type = EnumDataType()
 
     def resolve_return_type_category(self) -> DataTypeCategory:
         return DataTypeCategory.ENUM
@@ -47,7 +51,7 @@ class EnumConstant(Expression):
         return ENUM_RETURN_TYPE_SPEC
 
     def try_resolve_exact_data_type(self) -> DataType | None:
-        return EnumDataType()
+        return self.data_type
 
     def is_leaf(self) -> bool:
         return True
@@ -61,13 +65,14 @@ class EnumConstant(Expression):
         return self.own_characteristics
 
     def __str__(self) -> str:
-        return self.to_sql(False)
+        return self.to_sql(SqlDialectAdjuster(), False)
 
-    def to_sql(self, is_root_level: bool) -> str:
+    def to_sql(self, sql_adjuster: SqlDialectAdjuster, is_root_level: bool) -> str:
+        sql_value = self.data_type.value_to_sql(self.value, sql_adjuster)
         if self.add_quotes:
-            return f"'{self.value}'"
+            return f"'{sql_value}'"
 
-        return self.value
+        return sql_value
 
     def collect_leaves(self) -> list[LeafExpression]:
         return []

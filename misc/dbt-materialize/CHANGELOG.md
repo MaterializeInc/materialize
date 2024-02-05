@@ -1,5 +1,18 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Revert backport of [dbt-core #8887](https://github.com/dbt-labs/dbt-core/pull/8887),
+  which shipped with[dbt v1.7.6](https://github.com/dbt-labs/dbt-core/releases/tag/v1.7.6).
+  Non-standard types should just work™️ in model contracts as part of dbt core
+  functionality.
+
+## 1.7.3 - 2024-01-24
+
+* Support scheduled refreshes in the `materialized_view` materialization via the
+  new `refresh_interval` configuration. This is a private preview feature in
+  Materialize, so configuration details are likely to change in the future.
+
 ## 1.7.2 - 2023-12-18
 
 * Backport [dbt-core #8887](https://github.com/dbt-labs/dbt-core/pull/8887) to

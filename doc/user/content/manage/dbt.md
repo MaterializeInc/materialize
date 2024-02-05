@@ -141,7 +141,6 @@ Create a [Kafka source](/sql/create-source/kafka/).
 CREATE SOURCE {{ this }}
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'topic_a')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-  WITH (SIZE = '3xsmall')
 ```
 
 The source above would be compiled to:
@@ -160,7 +159,6 @@ Create a [PostgreSQL source](/sql/create-source/postgres/).
 CREATE SOURCE {{ this }}
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
   FOR ALL TABLES
-  WITH (SIZE = '3xsmall')
 ```
 
 Materialize will automatically create a **subsource** for each table in the `mz_source` publication. Pulling subsources into the dbt context automatically isn't supported yet. Follow the discussion in [dbt-core #6104](https://github.com/dbt-labs/dbt-core/discussions/6104#discussioncomment-3957001) for updates!
@@ -256,7 +254,6 @@ CREATE SINK {{ this }}
   INTO KAFKA CONNECTION kafka_connection (TOPIC 'topic_c')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   ENVELOPE DEBEZIUM
-  WITH (SIZE = '3xsmall')
 ```
 
 The sink above would be compiled to:

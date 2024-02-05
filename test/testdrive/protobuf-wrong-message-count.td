@@ -10,6 +10,10 @@
 # Test that Protobuf files with too few or too many messages are handled
 # correctly.
 
+$ kafka-create-topic topic=too-few partitions=1
+
+$ kafka-create-topic topic=too-many partitions=1
+
 $ schema-registry-publish subject=testdrive-too-few-${testdrive.seed}-value schema-type=protobuf
 syntax = "proto3";
 

@@ -52,6 +52,9 @@ $ kafka-ingest format=avro topic=correctness-data key-format=avro key-schema=${k
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
 
+# Prime tokio-postgres with the missing OIDs.
+> SELECT mz_now(), * FROM correctness_data WHERE false AS OF AT LEAST 0
+
 # Grab a cursor at timestamp 0
 > BEGIN
 

@@ -14,11 +14,11 @@ use mz_compute_types::dataflows::YieldSpec;
 use mz_orchestrator::scheduling_config::{ServiceSchedulingConfig, ServiceTopologySpreadConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_persist_client::cfg::{PersistParameters, RetryParameters};
+use mz_persist_client::cfg::PersistParameters;
 use mz_service::params::GrpcClientParameters;
 use mz_sql::session::vars::{SystemVars, DEFAULT_LINEAR_JOIN_YIELDING};
 use mz_storage_types::parameters::{
-    StorageMaxInflightBytesConfig, StorageParameters, UpsertAutoSpillConfig,
+    PgSourceSnapshotConfig, StorageMaxInflightBytesConfig, StorageParameters, UpsertAutoSpillConfig,
 };
 use mz_tracing::params::TracingParameters;
 
@@ -176,6 +176,12 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
         ),
         statistics_interval: config.storage_statistics_interval(),
         statistics_collection_interval: config.storage_statistics_collection_interval(),
+        pg_snapshot_config: PgSourceSnapshotConfig {
+            collect_strict_count: config.pg_source_snapshot_collect_strict_count(),
+            fallback_to_strict_count: config.pg_source_snapshot_fallback_to_strict_count(),
+            wait_for_count: config.pg_source_snapshot_wait_for_count(),
+        },
+        enable_dependency_read_hold_asserts: config.enable_dependency_read_hold_asserts(),
     }
 }
 
@@ -199,40 +205,7 @@ pub fn caching_config(config: &SystemVars) -> mz_secrets::CachingPolicy {
 
 fn persist_config(config: &SystemVars) -> PersistParameters {
     PersistParameters {
-        blob_target_size: Some(config.persist_blob_target_size()),
-        blob_cache_mem_limit_bytes: Some(config.persist_blob_cache_mem_limit_bytes()),
-        compaction_minimum_timeout: Some(config.persist_compaction_minimum_timeout()),
-        consensus_connect_timeout: Some(config.crdb_connect_timeout()),
-        consensus_tcp_user_timeout: Some(config.crdb_tcp_user_timeout()),
-        consensus_connection_pool_ttl: Some(config.persist_consensus_connection_pool_ttl()),
-        consensus_connection_pool_ttl_stagger: Some(
-            config.persist_consensus_connection_pool_ttl_stagger(),
-        ),
-        sink_minimum_batch_updates: Some(config.persist_sink_minimum_batch_updates()),
-        storage_sink_minimum_batch_updates: Some(
-            config.storage_persist_sink_minimum_batch_updates(),
-        ),
-        storage_source_decode_fuel: Some(config.storage_source_decode_fuel()),
-        next_listen_batch_retryer: Some(RetryParameters {
-            initial_backoff: config.persist_next_listen_batch_retryer_initial_backoff(),
-            multiplier: config.persist_next_listen_batch_retryer_multiplier(),
-            clamp: config.persist_next_listen_batch_retryer_clamp(),
-        }),
-        txns_data_shard_retryer: Some(RetryParameters {
-            initial_backoff: config.persist_txns_data_shard_retryer_initial_backoff(),
-            multiplier: config.persist_txns_data_shard_retryer_multiplier(),
-            clamp: config.persist_txns_data_shard_retryer_clamp(),
-        }),
-        reader_lease_duration: Some(config.persist_reader_lease_duration()),
-        stats_audit_percent: Some(config.persist_stats_audit_percent()),
-        stats_collection_enabled: Some(config.persist_stats_collection_enabled()),
-        stats_filter_enabled: Some(config.persist_stats_filter_enabled()),
-        stats_budget_bytes: Some(config.persist_stats_budget_bytes()),
-        stats_untrimmable_columns: Some(config.persist_stats_untrimmable_columns()),
-        pubsub_client_enabled: Some(config.persist_pubsub_client_enabled()),
-        pubsub_push_diff_enabled: Some(config.persist_pubsub_push_diff_enabled()),
-        rollup_threshold: Some(config.persist_rollup_threshold()),
-        feature_flags: config.persist_flags(),
+        config_updates: config.persist_configs(),
     }
 }
 

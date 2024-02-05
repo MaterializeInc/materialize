@@ -109,6 +109,7 @@ class QueryExecutionManager:
             elif verdict == ValidationVerdict.IGNORED_FAILURE:
                 summary_to_update.count_ignored_error_query_templates += 1
             elif verdict == ValidationVerdict.FAILURE:
+                summary_to_update.add_failures(test_outcome.to_failure_details())
                 all_comparisons_passed = False
             else:
                 raise RuntimeError(f"Unexpected verdict: {verdict}")

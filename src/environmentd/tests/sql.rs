@@ -39,6 +39,9 @@ use mz_repr::Timestamp;
 use mz_sql::session::user::{INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SUPPORT_USER, SYSTEM_USER};
 use mz_storage_types::sources::Timeline;
 use postgres::Row;
+use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
+use rdkafka::ClientConfig;
+use rdkafka_sys::RDKafkaErrorCode;
 use regex::Regex;
 use serde_json::json;
 use timely::order::PartialOrder;
@@ -101,6 +104,9 @@ impl MockHttpServer {
 async fn test_no_block() {
     // We manually time out the test because it's better than relying on CI to time out, because
     // an actual failure (as opposed to a CI timeout) causes `services.log` to be uploaded.
+
+    // Allow the use of banned rdkafka methods, because we are just in tests.
+    #[allow(clippy::disallowed_methods)]
     let test_case = async move {
         println!("test_no_block: starting server");
         let server = test_util::TestHarness::default().start().await;
@@ -124,6 +130,21 @@ async fn test_no_block() {
                 .await;
             println!("test_no_block: in thread; create CSR conn done");
             let _ = result.unwrap();
+
+            let admin: AdminClient<_> = ClientConfig::new()
+                .set("bootstrap.servers", &*KAFKA_ADDRS)
+                .create()
+                .expect("Admin client creation failed");
+
+            let new_topic = NewTopic::new("foo", 1, TopicReplication::Fixed(1));
+            let topic_results = admin
+                .create_topics([&new_topic], &AdminOptions::new())
+                .await
+                .expect("topic creation failed");
+            match topic_results[0] {
+                Ok(_) | Err((_, RDKafkaErrorCode::TopicAlreadyExists)) => {}
+                Err((ref err, _)) => panic!("failed to ensure topic: {err}"),
+            }
 
             let result = client
                     .batch_execute(&format!(
@@ -208,8 +229,26 @@ async fn test_drop_connection_race() {
         ))
         .await
         .unwrap();
+
+    // Allow the use of banned rdkafka methods, because we are just in tests.
+    #[allow(clippy::disallowed_methods)]
     let source_task = task::spawn(|| "source_client", async move {
         info!("test_drop_connection_race: in task; creating connection and source");
+        let admin: AdminClient<_> = ClientConfig::new()
+            .set("bootstrap.servers", &*KAFKA_ADDRS)
+            .create()
+            .expect("Admin client creation failed");
+
+        let new_topic = NewTopic::new("foo", 1, TopicReplication::Fixed(1));
+        let topic_results = admin
+            .create_topics([&new_topic], &AdminOptions::new())
+            .await
+            .expect("topic creation failed");
+        match topic_results[0] {
+            Ok(_) | Err((_, RDKafkaErrorCode::TopicAlreadyExists)) => {}
+            Err((ref err, _)) => panic!("failed to ensure topic: {err}"),
+        }
+
         let result = client
             .batch_execute(
                 "CREATE SOURCE foo \
@@ -465,7 +504,7 @@ fn test_subscribe_basic() {
         .batch_execute("CREATE TABLE t (data text)")
         .unwrap();
     client_writes
-        .batch_execute("CREATE DEFAULT INDEX t_primary_idx ON t WITH (LOGICAL COMPACTION WINDOW 0)")
+        .batch_execute("CREATE DEFAULT INDEX t_primary_idx ON t WITH (RETAIN HISTORY FOR 0)")
         .unwrap();
     // Now that the index (and its since) are initialized to 0, we can resume using
     // system time. Do a read to bump the oracle's state so it will read from the
@@ -573,7 +612,7 @@ fn test_subscribe_basic() {
     // view derived from the index. This previously selected an invalid
     // `AS OF` timestamp (#5391).
     client_writes
-        .batch_execute("ALTER INDEX t_primary_idx SET (LOGICAL COMPACTION WINDOW = '1ms')")
+        .batch_execute("ALTER INDEX t_primary_idx SET (RETAIN HISTORY = FOR '1ms')")
         .unwrap();
     client_writes
         .batch_execute("CREATE VIEW v AS SELECT * FROM t")
@@ -1778,6 +1817,16 @@ async fn test_timeline_read_holds() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn test_linearizability() {
+    // TODO(jkosh44) This doesn't actually test linearizability across sessions which would be nice.
+    test_session_linearizability("strict serializable").await;
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn test_strong_session_serializability() {
+    test_session_linearizability("strong session serializable").await;
+}
+
+async fn test_session_linearizability(isolation_level: &str) {
     // Set the timestamp to zero for deterministic initial timestamps.
     let now = Arc::new(Mutex::new(0));
     let now_fn = {
@@ -1788,6 +1837,9 @@ async fn test_linearizability() {
         .with_now(now_fn)
         .unsafe_mode()
         .start()
+        .await;
+    server
+        .enable_feature_flags(&["enable_session_timelines"])
         .await;
     let mz_client = server.connect().await.unwrap();
 
@@ -1834,7 +1886,7 @@ async fn test_linearizability() {
     assert!(join_ts < view_ts);
 
     mz_client
-        .batch_execute("SET transaction_isolation = 'strict serializable'")
+        .batch_execute(&format!("SET transaction_isolation = '{isolation_level}'"))
         .await
         .unwrap();
 
@@ -3528,6 +3580,7 @@ async fn test_explain_as_of() {
 
 // Test that RETAIN HISTORY results in the since and upper being separated by the specified amount.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[ignore] // TODO: Reenable when #24957 is fixed
 async fn test_retain_history() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
@@ -3589,8 +3642,15 @@ async fn test_retain_history() {
         )
         .await
         .unwrap();
+    client
+        .batch_execute(
+            "CREATE SOURCE s_auction FROM LOAD GENERATOR AUCTION FOR ALL TABLES WITH (RETAIN HISTORY = FOR '2s')",
+        )
+        .await
+        .unwrap();
 
-    for name in ["v", "s"] {
+    // users is a subsource on the auction source.
+    for name in ["v", "s", "users"] {
         // Test compaction and querying without an index present.
         Retry::default()
             .retry_async(|_| async {
@@ -3604,7 +3664,7 @@ async fn test_retain_history() {
                 client
                     .query(
                         &format!(
-                            "SELECT * FROM {name} AS OF {}-2000",
+                            "SELECT 1 FROM {name} LIMIT 1 AS OF {}-2000",
                             ts.determination.timestamp_context.timestamp_or_default()
                         ),
                         &[],
@@ -3743,4 +3803,72 @@ async fn test_temporal_static_queries() {
         EpochMillis::MAX,
         timestamp
     )
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_constant_materialized_view() {
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
+    client
+        .batch_execute("CREATE CLUSTER cold (SIZE '1', REPLICATION FACTOR = 0);")
+        .await
+        .unwrap();
+    // The materialized view is created in a cluster with 0 replicas, so it's upper will be stuck
+    // at 0.
+    client
+        .batch_execute(
+            "CREATE MATERIALIZED VIEW mv IN CLUSTER cold AS SELECT generate_series(1, 100);",
+        )
+        .await
+        .unwrap();
+
+    let timestamp_determination = get_explain_timestamp_determination("mv", &client)
+        .await
+        .unwrap();
+
+    assert!(
+        !timestamp_determination.respond_immediately,
+        "upper is stuck at 0 so the query cannot respond immediately"
+    );
+    match timestamp_determination.determination.timestamp_context {
+        TimestampContext::TimelineTimestamp { chosen_ts, .. } => {
+            assert_ne!(Timestamp::MAX, chosen_ts)
+        }
+        TimestampContext::NoTimestamp => {
+            panic!("queries against materialized views always require a timestamp")
+        }
+    }
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_explain_timestamp_blocking() {
+    let server = test_util::TestHarness::default().start().await;
+    server
+        .enable_feature_flags(&["enable_refresh_every_mvs"])
+        .await;
+    let client = server.connect().await.unwrap();
+    // This test will break in the year 30,000 after Jan 1st. When that happens, increase the year
+    // to fix the test.
+    client
+        .batch_execute(
+            "CREATE MATERIALIZED VIEW const_mv WITH (REFRESH AT '30000-01-01 23:59') AS SELECT 2;",
+        )
+        .await
+        .unwrap();
+
+    let mv_timestamp = get_explain_timestamp("const_mv", &client).await;
+
+    let row = client
+        .query_one("SELECT mz_now()::text;", &[])
+        .await
+        .unwrap();
+    let mz_now_ts_raw: String = row.get(0);
+    let mz_now_timestamp: EpochMillis = mz_now_ts_raw.parse().unwrap();
+
+    assert!(
+        mv_timestamp > mz_now_timestamp,
+        "read against mv at timestamp {mv_timestamp} should be in the future compared to now, {mz_now_timestamp}"
+    );
 }

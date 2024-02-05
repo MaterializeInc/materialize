@@ -39,10 +39,11 @@ use timely::progress::{timestamp::Refines, Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::{debug, trace};
 
+use crate::batch::BLOB_TARGET_SIZE;
 use crate::cfg::RetryParameters;
-use crate::fetch::{FetchedPart, SerdeLeasedBatchPart};
+use crate::fetch::{FetchedBlob, SerdeLeasedBatchPart};
 use crate::read::SubscriptionLeaseReturner;
-use crate::stats::PartStats;
+use crate::stats::{PartStats, STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
 use crate::{Diagnostics, PersistClient, ShardId};
 
 /// Creates a new source that reads from a persist shard, distributing the work
@@ -73,7 +74,7 @@ pub fn shard_source<'g, K, V, T, D, F, DT, G, C>(
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
 ) -> (
-    Stream<Child<'g, G, T>, FetchedPart<K, V, G::Timestamp, D>>,
+    Stream<Child<'g, G, T>, FetchedBlob<K, V, G::Timestamp, D>>,
     Vec<PressOnDropButton>,
 )
 where
@@ -350,7 +351,7 @@ where
         // Ideally, we'd like our audit overhead to be proportional to the actual amount of "real"
         // work we're doing in the source. So: start with a small, constant budget; add to the
         // budget when we do real work; and skip auditing a part if we don't have the budget for it.
-        let mut audit_budget_bytes = cfg.dynamic.blob_target_size().saturating_mul(2);
+        let mut audit_budget_bytes = BLOB_TARGET_SIZE.get(&cfg).saturating_mul(2);
 
         // All future updates will be timestamped after this frontier.
         let mut current_frontier = as_of.clone();
@@ -369,7 +370,7 @@ where
 
             for mut part_desc in parts {
                 // TODO: Push the filter down into the Subscribe?
-                if cfg.dynamic.stats_filter_enabled() {
+                if STATS_FILTER_ENABLED.get(&cfg) {
                     let should_fetch = part_desc.stats.as_ref().map_or(true, |stats| {
                         should_fetch_part(&stats.decode(), current_frontier.borrow())
                     });
@@ -385,7 +386,7 @@ where
                         let should_audit = {
                             let mut h = DefaultHasher::new();
                             part_desc.key.hash(&mut h);
-                            usize::cast_from(h.finish()) % 100 < cfg.dynamic.stats_audit_percent()
+                            usize::cast_from(h.finish()) % 100 < STATS_AUDIT_PERCENT.get(&cfg)
                         };
                         if should_audit && part_desc.encoded_size_bytes < audit_budget_bytes {
                             audit_budget_bytes -= part_desc.encoded_size_bytes;
@@ -434,7 +435,7 @@ pub(crate) fn shard_source_fetch<K, V, T, D, G>(
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
 ) -> (
-    Stream<G, FetchedPart<K, V, T, D>>,
+    Stream<G, FetchedBlob<K, V, T, D>>,
     Stream<G, SerdeLeasedBatchPart>,
     PressOnDropButton,
 )

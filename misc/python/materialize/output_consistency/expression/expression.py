@@ -12,6 +12,9 @@ from collections.abc import Callable
 
 from materialize.output_consistency.data_type.data_type import DataType
 from materialize.output_consistency.data_type.data_type_category import DataTypeCategory
+from materialize.output_consistency.execution.sql_dialect_adjuster import (
+    SqlDialectAdjuster,
+)
 from materialize.output_consistency.execution.value_storage_layout import (
     ValueStorageLayout,
 )
@@ -41,7 +44,7 @@ class Expression:
         self.is_aggregate = is_aggregate
         self.is_expect_error = is_expect_error
 
-    def to_sql(self, is_root_level: bool) -> str:
+    def to_sql(self, sql_adjuster: SqlDialectAdjuster, is_root_level: bool) -> str:
         raise NotImplementedError
 
     def resolve_return_type_spec(self) -> ReturnTypeSpec:
@@ -137,10 +140,13 @@ class LeafExpression(Expression):
     def try_resolve_exact_data_type(self) -> DataType | None:
         return self.data_type
 
-    def to_sql(self, is_root_level: bool) -> str:
-        return self.to_sql_as_column()
+    def to_sql(self, sql_adjuster: SqlDialectAdjuster, is_root_level: bool) -> str:
+        return self.to_sql_as_column(sql_adjuster)
 
-    def to_sql_as_column(self) -> str:
+    def to_sql_as_column(
+        self,
+        sql_adjuster: SqlDialectAdjuster,
+    ) -> str:
         return self.column_name
 
     def collect_leaves(self) -> list[LeafExpression]:

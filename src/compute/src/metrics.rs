@@ -50,8 +50,6 @@ pub struct ComputeMetrics {
     // look at.
     pub(crate) timely_step_duration_seconds: Histogram,
 
-    pub(crate) delayed_time_seconds_total: raw::CounterVec,
-
     /// Heap capacity of the shared row
     pub(crate) shared_row_heap_capacity_bytes: raw::UIntGaugeVec,
 
@@ -97,18 +95,11 @@ impl ComputeMetrics {
                 const_labels: {"cluster" => "compute"},
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 32.0),
             )),
-            delayed_time_seconds_total: registry.register(metric!(
-                name: "mz_dataflow_delayed_time_seconds_total",
-                help: "The total time dataflow outputs were delayed relative to their inputs.",
-                const_labels: {"cluster" => "compute"},
-                var_labels: ["worker_id"],
-            )),
             shared_row_heap_capacity_bytes: registry.register(metric!(
                 name: "mz_dataflow_shared_row_heap_capacity_bytes",
                 help: "The heap capacity of the shared row.",
                 var_labels: ["worker_id"],
             )),
-
             persist_peek_seconds: registry.register(metric!(
                 name: "mz_persist_peek_seconds",
                 help: "Time spent in (experimental) Persist fast-path peeks.",
@@ -143,17 +134,6 @@ impl ComputeMetrics {
         TraceMetrics {
             maintenance_seconds_total,
             maintenance_active_info,
-        }
-    }
-
-    pub fn for_logging(&self, worker_id: usize) -> LoggingMetrics {
-        let worker = worker_id.to_string();
-        let delayed_time_seconds_total = self
-            .delayed_time_seconds_total
-            .with_label_values(&[&worker]);
-
-        LoggingMetrics {
-            delayed_time_seconds_total,
         }
     }
 
@@ -209,10 +189,4 @@ pub struct TraceMetrics {
     /// to gain a sense that Materialize is stuck on maintenance before the
     /// maintenance completes
     pub maintenance_active_info: UIntGauge,
-}
-
-/// Metrics maintained by the logging dataflows.
-#[derive(Clone)]
-pub struct LoggingMetrics {
-    pub delayed_time_seconds_total: GenericCounter<AtomicF64>,
 }

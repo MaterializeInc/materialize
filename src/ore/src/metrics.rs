@@ -566,6 +566,16 @@ impl<F> WallTimeFuture<F, UnspecifiedMetric> {
             filter: self.filter,
         }
     }
+
+    /// Sets the recorded duration in a specific f64.
+    pub fn set_at(self, place: &mut f64) -> WallTimeFuture<F, &mut f64> {
+        WallTimeFuture {
+            fut: self.fut,
+            metric: place,
+            start: self.start,
+            filter: self.filter,
+        }
+    }
 }
 
 impl<F, M> WallTimeFuture<F, M> {
@@ -729,18 +739,26 @@ pub struct UnspecifiedMetric(());
 /// de-dupe the implemenation of [`Future`] for our wrapper Futures like [`WallTimeFuture`] and
 /// [`ExecTimeFuture`] over different kinds of prometheus metrics.
 trait DurationMetric {
-    fn record(&self, seconds: f64);
+    fn record(&mut self, seconds: f64);
 }
 
 impl DurationMetric for prometheus::Histogram {
-    fn record(&self, seconds: f64) {
+    fn record(&mut self, seconds: f64) {
         self.observe(seconds)
     }
 }
 
 impl DurationMetric for prometheus::Counter {
-    fn record(&self, seconds: f64) {
+    fn record(&mut self, seconds: f64) {
         self.inc_by(seconds)
+    }
+}
+
+// An implementation of `DurationMetric` that lets the user take the recorded
+// value and use it elsewhere.
+impl DurationMetric for &'_ mut f64 {
+    fn record(&mut self, seconds: f64) {
+        **self = seconds;
     }
 }
 

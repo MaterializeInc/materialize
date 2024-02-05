@@ -218,9 +218,7 @@ Below are the recommended ways to work around this.
 As an example, we'll create a [counter load generator](https://materialize.com/docs/sql/create-source/load-generator/#creating-a-counter-load-generator) that emits a row every second:
 
 ```sql
-CREATE SOURCE counter
-  FROM LOAD GENERATOR COUNTER
-  WITH (SIZE = '3xsmall');
+CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;
 ```
 
 ### Subscribing with `FETCH`

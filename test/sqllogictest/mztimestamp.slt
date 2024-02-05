@@ -44,22 +44,24 @@ SELECT *
 FROM intervals
 WHERE mz_now() BETWEEN a AND b;
 
-query TTBBB
+query TTBBBB
 SELECT
   '1702129950259'::mz_timestamp::text,
   '1990-01-04 11:00'::mz_timestamp::text,
   greatest('1990-01-04 11:00', mz_now()) > '1990-01-04 11:00'::mz_timestamp,
      least('1990-01-04 11:00', mz_now()) > '1990-01-04 11:00'::mz_timestamp,
-  greatest(mz_now(), '1990-01-04 11:00') > '3000-01-04 11:00'::mz_timestamp
+  greatest(mz_now(), '1990-01-04 11:00') > '3000-01-04 11:00'::mz_timestamp,
+  '1990-01-04 11:00+08'::mz_timestamp < '1990-01-04 11:00+06'::mz_timestamp;
 ----
 1702129950259
 631450800000
 true
 false
 false
+true
 
 # Bad timestamp string
-query error invalid input syntax for type mz_timestamp: could not parse mz_timestamp: could not parse as number of milliseconds since epoch; could not parse as date and time: invalid input syntax for type timestamp: YEAR, MONTH, DAY are all required: "1990\-01": "1990\-01"
+query error invalid input syntax for type mz_timestamp: could not parse mz_timestamp: could not parse as number of milliseconds since epoch; could not parse as date and time: invalid input syntax for type timestamp with time zone: YEAR, MONTH, DAY are all required: "1990\-01": "1990\-01"
 SELECT '1990-01'::mz_timestamp;
 
 # This would be negative milliseconds since the Unix epoch

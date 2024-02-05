@@ -50,6 +50,7 @@ use mz_sql_parser::ast::{
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{SourceDesc, Timeline};
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
@@ -95,7 +96,10 @@ pub use query::{ExprContext, QueryContext, QueryLifetime};
 pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
 pub use statement::ddl::{PlannedAlterRoleOption, PlannedRoleVariable};
-pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
+pub use statement::{
+    describe, plan, plan_copy_from, resolve_cluster_for_materialized_view, StatementContext,
+    StatementDesc,
+};
 
 /// Instructions for executing a SQL query.
 #[derive(Debug, EnumKind)]
@@ -640,7 +644,6 @@ pub struct CreateMaterializedViewPlan {
 pub struct CreateIndexPlan {
     pub name: QualifiedItemName,
     pub index: Index,
-    pub options: Vec<IndexOption>,
     pub if_not_exists: bool,
 }
 
@@ -709,7 +712,7 @@ pub struct SetTransactionPlan {
 
 #[derive(Clone, Debug)]
 pub struct SelectPlan {
-    pub source: MirRelationExpr,
+    pub source: HirRelationExpr,
     pub when: QueryWhen,
     pub finishing: RowSetFinishing,
     pub copy_to: Option<CopyFormat>,
@@ -842,12 +845,10 @@ pub enum Explainee {
 pub enum ExplaineeStatement {
     /// The object to be explained is a SELECT statement.
     Select {
-        raw_plan: HirRelationExpr,
-        row_set_finishing: RowSetFinishing,
-        desc: RelationDesc,
-        when: QueryWhen,
         /// Broken flag (see [`ExplaineeStatement::broken()`]).
         broken: bool,
+        plan: plan::SelectPlan,
+        desc: RelationDesc,
     },
     /// The object to be explained is a CREATE MATERIALIZED VIEW.
     CreateMaterializedView {
@@ -866,7 +867,7 @@ pub enum ExplaineeStatement {
 impl ExplaineeStatement {
     pub fn depends_on(&self) -> BTreeSet<GlobalId> {
         match self {
-            Self::Select { raw_plan, .. } => raw_plan.depends_on(),
+            Self::Select { plan, .. } => plan.source.depends_on(),
             Self::CreateMaterializedView { plan, .. } => plan.materialized_view.expr.depends_on(),
             Self::CreateIndex { plan, .. } => btreeset! {plan.index.on},
         }
@@ -887,31 +888,6 @@ impl ExplaineeStatement {
             Self::Select { broken, .. } => *broken,
             Self::CreateMaterializedView { broken, .. } => *broken,
             Self::CreateIndex { broken, .. } => *broken,
-        }
-    }
-
-    pub fn row_set_finishing(&self) -> Option<RowSetFinishing> {
-        match self {
-            Self::Select {
-                row_set_finishing,
-                desc,
-                ..
-            } => {
-                if !row_set_finishing.is_trivial(desc.arity()) {
-                    // Use the optional finishing extracted in the plan_query call.
-                    Some(row_set_finishing.clone())
-                } else {
-                    None
-                }
-            }
-            Self::CreateMaterializedView { .. } => {
-                // Trivial finishing asserted in plan_create_materialized_view.
-                None
-            }
-            Self::CreateIndex { .. } => {
-                // Trivial finishing for indexes on views asserted in plan_view.
-                None
-            }
         }
     }
 }
@@ -969,7 +945,7 @@ pub struct InsertPlan {
 #[derive(Debug)]
 pub struct ReadThenWritePlan {
     pub id: GlobalId,
-    pub selection: mz_expr::MirRelationExpr,
+    pub selection: HirRelationExpr,
     pub finishing: RowSetFinishing,
     pub assignments: BTreeMap<usize, mz_expr::MirScalarExpr>,
     pub kind: MutationKind,
@@ -1287,6 +1263,7 @@ pub enum DataSourceDesc {
     /// Receives data from HTTP post requests.
     Webhook {
         validate_using: Option<WebhookValidation>,
+        body_format: WebhookBodyFormat,
         headers: WebhookHeaders,
     },
 }
@@ -1373,6 +1350,23 @@ pub struct WebhookHeaderFilters {
     pub allow: BTreeSet<String>,
 }
 
+#[derive(Copy, Clone, Debug, Serialize, Arbitrary)]
+pub enum WebhookBodyFormat {
+    Json { array: bool },
+    Bytes,
+    Text,
+}
+
+impl From<WebhookBodyFormat> for ScalarType {
+    fn from(value: WebhookBodyFormat) -> Self {
+        match value {
+            WebhookBodyFormat::Json { .. } => ScalarType::Jsonb,
+            WebhookBodyFormat::Bytes => ScalarType::Bytes,
+            WebhookBodyFormat::Text => ScalarType::String,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct WebhookValidationSecret {
     /// Identifies the secret by [`GlobalId`].
@@ -1428,6 +1422,7 @@ pub struct Index {
     pub create_sql: String,
     pub on: GlobalId,
     pub keys: Vec<mz_expr::MirScalarExpr>,
+    pub compaction_window: Option<CompactionWindow>,
     pub cluster_id: ClusterId,
 }
 
@@ -1536,7 +1531,7 @@ pub enum ExecuteTimeout {
 #[derive(Clone, Debug)]
 pub enum IndexOption {
     /// Configures the logical compaction window for an index.
-    LogicalCompactionWindow(CompactionWindow),
+    RetainHistory(CompactionWindow),
 }
 
 #[derive(Clone, Debug)]

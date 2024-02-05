@@ -35,9 +35,10 @@
 //!    change could then impact a previous migration. You need to write separate upgrade functions
 //!    for the stash catalog and the persist catalog.
 //! 9. Call your upgrade function in [`stash::upgrade()`] and [`persist::upgrade()`].
-//! 10. Run `cargo test --package mz-catalog --lib \
-//!     durable::upgrade::tests::generate_missing_snapshots -- --ignored` to generate a test file
-//!     for the new version.
+//! 10. To generate a test file for the new version:
+//!     ```ignore
+//!     cargo test --package mz-catalog --lib durable::upgrade::tests::generate_missing_encodings -- --ignored
+//!     ```
 //!
 //! When in doubt, reach out to the Surfaces team, and we'll be more than happy to help :)
 
@@ -160,14 +161,14 @@ macro_rules! objects {
     }
 }
 
-objects!(v42, v43, v44, v45);
+objects!(v42, v43, v44, v45, v46);
 
 /// The current version of the `Catalog`.
 ///
 /// We will initialize new `Catalog`es with this version, and migrate existing `Catalog`es to this
 /// version. Whenever the `Catalog` changes, e.g. the protobufs we serialize in the `Catalog`
 /// change, we need to bump this version.
-pub(crate) const CATALOG_VERSION: u64 = 45;
+pub(crate) const CATALOG_VERSION: u64 = 46;
 
 /// The minimum `Catalog` version number that we support migrating from.
 ///
@@ -194,6 +195,7 @@ pub(crate) mod stash {
     mod v42_to_v43;
     mod v43_to_v44;
     mod v44_to_v45;
+    mod v45_to_v46;
 
     #[tracing::instrument(name = "stash::upgrade", level = "debug", skip_all)]
     pub(crate) async fn upgrade(stash: &mut Stash) -> Result<(), StashError> {
@@ -220,6 +222,7 @@ pub(crate) mod stash {
                             42 => v42_to_v43::upgrade(),
                             43 => v43_to_v44::upgrade(),
                             44 => v44_to_v45::upgrade(&tx).await?,
+                            45 => v45_to_v46::upgrade(&tx).await?,
 
                             // Up-to-date, no migration needed!
                             CATALOG_VERSION => return Ok(CATALOG_VERSION),
@@ -279,12 +282,13 @@ pub(crate) mod stash {
 
 pub(crate) mod persist {
     use mz_ore::{soft_assert_eq_or_log, soft_assert_ne_or_log};
+    use mz_repr::Diff;
     use timely::progress::Timestamp as TimelyTimestamp;
 
     use crate::durable::impls::persist::state_update::{
         IntoStateUpdateKindRaw, StateUpdateKindRaw,
     };
-    use crate::durable::impls::persist::{StateUpdate, Timestamp, UnopenedPersistCatalogState};
+    use crate::durable::impls::persist::{StateUpdateKind, Timestamp, UnopenedPersistCatalogState};
     use crate::durable::initialize::USER_VERSION_KEY;
     use crate::durable::objects::serialization::proto;
     use crate::durable::upgrade::{
@@ -295,6 +299,7 @@ pub(crate) mod persist {
     mod v42_to_v43;
     mod v43_to_v44;
     mod v44_to_v45;
+    mod v45_to_v46;
 
     /// Describes a single action to take during a migration from `V1` to `V2`.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -311,35 +316,16 @@ pub(crate) mod persist {
     impl<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKindRaw> MigrationAction<V1, V2> {
         /// Converts `self` into a `Vec<StateUpdate<StateUpdateKindBinary>>` that can be appended
         /// to persist.
-        fn into_updates(self, upper: Timestamp) -> Vec<StateUpdate<StateUpdateKindRaw>> {
+        fn into_updates(self) -> Vec<(StateUpdateKindRaw, Diff)> {
             match self {
                 MigrationAction::Delete(kind) => {
-                    vec![StateUpdate {
-                        kind: kind.into(),
-                        ts: upper,
-                        diff: -1,
-                    }]
+                    vec![(kind.into(), -1)]
                 }
                 MigrationAction::Insert(kind) => {
-                    vec![StateUpdate {
-                        kind: kind.into(),
-                        ts: upper,
-                        diff: 1,
-                    }]
+                    vec![(kind.into(), 1)]
                 }
                 MigrationAction::Update(old_kind, new_kind) => {
-                    vec![
-                        StateUpdate {
-                            kind: old_kind.into(),
-                            ts: upper,
-                            diff: -1,
-                        },
-                        StateUpdate {
-                            kind: new_kind.into(),
-                            ts: upper,
-                            diff: 1,
-                        },
-                    ]
+                    vec![(old_kind.into(), -1), (new_kind.into(), 1)]
                 }
             }
         }
@@ -351,24 +337,23 @@ pub(crate) mod persist {
     #[tracing::instrument(name = "persist::upgrade", level = "debug", skip_all)]
     pub(crate) async fn upgrade(
         persist_handle: &mut UnopenedPersistCatalogState,
-        mut upper: Timestamp,
-    ) -> Result<Timestamp, CatalogError> {
+    ) -> Result<(), CatalogError> {
         soft_assert_ne_or_log!(
-            upper,
+            persist_handle.upper,
             Timestamp::minimum(),
             "cannot upgrade uninitialized catalog"
         );
 
-        let as_of = persist_handle.as_of(upper);
+        // Consolidate to avoid migrating old state.
+        persist_handle.consolidate();
         let mut version = persist_handle
-            .get_user_version(as_of)
+            .get_user_version()
             .await?
             .expect("initialized catalog must have a version");
         // Run migrations until we're up-to-date.
         while version < CATALOG_VERSION {
-            let (new_version, new_upper) = run_upgrade(persist_handle, upper, version).await?;
+            let new_version = run_upgrade(persist_handle, version).await?;
             version = new_version;
-            upper = new_upper;
         }
 
         /// Determines which upgrade to run for the `version` and executes it.
@@ -376,9 +361,8 @@ pub(crate) mod persist {
         /// Returns the new version and upper.
         async fn run_upgrade(
             unopened_catalog_state: &mut UnopenedPersistCatalogState,
-            upper: Timestamp,
             version: u64,
-        ) -> Result<(u64, Timestamp), CatalogError> {
+        ) -> Result<u64, CatalogError> {
             let incompatible = DurableCatalogError::IncompatibleVersion {
                 found_version: version,
                 min_catalog_version: MIN_CATALOG_VERSION,
@@ -390,40 +374,29 @@ pub(crate) mod persist {
                 ..=TOO_OLD_VERSION => Err(incompatible),
 
                 42 => {
-                    run_versioned_upgrade(
-                        unopened_catalog_state,
-                        upper,
-                        version,
-                        v42_to_v43::upgrade,
-                    )
-                    .await
+                    run_versioned_upgrade(unopened_catalog_state, version, v42_to_v43::upgrade)
+                        .await
                 }
                 43 => {
-                    run_versioned_upgrade(
-                        unopened_catalog_state,
-                        upper,
-                        version,
-                        v43_to_v44::upgrade,
-                    )
-                    .await
+                    run_versioned_upgrade(unopened_catalog_state, version, v43_to_v44::upgrade)
+                        .await
                 }
                 44 => {
-                    run_versioned_upgrade(
-                        unopened_catalog_state,
-                        upper,
-                        version,
-                        v44_to_v45::upgrade,
-                    )
-                    .await
+                    run_versioned_upgrade(unopened_catalog_state, version, v44_to_v45::upgrade)
+                        .await
+                }
+                45 => {
+                    run_versioned_upgrade(unopened_catalog_state, version, v45_to_v46::upgrade)
+                        .await
                 }
 
                 // Up-to-date, no migration needed!
-                CATALOG_VERSION => Ok((CATALOG_VERSION, upper)),
+                CATALOG_VERSION => Ok(CATALOG_VERSION),
                 FUTURE_VERSION.. => Err(incompatible),
             }
         }
 
-        Ok(upper)
+        Ok(())
     }
 
     /// Runs `migration_logic` on the contents of the current catalog assuming a current version of
@@ -432,18 +405,15 @@ pub(crate) mod persist {
     /// Returns the new version and upper.
     async fn run_versioned_upgrade<V1: IntoStateUpdateKindRaw, V2: IntoStateUpdateKindRaw>(
         unopened_catalog_state: &mut UnopenedPersistCatalogState,
-        upper: Timestamp,
         current_version: u64,
         migration_logic: impl FnOnce(Vec<V1>) -> Vec<MigrationAction<V1, V2>>,
-    ) -> Result<(u64, Timestamp), CatalogError> {
-        // 1. Get a snapshot of the current catalog, using the V1 to deserialize the
-        // contents.
-        let as_of = unopened_catalog_state.as_of(upper);
-        let snapshot = unopened_catalog_state.snapshot_binary(as_of).await;
-        let snapshot: Vec<_> = snapshot
-            .into_iter()
+    ) -> Result<u64, CatalogError> {
+        // 1. Use the V1 to deserialize the contents of the current snapshot.
+        let snapshot: Vec<_> = unopened_catalog_state
+            .snapshot
+            .iter()
             .map(|update| {
-                soft_assert_eq_or_log!(1, update.diff, "snapshot is consolidated");
+                soft_assert_eq_or_log!(1, update.diff, "snapshot is consolidated, {update:?}");
                 V1::try_from(update.clone().kind).expect("invalid catalog data persisted")
             })
             .collect();
@@ -452,47 +422,35 @@ pub(crate) mod persist {
         let migration_actions = migration_logic(snapshot);
         let mut updates: Vec<_> = migration_actions
             .into_iter()
-            .flat_map(|action| action.into_updates(upper).into_iter())
+            .flat_map(|action| action.into_updates().into_iter())
             .collect();
 
         // 3. Add a retraction for old version and insertion for new version into updates.
         let next_version = current_version + 1;
-        let version_retraction = StateUpdate {
-            kind: version_update_kind(current_version),
-            ts: upper,
-            diff: -1,
-        };
+        let version_retraction = (version_update_kind(current_version), -1);
         updates.push(version_retraction);
-        let version_insertion = StateUpdate {
-            kind: version_update_kind(next_version),
-            ts: upper,
-            diff: 1,
-        };
+        let version_insertion = (version_update_kind(next_version), 1);
         updates.push(version_insertion);
 
         // 4. Compare and append migration into persist shard.
-        let next_upper = upper.step_forward();
-        unopened_catalog_state
-            .compare_and_append(updates, upper, next_upper)
-            .await?;
+        unopened_catalog_state.compare_and_append(updates).await?;
 
-        Ok((next_version, next_upper))
+        // 5. Consolidate snapshot to remove old versions.
+        unopened_catalog_state.consolidate();
+
+        Ok(next_version)
     }
 
     /// Generates a [`proto::StateUpdateKind`] to update the user version.
     fn version_update_kind(version: u64) -> StateUpdateKindRaw {
-        // We can use the current protobuf versions because Configs can never be migrated and are
-        // always wire compatible.
-        proto::StateUpdateKind {
-            kind: Some(proto::state_update_kind::Kind::Config(
-                proto::state_update_kind::Config {
-                    key: Some(proto::ConfigKey {
-                        key: USER_VERSION_KEY.to_string(),
-                    }),
-                    value: Some(proto::ConfigValue { value: version }),
-                },
-            )),
-        }
+        // We can use the current version because Configs can never be migrated and are always wire
+        // compatible.
+        StateUpdateKind::Config(
+            proto::ConfigKey {
+                key: USER_VERSION_KEY.to_string(),
+            },
+            proto::ConfigValue { value: version },
+        )
         .into()
     }
 }

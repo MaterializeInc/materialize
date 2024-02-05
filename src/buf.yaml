@@ -26,6 +26,8 @@ breaking:
     # reason: does currently not require backward-compatibility
     - catalog/protos/objects_v45.proto
     # reason: does currently not require backward-compatibility
+    - catalog/protos/objects_v46.proto
+    # reason: does currently not require backward-compatibility
     - cluster-client/src/client.proto
     # reason: does currently not require backward-compatibility
     - compute-client/src/logging.proto
@@ -37,6 +39,8 @@ breaking:
     - compute-client/src/service.proto
     # reason: does currently not require backward-compatibility
     - compute-types/src/dataflows.proto
+    # reason: does currently not require backward-compatibility
+    - compute-types/src/plan.proto
     # reason: Ignore because plans are currently not persisted.
     - expr/src/relation.proto
     # reason: still under active development

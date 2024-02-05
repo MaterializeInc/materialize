@@ -114,8 +114,7 @@ pub(crate) fn create_source() -> Result<u64, Error> {
         "
         CREATE SOURCE IF NOT EXISTS counter
         FROM LOAD GENERATOR COUNTER
-        (TICK INTERVAL '500ms')
-        WITH (SIZE = '3xsmall');
+        (TICK INTERVAL '500ms');
     ",
         &[],
     )

@@ -20,6 +20,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::Stream;
+use mz_dyncfg::Config;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
 use mz_persist::location::{Blob, SeqNo};
@@ -32,7 +33,7 @@ use tokio::runtime::Handle;
 use tracing::{debug_span, instrument, warn, Instrument};
 use uuid::Uuid;
 
-use crate::cfg::{PersistFeatureFlag, RetryParameters};
+use crate::cfg::RetryParameters;
 use crate::fetch::{
     fetch_leased_part, FetchBatchFilter, FetchedPart, LeasedBatchPart, SerdeLeasedBatchPart,
     SerdeLeasedBatchPartMetadata,
@@ -421,7 +422,7 @@ where
             Arc::clone(&self.handle.metrics),
             &self.handle.metrics.read.listen,
             &self.handle.machine.applier.shard_metrics,
-            Some(&self.handle.reader_id),
+            &self.handle.reader_id,
             self.handle.schemas.clone(),
         )
         .await;
@@ -550,6 +551,14 @@ where
     lease_returner: SubscriptionLeaseReturner,
     pub(crate) unexpired_state: Option<UnexpiredReadHandleState>,
 }
+
+/// Length of time after a reader's last operation after which the reader may be
+/// expired.
+pub(crate) const READER_LEASE_DURATION: Config<Duration> = Config::new(
+    "persist_reader_lease_duration",
+    Duration::from_secs(60 * 15),
+    "The time after which we'll clean up stale read leases",
+);
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
@@ -818,7 +827,7 @@ where
             .register_leased_reader(
                 &new_reader_id,
                 purpose,
-                self.cfg.dynamic.reader_lease_duration(),
+                READER_LEASE_DURATION.get(&self.cfg),
                 heartbeat_ts,
             )
             .await;
@@ -854,7 +863,7 @@ where
         // NB: min_elapsed is intentionally smaller than the one in
         // maybe_heartbeat_reader (this is the preferential treatment mentioned
         // above).
-        let min_elapsed = self.cfg.dynamic.reader_lease_duration() / 4;
+        let min_elapsed = READER_LEASE_DURATION.get(&self.cfg) / 4;
         let elapsed_since_last_heartbeat =
             Duration::from_millis((self.cfg.now)().saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
@@ -870,14 +879,12 @@ where
     /// compared to PersistConfig::FAKE_READ_LEASE_DURATION.
     #[allow(dead_code)]
     pub(crate) async fn maybe_heartbeat_reader(&mut self) {
-        let min_elapsed = self.cfg.dynamic.reader_lease_duration() / 2;
+        let min_elapsed = READER_LEASE_DURATION.get(&self.cfg) / 2;
         let heartbeat_ts = (self.cfg.now)();
         let elapsed_since_last_heartbeat =
             Duration::from_millis(heartbeat_ts.saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
-            if elapsed_since_last_heartbeat
-                > self.machine.applier.cfg.dynamic.reader_lease_duration()
-            {
+            if elapsed_since_last_heartbeat > READER_LEASE_DURATION.get(&self.machine.applier.cfg) {
                 warn!(
                     "reader ({}) of shard ({}) went {}s between heartbeats",
                     self.reader_id,
@@ -976,6 +983,12 @@ where
     }
 }
 
+pub(crate) const STREAMING_SNAPSHOT_AND_FETCH_ENABLED: Config<bool> = Config::new(
+    "persist_streaming_snapshot_and_fetch_enabled",
+    false,
+    "use the new streaming consolidate during snapshot_and_fetch",
+);
+
 impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
     K: Debug + Codec + Ord,
@@ -1000,13 +1013,7 @@ where
         &mut self,
         as_of: Antichain<T>,
     ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
-        if self
-            .machine
-            .applier
-            .cfg
-            .dynamic
-            .enabled(PersistFeatureFlag::STREAMING_SNAPSHOT_AND_FETCH)
-        {
+        if STREAMING_SNAPSHOT_AND_FETCH_ENABLED.get(&self.machine.applier.cfg) {
             return self.snapshot_and_fetch_streaming(as_of).await;
         }
 
@@ -1022,7 +1029,7 @@ where
                 Arc::clone(&self.metrics),
                 &self.metrics.read.snapshot,
                 &self.machine.applier.shard_metrics,
-                Some(&self.reader_id),
+                &self.reader_id,
                 self.schemas.clone(),
             )
             .await;
@@ -1155,7 +1162,7 @@ where
                     Arc::clone(&metrics),
                     &snapshot_metrics,
                     &shard_metrics,
-                    Some(&reader_id),
+                    &reader_id,
                     schemas.clone(),
                 )
                 .await;
@@ -1247,10 +1254,8 @@ mod tests {
     use std::pin;
     use std::str::FromStr;
 
-    use mz_build_info::DUMMY_BUILD_INFO;
     use mz_ore::cast::CastFrom;
     use mz_ore::metrics::MetricsRegistry;
-    use mz_ore::now::SYSTEM_TIME;
     use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
     use mz_persist::unreliable::{UnreliableConsensus, UnreliableHandle};
     use serde::{Deserialize, Serialize};
@@ -1258,6 +1263,7 @@ mod tests {
     use tokio_stream::StreamExt;
 
     use crate::async_runtime::IsolatedRuntime;
+    use crate::batch::BLOB_TARGET_SIZE;
     use crate::cache::StateCache;
     use crate::internal::metrics::Metrics;
     use crate::rpc::NoopPubSubSender;
@@ -1312,7 +1318,7 @@ mod tests {
 
         let (mut write, read) = {
             let client = new_test_client().await;
-            client.cfg.dynamic.set_blob_target_size(1000); // So our batch stays together!
+            client.cfg.set_config(&BLOB_TARGET_SIZE, 1000); // So our batch stays together!
             client
                 .expect_open::<String, String, u64, i64>(crate::ShardId::new())
                 .await
@@ -1359,7 +1365,7 @@ mod tests {
 
         let (mut write, mut read) = {
             let client = new_test_client().await;
-            client.cfg.dynamic.set_blob_target_size(0); // split batches across multiple parts
+            client.cfg.set_config(&BLOB_TARGET_SIZE, 0); // split batches across multiple parts
             client
                 .expect_open::<String, String, u64, i64>(crate::ShardId::new())
                 .await
@@ -1595,7 +1601,7 @@ mod tests {
             (("2".to_owned(), "two".to_owned()), 2, 1),
         ];
 
-        let cfg = PersistConfig::new(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+        let cfg = PersistConfig::new_for_tests();
         let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
         let consensus = Arc::new(MemConsensus::default());
         let unreliable = UnreliableHandle::default();

@@ -99,6 +99,7 @@ class MaterializeNonRemote(Endpoint):
         priv_cursor = priv_conn.cursor()
         priv_cursor.execute("ALTER SYSTEM SET max_connections = 65535;")
         priv_cursor.execute("ALTER SYSTEM SET max_tables = 65535;")
+        priv_cursor.execute("ALTER SYSTEM SET max_materialized_views = 65535;")
 
 
 class MaterializeLocal(MaterializeNonRemote):
@@ -126,6 +127,7 @@ class MaterializeContainer(MaterializeNonRemote):
         composition: Composition,
         specified_target: str,
         resolved_target: str,
+        use_balancerd: bool,
         image: str | None = None,
         alternative_image: str | None = None,
     ) -> None:
@@ -136,6 +138,7 @@ class MaterializeContainer(MaterializeNonRemote):
         )
         self._port: int | None = None
         self._resolved_target = resolved_target
+        self.use_balancerd = use_balancerd
         super().__init__(specified_target)
 
     def resolved_target(self) -> str:
@@ -173,8 +176,12 @@ class MaterializeContainer(MaterializeNonRemote):
             Materialized(image=self.image, sanity_restart=False)
         ):
             self.composition.up("materialized")
-            self.composition.up("balancerd")
-            self._port = self.composition.default_port("balancerd")
+
+            if self.use_balancerd:
+                self.composition.up("balancerd")
+                self._port = self.composition.default_port("balancerd")
+            else:
+                self._port = self.composition.default_port("materialized")
 
     def __str__(self) -> str:
         return (

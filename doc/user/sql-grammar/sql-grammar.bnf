@@ -178,7 +178,7 @@ create_source_load_generator ::=
   ('(' (load_generator_option) ( ( ',' load_generator_option ) )* ')')?
   'FOR ALL TABLES'
   ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
-  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  // ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 load_generator_option ::=
     'TICK INTERVAL' interval
     | 'SCALE FACTOR' scale_factor
@@ -193,7 +193,7 @@ create_source_postgres ::=
     | 'FOR SCHEMAS' '(' schema_name (',' schema_name )* ')'
   )
   ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
-  ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  // ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_source_webhook ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   'IN CLUSTER' cluster_name
@@ -307,7 +307,8 @@ format_spec ::=
   'REGEX' regex |
   'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' ) | n 'COLUMNS') ('DELIMITED BY' char)? |
   'TEXT' |
-  'BYTES'
+  'BYTES' |
+  'JSON'
 grant_privilege ::=
   'GRANT' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) 'ON' ( ('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name (',' object_name)* | 'SYSTEM' | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS') 'IN' 'SCHEMA' schema_name (',' schema_name)* | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'SCHEMAS') 'IN' 'DATABASE' database_name (',' database_name)* | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') ) 'TO' 'GROUP'? role_name ( ',' 'GROUP'? role_name )*
 grant_role ::=
@@ -346,6 +347,8 @@ func_date_part ::=
   'date_part' '(' "'" ( 'epoch' | 'millennium' | 'century' | 'decade' | 'year' | 'quarter' | 'month' | 'week' | 'dat' | 'hour' | 'minute' | 'second' | 'microsecond' | 'millisecond' | 'dow' | 'isodow' | 'doy' ) "'" ',' val ')'
 func_length ::=
   'length' '(' str (',' encoding_name)? ')'
+func_map_agg ::=
+  'map_agg' '(' keys ',' values ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 func_substring ::=
   'substring' '(' str ',' start_pos (',' len)? ')'
 func_timezone ::=

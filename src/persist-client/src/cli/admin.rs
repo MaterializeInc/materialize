@@ -19,6 +19,7 @@ use anyhow::{anyhow, bail};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures_util::{stream, StreamExt, TryStreamExt};
+use mz_dyncfg::ConfigSet;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::location::{Blob, Consensus, ExternalError};
@@ -30,6 +31,7 @@ use tracing::info;
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
+use crate::cfg::all_dyn_configs;
 use crate::cli::args::{make_blob, make_consensus, StateArgs, StoreArgs};
 use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
 use crate::internal::encoding::Schemas;
@@ -99,7 +101,9 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
     match command.command {
         Command::ForceCompaction(args) => {
             let shard_id = ShardId::from_str(&args.state.shard_id).expect("invalid shard id");
-            let cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
+            let configs = all_dyn_configs(ConfigSet::default());
+            // TODO: Fetch the latest values of these configs from Launch Darkly.
+            let cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone(), configs);
             if args.compaction_memory_bound_bytes > 0 {
                 cfg.dynamic
                     .set_compaction_memory_bound_bytes(args.compaction_memory_bound_bytes);
@@ -120,7 +124,9 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
         }
         Command::ForceGc(args) => {
             let shard_id = ShardId::from_str(&args.state.shard_id).expect("invalid shard id");
-            let cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
+            let configs = all_dyn_configs(ConfigSet::default());
+            // TODO: Fetch the latest values of these configs from Launch Darkly.
+            let cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone(), configs);
             let metrics_registry = MetricsRegistry::new();
             // We don't actually care about the return value here, but we do need to prevent
             // the shard metrics from being dropped before they're reported below.
@@ -144,7 +150,9 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
             let shard_id = ShardId::from_str(&shard_id).expect("invalid shard id");
             let commit = command.commit;
 
-            let cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
+            let configs = all_dyn_configs(ConfigSet::default());
+            // TODO: Fetch the latest values of these configs from Launch Darkly.
+            let cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone(), configs);
             let metrics_registry = MetricsRegistry::new();
             let metrics = Arc::new(Metrics::new(&cfg, &metrics_registry));
             let consensus =
@@ -168,7 +176,9 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
                 concurrency,
             } = args;
             let commit = command.commit;
-            let cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone());
+            let configs = all_dyn_configs(ConfigSet::default());
+            // TODO: Fetch the latest values of these configs from Launch Darkly.
+            let cfg = PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone(), configs);
             let metrics_registry = MetricsRegistry::new();
             let metrics = Arc::new(Metrics::new(&cfg, &metrics_registry));
             let consensus =

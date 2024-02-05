@@ -21,8 +21,7 @@
 //! collection. It is an error to use an identifier before it has been "created" with
 //! `create_dataflow()`. Once created, the controller holds a read capability for each output
 //! collection of a dataflow, which is manipulated with `set_read_policy()`. Eventually, a
-//! collection is dropped with either `drop_collections()` or by allowing compaction to the empty
-//! frontier.
+//! collection is dropped with `drop_collections()`.
 //!
 //! Created dataflows will prevent the compaction of their inputs, including other compute
 //! collections but also collections managed by the storage layer. Each dataflow input is prevented
@@ -55,8 +54,8 @@ use uuid::Uuid;
 
 use crate::controller::error::{
     CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
-    InstanceExists, InstanceMissing, PeekError, ReplicaCreationError, ReplicaDropError,
-    SubscribeTargetError,
+    InstanceExists, InstanceMissing, PeekError, ReadPolicyError, ReplicaCreationError,
+    ReplicaDropError, SubscribeTargetError,
 };
 use crate::controller::instance::{ActiveInstance, Instance};
 use crate::controller::replica::ReplicaConfig;
@@ -139,9 +138,15 @@ pub struct ComputeController<T> {
     response_rx: crossbeam_channel::Receiver<ComputeControllerResponse<T>>,
     /// Response sender that's passed to new `Instance`s.
     response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
+
+    /// Whether to aggressively downgrade read holds for sink dataflows.
+    ///
+    /// This flag exists to derisk the rollout of the aggressive downgrading approach.
+    /// TODO(teskje): Remove this after a couple weeks.
+    enable_aggressive_readhold_downgrades: bool,
 }
 
-impl<T> ComputeController<T> {
+impl<T: Timestamp> ComputeController<T> {
     /// Construct a new [`ComputeController`].
     pub fn new(
         build_info: &'static BuildInfo,
@@ -163,6 +168,7 @@ impl<T> ComputeController<T> {
             introspection: Introspection::new(),
             response_rx,
             response_tx,
+            enable_aggressive_readhold_downgrades: true,
         }
     }
 
@@ -241,12 +247,15 @@ impl<T> ComputeController<T> {
     pub fn set_default_arrangement_exert_proportionality(&mut self, value: u32) {
         self.default_arrangement_exert_proportionality = value;
     }
-}
 
-impl<T> ComputeController<T>
-where
-    T: Clone,
-{
+    pub fn enable_aggressive_readhold_downgrades(&self) -> bool {
+        self.enable_aggressive_readhold_downgrades
+    }
+
+    pub fn set_enable_aggressive_readhold_downgrades(&mut self, value: bool) {
+        self.enable_aggressive_readhold_downgrades = value;
+    }
+
     /// Returns the read and write frontiers for each collection.
     pub fn collection_frontiers(&self) -> BTreeMap<GlobalId, (Antichain<T>, Antichain<T>)> {
         let collections = self.instances.values().flat_map(|i| i.collections_iter());
@@ -296,6 +305,7 @@ where
                 self.metrics.for_instance(id),
                 self.response_tx.clone(),
                 self.introspection.tx.clone(),
+                self.enable_aggressive_readhold_downgrades,
             ),
         );
 
@@ -416,7 +426,7 @@ pub struct ActiveComputeController<'a, T> {
     storage: &'a mut dyn StorageController<Timestamp = T>,
 }
 
-impl<T> ActiveComputeController<'_, T> {
+impl<T: Timestamp> ActiveComputeController<'_, T> {
     pub fn instance_exists(&self, id: ComputeInstanceId) -> bool {
         self.compute.instance_exists(id)
     }
@@ -572,11 +582,14 @@ where
     /// capability is already ahead of it.
     ///
     /// Identifiers not present in `policies` retain their existing read policies.
+    ///
+    /// It is an error to attempt to set a read policy for a collection that is not readable in the
+    /// context of compute. At this time, only indexes are readable compute collections.
     pub fn set_read_policy(
         &mut self,
         instance_id: ComputeInstanceId,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
-    ) -> Result<(), CollectionUpdateError> {
+    ) -> Result<(), ReadPolicyError> {
         self.instance(instance_id)?.set_read_policy(policies)?;
         Ok(())
     }
@@ -584,14 +597,9 @@ where
     /// Processes the work queued by [`ComputeController::ready`].
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn process(&mut self) -> Option<ComputeControllerResponse<T>> {
-        // Update controller state metrics.
+        // Perform periodic instance maintenance work.
         for instance in self.compute.instances.values_mut() {
-            instance.refresh_state_metrics();
-        }
-
-        // Rehydrate any failed replicas.
-        for instance in self.compute.instances.values_mut() {
-            instance.activate(self.storage).rehydrate_failed_replicas();
+            instance.activate(self.storage).maintain();
         }
 
         // Record pending introspection updates.
@@ -643,7 +651,7 @@ pub struct ComputeInstanceRef<'a, T> {
     instance: &'a Instance<T>,
 }
 
-impl<T> ComputeInstanceRef<'_, T> {
+impl<T: Timestamp> ComputeInstanceRef<'_, T> {
     /// Return the ID of this compute instance.
     pub fn instance_id(&self) -> ComputeInstanceId {
         self.instance_id
@@ -670,6 +678,12 @@ pub struct CollectionState<T> {
     ///
     /// Log collections are special in that they are only maintained by a subset of all replicas.
     log_collection: bool,
+    /// Whether this collection has been dropped by a controller client.
+    ///
+    /// The controller is allowed to remove the `CollectionState` for a collection only when
+    /// `dropped == true`. Otherwise, clients might still expect to be able to query information
+    /// about this collection.
+    dropped: bool,
 
     /// Accumulation of read capabilities for the collection.
     ///
@@ -679,7 +693,11 @@ pub struct CollectionState<T> {
     /// The implicit capability associated with collection creation.
     implied_capability: Antichain<T>,
     /// The policy to use to downgrade `self.implied_capability`.
-    read_policy: ReadPolicy<T>,
+    ///
+    /// If `None`, the collection is a write-only collection (i.e. a sink). For write-only
+    /// collections, the `implied_capability` is only required for maintaining read holds on the
+    /// inputs, so we can immediately downgrade it to the `write_frontier`.
+    read_policy: Option<ReadPolicy<T>>,
 
     /// Storage identifiers on which this collection depends.
     storage_dependencies: Vec<GlobalId>,
@@ -733,9 +751,10 @@ impl<T: Timestamp> CollectionState<T> {
 
         Self {
             log_collection: false,
+            dropped: false,
             read_capabilities,
             implied_capability: since.clone(),
-            read_policy: ReadPolicy::ValidFrom(since),
+            read_policy: Some(ReadPolicy::ValidFrom(since)),
             storage_dependencies,
             compute_dependencies,
             write_frontier: upper,

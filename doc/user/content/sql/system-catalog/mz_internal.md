@@ -48,8 +48,8 @@ logging entirely for a session, execute `SET
 statement_logging_sample_rate TO 0`. Materialize may apply a lower
 sampling rate than the one set in this variable.
 
-Only superusers or users that have been granted the `mz_monitor` role can access
-this view.
+The view can be accessed by Materialize _superusers_ or users that have been
+granted the `mz_monitor` role.
 
 <!-- RELATION_SPEC mz_internal.mz_activity_log -->
 | Field                     | Type                         | Meaning                                                                                                                                                                                                                                                                       |
@@ -77,6 +77,8 @@ this view.
 | `redacted_sql`            | [`text`]                     | The SQL text of the statement, in a normalized form, with all string and numeric literals hidden.                                                                                                                                                                             |
 | `prepared_at`             | [`timestamp with time zone`] | The time at which the statement was prepared.                                                                                                                                                                                                                                 |
 | `statement_type`          | [`text`]                     | The _type_ of the statement, e.g. `select` for a `SELECT` query, or `NULL` if the statement was empty.                                                                                                                                                                        |
+| `throttled_count`         | [`uint8`]                    | The number of statements that were dropped due to throttling before the current one was seen. If you have a very high volume of queries and need to log them without throttling, [contact our team](https://materialize.com/docs/support/).                                                                             |
+
 
 ### `mz_aws_connections`
 
@@ -185,25 +187,6 @@ any kind of capacity planning.
 | `memory_bytes`         | [`uint8`]   | The RAM allocation per process, in billionths of a vCPU core.                                                                                                |
 | `disk_bytes`           | [`uint8`]   | The disk allocation per process, if the replica has a [disk](/sql/create-cluster#disk) attached. `NULL` otherwise. |
 | `credits_per_hour`     | [`numeric`] | The number of compute credits consumed per hour.                                                                                                             |
-
-### `mz_cluster_links`
-
-The `mz_cluster_links` table contains a row for each cluster that is linked to a
-source or sink. When present, the lifetime of the specified cluster is tied to
-the lifetime of the specified source or sink: the cluster cannot be dropped
-without dropping the linked source or sink, and dropping the linked source or
-sink will also drop the cluster. There is at most one row per cluster.
-
-{{< note >}}
-The concept of a linked cluster is not user-facing, and is intentionally undocumented. Linked clusters are meant to preserve the soon-to-be legacy interface for sizing sources and sinks.
-{{< /note >}}
-
-<!-- RELATION_SPEC mz_internal.mz_cluster_links -->
-| Field        | Type     | Meaning                                                                                                      |
-|--------------|----------|--------------------------------------------------------------------------------------------------------------|
-| `cluster_id` | [`text`] | The ID of the cluster. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).       |
-| `object_id`  | [`text`] | The ID of the source or sink. Corresponds to [`mz_objects.id`](/sql/system-catalog/mz_catalog/#mz_clusters). |
-
 
 
 ### `mz_cluster_replica_statuses`
@@ -425,7 +408,7 @@ The view is defined as the transitive closure of [`mz_object_dependencies`](#mz_
 {{< public-preview />}}
 
 The `mz_notices` view contains a list of currently active notices emitted by the
-system. The view can be accessed by Materialize superusers.
+system. The view can be accessed by Materialize _superusers_.
 
 <!-- RELATION_SPEC mz_internal.mz_notices -->
 | Field                   | Type                         | Meaning                                                                                                                                           |
@@ -450,7 +433,7 @@ system. The view can be accessed by Materialize superusers.
 
 The `mz_notices_redacted` view contains a redacted list of currently active
 optimizer notices emitted by the system. The view can be accessed by Materialize
-superusers and Materialize support.
+_superusers_ and Materialize support.
 
 <!-- RELATION_SPEC mz_internal.mz_notices_redacted -->
 | Field                   | Type                         | Meaning                                                                                                                                           |
@@ -1349,6 +1332,7 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_scheduling_parks_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_scheduling_parks_histogram_raw -->
 
+
 [`bigint`]: /sql/types/bigint
 [`bigint list`]: /sql/types/list
 [`boolean`]: /sql/types/boolean
@@ -1371,6 +1355,8 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [query hints]: /sql/select/#query-hints
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_redacted -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability_per_worker -->
@@ -1388,3 +1374,4 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_shards -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_usage_by_shard -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_type_pg_metadata -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_object_oid_alias -->

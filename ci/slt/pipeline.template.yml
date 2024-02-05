@@ -8,12 +8,12 @@
 # by the Apache License, Version 2.0.
 
 steps:
-  - id: build-x86_64
-    label: Build x86_64
-    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build x86_64
+  - id: build-aarch64
+    label: Build aarch64
+    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build aarch64
     timeout_in_minutes: 60
     agents:
-      queue: builder-linux-x86_64
+      queue: builder-linux-aarch64
 
   - wait: ~
 
@@ -23,7 +23,7 @@ steps:
     parallelism: 10
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
@@ -35,7 +35,7 @@ steps:
     parallelism: 10
     artifact_paths: junit_*.xml
     agents:
-      queue: linux-x86_64
+      queue: linux-aarch64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
@@ -55,4 +55,4 @@ steps:
           job-uuid-file-pattern: _([^_]*).xml
     priority: 1
     agents:
-      queue: linux-x86_64-small
+      queue: linux-aarch64-small

@@ -9,6 +9,8 @@
 
 # Test that Kafka sources with no format are disallowed.
 
+$ kafka-create-topic topic=thetopic partitions=1
+
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_create_source_denylist_with_options = true
 
@@ -16,10 +18,10 @@ ALTER SYSTEM SET enable_create_source_denylist_with_options = true
 
 ! CREATE SOURCE s
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-thetopic-${testdrive.seed}')
 contains:Source format must be specified
 
-! CREATE CONNECTION no_topic TO KAFKA (BROKER '');
+! CREATE CONNECTION no_broker TO KAFKA (BROKER '');
 contains:Meta data fetch error: BrokerTransportFailure (Local: Broker transport failure)
 
 # Verify that incorrect/unreachable brokers throw up an error on source creation.
@@ -72,3 +74,10 @@ contains:cannot convert negative interval to duration
   FORMAT TEXT
   ENVELOPE NONE
 contains:TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour
+
+! CREATE SOURCE bad_topic
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'whatever')
+  FORMAT TEXT
+  ENVELOPE NONE
+contains:Topic does not exist

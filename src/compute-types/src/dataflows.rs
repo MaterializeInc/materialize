@@ -60,6 +60,9 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     /// Frontier beyond which the dataflow should not execute.
     /// Specifically, updates at times greater or equal to this frontier are suppressed.
     /// This is often set to `as_of + 1` to enable "batch" computations.
+    /// Note that frontier advancements might still happen to times that are after the `until`,
+    /// only data is suppressed. (This is consistent with how frontier advancements can also
+    /// happen before the `as_of`.)
     pub until: Antichain<T>,
     /// Human readable name
     pub debug_name: String,
@@ -97,6 +100,24 @@ impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
         // Note that the `(as_of = MAX, until = {})` case also returns `true`
         // here (as expected) since we are going to compare two `None` values.
         as_of.try_step_forward().as_ref() == until.as_option()
+    }
+
+    /// Check invariants expected to be true about `DataflowDescription`s.
+    pub fn check_invariants(&self) -> Result<(), String> {
+        let mut plans: Vec<_> = self.objects_to_build.iter().map(|o| &o.plan).collect();
+        let mut node_ids = BTreeSet::new();
+
+        while let Some(plan) = plans.pop() {
+            let node_id = plan.node_id();
+            if !node_ids.insert(node_id) {
+                return Err(format!(
+                    "duplicate `NodeId` in `DataflowDescription`: {node_id}"
+                ));
+            }
+            plans.extend(plan.children());
+        }
+
+        Ok(())
     }
 }
 
@@ -275,10 +296,17 @@ where
 
     /// Identifiers of exported objects (indexes and sinks).
     pub fn export_ids(&self) -> impl Iterator<Item = GlobalId> + Clone + '_ {
-        self.index_exports
-            .keys()
-            .chain(self.sink_exports.keys())
-            .copied()
+        self.exported_index_ids().chain(self.exported_sink_ids())
+    }
+
+    /// Identifiers of exported indexes.
+    pub fn exported_index_ids(&self) -> impl Iterator<Item = GlobalId> + Clone + '_ {
+        self.index_exports.keys().copied()
+    }
+
+    /// Identifiers of exported sinks.
+    pub fn exported_sink_ids(&self) -> impl Iterator<Item = GlobalId> + Clone + '_ {
+        self.sink_exports.keys().copied()
     }
 
     /// Identifiers of exported subscribe sinks.

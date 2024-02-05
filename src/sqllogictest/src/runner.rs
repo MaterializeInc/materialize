@@ -68,6 +68,7 @@ use mz_repr::ColumnName;
 use mz_secrets::SecretsController;
 use mz_sql::ast::{Expr, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
+use mz_sql::session::vars::all_dyn_configs;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     CreateIndexStatement, CreateViewStatement, CteBlock, Distinct, DropObjectsStatement, Ident,
@@ -971,7 +972,8 @@ impl<'a> RunnerInner<'a> {
         let now = SYSTEM_TIME.clone();
         let metrics_registry = MetricsRegistry::new();
 
-        let persist_config = PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone());
+        let persist_config =
+            PersistConfig::new(&mz_environmentd::BUILD_INFO, now.clone(), all_dyn_configs());
         let persist_pubsub_server =
             PersistGrpcPubSubServer::new(&persist_config, &metrics_registry);
         let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
@@ -1063,7 +1065,6 @@ impl<'a> RunnerInner<'a> {
                 params.extend(config.system_parameter_defaults.clone());
                 params
             },
-            default_storage_cluster_size: None,
             availability_zones: Default::default(),
             tracing_handle: config.tracing_handle.clone(),
             storage_usage_collection_interval: Duration::from_secs(3600),
@@ -1080,8 +1081,7 @@ impl<'a> RunnerInner<'a> {
             deploy_generation: None,
             http_host_name: Some(host_name),
             internal_console_redirect_url: None,
-            // TODO(txn-lazy): Get "lazy" flipped on before turning "lazy" on in prod.
-            persist_txn_tables_cli: Some(PersistTxnTablesImpl::Eager),
+            persist_txn_tables_cli: Some(PersistTxnTablesImpl::Lazy),
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned

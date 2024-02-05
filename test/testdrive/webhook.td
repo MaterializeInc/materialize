@@ -320,7 +320,7 @@ this_will_work
 > SELECT body FROM webhook_with_time_based_rejection
 this_will_work
 
-# Unnest batch requests.
+# Unnest batch requests, with a materialize view.
 
 > CREATE SOURCE webhook_for_batch_events IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT JSON
@@ -355,6 +355,61 @@ $ webhook-append name=webhook_for_batch_events
 
 > SELECT COUNT(*) FROM webhook_for_batch_events_flattened
 8
+
+# Unnest batch requests with FORMAT JSON ARRAY.
+
+> CREATE SOURCE webhook_json_array IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT JSON ARRAY
+
+$ webhook-append name=webhook_json_array
+[
+  { "event_name": "a" },
+  { "event_name": "b" },
+  { "event_name": "c" },
+  { "event_name": "a" }
+]
+
+> SELECT body FROM webhook_json_array
+"{\"event_name\":\"a\"}"
+"{\"event_name\":\"a\"}"
+"{\"event_name\":\"b\"}"
+"{\"event_name\":\"c\"}"
+
+$ webhook-append name=webhook_json_array
+{ "event_type": "i am a single event" }
+
+> SELECT body FROM webhook_json_array
+"{\"event_name\":\"a\"}"
+"{\"event_name\":\"a\"}"
+"{\"event_name\":\"b\"}"
+"{\"event_name\":\"c\"}"
+"{\"event_type\":\"i am a single event\"}"
+
+> CREATE SOURCE webhook_json_array_with_headers IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT JSON ARRAY
+  INCLUDE HEADER 'x-timestamp' as event_timestamp
+  CHECK (
+    WITH ( HEADERS, BODY )
+    decode(headers->'x-signature', 'base64') = hmac(body, 'super_secret_123', 'sha256')
+  )
+
+$ webhook-append name=webhook_json_array_with_headers x-timestamp=200 x-signature=a5nfOLZK7Xp5yuJeukC7A3XhNo5Y0gPQmg9KVDo9hU8=
+[
+  { "event": "coolio_thing" },
+  { "event": "oof_not_good" },
+  { "event": "recovered" }
+]
+
+> SELECT body, event_timestamp FROM webhook_json_array_with_headers
+"{\"event\":\"coolio_thing\"}" 200
+"{\"event\":\"oof_not_good\"}" 200
+"{\"event\":\"recovered\"}" 200
+
+$ webhook-append name=webhook_json_array_with_headers x-timestamp=202 x-signature=aUyjzZBzSvGGZVwMncpZ8mZABmgr2L13quRZy6uaTgA=
+{ "event": "ugh_wish_i_was_batch" }
+
+> SELECT body FROM webhook_json_array_with_headers WHERE event_timestamp = '202'
+"{\"event\":\"ugh_wish_i_was_batch\"}"
 
 # Renaming a webhook source.
 
@@ -435,3 +490,8 @@ SELECT id FROM mz_sources WHERE name = 'webhook_bytes';
 
 > SELECT COUNT(*) FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-source-id}';
 0
+
+# Cleanup.
+> DROP CLUSTER webhook_cluster CASCADE;
+
+> DROP CLUSTER webhook_compute CASCADE;

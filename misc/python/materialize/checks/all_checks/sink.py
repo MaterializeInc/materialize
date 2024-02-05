@@ -227,7 +227,11 @@ class SinkTables(Check):
 
                 > CREATE MATERIALIZED VIEW sink_large_transaction_view AS SELECT f1 - 1 AS f1 , f2 FROM sink_large_transaction_table;
 
-                > CREATE SINK sink_large_transaction_sink1 FROM sink_large_transaction_view
+                > CREATE CLUSTER sink_large_transaction_sink1_cluster SIZE '4';
+
+                > CREATE SINK sink_large_transaction_sink1
+                  IN CLUSTER sink_large_transaction_sink1_cluster
+                  FROM sink_large_transaction_view
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-large-transaction-sink-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM;
@@ -284,6 +288,8 @@ class SinkTables(Check):
                     SELECT (before).f2, -COUNT(*) AS c  FROM sink_large_transaction_source GROUP BY (before).f2
                   )
                   GROUP BY f2
+
+                > SET statement_timeout = '120s'
 
                 > SELECT * FROM sink_large_transaction_view2
                 500000 200000 100000 0 99999

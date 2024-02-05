@@ -49,8 +49,7 @@ with.
     CREATE SOURCE auction_house
     FROM LOAD GENERATOR AUCTION
     (TICK INTERVAL '1s')
-    FOR ALL TABLES
-    WITH (SIZE = '3xsmall');
+    FOR ALL TABLES;
     ```
 1. Use the [`SHOW SOURCES`](/sql/show-sources/) command to get an idea of the data being generated:
 

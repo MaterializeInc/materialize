@@ -355,9 +355,6 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
 
     /// Returns the associated comments for the given `id`
     fn get_item_comments(&self, id: &GlobalId) -> Option<&BTreeMap<Option<usize>, String>>;
-
-    /// Returns the ID of a cluster linked to this object ID if one exists.
-    fn get_linked_cluster(&self, id: GlobalId) -> Option<ClusterId>;
 }
 
 /// Configuration associated with a catalog.
@@ -512,10 +509,6 @@ pub trait CatalogCluster<'a> {
     /// Returns a stable ID for the cluster.
     fn id(&self) -> ClusterId;
 
-    /// Returns the ID of the object this cluster is linked to, if
-    /// any.
-    fn linked_object_id(&self) -> Option<GlobalId>;
-
     /// Returns the objects that are bound to this cluster.
     fn bound_objects(&self) -> &BTreeSet<GlobalId>;
 
@@ -537,6 +530,9 @@ pub trait CatalogCluster<'a> {
 
     /// Returns true if this cluster is a managed cluster.
     fn is_managed(&self) -> bool;
+
+    /// Returns the size of the cluster, if the cluster is a managed cluster.
+    fn managed_size(&self) -> Option<&str>;
 }
 
 /// A cluster replica in a [`SessionCatalog`]

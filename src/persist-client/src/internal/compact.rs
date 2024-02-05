@@ -19,6 +19,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::TryFutureExt;
+use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::task::{spawn, JoinHandle};
@@ -33,7 +34,7 @@ use tracing::{debug, debug_span, trace, warn, Instrument, Span};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BatchBuilderConfig, BatchBuilderInternal};
-use crate::cfg::{MiB, PersistFeatureFlag};
+use crate::cfg::MiB;
 use crate::fetch::{fetch_batch_part, Cursor, EncodedPart, FetchBatchFilter};
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::GarbageCollector;
@@ -68,6 +69,12 @@ pub struct CompactRes<T> {
     pub output: HollowBatch<T>,
 }
 
+pub(crate) const STREAMING_COMPACTION_ENABLED: Config<bool> = Config::new(
+    "persist_streaming_compaction_enabled",
+    false,
+    "use the new streaming consolidate during compaction",
+);
+
 /// A snapshot of dynamic configs to make it easier to reason about an
 /// individual run of compaction.
 #[derive(Debug, Clone)]
@@ -87,9 +94,7 @@ impl CompactConfig {
             compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
             version: value.build_version.clone(),
             batch: BatchBuilderConfig::new(value, writer_id),
-            streaming_compact: value
-                .dynamic
-                .enabled(PersistFeatureFlag::STREAMING_COMPACTION),
+            streaming_compact: STREAMING_COMPACTION_ENABLED.get(value),
         }
     }
 }
@@ -122,6 +127,17 @@ impl<K, V, T, D> Clone for Compactor<K, V, T, D> {
         }
     }
 }
+
+/// In Compactor::compact_and_apply_background, the minimum amount of time to
+/// allow a compaction request to run before timing it out. A request may be
+/// given a timeout greater than this value depending on the inputs' size
+pub(crate) const COMPACTION_MINIMUM_TIMEOUT: Config<Duration> = Config::new(
+    "persist_compaction_minimum_timeout",
+    Duration::from_secs(90),
+    "\
+    The minimum amount of time to allow a persist compaction request to run \
+    before timing it out (Materialize).",
+);
 
 impl<K, V, T, D> Compactor<K, V, T, D>
 where
@@ -297,7 +313,7 @@ where
             .sum::<usize>();
         let timeout = Duration::max(
             // either our minimum timeout
-            cfg.dynamic.compaction_minimum_timeout(),
+            COMPACTION_MINIMUM_TIMEOUT.get(&cfg),
             // or 1s per MB of input data
             Duration::from_secs(u64::cast_from(total_input_bytes / MiB)),
         );
@@ -1123,6 +1139,7 @@ mod tests {
     use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
     use timely::progress::Antichain;
 
+    use crate::batch::BLOB_TARGET_SIZE;
     use crate::internal::paths::PartialBatchKey;
     use crate::tests::{
         all_ok, expect_fetch_part, new_test_client, new_test_client_cache, CodecProduct,
@@ -1144,7 +1161,7 @@ mod tests {
         ];
 
         let cache = new_test_client_cache();
-        cache.cfg.dynamic.set_blob_target_size(100);
+        cache.cfg.set_config(&BLOB_TARGET_SIZE, 100);
         let (mut write, _) = cache
             .open(PersistLocation::new_in_mem())
             .await
@@ -1215,7 +1232,7 @@ mod tests {
         ];
 
         let cache = new_test_client_cache();
-        cache.cfg.dynamic.set_blob_target_size(100);
+        cache.cfg.set_config(&BLOB_TARGET_SIZE, 100);
         let (mut write, _) = cache
             .open(PersistLocation::new_in_mem())
             .await

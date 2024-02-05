@@ -22,34 +22,6 @@ use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState};
 impl Catalog {
     /// Transform the [`DataflowMetainfo`] by rendering an [`OptimizerNotice`]
     /// for each [`RawOptimizerNotice`].
-    ///
-    /// Delegates to [`CatalogState::render_notices`].
-    pub fn render_notices(
-        &self,
-        df_meta: DataflowMetainfo<RawOptimizerNotice>,
-        notice_ids: Vec<GlobalId>,
-        item_id: Option<GlobalId>,
-    ) -> DataflowMetainfo<Arc<OptimizerNotice>> {
-        self.state.render_notices(df_meta, notice_ids, item_id)
-    }
-
-    /// Pack a [`BuiltinTableUpdate`] with the given `diff` for each
-    /// [`OptimizerNotice`] in `notices` into `updates`.
-    ///
-    /// Delegates to [`CatalogState::pack_optimizer_notices`].
-    pub fn pack_optimizer_notices<'a>(
-        &self,
-        updates: &mut Vec<BuiltinTableUpdate>,
-        notices: impl Iterator<Item = &'a Arc<OptimizerNotice>>,
-        diff: Diff,
-    ) {
-        self.state.pack_optimizer_notices(updates, notices, diff);
-    }
-}
-
-impl CatalogState {
-    /// Transform the [`DataflowMetainfo`] by rendering an [`OptimizerNotice`]
-    /// for each [`RawOptimizerNotice`].
     pub fn render_notices(
         &self,
         df_meta: DataflowMetainfo<RawOptimizerNotice>,
@@ -68,31 +40,39 @@ impl CatalogState {
             }
         }
 
+        // These notices will be persisted in a system table, so should not be
+        // relative to any user's session.
+        let conn_catalog = self.for_system_session();
+
         let optimizer_notices = std::iter::zip(
             df_meta.optimizer_notices.into_iter(),
             notice_ids.into_iter(),
         )
         .map(|(notice, id)| {
             // Render non-redacted fields.
-            let message = notice.message(self, false).to_string();
-            let hint = notice.hint(self, false).to_string();
-            let action = match notice.action_kind(self) {
+            let message = notice.message(&conn_catalog, false).to_string();
+            let hint = notice.hint(&conn_catalog, false).to_string();
+            let action = match notice.action_kind(&conn_catalog) {
                 ActionKind::SqlStatements => {
-                    Action::SqlStatements(notice.action(self, false).to_string())
+                    Action::SqlStatements(notice.action(&conn_catalog, false).to_string())
                 }
-                ActionKind::PlainText => Action::PlainText(notice.action(self, false).to_string()),
+                ActionKind::PlainText => {
+                    Action::PlainText(notice.action(&conn_catalog, false).to_string())
+                }
                 ActionKind::None => {
                     Action::None // No concrete action.
                 }
             };
             // Render redacted fields.
-            let message_redacted = notice.message(self, true).to_string();
-            let hint_redacted = notice.hint(self, true).to_string();
-            let action_redacted = match notice.action_kind(self) {
+            let message_redacted = notice.message(&conn_catalog, true).to_string();
+            let hint_redacted = notice.hint(&conn_catalog, true).to_string();
+            let action_redacted = match notice.action_kind(&conn_catalog) {
                 ActionKind::SqlStatements => {
-                    Action::SqlStatements(notice.action(self, true).to_string())
+                    Action::SqlStatements(notice.action(&conn_catalog, true).to_string())
                 }
-                ActionKind::PlainText => Action::PlainText(notice.action(self, true).to_string()),
+                ActionKind::PlainText => {
+                    Action::PlainText(notice.action(&conn_catalog, true).to_string())
+                }
                 ActionKind::None => {
                     Action::None // No concrete action.
                 }
@@ -120,10 +100,12 @@ impl CatalogState {
             index_usage_types: df_meta.index_usage_types,
         }
     }
+}
 
+impl CatalogState {
     /// Pack a [`BuiltinTableUpdate`] with the given `diff` for each
     /// [`OptimizerNotice`] in `notices` into `updates`.
-    pub fn pack_optimizer_notices<'a>(
+    pub(crate) fn pack_optimizer_notices<'a>(
         &self,
         updates: &mut Vec<BuiltinTableUpdate>,
         notices: impl Iterator<Item = &'a Arc<OptimizerNotice>>,
