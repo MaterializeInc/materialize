@@ -385,6 +385,34 @@ $ webhook-append name=webhook_json_array
 "{\"event_name\":\"c\"}"
 "{\"event_type\":\"i am a single event\"}"
 
+$ webhook-append name=webhook_json_array
+[ { "nested_array": "a_1" }, { "nested_array": "a_2" } ]
+[ { "nested_array": "b_1" }, { "nested_array": "b_2" } ]
+
+> SELECT body FROM webhook_json_array
+"{\"event_name\":\"a\"}"
+"{\"event_name\":\"a\"}"
+"{\"event_name\":\"b\"}"
+"{\"event_name\":\"c\"}"
+"{\"event_type\":\"i am a single event\"}"
+"{\"nested_array\":\"a_1\"}"
+"{\"nested_array\":\"a_2\"}"
+"{\"nested_array\":\"b_1\"}"
+"{\"nested_array\":\"b_2\"}"
+
+> CREATE SOURCE webhook_ndjson IN CLUSTER webhook_cluster FROM WEBHOOK
+  BODY FORMAT JSON
+
+$ webhook-append name=webhook_ndjson
+{ "name": "bill" }
+{ "name": "john" }
+{ "name": "alex" }
+
+> SELECT body FROM webhook_ndjson
+"{\"name\":\"bill\"}"
+"{\"name\":\"john\"}"
+"{\"name\":\"alex\"}"
+
 > CREATE SOURCE webhook_json_array_with_headers IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT JSON ARRAY
   INCLUDE HEADER 'x-timestamp' as event_timestamp
