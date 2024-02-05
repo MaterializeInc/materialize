@@ -498,6 +498,7 @@ where
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+#[ignore] // TODO: Reenable when #24961 is fixed
 async fn test_stash_fail_after_commit() {
     Stash::with_debug_stash(|mut stash| async move {
         let col = collection::<i64, i64>(&mut stash, "c1").await.unwrap();

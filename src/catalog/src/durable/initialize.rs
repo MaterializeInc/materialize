@@ -492,7 +492,6 @@ pub async fn initialize(
     tx.insert_user_cluster(
         DEFAULT_USER_CLUSTER_ID,
         DEFAULT_USER_CLUSTER_NAME,
-        None,
         Vec::new(),
         MZ_SYSTEM_ROLE_ID,
         cluster_privileges,

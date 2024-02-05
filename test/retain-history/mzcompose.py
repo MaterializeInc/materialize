@@ -30,6 +30,7 @@ def workflow_default(c: Composition) -> None:
     run_test_with_counter_source(c)
     # TODO: #24479 needs to be fixed
     # run_test_gh_24479(c)
+    run_test_with_index(c)
 
 
 def setup(c: Composition) -> None:
@@ -274,6 +275,22 @@ def _validate_count_of_counter_source(c: Composition, object_name: str) -> None:
     assert (
         count_at_mz_time2 > count_at_mz_time1
     ), f"value at time2 did not progress ({count_at_mz_time2} vs. {count_at_mz_time1}), consider increasing 'sleep_duration_between_mz_time1_and_mz_time2'"
+
+
+def run_test_with_index(c: Composition) -> None:
+    c.testdrive(
+        dedent(
+            """
+            > CREATE SOURCE retain_history_source3
+              FROM LOAD GENERATOR COUNTER
+              (TICK INTERVAL '100ms');
+            > CREATE DEFAULT INDEX retain_history_idx
+              ON retain_history_source2
+              WITH (RETAIN HISTORY FOR '10s');
+            """
+        )
+    )
+    _validate_count_of_counter_source(c, "retain_history_source3")
 
 
 def run_test_gh_24479(c: Composition) -> None:

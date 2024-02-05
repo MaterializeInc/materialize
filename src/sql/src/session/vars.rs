@@ -942,11 +942,20 @@ static WEBHOOKS_SECRETS_CACHING_TTL_SECS: Lazy<ServerVar<usize>> = Lazy::new(|| 
 
 const COORD_SLOW_MESSAGE_REPORTING_THRESHOLD: ServerVar<Duration> = ServerVar {
     name: UncasedStr::new("coord_slow_message_reporting_threshold"),
-    // Note(parkmycar): This value was chosen arbitrarily.
-    value: Duration::from_millis(100),
+    // Default to recording all messages, but left here so we can dynamically increase if this
+    // causes unexpected problems.
+    value: Duration::from_millis(0),
     description:
         "Sets the threshold at which we will report the handling of a coordinator message \
     for being slow.",
+    internal: true,
+};
+
+const COORD_SLOW_MESSAGE_WARN_THRESHOLD: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("coord_slow_message_warn_threshold"),
+    // Note(parkmycar): This value was chosen arbitrarily.
+    value: Duration::from_secs(5),
+    description: "Sets the threshold at which we will warn! for a coordinator message being slow.",
     internal: true,
 };
 
@@ -1509,6 +1518,16 @@ pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: ServerVar<bool> = ServerVar {
     internal: true,
 };
 
+const ENABLE_DEPENDENCY_READ_HOLD_ASSERTS: ServerVar<bool> = ServerVar {
+    name: UncasedStr::new("enable_dependency_read_hold_asserts"),
+    value: true,
+    description:
+        "Whether to have the storage client check if a subsource's implied capability is less than \
+        its write frontier. This should only be set to false in cases where customer envs cannot
+        boot (Materialize).",
+    internal: true,
+};
+
 /// Configuration for gRPC client connections.
 mod grpc_client {
     use super::*;
@@ -1824,8 +1843,9 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+
         name: enable_logical_compaction_window,
-        desc: "LOGICAL COMPACTION WINDOW",
+        desc: "RETAIN HISTORY",
         default: false,
         internal: true,
         enable_for_item_parsing: true,
@@ -2002,13 +2022,6 @@ feature_flags!(
         name: enable_explain_broken,
         desc: "EXPLAIN ... BROKEN <query> syntax",
         default: false,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_role_vars,
-        desc: "setting default session variables for a role",
-        default: true,
         internal: true,
         enable_for_item_parsing: true,
     },
@@ -2952,6 +2965,7 @@ impl SystemVars {
             .with_var(&SENTRY_FILTERS)
             .with_var(&WEBHOOKS_SECRETS_CACHING_TTL_SECS)
             .with_var(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
+            .with_var(&COORD_SLOW_MESSAGE_WARN_THRESHOLD)
             .with_var(&grpc_client::CONNECT_TIMEOUT)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
             .with_var(&grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT)
@@ -2982,6 +2996,7 @@ impl SystemVars {
             .with_var(&WEBHOOK_CONCURRENT_REQUEST_LIMIT)
             .with_var(&ENABLE_COLUMNATION_LGALLOC)
             .with_var(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
+            .with_var(&ENABLE_DEPENDENCY_READ_HOLD_ASSERTS)
             .with_var(&TIMESTAMP_ORACLE_IMPL)
             .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE)
             .with_var(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT)
@@ -3756,6 +3771,10 @@ impl SystemVars {
         *self.expect_value(&COORD_SLOW_MESSAGE_REPORTING_THRESHOLD)
     }
 
+    pub fn coord_slow_message_warn_threshold(&self) -> Duration {
+        *self.expect_value(&COORD_SLOW_MESSAGE_WARN_THRESHOLD)
+    }
+
     pub fn grpc_client_http2_keep_alive_interval(&self) -> Duration {
         *self.expect_value(&grpc_client::HTTP2_KEEP_ALIVE_INTERVAL)
     }
@@ -3878,6 +3897,10 @@ impl SystemVars {
     /// Returns the `pg_timestamp_oracle_connection_pool_ttl_stagger` configuration parameter.
     pub fn pg_timestamp_oracle_connection_pool_ttl_stagger(&self) -> Duration {
         *self.expect_value(&PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER)
+    }
+
+    pub fn enable_dependency_read_hold_asserts(&self) -> bool {
+        *self.expect_value(&ENABLE_DEPENDENCY_READ_HOLD_ASSERTS)
     }
 }
 

@@ -20,5 +20,3 @@ pub mod durable;
 pub mod memory;
 
 pub static SYSTEM_CONN_ID: ConnectionId = ConnectionId::Static(0);
-
-pub const LINKED_CLUSTER_REPLICA_NAME: &str = "linked";

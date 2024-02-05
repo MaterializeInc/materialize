@@ -47,7 +47,7 @@ use crate::extensions::reduce::{MzReduce, ReduceExt};
 use crate::render::context::{CollectionBundle, Context, SpecializedArrangement};
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{get_monoid, ReductionMonoid};
-use crate::render::ArrangementFlavor;
+use crate::render::{ArrangementFlavor, Pairer};
 use crate::row_spine::DatumSeq;
 use crate::typedefs::{
     KeyBatcher, RowErrSpine, RowRowArrangement, RowRowSpine, RowSpine, RowValSpine,
@@ -994,24 +994,13 @@ where
                             &input,
                             aggr_funcs.clone(),
                         )
-                        .as_collection(|k, v| {
-                            let binding = SharedRow::get();
-                            let mut row_builder = binding.borrow_mut();
-                            let mut row_packer = row_builder.packer();
-                            row_packer.extend(k);
-                            (row_builder.clone(), v.clone())
-                        })
+                        .as_collection(|k, v| (SharedRow::pack(k), v.clone()))
                         .map_fallible("Checked Invalid Accumulations", |(hash_key, result)| {
                             match result {
                                 Err(hash_key) => {
                                     let mut hash_key_iter = hash_key.iter();
                                     let _hash = hash_key_iter.next();
-
-                                    let binding = SharedRow::get();
-                                    let mut row_builder = binding.borrow_mut();
-                                    let mut row_packer = row_builder.packer();
-                                    row_packer.extend(hash_key_iter);
-                                    let key = row_builder.clone();
+                                    let key = SharedRow::pack(hash_key_iter);
                                     let message = format!(
                                         "Invalid data in source, saw non-positive accumulation \
                                          for key {key:?} in hierarchical mins-maxes aggregate"
@@ -1031,12 +1020,9 @@ where
                     .as_collection(|k, v| {
                         let binding = SharedRow::get();
                         let mut row_builder = binding.borrow_mut();
-                        let mut row_packer = row_builder.packer();
-                        row_packer.extend(k);
-                        let key = row_builder.clone();
-                        row_packer = row_builder.packer();
-                        row_packer.extend(v);
-                        (key, row_builder.clone())
+                        let key = row_builder.pack_using(k);
+                        let val = row_builder.pack_using(v);
+                        (key, val)
                     })
                 };
 
@@ -1050,12 +1036,7 @@ where
             let partial = stage.map(move |(hash_key, values)| {
                 let mut hash_key_iter = hash_key.iter();
                 let _hash = hash_key_iter.next();
-
-                let binding = SharedRow::get();
-                let mut row_builder = binding.borrow_mut();
-                let mut row_packer = row_builder.packer();
-                row_packer.extend(hash_key_iter.take(key_arity));
-                (row_builder.clone(), values)
+                (SharedRow::pack(hash_key_iter.take(key_arity)), values)
             });
 
             // Allocations for the two closures.
@@ -1269,8 +1250,9 @@ where
                 let mut values = Vec::with_capacity(skips.len());
                 let mut row_iter = row.iter();
                 for skip in skips.iter() {
-                    row_builder.packer().push(row_iter.nth(*skip).unwrap());
-                    values.push(row_builder.clone());
+                    values.push(
+                        row_builder.pack_using(std::iter::once(row_iter.nth(*skip).unwrap())),
+                    );
                 }
 
                 (key, values)
@@ -1583,22 +1565,21 @@ fn evaluate_mfp_after<'a, 'b>(
 ) -> Option<Row> {
     let binding = SharedRow::get();
     let mut row_builder = binding.borrow_mut();
-    let mut row_packer = row_builder.packer();
     // Apply MFP if it exists and pack a Row of
     // aggregate values from `datums_local`.
     if let Some(mfp) = mfp_after {
         // It must ignore errors here, but they are scanned
         // for elsewhere if the MFP can error.
-        let Ok(Some(iter)) = mfp.evaluate_iter(datums_local, temp_storage) else {
-            return None;
-        };
-        // The `mfp_after` must preserve the key columns,
-        // so we can skip them to form aggregation results.
-        row_packer.extend(iter.skip(key_len));
+        if let Ok(Some(iter)) = mfp.evaluate_iter(datums_local, temp_storage) {
+            // The `mfp_after` must preserve the key columns,
+            // so we can skip them to form aggregation results.
+            Some(row_builder.pack_using(iter.skip(key_len)))
+        } else {
+            None
+        }
     } else {
-        row_packer.extend(&datums_local[key_len..]);
+        Some(row_builder.pack_using(&datums_local[key_len..]))
     }
-    Some(row_builder.clone())
 }
 
 fn accumulable_zero(aggr_func: &AggregateFunc) -> Accum {
@@ -2188,47 +2169,6 @@ impl Multiply<Diff> for Accum {
 
 impl Columnation for Accum {
     type InnerRegion = CopyRegion<Self>;
-}
-
-/// Helper to merge pairs of datum iterators into a row or split a datum iterator
-/// into two rows, given the arity of the first component.
-#[derive(Clone, Copy, Debug)]
-struct Pairer {
-    split_arity: usize,
-}
-
-impl Pairer {
-    /// Creates a pairer with knowledge of the arity of first component in the pair.
-    fn new(split_arity: usize) -> Self {
-        Self { split_arity }
-    }
-
-    /// Merges a pair of datum iterators creating a `Row` instance.
-    fn merge<'a, I1, I2>(&self, first: I1, second: I2) -> Row
-    where
-        I1: IntoIterator<Item = Datum<'a>>,
-        I2: IntoIterator<Item = Datum<'a>>,
-    {
-        let binding = SharedRow::get();
-        let mut row_builder = binding.borrow_mut();
-        let mut row_packer = row_builder.packer();
-        row_packer.extend(first);
-        row_packer.extend(second);
-        row_builder.clone()
-    }
-
-    /// Splits a datum iterator into a pair of `Row` instances.
-    fn split<'a>(&self, datum_iter: impl IntoIterator<Item = Datum<'a>>) -> (Row, Row) {
-        let mut datum_iter = datum_iter.into_iter();
-        let binding = SharedRow::get();
-        let mut row_builder = binding.borrow_mut();
-        let mut row_packer = row_builder.packer();
-        row_packer.extend(datum_iter.by_ref().take(self.split_arity));
-        let first = row_builder.clone();
-        row_packer = row_builder.packer();
-        row_packer.extend(datum_iter);
-        (first, row_builder.clone())
-    }
 }
 
 /// Monoids for in-place compaction of monotonic streams.

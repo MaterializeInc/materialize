@@ -409,7 +409,6 @@ Trace {
                     },
                     ClusterValue {
                         name: "quickstart",
-                        linked_object_id: None,
                         owner_id: Some(
                             RoleId {
                                 value: Some(
@@ -612,7 +611,7 @@ Trace {
                         key: "user_version",
                     },
                     ConfigValue {
-                        value: 45,
+                        value: 46,
                     },
                 ),
                 "-9223372036854775808",

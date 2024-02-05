@@ -115,7 +115,7 @@ use mz_compute_types::dataflows::{BuildDesc, DataflowDescription, IndexDesc};
 use mz_compute_types::plan::Plan;
 use mz_expr::{EvalError, Id};
 use mz_persist_client::operators::shard_source::SnapshotMode;
-use mz_repr::{Diff, GlobalId};
+use mz_repr::{Datum, Diff, GlobalId, Row, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
@@ -642,6 +642,7 @@ where
             values,
             limits,
             body,
+            node_id: _,
         } = plan
         {
             assert_eq!(ids.len(), values.len());
@@ -685,10 +686,8 @@ where
                     // these results would go into the `max_iter + 1`th iteration.
                     let (in_limit, over_limit) =
                         oks.inner.branch_when(move |Product { inner: ps, .. }| {
-                            // We get None in the first iteration, because the `PointStamp` doesn't yet have
-                            // the `level`th element. It will get created when applying the summary for the
-                            // first time.
-                            let iteration_index = *ps.vector.get(level).unwrap_or(&0);
+                            // The iteration number, or if missing a zero (as trailing zeros are truncated).
+                            let iteration_index = *ps.get(level).unwrap_or(&0);
                             // The pointstamp starts counting from 0, so we need to add 1.
                             iteration_index + 1 >= limit.max_iters.into()
                         });
@@ -753,7 +752,7 @@ where
     /// as a stream of data, perhaps as an arrangement, perhaps as a stream of batches.
     pub fn render_plan(&mut self, plan: Plan) -> CollectionBundle<G> {
         match plan {
-            Plan::Constant { rows } => {
+            Plan::Constant { rows, node_id: _ } => {
                 // Produce both rows and errs to avoid conditional dataflow construction.
                 let (rows, errs) = match rows {
                     Ok(rows) => (rows, Vec::new()),
@@ -796,7 +795,12 @@ where
 
                 CollectionBundle::from_collections(ok_collection, err_collection)
             }
-            Plan::Get { id, keys, plan } => {
+            Plan::Get {
+                id,
+                keys,
+                plan,
+                node_id: _,
+            } => {
                 // Recover the collection from `self` and then apply `mfp` to it.
                 // If `mfp` happens to be trivial, we can just return the collection.
                 let mut collection = self
@@ -831,7 +835,12 @@ where
                     }
                 }
             }
-            Plan::Let { id, value, body } => {
+            Plan::Let {
+                id,
+                value,
+                body,
+                node_id: _,
+            } => {
                 // Render `value` and bind it to `id`. Complain if this shadows an id.
                 let value = self.render_plan(*value);
                 let prebound = self.insert_id(Id::Local(id), value);
@@ -848,6 +857,7 @@ where
                 input,
                 mfp,
                 input_key_val,
+                node_id: _,
             } => {
                 let input = self.render_plan(*input);
                 // If `mfp` is non-trivial, we should apply it and produce a collection.
@@ -865,11 +875,16 @@ where
                 exprs,
                 mfp_after: mfp,
                 input_key,
+                node_id: _,
             } => {
                 let input = self.render_plan(*input);
                 self.render_flat_map(input, func, exprs, mfp, input_key)
             }
-            Plan::Join { inputs, plan } => {
+            Plan::Join {
+                inputs,
+                plan,
+                node_id: _,
+            } => {
                 let inputs = inputs
                     .into_iter()
                     .map(|input| self.render_plan(input))
@@ -889,16 +904,21 @@ where
                 plan,
                 input_key,
                 mfp_after,
+                node_id: _,
             } => {
                 let input = self.render_plan(*input);
                 let mfp_option = (!mfp_after.is_identity()).then_some(mfp_after);
                 self.render_reduce(input, key_val_plan, plan, input_key, mfp_option)
             }
-            Plan::TopK { input, top_k_plan } => {
+            Plan::TopK {
+                input,
+                top_k_plan,
+                node_id: _,
+            } => {
                 let input = self.render_plan(*input);
                 self.render_topk(input, top_k_plan)
             }
-            Plan::Negate { input } => {
+            Plan::Negate { input, node_id: _ } => {
                 let input = self.render_plan(*input);
                 let (oks, errs) = input.as_specific_collection(None);
                 CollectionBundle::from_collections(oks.negate(), errs)
@@ -906,6 +926,7 @@ where
             Plan::Threshold {
                 input,
                 threshold_plan,
+                node_id: _,
             } => {
                 let input = self.render_plan(*input);
                 self.render_threshold(input, threshold_plan)
@@ -913,6 +934,7 @@ where
             Plan::Union {
                 inputs,
                 consolidate_output,
+                node_id: _,
             } => {
                 let mut oks = Vec::new();
                 let mut errs = Vec::new();
@@ -933,6 +955,7 @@ where
                 forms: keys,
                 input_key,
                 input_mfp,
+                node_id: _,
             } => {
                 let input = self.render_plan(*input);
                 input.ensure_collections(
@@ -1000,14 +1023,12 @@ impl RenderTimestamp for Product<mz_repr::Timestamp, PointStamp<u64>> {
         // It is necessary to step back both coordinates of a product,
         // and when one is a `PointStamp` that also means all coordinates
         // of the pointstamp.
-        let mut inner = self.inner.clone();
-        for item in inner.vector.iter_mut() {
+        let inner = self.inner.clone();
+        let mut vec = inner.into_vec();
+        for item in vec.iter_mut() {
             *item = item.saturating_sub(1);
         }
-        while inner.vector.last() == Some(&0) {
-            inner.vector.pop();
-        }
-        Product::new(self.outer.saturating_sub(1), inner)
+        Product::new(self.outer.saturating_sub(1), PointStamp::new(vec))
     }
 }
 
@@ -1062,4 +1083,37 @@ where
             }
         }
     })
+}
+
+/// Helper to merge pairs of datum iterators into a row or split a datum iterator
+/// into two rows, given the arity of the first component.
+#[derive(Clone, Copy, Debug)]
+struct Pairer {
+    split_arity: usize,
+}
+
+impl Pairer {
+    /// Creates a pairer with knowledge of the arity of first component in the pair.
+    fn new(split_arity: usize) -> Self {
+        Self { split_arity }
+    }
+
+    /// Merges a pair of datum iterators creating a `Row` instance.
+    fn merge<'a, I1, I2>(&self, first: I1, second: I2) -> Row
+    where
+        I1: IntoIterator<Item = Datum<'a>>,
+        I2: IntoIterator<Item = Datum<'a>>,
+    {
+        SharedRow::pack(first.into_iter().chain(second))
+    }
+
+    /// Splits a datum iterator into a pair of `Row` instances.
+    fn split<'a>(&self, datum_iter: impl IntoIterator<Item = Datum<'a>>) -> (Row, Row) {
+        let mut datum_iter = datum_iter.into_iter();
+        let binding = SharedRow::get();
+        let mut row_builder = binding.borrow_mut();
+        let first = row_builder.pack_using(datum_iter.by_ref().take(self.split_arity));
+        let second = row_builder.pack_using(datum_iter);
+        (first, second)
+    }
 }

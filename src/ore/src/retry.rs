@@ -749,6 +749,7 @@ mod tests {
 
     #[mz_test_macro::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
+    #[ignore] // TODO: Reenable when #24933 is fixed
     async fn test_retry_async_fail_max_duration() {
         let mut states = vec![];
         let res = Retry::default()

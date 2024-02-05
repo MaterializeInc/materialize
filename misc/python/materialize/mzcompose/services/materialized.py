@@ -54,9 +54,13 @@ class Materialized(Service):
         sanity_restart: bool = True,
         catalog_store: str | None = "shadow",
         platform: str | None = None,
+        healthcheck: list[str] | None = None,
     ) -> None:
         if name is None:
             name = "materialized"
+
+        if healthcheck is None:
+            healthcheck = ["CMD", "curl", "-f", "localhost:6878/api/readyz"]
 
         depends_graph: dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
@@ -195,7 +199,7 @@ class Materialized(Service):
             config["deploy"] = {"resources": {"limits": {"memory": memory}}}
 
         if sanity_restart:
-            # Workaround for https://bytemeta.vip/repo/docker/compose/issues/11133
+            # Workaround for https://github.com/docker/compose/issues/11133
             config["labels"] = {"sanity_restart": True}
 
         if platform:
@@ -215,7 +219,7 @@ class Materialized(Service):
                 "volumes": volumes,
                 "tmpfs": ["/tmp"],
                 "healthcheck": {
-                    "test": ["CMD", "curl", "-f", "localhost:6878/api/readyz"],
+                    "test": healthcheck,
                     "interval": "1s",
                     # A fully loaded Materialize can take a long time to start.
                     "start_period": "600s",

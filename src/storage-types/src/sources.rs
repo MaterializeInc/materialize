@@ -83,8 +83,8 @@ pub struct IngestionDescription<S = (), C: ConnectionAccess = InlinedConnection>
     pub ingestion_metadata: S,
     /// Collections to be exported by this ingestion.
     ///
-    /// This field includes the primary source's ID, which must be filtered out
-    /// to understand which exports are data-bearing subsources.
+    /// This field includes the primary source's ID, which might need to be
+    /// filtered out to understand which exports are data-bearing subsources.
     ///
     /// Note that this does _not_ include the remap collection, which is tracked
     /// in its own field.

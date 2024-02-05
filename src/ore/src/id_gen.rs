@@ -335,6 +335,24 @@ pub fn conn_id_org_uuid(conn_id: u32) -> String {
     dst
 }
 
+/// Generate a random temporary ID.
+///
+/// Concretely we generate a UUIDv4 and return the last 12 characters for maximum uniqueness.
+///
+/// Note: the reason we use the last 12 characters is because the bits 6, 7, and 12 - 15
+/// are all hard coded <https://www.rfc-editor.org/rfc/rfc4122#section-4.4>.
+/// ```
+/// use mz_ore::id_gen::temp_id;
+///
+/// let temp = temp_id();
+/// assert_eq!(temp.len(), 12);
+/// assert!(temp.is_ascii());
+/// ```
+pub fn temp_id() -> String {
+    let temp_uuid = uuid::Uuid::new_v4().as_hyphenated().to_string();
+    temp_uuid.chars().rev().take_while(|c| *c != '-').collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;

@@ -15,6 +15,7 @@ import shutil
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import requests
 from semver.version import VersionInfo
@@ -87,7 +88,9 @@ def release_package(version: NpmPackageVersion, package_path: Path) -> None:
         return
     else:
         dist_tag: str | None = "dev" if version.is_development else "latest"
+        branch_tag: str | None = None
         if dist_tag == "latest":
+            branch_tag = f"latest-{version.rust.major}.{version.rust.minor}"
             latest_published = get_latest_version(name)
             if latest_published and latest_published > version.node:
                 logger.info(
@@ -99,11 +102,28 @@ def release_package(version: NpmPackageVersion, package_path: Path) -> None:
                 dist_tag = None
         logger.info("Releasing %s %s", name, version.node)
         set_npm_credentials(package_path)
-        extra_args = ["--tag", dist_tag] if dist_tag is not None else []
+        # If we do not specify a dist tag, this automatically is tagged as
+        # `latest`. So, force a dist tag for release builds that are lower than
+        # the stable version. This usually happens when we cut a hotfix release
+        # for the in-production version after a release has been cut for the
+        # next version.
         spawn.runv(
-            ["npm", "publish", "--access", "public"] + extra_args,
+            [
+                "npm",
+                "publish",
+                "--access",
+                "public",
+                "--tag",
+                cast(str, dist_tag or branch_tag),
+            ],
             cwd=package_path,
         )
+        # If we didn't tag the release with the branch tag, add it now.
+        if dist_tag == "latest" and branch_tag:
+            spawn.runv(
+                ["npm", "dist-tag", "add", f"{name}@{version.node}", branch_tag],
+                cwd=package_path,
+            )
 
 
 def build_all(

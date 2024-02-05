@@ -27,8 +27,7 @@ use crate::names::{
 };
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::{
-    ensure_cluster_is_not_linked, resolve_cluster, resolve_database, resolve_item_or_type,
-    resolve_schema,
+    resolve_cluster, resolve_database, resolve_item_or_type, resolve_schema,
 };
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
@@ -109,15 +108,11 @@ fn plan_alter_cluster_owner(
     new_owner: RoleId,
 ) -> Result<Plan, PlanError> {
     match resolve_cluster(scx, &name, if_exists)? {
-        Some(cluster) => {
-            // Prevent changes to linked clusters.
-            ensure_cluster_is_not_linked(scx, cluster.id());
-            Ok(Plan::AlterOwner(AlterOwnerPlan {
-                id: ObjectId::Cluster(cluster.id()),
-                object_type: ObjectType::Cluster,
-                new_owner,
-            }))
-        }
+        Some(cluster) => Ok(Plan::AlterOwner(AlterOwnerPlan {
+            id: ObjectId::Cluster(cluster.id()),
+            object_type: ObjectType::Cluster,
+            new_owner,
+        })),
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
                 name: name.to_ast_string(),

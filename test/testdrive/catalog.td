@@ -584,7 +584,6 @@ name
 ----
 mz_aggregates
 mz_aws_connections
-mz_cluster_links
 mz_cluster_replica_metrics
 mz_cluster_replica_sizes
 mz_cluster_replica_statuses
@@ -703,11 +702,11 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-49
+48
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-127
+126
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

@@ -94,9 +94,12 @@ fn test_proto_serialization_stability() {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // not an actual test
 #[ignore]
-/// This is not a real test, it is a helper to generate encoded catalog objects for other tests.
-/// When you want to generate new encodings, then run
-/// `cargo test --package mz-catalog --lib durable::upgrade::tests::generate_missing_encodings -- --ignored`.
+/// This is not a real test, it is a helper to generate encoded catalog objects
+/// for other tests. When you want to generate new encodings, then run:
+///
+/// ```ignore
+/// cargo test --package mz-catalog --lib durable::upgrade::tests::generate_missing_encodings -- --ignored
+/// ```
 fn generate_missing_encodings() {
     let protos: BTreeSet<_> = read_file_names(&PROTO_DIRECTORY, PROTO_EXT)
         .filter(|name| name != "objects")

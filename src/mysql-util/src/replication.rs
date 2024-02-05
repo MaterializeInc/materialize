@@ -51,13 +51,22 @@ pub async fn ensure_gtid_consistency(conn: &mut Conn) -> Result<(), MySqlError> 
     Ok(())
 }
 
-// TODO: This only applies if connecting to a replica, to ensure that the replica preserves
-// all transactions in the order they were committed on the primary which implies
-// monotonically increasing transaction ids
+/// When connected to a MySQL Replica we ensure that the replica preserves
+/// all transactions in the order they were committed on the primary which implies
+/// consecutive monotonically increasing transaction ids.
 pub async fn ensure_replication_commit_order(conn: &mut Conn) -> Result<(), MySqlError> {
-    // This system variable was renamed between MySQL 5.7 and 8.0
-    match verify_sys_setting(conn, "replica_preserve_commit_order", "1").await {
-        Ok(_) => Ok(()),
-        Err(_) => verify_sys_setting(conn, "slave_preserve_commit_order", "1").await,
+    // Determine if this is a replica by checking if there are any rows in the replica connection table
+    let res: u8 = conn
+        .query_first("SELECT COUNT(*) FROM performance_schema.replication_connection_configuration")
+        .await?
+        .unwrap();
+    if res > 0 {
+        // This system variable was renamed between MySQL 5.7 and 8.0
+        match verify_sys_setting(conn, "replica_preserve_commit_order", "1").await {
+            Ok(_) => Ok(()),
+            Err(_) => verify_sys_setting(conn, "slave_preserve_commit_order", "1").await,
+        }
+    } else {
+        Ok(())
     }
 }

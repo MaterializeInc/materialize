@@ -235,22 +235,31 @@ impl Coordinator {
                             &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
                         ));
 
-                    let (data_source, status_collection_id) = match source.data_source {
+                    let (data_source, status_collection_id, set_read_policies) = match source
+                        .data_source
+                    {
                         DataSourceDesc::Ingestion(ingestion) => {
                             let ingestion =
                                 ingestion.into_inline_connection(coord.catalog().state());
 
+                            // The parent source dictates all of the subsource's read policies.
+                            let set_read_policies =
+                                ingestion.source_exports.keys().cloned().collect();
+
                             (
                                 DataSource::Ingestion(ingestion),
                                 source_status_collection_id,
+                                set_read_policies,
                             )
                         }
                         // Subsources use source statuses.
                         DataSourceDesc::Source => (
                             DataSource::Other(DataSourceOther::Source),
                             source_status_collection_id,
+                            // Subsources will inherit their parent source's read_policy.
+                            vec![],
                         ),
-                        DataSourceDesc::Progress => (DataSource::Progress, None),
+                        DataSourceDesc::Progress => (DataSource::Progress, None, vec![source_id]),
                         DataSourceDesc::Webhook { .. } => {
                             if let Some(url) =
                                 coord.catalog().state().try_get_webhook_url(&source_id)
@@ -258,7 +267,7 @@ impl Coordinator {
                                 session.add_notice(AdapterNotice::WebhookSourceCreated { url })
                             }
 
-                            (DataSource::Webhook, None)
+                            (DataSource::Webhook, None, vec![source_id])
                         }
                         DataSourceDesc::Introspection(_) => {
                             unreachable!("cannot create sources with introspection data sources")
@@ -285,7 +294,7 @@ impl Coordinator {
 
                     coord
                         .initialize_storage_read_policies(
-                            vec![source_id],
+                            set_read_policies,
                             source
                                 .custom_logical_compaction_window
                                 .unwrap_or(CompactionWindow::Default),
@@ -2684,7 +2693,13 @@ impl Coordinator {
         &mut self,
         plan: plan::AlterIndexSetOptionsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.set_index_options(plan.id, plan.options)?;
+        for o in plan.options {
+            match o {
+                IndexOption::RetainHistory(window) => {
+                    self.set_index_compaction_window(plan.id, window)?;
+                }
+            }
+        }
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
@@ -2692,39 +2707,29 @@ impl Coordinator {
         &mut self,
         plan: plan::AlterIndexResetOptionsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let mut options = Vec::with_capacity(plan.options.len());
         for o in plan.options {
-            options.push(match o {
-                IndexOptionName::LogicalCompactionWindow => {
-                    IndexOption::LogicalCompactionWindow(CompactionWindow::Default)
-                }
-            });
-        }
-
-        self.set_index_options(plan.id, options)?;
-
-        Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
-    }
-
-    pub(super) fn set_index_options(
-        &mut self,
-        id: GlobalId,
-        options: Vec<IndexOption>,
-    ) -> Result<(), AdapterError> {
-        for o in options {
             match o {
-                IndexOption::LogicalCompactionWindow(window) => {
-                    // The index is on a specific cluster.
-                    let cluster = self
-                        .catalog()
-                        .get_entry(&id)
-                        .index()
-                        .expect("setting options on index")
-                        .cluster_id;
-                    self.update_compute_base_read_policy(cluster, id, window.into());
+                IndexOptionName::RetainHistory => {
+                    self.set_index_compaction_window(plan.id, CompactionWindow::Default)?;
                 }
             }
         }
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
+    }
+
+    pub(super) fn set_index_compaction_window(
+        &mut self,
+        id: GlobalId,
+        window: CompactionWindow,
+    ) -> Result<(), AdapterError> {
+        // The index is on a specific cluster.
+        let cluster = self
+            .catalog()
+            .get_entry(&id)
+            .index()
+            .expect("setting options on index")
+            .cluster_id;
+        self.update_compute_base_read_policy(cluster, id, window.into());
         Ok(())
     }
 
@@ -3521,6 +3526,8 @@ impl Coordinator {
                     cur_source.is_retained_metrics_object,
                 );
 
+                let source_compaction_window = source.custom_logical_compaction_window;
+
                 // Get new ingestion description for storage.
                 let ingestion = match &source.data_source {
                     DataSourceDesc::Ingestion(ingestion) => ingestion
@@ -3608,8 +3615,11 @@ impl Coordinator {
                     .await
                     .expect("altering collection after txn must succeed");
 
-                self.initialize_storage_read_policies(source_ids, CompactionWindow::Default)
-                    .await;
+                self.initialize_storage_read_policies(
+                    source_ids,
+                    source_compaction_window.unwrap_or(CompactionWindow::Default),
+                )
+                .await;
             }
         }
 
@@ -4091,20 +4101,6 @@ impl Coordinator {
                         new_owner,
                     });
                 ops.extend(dependent_index_ops);
-
-                // Alter owner cascades down to linked clusters and replicas.
-                if let Some(cluster) = self.catalog().get_linked_cluster(*global_id) {
-                    let linked_cluster_replica_ops =
-                        cluster.replicas().map(|r| catalog::Op::UpdateOwner {
-                            id: ObjectId::ClusterReplica((cluster.id(), r.replica_id)),
-                            new_owner,
-                        });
-                    ops.extend(linked_cluster_replica_ops);
-                    ops.push(catalog::Op::UpdateOwner {
-                        id: ObjectId::Cluster(cluster.id()),
-                        new_owner,
-                    });
-                }
 
                 // Alter owner cascades down to sub-sources and progress collections.
                 let dependent_subsources =

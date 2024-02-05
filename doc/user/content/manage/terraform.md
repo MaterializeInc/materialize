@@ -253,7 +253,7 @@ resource "materialize_connection_postgres" "example_postgres_connection" {
 resource "materialize_source_postgres" "example_source_postgres" {
   name        = "source_postgres"
   schema_name = "schema"
-  size        = "3xsmall"
+  cluster_name = "quickstart"
   postgres_connection {
     name = "pg_connection"
     # Optional parameters

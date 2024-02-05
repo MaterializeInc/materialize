@@ -309,18 +309,6 @@ Used Indexes:
 EOF
 
 query T multiline
-EXPLAIN SELECT cluster_id FROM mz_internal.mz_cluster_links
-----
-Explained Query (fast path):
-  Project (#0)
-    ReadIndex on=mz_internal.mz_cluster_links mz_cluster_links_ind=[*** full scan ***]
-
-Used Indexes:
-  - mz_internal.mz_cluster_links_ind (*** full scan ***)
-
-EOF
-
-query T multiline
 EXPLAIN SELECT object_id FROM mz_internal.mz_object_dependencies
 ----
 Explained Query (fast path):

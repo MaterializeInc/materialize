@@ -13,7 +13,6 @@ use maplit::btreemap;
 use mz_catalog::memory::objects::{CatalogItem, Index};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::explain::{trace_plan, ExprHumanizerExt, TransientItem, UsedIndexes};
-use mz_repr::{Datum, Row};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
@@ -338,8 +337,8 @@ impl Coordinator {
                             on,
                             keys,
                             cluster_id,
+                            compaction_window,
                         },
-                    options,
                     if_not_exists,
                 },
             resolved_ids,
@@ -360,7 +359,7 @@ impl Coordinator {
                 resolved_ids,
                 cluster_id,
                 is_retained_metrics_object: false,
-                custom_logical_compaction_window: None,
+                custom_logical_compaction_window: compaction_window,
             }),
             owner_id: *self.catalog().get_entry(&on).owner_id(),
         }];
@@ -423,7 +422,10 @@ impl Coordinator {
                 }
 
                 coord
-                    .set_index_options(exported_index_id, options)
+                    .set_index_compaction_window(
+                        exported_index_id,
+                        compaction_window.unwrap_or_default(),
+                    )
                     .expect("index enabled");
             })
             .await;
@@ -483,58 +485,16 @@ impl Coordinator {
             ExprHumanizerExt::new(transient_items, &session_catalog)
         };
 
-        let trace = optimizer_trace.drain_all(
+        let rows = optimizer_trace.into_rows(
             format,
             &config,
             &expr_humanizer,
             None,
             used_indexes,
-            None,
             df_meta,
+            stage,
+            plan::ExplaineeStatementKind::CreateIndex,
         )?;
-
-        let rows = match stage.path() {
-            None => {
-                // For the `Trace` (pseudo-)stage, return the entire trace as
-                // triples of (time, path, plan) values.
-                let rows = trace
-                    .into_iter()
-                    .map(|entry| {
-                        // The trace would have to take over 584 years to overflow a u64.
-                        let span_duration = u64::try_from(entry.span_duration.as_nanos());
-                        Row::pack_slice(&[
-                            Datum::from(span_duration.unwrap_or(u64::MAX)),
-                            Datum::from(entry.path.as_str()),
-                            Datum::from(entry.plan.as_str()),
-                        ])
-                    })
-                    .collect();
-                rows
-            }
-            Some(path) => {
-                // For everything else, return the plan for the stage identified
-                // by the corresponding path.
-                let row = trace
-                    .into_iter()
-                    .find(|entry| entry.path == path)
-                    .map(|entry| Row::pack_slice(&[Datum::from(entry.plan.as_str())]))
-                    .ok_or_else(|| {
-                        let stmt_kind = plan::ExplaineeStatementKind::CreateIndex;
-                        if !stmt_kind.supports(&stage) {
-                            // Print a nicer error for unsupported stages.
-                            AdapterError::Unstructured(anyhow::anyhow!(format!(
-                                "cannot EXPLAIN {stage} FOR {stmt_kind}"
-                            )))
-                        } else {
-                            // We don't expect this stage to be missing.
-                            AdapterError::Internal(format!(
-                                "stage `{path}` not present in the collected optimizer trace",
-                            ))
-                        }
-                    })?;
-                vec![row]
-            }
-        };
 
         if broken {
             tracing_core::callsite::rebuild_interest_cache();

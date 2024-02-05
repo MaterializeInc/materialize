@@ -35,6 +35,7 @@ perf.data*
 /scratch
 services.log
 *.swp
+/temp
 test/scalability/results/**/*.csv
 test/scalability/results/**/*.png
 misc/wasm/target

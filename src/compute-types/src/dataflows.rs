@@ -101,6 +101,24 @@ impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
         // here (as expected) since we are going to compare two `None` values.
         as_of.try_step_forward().as_ref() == until.as_option()
     }
+
+    /// Check invariants expected to be true about `DataflowDescription`s.
+    pub fn check_invariants(&self) -> Result<(), String> {
+        let mut plans: Vec<_> = self.objects_to_build.iter().map(|o| &o.plan).collect();
+        let mut node_ids = BTreeSet::new();
+
+        while let Some(plan) = plans.pop() {
+            let node_id = plan.node_id();
+            if !node_ids.insert(node_id) {
+                return Err(format!(
+                    "duplicate `NodeId` in `DataflowDescription`: {node_id}"
+                ));
+            }
+            plans.extend(plan.children());
+        }
+
+        Ok(())
+    }
 }
 
 impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {

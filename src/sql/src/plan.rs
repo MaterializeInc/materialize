@@ -644,7 +644,6 @@ pub struct CreateMaterializedViewPlan {
 pub struct CreateIndexPlan {
     pub name: QualifiedItemName,
     pub index: Index,
-    pub options: Vec<IndexOption>,
     pub if_not_exists: bool,
 }
 
@@ -889,27 +888,6 @@ impl ExplaineeStatement {
             Self::Select { broken, .. } => *broken,
             Self::CreateMaterializedView { broken, .. } => *broken,
             Self::CreateIndex { broken, .. } => *broken,
-        }
-    }
-
-    pub fn row_set_finishing(&self) -> Option<RowSetFinishing> {
-        match self {
-            Self::Select { plan, desc, .. } => {
-                if !plan.finishing.is_trivial(desc.arity()) {
-                    // Use the optional finishing extracted in the plan_query call.
-                    Some(plan.finishing.clone())
-                } else {
-                    None
-                }
-            }
-            Self::CreateMaterializedView { .. } => {
-                // Trivial finishing asserted in plan_create_materialized_view.
-                None
-            }
-            Self::CreateIndex { .. } => {
-                // Trivial finishing for indexes on views asserted in plan_view.
-                None
-            }
         }
     }
 }
@@ -1444,6 +1422,7 @@ pub struct Index {
     pub create_sql: String,
     pub on: GlobalId,
     pub keys: Vec<mz_expr::MirScalarExpr>,
+    pub compaction_window: Option<CompactionWindow>,
     pub cluster_id: ClusterId,
 }
 
@@ -1552,7 +1531,7 @@ pub enum ExecuteTimeout {
 #[derive(Clone, Debug)]
 pub enum IndexOption {
     /// Configures the logical compaction window for an index.
-    LogicalCompactionWindow(CompactionWindow),
+    RetainHistory(CompactionWindow),
 }
 
 #[derive(Clone, Debug)]

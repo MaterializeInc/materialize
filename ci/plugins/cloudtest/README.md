@@ -1,4 +1,4 @@
-# mzcompose Buildkite Plugin
+# cloudtest Buildkite Plugin
 
 A [Buildkite plugin] that runs cloudtest.
 

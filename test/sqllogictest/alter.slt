@@ -25,7 +25,7 @@ ALTER TABLE mz_tables RENAME TO foo;
 query error system schema 'mz_internal' cannot be modified
 ALTER SOURCE mz_internal.mz_storage_shards RENAME TO foo;
 
-query error cannot ALTER this type of source
+query error Expected one of IGNORE or TIMELINE or TIMESTAMP or RETAIN, found SIZE
 ALTER SOURCE mz_internal.mz_storage_shards RESET (size);
 
 statement ok

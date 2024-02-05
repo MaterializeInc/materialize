@@ -1785,7 +1785,7 @@ checksum = "0e25ea47919b1560c4e3b7fe0aaab9becf5b84a10325ddf7db0f0ba5e1026499"
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#c5b9baca0283f4d96f7e6f914de8578fb5c521de"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#15b7b8dcf606580b4cf50e3f1b408da91b27b4c1"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1841,7 +1841,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/differential-dataflow.git#c5b9baca0283f4d96f7e6f914de8578fb5c521de"
+source = "git+https://github.com/MaterializeInc/differential-dataflow.git#15b7b8dcf606580b4cf50e3f1b408da91b27b4c1"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -3738,7 +3738,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "0.86.0-dev"
+version = "0.87.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3851,7 +3851,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "0.86.0-dev"
+version = "0.87.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -4001,7 +4001,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "0.86.0-dev"
+version = "0.87.0-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -4219,7 +4219,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "0.86.0-dev"
+version = "0.87.0-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -4309,6 +4309,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rlimit",
+ "semver",
  "sentry",
  "sentry-tracing",
  "serde",
@@ -4437,6 +4438,7 @@ dependencies = [
  "itertools",
  "mz-ore",
  "mz-pgrepr",
+ "mz-sql-parser",
  "openssl",
  "postgres-openssl",
  "postgres-protocol",
@@ -4450,6 +4452,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-stream",
+ "tokio-util",
  "tonic",
  "tonic-build",
  "tracing",
@@ -4921,7 +4924,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "0.86.0-dev"
+version = "0.87.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -5736,7 +5739,7 @@ dependencies = [
 
 [[package]]
 name = "mz-stash-debug"
-version = "0.86.0-dev"
+version = "0.87.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -6057,7 +6060,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "0.86.0-dev"
+version = "0.87.0-dev"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -7462,7 +7465,7 @@ dependencies = [
 [[package]]
 name = "rdkafka"
 version = "0.29.0"
-source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#c729f89b70935fb2ad8a4f377cff2845acc197b0"
+source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#843ccffbd75f4dac93b2e34cf091bd7770b9a3de"
 dependencies = [
  "futures-channel",
  "futures-util",
@@ -7479,7 +7482,7 @@ dependencies = [
 [[package]]
 name = "rdkafka-sys"
 version = "4.3.0+1.9.2"
-source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#c729f89b70935fb2ad8a4f377cff2845acc197b0"
+source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#843ccffbd75f4dac93b2e34cf091bd7770b9a3de"
 dependencies = [
  "cmake",
  "libc",

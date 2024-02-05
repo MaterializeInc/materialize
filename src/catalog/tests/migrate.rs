@@ -7,15 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::panic;
+
 use fail::FailScenario;
 use mz_catalog::durable::objects::DurableType;
 use mz_catalog::durable::{
-    migrate_from_stash_to_persist_state, persist_backed_catalog_state,
-    rollback_from_persist_to_stash_state, stash_backed_catalog_state, test_bootstrap_args,
-    test_stash_config, CatalogError, Database, Metrics, OpenableDurableCatalogState, Role,
+    stash_backed_catalog_state, test_bootstrap_args, test_migrate_from_stash_to_persist_state,
+    test_persist_backed_catalog_state, test_rollback_from_persist_to_stash_state,
+    test_stash_config, CatalogError, Database, OpenableDurableCatalogState, Role,
     TimelineTimestamp,
 };
-use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NOW_ZERO;
 use mz_persist_client::PersistClient;
 use mz_proto::{ProtoType, RustType};
@@ -24,8 +25,6 @@ use mz_sql::catalog::{RoleAttributes, RoleMembership, RoleVars};
 use mz_sql::names::DatabaseId;
 use mz_sql::session::vars::CatalogKind;
 use mz_storage_types::sources::Timeline;
-use std::panic;
-use std::sync::Arc;
 use uuid::Uuid;
 
 #[mz_ore::test(tokio::test)]
@@ -34,7 +33,6 @@ async fn test_migration() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut role = Role {
         // Temp placeholder.
@@ -85,11 +83,10 @@ async fn test_migration() {
     // Migrate catalog to persist.
     {
         let migrate_openable_state = Box::new(
-            migrate_from_stash_to_persist_state(
+            test_migrate_from_stash_to_persist_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -120,12 +117,8 @@ async fn test_migration() {
     // Open plain persist catalog and check that all the catalog data is there.
     {
         let persist_openable_state = Box::new(
-            persist_backed_catalog_state(
-                persist_client.clone(),
-                organization_id.clone(),
-                Arc::clone(&persist_metrics),
-            )
-            .await,
+            test_persist_backed_catalog_state(persist_client.clone(), organization_id.clone())
+                .await,
         );
         let mut persist_state = persist_openable_state
             .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
@@ -158,11 +151,10 @@ async fn test_migration() {
     // Check that migrating again is OK.
     {
         let migrate_openable_state = Box::new(
-            migrate_from_stash_to_persist_state(
+            test_migrate_from_stash_to_persist_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -197,11 +189,10 @@ async fn test_migration() {
     // Rollback from persist to the stash.
     let database_key = {
         let rollback_openable_state = Box::new(
-            rollback_from_persist_to_stash_state(
+            test_rollback_from_persist_to_stash_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -290,11 +281,10 @@ async fn test_migration() {
     // Check that rolling back again is OK.
     {
         let rollback_openable_state = Box::new(
-            rollback_from_persist_to_stash_state(
+            test_rollback_from_persist_to_stash_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -347,7 +337,6 @@ async fn test_migration_panic_after_stash_fence_then_migrate() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut role = Role {
         // Temp placeholder.
@@ -387,15 +376,13 @@ async fn test_migration_panic_after_stash_fence_then_migrate() {
         let stash_config = stash_config.clone();
         let persist_client = persist_client.clone();
         let organization_id = organization_id.clone();
-        let persist_metrics = Arc::clone(&persist_metrics);
         let handle = mz_ore::task::spawn(|| "migrate-panic", async move {
             hide_panic_stack_trace();
             let migrate_openable_state = Box::new(
-                migrate_from_stash_to_persist_state(
+                test_migrate_from_stash_to_persist_state(
                     stash_config,
                     persist_client,
                     organization_id,
-                    persist_metrics,
                 )
                 .await,
             );
@@ -411,11 +398,10 @@ async fn test_migration_panic_after_stash_fence_then_migrate() {
     fail::cfg("post_stash_fence", "off").unwrap();
     {
         let migrate_openable_state = Box::new(
-            migrate_from_stash_to_persist_state(
+            test_migrate_from_stash_to_persist_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -437,12 +423,8 @@ async fn test_migration_panic_after_stash_fence_then_migrate() {
     // Open plain persist catalog and check that all the catalog data is there.
     {
         let persist_openable_state = Box::new(
-            persist_backed_catalog_state(
-                persist_client.clone(),
-                organization_id.clone(),
-                Arc::clone(&persist_metrics),
-            )
-            .await,
+            test_persist_backed_catalog_state(persist_client.clone(), organization_id.clone())
+                .await,
         );
         let mut persist_state = persist_openable_state
             .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
@@ -472,7 +454,6 @@ async fn test_migration_panic_after_stash_fence_then_rollback() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut role = Role {
         // Temp placeholder.
@@ -512,15 +493,13 @@ async fn test_migration_panic_after_stash_fence_then_rollback() {
         let stash_config = stash_config.clone();
         let persist_client = persist_client.clone();
         let organization_id = organization_id.clone();
-        let persist_metrics = Arc::clone(&persist_metrics);
         let handle = mz_ore::task::spawn(|| "migrate-panic", async move {
             hide_panic_stack_trace();
             let migrate_openable_state = Box::new(
-                migrate_from_stash_to_persist_state(
+                test_migrate_from_stash_to_persist_state(
                     stash_config,
                     persist_client,
                     organization_id,
-                    persist_metrics,
                 )
                 .await,
             );
@@ -536,11 +515,10 @@ async fn test_migration_panic_after_stash_fence_then_rollback() {
     fail::cfg("post_stash_fence", "off").unwrap();
     {
         let rollback_openable_state = Box::new(
-            rollback_from_persist_to_stash_state(
+            test_rollback_from_persist_to_stash_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -590,7 +568,6 @@ async fn test_rollback_panic_after_stash_fence_then_migrate() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut role = Role {
         // Temp placeholder.
@@ -632,11 +609,10 @@ async fn test_rollback_panic_after_stash_fence_then_migrate() {
     // Migrate catalog to persist.
     {
         let migrate_openable_state = Box::new(
-            migrate_from_stash_to_persist_state(
+            test_migrate_from_stash_to_persist_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -670,15 +646,13 @@ async fn test_rollback_panic_after_stash_fence_then_migrate() {
         let stash_config = stash_config.clone();
         let persist_client = persist_client.clone();
         let organization_id = organization_id.clone();
-        let persist_metrics = Arc::clone(&persist_metrics);
         let handle = mz_ore::task::spawn(|| "migrate-panic", async move {
             hide_panic_stack_trace();
             let rollback_openable_state = Box::new(
-                rollback_from_persist_to_stash_state(
+                test_rollback_from_persist_to_stash_state(
                     stash_config,
                     persist_client,
                     organization_id,
-                    persist_metrics,
                 )
                 .await,
             );
@@ -694,11 +668,10 @@ async fn test_rollback_panic_after_stash_fence_then_migrate() {
     fail::cfg("post_stash_fence", "off").unwrap();
     {
         let migrate_openable_state = Box::new(
-            rollback_from_persist_to_stash_state(
+            test_rollback_from_persist_to_stash_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -733,12 +706,8 @@ async fn test_rollback_panic_after_stash_fence_then_migrate() {
     // Open plain persist catalog and check that all the catalog data is there.
     {
         let persist_openable_state = Box::new(
-            persist_backed_catalog_state(
-                persist_client.clone(),
-                organization_id.clone(),
-                Arc::clone(&persist_metrics),
-            )
-            .await,
+            test_persist_backed_catalog_state(persist_client.clone(), organization_id.clone())
+                .await,
         );
         let mut persist_state = persist_openable_state
             .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
@@ -780,7 +749,6 @@ async fn test_rollback_panic_after_stash_fence_then_rollback() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut role = Role {
         // Temp placeholder.
@@ -822,11 +790,10 @@ async fn test_rollback_panic_after_stash_fence_then_rollback() {
     // Migrate catalog to persist.
     {
         let migrate_openable_state = Box::new(
-            migrate_from_stash_to_persist_state(
+            test_migrate_from_stash_to_persist_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -860,15 +827,13 @@ async fn test_rollback_panic_after_stash_fence_then_rollback() {
         let stash_config = stash_config.clone();
         let persist_client = persist_client.clone();
         let organization_id = organization_id.clone();
-        let persist_metrics = Arc::clone(&persist_metrics);
         let handle = mz_ore::task::spawn(|| "migrate-panic", async move {
             hide_panic_stack_trace();
             let rollback_openable_state = Box::new(
-                rollback_from_persist_to_stash_state(
+                test_rollback_from_persist_to_stash_state(
                     stash_config,
                     persist_client,
                     organization_id,
-                    persist_metrics,
                 )
                 .await,
             );
@@ -884,11 +849,10 @@ async fn test_rollback_panic_after_stash_fence_then_rollback() {
     fail::cfg("post_stash_fence", "off").unwrap();
     {
         let rollback_openable_state = Box::new(
-            rollback_from_persist_to_stash_state(
+            test_rollback_from_persist_to_stash_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -963,7 +927,6 @@ async fn test_migration_panic_after_fence_then_migrate() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut role = Role {
         // Temp placeholder.
@@ -1003,15 +966,13 @@ async fn test_migration_panic_after_fence_then_migrate() {
         let stash_config = stash_config.clone();
         let persist_client = persist_client.clone();
         let organization_id = organization_id.clone();
-        let persist_metrics = Arc::clone(&persist_metrics);
         let handle = mz_ore::task::spawn(|| "migrate-panic", async move {
             hide_panic_stack_trace();
             let migrate_openable_state = Box::new(
-                migrate_from_stash_to_persist_state(
+                test_migrate_from_stash_to_persist_state(
                     stash_config,
                     persist_client,
                     organization_id,
-                    persist_metrics,
                 )
                 .await,
             );
@@ -1027,11 +988,10 @@ async fn test_migration_panic_after_fence_then_migrate() {
     fail::cfg("post_persist_fence", "off").unwrap();
     {
         let migrate_openable_state = Box::new(
-            migrate_from_stash_to_persist_state(
+            test_migrate_from_stash_to_persist_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -1053,12 +1013,8 @@ async fn test_migration_panic_after_fence_then_migrate() {
     // Open plain persist catalog and check that all the catalog data is there.
     {
         let persist_openable_state = Box::new(
-            persist_backed_catalog_state(
-                persist_client.clone(),
-                organization_id.clone(),
-                Arc::clone(&persist_metrics),
-            )
-            .await,
+            test_persist_backed_catalog_state(persist_client.clone(), organization_id.clone())
+                .await,
         );
         let mut persist_state = persist_openable_state
             .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
@@ -1088,7 +1044,6 @@ async fn test_migration_panic_after_fence_then_rollback() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut role = Role {
         // Temp placeholder.
@@ -1128,15 +1083,13 @@ async fn test_migration_panic_after_fence_then_rollback() {
         let stash_config = stash_config.clone();
         let persist_client = persist_client.clone();
         let organization_id = organization_id.clone();
-        let persist_metrics = Arc::clone(&persist_metrics);
         let handle = mz_ore::task::spawn(|| "migrate-panic", async move {
             hide_panic_stack_trace();
             let migrate_openable_state = Box::new(
-                migrate_from_stash_to_persist_state(
+                test_migrate_from_stash_to_persist_state(
                     stash_config,
                     persist_client,
                     organization_id,
-                    persist_metrics,
                 )
                 .await,
             );
@@ -1152,11 +1105,10 @@ async fn test_migration_panic_after_fence_then_rollback() {
     fail::cfg("post_persist_fence", "off").unwrap();
     {
         let rollback_openable_state = Box::new(
-            rollback_from_persist_to_stash_state(
+            test_rollback_from_persist_to_stash_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -1206,7 +1158,6 @@ async fn test_rollback_panic_after_fence_then_migrate() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut role = Role {
         // Temp placeholder.
@@ -1248,11 +1199,10 @@ async fn test_rollback_panic_after_fence_then_migrate() {
     // Migrate catalog to persist.
     {
         let migrate_openable_state = Box::new(
-            migrate_from_stash_to_persist_state(
+            test_migrate_from_stash_to_persist_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -1286,15 +1236,13 @@ async fn test_rollback_panic_after_fence_then_migrate() {
         let stash_config = stash_config.clone();
         let persist_client = persist_client.clone();
         let organization_id = organization_id.clone();
-        let persist_metrics = Arc::clone(&persist_metrics);
         let handle = mz_ore::task::spawn(|| "migrate-panic", async move {
             hide_panic_stack_trace();
             let rollback_openable_state = Box::new(
-                rollback_from_persist_to_stash_state(
+                test_rollback_from_persist_to_stash_state(
                     stash_config,
                     persist_client,
                     organization_id,
-                    persist_metrics,
                 )
                 .await,
             );
@@ -1310,11 +1258,10 @@ async fn test_rollback_panic_after_fence_then_migrate() {
     fail::cfg("post_persist_fence", "off").unwrap();
     {
         let migrate_openable_state = Box::new(
-            rollback_from_persist_to_stash_state(
+            test_rollback_from_persist_to_stash_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -1349,12 +1296,8 @@ async fn test_rollback_panic_after_fence_then_migrate() {
     // Open plain persist catalog and check that all the catalog data is there.
     {
         let persist_openable_state = Box::new(
-            persist_backed_catalog_state(
-                persist_client.clone(),
-                organization_id.clone(),
-                Arc::clone(&persist_metrics),
-            )
-            .await,
+            test_persist_backed_catalog_state(persist_client.clone(), organization_id.clone())
+                .await,
         );
         let mut persist_state = persist_openable_state
             .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
@@ -1396,7 +1339,6 @@ async fn test_rollback_panic_after_fence_then_rollback() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut role = Role {
         // Temp placeholder.
@@ -1438,11 +1380,10 @@ async fn test_rollback_panic_after_fence_then_rollback() {
     // Migrate catalog to persist.
     {
         let migrate_openable_state = Box::new(
-            migrate_from_stash_to_persist_state(
+            test_migrate_from_stash_to_persist_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -1476,15 +1417,13 @@ async fn test_rollback_panic_after_fence_then_rollback() {
         let stash_config = stash_config.clone();
         let persist_client = persist_client.clone();
         let organization_id = organization_id.clone();
-        let persist_metrics = Arc::clone(&persist_metrics);
         let handle = mz_ore::task::spawn(|| "migrate-panic", async move {
             hide_panic_stack_trace();
             let rollback_openable_state = Box::new(
-                rollback_from_persist_to_stash_state(
+                test_rollback_from_persist_to_stash_state(
                     stash_config,
                     persist_client,
                     organization_id,
-                    persist_metrics,
                 )
                 .await,
             );
@@ -1500,11 +1439,10 @@ async fn test_rollback_panic_after_fence_then_rollback() {
     fail::cfg("post_persist_fence", "off").unwrap();
     {
         let rollback_openable_state = Box::new(
-            rollback_from_persist_to_stash_state(
+            test_rollback_from_persist_to_stash_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -1579,7 +1517,6 @@ async fn test_migration_panic_after_write_then_migrate() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut role = Role {
         // Temp placeholder.
@@ -1619,15 +1556,13 @@ async fn test_migration_panic_after_write_then_migrate() {
         let stash_config = stash_config.clone();
         let persist_client = persist_client.clone();
         let organization_id = organization_id.clone();
-        let persist_metrics = Arc::clone(&persist_metrics);
         let handle = mz_ore::task::spawn(|| "migrate-panic", async move {
             hide_panic_stack_trace();
             let migrate_openable_state = Box::new(
-                migrate_from_stash_to_persist_state(
+                test_migrate_from_stash_to_persist_state(
                     stash_config,
                     persist_client,
                     organization_id,
-                    persist_metrics,
                 )
                 .await,
             );
@@ -1643,11 +1578,10 @@ async fn test_migration_panic_after_write_then_migrate() {
     fail::cfg("migrate_post_write", "off").unwrap();
     {
         let migrate_openable_state = Box::new(
-            migrate_from_stash_to_persist_state(
+            test_migrate_from_stash_to_persist_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -1669,12 +1603,8 @@ async fn test_migration_panic_after_write_then_migrate() {
     // Open plain persist catalog and check that all the catalog data is there.
     {
         let persist_openable_state = Box::new(
-            persist_backed_catalog_state(
-                persist_client.clone(),
-                organization_id.clone(),
-                Arc::clone(&persist_metrics),
-            )
-            .await,
+            test_persist_backed_catalog_state(persist_client.clone(), organization_id.clone())
+                .await,
         );
         let mut persist_state = persist_openable_state
             .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
@@ -1704,7 +1634,6 @@ async fn test_migration_panic_after_write_then_rollback() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut role = Role {
         // Temp placeholder.
@@ -1744,15 +1673,13 @@ async fn test_migration_panic_after_write_then_rollback() {
         let stash_config = stash_config.clone();
         let persist_client = persist_client.clone();
         let organization_id = organization_id.clone();
-        let persist_metrics = Arc::clone(&persist_metrics);
         let handle = mz_ore::task::spawn(|| "migrate-panic", async move {
             hide_panic_stack_trace();
             let migrate_openable_state = Box::new(
-                migrate_from_stash_to_persist_state(
+                test_migrate_from_stash_to_persist_state(
                     stash_config,
                     persist_client,
                     organization_id,
-                    persist_metrics,
                 )
                 .await,
             );
@@ -1768,11 +1695,10 @@ async fn test_migration_panic_after_write_then_rollback() {
     fail::cfg("migrate_post_write", "off").unwrap();
     {
         let rollback_openable_state = Box::new(
-            rollback_from_persist_to_stash_state(
+            test_rollback_from_persist_to_stash_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -1820,7 +1746,6 @@ async fn test_savepoint_persist_uninitialized() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     // Initialize catalog only in the stash.
     {
@@ -1834,11 +1759,10 @@ async fn test_savepoint_persist_uninitialized() {
     // Open a savepoint catalog using the rollback implementation.
     let database_key = {
         let rollback_openable_state = Box::new(
-            rollback_from_persist_to_stash_state(
+            test_rollback_from_persist_to_stash_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -1885,11 +1809,10 @@ async fn test_savepoint_persist_uninitialized() {
     // Try to open a savepoint catalog using the migrate implementation.
     {
         let migrate_openable_state = Box::new(
-            migrate_from_stash_to_persist_state(
+            test_migrate_from_stash_to_persist_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -1910,11 +1833,10 @@ async fn test_savepoint_persist_uninitialized() {
     // Open a writable catalog using the rollback implementation.
     {
         let rollback_openable_state = Box::new(
-            rollback_from_persist_to_stash_state(
+            test_rollback_from_persist_to_stash_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -1939,17 +1861,12 @@ async fn test_savepoint_stash_uninitialized() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     // Initialize catalog only in persist.
     {
         let persist_openable_state = Box::new(
-            persist_backed_catalog_state(
-                persist_client.clone(),
-                organization_id.clone(),
-                Arc::clone(&persist_metrics),
-            )
-            .await,
+            test_persist_backed_catalog_state(persist_client.clone(), organization_id.clone())
+                .await,
         );
         let _persist_state = persist_openable_state
             .open(NOW_ZERO(), &test_bootstrap_args(), None, None)
@@ -1960,11 +1877,10 @@ async fn test_savepoint_stash_uninitialized() {
     // Open a savepoint catalog using the migrate implementation.
     let database_key = {
         let migrate_openable_state = Box::new(
-            migrate_from_stash_to_persist_state(
+            test_migrate_from_stash_to_persist_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -2011,11 +1927,10 @@ async fn test_savepoint_stash_uninitialized() {
     // Try to open a savepoint catalog using the rollback implementation.
     {
         let rollback_openable_state = Box::new(
-            rollback_from_persist_to_stash_state(
+            test_rollback_from_persist_to_stash_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -2036,11 +1951,10 @@ async fn test_savepoint_stash_uninitialized() {
     // Open a writable catalog using the migrate implementation.
     {
         let migrate_openable_state = Box::new(
-            migrate_from_stash_to_persist_state(
+            test_migrate_from_stash_to_persist_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -2065,15 +1979,13 @@ async fn test_set_emergency_stash_migrate() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     // Set a migrate catalog to emergency-stash and open.
     let mut migrate_openable_state = Box::new(
-        migrate_from_stash_to_persist_state(
+        test_migrate_from_stash_to_persist_state(
             stash_config.clone(),
             persist_client.clone(),
             organization_id.clone(),
-            Arc::clone(&persist_metrics),
         )
         .await,
     );
@@ -2089,12 +2001,7 @@ async fn test_set_emergency_stash_migrate() {
 
     // Check that persist is still uninitialized.
     let mut persist_openable_state = Box::new(
-        persist_backed_catalog_state(
-            persist_client.clone(),
-            organization_id.clone(),
-            Arc::clone(&persist_metrics),
-        )
-        .await,
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id.clone()).await,
     );
     assert!(!persist_openable_state.is_initialized().await.unwrap());
 
@@ -2107,15 +2014,13 @@ async fn test_set_emergency_stash_rollback() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     // Set a rollback catalog to emergency-stash and open.
     let mut rollback_openable_state = Box::new(
-        rollback_from_persist_to_stash_state(
+        test_rollback_from_persist_to_stash_state(
             stash_config.clone(),
             persist_client.clone(),
             organization_id.clone(),
-            Arc::clone(&persist_metrics),
         )
         .await,
     );
@@ -2131,12 +2036,7 @@ async fn test_set_emergency_stash_rollback() {
 
     // Check that persist is still uninitialized.
     let mut persist_openable_state = Box::new(
-        persist_backed_catalog_state(
-            persist_client.clone(),
-            organization_id.clone(),
-            Arc::clone(&persist_metrics),
-        )
-        .await,
+        test_persist_backed_catalog_state(persist_client.clone(), organization_id.clone()).await,
     );
     assert!(!persist_openable_state.is_initialized().await.unwrap());
 
@@ -2149,16 +2049,14 @@ async fn test_emergency_stash_tombstone() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     {
         // Open a persist catalog.
         let persist_openable_state = Box::new(
-            migrate_from_stash_to_persist_state(
+            test_migrate_from_stash_to_persist_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -2178,11 +2076,10 @@ async fn test_emergency_stash_tombstone() {
         // Open an emergency stash catalog (it doesn't matter if we start with a migrate or rollback
         // catalog because we change it to emergency-stash).
         let mut emergency_stash_openable_state = Box::new(
-            rollback_from_persist_to_stash_state(
+            test_rollback_from_persist_to_stash_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -2201,11 +2098,10 @@ async fn test_emergency_stash_tombstone() {
     // Check that a migrate implementation reads from the correct location pre-boot.
     {
         let mut openable_state = Box::new(
-            migrate_from_stash_to_persist_state(
+            test_migrate_from_stash_to_persist_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -2222,11 +2118,10 @@ async fn test_emergency_stash_tombstone() {
     // Check that a rollback implementation reads from the correct location pre-boot.
     {
         let mut openable_state = Box::new(
-            rollback_from_persist_to_stash_state(
+            test_rollback_from_persist_to_stash_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
@@ -2250,7 +2145,6 @@ async fn test_epoch_migration() {
     let (debug_factory, stash_config) = test_stash_config().await;
     let persist_client = PersistClient::new_for_tests().await;
     let organization_id = Uuid::new_v4();
-    let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
     let mut epoch = 1;
 
@@ -2268,11 +2162,10 @@ async fn test_epoch_migration() {
     // Migrate catalog to persist many times to increment the epoch.
     for _ in 0..10 {
         let migrate_openable_state = Box::new(
-            migrate_from_stash_to_persist_state(
+            test_migrate_from_stash_to_persist_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await,
         );
