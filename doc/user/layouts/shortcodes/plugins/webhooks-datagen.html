@@ -1,22 +1,12 @@
 <div id="webhooks-datagen" class="json_widget">
   <div class="input_container">
     <div class="input_container-text">
-      <input
-        type="text"
-        placeholder="Webhook URL"
-        id="webhookURL"
-        class="text-input"
-      />
+      <input type="text" placeholder="Webhook URL" id="webhookURL" class="text-input" />
     </div>
   </div>
   <div class="input_container">
     <div class="input_container-text">
-      <input
-        type="password"
-        placeholder="Auth Password"
-        id="authPassword"
-        class="text-input"
-      />
+      <input type="password" placeholder="Auth Password" id="authPassword" class="text-input" />
     </div>
   </div>
   <div class="input_container">
@@ -25,15 +15,19 @@
       <button id="stopButton" class="btn" style="display: none">Stop</button>
     </div>
   </div>
+  <div class="input_container">
+    <div class="input_container-text">
+      <select id="useCaseSelect" class="text-input">
+        <option value="">Select a use-case</option>
+        <option value="sensorData">Sensor Data</option>
+        <option value="userActivity">User Activity</option>
+        <option value="ecommerceTransaction">E-commerce Transaction</option>
+      </select>
+    </div>
+  </div>
   <div>
     <div class="json">
-      <textarea
-        placeholder="JSON schema"
-        id="jsonSchema"
-        rows="5"
-        cols="30"
-        class="json-textarea"
-      >
+      <textarea placeholder="JSON schema" id="jsonSchema" rows="5" cols="30" class="json-textarea">
 {
   "sensor_id": "faker.datatype.number({ max: 100, min: 1})",
   "timestamp": "faker.date.between('2020-01-01T00:00:00.000Z', '2030-01-01T00:00:00.000Z')",
@@ -46,12 +40,12 @@
       </textarea>
       <div id="jsonError" class="error" style="display: none"></div>
     </div>
-    <div class="log-output" id="logOutput" style="display: none"></div>
+    <div class="log_output" id="logOutput" style="display: none"></div>
   </div>
 </div>
 
 <script type="module">
-  import { faker } from 'https://cdn.skypack.dev/@faker-js/faker';
+  import { faker } from 'https://esm.sh/@faker-js/faker@8.4.0';
 
   const webhookURLInput = document.getElementById("webhookURL");
   const authPasswordInput = document.getElementById("authPassword");
@@ -89,15 +83,15 @@
 
   function generateDataAndSend() {
     const generatedData = JSON.parse(
-        jsonSchemaTextarea.value.replace(/"faker\.(.+?)"/g, (_, match) => {
-            try {
-                const fakerValue = eval(`faker.${match}`);
-                return JSON.stringify(fakerValue);
-            } catch (error) {
-                console.error("Error while generating faker data:", error);
-                return '"Error"';
-            }
-        })
+      jsonSchemaTextarea.value.replace(/"faker\.(.+?)"/g, (_, match) => {
+        try {
+          const fakerValue = eval(`faker.${match}`);
+          return JSON.stringify(fakerValue);
+        } catch (error) {
+          console.error("Error while generating faker data:", error);
+          return '"Error"';
+        }
+      })
     );
     logs.unshift(`Sent: ${JSON.stringify(generatedData)}`); // Prepend log messages
     logOutputDiv.innerHTML = logs
@@ -181,7 +175,53 @@
       const formattedJSON = JSON.stringify(JSON.parse(jsonString), null, 2);
       jsonSchemaTextarea.value = formattedJSON;
     } catch (error) {
-      // Handle the error if the JSON is not valid
+      // Handle the error if the JSON is not valid:
+      console.error("Error while formatting JSON:", error);
     }
   }
+
+  document.getElementById('useCaseSelect').addEventListener('change', function() {
+    const selectedUseCase = this.value;
+    const schema = schemas[selectedUseCase];
+    if (schema) {
+      jsonSchemaTextarea.value = schema;
+      formatJSON(); // Automatically format the selected JSON schema
+    }
+  });
+
+  const schemas = {
+    sensorData: `{
+      "sensor_id": "faker.datatype.number({ max: 100, min: 1})",
+      "timestamp": "faker.date.between('2020-01-01T00:00:00.000Z', '2030-01-01T00:00:00.000Z')",
+      "location": {
+          "latitude": "faker.datatype.number({ max: 90, min: -90})",
+          "longitude": "faker.datatype.number({ max: 180, min: -180})"
+      },
+      "temperature": "faker.datatype.float({ min: 20, max: 95 })"
+    }`,
+    userActivity: `{
+      "user_id": "faker.datatype.uuid()",
+      "event": "faker.helpers.arrayElement(['page_view', 'click', 'scroll', 'navigation'])",
+      "timestamp": "faker.date.recent()",
+      "page": {
+        "url": "faker.internet.url()",
+        "title": "faker.lorem.words()"
+      },
+      "interaction": {
+        "element": "faker.lorem.word()",
+        "time_spent": "faker.datatype.number({ min: 1, max: 120 })"
+      }
+    }`,
+    ecommerceTransaction: `{
+      "user_id": "faker.datatype.uuid()",
+      "event": "faker.helpers.arrayElement(['add_to_cart', 'remove_from_cart', 'purchase', 'view_product'])",
+      "timestamp": "faker.date.recent()",
+      "product": {
+        "id": "faker.datatype.uuid()",
+        "name": "faker.commerce.productName()",
+        "category": "faker.commerce.department()",
+        "price": "faker.commerce.price()"
+      }
+    }`
+  };
 </script>

@@ -327,49 +327,18 @@ top of your webhook source that maps the individual fields to columns with the
 required data types. To avoid doing this tedious task manually, you can use
 [this **JSON parsing widget**](/sql/types/jsonb/#parsing)!
 
-### Related pages
-
-<<<<<<< HEAD
-- [`CREATE SECRET`](/sql/create-secret)
-- [`CREATE SOURCE`](../)
-- [`SHOW SOURCES`](/sql/show-sources)
-- [`DROP SOURCE`](/sql/drop-source)
-=======
-```sql
-CREATE SECRET event_bridge_api_key AS 'abc123';
-```
-
-When we create a new EventBridge Rule, we'll make sure to include this shared secret as a header in
-each request, which Materialize will then check against.
-
-After defining the shared secret, we can create the source itself:
-
-```sql
-CREATE SOURCE my_event_bridge_source IN CLUSTER my_cluster FROM WEBHOOK
-  BODY FORMAT JSON
-  -- Includes all headers, but filters out our shared secret.
-  INCLUDE HEADERS ( NOT 'x-mz-api-key' )
-  CHECK (
-    WITH ( HEADERS, SECRET event_bridge_api_key AS secret)
-    headers->'x-mz-api-key' = secret
-  );
-```
-
-This creates a source called _my_event_bridge_source_ and installs it in cluster named _my_cluster_.
-The source will have two columns, _body_ of type `jsonb` and _headers_ of type `map[text=>text]`. We will
-use the shared secret to validate each request, but it will get filtered out of the map in the _headers_
-column.
-
-Now with the source created we need to connect with with EventBridge. You can follow [Amazon's tutorial
-for connecting with Datadog](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-tutorial-datadog.html),
-but for an **API key name, make sure to use `x-mz-api-key`** which is what we specified in our `CHECK`
-statement for request validation.
-
 ### Generating demo data
 
-To generate demo data for your webhook source, you can use the following form. It will generate webhook events based on the schema you provided.
+To generate demo data for your webhook source, you can use the following form.
+It will generate webhook events based on the schema you provided.
 
 You can use any of the [Faker.js API methods](https://fakerjs.dev/api/) to generate data.
 
 {{% plugins/webhooks-datagen %}}
->>>>>>> 4f15824d33 (Include the datagen plugin)
+
+### Related pages
+
+- [`CREATE SECRET`](/sql/create-secret)
+- [`CREATE SOURCE`](../)
+- [`SHOW SOURCES`](/sql/show-sources)
+- [`DROP SOURCE`](/sql/drop-source)
