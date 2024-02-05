@@ -287,7 +287,7 @@ def mkrepo(i: Instance, rev: str, init: bool = True, force: bool = False) -> Non
     )
     mssh(
         i,
-        f"cd materialize && git config core.bare false && git checkout {rev}",
+        f"cd materialize && git config core.bare false && git checkout {rev} && git submodule sync --recursive && git submodule update --recursive",
     )
 
 
