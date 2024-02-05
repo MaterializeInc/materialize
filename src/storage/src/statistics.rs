@@ -112,7 +112,6 @@ impl SourceStatisticsMetrics {
         let shard = shard_id.to_string();
         let envelope = match envelope {
             SourceEnvelope::None(_) => "none",
-            SourceEnvelope::Debezium(_) => "debezium",
             SourceEnvelope::Upsert(_) => "upsert",
             SourceEnvelope::CdcV2 => "cdcv2",
         };

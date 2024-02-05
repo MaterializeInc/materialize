@@ -54,13 +54,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 
 # Verify that the errors from before are still there
 ! SELECT * FROM upsert
-contains: Key decode
+contains: Value error
 
 # Retract the bad key
 $ kafka-ingest format=bytes topic=dbzupsert key-format=bytes omit-value=true
 broken-key:
 
-# There is still an error, due to the bad key.
+# There is still an error, due to the bad value.
 ! SELECT * FROM upsert
 contains: Value error
 

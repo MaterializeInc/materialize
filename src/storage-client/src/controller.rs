@@ -35,7 +35,7 @@ use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{MetadataUnfilled, StorageSinkConnection, StorageSinkDesc};
-use mz_storage_types::sources::{IngestionDescription, SourceData, SourceEnvelope};
+use mz_storage_types::sources::{IngestionDescription, SourceData};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
@@ -132,19 +132,6 @@ impl<T> CollectionDescription<T> {
         // NOTE: Exhaustive match for future proofing.
         match &self.data_source {
             DataSource::Ingestion(ingestion) => {
-                match &ingestion.desc.envelope {
-                    SourceEnvelope::Debezium(envelope_debezium) => {
-                        let tx_metadata_topic = &envelope_debezium.dedup.tx_metadata;
-                        if let Some(tx_input) = tx_metadata_topic {
-                            result.push(tx_input.tx_metadata_global_id);
-                        }
-                    }
-                    // NOTE: We explicitly list envelopes instead of using a catch all to
-                    // make sure that we change this when adding/removing and envelope.
-                    SourceEnvelope::None(_) | SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2 => {
-                        // No storage dependencies.
-                    }
-                }
                 result.push(ingestion.remap_collection_id);
             }
             DataSource::Webhook | DataSource::Introspection(_) | DataSource::Progress => {
