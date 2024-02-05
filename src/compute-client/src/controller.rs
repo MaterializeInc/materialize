@@ -248,6 +248,10 @@ impl<T: Timestamp> ComputeController<T> {
         self.default_arrangement_exert_proportionality = value;
     }
 
+    pub fn enable_aggressive_readhold_downgrades(&self) -> bool {
+        self.enable_aggressive_readhold_downgrades
+    }
+
     pub fn set_enable_aggressive_readhold_downgrades(&mut self, value: bool) {
         self.enable_aggressive_readhold_downgrades = value;
     }
