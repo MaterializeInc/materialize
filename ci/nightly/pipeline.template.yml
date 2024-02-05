@@ -868,7 +868,7 @@ steps:
         label: "K8s recovery: storage on failing node"
         timeout_in_minutes: 30
         agents:
-          queue: linux-x86_64
+          queue: linux-aarch64
         artifact_paths: junit_*.xml
         inputs:
           - test/cloudtest
@@ -884,7 +884,7 @@ steps:
         label: "K8s recovery: compute on failing node"
         timeout_in_minutes: 30
         agents:
-          queue: linux-x86_64
+          queue: linux-aarch64
         artifact_paths: junit_*.xml
         inputs:
           - test/cloudtest
@@ -900,7 +900,7 @@ steps:
         label: "K8s recovery: replicated compute on failing node"
         timeout_in_minutes: 30
         agents:
-          queue: linux-x86_64
+          queue: linux-aarch64
         artifact_paths: junit_*.xml
         inputs:
           - test/cloudtest
@@ -916,7 +916,7 @@ steps:
         label: "K8s recovery: envd on failing node"
         timeout_in_minutes: 30
         agents:
-          queue: linux-x86_64
+          queue: linux-aarch64
         artifact_paths: junit_*.xml
         inputs:
           - test/cloudtest
