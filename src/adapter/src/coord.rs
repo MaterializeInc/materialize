@@ -2654,16 +2654,25 @@ impl Coordinator {
         dataflow: DataflowDescription<Plan>,
         instance: ComputeInstanceId,
     ) {
-        // We must only install read policies for indexes, not for sinks.
-        // Sinks are write-only compute collections that don't have read policies.
-        let index_ids = dataflow.exported_index_ids().collect();
+        let export_ids = if self
+            .controller
+            .compute
+            .enable_aggressive_readhold_downgrades()
+        {
+            // We must only install read policies for indexes, not for sinks.
+            // Sinks are write-only compute collections that don't have read policies.
+            dataflow.exported_index_ids().collect()
+        } else {
+            // If aggressive downgrading is disabled, all compute collections expect a read policy.
+            dataflow.export_ids().collect()
+        };
 
         self.controller
             .active_compute()
             .create_dataflow(instance, dataflow)
             .unwrap_or_terminate("dataflow creation cannot fail");
 
-        self.initialize_compute_read_policies(index_ids, instance, CompactionWindow::Default)
+        self.initialize_compute_read_policies(export_ids, instance, CompactionWindow::Default)
             .await;
     }
 }
