@@ -31,7 +31,6 @@ use timely::PartialOrder;
 use tracing::debug;
 use uuid::Uuid;
 
-use crate::cfg::is_data_version_invalid;
 use crate::critical::CriticalReaderId;
 use crate::error::{CodecMismatch, CodecMismatchT};
 use crate::internal::metrics::Metrics;
@@ -51,7 +50,7 @@ use crate::internal::state_diff::{
 use crate::internal::trace::Trace;
 use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
 use crate::stats::PartStats;
-use crate::{PersistConfig, ShardId, WriterId};
+use crate::{cfg, PersistConfig, ShardId, WriterId};
 
 #[derive(Debug)]
 pub struct Schemas<K: Codec, V: Codec> {
@@ -176,20 +175,13 @@ pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<
 }
 
 pub(crate) fn check_data_version(code_version: &Version, data_version: &Version) {
-    if is_data_version_invalid(code_version, data_version) {
+    if let Err(msg) = cfg::check_data_version(code_version, data_version) {
         // We can't catch halts, so panic in test, so we can get unit test
         // coverage.
         if cfg!(test) {
-            panic!(
-                "{} received persist state from the future {}",
-                code_version, data_version,
-            );
+            panic!("{msg}");
         } else {
-            halt!(
-                "{} received persist state from the future {}",
-                code_version,
-                data_version,
-            );
+            halt!("{msg}");
         }
     }
 }

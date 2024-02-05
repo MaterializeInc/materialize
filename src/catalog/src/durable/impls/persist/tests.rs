@@ -12,7 +12,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::PersistLocation;
 use uuid::Uuid;
 
-use crate::durable::impls::persist::{UnopenedPersistCatalogState, UPGRADE_SEED};
+use crate::durable::impls::persist::{shard_id, UnopenedPersistCatalogState, UPGRADE_SEED};
 use crate::durable::{
     test_bootstrap_args, test_persist_backed_catalog_state_with_version,
     OpenableDurableCatalogState,
@@ -25,7 +25,7 @@ async fn test_upgrade_shard() {
     let second_version = semver::Version::parse("0.11.0").expect("failed to parse version");
     let organization_id = Uuid::new_v4();
     let mut persist_cache = PersistClientCache::new_no_metrics();
-    let upgrade_shard_id = UnopenedPersistCatalogState::shard_id(organization_id, UPGRADE_SEED);
+    let upgrade_shard_id = shard_id(organization_id, UPGRADE_SEED);
 
     persist_cache.cfg.build_version = first_version.clone();
     let persist_client = persist_cache
@@ -35,7 +35,11 @@ async fn test_upgrade_shard() {
 
     assert_eq!(
         None,
-        UnopenedPersistCatalogState::upgrade_version(&persist_client, upgrade_shard_id).await
+        UnopenedPersistCatalogState::fetch_catalog_upgrade_shard_version(
+            &persist_client,
+            upgrade_shard_id
+        )
+        .await
     );
 
     let persist_openable_state = test_persist_backed_catalog_state_with_version(
@@ -52,7 +56,11 @@ async fn test_upgrade_shard() {
 
     assert_eq!(
         Some(first_version.clone()),
-        UnopenedPersistCatalogState::upgrade_version(&persist_client, upgrade_shard_id).await,
+        UnopenedPersistCatalogState::fetch_catalog_upgrade_shard_version(
+            &persist_client,
+            upgrade_shard_id
+        )
+        .await,
         "opening the catalog should increment the upgrade version"
     );
 
@@ -75,7 +83,11 @@ async fn test_upgrade_shard() {
 
     assert_eq!(
         Some(first_version.clone()),
-        UnopenedPersistCatalogState::upgrade_version(&persist_client, upgrade_shard_id).await,
+        UnopenedPersistCatalogState::fetch_catalog_upgrade_shard_version(
+            &persist_client,
+            upgrade_shard_id
+        )
+        .await,
         "opening a savepoint catalog should not increment the upgrade version"
     );
 
@@ -93,7 +105,11 @@ async fn test_upgrade_shard() {
 
     assert_eq!(
         Some(first_version),
-        UnopenedPersistCatalogState::upgrade_version(&persist_client, upgrade_shard_id).await,
+        UnopenedPersistCatalogState::fetch_catalog_upgrade_shard_version(
+            &persist_client,
+            upgrade_shard_id
+        )
+        .await,
         "opening a readonly catalog should not increment the upgrade version"
     );
 }

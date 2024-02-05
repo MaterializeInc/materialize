@@ -815,29 +815,7 @@ async fn test_persist_fencing() {
         );
     }
 
-    // Test cases copied from mz_persist_client::internal::encoding::tests::check_data_versions.
-    testcase("0.10.0-dev", "0.10.0-dev", Ok(())).await;
-    testcase("0.10.0-dev", "0.10.0", Ok(())).await;
-
-    testcase("0.10.0-dev", "0.11.0-dev", Ok(())).await;
-    testcase("0.10.0-dev", "0.11.0", Ok(())).await;
-    testcase("0.10.0-dev", "0.12.0-dev", Err(())).await;
-    testcase("0.10.0-dev", "0.12.0", Err(())).await;
-    testcase("0.10.0-dev", "0.13.0-dev", Err(())).await;
-
-    testcase("0.10.0", "0.10.0-dev", Ok(())).await;
     testcase("0.10.0", "0.10.0", Ok(())).await;
-
-    testcase("0.10.0", "0.11.0-dev", Ok(())).await;
     testcase("0.10.0", "0.11.0", Ok(())).await;
-    testcase("0.10.0", "0.11.1", Ok(())).await;
-    testcase("0.10.0", "0.12.0-dev", Err(())).await;
     testcase("0.10.0", "0.12.0", Err(())).await;
-    testcase("0.10.0", "0.13.0-dev", Err(())).await;
-
-    testcase("0.10.1", "0.10.0", Ok(())).await;
-    testcase("0.10.1", "0.11.0", Ok(())).await;
-    testcase("0.10.1", "0.11.1", Ok(())).await;
-
-    testcase("0.10.0", "0.10.1", Ok(())).await;
 }

@@ -621,7 +621,7 @@ impl RustType<ConfigUpdates> for PersistParameters {
 // data we read is going to be because we fetched it using a pointer stored in
 // some persist state. If we can handle the state, we can handle the blobs it
 // references, too.
-pub fn is_data_version_invalid(code_version: &Version, data_version: &Version) -> bool {
+pub fn check_data_version(code_version: &Version, data_version: &Version) -> Result<(), String> {
     // Allow one minor version of forward compatibility. We could avoid the
     // clone with some nested comparisons of the semver fields, but this code
     // isn't particularly performance sensitive and I find this impl easier to
@@ -632,5 +632,11 @@ pub fn is_data_version_invalid(code_version: &Version, data_version: &Version) -
         u64::MAX,
     );
 
-    &max_allowed_data_version < data_version
+    if &max_allowed_data_version < data_version {
+        Err(format!(
+            "{code_version} received persist state from the future {data_version}",
+        ))
+    } else {
+        Ok(())
+    }
 }
