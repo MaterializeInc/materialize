@@ -165,6 +165,53 @@ steps:
             composition: sqlsmith
             args: [--max-joins=15, --explain-only, --runtime=6000]
 
+  - id: tests-preflight-check-rollback
+    label: Tests with preflight check and rollback
+    trigger: tests
+    async: false
+    build:
+      # TODO(def-): How to get the last release version here? For now v0.84.3
+      commit: "19827035bbeb59a90617491f3b12f33e80232a48"
+      branch: "v0.84.3"
+      env:
+        CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
+        CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 1
+
+  - id: tests-preflight-check-upgrade
+    label: Tests with preflight check and upgrade
+    trigger: tests
+    async: false
+    build:
+      # TODO(def-): How to get the last release version here? For now v0.84.3
+      commit: "19827035bbeb59a90617491f3b12f33e80232a48"
+      branch: "v0.84.3"
+      env:
+        CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
+        CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 0
+  - id: nightlies-preflight-check-rollback
+    label: Nightlies with preflight check and rollback
+    trigger: nightlies
+    async: false
+    build:
+      # TODO(def-): How to get the last release version here? For now v0.84.3
+      commit: "19827035bbeb59a90617491f3b12f33e80232a48"
+      branch: "v0.84.3"
+      env:
+        CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
+        CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 1
+
+  - id: nightlies-preflight-check-upgrade
+    label: Nightlies with preflight check and upgrade
+    trigger: nightlies
+    async: false
+    build:
+      # TODO(def-): How to get the last release version here? For now v0.84.3
+      commit: "19827035bbeb59a90617491f3b12f33e80232a48"
+      branch: "v0.84.3"
+      env:
+        CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
+        CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 0
+
 
   - wait: ~
     continue_on_failure: true
