@@ -16,8 +16,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{
-    ColumnDef, CreateMaterializedViewStatement, RawItemName, ShowStatement, TableConstraint,
-    UnresolvedDatabaseName, UnresolvedSchemaName,
+    ColumnDef, ConnectionDefaultAwsPrivatelink, CreateMaterializedViewStatement, RawItemName,
+    ShowStatement, TableConstraint, UnresolvedDatabaseName, UnresolvedSchemaName,
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
@@ -838,7 +838,7 @@ impl<'a> StatementContext<'a> {
     pub(crate) fn build_tunnel_definition(
         &self,
         ssh_tunnel: Option<with_options::Object>,
-        aws_privatelink: Option<with_options::Object>,
+        aws_privatelink: Option<ConnectionDefaultAwsPrivatelink<Aug>>,
     ) -> Result<Tunnel<ReferencedConnection>, PlanError> {
         match (ssh_tunnel, aws_privatelink) {
             (None, None) => Ok(Tunnel::Direct),
@@ -854,7 +854,7 @@ impl<'a> StatementContext<'a> {
                 }
             }
             (None, Some(aws_privatelink)) => {
-                let id = GlobalId::from(aws_privatelink);
+                let id = aws_privatelink.connection.item_id().clone();
                 let entry = self.catalog.get_item(&id);
                 match entry.connection()? {
                     Connection::AwsPrivatelink(_) => Ok(Tunnel::AwsPrivatelink(AwsPrivatelink {
@@ -862,7 +862,7 @@ impl<'a> StatementContext<'a> {
                         // By default we do not specify an availability zone for the tunnel.
                         availability_zone: None,
                         // We always use the port as specified by the top-level connection.
-                        port: None,
+                        port: aws_privatelink.port,
                     })),
                     _ => sql_bail!("{} is not an AWS PRIVATELINK connection", entry.name().item),
                 }

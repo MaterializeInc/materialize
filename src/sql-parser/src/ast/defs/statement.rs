@@ -534,6 +534,25 @@ impl AstDisplay for CreateSchemaStatement {
 impl_display!(CreateSchemaStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ConnectionDefaultAwsPrivatelink<T: AstInfo> {
+    pub connection: T::ItemName,
+    // TODO port should be switched to a vec of options similar to KafkaBrokerAwsPrivatelink if ever support more than port
+    pub port: Option<u16>,
+}
+
+impl<T: AstInfo> AstDisplay for ConnectionDefaultAwsPrivatelink<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.connection);
+        if let Some(port) = self.port {
+            f.write_str(" (PORT ");
+            f.write_node(&display::escape_single_quote_string(&port.to_string()));
+            f.write_str(")");
+        }
+    }
+}
+impl_display_t!(ConnectionDefaultAwsPrivatelink);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct KafkaBroker<T: AstInfo> {
     pub address: String,
     pub tunnel: KafkaBrokerTunnel<T>,
@@ -3131,6 +3150,7 @@ pub enum WithOptionValue<T: AstInfo> {
     // Special cases.
     ClusterReplicas(Vec<ReplicaDefinition<T>>),
     ConnectionKafkaBroker(KafkaBroker<T>),
+    ConnectionAwsPrivatelink(ConnectionDefaultAwsPrivatelink<T>),
     RetainHistoryFor(Value),
     Refresh(RefreshOptionValue<T>),
 }
@@ -3150,7 +3170,9 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 WithOptionValue::DataType(_)
                 | WithOptionValue::Item(_)
                 | WithOptionValue::UnresolvedItemName(_)
+                | WithOptionValue::ConnectionAwsPrivatelink(_)
                 | WithOptionValue::ClusterReplicas(_) => {
+
                     // These do not need redaction.
                 }
                 WithOptionValue::Secret(_)
@@ -3182,6 +3204,9 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 f.write_str("(");
                 f.write_node(&display::comma_separated(replicas));
                 f.write_str(")");
+            }
+            WithOptionValue::ConnectionAwsPrivatelink(aws_privatelink) => {
+                f.write_node(aws_privatelink);
             }
             WithOptionValue::ConnectionKafkaBroker(broker) => {
                 f.write_node(broker);

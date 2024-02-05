@@ -14,7 +14,9 @@ use std::time::Duration;
 use mz_repr::adt::interval::Interval;
 use mz_repr::bytes::ByteSize;
 use mz_repr::{strconv, GlobalId};
-use mz_sql_parser::ast::{Ident, KafkaBroker, RefreshOptionValue, ReplicaDefinition};
+use mz_sql_parser::ast::{
+    ConnectionDefaultAwsPrivatelink, Ident, KafkaBroker, RefreshOptionValue, ReplicaDefinition,
+};
 use mz_storage_types::connections::StringOrSecret;
 use serde::{Deserialize, Serialize};
 
@@ -464,6 +466,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
             | WithOptionValue::DataType(_)
             | WithOptionValue::ClusterReplicas(_)
             | WithOptionValue::ConnectionKafkaBroker(_)
+            | WithOptionValue::ConnectionAwsPrivatelink(_)
             | WithOptionValue::Refresh(_) => sql_bail!(
                 "incompatible value types: cannot convert {} to {}",
                 match v {
@@ -478,6 +481,7 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
                     WithOptionValue::DataType(_) => "data types",
                     WithOptionValue::ClusterReplicas(_) => "cluster replicas",
                     WithOptionValue::ConnectionKafkaBroker(_) => "connection kafka brokers",
+                    WithOptionValue::ConnectionAwsPrivatelink(_) => "connection kafka brokers",
                     WithOptionValue::Refresh(_) => "refresh option values",
                 },
                 V::name()
@@ -563,5 +567,25 @@ impl TryFromValue<WithOptionValue<Aug>> for RefreshOptionValue<Aug> {
 impl ImpliedValue for RefreshOptionValue<Aug> {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide a refresh option value")
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for ConnectionDefaultAwsPrivatelink<Aug> {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        if let WithOptionValue::ConnectionAwsPrivatelink(r) = v {
+            Ok(r)
+        } else {
+            sql_bail!("cannot use value `{}` for a privatelink", v)
+        }
+    }
+
+    fn name() -> String {
+        "privatelink option value".to_string()
+    }
+}
+
+impl ImpliedValue for ConnectionDefaultAwsPrivatelink<Aug> {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a value")
     }
 }

@@ -2257,6 +2257,25 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_default_aws_privatelink(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
+        let _ = self.consume_token(&Token::Eq);
+        let connection = self.parse_raw_name()?;
+        let port = if self.consume_token(&Token::LParen) {
+            self.expect_keyword(PORT)?;
+            let pos = self.peek_pos();
+            let Ok(port) = u16::try_from(self.parse_literal_int()?) else {
+                return parser_err!(self, pos, "Could not parse value into port");
+            };
+            self.expect_token(&Token::RParen)?;
+            Some(port)
+        } else {
+            None
+        };
+        Ok(WithOptionValue::ConnectionAwsPrivatelink(
+            ConnectionDefaultAwsPrivatelink { connection, port },
+        ))
+    }
+
     fn parse_kafka_broker(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
         let _ = self.consume_token(&Token::Eq);
         let address = self.parse_literal_string()?;
@@ -2267,7 +2286,7 @@ impl<'a> Parser<'a> {
                     let connection = self.parse_raw_name()?;
                     let options = if self.consume_token(&Token::LParen) {
                         let options = self.parse_comma_separated(
-                            Parser::parse_kafka_broker_aws_private_link_option,
+                            Parser::parse_kafka_broker_aws_privatelink_option,
                         )?;
                         self.expect_token(&Token::RParen)?;
                         options
@@ -2295,7 +2314,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_kafka_broker_aws_private_link_option(
+    fn parse_kafka_broker_aws_privatelink_option(
         &mut self,
     ) -> Result<KafkaBrokerAwsPrivatelinkOption<Raw>, ParserError> {
         let name = match self.expect_one_of_keywords(&[AVAILABILITY, PORT])? {
@@ -2487,7 +2506,7 @@ impl<'a> Parser<'a> {
             ConnectionOptionName::AwsPrivatelink => {
                 return Ok(ConnectionOption {
                     name: ConnectionOptionName::AwsPrivatelink,
-                    value: Some(self.parse_object_option_value()?),
+                    value: Some(self.parse_default_aws_privatelink()?),
                 });
             }
             ConnectionOptionName::Broker => {
