@@ -58,7 +58,7 @@ use std::rc::Rc;
 use differential_dataflow::{AsCollection, Collection};
 use futures::TryStreamExt;
 use mysql_async::prelude::Queryable;
-use mysql_async::{IsolationLevel, Row as MySqlRow, TxOpts};
+use mysql_async::{Conn, IsolationLevel, Row as MySqlRow, TxOpts};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::{Broadcast, CapabilitySet, Concat, ConnectLoop, Feedback, Map};
@@ -69,16 +69,18 @@ use tracing::{trace, warn};
 use mz_mysql_util::{query_sys_var, SchemaRequest};
 use mz_mysql_util::{schema_info, MySqlTableDesc};
 use mz_ore::cast::CastFrom;
+use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::result::ResultExt;
 use mz_repr::{Diff, GlobalId, Row};
-use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::UnresolvedItemName;
+use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition};
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 
+use crate::metrics::mysql::MySqlSnapshotMetrics;
 use crate::source::{RawSourceCreationConfig, SourceReaderError};
 
 use super::{
@@ -93,6 +95,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     connection: MySqlSourceConnection,
     subsource_resume_uppers: BTreeMap<GlobalId, Antichain<GtidPartition>>,
     table_info: BTreeMap<UnresolvedItemName, (usize, MySqlTableDesc)>,
+    metrics: MySqlSnapshotMetrics,
 ) -> (
     Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
     Stream<G, RewindRequest>,
@@ -383,6 +386,22 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 )
                 .await?;
 
+                record_table_sizes(
+                    &mut conn,
+                    metrics,
+                    reader_snapshot_table_info
+                        .values()
+                        .map(|(_, table_desc)| {
+                            (
+                                Ident::new_unchecked(table_desc.name.clone()).to_ast_string(),
+                                Ident::new_unchecked(table_desc.schema_name.clone())
+                                    .to_ast_string(),
+                            )
+                        })
+                        .collect(),
+                )
+                .await?;
+
                 // Read the snapshot data from the tables
                 let mut final_row = Row::default();
                 'outer: for (table, (output_index, table_desc)) in reader_snapshot_table_info {
@@ -436,4 +455,68 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
 
     (snapshot_updates, rewinds, errors, button.press_on_drop())
+}
+
+/// Record the sizes of the tables being snapshotted in `MySqlSnapshotMetrics`.
+async fn record_table_sizes(
+    conn: &mut Conn,
+    metrics: MySqlSnapshotMetrics,
+    // Tables and their schemas.
+    tables: Vec<(String, String)>,
+) -> Result<(), anyhow::Error> {
+    for (table, schema) in tables {
+        let stats = collect_table_statistics(conn, &table, &schema).await?;
+        if let Some(estimate) = stats.estimate_count {
+            metrics.record_table_count(
+                table.clone(),
+                schema.clone(),
+                estimate,
+                stats.estimate_latency,
+            );
+        }
+        if let Some(count) = stats.count {
+            metrics.record_table_estimate(
+                table.clone(),
+                schema.clone(),
+                count,
+                stats.count_latency,
+            );
+        }
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct TableStatistics {
+    count_latency: f64,
+    count: Option<u64>,
+    estimate_latency: f64,
+    estimate_count: Option<u64>,
+}
+
+async fn collect_table_statistics(
+    conn: &mut Conn,
+    table: &str,
+    schema: &str,
+) -> Result<TableStatistics, anyhow::Error> {
+    let mut stats = TableStatistics::default();
+
+    let estimate_row: Option<u64> = conn
+        .query_first(format!(
+            "SELECT TABLE_ROWS FROM INFORMATION_SCHEMA.TABLES \
+            WHERE TABLE_NAME = '{table}' AND TABLE_SCHEMA = '{schema}'"
+        ))
+        .wall_time()
+        .set_at(&mut stats.estimate_latency)
+        .await?;
+    stats.estimate_count = estimate_row;
+
+    let count_row: Option<u64> = conn
+        .query_first(format!("SELECT COUNT(*) FROM {schema}.{table}"))
+        .wall_time()
+        .set_at(&mut stats.count_latency)
+        .await?;
+    stats.count = count_row;
+
+    Ok(stats)
 }

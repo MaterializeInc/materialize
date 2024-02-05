@@ -44,6 +44,7 @@ use mz_storage_operators::metrics::BackpressureMetrics;
 pub mod channel;
 pub mod decode;
 pub mod kafka;
+pub mod mysql;
 pub mod postgres;
 pub mod source;
 pub mod upsert;
@@ -153,6 +154,11 @@ impl StorageMetrics {
     /// Get a `PgMetrics` for the given id.
     pub(crate) fn get_postgres_metrics(&self, id: GlobalId) -> postgres::PgSourceMetrics {
         postgres::PgSourceMetrics::new(&self.source_defs.postgres_defs, id)
+    }
+
+    /// Get a `MySqlSourceMetrics` for the given id.
+    pub(crate) fn get_mysql_metrics(&self, id: GlobalId) -> mysql::MySqlSourceMetrics {
+        mysql::MySqlSourceMetrics::new(&self.source_defs.mysql_defs, id)
     }
 
     /// Get an `OffsetCommitMetrics` for the given id.
