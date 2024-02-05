@@ -33,7 +33,7 @@ use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use timely::PartialOrder;
 use uuid::Uuid;
 
-use crate::controller::error::CollectionMissing;
+use crate::controller::error::{CollectionMissing, CollectionUpdateError};
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
     CollectionState, ComputeControllerResponse, IntrospectionUpdates, ReplicaId,
@@ -87,21 +87,6 @@ impl From<CollectionMissing> for PeekError {
         Self::CollectionMissing(error.0)
     }
 }
-
-#[derive(Error, Debug)]
-pub(super) enum ReadPolicyError {
-    #[error("collection does not exist: {0}")]
-    CollectionMissing(GlobalId),
-    #[error("collection is write-only: {0}")]
-    WriteOnlyCollection(GlobalId),
-}
-
-impl From<CollectionMissing> for ReadPolicyError {
-    fn from(error: CollectionMissing) -> Self {
-        Self::CollectionMissing(error.0)
-    }
-}
-
 #[derive(Error, Debug)]
 pub(super) enum SubscribeTargetError {
     #[error("subscribe does not exist: {0}")]
@@ -166,11 +151,6 @@ pub(super) struct Instance<T> {
     replica_epochs: BTreeMap<ReplicaId, u64>,
     /// The registry the controller uses to report metrics.
     metrics: InstanceMetrics,
-    /// Whether to aggressively downgrade read holds for sink dataflows.
-    ///
-    /// This flag exists to derisk the rollout of the aggressive downgrading approach.
-    /// TODO(teskje): Remove this after a couple weeks.
-    enable_aggressive_readhold_downgrades: bool,
 }
 
 impl<T: Timestamp> Instance<T> {
@@ -218,15 +198,9 @@ impl<T: Timestamp> Instance<T> {
         as_of: Antichain<T>,
         storage_dependencies: Vec<GlobalId>,
         compute_dependencies: Vec<GlobalId>,
-        write_only: bool,
     ) {
         // Add global collection state.
-        let mut state =
-            CollectionState::new(as_of.clone(), storage_dependencies, compute_dependencies);
-        // If the collection is write-only, clear its read policy to reflect that.
-        if write_only && self.enable_aggressive_readhold_downgrades {
-            state.read_policy = None;
-        }
+        let state = CollectionState::new(as_of.clone(), storage_dependencies, compute_dependencies);
         self.collections.insert(id, state);
 
         // Add per-replica collection state.
@@ -495,7 +469,6 @@ where
         metrics: InstanceMetrics,
         response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-        enable_aggressive_readhold_downgrades: bool,
     ) -> Self {
         let collections = arranged_logs
             .iter()
@@ -520,7 +493,6 @@ where
             envd_epoch,
             replica_epochs: Default::default(),
             metrics,
-            enable_aggressive_readhold_downgrades,
         };
 
         instance.send(ComputeCommand::CreateTimely {
@@ -921,13 +893,11 @@ where
         // Install collection state for each of the exports.
         let mut updates = Vec::new();
         for export_id in dataflow.export_ids() {
-            let write_only = dataflow.sink_exports.contains_key(&export_id);
             self.compute.add_collection(
                 export_id,
                 as_of.clone(),
                 storage_dependencies.clone(),
                 compute_dependencies.clone(),
-                write_only,
             );
             updates.push((export_id, replica_write_frontier.clone()));
         }
@@ -1157,14 +1127,11 @@ where
     /// capability is already ahead of it.
     ///
     /// Identifiers not present in `policies` retain their existing read policies.
-    ///
-    /// It is an error to attempt to set a read policy for a collection that is not readable in the
-    /// context of compute. At this time, only indexes are readable compute collections.
     #[tracing::instrument(level = "debug", skip(self))]
     pub fn set_read_policy(
         &mut self,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
-    ) -> Result<(), ReadPolicyError> {
+    ) -> Result<(), CollectionUpdateError> {
         let mut read_capability_changes = BTreeMap::default();
         for (id, new_policy) in policies.into_iter() {
             let collection = self.compute.collection_mut(id)?;
@@ -1179,11 +1146,7 @@ where
                 collection.implied_capability = new_capability;
             }
 
-            if let Some(read_policy) = &mut collection.read_policy {
-                *read_policy = new_policy;
-            } else {
-                return Err(ReadPolicyError::WriteOnlyCollection(id));
-            }
+            collection.read_policy = new_policy;
         }
         if !read_capability_changes.is_empty() {
             self.update_read_capabilities(&mut read_capability_changes);
@@ -1297,19 +1260,7 @@ where
                 "global frontier regression: {old_upper:?} -> {new_upper:?}, collection={id}",
             );
 
-            let new_since = match &collection.read_policy {
-                Some(read_policy) => {
-                    // For readable collections the read frontier is determined by applying the
-                    // client-provided read policy to the write frontier.
-                    read_policy.frontier(new_upper.borrow())
-                }
-                None => {
-                    // Write-only collections cannot be read within the context of the compute
-                    // controller, so we can immediately advance their read frontier to the new write
-                    // frontier.
-                    new_upper.clone()
-                }
-            };
+            let new_since = collection.read_policy.frontier(new_upper.borrow());
 
             if PartialOrder::less_than(old_since, &new_since) {
                 let mut update = ChangeBatch::new();

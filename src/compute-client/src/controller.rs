@@ -54,8 +54,8 @@ use uuid::Uuid;
 
 use crate::controller::error::{
     CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
-    InstanceExists, InstanceMissing, PeekError, ReadPolicyError, ReplicaCreationError,
-    ReplicaDropError, SubscribeTargetError,
+    InstanceExists, InstanceMissing, PeekError, ReplicaCreationError, ReplicaDropError,
+    SubscribeTargetError,
 };
 use crate::controller::instance::{ActiveInstance, Instance};
 use crate::controller::replica::ReplicaConfig;
@@ -138,12 +138,6 @@ pub struct ComputeController<T> {
     response_rx: crossbeam_channel::Receiver<ComputeControllerResponse<T>>,
     /// Response sender that's passed to new `Instance`s.
     response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
-
-    /// Whether to aggressively downgrade read holds for sink dataflows.
-    ///
-    /// This flag exists to derisk the rollout of the aggressive downgrading approach.
-    /// TODO(teskje): Remove this after a couple weeks.
-    enable_aggressive_readhold_downgrades: bool,
 }
 
 impl<T: Timestamp> ComputeController<T> {
@@ -168,7 +162,6 @@ impl<T: Timestamp> ComputeController<T> {
             introspection: Introspection::new(),
             response_rx,
             response_tx,
-            enable_aggressive_readhold_downgrades: true,
         }
     }
 
@@ -248,14 +241,6 @@ impl<T: Timestamp> ComputeController<T> {
         self.default_arrangement_exert_proportionality = value;
     }
 
-    pub fn enable_aggressive_readhold_downgrades(&self) -> bool {
-        self.enable_aggressive_readhold_downgrades
-    }
-
-    pub fn set_enable_aggressive_readhold_downgrades(&mut self, value: bool) {
-        self.enable_aggressive_readhold_downgrades = value;
-    }
-
     /// Returns the read and write frontiers for each collection.
     pub fn collection_frontiers(&self) -> BTreeMap<GlobalId, (Antichain<T>, Antichain<T>)> {
         let collections = self.instances.values().flat_map(|i| i.collections_iter());
@@ -305,7 +290,6 @@ where
                 self.metrics.for_instance(id),
                 self.response_tx.clone(),
                 self.introspection.tx.clone(),
-                self.enable_aggressive_readhold_downgrades,
             ),
         );
 
@@ -582,14 +566,11 @@ where
     /// capability is already ahead of it.
     ///
     /// Identifiers not present in `policies` retain their existing read policies.
-    ///
-    /// It is an error to attempt to set a read policy for a collection that is not readable in the
-    /// context of compute. At this time, only indexes are readable compute collections.
     pub fn set_read_policy(
         &mut self,
         instance_id: ComputeInstanceId,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
-    ) -> Result<(), ReadPolicyError> {
+    ) -> Result<(), CollectionUpdateError> {
         self.instance(instance_id)?.set_read_policy(policies)?;
         Ok(())
     }
@@ -693,11 +674,7 @@ pub struct CollectionState<T> {
     /// The implicit capability associated with collection creation.
     implied_capability: Antichain<T>,
     /// The policy to use to downgrade `self.implied_capability`.
-    ///
-    /// If `None`, the collection is a write-only collection (i.e. a sink). For write-only
-    /// collections, the `implied_capability` is only required for maintaining read holds on the
-    /// inputs, so we can immediately downgrade it to the `write_frontier`.
-    read_policy: Option<ReadPolicy<T>>,
+    read_policy: ReadPolicy<T>,
 
     /// Storage identifiers on which this collection depends.
     storage_dependencies: Vec<GlobalId>,
@@ -754,7 +731,7 @@ impl<T: Timestamp> CollectionState<T> {
             dropped: false,
             read_capabilities,
             implied_capability: since.clone(),
-            read_policy: Some(ReadPolicy::ValidFrom(since)),
+            read_policy: ReadPolicy::ValidFrom(since),
             storage_dependencies,
             compute_dependencies,
             write_frontier: upper,

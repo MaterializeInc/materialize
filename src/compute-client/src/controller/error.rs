@@ -190,33 +190,6 @@ impl From<CollectionMissing> for CollectionUpdateError {
     }
 }
 
-/// Errors arising during collection read policy assignment.
-#[derive(Error, Debug)]
-pub enum ReadPolicyError {
-    #[error("instance does not exist: {0}")]
-    InstanceMissing(ComputeInstanceId),
-    #[error("collection does not exist: {0}")]
-    CollectionMissing(GlobalId),
-    #[error("collection is write-only: {0}")]
-    WriteOnlyCollection(GlobalId),
-}
-
-impl From<InstanceMissing> for ReadPolicyError {
-    fn from(error: InstanceMissing) -> Self {
-        Self::InstanceMissing(error.0)
-    }
-}
-
-impl From<instance::ReadPolicyError> for ReadPolicyError {
-    fn from(error: instance::ReadPolicyError) -> Self {
-        use instance::ReadPolicyError::*;
-        match error {
-            CollectionMissing(id) => Self::CollectionMissing(id),
-            WriteOnlyCollection(id) => Self::WriteOnlyCollection(id),
-        }
-    }
-}
-
 // Errors arising during subscribe target assignment.
 #[derive(Error, Debug)]
 pub enum SubscribeTargetError {
