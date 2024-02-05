@@ -109,7 +109,7 @@ const CATALOG_SEED: usize = 1;
 ///   version v0.X.0, and it is not safe to run the upgrade checker.
 ///
 /// Persist guarantees that the shard versions are non-decreasing, so we don't need to worry about
-/// race conditions where the shard version decreases after reading it.  
+/// race conditions where the shard version decreases after reading it.
 const UPGRADE_SEED: usize = 2;
 
 /// Durable catalog mode that dictates the effect of mutable operations.
@@ -1440,7 +1440,6 @@ impl DurableCatalogState for PersistCatalogState {
 }
 
 /// Deterministically generate the a ID for the given `organization_id` and `seed`.
-
 fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
     let hash = sha2::Sha256::digest(format!("{organization_id}{seed}")).to_vec();
     soft_assert_eq_or_log!(hash.len(), 32, "SHA256 returns 32 bytes (256 bits)");
