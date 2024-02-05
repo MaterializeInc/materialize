@@ -70,7 +70,7 @@ IGNORE_RE = re.compile(
     re.VERBOSE | re.IGNORECASE,
 )
 
-IGNORE_FILE_NAME_RE = re.compile(
+IGNORE_FILENAME_RE = re.compile(
     r"""
     ( .*\.(svg|png|jpg|jpeg|avro|ico)
     | doc/developer/design/20230223_stabilize_with_mutually_recursive.md
@@ -79,6 +79,8 @@ IGNORE_FILE_NAME_RE = re.compile(
     re.VERBOSE,
 )
 
+FILENAME_REFERENCE_RE = re.compile(r".*\.(td|slt|test)\.gh(?P<materialize>[0-9]+)")
+
 
 @dataclass
 class IssueRef:
@@ -86,7 +88,7 @@ class IssueRef:
     issue_id: int
     filename: str
     line_number: int
-    line: str
+    line: str | None
 
 
 def detect_closed_issues(filename: str) -> list[IssueRef]:
@@ -183,9 +185,24 @@ def main() -> int:
 
     issue_refs: list[IssueRef] = []
     for filename in filenames.splitlines():
+        if issue_match := FILENAME_REFERENCE_RE.search(filename):
+            groups = [
+                (key, value) for key, value in issue_match.groupdict().items() if value
+            ]
+            assert len(groups) == 1, f"Expected only 1 element in {groups}"
+            group, issue_id = groups[0]
+            issue_refs.append(
+                IssueRef(
+                    GROUP_REPO[group],
+                    int(issue_id),
+                    filename,
+                    0,
+                    None,
+                )
+            )
         # Files without any ending can be interesting datadriven test files
         if (
-            not IGNORE_FILE_NAME_RE.match(filename)
+            not IGNORE_FILENAME_RE.match(filename)
             and not os.path.isdir(filename)
             and not os.path.islink(filename)
         ):
@@ -202,7 +219,10 @@ def main() -> int:
             f"#{issue_ref.issue_id}",
         )
         print(f"--- Issue is referenced in comment but already closed: {url}")
-        print(f"{issue_ref.filename}:{issue_ref.line_number}: {issue_ref.line}")
+        if issue_ref.line is not None:
+            print(f"{issue_ref.filename}:{issue_ref.line_number}: {issue_ref.line}")
+        else:
+            print(f"{issue_ref.filename} (filename)")
 
     return 1 if len(issue_refs) else 0
 
