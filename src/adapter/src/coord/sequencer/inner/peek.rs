@@ -36,8 +36,9 @@ use crate::coord::timestamp_selection::{
 };
 use crate::coord::{
     Coordinator, ExecuteContext, ExplainContext, Message, PeekContext, PeekStage, PeekStageExplain,
-    PeekStageFinish, PeekStageOptimizeLir, PeekStageOptimizeMir, PeekStageRealTimeRecency,
-    PeekStageTimestamp, PeekStageValidate, PlanValidity, RealTimeRecencyContext, TargetCluster,
+    PeekStageFinish, PeekStageLinearizeTimestamp, PeekStageOptimizeLir, PeekStageOptimizeMir,
+    PeekStageRealTimeRecency, PeekStageTimestampReadHold, PeekStageValidate, PlanValidity,
+    RealTimeRecencyContext, TargetCluster,
 };
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
@@ -148,23 +149,31 @@ impl Coordinator {
                     let next =
                         return_if_err!(self.peek_stage_validate(ctx.session_mut(), stage), ctx);
 
-                    (ctx, PeekStage::Timestamp(next))
+                    (ctx, PeekStage::LinearizeTimestamp(next))
                 }
-                Timestamp(stage) => {
-                    self.peek_stage_timestamp(ctx, root_otel_ctx.clone(), stage)
-                        .await;
-                    return;
-                }
-                OptimizeMir(stage) => {
-                    self.peek_stage_optimize_mir(ctx, root_otel_ctx.clone(), stage)
+                LinearizeTimestamp(stage) => {
+                    self.peek_stage_linearize_timestamp(ctx, root_otel_ctx.clone(), stage)
                         .await;
                     return;
                 }
                 RealTimeRecency(stage) => {
                     match self.peek_stage_real_time_recency(ctx, root_otel_ctx.clone(), stage) {
-                        Some((ctx, next)) => (ctx, PeekStage::OptimizeLir(next)),
+                        Some((ctx, next)) => (ctx, PeekStage::TimestampReadHold(next)),
                         None => return,
                     }
+                }
+                TimestampReadHold(stage) => {
+                    let next = return_if_err!(
+                        self.peek_stage_timestamp_read_hold(ctx.session_mut(), stage)
+                            .await,
+                        ctx
+                    );
+                    (ctx, PeekStage::OptimizeMir(next))
+                }
+                OptimizeMir(stage) => {
+                    self.peek_stage_optimize_mir(ctx, root_otel_ctx.clone(), stage)
+                        .await;
+                    return;
                 }
                 OptimizeLir(stage) => {
                     self.peek_stage_optimize_lir(ctx, root_otel_ctx.clone(), stage)
@@ -195,7 +204,7 @@ impl Coordinator {
             target_cluster,
             peek_ctx,
         }: PeekStageValidate,
-    ) -> Result<PeekStageTimestamp, AdapterError> {
+    ) -> Result<PeekStageLinearizeTimestamp, AdapterError> {
         // Collect optimizer parameters.
         let catalog = self.owned_catalog();
         let cluster = catalog.resolve_target_cluster(target_cluster, session)?;
@@ -248,8 +257,6 @@ impl Coordinator {
             // required because `source_ids` doesn't contain functions.
             timeline_context = TimelineContext::TimestampDependent;
         }
-        let in_immediate_multi_stmt_txn = session.transaction().is_in_multi_statement_transaction()
-            && plan.when == QueryWhen::Immediately;
 
         let notices = check_log_reads(
             &catalog,
@@ -268,35 +275,32 @@ impl Coordinator {
             role_metadata: session.role_metadata().clone(),
         };
 
-        Ok(PeekStageTimestamp {
+        Ok(PeekStageLinearizeTimestamp {
             validity,
             plan,
             source_ids,
             target_replica,
             timeline_context,
-            in_immediate_multi_stmt_txn,
             optimizer,
             peek_ctx,
         })
     }
 
-    /// Determine a linearized read timestamp (from a `TimestampOracle`), if
-    /// needed.
+    /// Possibly linearize a timestamp from a `TimestampOracle`.
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn peek_stage_timestamp(
+    async fn peek_stage_linearize_timestamp(
         &mut self,
         ctx: ExecuteContext,
         root_otel_ctx: OpenTelemetryContext,
-        PeekStageTimestamp {
+        PeekStageLinearizeTimestamp {
             validity,
             source_ids,
             plan,
             target_replica,
             timeline_context,
-            in_immediate_multi_stmt_txn,
             optimizer,
             peek_ctx,
-        }: PeekStageTimestamp,
+        }: PeekStageLinearizeTimestamp,
     ) {
         let isolation_level = ctx.session.vars().transaction_isolation().clone();
         let linearized_timeline =
@@ -304,20 +308,16 @@ impl Coordinator {
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
 
-        let build_optimize_stage =
-            move |oracle_read_ts: Option<Timestamp>| -> PeekStageOptimizeMir {
-                PeekStageOptimizeMir {
-                    validity,
-                    plan,
-                    source_ids,
-                    target_replica,
-                    timeline_context,
-                    oracle_read_ts,
-                    in_immediate_multi_stmt_txn,
-                    optimizer,
-                    peek_ctx,
-                }
-            };
+        let build_stage = move |oracle_read_ts: Option<Timestamp>| PeekStageRealTimeRecency {
+            validity,
+            plan,
+            source_ids,
+            target_replica,
+            timeline_context,
+            oracle_read_ts,
+            optimizer,
+            peek_ctx,
+        };
 
         match linearized_timeline {
             Some(timeline) => {
@@ -330,9 +330,9 @@ impl Coordinator {
                     let span = tracing::debug_span!("linearized timestamp task");
                     mz_ore::task::spawn(|| "linearized timestamp task", async move {
                         let oracle_read_ts = shared_oracle.read_ts().instrument(span).await;
-                        let stage = build_optimize_stage(Some(oracle_read_ts));
+                        let stage = build_stage(Some(oracle_read_ts));
 
-                        let stage = PeekStage::OptimizeMir(stage);
+                        let stage = PeekStage::RealTimeRecency(stage);
                         // Ignore errors if the coordinator has shut down.
                         let _ = internal_cmd_tx.send(Message::PeekStageReady {
                             ctx,
@@ -345,9 +345,9 @@ impl Coordinator {
                     // have to do it here.
                     let oracle = self.get_timestamp_oracle(&timeline);
                     let oracle_read_ts = oracle.read_ts().await;
-                    let stage = build_optimize_stage(Some(oracle_read_ts));
+                    let stage = build_stage(Some(oracle_read_ts));
 
-                    let stage = PeekStage::OptimizeMir(stage);
+                    let stage = PeekStage::RealTimeRecency(stage);
                     // Ignore errors if the coordinator has shut down.
                     let _ = internal_cmd_tx.send(Message::PeekStageReady {
                         ctx,
@@ -357,8 +357,8 @@ impl Coordinator {
                 }
             }
             None => {
-                let stage = build_optimize_stage(None);
-                let stage = PeekStage::OptimizeMir(stage);
+                let stage = build_stage(None);
+                let stage = PeekStage::RealTimeRecency(stage);
                 // Ignore errors if the coordinator has shut down.
                 let _ = internal_cmd_tx.send(Message::PeekStageReady {
                     ctx,
@@ -369,19 +369,69 @@ impl Coordinator {
         }
     }
 
+    /// Determine a read timestamp and create appropriate read holds.
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn peek_stage_optimize_mir(
+    async fn peek_stage_timestamp_read_hold(
         &mut self,
-        ctx: ExecuteContext,
-        root_otel_ctx: OpenTelemetryContext,
-        PeekStageOptimizeMir {
+        session: &mut Session,
+        PeekStageTimestampReadHold {
             mut validity,
             plan,
             source_ids,
             target_replica,
             timeline_context,
             oracle_read_ts,
-            in_immediate_multi_stmt_txn,
+            real_time_recency_ts,
+            optimizer,
+            peek_ctx,
+        }: PeekStageTimestampReadHold,
+    ) -> Result<PeekStageOptimizeMir, AdapterError> {
+        let id_bundle = self
+            .dataflow_builder(optimizer.cluster_id())
+            .sufficient_collections(&source_ids);
+
+        // Although we have added `sources.depends_on()` to the validity already, also add the
+        // sufficient collections for safety.
+        validity.dependency_ids.extend(id_bundle.iter());
+
+        let determination = self
+            .sequence_peek_timestamp(
+                session,
+                &plan.when,
+                optimizer.cluster_id(),
+                timeline_context,
+                oracle_read_ts,
+                &id_bundle,
+                &source_ids,
+                real_time_recency_ts,
+                (&peek_ctx).into(),
+            )
+            .await?;
+
+        Ok(PeekStageOptimizeMir {
+            validity,
+            plan,
+            source_ids,
+            id_bundle,
+            target_replica,
+            determination,
+            optimizer,
+            peek_ctx,
+        })
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn peek_stage_optimize_mir(
+        &mut self,
+        ctx: ExecuteContext,
+        root_otel_ctx: OpenTelemetryContext,
+        PeekStageOptimizeMir {
+            validity,
+            plan,
+            source_ids,
+            id_bundle,
+            target_replica,
+            determination,
             mut optimizer,
             peek_ctx,
         }: PeekStageOptimizeMir,
@@ -390,40 +440,15 @@ impl Coordinator {
         // expensive optimizations.
         let internal_cmd_tx = self.internal_cmd_tx.clone();
 
-        // TODO: Is there a way to avoid making two dataflow_builders (the second is in
-        // optimize_peek)?
-        let id_bundle = self
-            .dataflow_builder(optimizer.cluster_id())
-            .sufficient_collections(&source_ids);
-        // Although we have added `sources.depends_on()` to the validity already, also add the
-        // sufficient collections for safety.
-        validity.dependency_ids.extend(id_bundle.iter());
-
-        let stats = {
-            match self
-                .determine_timestamp(
-                    ctx.session(),
-                    &id_bundle,
-                    &plan.when,
-                    optimizer.cluster_id(),
-                    &timeline_context,
-                    oracle_read_ts.clone(),
-                    None,
-                )
-                .await
-            {
-                Err(_) => Box::new(EmptyStatisticsOracle),
-                Ok(query_as_of) => self
-                    .statistics_oracle(
-                        ctx.session(),
-                        &source_ids,
-                        query_as_of.timestamp_context.antichain(),
-                        true,
-                    )
-                    .await
-                    .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle)),
-            }
-        };
+        let stats = self
+            .statistics_oracle(
+                ctx.session(),
+                &source_ids,
+                &determination.timestamp_context.antichain(),
+                true,
+            )
+            .await
+            .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));
 
         mz_ore::task::spawn_blocking(
             || "optimize peek (MIR)",
@@ -452,18 +477,16 @@ impl Coordinator {
                 };
 
                 let stage = match pipeline() {
-                    Ok(global_mir_plan) => PeekStage::RealTimeRecency(PeekStageRealTimeRecency {
+                    Ok(global_mir_plan) => PeekStage::OptimizeLir(PeekStageOptimizeLir {
                         validity,
                         plan,
                         source_ids,
                         id_bundle,
                         target_replica,
-                        timeline_context,
-                        oracle_read_ts,
-                        in_immediate_multi_stmt_txn,
                         optimizer,
                         global_mir_plan,
                         peek_ctx,
+                        determination,
                     }),
                     // Internal optimizer errors are handled differently
                     // depending on the caller.
@@ -513,16 +536,13 @@ impl Coordinator {
             validity,
             plan,
             source_ids,
-            id_bundle,
             target_replica,
             timeline_context,
             oracle_read_ts,
-            in_immediate_multi_stmt_txn,
             optimizer,
-            global_mir_plan,
             peek_ctx,
         }: PeekStageRealTimeRecency,
-    ) -> Option<(ExecuteContext, PeekStageOptimizeLir)> {
+    ) -> Option<(ExecuteContext, PeekStageTimestampReadHold)> {
         match self.recent_timestamp(ctx.session(), source_ids.iter().cloned()) {
             Some(fut) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
@@ -537,9 +557,7 @@ impl Coordinator {
                         timeline_context,
                         oracle_read_ts: oracle_read_ts.clone(),
                         source_ids,
-                        in_immediate_multi_stmt_txn,
                         optimizer,
-                        global_mir_plan,
                         peek_ctx,
                     },
                 );
@@ -559,18 +577,16 @@ impl Coordinator {
             }
             None => Some((
                 ctx,
-                PeekStageOptimizeLir {
+                PeekStageTimestampReadHold {
                     validity,
                     plan,
-                    id_bundle: Some(id_bundle),
                     target_replica,
                     timeline_context,
-                    oracle_read_ts,
                     source_ids,
-                    real_time_recency_ts: None,
                     optimizer,
-                    global_mir_plan,
                     peek_ctx,
+                    oracle_read_ts,
+                    real_time_recency_ts: None,
                 },
             )),
         }
@@ -586,10 +602,8 @@ impl Coordinator {
             plan,
             id_bundle,
             target_replica,
-            timeline_context,
-            oracle_read_ts,
+            determination,
             source_ids,
-            real_time_recency_ts,
             mut optimizer,
             global_mir_plan,
             peek_ctx,
@@ -599,26 +613,6 @@ impl Coordinator {
         // expensive optimizations.
         let internal_cmd_tx = self.internal_cmd_tx.clone();
 
-        let id_bundle = id_bundle.unwrap_or_else(|| {
-            self.index_oracle(optimizer.cluster_id())
-                .sufficient_collections(&source_ids)
-        });
-
-        let determination = self
-            .sequence_peek_timestamp(
-                ctx.session_mut(),
-                &plan.when,
-                optimizer.cluster_id(),
-                timeline_context,
-                oracle_read_ts,
-                &id_bundle,
-                &source_ids,
-                real_time_recency_ts,
-                (&peek_ctx).into(),
-            )
-            .await;
-
-        let determination = return_if_err!(determination, ctx);
         let timestamp_context = determination.clone().timestamp_context;
 
         mz_ore::task::spawn_blocking(
@@ -692,7 +686,6 @@ impl Coordinator {
                             target_replica,
                             source_ids,
                             determination,
-                            timestamp_context,
                             optimizer,
                             global_lir_plan,
                         }),
@@ -748,7 +741,6 @@ impl Coordinator {
             target_replica,
             source_ids,
             determination,
-            timestamp_context,
             optimizer,
             global_lir_plan,
         }: PeekStageFinish,
@@ -779,7 +771,7 @@ impl Coordinator {
         }
 
         if let Some(uuid) = ctx.extra().contents() {
-            let ts = timestamp_context.timestamp_or_default();
+            let ts = determination.timestamp_context.timestamp_or_default();
             let mut transitive_storage_deps = BTreeSet::new();
             let mut transitive_compute_deps = BTreeSet::new();
             for id in id_bundle

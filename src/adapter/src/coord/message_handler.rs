@@ -34,7 +34,7 @@ use crate::command::Command;
 use crate::coord::appends::Deferred;
 use crate::coord::statement_logging::StatementLoggingId;
 use crate::coord::{
-    Coordinator, CreateConnectionValidationReady, Message, PeekStage, PeekStageOptimizeLir,
+    Coordinator, CreateConnectionValidationReady, Message, PeekStage, PeekStageTimestampReadHold,
     PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
 };
 use crate::session::Session;
@@ -854,25 +854,21 @@ impl Coordinator {
                 timeline_context,
                 oracle_read_ts,
                 source_ids,
-                in_immediate_multi_stmt_txn: _,
                 optimizer,
-                global_mir_plan,
                 peek_ctx,
             } => {
                 self.execute_peek_stage(
                     ctx,
                     root_otel_ctx,
-                    PeekStage::OptimizeLir(PeekStageOptimizeLir {
+                    PeekStage::TimestampReadHold(PeekStageTimestampReadHold {
                         validity,
                         plan,
-                        id_bundle: None,
                         target_replica,
                         timeline_context,
                         oracle_read_ts,
                         source_ids,
                         real_time_recency_ts: Some(real_time_recency_ts),
                         optimizer,
-                        global_mir_plan,
                         peek_ctx,
                     }),
                 )
