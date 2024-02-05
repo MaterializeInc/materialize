@@ -111,12 +111,14 @@ def get_data(
     return result
 
 
-def get_step_info_from_build(build: Any, build_step_key: str) -> StepData | None:
+def get_step_infos_from_build(build: Any, build_step_keys: list[str]) -> list[StepData]:
+    collected_steps = []
+
     for job in build["jobs"]:
         if not job.get("step_key"):
             continue
 
-        if job["step_key"] != build_step_key:
+        if build_step_keys is not None and job["step_key"] not in build_step_keys:
             continue
 
         if job["state"] in ["canceled", "running"]:
@@ -124,6 +126,7 @@ def get_step_info_from_build(build: Any, build_step_key: str) -> StepData | None
 
         build_number = build["number"]
         created_at = datetime.fromisoformat(job["created_at"])
+        build_step_key = job["step_key"]
 
         if job.get("started_at") and job.get("finished_at"):
             started_at = datetime.fromisoformat(job["started_at"])
@@ -141,18 +144,19 @@ def get_step_info_from_build(build: Any, build_step_key: str) -> StepData | None
         step_data = StepData(
             build_step_key, build_number, created_at, duration_in_min, job_passed
         )
-        return step_data
+        collected_steps.append(step_data)
 
-    return None
+    return collected_steps
 
 
-def collect_data(data: list[Any], build_step_key: str) -> list[StepData]:
+def collect_data(
+    data: list[Any],
+    build_step_keys: list[str],
+) -> list[StepData]:
     result = []
     for build in data:
-        step_info = get_step_info_from_build(build, build_step_key)
-
-        if step_info is not None:
-            result.append(step_info)
+        step_infos = get_step_infos_from_build(build, build_step_keys)
+        result.extend(step_infos)
 
     return result
 
@@ -160,7 +164,7 @@ def collect_data(data: list[Any], build_step_key: str) -> list[StepData]:
 def print_data(
     step_infos: list[StepData],
     pipeline_slug: str,
-    build_step_key: str,
+    build_step_keys: list[str],
     output_type: str,
 ) -> None:
     if output_type == OUTPUT_TYPE_CSV:
@@ -187,12 +191,15 @@ def print_data(
             )
 
     if output_type in [OUTPUT_TYPE_TXT, OUTPUT_TYPE_TXT_SHORT]:
-        print_stats(step_infos, build_step_key)
+        print_stats(step_infos, build_step_keys)
 
 
-def print_stats(step_infos: list[StepData], build_step_key: str) -> None:
+def print_stats(
+    step_infos: list[StepData],
+    build_step_keys: list[str],
+) -> None:
     if len(step_infos) == 0:
-        print(f"No data for job {build_step_key}!")
+        print(f"No data for jobs with keys {build_step_keys}!")
         return
 
     dfs = pd.DataFrame(step_infos)
@@ -203,7 +210,7 @@ def print_stats(step_infos: list[StepData], build_step_key: str) -> None:
     success_prop = number_of_builds_with_successful_step / number_of_builds
 
     print()
-    print(f"Statistics for job '{build_step_key}':")
+    print(f"Statistics for jobs {build_step_keys}:")
     print(f"Number of builds: {number_of_builds}")
     print(
         f"Number of builds with job success: {number_of_builds_with_successful_step} ({100 * success_prop:.1f}%)"
@@ -224,7 +231,7 @@ def print_stats(step_infos: list[StepData], build_step_key: str) -> None:
 
 def main(
     pipeline_slug: str,
-    build_step_key: str,
+    build_step_keys: list[str],
     no_fetch: bool,
     max_fetches: int | None,
     branch: str | None,
@@ -232,8 +239,8 @@ def main(
     output_type: str,
 ) -> None:
     data = get_data(pipeline_slug, no_fetch, max_fetches, branch, build_state)
-    step_infos = collect_data(data, build_step_key)
-    print_data(step_infos, pipeline_slug, build_step_key, output_type)
+    step_infos = collect_data(data, build_step_keys)
+    print_data(step_infos, pipeline_slug, build_step_keys, output_type)
 
 
 if __name__ == "__main__":
@@ -243,7 +250,7 @@ if __name__ == "__main__":
     )
 
     parser.add_argument("--pipeline", choices=MZ_PIPELINES, default="tests", type=str)
-    parser.add_argument("--build-step-key", default=None, type=str)
+    parser.add_argument("--build-step-key", action="append", type=str)
     parser.add_argument(
         "--no-fetch",
         action="store_true",
