@@ -2379,7 +2379,7 @@ impl Coordinator {
             peek_ctx,
             plan::SelectPlan {
                 source: selection,
-                when: QueryWhen::Freshest,
+                when: QueryWhen::FreshestTableWrite,
                 finishing,
                 copy_to: None,
             },
