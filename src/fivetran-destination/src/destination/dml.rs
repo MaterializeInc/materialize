@@ -231,6 +231,12 @@ async fn load_file(file_config: &FileConfig, path: &str) -> Result<AsyncFileRead
     Ok(file)
 }
 
+/// `DELETE` and then `INSERT` for all of the records in `replace_files` based on primary key.
+///
+/// TODO(benesch): the `DELETE` and `INSERT` are not issued transactionally,
+/// so they present as a retraction at one timestamp followed by an insertion
+/// at another, rather than presenting as a single update at a single
+/// timestamp.
 async fn replace_files(
     schema: &str,
     table: &Table,
@@ -238,102 +244,63 @@ async fn replace_files(
     client: &tokio_postgres::Client,
     replace_files: &[String],
 ) -> Result<(), anyhow::Error> {
-    // For each record in each replace file, we execute a `DELETE` to remove the
-    // old row with that value, matching based on all primary key columns, and
-    // then execute an `INSERT` to insert the new row.
-
-    // TODO(benesch): this is hideously inefficient.
-
-    // TODO(benesch): the `DELETE` and `INSERT` are not issued transactionally,
-    // so they present as a retraction at one timestamp followed by an insertion
-    // at another, rather than presenting as a single update at a single
-    // timestamp.
-
-    let mut key = vec![];
-    let mut delete_stmt = format!(
-        "DELETE FROM {}.{} WHERE ",
-        escape::escape_identifier(schema),
-        escape::escape_identifier(&table.name),
-    );
-    let mut p = 1;
-    for (i, c) in table.columns.iter().enumerate() {
-        if c.primary_key {
-            key.push(i);
-            if p > 1 {
-                delete_stmt += " AND "
-            }
-            delete_stmt += &format!("{} = ${p}", escape::escape_identifier(&c.name));
-            p += 1;
-        }
+    // Bail early if there isn't any work to do.
+    if replace_files.is_empty() {
+        return Ok(());
     }
 
+    // Copy into a temporary table, which we then merge into the destination.
+    let (qualified_temp_table_name, columns) = create_temporary_table(table, client).await?;
+    let row_count = copy_files(
+        file_config,
+        replace_files,
+        client,
+        &qualified_temp_table_name,
+    )
+    .await
+    .context("replace_files")?;
+
+    // Bail early if there isn't any work to do.
+    if row_count == 0 {
+        return Ok(());
+    }
+
+    let qualified_table_name = format!(
+        "{}.{}",
+        escape::escape_identifier(schema),
+        escape::escape_identifier(&table.name)
+    );
+
+    // First delete all of the matching rows.
+    let matching_cols = columns.iter().filter(|col| col.is_primary);
+    let delete_stmt = format!(
+        r#"
+        DELETE FROM {qualified_table_name}
+        WHERE ({cols}) IN (
+            SELECT {cols}
+            FROM {qualified_temp_table_name}
+        )"#,
+        cols = matching_cols.map(|col| &col.name).join(","),
+    );
+    let rows_changed = client.execute(&delete_stmt, &[]).await?;
+    tracing::info!(rows_changed, "deleted rows from {qualified_table_name}");
+
+    // Then re-insert rows.
     let insert_stmt = format!(
-        "INSERT INTO {}.{} ({}) VALUES ({})",
-        escape::escape_identifier(schema),
-        escape::escape_identifier(&table.name),
-        table
-            .columns
-            .iter()
-            .map(|c| escape::escape_identifier(&c.name))
-            .join(","),
-        (1..=table.columns.len()).map(|p| format!("${p}")).join(","),
+        r#"
+        INSERT INTO {qualified_table_name} ({cols})
+        SELECT {cols} FROM {qualified_temp_table_name}
+        "#,
+        cols = columns.iter().map(|col| &col.name).join(","),
     );
-
-    let delete_stmt = client
-        .prepare(&delete_stmt)
-        .await
-        .context("internal error: preparing delete statement")?;
-    let insert_stmt = client
-        .prepare(&insert_stmt)
-        .await
-        .context("internal error: preparing insert statement")?;
-
-    for path in replace_files {
-        let file = load_file(file_config, path)
-            .await
-            .with_context(|| format!("loading replace file {path}"))?;
-        let reader = csv_async::AsyncReaderBuilder::new().create_reader(file);
-
-        replace_file(
-            file_config,
-            &key,
-            client,
-            &delete_stmt,
-            &insert_stmt,
-            reader,
-        )
-        .await
-        .with_context(|| format!("handling replace file {path}"))?;
-    }
+    let rows_changed = client.execute(&insert_stmt, &[]).await?;
+    tracing::info!(rows_changed, "inserted rows to {qualified_table_name}");
 
     Ok(())
 }
 
-async fn replace_file(
-    file_config: &FileConfig,
-    key: &[usize],
-    client: &tokio_postgres::Client,
-    delete_stmt: &tokio_postgres::Statement,
-    insert_stmt: &tokio_postgres::Statement,
-    reader: AsyncCsvReader,
-) -> Result<(), anyhow::Error> {
-    let mut stream = reader.into_byte_records();
-    while let Some(record) = stream.try_next().await? {
-        let delete_params = key.iter().map(|i| TextFormatter {
-            value: &record[*i],
-            null_string: &file_config.null_string,
-        });
-        client.execute_raw(delete_stmt, delete_params).await?;
-
-        let insert_params = record.iter().map(|value| TextFormatter {
-            value,
-            null_string: &file_config.null_string,
-        });
-        client.execute_raw(insert_stmt, insert_params).await?;
-    }
-    Ok(())
-}
-
+/// For each record in all `update_files`, `UPDATE` all columns that are not the "unmodified
+/// string" to their new values provided in the record, based on primary key columns.
 async fn update_files(
     schema: &str,
     table: &Table,
@@ -341,10 +308,6 @@ async fn update_files(
     client: &tokio_postgres::Client,
     update_files: &[String],
 ) -> Result<(), anyhow::Error> {
-    // For each record in each update file, we execute an `UPDATE` that updates
-    // all columns that are not the unmodified string to their new values,
-    // matching based on all primary key columns.
-
     // TODO(benesch): this is hideously inefficient.
 
     let mut assignments = vec![];
@@ -411,6 +374,8 @@ async fn update_file(
     Ok(())
 }
 
+/// "Soft deletes" rows by setting the [`FIVETRAN_SYSTEM_COLUMN_SYNCED`] to `true`, based on all
+/// primary keys.
 async fn delete_files(
     schema: &str,
     table: &Table,
@@ -427,15 +392,68 @@ async fn delete_files(
     }
 
     // Copy into a temporary table, which we then merge into the destination.
+    let (qualified_temp_table_name, columns) = create_temporary_table(table, client).await?;
+    let row_count = copy_files(
+        file_config,
+        delete_files,
+        client,
+        &qualified_temp_table_name,
+    )
+    .await
+    .context("delete_files")?;
+
+    // Skip the update if there are no rows to delete!
+    if row_count == 0 {
+        return Ok(());
+    }
+
+    // Mark rows as deleted by "merging" our temporary table into the destination table.
     //
+    // HACKY: We want to update the "_fivetran_synced" column for all of the rows we marked as
+    // deleted, but don't have a way to read from the temp table that would allow this in an
+    // `UPDATE` statement.
+    let synced_time_stmt = format!(
+        "SELECT MAX({synced_col}) FROM {qualified_temp_table_name}",
+        synced_col = escape::escape_identifier(FIVETRAN_SYSTEM_COLUMN_SYNCED)
+    );
+    let synced_time: SystemTime = client
+        .query_one(&synced_time_stmt, &[])
+        .await
+        .and_then(|row| row.try_get(0))?;
+
+    let qualified_table_name =
+        UnresolvedItemName::qualified(&[Ident::new(schema)?, Ident::new(&table.name)?]);
+    let matching_cols = columns.iter().filter(|col| col.is_primary);
+    let merge_stmt = format!(
+        r#"
+        UPDATE {qualified_table_name}
+        SET {deleted_col} = true, {synced_col} = $1
+        WHERE ({cols}) IN (
+            SELECT {cols}
+            FROM {qualified_temp_table_name}
+        )"#,
+        deleted_col = escape::escape_identifier(FIVETRAN_SYSTEM_COLUMN_DELETE),
+        synced_col = escape::escape_identifier(FIVETRAN_SYSTEM_COLUMN_SYNCED),
+        cols = matching_cols.map(|col| &col.name).join(","),
+    );
+    let total_count = client.execute(&merge_stmt, &[&synced_time]).await?;
+    tracing::info!(?total_count, "altered rows in {qualified_table_name}");
+
+    Ok(())
+}
+
+/// Creates a `TEMPORARY` table that will get dropped at the end of the SQL session, with the same
+/// format as the provided [`Table`].
+async fn create_temporary_table(
+    table: &Table,
+    client: &tokio_postgres::Client,
+) -> Result<(UnresolvedItemName, Vec<ColumnMetadata>), anyhow::Error> {
     // This temporary table names to be a valid identifier within Materialize, and a table with the
     // same name must not already exist in the provided schema.
     let prefix = format!("fivetran_temp_{}_", mz_ore::id_gen::temp_id());
     let mut temp_table_name = Ident::new_lossy(prefix);
     temp_table_name.append_lossy(&table.name);
 
-    let qualified_table_name =
-        UnresolvedItemName::qualified(&[Ident::new(schema)?, Ident::new(&table.name)?]);
     // Note: temporary items are all created in the same schema.
     let qualified_temp_table_name = UnresolvedItemName::qualified(&[temp_table_name]);
 
@@ -457,7 +475,7 @@ async fn delete_files(
         })
         .collect::<Result<Vec<_>, anyhow::Error>>()?;
 
-    // Create our temporary table that we'll copy the delete files into.
+    // Create the temporary table.
     let defs = columns
         .iter()
         .map(|col| format!("{} {}", col.name, col.ty))
@@ -465,15 +483,29 @@ async fn delete_files(
     let create_table_stmt = format!("CREATE TEMPORARY TABLE {qualified_temp_table_name} ({defs})");
     client.execute(&create_table_stmt, &[]).await?;
 
-    // COPY all of the rows from delete_files into our temporary table.
+    Ok((qualified_temp_table_name, columns))
+}
+
+/// Copies a CSV file into a temporary table using the `COPY FROM` protocol.
+///
+/// It is assumed that the provided CSV files have the same number of columns as the referenced
+/// table.
+async fn copy_files(
+    file_config: &FileConfig,
+    files: &[String],
+    client: &tokio_postgres::Client,
+    temporary_table: &UnresolvedItemName,
+) -> Result<u64, anyhow::Error> {
+    // Create a Sink which we can stream the CSV files into.
     let copy_in_stmt = format!(
-        "COPY {qualified_temp_table_name} FROM STDIN WITH (FORMAT CSV, HEADER true, NULL {null_value})",
+        "COPY {temporary_table} FROM STDIN WITH (FORMAT CSV, HEADER true, NULL {null_value})",
         null_value = escape::escape_literal(&file_config.null_string),
     );
     let sink = client.copy_in(&copy_in_stmt).await?;
     let mut sink = std::pin::pin!(sink);
 
-    for path in delete_files {
+    // Stream the files into the COPY FROM sink.
+    for path in files {
         let file = load_file(file_config, path)
             .await
             .with_context(|| format!("loading delete file {path}"))?;
@@ -486,42 +518,9 @@ async fn delete_files(
             .context("sinking data")?;
     }
     let row_count = sink.finish().await.context("closing sink")?;
-    tracing::info!(row_count, "copied rows into {qualified_temp_table_name}");
+    tracing::info!(row_count, "copied rows into {temporary_table}");
 
-    // Skip the update if there are no rows to delete!
-    if row_count > 0 {
-        // Mark rows as deleted by "merging" our temporary table into the destination table.
-        //
-        // HACKY: We want to update the "_fivetran_synced" column for all of the rows we marked as
-        // deleted, but don't have a way to read from the temp table that would allow this in an
-        // `UPDATE` statement.
-        let synced_time_stmt = format!(
-            "SELECT MAX({synced_col}) FROM {qualified_temp_table_name}",
-            synced_col = escape::escape_identifier(FIVETRAN_SYSTEM_COLUMN_SYNCED)
-        );
-        let synced_time: SystemTime = client
-            .query_one(&synced_time_stmt, &[])
-            .await
-            .and_then(|row| row.try_get(0))?;
-
-        let matching_cols = columns.iter().filter(|col| col.is_primary);
-        let merge_stmt = format!(
-            r#"
-            UPDATE {qualified_table_name}
-            SET {deleted_col} = true, {synced_col} = $1
-            WHERE ({cols}) IN (
-                SELECT {cols}
-                FROM {qualified_temp_table_name}
-            )"#,
-            deleted_col = escape::escape_identifier(FIVETRAN_SYSTEM_COLUMN_DELETE),
-            synced_col = escape::escape_identifier(FIVETRAN_SYSTEM_COLUMN_SYNCED),
-            cols = matching_cols.map(|col| &col.name).join(","),
-        );
-        let total_count = client.execute(&merge_stmt, &[&synced_time]).await?;
-        tracing::info!(?total_count, "altered rows in {qualified_table_name}");
-    }
-
-    Ok(())
+    Ok(row_count)
 }
 
 /// Metadata about a column that is relevant to operations peformed by the destination.
