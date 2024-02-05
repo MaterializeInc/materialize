@@ -7225,6 +7225,9 @@ impl<'a> Parser<'a> {
         if self.parse_keyword(TIMESTAMP) {
             self.parse_explain_timestamp()
                 .map_parser_err(StatementKind::ExplainTimestamp)
+        } else if self.parse_keywords(&[FILTER, PUSHDOWN]) {
+            self.parse_explain_pushdown()
+                .map_parser_err(StatementKind::ExplainPushdown)
         } else if self.peek_keyword(KEY) || self.peek_keyword(VALUE) {
             self.parse_explain_schema()
                 .map_parser_err(StatementKind::ExplainSinkSchema)
@@ -7232,6 +7235,59 @@ impl<'a> Parser<'a> {
             self.parse_explain_plan()
                 .map_parser_err(StatementKind::ExplainPlan)
         }
+    }
+
+    fn parse_explainee(&mut self) -> Result<Explainee<Raw>, ParserError> {
+        let explainee = if self.parse_keyword(VIEW) {
+            // Parse: `VIEW name`
+            Explainee::View(self.parse_raw_name()?)
+        } else if self.parse_keywords(&[MATERIALIZED, VIEW]) {
+            // Parse: `MATERIALIZED VIEW name`
+            Explainee::MaterializedView(self.parse_raw_name()?)
+        } else if self.parse_keyword(INDEX) {
+            // Parse: `INDEX name`
+            Explainee::Index(self.parse_raw_name()?)
+        } else if self.parse_keywords(&[REPLAN, VIEW]) {
+            // Parse: `REPLAN VIEW name`
+            Explainee::ReplanView(self.parse_raw_name()?)
+        } else if self.parse_keywords(&[REPLAN, MATERIALIZED, VIEW]) {
+            // Parse: `REPLAN MATERIALIZED VIEW name`
+            Explainee::ReplanMaterializedView(self.parse_raw_name()?)
+        } else if self.parse_keywords(&[REPLAN, INDEX]) {
+            // Parse: `REPLAN INDEX name`
+            Explainee::ReplanIndex(self.parse_raw_name()?)
+        } else {
+            let broken = self.parse_keyword(BROKEN);
+
+            if self.peek_keywords(&[CREATE, MATERIALIZED, VIEW])
+                || self.peek_keywords(&[CREATE, OR, REPLACE, MATERIALIZED, VIEW])
+            {
+                // Parse: `BROKEN? CREATE [OR REPLACE] MATERIALIZED VIEW ...`
+                let _ = self.parse_keyword(CREATE); // consume CREATE token
+                let stmt = match self.parse_create_materialized_view()? {
+                    Statement::CreateMaterializedView(stmt) => stmt,
+                    _ => panic!("Unexpected statement type return after parsing"),
+                };
+
+                Explainee::CreateMaterializedView(Box::new(stmt), broken)
+            } else if self.peek_keywords(&[CREATE, INDEX])
+                || self.peek_keywords(&[CREATE, DEFAULT, INDEX])
+            {
+                // Parse: `BROKEN? CREATE INDEX ...`
+                let _ = self.parse_keyword(CREATE); // consume CREATE token
+                let stmt = match self.parse_create_index()? {
+                    Statement::CreateIndex(stmt) => stmt,
+                    _ => panic!("Unexpected statement type return after parsing"),
+                };
+
+                Explainee::CreateIndex(Box::new(stmt), broken)
+            } else {
+                // Parse: `BROKEN? query`
+                let query = self.parse_select_statement()?;
+                Explainee::Select(Box::new(query), broken)
+            }
+        };
+        Ok(explainee)
     }
 
     /// Parse an `EXPLAIN ... PLAN` statement, assuming that the `EXPLAIN` token
@@ -7302,60 +7358,24 @@ impl<'a> Parser<'a> {
             self.expect_keyword(FOR)?;
         }
 
-        let explainee = if self.parse_keyword(VIEW) {
-            // Parse: `VIEW name`
-            Explainee::View(self.parse_raw_name()?)
-        } else if self.parse_keywords(&[MATERIALIZED, VIEW]) {
-            // Parse: `MATERIALIZED VIEW name`
-            Explainee::MaterializedView(self.parse_raw_name()?)
-        } else if self.parse_keyword(INDEX) {
-            // Parse: `INDEX name`
-            Explainee::Index(self.parse_raw_name()?)
-        } else if self.parse_keywords(&[REPLAN, VIEW]) {
-            // Parse: `REPLAN VIEW name`
-            Explainee::ReplanView(self.parse_raw_name()?)
-        } else if self.parse_keywords(&[REPLAN, MATERIALIZED, VIEW]) {
-            // Parse: `REPLAN MATERIALIZED VIEW name`
-            Explainee::ReplanMaterializedView(self.parse_raw_name()?)
-        } else if self.parse_keywords(&[REPLAN, INDEX]) {
-            // Parse: `REPLAN INDEX name`
-            Explainee::ReplanIndex(self.parse_raw_name()?)
-        } else {
-            let broken = self.parse_keyword(BROKEN);
-
-            if self.peek_keywords(&[CREATE, MATERIALIZED, VIEW])
-                || self.peek_keywords(&[CREATE, OR, REPLACE, MATERIALIZED, VIEW])
-            {
-                // Parse: `BROKEN? CREATE [OR REPLACE] MATERIALIZED VIEW ...`
-                let _ = self.parse_keyword(CREATE); // consume CREATE token
-                let stmt = match self.parse_create_materialized_view()? {
-                    Statement::CreateMaterializedView(stmt) => stmt,
-                    _ => panic!("Unexpected statement type return after parsing"),
-                };
-
-                Explainee::CreateMaterializedView(Box::new(stmt), broken)
-            } else if self.peek_keywords(&[CREATE, INDEX])
-                || self.peek_keywords(&[CREATE, DEFAULT, INDEX])
-            {
-                // Parse: `BROKEN? CREATE INDEX ...`
-                let _ = self.parse_keyword(CREATE); // consume CREATE token
-                let stmt = match self.parse_create_index()? {
-                    Statement::CreateIndex(stmt) => stmt,
-                    _ => panic!("Unexpected statement type return after parsing"),
-                };
-
-                Explainee::CreateIndex(Box::new(stmt), broken)
-            } else {
-                // Parse: `BROKEN? query`
-                let query = self.parse_select_statement()?;
-                Explainee::Select(Box::new(query), broken)
-            }
-        };
+        let explainee = self.parse_explainee()?;
 
         Ok(Statement::ExplainPlan(ExplainPlanStatement {
             stage: stage.unwrap_or(ExplainStage::OptimizedPlan),
             config_flags,
             format,
+            explainee,
+        }))
+    }
+
+    /// Parse an `EXPLAIN FILTER PUSHDOWN` statement, assuming that the `EXPLAIN
+    /// PUSHDOWN` tokens have already been consumed.
+    fn parse_explain_pushdown(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(FOR)?;
+
+        let explainee = self.parse_explainee()?;
+
+        Ok(Statement::ExplainPushdown(ExplainPushdownStatement {
             explainee,
         }))
     }
