@@ -275,6 +275,7 @@ def mkrepo(i: Instance, rev: str, init: bool = True, force: bool = False) -> Non
         # Explicit refspec is required if the host repository is in detached
         # HEAD mode.
         f"{rev}:refs/heads/scratch",
+        "--no-recurse-submodules",
     ]
     if force:
         cmd.append("--force")
