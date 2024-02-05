@@ -75,7 +75,9 @@ impl ReadPolicy<mz_repr::Timestamp> {
     /// The rounding down is done to reduce the number of changes the capability undergoes.
     pub fn lag_writes_by(lag: mz_repr::Timestamp, max_granularity: mz_repr::Timestamp) -> Self {
         Self::LagWriteFrontier(Arc::new(move |upper| {
-            if upper.is_empty() {
+            if lag == 0.into() {
+                upper.to_owned()
+            } else if upper.is_empty() {
                 Antichain::from_elem(Timestamp::minimum())
             } else {
                 // Subtract the lag from the time, and then round down to a multiple of `granularity` to cut chatter.

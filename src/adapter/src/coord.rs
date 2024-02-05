@@ -2662,14 +2662,23 @@ impl Coordinator {
         dataflow: DataflowDescription<Plan>,
         instance: ComputeInstanceId,
     ) {
-        let export_ids = dataflow.export_ids().collect();
+        let index_ids = dataflow.exported_index_ids().collect();
+        let sink_ids = dataflow.exported_sink_ids().collect();
 
         self.controller
             .active_compute()
             .create_dataflow(instance, dataflow)
             .unwrap_or_terminate("dataflow creation cannot fail");
 
-        self.initialize_compute_read_policies(export_ids, instance, CompactionWindow::Default)
+        self.initialize_compute_read_policies(index_ids, instance, CompactionWindow::Default)
+            .await;
+
+        // Sinks are not readable in the context of Compute, so there is no need to keep a
+        // compaction window. We still want to install read holds and continually tick them
+        // forward, to ensure new dataflow instances hydrate at roughly the current time. This is
+        // needed to ensure that REFRESH materialized views can be warmed up by spawning them prior
+        // to their next refresh time so they can hydrate ahead of it.
+        self.initialize_compute_read_policies(sink_ids, instance, CompactionWindow::empty())
             .await;
     }
 }
