@@ -351,7 +351,8 @@ impl TransactionalProducer {
             Err((err, record)) => match err.rdkafka_error_code() {
                 Some(RDKafkaErrorCode::QueueFull) => {
                     // If the internal rdkafka queue is full we have no other option than to flush
-                    // TODO(petrosagg): remove this logic once we fix #24864
+                    // TODO(petrosagg): remove this logic once we fix upgrade to librdkafka 2.3 and
+                    // increase the queue limits
                     let timeout = self.transaction_timeout;
                     self.spawn_blocking(move |p| p.flush(timeout)).await?;
                     self.producer.send(record).map_err(|(err, _)| err.into())
