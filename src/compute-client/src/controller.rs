@@ -42,6 +42,7 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::RowSetFinishing;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_client::controller::{IntrospectionType, StorageController};
@@ -144,6 +145,8 @@ pub struct ComputeController<T> {
     /// This flag exists to derisk the rollout of the aggressive downgrading approach.
     /// TODO(teskje): Remove this after a couple weeks.
     enable_aggressive_readhold_downgrades: bool,
+    /// Provides the current time.
+    now_fn: NowFn<T>,
 }
 
 impl<T: Timestamp> ComputeController<T> {
@@ -152,6 +155,7 @@ impl<T: Timestamp> ComputeController<T> {
         build_info: &'static BuildInfo,
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
+        now_fn: NowFn<T>,
     ) -> Self {
         let (response_tx, response_rx) = crossbeam_channel::unbounded();
 
@@ -169,6 +173,7 @@ impl<T: Timestamp> ComputeController<T> {
             response_rx,
             response_tx,
             enable_aggressive_readhold_downgrades: true,
+            now_fn,
         }
     }
 
@@ -302,6 +307,7 @@ where
                 self.response_tx.clone(),
                 self.introspection.tx.clone(),
                 self.enable_aggressive_readhold_downgrades,
+                self.now_fn.clone(),
             ),
         );
 

@@ -24,6 +24,7 @@ use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSin
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
+use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_client::controller::{IntrospectionType, StorageController};
@@ -171,6 +172,8 @@ pub(super) struct Instance<T> {
     /// This flag exists to derisk the rollout of the aggressive downgrading approach.
     /// TODO(teskje): Remove this after a couple weeks.
     enable_aggressive_readhold_downgrades: bool,
+    /// Provides the current time.
+    now_fn: NowFn<T>,
 }
 
 impl<T: Timestamp> Instance<T> {
@@ -224,7 +227,7 @@ impl<T: Timestamp> Instance<T> {
         let mut state =
             CollectionState::new(as_of.clone(), storage_dependencies, compute_dependencies);
         // If the collection is write-only, clear its read policy to reflect that.
-        if write_only && self.enable_aggressive_readhold_downgrades {
+        if write_only {
             state.read_policy = None;
         }
         self.collections.insert(id, state);
@@ -496,6 +499,7 @@ where
         response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
         enable_aggressive_readhold_downgrades: bool,
+        now_fn: NowFn<T>,
     ) -> Self {
         let collections = arranged_logs
             .iter()
@@ -521,6 +525,7 @@ where
             replica_epochs: Default::default(),
             metrics,
             enable_aggressive_readhold_downgrades,
+            now_fn,
         };
 
         instance.send(ComputeCommand::CreateTimely {
@@ -1282,6 +1287,9 @@ where
     /// Panics if any of the `updates` regresses an existing write frontier.
     #[tracing::instrument(level = "debug", skip(self))]
     fn update_global_write_frontiers(&mut self, updates: &[(GlobalId, Antichain<T>)]) {
+        let downgrade_aggressive = self.compute.enable_aggressive_readhold_downgrades;
+        let now_fn = self.compute.now_fn.clone();
+
         // Compute and apply read capability downgrades that result from collection frontier
         // advancements.
         let mut read_capability_changes = BTreeMap::new();
@@ -1303,11 +1311,19 @@ where
                     // client-provided read policy to the write frontier.
                     read_policy.frontier(new_upper.borrow())
                 }
-                None => {
+                None if downgrade_aggressive => {
                     // Write-only collections cannot be read within the context of the compute
                     // controller, so we can immediately advance their read frontier to the new write
                     // frontier.
                     new_upper.clone()
+                }
+                None => {
+                    // Adapter doesn't downgrade read policies for sink dataflows, so we have to do
+                    // it outselves. We want to downgrade to the current time, rather than to a
+                    // time derived from `new_upper`, to support dataflow warm up.
+                    //
+                    // TODO(#24966): find a proper solution for this
+                    Antichain::from_elem(now_fn())
                 }
             };
 
