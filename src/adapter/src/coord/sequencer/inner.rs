@@ -2702,7 +2702,13 @@ impl Coordinator {
         &mut self,
         plan: plan::AlterIndexSetOptionsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.set_index_options(plan.id, plan.options)?;
+        for o in plan.options {
+            match o {
+                IndexOption::RetainHistory(window) => {
+                    self.set_index_compaction_window(plan.id, window)?;
+                }
+            }
+        }
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
@@ -2710,39 +2716,29 @@ impl Coordinator {
         &mut self,
         plan: plan::AlterIndexResetOptionsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let mut options = Vec::with_capacity(plan.options.len());
         for o in plan.options {
-            options.push(match o {
-                IndexOptionName::LogicalCompactionWindow => {
-                    IndexOption::LogicalCompactionWindow(CompactionWindow::Default)
-                }
-            });
-        }
-
-        self.set_index_options(plan.id, options)?;
-
-        Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
-    }
-
-    pub(super) fn set_index_options(
-        &mut self,
-        id: GlobalId,
-        options: Vec<IndexOption>,
-    ) -> Result<(), AdapterError> {
-        for o in options {
             match o {
-                IndexOption::LogicalCompactionWindow(window) => {
-                    // The index is on a specific cluster.
-                    let cluster = self
-                        .catalog()
-                        .get_entry(&id)
-                        .index()
-                        .expect("setting options on index")
-                        .cluster_id;
-                    self.update_compute_base_read_policy(cluster, id, window.into());
+                IndexOptionName::RetainHistory => {
+                    self.set_index_compaction_window(plan.id, CompactionWindow::Default)?;
                 }
             }
         }
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
+    }
+
+    pub(super) fn set_index_compaction_window(
+        &mut self,
+        id: GlobalId,
+        window: CompactionWindow,
+    ) -> Result<(), AdapterError> {
+        // The index is on a specific cluster.
+        let cluster = self
+            .catalog()
+            .get_entry(&id)
+            .index()
+            .expect("setting options on index")
+            .cluster_id;
+        self.update_compute_base_read_policy(cluster, id, window.into());
         Ok(())
     }
 

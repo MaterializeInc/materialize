@@ -3388,13 +3388,15 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_index_option_name(&mut self) -> Result<IndexOptionName, ParserError> {
-        self.expect_keywords(&[LOGICAL, COMPACTION, WINDOW])?;
-        Ok(IndexOptionName::LogicalCompactionWindow)
+        self.expect_keywords(&[RETAIN, HISTORY])?;
+        Ok(IndexOptionName::RetainHistory)
     }
 
     fn parse_index_option(&mut self) -> Result<IndexOption<Raw>, ParserError> {
         let name = self.parse_index_option_name()?;
-        let value = self.parse_optional_option_value()?;
+        let value = match name {
+            IndexOptionName::RetainHistory => self.parse_option_retain_history(),
+        }?;
         Ok(IndexOption { name, value })
     }
 

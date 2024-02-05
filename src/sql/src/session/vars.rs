@@ -1843,8 +1843,9 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+
         name: enable_logical_compaction_window,
-        desc: "LOGICAL COMPACTION WINDOW",
+        desc: "RETAIN HISTORY",
         default: false,
         internal: true,
         enable_for_item_parsing: true,

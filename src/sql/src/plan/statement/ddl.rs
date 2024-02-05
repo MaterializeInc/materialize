@@ -18,6 +18,7 @@ use std::iter;
 use std::time::Duration;
 
 use itertools::{Either, Itertools};
+use mz_adapter_types::compaction::CompactionWindow;
 use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL};
 use mz_expr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
@@ -118,7 +119,7 @@ use crate::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan,
     AlterOptionParameter, AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan,
     AlterSecretPlan, AlterSetClusterPlan, AlterSourcePlan, AlterSystemResetAllPlan,
-    AlterSystemResetPlan, AlterSystemSetPlan, CommentPlan, CompactionWindow, ComputeReplicaConfig,
+    AlterSystemResetPlan, AlterSystemSetPlan, CommentPlan, ComputeReplicaConfig,
     ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
     CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
@@ -2959,6 +2960,14 @@ pub fn plan_create_index(
         *print_id = false;
     }
     let create_sql = normalize::create_statement(scx, Statement::CreateIndex(stmt))?;
+    let compaction_window = options.iter().find_map(|o| {
+        #[allow(irrefutable_let_patterns)]
+        if let crate::plan::IndexOption::RetainHistory(lcw) = o {
+            Some(lcw.clone())
+        } else {
+            None
+        }
+    });
 
     Ok(Plan::CreateIndex(CreateIndexPlan {
         name: index_name,
@@ -2967,8 +2976,8 @@ pub fn plan_create_index(
             on: on.id(),
             keys,
             cluster_id,
+            compaction_window,
         },
-        options,
         if_not_exists,
     }))
 }
@@ -4254,7 +4263,7 @@ pub fn plan_drop_owned(
     }))
 }
 
-generate_extracted_config!(IndexOption, (LogicalCompactionWindow, OptionalDuration));
+generate_extracted_config!(IndexOption, (RetainHistory, OptionalDuration));
 
 fn plan_index_options(
     scx: &StatementContext,
@@ -4265,21 +4274,16 @@ fn plan_index_options(
         scx.require_feature_flag(&vars::ENABLE_INDEX_OPTIONS)?;
     }
 
-    let IndexOptionExtracted {
-        logical_compaction_window,
-        ..
-    }: IndexOptionExtracted = with_opts.try_into()?;
+    let IndexOptionExtracted { retain_history, .. }: IndexOptionExtracted = with_opts.try_into()?;
 
     let mut out = Vec::with_capacity(1);
 
-    if let Some(OptionalDuration(lcw)) = logical_compaction_window {
+    if let Some(OptionalDuration(lcw)) = retain_history {
         scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
-        out.push(crate::plan::IndexOption::LogicalCompactionWindow(
-            match lcw {
-                Some(duration) => duration.try_into()?,
-                None => CompactionWindow::DisableCompaction,
-            },
-        ));
+        out.push(crate::plan::IndexOption::RetainHistory(match lcw {
+            Some(duration) => duration.try_into()?,
+            None => CompactionWindow::DisableCompaction,
+        }));
     }
 
     Ok(out)

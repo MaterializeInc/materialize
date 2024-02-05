@@ -542,7 +542,6 @@ fn generate_rbac_requirements(
         Plan::CreateIndex(plan::CreateIndexPlan {
             name,
             index,
-            options: _,
             if_not_exists: _,
         }) => RbacRequirements {
             ownership: vec![ObjectId::Item(index.on)],

@@ -504,7 +504,7 @@ fn test_subscribe_basic() {
         .batch_execute("CREATE TABLE t (data text)")
         .unwrap();
     client_writes
-        .batch_execute("CREATE DEFAULT INDEX t_primary_idx ON t WITH (LOGICAL COMPACTION WINDOW 0)")
+        .batch_execute("CREATE DEFAULT INDEX t_primary_idx ON t WITH (RETAIN HISTORY FOR 0)")
         .unwrap();
     // Now that the index (and its since) are initialized to 0, we can resume using
     // system time. Do a read to bump the oracle's state so it will read from the
@@ -612,7 +612,7 @@ fn test_subscribe_basic() {
     // view derived from the index. This previously selected an invalid
     // `AS OF` timestamp (#5391).
     client_writes
-        .batch_execute("ALTER INDEX t_primary_idx SET (LOGICAL COMPACTION WINDOW = '1ms')")
+        .batch_execute("ALTER INDEX t_primary_idx SET (RETAIN HISTORY = FOR '1ms')")
         .unwrap();
     client_writes
         .batch_execute("CREATE VIEW v AS SELECT * FROM t")
