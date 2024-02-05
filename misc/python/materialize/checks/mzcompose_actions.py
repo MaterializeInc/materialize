@@ -95,6 +95,9 @@ class StartMz(MzcomposeAction):
         with c.override(mz):
             c.up("materialized" if self.mz_service is None else self.mz_service)
 
+            # If we start up Materialize with MZ_DEPLOY_GENERATION, then it
+            # stays in a stuck state when the preflight-check is completed. So
+            # we can't connect to it yet to run any commands.
             if any(
                 env.startswith("MZ_DEPLOY_GENERATION=")
                 for env in self.environment_extra
