@@ -382,9 +382,6 @@ impl TransactionalProducer {
             .await
         {
             Ok(()) => {
-                // librdkafka guarantees that all outstanding messages are successfully delivered
-                // before the transaction commits. We assert this fact here.
-                assert_eq!(self.producer.in_flight_count(), 0);
                 self.statistics
                     .inc_messages_committed_by(self.staged_messages);
                 self.statistics.inc_bytes_committed_by(self.staged_bytes);
