@@ -176,6 +176,8 @@ pub struct ExplainConfig {
     pub no_fast_path: bool,
     /// Don't print optimizer hints.
     pub no_notices: bool,
+    /// Show node IDs in physical plans.
+    pub node_ids: bool,
     /// Don't normalize plans before explaining them.
     pub raw_plans: bool,
     /// Disable virtual syntax in the explanation.
@@ -212,6 +214,7 @@ impl Default for ExplainConfig {
             linear_chains: false,
             no_fast_path: true,
             no_notices: false,
+            node_ids: false,
             non_negative: false,
             raw_plans: true,
             raw_syntax: false,
@@ -259,6 +262,7 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
             linear_chains: flags.remove("linear_chains") && !flags.contains("raw_plans"),
             no_fast_path: flags.remove("no_fast_path") || flags.contains("timing"),
             no_notices: flags.remove("no_notices"),
+            node_ids: flags.remove("node_ids"),
             non_negative: flags.remove("non_negative"),
             raw_plans: flags.remove("raw_plans"),
             raw_syntax: flags.remove("raw_syntax"),
@@ -948,6 +952,7 @@ mod tests {
             linear_chains: false,
             no_fast_path: false,
             no_notices: false,
+            node_ids: false,
             non_negative: false,
             raw_plans: false,
             raw_syntax: false,
