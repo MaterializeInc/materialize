@@ -48,6 +48,7 @@ steps:
       command: bin/ci-builder run stable bin/ci-closed-issues-detect
       agents:
         queue: linux-aarch64-small
+      branches: "main"
 
     - id: unused-deps
       label: Unused dependencies
