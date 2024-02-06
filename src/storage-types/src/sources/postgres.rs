@@ -228,7 +228,7 @@ impl RustType<ProtoPostgresSourceConnectionV2> for PostgresSourceConnection {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PostgresSourcePublicationDetails {
-    pub tables: Vec<mz_postgres_util::desc::PostgresTableDesc>,
+    pub tables: BTreeMap<u32, mz_postgres_util::desc::PostgresTableDesc>,
     pub slot: String,
     /// The active timeline_id when this source was created
     /// The None value indicates an unknown timeline, to account for sources that existed
@@ -242,7 +242,11 @@ impl Arbitrary for PostgresSourcePublicationDetails {
 
     fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
         (
-            proptest::collection::vec(any::<mz_postgres_util::desc::PostgresTableDesc>(), 1..4),
+            proptest::collection::btree_map(
+                any::<u32>(),
+                any::<mz_postgres_util::desc::PostgresTableDesc>(),
+                1..4,
+            ),
             any::<String>(),
             any::<Option<u64>>(),
         )
@@ -255,21 +259,29 @@ impl Arbitrary for PostgresSourcePublicationDetails {
     }
 }
 
-impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicationDetails {
-    fn into_proto(&self) -> ProtoPostgresSourcePublicationDetails {
-        ProtoPostgresSourcePublicationDetails {
-            tables: self.tables.iter().map(|t| t.into_proto()).collect(),
+impl RustType<ProtoPostgresSourcePublicationDetailsV2> for PostgresSourcePublicationDetails {
+    fn into_proto(&self) -> ProtoPostgresSourcePublicationDetailsV2 {
+        ProtoPostgresSourcePublicationDetailsV2 {
+            tables: self
+                .tables
+                .iter()
+                .map(|(oid, t)| (*oid, t.into_proto()))
+                .collect(),
             slot: self.slot.clone(),
             timeline_id: self.timeline_id.clone(),
         }
     }
 
-    fn from_proto(proto: ProtoPostgresSourcePublicationDetails) -> Result<Self, TryFromProtoError> {
+    fn from_proto(
+        proto: ProtoPostgresSourcePublicationDetailsV2,
+    ) -> Result<Self, TryFromProtoError> {
         Ok(PostgresSourcePublicationDetails {
             tables: proto
                 .tables
                 .into_iter()
-                .map(mz_postgres_util::desc::PostgresTableDesc::from_proto)
+                .map(|(oid, t)| {
+                    mz_postgres_util::desc::PostgresTableDesc::from_proto(t).map(|t| (oid, t))
+                })
                 .collect::<Result<_, _>>()?,
             slot: proto.slot,
             timeline_id: proto.timeline_id,

@@ -383,8 +383,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 Ok(i) => i,
             };
 
-            let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
-
             let worker_tables = reader_snapshot_table_info
                 .iter()
                 .map(|(_, (_, desc, _))| {

@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
+
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 use tokio_postgres::types::Oid;
 
@@ -50,7 +52,7 @@ pub async fn publication_info(
     config: &Config,
     publication: &str,
     oid_filter: Option<u32>,
-) -> Result<Vec<PostgresTableDesc>, PostgresError> {
+) -> Result<BTreeMap<u32, PostgresTableDesc>, PostgresError> {
     let client = config
         .connect("postgres_publication_info", ssh_tunnel_manager)
         .await?;
@@ -82,9 +84,9 @@ pub async fn publication_info(
         .await
         .map_err(PostgresError::from)?;
 
-    let mut table_infos = vec![];
+    let mut publication_tables = BTreeMap::new();
     for row in tables {
-        let oid = row.get("oid");
+        let oid: u32 = row.get("oid");
 
         let columns = client
             .query(
@@ -196,14 +198,24 @@ pub async fn publication_info(
             })
             .collect();
 
-        table_infos.push(PostgresTableDesc {
+        let existed = publication_tables.insert(
             oid,
-            namespace: row.get("schemaname"),
-            name: row.get("tablename"),
-            columns,
-            keys,
-        });
+            PostgresTableDesc {
+                oid,
+                namespace: row.get("schemaname"),
+                name: row.get("tablename"),
+                columns,
+                keys,
+            },
+        );
+
+        assert!(
+            existed.is_none(),
+            "PG publication had two tables with same OID {}, table_info {:?}",
+            oid,
+            existed
+        );
     }
 
-    Ok(table_infos)
+    Ok(publication_tables)
 }

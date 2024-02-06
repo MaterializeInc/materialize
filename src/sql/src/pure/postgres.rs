@@ -31,13 +31,16 @@ use crate::plan::{PlanError, StatementContext};
 use super::error::PgSourcePurificationError;
 use super::RequestedSubsource;
 
-pub(super) fn derive_catalog_from_publication_tables<'a>(
+pub(super) fn derive_catalog_from_publication_tables<'a, I>(
     database: &'a str,
-    publication_tables: &'a [PostgresTableDesc],
-) -> Result<SubsourceCatalog<&'a PostgresTableDesc>, PlanError> {
+    publication_tables: I,
+) -> Result<SubsourceCatalog<&'a PostgresTableDesc>, PlanError>
+where
+    I: Iterator<Item = &'a PostgresTableDesc>,
+{
     // An index from table name -> schema name -> database name -> PostgresTableDesc
     let mut tables_by_name = BTreeMap::new();
-    for table in publication_tables.iter() {
+    for table in publication_tables {
         tables_by_name
             .entry(table.name.clone())
             .or_insert_with(BTreeMap::new)
@@ -160,7 +163,7 @@ pub(crate) fn generate_targeted_subsources<F>(
     validated_requested_subsources: Vec<RequestedSubsource<'_, PostgresTableDesc>>,
     mut text_cols_dict: BTreeMap<u32, BTreeSet<String>>,
     mut get_transient_subsource_id: F,
-    publication_tables: &[PostgresTableDesc],
+    publication_tables: &BTreeMap<u32, PostgresTableDesc>,
 ) -> Result<
     (
         Vec<CreateSourceSubsource<Aug>>,
@@ -299,10 +302,7 @@ where
     let mut dangling_text_column_refs = vec![];
 
     for id in text_cols_dict.keys() {
-        let desc = publication_tables
-            .iter()
-            .find(|t| t.oid == *id)
-            .expect("validated when generating text columns");
+        let desc = &publication_tables[id];
 
         dangling_text_column_refs.push(PartialItemName {
             database: None,

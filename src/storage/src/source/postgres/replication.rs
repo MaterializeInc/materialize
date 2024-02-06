@@ -621,7 +621,6 @@ fn extract_transaction<'a>(
                             Some(rel_id),
                         )
                         .await?;
-                        let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
 
                         if let Err(err) = verify_schema(rel_id, expected_desc, &upstream_info) {
                             errored_tables.insert(rel_id);

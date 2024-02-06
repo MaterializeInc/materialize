@@ -739,7 +739,7 @@ async fn purify_create_source(
 
             let publication_catalog = postgres::derive_catalog_from_publication_tables(
                 &connection.database,
-                &publication_tables,
+                publication_tables.values(),
             )?;
 
             let mut validated_requested_subsources = vec![];
@@ -748,7 +748,7 @@ async fn purify_create_source(
                 .ok_or(PgSourcePurificationError::RequiresReferencedSubsources)?
             {
                 ReferencedSubsources::All => {
-                    for table in &publication_tables {
+                    for table in publication_tables.values() {
                         let upstream_name = UnresolvedItemName::qualified(&[
                             Ident::new(&connection.database)?,
                             Ident::new(&table.namespace)?,
@@ -787,7 +787,7 @@ async fn purify_create_source(
                         })?;
                     }
 
-                    for table in &publication_tables {
+                    for table in publication_tables.values() {
                         if !requested_schemas.contains(table.namespace.as_str()) {
                             continue;
                         }
@@ -1353,9 +1353,12 @@ async fn purify_alter_source(
         Err(PgSourcePurificationError::InsufficientReplicationSlotsAvailable { count: 1 })?;
     }
 
-    // TODO: Publication tables needs to become a map to ensure we do not
-    // inadvertently change table's schema.
-    let publication_tables = pg_source_connection.publication_details.tables;
+    // Take current publication tables; we'll make sure there are no duplicate
+    // references in it, and then we'll copy over any new tables' schemas. When
+    // we support demuxing tables into multiple persist shards we can revisit
+    // this strategy, which will likely require comparing schemas across new and
+    // old versions.
+    let mut publication_tables = pg_source_connection.publication_details.tables;
 
     let new_publication_tables = mz_postgres_util::publication_info(
         &storage_configuration.connection_context.ssh_tunnel_manager,
@@ -1365,7 +1368,7 @@ async fn purify_alter_source(
     )
     .await?;
 
-    if publication_tables.is_empty() {
+    if new_publication_tables.is_empty() {
         Err(PgSourcePurificationError::EmptyPublication(
             pg_source_connection.publication.to_string(),
         ))?;
@@ -1373,7 +1376,7 @@ async fn purify_alter_source(
 
     let publication_catalog = postgres::derive_catalog_from_publication_tables(
         &pg_connection.database,
-        &new_publication_tables,
+        new_publication_tables.values(),
     )?;
 
     let validated_requested_subsources =
@@ -1386,7 +1389,7 @@ async fn purify_alter_source(
         .collect();
 
     let current_subsource_names: BTreeSet<_> = publication_tables
-        .iter()
+        .values()
         .filter_map(|t| {
             if current_subsource_oids.contains(&t.oid) {
                 Some(UnresolvedItemName(vec![
@@ -1413,6 +1416,10 @@ async fn purify_alter_source(
                 name: upstream_name.clone(),
             })?;
         }
+
+        // Copy new publication table info knowing it doesn't conflict with the
+        // current definition.
+        publication_tables.insert(table.oid, new_publication_tables[&table.oid].clone());
     }
 
     validate_subsource_names(&validated_requested_subsources)?;

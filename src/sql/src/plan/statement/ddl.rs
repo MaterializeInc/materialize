@@ -83,7 +83,7 @@ use mz_storage_types::sources::mysql::{
 };
 use mz_storage_types::sources::postgres::{
     PostgresSourceConnection, PostgresSourcePublicationDetails,
-    ProtoPostgresSourcePublicationDetails,
+    ProtoPostgresSourcePublicationDetailsV2,
 };
 use mz_storage_types::sources::testscript::TestScriptSourceConnection;
 use mz_storage_types::sources::{
@@ -765,12 +765,12 @@ pub fn plan_create_source(
                 .as_ref()
                 .ok_or_else(|| sql_err!("internal error: Postgres source missing details"))?;
             let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
-            let details = ProtoPostgresSourcePublicationDetails::decode(&*details)
+            let details = ProtoPostgresSourcePublicationDetailsV2::decode(&*details)
                 .map_err(|e| sql_err!("{}", e))?;
 
             // Create a "catalog" of the tables in the PG details.
             let mut tables_by_name = BTreeMap::new();
-            for table in details.tables.iter() {
+            for table in details.tables.values() {
                 tables_by_name
                     .entry(table.name.clone())
                     .or_insert_with(BTreeMap::new)
@@ -819,7 +819,7 @@ pub fn plan_create_source(
             // on the target table
             let mut table_casts = BTreeMap::new();
 
-            for table in details.tables.iter() {
+            for table in details.tables.values() {
                 // First, construct an expression context where the expression is evaluated on an
                 // imaginary row which has the same number of columns as the upstream table but all
                 // of the types are text

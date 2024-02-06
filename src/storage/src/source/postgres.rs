@@ -145,13 +145,6 @@ impl SourceRender for PostgresSourceConnection {
             })
             .collect();
 
-        let publication_details: BTreeMap<_, _> = self
-            .publication_details
-            .tables
-            .iter()
-            .map(|t| (t.oid, t))
-            .collect();
-
         // Collect the tables that we will be ingesting.
         let mut table_info = BTreeMap::new();
 
@@ -167,18 +160,8 @@ impl SourceRender for PostgresSourceConnection {
                 None => continue,
             };
 
-            let arity = export.storage_metadata.relation_desc.arity();
-            let mut casts = self.table_casts[&oid].clone();
-            // The schema of the upstream table may change, but the
-            // subsource's relation desc is fixed from the time of its
-            // creation. If we allowed the source to render, we've validated
-            // that the schema is OK––either it's the same or is backward
-            // compatible with the existing schema.
-            casts.truncate(arity);
-
-            let mut desc = publication_details[&oid].clone();
-            desc.truncate_to_arity(arity);
-
+            let casts = self.table_casts[&oid].clone();
+            let desc = self.publication_details.tables[&oid].clone();
             table_info.insert(oid, (output_idx, desc, casts));
         }
 

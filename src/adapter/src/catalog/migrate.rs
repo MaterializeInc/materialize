@@ -70,7 +70,7 @@ pub(crate) async fn migrate(
 
     // Perform per-item AST migrations.
     let conn_cat = state.for_system_session();
-    rewrite_items(tx, &conn_cat, |_tx, _conn_cat, _id, _stmt| {
+    rewrite_items(tx, &conn_cat, |_tx, _conn_cat, _id, stmt| {
         let _catalog_version = catalog_version.clone();
         Box::pin(async move {
             // Add per-item AST migrations below.
@@ -86,6 +86,7 @@ pub(crate) async fn migrate(
             //
             // Migration functions may also take `tx` as input to stage
             // arbitrary changes to the catalog.
+            ast_rewrite_rewrite_postgres_source_details(stmt);
             Ok(())
         })
     })
@@ -101,6 +102,57 @@ pub(crate) async fn migrate(
         catalog_version
     );
     Ok(())
+}
+
+// Rewrite all non-`pg_catalog` system types to have the correct schema.
+fn ast_rewrite_rewrite_postgres_source_details(stmt: &mut Statement<Raw>) {
+    use mz_sql::ast::visit_mut::VisitMut;
+    use mz_sql::ast::{PgConfigOption, PgConfigOptionName, Value, WithOptionValue};
+    use mz_storage_types::sources::postgres::{
+        ProtoPostgresSourcePublicationDetails, ProtoPostgresSourcePublicationDetailsV2,
+    };
+    use prost::Message;
+
+    struct Rewriter;
+
+    impl<'ast> VisitMut<'ast, Raw> for Rewriter {
+        fn visit_pg_config_option_mut(&mut self, node: &'ast mut PgConfigOption<Raw>) {
+            if node.name == PgConfigOptionName::Details {
+                let details = match &node.value {
+                    Some(mz_sql_parser::ast::WithOptionValue::Value(Value::String(details))) => {
+                        details.clone()
+                    }
+                    _ => unreachable!("PgConfigOptionName::Details must have string value"),
+                };
+                let details = hex::decode(details).expect("details value must be hex encoded");
+                let Ok(ProtoPostgresSourcePublicationDetails {
+                    tables,
+                    slot,
+                    timeline_id,
+                }) = ProtoPostgresSourcePublicationDetails::decode(&*details)
+                else {
+                    // Already converted
+                    return;
+                };
+
+                let details = ProtoPostgresSourcePublicationDetailsV2 {
+                    slot,
+                    timeline_id,
+                    tables: tables.into_iter().map(|t| (t.oid, t)).collect(),
+                };
+
+                node.value = Some(WithOptionValue::Value(Value::String(hex::encode(
+                    details.encode_to_vec(),
+                ))));
+            }
+        }
+    }
+
+    if !matches!(stmt, Statement::CreateSource(..)) {
+        return;
+    }
+
+    Rewriter.visit_statement_mut(stmt);
 }
 
 // Add new migrations below their appropriate heading, and precede them with a
