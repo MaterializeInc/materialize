@@ -451,5 +451,5 @@ RxbPMjhEBdVZ5NxlxYer7yKN+h5OBJfrLswPku7y4vdFYK3x/lMuNQO61hb1VFHc
 T2BDTbF0QSlPxFsv18B9zg==
 -----END PRIVATE KEY-----
 x"#;
-    Identity::from_pem(certs.as_bytes()).unwrap_err();
+    Identity::from_pem(certs.as_bytes(), &[]).unwrap_err();
 }
