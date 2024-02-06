@@ -192,20 +192,41 @@ impl From<&SystemVars> for OptimizerConfig {
     }
 }
 
-impl From<(&SystemVars, &ExplainContext)> for OptimizerConfig {
-    fn from((vars, ctx): (&SystemVars, &ExplainContext)) -> Self {
-        // Construct base config from vars.
-        let mut config = Self::from(vars);
-        // We are calling this constructor from an 'Explain' mode context.
-        config.mode = OptimizeMode::Explain;
-        config.replan = ctx.replan;
-        config.enable_fast_path = !ctx.config.no_fast_path;
+/// A trait used to implement layered config construction.
+pub trait OverrideFrom<T> {
+    /// Override the configuration represented by [`Self`] with values
+    /// from the given `layer`.
+    fn override_from(self, layer: &T) -> Self;
+}
+
+/// Blanket implementation for optional layers.
+impl<S, T> OverrideFrom<Option<T>> for S
+where
+    S: OverrideFrom<T>,
+{
+    fn override_from(self, layer: &Option<T>) -> Self {
+        match layer.as_ref() {
+            Some(layer) => self.override_from(layer),
+            None => self,
+        }
+    }
+}
+
+/// [`OptimizerConfig`] overrides coming from an [`ExplainContext`].
+impl OverrideFrom<ExplainContext> for OptimizerConfig {
+    fn override_from(mut self, ctx: &ExplainContext) -> Self {
+        // Override general parameters.
+        self.mode = OptimizeMode::Explain;
+        self.replan = ctx.replan;
+        self.enable_fast_path = !ctx.config.no_fast_path;
+
         // Override feature flags that can be enabled in the EXPLAIN config.
         if let Some(explain_flag) = ctx.config.enable_new_outer_join_lowering {
-            config.enable_new_outer_join_lowering = explain_flag;
+            self.enable_new_outer_join_lowering = explain_flag;
         }
+
         // Return final result.
-        config
+        self
     }
 }
 

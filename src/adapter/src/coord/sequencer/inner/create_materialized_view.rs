@@ -31,7 +31,7 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
-use crate::optimize::{self, Optimize};
+use crate::optimize::{self, Optimize, OverrideFrom};
 use crate::session::Session;
 use crate::util::ResultExt;
 use crate::{catalog, AdapterNotice, ExecuteContext, TimestampProvider};
@@ -246,11 +246,8 @@ impl Coordinator {
         };
         let internal_view_id = return_if_err!(self.allocate_transient_id(), ctx);
         let debug_name = self.catalog().resolve_full_name(name, None).to_string();
-        let optimizer_config = if let Some(explain_ctx) = explain_ctx.as_ref() {
-            optimize::OptimizerConfig::from((self.catalog().system_config(), explain_ctx))
-        } else {
-            optimize::OptimizerConfig::from(self.catalog().system_config())
-        };
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
+            .override_from(&explain_ctx);
 
         // Build an optimizer for this MATERIALIZED VIEW.
         let mut optimizer = optimize::materialized_view::Optimizer::new(
