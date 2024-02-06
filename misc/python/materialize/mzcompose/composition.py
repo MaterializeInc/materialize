@@ -53,6 +53,7 @@ from materialize.mzcompose.test_result import (
     TestResult,
     try_determine_errors_from_cmd_execution,
 )
+from materialize.parallel_workload.worker_exception import WorkerFailedException
 from materialize.ui import (
     CommandFailureCausedUIError,
     UIError,
@@ -544,33 +545,44 @@ class Composition:
             end_time = time.time()
             error_message = f"{str(type(e))}: {e}"
             ui.header(f"mzcompose: test case {name} failed: {error_message}")
-            errors = [
-                TestFailureDetails(
-                    error_message, details=None, location=None, line_number=None
-                )
-            ]
-
-            if isinstance(e, CommandFailureCausedUIError):
-                if e.stderr is not None:
-                    # This is to avoid that captured stderr is missing in the logs.
-                    print(e.stderr, file=sys.stderr, flush=True)
-
-                try:
-                    extracted_errors = try_determine_errors_from_cmd_execution(e)
-                except:
-                    extracted_errors = []
-                errors = extracted_errors if len(extracted_errors) > 0 else errors
-            elif isinstance(e, FailedTestExecutionError):
-                errors = e.errors
-                assert (
-                    len(errors) > 0
-                ), "Failed test execution does not contain any errors"
+            errors = self.extract_test_errors(e, error_message)
 
             if not isinstance(e, UIError):
                 traceback.print_exc()
 
         duration = end_time - start_time
         self.test_results[name] = TestResult(duration, errors)
+
+    def extract_test_errors(
+        self, e: Exception, error_message: str
+    ) -> list[TestFailureDetails]:
+        errors = [
+            TestFailureDetails(
+                error_message, details=None, location=None, line_number=None
+            )
+        ]
+
+        if isinstance(e, CommandFailureCausedUIError):
+            if e.stderr is not None:
+                # This is to avoid that captured stderr is missing in the logs.
+                print(e.stderr, file=sys.stderr, flush=True)
+
+            try:
+                extracted_errors = try_determine_errors_from_cmd_execution(e)
+            except:
+                extracted_errors = []
+            errors = extracted_errors if len(extracted_errors) > 0 else errors
+        elif isinstance(e, FailedTestExecutionError):
+            errors = e.errors
+            assert len(errors) > 0, "Failed test execution does not contain any errors"
+        elif isinstance(e, WorkerFailedException):
+            errors = [
+                TestFailureDetails(
+                    error_message, details=str(e.cause), location=None, line_number=None
+                )
+            ]
+
+        return errors
 
     def sql_connection(
         self,

@@ -49,6 +49,7 @@ from materialize.parallel_workload.database import (
 from materialize.parallel_workload.executor import Executor, initialize_logging
 from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.parallel_workload.worker import Worker
+from materialize.parallel_workload.worker_exception import WorkerFailedException
 
 SEED_RANGE = 1_000_000
 REPORT_TIME = 10
@@ -316,9 +317,14 @@ def run(
         while time.time() < end_time:
             for thread in threads:
                 if not thread.is_alive():
+                    query_error = None
                     for worker in workers:
                         worker.end_time = time.time()
-                    raise Exception(f"^^^ +++ Thread {thread.name} failed, exiting")
+                        query_error = query_error or worker.failed_query_error
+                    raise WorkerFailedException(
+                        f"^^^ +++ Thread {thread.name} failed, exiting",
+                        query_error,
+                    )
             time.sleep(REPORT_TIME)
             print(
                 "QPS: "
