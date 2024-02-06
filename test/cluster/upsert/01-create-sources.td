@@ -79,9 +79,15 @@ id creature
 $ kafka-ingest format=bytes topic=dbzupsert key-format=bytes
 broken-key:bar
 
+! SELECT * FROM upsert
+contains: Key decode
+
 # Ingest a broken value with a good key
 $ kafka-ingest format=bytes topic=dbzupsert key-format=avro key-schema=${keyschema}
 {"id": 2}bar2
+
+! SELECT * FROM upsert
+contains: Value error
 
 # With this second source, we verify that we can retract NULL-key errors by
 # ingesting a NULL:NULL record (a record where both key and value are NULL).

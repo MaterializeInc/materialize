@@ -114,8 +114,6 @@ impl Display for DecodeErrorKind {
 /// Errors arising during envelope processing.
 #[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
 pub enum EnvelopeError {
-    /// An error arising while processing the Debezium envelope.
-    Debezium(String),
     /// An error that can be retracted by a future message using upsert logic.
     Upsert(UpsertError),
     /// Errors corresponding to `ENVELOPE NONE`. Naming this
@@ -128,7 +126,6 @@ impl RustType<ProtoEnvelopeErrorV1> for EnvelopeError {
         use proto_envelope_error_v1::Kind;
         ProtoEnvelopeErrorV1 {
             kind: Some(match self {
-                EnvelopeError::Debezium(text) => Kind::Debezium(text.clone()),
                 EnvelopeError::Upsert(rust) => Kind::Upsert(rust.into_proto()),
                 EnvelopeError::Flat(text) => Kind::Flat(text.clone()),
             }),
@@ -138,7 +135,6 @@ impl RustType<ProtoEnvelopeErrorV1> for EnvelopeError {
     fn from_proto(proto: ProtoEnvelopeErrorV1) -> Result<Self, TryFromProtoError> {
         use proto_envelope_error_v1::Kind;
         match proto.kind {
-            Some(Kind::Debezium(text)) => Ok(Self::Debezium(text)),
             Some(Kind::Upsert(proto)) => {
                 let rust = RustType::from_proto(proto)?;
                 Ok(Self::Upsert(rust))
@@ -154,7 +150,6 @@ impl RustType<ProtoEnvelopeErrorV1> for EnvelopeError {
 impl Display for EnvelopeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EnvelopeError::Debezium(err) => write!(f, "Debezium: {err}"),
             EnvelopeError::Upsert(err) => write!(f, "Upsert: {err}"),
             EnvelopeError::Flat(err) => write!(f, "Flat: {err}"),
         }
@@ -786,9 +781,6 @@ mod columnation {
                 DataflowError::EnvelopeError(err) => {
                     let err: &EnvelopeError = &*err;
                     let err = match err {
-                        EnvelopeError::Debezium(string) => {
-                            EnvelopeError::Debezium(self.string_region.copy(string))
-                        }
                         EnvelopeError::Upsert(err) => {
                             let err = match err {
                                 UpsertError::KeyDecode(err) => {

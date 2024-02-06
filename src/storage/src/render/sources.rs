@@ -157,7 +157,6 @@ where
             id,
             ok_source,
             description.clone(),
-            as_of.clone(),
             error_collections,
             storage_state,
             base_source_config.clone(),
@@ -179,7 +178,6 @@ fn render_source_stream<G, FromTime>(
     id: GlobalId,
     ok_source: Collection<G, SourceOutput<FromTime>, Diff>,
     description: IngestionDescription<CollectionMetadata>,
-    as_of: Antichain<G::Timestamp>,
     mut error_collections: Vec<Collection<G, DataflowError, Diff>>,
     storage_state: &crate::storage_state::StorageState,
     base_source_config: RawSourceCreationConfig,
@@ -266,40 +264,6 @@ where
 
             // render envelopes
             let (envelope_ok, envelope_err, envelope_health) = match &envelope {
-                SourceEnvelope::Debezium(dbz_envelope) => {
-                    let (debezium_ok, errors) = match &dbz_envelope.dedup.tx_metadata {
-                        Some(tx_metadata) => {
-                            let tx_storage_metadata = description
-                                .source_imports
-                                .get(&tx_metadata.tx_metadata_global_id)
-                                .expect("dependent source missing from ingestion description")
-                                .clone();
-                            let persist_clients = Arc::clone(&storage_state.persist_clients);
-                            let (tx_source_ok_stream, tx_source_err_stream, tx_token) =
-                                persist_source::persist_source(
-                                    scope,
-                                    id,
-                                    persist_clients,
-                                    tx_storage_metadata,
-                                    Some(as_of),
-                                    SnapshotMode::Include,
-                                    Antichain::new(),
-                                    None,
-                                    None,
-                                );
-                            let (tx_source_ok, tx_source_err) = (
-                                tx_source_ok_stream.as_collection(),
-                                tx_source_err_stream.as_collection(),
-                            );
-                            needed_tokens.extend(tx_token);
-                            error_collections.push(tx_source_err);
-
-                            super::debezium::render_tx(dbz_envelope, &decoded_stream, tx_source_ok)
-                        }
-                        None => super::debezium::render(dbz_envelope, &decoded_stream),
-                    };
-                    (debezium_ok, Some(errors), empty(scope))
-                }
                 SourceEnvelope::Upsert(upsert_envelope) => {
                     let upsert_input = upsert_commands(decoded_stream, upsert_envelope.clone());
 

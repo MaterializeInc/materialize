@@ -794,8 +794,7 @@ impl<C: ConnectionAccess> SourceDesc<C> {
             } => true,
             // Other combinations may produce retractions.
             SourceDesc {
-                envelope:
-                    SourceEnvelope::Debezium(_) | SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2,
+                envelope: SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2,
                 connection:
                     GenericSourceConnection::Kafka(_) | GenericSourceConnection::TestScript(_),
                 ..
@@ -1265,9 +1264,7 @@ mod tests {
         for datum in scalar_type.interesting_datums() {
             rows.push(SourceData(Ok(Row::pack(std::iter::once(datum)))));
         }
-        rows.push(SourceData(
-            Err(EnvelopeError::Debezium("foo".into()).into()),
-        ));
+        rows.push(SourceData(Err(EnvelopeError::Flat("foo".into()).into())));
 
         // Non-nullable version of the column.
         let schema = RelationDesc::empty().with_column("col", scalar_type.clone().nullable(false));

@@ -68,8 +68,8 @@ message ProtoUpsertError {
 // since they might want to repurpose/modify this field
 // in the future.
 message ProtoEnvelopeErrorV1 {
+    reserved 1;
     oneof kind {
-        string debezium = 1;
         ProtoUpsertError upsert = 2;
         string flat = 3;
     }

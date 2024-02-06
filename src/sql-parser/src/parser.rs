@@ -2148,28 +2148,34 @@ impl<'a> Parser<'a> {
         Ok(CsrConnectionProtobuf { connection, seed })
     }
 
-    fn parse_envelope(&mut self) -> Result<Envelope, ParserError> {
+    fn parse_source_envelope(&mut self) -> Result<SourceEnvelope, ParserError> {
         let envelope = if self.parse_keyword(NONE) {
-            Envelope::None
+            SourceEnvelope::None
         } else if self.parse_keyword(DEBEZIUM) {
-            // In Platform, `DEBEZIUM UPSERT` is the only available option.
-            // Revisit this if we ever change that.
-            let debezium_mode = DbzMode::Plain;
-            Envelope::Debezium(debezium_mode)
+            SourceEnvelope::Debezium
         } else if self.parse_keyword(UPSERT) {
-            Envelope::Upsert
+            SourceEnvelope::Upsert
         } else if self.parse_keyword(MATERIALIZE) {
-            Envelope::CdcV2
+            SourceEnvelope::CdcV2
         } else {
             return self.expected(
                 self.peek_pos(),
-                "NONE, DEBEZIUM, UPSERT, or MATERIALIZE",
+                "NONE, UPSERT, or MATERIALIZE",
                 self.peek_token(),
             );
         };
         Ok(envelope)
     }
 
+    fn parse_sink_envelope(&mut self) -> Result<SinkEnvelope, ParserError> {
+        if self.parse_keyword(UPSERT) {
+            Ok(SinkEnvelope::Upsert)
+        } else if self.parse_keyword(DEBEZIUM) {
+            Ok(SinkEnvelope::Debezium)
+        } else {
+            self.expected(self.peek_pos(), "UPSERT, or DEBEZIUM", self.peek_token())
+        }
+    }
     /// Parse a `VALIDATE` statement
     fn parse_validate(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(CONNECTION)?;
@@ -2606,7 +2612,7 @@ impl<'a> Parser<'a> {
         let include_metadata = self.parse_source_include_metadata()?;
 
         let envelope = if self.parse_keyword(ENVELOPE) {
-            Some(self.parse_envelope()?)
+            Some(self.parse_source_envelope()?)
         } else {
             None
         };
@@ -2927,7 +2933,7 @@ impl<'a> Parser<'a> {
             None
         };
         let envelope = if self.parse_keyword(ENVELOPE) {
-            Some(self.parse_envelope()?)
+            Some(self.parse_sink_envelope()?)
         } else {
             None
         };

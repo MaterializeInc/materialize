@@ -27,10 +27,11 @@ use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, ColumnDef, ConnectionOption, ConnectionOptionName, CreateConnectionOption,
     CreateConnectionType, CreateSinkConnection, CreateSourceConnection, CreateSourceFormat,
-    CreateSourceOption, CreateSourceOptionName, DeferredItemName, Envelope, Expr, Format, Ident,
-    IntervalValue, KeyConstraint, MaterializedViewOption, Query, SelectItem, SourceIncludeMetadata,
-    SubscribeOutput, TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName,
-    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    CreateSourceOption, CreateSourceOptionName, DeferredItemName, Expr, Format, Ident,
+    IntervalValue, KeyConstraint, MaterializedViewOption, Query, SelectItem, SinkEnvelope,
+    SourceEnvelope, SourceIncludeMetadata, SubscribeOutput, TableAlias, TableConstraint,
+    TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -925,7 +926,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub connection: CreateSourceConnection<T>,
     pub include_metadata: Vec<SourceIncludeMetadata>,
     pub format: CreateSourceFormat<T>,
-    pub envelope: Option<Envelope>,
+    pub envelope: Option<SourceEnvelope>,
     pub if_not_exists: bool,
     pub key_constraint: Option<KeyConstraint>,
     pub with_options: Vec<CreateSourceOption<T>>,
@@ -1147,7 +1148,7 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub from: T::ItemName,
     pub connection: CreateSinkConnection<T>,
     pub format: Option<Format<T>>,
-    pub envelope: Option<Envelope>,
+    pub envelope: Option<SinkEnvelope>,
     pub with_options: Vec<CreateSinkOption<T>>,
 }
 

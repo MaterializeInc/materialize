@@ -214,7 +214,6 @@ use timely::worker::Worker as TimelyWorker;
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::storage_state::StorageState;
 
-mod debezium;
 mod persist_sink;
 pub mod sinks;
 pub mod sources;

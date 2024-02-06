@@ -567,11 +567,6 @@ impl Source {
             // string? It would not be hard to convince me otherwise, though.
             DataSourceDesc::Ingestion(ingestion) => match ingestion.desc.envelope() {
                 SourceEnvelope::None(_) => Some("none"),
-                SourceEnvelope::Debezium(_) => {
-                    // NOTE(aljoscha): This is currently not used in production.
-                    // DEBEZIUM sources transparently use `DEBEZIUM UPSERT`.
-                    Some("debezium")
-                }
                 SourceEnvelope::Upsert(upsert_envelope) => match upsert_envelope.style {
                     mz_storage_types::sources::envelope::UpsertStyle::Default(_) => Some("upsert"),
                     mz_storage_types::sources::envelope::UpsertStyle::Debezium { .. } => {
