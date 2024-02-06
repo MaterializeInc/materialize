@@ -34,8 +34,5 @@ message ProtoPostgresColumnDesc {
     uint32 type_oid = 2;
     int32 type_mod = 3;
     bool nullable = 4;
-    // This field does not need to be optional, but was originally marked as
-    // optional when it was added, and the migration required to remove the
-    // optional marker is more convoluted than it's worth.
-    optional uint32 col_num = 6;
+    uint32 col_num = 6;
 }
