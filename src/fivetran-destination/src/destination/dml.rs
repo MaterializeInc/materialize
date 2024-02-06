@@ -25,18 +25,13 @@ use tokio_postgres::types::{to_sql_checked, Format, IsNull, ToSql, Type};
 use tokio_util::io::ReaderStream;
 
 use crate::crypto::AsyncAesDecrypter;
-use crate::destination::config;
+use crate::destination::{
+    config, FIVETRAN_SYSTEM_COLUMN_DELETE, FIVETRAN_SYSTEM_COLUMN_ID, FIVETRAN_SYSTEM_COLUMN_SYNCED,
+};
 use crate::error::{Context, OpError, OpErrorKind};
 use crate::fivetran_sdk::write_batch_request::FileParams;
 use crate::fivetran_sdk::{Compression, Encryption, Table, TruncateRequest, WriteBatchRequest};
 use crate::utils;
-
-/// Tracks if a row has been "soft deleted" if this column to true.
-const FIVETRAN_SYSTEM_COLUMN_DELETE: &str = "_fivetran_deleted";
-/// Tracks the last time this Row was modified by Fivetran.
-const FIVETRAN_SYSTEM_COLUMN_SYNCED: &str = "_fivetran_synced";
-/// Fivetran will synthesize a primary key column when one doesn't exist.
-const FIVETRAN_SYSTEM_COLUMN_ID: &str = "_fivetran_id";
 
 pub async fn handle_truncate_table(request: TruncateRequest) -> Result<(), OpError> {
     let delete_before = {
