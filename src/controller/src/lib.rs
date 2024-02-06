@@ -418,7 +418,7 @@ where
             config.storage_stash_url,
             config.persist_location,
             config.persist_clients,
-            config.now,
+            config.now.clone(),
             config.stash_metrics,
             envd_epoch,
             config.metrics_registry.clone(),
@@ -427,10 +427,12 @@ where
         )
         .await;
 
+        let now = NowFn::from(move || (config.now)().into());
         let compute_controller = ComputeController::new(
             config.build_info,
             envd_epoch,
             config.metrics_registry.clone(),
+            now,
         );
         let (metrics_tx, metrics_rx) = mpsc::unbounded_channel();
 

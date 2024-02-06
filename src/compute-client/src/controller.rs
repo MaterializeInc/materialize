@@ -42,6 +42,7 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::RowSetFinishing;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_client::controller::{IntrospectionType, StorageController};
@@ -132,6 +133,8 @@ pub struct ComputeController<T> {
     metrics: ComputeControllerMetrics,
     /// Compute controller introspection support.
     introspection: Introspection,
+    /// A system time provider.
+    now: NowFn<T>,
 
     /// Receiver for responses produced by `Instance`s, to be delivered on subsequent calls to
     /// `ActiveComputeController::process`.
@@ -152,6 +155,7 @@ impl<T: Timestamp> ComputeController<T> {
         build_info: &'static BuildInfo,
         envd_epoch: NonZeroI64,
         metrics_registry: MetricsRegistry,
+        now: NowFn<T>,
     ) -> Self {
         let (response_tx, response_rx) = crossbeam_channel::unbounded();
 
@@ -166,6 +170,7 @@ impl<T: Timestamp> ComputeController<T> {
             envd_epoch,
             metrics: ComputeControllerMetrics::new(metrics_registry),
             introspection: Introspection::new(),
+            now,
             response_rx,
             response_tx,
             enable_aggressive_readhold_downgrades: true,
@@ -303,6 +308,7 @@ where
                 arranged_logs,
                 self.envd_epoch,
                 self.metrics.for_instance(id),
+                self.now.clone(),
                 self.response_tx.clone(),
                 self.introspection.tx.clone(),
                 self.enable_aggressive_readhold_downgrades,

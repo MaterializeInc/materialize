@@ -11,9 +11,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroI64;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Duration, DurationRound, Utc};
+use chrono::{DateTime, DurationRound, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
 use futures::{future, StreamExt};
@@ -24,6 +24,7 @@ use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, PersistSin
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
+use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_client::controller::{IntrospectionType, StorageController};
@@ -166,6 +167,8 @@ pub(super) struct Instance<T> {
     replica_epochs: BTreeMap<ReplicaId, u64>,
     /// The registry the controller uses to report metrics.
     metrics: InstanceMetrics,
+    /// A ticker that provides the system time in regular intervals.
+    now_ticker: NowTicker<T>,
     /// Whether to aggressively downgrade read holds for sink dataflows.
     ///
     /// This flag exists to derisk the rollout of the aggressive downgrading approach.
@@ -493,6 +496,7 @@ where
         arranged_logs: BTreeMap<LogVariant, GlobalId>,
         envd_epoch: NonZeroI64,
         metrics: InstanceMetrics,
+        now: NowFn<T>,
         response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
         introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
         enable_aggressive_readhold_downgrades: bool,
@@ -505,6 +509,7 @@ where
             })
             .collect();
         let history = ComputeCommandHistory::new(metrics.for_history());
+        let now_ticker = NowTicker::new(now);
 
         let mut instance = Self {
             build_info,
@@ -520,6 +525,7 @@ where
             envd_epoch,
             replica_epochs: Default::default(),
             metrics,
+            now_ticker,
             enable_aggressive_readhold_downgrades,
         };
 
@@ -637,7 +643,7 @@ where
             .expect("replica must exist");
 
         let now = Utc::now()
-            .duration_trunc(Duration::seconds(60))
+            .duration_trunc(chrono::Duration::seconds(60))
             .expect("cannot fail");
 
         let mut updates = Vec::new();
@@ -1304,11 +1310,15 @@ where
                     // client-provided read policy to the write frontier.
                     read_policy.frontier(new_upper.borrow())
                 }
+                None if new_upper.is_empty() => {
+                    // Write-only collections that have advanced to the empty frontier don't need
+                    // to be computed ever again, so we can allow them to compact away.
+                    Antichain::new()
+                }
                 None => {
-                    // Write-only collections cannot be read within the context of the compute
-                    // controller, so we can immediately advance their read frontier to the new write
-                    // frontier.
-                    new_upper.clone()
+                    // Write-only collections with a non-empty frontier get their red frontiers
+                    // bumped asynchronously be `tick_read_frontiers`.
+                    old_since.clone()
                 }
             };
 
@@ -1614,6 +1624,78 @@ where
         self.compute.refresh_state_metrics();
         self.compute.cleanup_collections();
         self.rehydrate_failed_replicas();
+        self.tick_read_frontiers();
+    }
+
+    /// Bump read frontiers of write-only collections to the current time.
+    ///
+    /// This is done to enable a dataflow warm-up optimization. It would be correct to always
+    /// advance read frontiers of write-only collections to their write frontiers, as the only
+    /// purpose of holding them back is installing read holds on their dependencies. But if we did
+    /// that, we would also advance the dataflows' as-ofs to their write frontier, so if the write
+    /// frontier is in the future, dataflows couldn't hydrate prior to that future time. For sinks
+    /// with a refresh schedule in particular, we would like to enable pre-hydration, to ensure the
+    /// refresh itself is fast. So what we do here is hold back the read frontiers of write-only
+    /// collections to a current time, thereby ensuring that they can hydrate as of that time.
+    ///
+    /// Note that this assumes that all collections move forward at roughly the system time (i.e.,
+    /// they adhere to an `EpochMilliseconds` timeline). If this assumption is broken, the warm-up
+    /// optimization will likely be broken as well. Correctness is ensured in any case though.
+    fn tick_read_frontiers(&mut self) {
+        let Some(time) = self.compute.now_ticker.maybe_tick() else {
+            return;
+        };
+
+        let write_only_collections = self
+            .compute
+            .collections
+            .iter_mut()
+            .filter(|(_id, coll)| coll.read_policy.is_none());
+
+        let mut read_capability_changes = BTreeMap::new();
+        for (id, collection) in write_only_collections {
+            let old_since = &collection.implied_capability;
+
+            // Bump the read frontier to the current time, but never beyond the write frontier.
+            // The constraint is important to ensure we maintain sufficient read holds on the
+            // collection's dependencies.
+            let mut new_since = collection.write_frontier.clone();
+            new_since.insert_ref(&time);
+
+            if PartialOrder::less_than(old_since, &new_since) {
+                let mut update = ChangeBatch::new();
+                update.extend(old_since.iter().map(|t| (t.clone(), -1)));
+                update.extend(new_since.iter().map(|t| (t.clone(), 1)));
+                read_capability_changes.insert(*id, update);
+                collection.implied_capability = new_since.clone();
+            }
+        }
+
+        self.update_read_capabilities(&mut read_capability_changes);
+    }
+}
+
+#[derive(Debug)]
+struct NowTicker<T> {
+    now: NowFn<T>,
+    /// Time when introspection updates were last recorded.
+    last_tick: Instant,
+    /// Amount of time to wait between ticks.
+    interval: Duration,
+}
+
+impl<T> NowTicker<T> {
+    fn new(now: NowFn<T>) -> Self {
+        Self {
+            now,
+            last_tick: Instant::now(),
+            interval: Duration::from_secs(1),
+        }
+    }
+
+    fn maybe_tick(&mut self) -> Option<T> {
+        let interval_elapsed = self.last_tick.elapsed() > self.interval;
+        interval_elapsed.then(|| (self.now)())
     }
 }
 
