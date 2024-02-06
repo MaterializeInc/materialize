@@ -694,7 +694,7 @@ class ResolvedImage:
 
         self_hash.update(f"arch={self.image.rd.arch}".encode())
         self_hash.update(f"coverage={self.image.rd.coverage}".encode())
-        self_hash.update(f"aasan={self.image.rd.asan}".encode())
+        self_hash.update(f"lsan={self.image.rd.asan}".encode())
 
         full_hash = hashlib.sha1()
         full_hash.update(self_hash.digest())

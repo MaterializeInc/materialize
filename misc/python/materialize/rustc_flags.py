@@ -23,10 +23,8 @@ coverage = [
 ]
 
 asan = [
-    "-Zsanitizer=address",
-    "-Zsanitizer-address-use-after-scope",
-    "-Zsanitizer-address-use-after-return=always",
-    "-Zsanitizer-ignorelist=.config/sanitizer-ignorelist.txt",
+    "-Zsanitizer=leak",
+    "-Cllvm-args=-asan-recover",
     "-Cdebug-assertions=off",
     "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
 ]
