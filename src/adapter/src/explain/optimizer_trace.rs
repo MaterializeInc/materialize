@@ -10,7 +10,6 @@
 //! Tracing utilities for explainable plans.
 
 use std::fmt::{Debug, Display};
-use std::time::Duration;
 
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
@@ -72,7 +71,8 @@ impl OptimizerTrace {
                 .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(filter))
                 .with(PlanTrace::<DataflowDescription<Plan>>::new(filter))
                 // Don't filter for FastPathPlan entries (there can be at most one).
-                .with(PlanTrace::<FastPathPlan>::new(None));
+                .with(PlanTrace::<FastPathPlan>::new(None))
+                .with(PlanTrace::<UsedIndexes>::new(None));
 
             OptimizerTrace(dispatcher::Dispatch::new(subscriber))
         } else {
@@ -88,7 +88,8 @@ impl OptimizerTrace {
                 .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(filter))
                 .with(PlanTrace::<DataflowDescription<Plan>>::new(filter))
                 // Don't filter for FastPathPlan entries (there can be at most one).
-                .with(PlanTrace::<FastPathPlan>::new(None));
+                .with(PlanTrace::<FastPathPlan>::new(None))
+                .with(PlanTrace::<UsedIndexes>::new(None));
 
             OptimizerTrace(dispatcher::Dispatch::new(subscriber))
         }
@@ -102,7 +103,6 @@ impl OptimizerTrace {
         config: &ExplainConfig,
         humanizer: &dyn ExprHumanizer,
         row_set_finishing: Option<RowSetFinishing>,
-        used_indexes: UsedIndexes,
         dataflow_metainfo: DataflowMetainfo,
         stage: ExplainStage,
         stmt_kind: plan::ExplaineeStatementKind,
@@ -112,7 +112,6 @@ impl OptimizerTrace {
             config,
             humanizer,
             row_set_finishing,
-            used_indexes,
             dataflow_metainfo,
         )?;
 
@@ -184,7 +183,6 @@ impl OptimizerTrace {
         config: &ExplainConfig,
         humanizer: &dyn ExprHumanizer,
         row_set_finishing: Option<RowSetFinishing>,
-        used_indexes: UsedIndexes,
         dataflow_metainfo: DataflowMetainfo,
     ) -> Result<Vec<TraceEntry<String>>, ExplainError> {
         let mut results = vec![];
@@ -194,9 +192,9 @@ impl OptimizerTrace {
         let mut context = ExplainContext {
             config,
             humanizer,
-            used_indexes: UsedIndexes::default(),
+            used_indexes: Default::default(),
             finishing: row_set_finishing.clone(),
-            duration: Duration::default(),
+            duration: Default::default(),
             optimizer_notices: RawOptimizerNotice::explain(
                 &dataflow_metainfo.optimizer_notices,
                 humanizer,
@@ -214,9 +212,9 @@ impl OptimizerTrace {
         let mut context = ExplainContext {
             config,
             humanizer,
-            used_indexes,
+            used_indexes: Default::default(),
             finishing: row_set_finishing,
-            duration: Duration::default(),
+            duration: Default::default(),
             optimizer_notices: RawOptimizerNotice::explain(
                 &dataflow_metainfo.optimizer_notices,
                 humanizer,
@@ -260,18 +258,40 @@ impl OptimizerTrace {
         for<'a> Explainable<'a, T>: Explain<'a, Context = ExplainContext<'a>>,
     {
         if let Some(trace) = self.0.downcast_ref::<PlanTrace<T>>() {
+            // Get a handle of the associated `PlanTrace<UsedIndexes>`.
+            let used_indexes_trace = self.0.downcast_ref::<PlanTrace<UsedIndexes>>();
+
             trace
                 .drain_as_vec()
                 .into_iter()
                 .map(|mut entry| {
-                    // update the context with the current time
+                    // Update the context with the current time.
                     context.duration = entry.full_duration;
+
+                    // Try to find the UsedIndexes instance for this entry.
+                    let used_indexes = used_indexes_trace.map(|t| t.used_indexes_for(&entry.path));
+
+                    // Render the EXPLAIN output string for this entry.
+                    let plan = if let Some(mut used_indexes) = used_indexes {
+                        // Temporary swap the found UsedIndexes with the default
+                        // one in the ExplainContext while explaining the plan
+                        // for this entry.
+                        std::mem::swap(&mut context.used_indexes, &mut used_indexes);
+                        let plan = Explainable::new(&mut entry.plan).explain(format, context)?;
+                        std::mem::swap(&mut context.used_indexes, &mut used_indexes);
+                        plan
+                    } else {
+                        // No UsedIndexes instance for this entry found - use
+                        // the default UsedIndexes in the ExplainContext.
+                        Explainable::new(&mut entry.plan).explain(format, context)?
+                    };
+
                     Ok(TraceEntry {
                         instant: entry.instant,
                         span_duration: entry.span_duration,
                         full_duration: entry.full_duration,
                         path: entry.path,
-                        plan: Explainable::new(&mut entry.plan).explain(format, context)?,
+                        plan,
                     })
                 })
                 .collect()

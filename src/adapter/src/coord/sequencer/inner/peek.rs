@@ -18,7 +18,7 @@ use mz_controller_types::ClusterId;
 use mz_expr::CollectionPlan;
 use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::explain::{trace_plan, ExprHumanizerExt, TransientItem, UsedIndexes};
+use mz_repr::explain::{trace_plan, ExprHumanizerExt, TransientItem};
 use mz_repr::{Datum, GlobalId, RowArena, Timestamp};
 use mz_sql::catalog::CatalogCluster;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
@@ -633,7 +633,6 @@ impl Coordinator {
                                 select_id: optimizer.select_id(),
                                 finishing: optimizer.finishing().clone(),
                                 df_meta: Default::default(),
-                                used_indexes: Default::default(),
                                 explain_ctx,
                             })
                         } else {
@@ -745,7 +744,7 @@ impl Coordinator {
             || "optimize peek (LIR)",
             move || {
                 let pipeline =
-                    || -> Result<(Either<optimize::peek::GlobalLirPlan, optimize::copy_to::GlobalLirPlan>, UsedIndexes), AdapterError> {
+                    || -> Result<Either<optimize::peek::GlobalLirPlan, optimize::copy_to::GlobalLirPlan>, AdapterError> {
                         // In `explain_~` contexts, set the trace-derived dispatch
                         // as default while optimizing.
                         let _dispatch_guard = if let Some(explain_ctx) = explain_ctx.as_ref() {
@@ -763,55 +762,27 @@ impl Coordinator {
                             Either::Left(optimizer) => {
                                 let global_mir_plan = global_mir_plan.unwrap_left();
 
-                                // Collect the list of indexes used by the dataflow at this point
-                                let mut used_indexes = {
-                                    let df_desc = global_mir_plan.df_desc();
-                                    let df_meta = global_mir_plan.df_meta();
-                                    UsedIndexes::new(
-                                        df_desc
-                                            .index_imports
-                                            .iter()
-                                            .map(|(id, _index_import)| {
-                                                (*id, df_meta.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
-                                            })
-                                            .collect(),
-                                    )
-                                };
-
                                 // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                                let global_mir_plan =
-                                    global_mir_plan.resolve(timestamp_context.clone(), ctx.session_mut());
+                                let global_mir_plan = global_mir_plan.resolve(timestamp_context.clone(), ctx.session_mut());
                                 let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
 
-                                // Update used_indexes for FastPath plans.
-                                if let peek::PeekPlan::FastPath(plan) = global_lir_plan.peek_plan() {
-                                    let arity = global_lir_plan.typ().arity();
-                                    let finishing = if !optimizer.finishing().is_trivial(arity) {
-                                        Some(optimizer.finishing())
-                                    } else {
-                                        None
-                                    };
-                                    used_indexes = plan.used_indexes(finishing);
-                                }
-                                Ok((Either::Left(global_lir_plan), used_indexes))
+                                Ok(Either::Left(global_lir_plan))
                             }
                             // Optimize COPY TO statement.
                             Either::Right(optimizer) => {
                                 let global_mir_plan = global_mir_plan.unwrap_right();
 
                                 // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                                let global_mir_plan = global_mir_plan
-                                    .resolve(timestamp_context.clone(), ctx.session_mut())?;
-                                let global_lir_plan =
-                                    optimizer.catch_unwind_optimize(global_mir_plan)?;
+                                let global_mir_plan = global_mir_plan.resolve(timestamp_context.clone(), ctx.session_mut())?;
+                                let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan)?;
 
-                                Ok((Either::Right(global_lir_plan), UsedIndexes::default()))
+                                Ok(Either::Right(global_lir_plan))
                             }
                         }
                     };
 
                 let stage = match pipeline() {
-                    Ok((Either::Left(global_lir_plan), used_indexes)) => {
+                    Ok(Either::Left(global_lir_plan)) => {
                         let optimizer = optimizer.unwrap_left();
                         if let Some(explain_ctx) = explain_ctx {
                             let (_, df_meta, _) = global_lir_plan.unapply();
@@ -820,7 +791,6 @@ impl Coordinator {
                                 select_id: optimizer.select_id(),
                                 finishing: optimizer.finishing().clone(),
                                 df_meta,
-                                used_indexes,
                                 explain_ctx,
                             })
                         } else {
@@ -836,7 +806,7 @@ impl Coordinator {
                             })
                         }
                     }
-                    Ok((Either::Right(global_lir_plan), _)) => {
+                    Ok(Either::Right(global_lir_plan)) => {
                         let optimizer = optimizer.unwrap_right();
                         PeekStage::CopyTo(PeekStageCopyTo {
                             validity,
@@ -868,7 +838,6 @@ impl Coordinator {
                                 select_id: optimizer.select_id(),
                                 finishing: optimizer.finishing().clone(),
                                 df_meta: Default::default(),
-                                used_indexes: Default::default(),
                                 explain_ctx,
                             })
                         } else {
@@ -1030,7 +999,6 @@ impl Coordinator {
             df_meta,
             select_id,
             finishing,
-            used_indexes,
             explain_ctx:
                 ExplainContext {
                     broken,
@@ -1068,7 +1036,6 @@ impl Coordinator {
             &config,
             &expr_humanizer,
             finishing,
-            used_indexes,
             df_meta,
             stage,
             plan::ExplaineeStatementKind::Select,

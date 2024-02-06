@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
-use mz_compute_types::dataflows::{BuildDesc, DataflowDesc, IndexImport};
+use mz_compute_types::dataflows::{BuildDesc, DataflowDesc, DataflowDescription, IndexImport};
 use mz_expr::visit::Visit;
 use mz_expr::{
     AccessStrategy, CollectionPlan, Id, JoinImplementation, LocalId, MapFilterProject,
@@ -25,7 +25,7 @@ use mz_expr::{
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
-use mz_repr::explain::IndexUsageType;
+use mz_repr::explain::{IndexUsageType, UsedIndexes};
 use mz_repr::GlobalId;
 
 use crate::monotonic::MonotonicFlag;
@@ -1199,6 +1199,33 @@ impl Default for DataflowMetainfo {
             optimizer_notices: Vec::new(),
             index_usage_types: BTreeMap::new(),
         }
+    }
+}
+
+impl<Notice> DataflowMetainfo<Notice> {
+    /// Create a [`UsedIndexes`] instance by resolving each `id` in the
+    /// `index_ids` iterator against an entry expected to exist in the
+    /// [`DataflowMetainfo::index_usage_types`].
+    pub fn used_indexes<T>(&self, df_desc: &DataflowDescription<T>) -> UsedIndexes {
+        UsedIndexes::new(
+            df_desc
+                .index_imports
+                .iter()
+                .map(|(id, _)| {
+                    let entry = self.index_usage_types.get(id).cloned();
+                    // If an entry does not exist, mark the usage type for this
+                    // index as `Unknown`.
+                    //
+                    // This should never happen if this method is called after
+                    // running `prune_and_annotate_dataflow_index_imports` on
+                    // the dataflow (this happens at the end of the
+                    // `optimize_dataflow` call).
+                    let index_usage_type = entry.unwrap_or(vec![IndexUsageType::Unknown]);
+
+                    (*id, index_usage_type)
+                })
+                .collect(),
+        )
     }
 }
 
