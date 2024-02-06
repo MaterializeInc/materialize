@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import argparse
-import subprocess
 from argparse import Namespace
 from pathlib import Path
 
@@ -73,7 +72,6 @@ def run_sqllogictest(
     )
 
     try:
-        preparation_before_run()
         for command in commands:
             container_name = "sqllogictest"
             c.run(container_name, *command)
@@ -87,12 +85,11 @@ class SltRunConfig:
 
 
 class SltRunStepConfig:
-    def __init__(self, file_set: set[str], flags: list[str], use_tee: bool = False):
+    def __init__(self, file_set: set[str], flags: list[str]):
         file_list = list(file_set)
         file_list.sort()
         self.file_list = file_list
         self.flags = flags
-        self.use_tee = use_tee
 
     def configure(self, args: Namespace) -> None:
         pass
@@ -120,25 +117,12 @@ class SltRunStepConfig:
             *self.file_list,
         ]
 
-        if self.use_tee:
-            # TODO: test whether the pipe works
-            command = [
-                "stdbuf",
-                "--output=L",
-                "--error=L",
-                *command,
-                "|",
-                "tee",
-                "-a",
-                "target/slt.log",
-            ]
-
         return command
 
 
 class InputBasedSltRunStepConfig(SltRunStepConfig):
     def __init__(self) -> None:
-        super().__init__(file_set=set(), flags=[], use_tee=False)
+        super().__init__(file_set=set(), flags=[])
 
     def configure(self, args: Namespace) -> None:
         if args.pattern is not None:
@@ -161,29 +145,7 @@ class DefaultSltRunStepConfig(SltRunStepConfig):
         super().__init__(
             file_set,
             flags=[],
-            use_tee=False,
         )
-
-
-def preparation_before_run() -> None:
-    subprocess.run(
-        [
-            "mkdir",
-            "-p",
-            "target",
-        ],
-        check=True,
-        cwd=MZ_ROOT / "ci/test",
-    )
-    subprocess.run(
-        [
-            "rm",
-            "-f",
-            "target/slt.log",
-        ],
-        check=True,
-        cwd=MZ_ROOT / "ci/test",
-    )
 
 
 def create_slt_execution_commands(
@@ -571,9 +533,7 @@ def compileSlowSltConfig() -> SltRunConfig:
     )
 
     config.steps.append(
-        SltRunStepConfig(
-            cockroach_and_pg_tests, ["--auto-index-selects", "--no-fail"], use_tee=True
-        )
+        SltRunStepConfig(cockroach_and_pg_tests, ["--auto-index-selects", "--no-fail"])
     )
 
     tests = {
@@ -623,13 +583,9 @@ def compileSlowSltConfig() -> SltRunConfig:
     tests_with_views_or_replica = tests - tests_without_views_and_replica
 
     config.steps.append(
-        SltRunStepConfig(
-            tests_with_views_or_replica, ["--auto-index-selects"], use_tee=True
-        )
+        SltRunStepConfig(tests_with_views_or_replica, ["--auto-index-selects"])
     )
-    config.steps.append(
-        SltRunStepConfig(tests_without_views_and_replica, [], use_tee=True)
-    )
+    config.steps.append(SltRunStepConfig(tests_without_views_and_replica, []))
 
     # Due to performance issues (see below), we pick two selected SLTs from
     # the SQLite corpus that we can reasonably run with --auto-index-selects
@@ -648,7 +604,6 @@ def compileSlowSltConfig() -> SltRunConfig:
         SltRunStepConfig(
             tests_with_views,
             ["--auto-index-selects", "--enable-table-keys"],
-            use_tee=True,
         )
     )
 
@@ -660,7 +615,6 @@ def compileSlowSltConfig() -> SltRunConfig:
         SltRunStepConfig(
             tests_without_views,
             ["--auto-transactions", "--auto-index-tables", "--enable-table-keys"],
-            use_tee=True,
         )
     )
 
