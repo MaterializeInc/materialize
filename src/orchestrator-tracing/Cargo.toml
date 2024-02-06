@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow = "1.0.66"
 async-trait = "0.1.68"
-clap = { version = "3.2.24", features = ["env", "derive"] }
+clap = { version = "4.4.18", features = ["env", "derive"] }
 futures-core = "0.3.21"
 http = "0.2.8"
 humantime = { version = "2.1.0", optional = true }
