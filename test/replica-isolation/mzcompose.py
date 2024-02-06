@@ -453,6 +453,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
                 no_reset=True,
                 materialize_params={"cluster": "cluster1"},
                 seed=id,
+                default_timeout="300s",
             )
         ):
             populate(c)

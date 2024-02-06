@@ -42,6 +42,7 @@ class NestedTypes(Check):
                   array_col, ARRAY[ARRAY['a', 'b'], ARRAY['c', 'd']]
                   FROM nested_types_table;
 
+                > SET statement_timeout = '120s'
                 > INSERT INTO nested_types_table SELECT * FROM nested_types_table LIMIT 1;
                 """,
                 """

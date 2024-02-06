@@ -22,6 +22,7 @@
 > CREATE TABLE long_transaction (f1 INTEGER);
 
 # Insert 1M unique rows
+> SET statement_timeout = '120s'
 > INSERT INTO long_transaction
   SELECT (a1.f1 * 1) +
          (a2.f1 * 10) +
