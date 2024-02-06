@@ -12,7 +12,8 @@ The DRI is responsible for communicating progress through these
 lifecycle phases by:
 
 - Updating the "Lifecycle" tag on the associated GitHub Epic.
-- Optionally, announcing the update in #epd-announce and #ohship.
+- Optionally, announcing the update in `#epd-announce` and
+  `#shipped-it`.
 
 ## Internal Development
 
@@ -41,7 +42,7 @@ Before a project can move to Private Preview, it must:
     - Cause stability issues for other parts of the system.
 - Live behind a gated feature flag (disabled by default).
 - Have basic tests live and running.
-- Have basic reference documentation live behind a {{< private-preview >}} flag.
+- Have basic reference documentation live behind a `{{< private-preview >}}` flag.
 - Have its GitHub epic status set to "Private Preview".
 
 ## Private Preview
@@ -49,8 +50,8 @@ Before a project can move to Private Preview, it must:
 The goal of Private Preview is to identify and address all of
 the reasons why the solution might not work. To do this, the
 DRI is responsible for getting the solution in front of relevant
-internal (e.g. DevEx) and external (e.g. customers) testers.
-It is recommended to kick this off by posting to #epd-announce
+internal (e.g. QA) and external (e.g. customers) testers.
+It is recommended to kick this off by posting to `#epd-announce`
 and asking for support on identifying testers. Customer-facing
 teams such as field engineering are well-positioned to provide
 guidance on external testers. If you're unsure how to proceed,
@@ -83,12 +84,12 @@ Before a project can move to Public Preview, it must:
 - Have addressed all known stability issues.
 - Have addressed all known limitations, except those that are explicitly out of scope.
 - Support all known customer configurations, except those that are explicitly out of scope.
-- Have polished reference documentation published with a {{< private-preview >}} notice.
+- Have polished reference documentation published with a `{{< private-preview >}}` notice.
 
 To move a feature to Public Preview:
 
-- Update any documentation about the feature to use the {{< public-preview >}} notice.
-- Add a release note with a {{< public-preview >}} flag.
+- Update any documentation about the feature to use the `{{< public-preview >}}` notice.
+- Add a release note with a `{{< public-preview >}}` flag.
 - Update the GitHub epic status to "Public Preview".
 - Enable the feature flag in all environments.
 
@@ -113,7 +114,7 @@ Before a project can move to General Availability, it must:
 
 To move a project to General Availability:
 
-- Remove the {{< public-preview >}} notice from the documentation.
+- Remove the `{{< public-preview >}}` notice from the documentation.
 - Write a blog post describing the project, or explicitly
   justify why a blog post is not required.
 - Write a release note announcing that the project is in General Availability.
