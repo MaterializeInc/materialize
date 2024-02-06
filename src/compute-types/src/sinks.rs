@@ -107,6 +107,7 @@ impl RustType<ProtoComputeSinkDesc> for ComputeSinkDesc<CollectionMetadata, Time
 pub enum ComputeSinkConnection<S: 'static = ()> {
     Subscribe(SubscribeSinkConnection),
     Persist(PersistSinkConnection<S>),
+    S3Oneshot(S3OneshotSinkConnection),
 }
 
 impl<S> ComputeSinkConnection<S> {
@@ -115,6 +116,7 @@ impl<S> ComputeSinkConnection<S> {
         match self {
             ComputeSinkConnection::Subscribe(_) => "subscribe",
             ComputeSinkConnection::Persist(_) => "persist",
+            ComputeSinkConnection::S3Oneshot(_) => "s3",
         }
     }
 
@@ -135,6 +137,7 @@ impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMe
             kind: Some(match self {
                 ComputeSinkConnection::Subscribe(_) => Kind::Subscribe(()),
                 ComputeSinkConnection::Persist(persist) => Kind::Persist(persist.into_proto()),
+                ComputeSinkConnection::S3Oneshot(s3) => Kind::S3Oneshot(s3.into_proto()),
             }),
         }
     }
@@ -147,12 +150,37 @@ impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMe
         Ok(match kind {
             Kind::Subscribe(_) => ComputeSinkConnection::Subscribe(SubscribeSinkConnection {}),
             Kind::Persist(persist) => ComputeSinkConnection::Persist(persist.into_rust()?),
+            Kind::S3Oneshot(s3) => ComputeSinkConnection::S3Oneshot(s3.into_rust()?),
         })
     }
 }
 
 #[derive(Arbitrary, Default, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct SubscribeSinkConnection {}
+
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct S3OneshotSinkConnection {
+    pub prefix: String,
+    pub aws_connection: mz_storage_types::connections::aws::AwsConnection,
+}
+
+impl RustType<ProtoS3OneshotSinkConnection> for S3OneshotSinkConnection {
+    fn into_proto(&self) -> ProtoS3OneshotSinkConnection {
+        ProtoS3OneshotSinkConnection {
+            prefix: self.prefix.clone(),
+            aws_connection: Some(self.aws_connection.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoS3OneshotSinkConnection) -> Result<Self, TryFromProtoError> {
+        Ok(S3OneshotSinkConnection {
+            prefix: proto.prefix,
+            aws_connection: proto
+                .aws_connection
+                .into_rust_if_some("ProtoS3OneshotSinkConnection::aws_connection")?,
+        })
+    }
+}
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PersistSinkConnection<S> {

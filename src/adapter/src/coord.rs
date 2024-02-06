@@ -82,7 +82,8 @@ use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
 use futures::future::{BoxFuture, FutureExt, LocalBoxFuture};
 use futures::StreamExt;
-use itertools::Itertools;
+use http::Uri;
+use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::{
     CompactionWindow, ReadCapability, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
 };
@@ -107,6 +108,7 @@ use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::{soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
+use mz_pgcopy::CopyFormatParams;
 use mz_repr::explain::{ExplainConfig, ExplainFormat, UsedIndexes};
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
@@ -122,7 +124,8 @@ use mz_sql::session::vars::{self, ConnectionCounter, OwnedVarInput, SystemVars};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ExplainStage;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
-use mz_storage_types::connections::inline::IntoInlineConnection;
+use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
+use mz_storage_types::connections::Connection as StorageConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::Timeline;
@@ -365,8 +368,8 @@ pub enum RealTimeRecencyContext {
         timeline_context: TimelineContext,
         oracle_read_ts: Option<Timestamp>,
         source_ids: BTreeSet<GlobalId>,
-        optimizer: optimize::peek::Optimizer,
-        peek_ctx: PeekContext,
+        optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
+        explain_ctx: Option<ExplainContext>,
     },
 }
 
@@ -380,14 +383,6 @@ impl RealTimeRecencyContext {
 }
 
 #[derive(Debug)]
-pub enum PeekContext {
-    /// Peek was initiated from SELECT stmt.
-    Select,
-    /// Peek was initiated with an EXPLAIN stmt.
-    Explain(ExplainContext),
-}
-
-#[derive(Debug)]
 pub enum PeekStage {
     Validate(PeekStageValidate),
     LinearizeTimestamp(PeekStageLinearizeTimestamp),
@@ -396,6 +391,7 @@ pub enum PeekStage {
     OptimizeMir(PeekStageOptimizeMir),
     OptimizeLir(PeekStageOptimizeLir),
     Finish(PeekStageFinish),
+    CopyTo(PeekStageCopyTo),
     Explain(PeekStageExplain),
 }
 
@@ -408,17 +404,34 @@ impl PeekStage {
             | PeekStage::TimestampReadHold(PeekStageTimestampReadHold { validity, .. })
             | PeekStage::OptimizeMir(PeekStageOptimizeMir { validity, .. })
             | PeekStage::OptimizeLir(PeekStageOptimizeLir { validity, .. })
-            | PeekStage::Finish(PeekStageFinish { validity, .. }) => Some(validity),
-            PeekStage::Explain(PeekStageExplain { validity, .. }) => Some(validity),
+            | PeekStage::Finish(PeekStageFinish { validity, .. })
+            | PeekStage::CopyTo(PeekStageCopyTo { validity, .. })
+            | PeekStage::Explain(PeekStageExplain { validity, .. }) => Some(validity),
         }
     }
+}
+
+#[derive(Debug)]
+pub struct CopyToContext {
+    pub desc: RelationDesc,
+    pub uri: Uri,
+    pub connection: StorageConnection<ReferencedConnection>,
+    pub format_params: CopyFormatParams<'static>,
 }
 
 #[derive(Debug)]
 pub struct PeekStageValidate {
     plan: mz_sql::plan::SelectPlan,
     target_cluster: TargetCluster,
-    peek_ctx: PeekContext,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing a COPY TO statement.
+    ///
+    /// Will result in creating and using [`optimize::copy_to::Optimizer`] in
+    /// the `opimizer` field of all subsequent stages.
+    copy_to_ctx: Option<CopyToContext>,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
@@ -428,8 +441,10 @@ pub struct PeekStageLinearizeTimestamp {
     source_ids: BTreeSet<GlobalId>,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
-    optimizer: optimize::peek::Optimizer,
-    peek_ctx: PeekContext,
+    optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
@@ -440,8 +455,10 @@ pub struct PeekStageRealTimeRecency {
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
     oracle_read_ts: Option<Timestamp>,
-    optimizer: optimize::peek::Optimizer,
-    peek_ctx: PeekContext,
+    optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
@@ -453,8 +470,10 @@ pub struct PeekStageTimestampReadHold {
     timeline_context: TimelineContext,
     oracle_read_ts: Option<Timestamp>,
     real_time_recency_ts: Option<mz_repr::Timestamp>,
-    optimizer: optimize::peek::Optimizer,
-    peek_ctx: PeekContext,
+    optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
@@ -465,8 +484,10 @@ pub struct PeekStageOptimizeMir {
     id_bundle: CollectionIdBundle,
     target_replica: Option<ReplicaId>,
     determination: TimestampDetermination<mz_repr::Timestamp>,
-    optimizer: optimize::peek::Optimizer,
-    peek_ctx: PeekContext,
+    optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
@@ -477,9 +498,11 @@ pub struct PeekStageOptimizeLir {
     target_replica: Option<ReplicaId>,
     determination: TimestampDetermination<mz_repr::Timestamp>,
     source_ids: BTreeSet<GlobalId>,
-    optimizer: optimize::peek::Optimizer,
-    global_mir_plan: optimize::peek::GlobalMirPlan,
-    peek_ctx: PeekContext,
+    optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
+    global_mir_plan: Either<optimize::peek::GlobalMirPlan, optimize::copy_to::GlobalMirPlan>,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
@@ -492,6 +515,13 @@ pub struct PeekStageFinish {
     determination: TimestampDetermination<mz_repr::Timestamp>,
     optimizer: optimize::peek::Optimizer,
     global_lir_plan: optimize::peek::GlobalLirPlan,
+}
+
+#[derive(Debug)]
+pub struct PeekStageCopyTo {
+    validity: PlanValidity,
+    optimizer: optimize::copy_to::Optimizer,
+    global_lir_plan: optimize::copy_to::GlobalLirPlan,
 }
 
 #[derive(Debug)]

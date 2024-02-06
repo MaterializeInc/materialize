@@ -34,15 +34,14 @@ use crate::command::Command;
 use crate::coord::appends::Deferred;
 use crate::coord::statement_logging::StatementLoggingId;
 use crate::coord::{
-    Coordinator, CreateConnectionValidationReady, Message, PeekStage, PeekStageTimestampReadHold,
-    PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
+    AlterConnectionValidationReady, Coordinator, CreateConnectionValidationReady, Message,
+    PeekStage, PeekStageTimestampReadHold, PendingReadTxn, PlanValidity, PurifiedStatementReady,
+    RealTimeRecencyContext,
 };
 use crate::session::Session;
 use crate::statement_logging::StatementLifecycleEvent;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterNotice, TimestampContext};
-
-use super::AlterConnectionValidationReady;
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 74KB. This would
@@ -855,7 +854,7 @@ impl Coordinator {
                 oracle_read_ts,
                 source_ids,
                 optimizer,
-                peek_ctx,
+                explain_ctx,
             } => {
                 self.execute_peek_stage(
                     ctx,
@@ -869,7 +868,7 @@ impl Coordinator {
                         source_ids,
                         real_time_recency_ts: Some(real_time_recency_ts),
                         optimizer,
-                        peek_ctx,
+                        explain_ctx,
                     }),
                 )
                 .await;

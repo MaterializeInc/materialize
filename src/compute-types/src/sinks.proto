@@ -15,6 +15,7 @@ import "repr/src/global_id.proto";
 import "expr/src/refresh_schedule.proto";
 import "repr/src/relation_and_scalar.proto";
 import "storage-types/src/controller.proto";
+import "storage-types/src/connections/aws.proto";
 
 package mz_compute_types.sinks;
 
@@ -32,10 +33,16 @@ message ProtoComputeSinkConnection {
     oneof kind {
         google.protobuf.Empty subscribe = 1;
         ProtoPersistSinkConnection persist = 2;
+        ProtoS3OneshotSinkConnection s3_oneshot = 3;
     }
 }
 
 message ProtoPersistSinkConnection {
     mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 1;
     mz_storage_types.controller.ProtoCollectionMetadata storage_metadata = 2;
+}
+
+message ProtoS3OneshotSinkConnection {
+    string prefix = 1;
+    mz_storage_types.connections.aws.ProtoAwsConnection aws_connection = 2;
 }
