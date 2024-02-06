@@ -363,7 +363,7 @@ pub(crate) mod persist {
             unopened_catalog_state: &mut UnopenedPersistCatalogState,
             version: u64,
         ) -> Result<u64, CatalogError> {
-            let incompatible = DurableCatalogError::IncompatibleVersion {
+            let incompatible = DurableCatalogError::IncompatibleDataVersion {
                 found_version: version,
                 min_catalog_version: MIN_CATALOG_VERSION,
                 catalog_version: CATALOG_VERSION,

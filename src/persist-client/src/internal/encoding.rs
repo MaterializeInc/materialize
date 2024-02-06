@@ -50,7 +50,7 @@ use crate::internal::state_diff::{
 use crate::internal::trace::Trace;
 use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
 use crate::stats::PartStats;
-use crate::{PersistConfig, ShardId, WriterId};
+use crate::{cfg, PersistConfig, ShardId, WriterId};
 
 #[derive(Debug)]
 pub struct Schemas<K: Codec, V: Codec> {
@@ -174,54 +174,14 @@ pub(crate) fn parse_id(id_prefix: char, id_type: &str, encoded: &str) -> Result<
     Ok(*uuid.as_bytes())
 }
 
-// If persist gets some encoded ProtoState from the future (e.g. two versions of
-// code are running simultaneously against the same shard), it might have a
-// field that the current code doesn't know about. This would be silently
-// discarded at proto decode time. Unknown Fields [1] are a tool we can use in
-// the future to help deal with this, but in the short-term, it's best to keep
-// the persist read-modify-CaS loop simple for as long as we can get away with
-// it (i.e. until we have to offer the ability to do rollbacks).
-//
-// [1]: https://developers.google.com/protocol-buffers/docs/proto3#unknowns
-//
-// To detect the bad situation and disallow it, we tag every version of state
-// written to consensus with the version of code used to encode it. Then at
-// decode time, we're able to compare the current version against any we receive
-// and assert as necessary.
-//
-// Initially we allow any from the past (permanent backward compatibility) and
-// one minor version into the future (forward compatibility). This allows us to
-// run two versions concurrently for rolling upgrades. We'll have to revisit
-// this logic if/when we start using major versions other than 0.
-//
-// We could do the same for blob data, but it shouldn't be necessary. Any blob
-// data we read is going to be because we fetched it using a pointer stored in
-// some persist state. If we can handle the state, we can handle the blobs it
-// references, too.
 pub(crate) fn check_data_version(code_version: &Version, data_version: &Version) {
-    // Allow one minor version of forward compatibility. We could avoid the
-    // clone with some nested comparisons of the semver fields, but this code
-    // isn't particularly performance sensitive and I find this impl easier to
-    // reason about.
-    let max_allowed_data_version = Version::new(
-        code_version.major,
-        code_version.minor.saturating_add(1),
-        u64::MAX,
-    );
-    if &max_allowed_data_version < data_version {
+    if let Err(msg) = cfg::check_data_version(code_version, data_version) {
         // We can't catch halts, so panic in test, so we can get unit test
         // coverage.
         if cfg!(test) {
-            panic!(
-                "{} received persist state from the future {}",
-                code_version, data_version,
-            );
+            panic!("{msg}");
         } else {
-            halt!(
-                "{} received persist state from the future {}",
-                code_version,
-                data_version,
-            );
+            halt!("{msg}");
         }
     }
 }

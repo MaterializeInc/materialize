@@ -596,3 +596,47 @@ impl RustType<ConfigUpdates> for PersistParameters {
         Ok(Self { config_updates })
     }
 }
+
+// If persist gets some encoded ProtoState from the future (e.g. two versions of
+// code are running simultaneously against the same shard), it might have a
+// field that the current code doesn't know about. This would be silently
+// discarded at proto decode time. Unknown Fields [1] are a tool we can use in
+// the future to help deal with this, but in the short-term, it's best to keep
+// the persist read-modify-CaS loop simple for as long as we can get away with
+// it (i.e. until we have to offer the ability to do rollbacks).
+//
+// [1]: https://developers.google.com/protocol-buffers/docs/proto3#unknowns
+//
+// To detect the bad situation and disallow it, we tag every version of state
+// written to consensus with the version of code used to encode it. Then at
+// decode time, we're able to compare the current version against any we receive
+// and assert as necessary.
+//
+// Initially we allow any from the past (permanent backward compatibility) and
+// one minor version into the future (forward compatibility). This allows us to
+// run two versions concurrently for rolling upgrades. We'll have to revisit
+// this logic if/when we start using major versions other than 0.
+//
+// We could do the same for blob data, but it shouldn't be necessary. Any blob
+// data we read is going to be because we fetched it using a pointer stored in
+// some persist state. If we can handle the state, we can handle the blobs it
+// references, too.
+pub fn check_data_version(code_version: &Version, data_version: &Version) -> Result<(), String> {
+    // Allow one minor version of forward compatibility. We could avoid the
+    // clone with some nested comparisons of the semver fields, but this code
+    // isn't particularly performance sensitive and I find this impl easier to
+    // reason about.
+    let max_allowed_data_version = Version::new(
+        code_version.major,
+        code_version.minor.saturating_add(1),
+        u64::MAX,
+    );
+
+    if &max_allowed_data_version < data_version {
+        Err(format!(
+            "{code_version} received persist state from the future {data_version}",
+        ))
+    } else {
+        Ok(())
+    }
+}

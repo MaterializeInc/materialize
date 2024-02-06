@@ -393,17 +393,14 @@ impl CatalogMigrator {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use mz_ore::metrics::MetricsRegistry;
     use mz_persist_client::PersistClient;
     use mz_sql::session::vars::CatalogKind;
     use uuid::Uuid;
 
     use crate::durable::impls::migrate::{Direction, TargetImplementation};
     use crate::durable::{
-        rollback_from_persist_to_stash_state, test_migrate_from_stash_to_persist_state,
-        test_stash_config, Metrics, OpenableDurableCatalogState,
+        test_migrate_from_stash_to_persist_state, test_rollback_from_persist_to_stash_state,
+        test_stash_config, OpenableDurableCatalogState,
     };
 
     #[mz_ore::test(tokio::test)]
@@ -412,7 +409,6 @@ mod tests {
         let (debug_factory, stash_config) = test_stash_config().await;
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
-        let persist_metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
 
         {
             let mut catalog = test_migrate_from_stash_to_persist_state(
@@ -455,11 +451,10 @@ mod tests {
         }
 
         {
-            let mut catalog = rollback_from_persist_to_stash_state(
+            let mut catalog = test_rollback_from_persist_to_stash_state(
                 stash_config.clone(),
                 persist_client.clone(),
                 organization_id.clone(),
-                Arc::clone(&persist_metrics),
             )
             .await;
             assert_eq!(
