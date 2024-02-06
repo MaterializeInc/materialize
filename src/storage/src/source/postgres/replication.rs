@@ -83,7 +83,6 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::HashSet;
 use mz_ore::result::ResultExt;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_postgres_util::PostgresError;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
@@ -325,10 +324,15 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 if !table_info.contains_key(&oid) {
                                     continue;
                                 }
+
+                                let event_is_ok = event.is_ok();
                                 let data = (oid, event);
                                 if let Some((rewind_caps, req)) = rewinds.get(&oid) {
                                     let [data_cap, _upper_cap] = rewind_caps;
-                                    if commit_lsn <= req.snapshot_lsn {
+                                    // Do not "rewind" definite errors because
+                                    // we cannot guarantee that the snapshot
+                                    // dataflow produced a definite error.
+                                    if commit_lsn <= req.snapshot_lsn && event_is_ok {
                                         let update = (data.clone(), MzOffset::from(0), -diff);
                                         data_output.give(data_cap, update).await;
                                     }
@@ -386,20 +390,29 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     // We now process the slot updates and apply the cast expressions
     let mut final_row = Row::default();
     let mut datum_vec = DatumVec::new();
-    let replication_updates = raw_collection.map(move |(oid, event)| {
-        let (output_index, _, casts) = &table_info[&oid];
-        let event = event.and_then(|row| {
-            let mut datums = datum_vec.borrow();
-            for col in row.iter() {
-                let datum = col.as_deref().map(super::decode_utf8_text).transpose()?;
-                datums.push(datum.unwrap_or(Datum::Null));
-            }
-            super::cast_row(casts, &datums, &mut final_row)?;
-            Ok(final_row.clone())
-        });
+    let replication_updates = raw_collection
+        .map(move |(oid, event)| {
+            let (output_index, _, casts) = &table_info[&oid];
+            let event = event.and_then(|row| {
+                let mut datums = datum_vec.borrow();
+                for col in row.iter() {
+                    let datum = col.as_deref().map(super::decode_utf8_text).transpose()?;
+                    datums.push(datum.unwrap_or(Datum::Null));
+                }
+                super::cast_row(casts, &datums, &mut final_row)?;
+                Ok(final_row.clone())
+            });
 
-        (*output_index, event.err_into())
-    });
+            (*output_index, event.err_into())
+        })
+        .inner
+        .map_in_place(move |&mut ((_, ref data), _, ref mut diff)| {
+            // Ensure errors are never retracted.
+            if data.is_err() {
+                *diff = diff.abs();
+            }
+        })
+        .as_collection();
 
     let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
 
@@ -607,8 +620,7 @@ fn extract_transaction<'a>(
                             publication,
                             Some(rel_id),
                         )
-                        .await
-                        .map_err(PostgresError::from)?;
+                        .await?;
                         let upstream_info = upstream_info.into_iter().map(|t| (t.oid, t)).collect();
 
                         if let Err(err) = verify_schema(rel_id, expected_desc, &upstream_info) {

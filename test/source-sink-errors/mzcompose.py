@@ -410,7 +410,7 @@ class PgDisruption:
                     JOIN mz_sources ON mz_sources.id = source_id
                     WHERE (
                         name = 'source1' OR name = 'pg_source'
-                    ) AND status = 'stalled'
+                    ) AND (status = 'stalled' OR status = 'ceased')
                     ORDER BY occurred_at DESC LIMIT 1;
                 true
                 """

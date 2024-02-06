@@ -146,9 +146,8 @@ use mz_expr::MirScalarExpr;
 use mz_ore::result::ResultExt;
 use mz_ore::task::{AbortOnDropHandle, JoinHandleExt};
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_postgres_util::schemas::PublicationInfoError;
-use mz_postgres_util::simple_query_opt;
 use mz_postgres_util::tunnel::Config;
+use mz_postgres_util::{simple_query_opt, PostgresError};
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::{display::AstDisplay, Ident};
 use mz_storage_types::parameters::PgSourceSnapshotConfig;
@@ -361,7 +360,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             {
                 // If the replication stream cannot be obtained in a definite way there is
                 // nothing else to do. These errors are not retractable.
-                Err(PublicationInfoError::PublicationMissing(publication)) => {
+                Err(PostgresError::PublicationMissing(publication)) => {
                     let err = DefiniteError::PublicationDropped(publication);
                     for oid in reader_snapshot_table_info.keys() {
                         // Produce a definite error here and then exit to ensure
@@ -383,7 +382,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                         .await;
                     return Ok(());
                 }
-                Err(PublicationInfoError::PostgresError(e)) => Err(e)?,
+                Err(e) => Err(TransientError::from(e))?,
                 Ok(i) => i,
             };
 
