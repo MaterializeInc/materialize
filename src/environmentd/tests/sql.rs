@@ -3872,3 +3872,43 @@ async fn test_explain_timestamp_blocking() {
         "read against mv at timestamp {mv_timestamp} should be in the future compared to now, {mz_now_timestamp}"
     );
 }
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_linearize_read_then_write() {
+    let server = test_util::TestHarness::default().start().await;
+    server
+        .enable_feature_flags(&["enable_refresh_every_mvs"])
+        .await;
+    let client = server.connect().await.unwrap();
+    // This test will break in the year 30,000 after Jan 1st. When that happens, increase the year
+    // to fix the test.
+    client
+        .batch_execute(
+            "CREATE MATERIALIZED VIEW const_mv WITH (REFRESH AT '30000-01-01 23:59') AS SELECT 2;",
+        )
+        .await
+        .unwrap();
+
+    client
+        .batch_execute("CREATE TABLE t (a INT);")
+        .await
+        .unwrap();
+
+    let handle = task::spawn(|| "read task", async move {
+        // The since of const_mv will be in the year 30,000, requiring us to select a timestamp in
+        // the year 30,000, requiring us to linearize the read waiting for the timestamp oracle to
+        // catch up to the year 30,000.
+        let _ = client
+            .query_one("INSERT INTO t SELECT * FROM const_mv;", &[])
+            .await;
+        panic!("We shouldn't get here until the year 30,000");
+    });
+
+    // Sleep for a bit to try and get the `INSERT INTO SELECT` to run. We may get some false
+    // positives, but we won't get false negatives.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    assert!(!handle.is_finished());
+    handle.abort_on_drop();
+}

@@ -706,7 +706,7 @@ impl Coordinator {
                 timeline,
                 chosen_ts,
                 oracle_ts,
-            } = read_txn.txn.timestamp_context()
+            } = read_txn.timestamp_context()
             {
                 let oracle_ts = match oracle_ts {
                     Some(oracle_ts) => oracle_ts,
@@ -728,7 +728,7 @@ impl Coordinator {
                 let current_oracle_ts = cached_oracle_ts.entry(timeline.clone());
                 let current_oracle_ts = match current_oracle_ts {
                     btree_map::Entry::Vacant(entry) => {
-                        let timestamp_oracle = self.get_timestamp_oracle(&timeline);
+                        let timestamp_oracle = self.get_timestamp_oracle(timeline);
                         let read_ts = timestamp_oracle.read_ts().await;
                         entry.insert(read_ts.clone());
                         read_ts
@@ -736,7 +736,7 @@ impl Coordinator {
                     btree_map::Entry::Occupied(entry) => entry.get().clone(),
                 };
 
-                if chosen_ts <= current_oracle_ts {
+                if *chosen_ts <= current_oracle_ts {
                     ready_txns.push(read_txn);
                 } else {
                     let wait =

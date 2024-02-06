@@ -1421,8 +1421,8 @@ pub enum QueryWhen {
     /// peek to complete immediately.
     Immediately,
     /// The peek should occur at a timestamp that allows the peek to see all
-    /// data written within Materialize.
-    Freshest,
+    /// data written to tables within Materialize.
+    FreshestTableWrite,
     /// The peek should occur at the timestamp described by the specified
     /// expression.
     ///
@@ -1438,43 +1438,39 @@ impl QueryWhen {
     pub fn advance_to_timestamp(&self) -> Option<MirScalarExpr> {
         match self {
             QueryWhen::AtTimestamp(t) | QueryWhen::AtLeastTimestamp(t) => Some(t.clone()),
-            QueryWhen::Immediately | QueryWhen::Freshest => None,
+            QueryWhen::Immediately | QueryWhen::FreshestTableWrite => None,
         }
     }
     /// Returns whether the candidate must be advanced to the since.
     pub fn advance_to_since(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) | QueryWhen::Freshest => true,
+            QueryWhen::Immediately
+            | QueryWhen::AtLeastTimestamp(_)
+            | QueryWhen::FreshestTableWrite => true,
             QueryWhen::AtTimestamp(_) => false,
         }
     }
     /// Returns whether the candidate can be advanced to the upper.
     pub fn can_advance_to_upper(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::Freshest => true,
-            QueryWhen::AtTimestamp(_) | QueryWhen::AtLeastTimestamp(_) => false,
+            QueryWhen::Immediately => true,
+            QueryWhen::FreshestTableWrite
+            | QueryWhen::AtTimestamp(_)
+            | QueryWhen::AtLeastTimestamp(_) => false,
         }
     }
-    /// Returns whether the candidate must be advanced to the upper.
-    pub fn must_advance_to_upper(&self) -> bool {
-        match self {
-            QueryWhen::Freshest => true,
-            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) | QueryWhen::AtTimestamp(_) => {
-                false
-            }
-        }
-    }
+
     /// Returns whether the candidate can be advanced to the timeline's timestamp.
     pub fn can_advance_to_timeline_ts(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::Freshest => true,
+            QueryWhen::Immediately | QueryWhen::FreshestTableWrite => true,
             QueryWhen::AtTimestamp(_) | QueryWhen::AtLeastTimestamp(_) => false,
         }
     }
     /// Returns whether the candidate must be advanced to the timeline's timestamp.
     pub fn must_advance_to_timeline_ts(&self) -> bool {
         match self {
-            QueryWhen::Freshest => true,
+            QueryWhen::FreshestTableWrite => true,
             QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) | QueryWhen::AtTimestamp(_) => {
                 false
             }
@@ -1483,7 +1479,7 @@ impl QueryWhen {
     /// Returns whether the selected timestamp should be tracked within the current transaction.
     pub fn is_transactional(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::Freshest => true,
+            QueryWhen::Immediately | QueryWhen::FreshestTableWrite => true,
             QueryWhen::AtLeastTimestamp(_) | QueryWhen::AtTimestamp(_) => false,
         }
     }
