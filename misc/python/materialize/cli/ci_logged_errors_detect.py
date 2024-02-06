@@ -197,7 +197,7 @@ def annotate_logged_errors(log_files: list[str]) -> int:
     error_logs = get_error_logs(log_files)
 
     if not error_logs:
-        return 0
+        error_logs = []
 
     os.getenv("BUILDKITE_STEP_KEY", "")
     os.getenv("BUILDKITE_LABEL", "")
