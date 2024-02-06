@@ -4446,6 +4446,7 @@ dependencies = [
  "prost-build",
  "prost-types",
  "protobuf-src",
+ "reqwest",
  "serde",
  "serde_json",
  "socket2 0.5.3",

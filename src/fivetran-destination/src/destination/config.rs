@@ -11,6 +11,8 @@ use anyhow::{bail, Context};
 use mz_ore::error::ErrorExt;
 use mz_ore::str::StrExt;
 use openssl::ssl::{SslConnector, SslMethod};
+use openssl::x509::X509;
+use openssl::x509::store::X509StoreBuilder;
 use postgres_openssl::MakeTlsConnector;
 use std::collections::BTreeMap;
 
@@ -126,7 +128,25 @@ pub async fn connect(
         bail!("internal error: \"dbname\" configuration parameter missing");
     };
 
-    let builder = SslConnector::builder(SslMethod::tls_client())?;
+    // Compile in the CA certificate bundle downloaded by the build script, and
+    // configure the TLS connector to reference that compiled-in CA bundle,
+    // rather than attempting to use the system's CA bundle. This supports
+    // running in Fivetran's environment, where the CA bundle will not be
+    // available. This does introduce a small amount of risk, as the CA bundle
+    // will not be updated until we issue a new release of the Fivetran
+    // destination.
+    //
+    // TODO: depend on the system's certificate bundle instead, once Fivetran
+    // supports running destinations in a containerized environment.
+    let ca_bundle = include_bytes!(concat!(env!("OUT_DIR"), "/ca-certificate.crt"));
+    let ca_certs = X509::stack_from_pem(ca_bundle)?;
+    let mut cert_store = X509StoreBuilder::new()?;
+    for cert in ca_certs {
+        cert_store.add_cert(cert)?;
+    }
+    let mut builder = SslConnector::builder(SslMethod::tls_client())?;
+    builder.set_verify_cert_store(cert_store.build())?;
+
     let tls_connector = MakeTlsConnector::new(builder.build());
     let (client, conn) = tokio_postgres::Config::new()
         .host(&host)
