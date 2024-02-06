@@ -42,7 +42,10 @@ fn main() {
 
     // Download CA bundle.
     {
-        let ca_bundle = reqwest::blocking::get(CA_BUNDLE_URL).unwrap().bytes().unwrap();
+        let ca_bundle = reqwest::blocking::get(CA_BUNDLE_URL)
+            .unwrap()
+            .bytes()
+            .unwrap();
         fs::write(out_dir.join("ca-certificate.crt"), ca_bundle).unwrap();
     }
 }

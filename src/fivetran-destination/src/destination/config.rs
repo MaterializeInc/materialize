@@ -11,8 +11,8 @@ use anyhow::{bail, Context};
 use mz_ore::error::ErrorExt;
 use mz_ore::str::StrExt;
 use openssl::ssl::{SslConnector, SslMethod};
-use openssl::x509::X509;
 use openssl::x509::store::X509StoreBuilder;
+use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
 use std::collections::BTreeMap;
 
