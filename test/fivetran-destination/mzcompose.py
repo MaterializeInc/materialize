@@ -79,9 +79,7 @@ SERVICES = [
 ]
 
 # Tests that are currently broken because the Fivetran Tester seems to do the wrong thing.
-#
-# 'test-truncate': https://materializeinc.slack.com/archives/C060KAR4802/p1706651239233319
-BROKEN_TESTS = ["test-truncate"]
+BROKEN_TESTS = []
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
