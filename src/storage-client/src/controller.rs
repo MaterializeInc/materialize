@@ -26,7 +26,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
 use mz_persist_client::read::{Cursor, ReadHandle};
-use mz_persist_client::stats::SnapshotStats;
+use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_types::Codec64;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_types::configuration::StorageConfiguration;
@@ -399,6 +399,14 @@ pub trait StorageController: Debug {
         id: GlobalId,
         as_of: Antichain<Self::Timestamp>,
     ) -> Result<SnapshotStats, StorageError>;
+
+    /// Returns aggregate statistics about the contents of the local input named
+    /// `id` at `as_of`.
+    async fn snapshot_parts_stats(
+        &self,
+        id: GlobalId,
+        as_of: Antichain<Self::Timestamp>,
+    ) -> Result<SnapshotPartsStats, StorageError>;
 
     /// Assigns a read policy to specific identifiers.
     ///

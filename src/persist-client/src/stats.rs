@@ -10,6 +10,7 @@
 //! Aggregate statistics about data stored in persist.
 
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use mz_dyncfg::{Config, ConfigSet};
 use mz_persist::indexed::columnar::ColumnarRecords;
@@ -21,6 +22,9 @@ use proptest_derive::Arbitrary;
 
 use crate::batch::UntrimmableColumns;
 use crate::internal::encoding::Schemas;
+use crate::metrics::Metrics;
+use crate::read::LazyPartStats;
+
 use crate::ShardId;
 
 /// Percent of filtered data to opt in to correctness auditing.
@@ -183,4 +187,25 @@ pub struct SnapshotStats {
     /// compaction never results in more updates than the sum of the inputs, it
     /// can only go down.
     pub num_updates: usize,
+}
+
+/// Statistics about the contents of the parts of a shard as_of some time.
+#[derive(Debug)]
+pub struct SnapshotPartsStats {
+    /// Metrics for the persist backing shard, so the caller can report any
+    /// necessary counters.
+    pub metrics: Arc<Metrics>,
+    /// The shard these statistics are for.
+    pub shard_id: ShardId,
+    /// Stats for individual parts.
+    pub parts: Vec<SnapshotPartStats>,
+}
+
+/// Part-specific stats.
+#[derive(Debug)]
+pub struct SnapshotPartStats {
+    /// The size of the encoded data in bytes.
+    pub encoded_size_bytes: usize,
+    /// The raw/encoded statistics for that part, if we have them.
+    pub stats: Option<LazyPartStats>,
 }

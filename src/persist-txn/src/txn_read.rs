@@ -22,7 +22,7 @@ use mz_ore::instrument;
 use mz_ore::task::AbortOnDropHandle;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::{Cursor, LazyPartStats, ListenEvent, ReadHandle, Since, Subscribe};
-use mz_persist_client::stats::SnapshotStats;
+use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
@@ -219,6 +219,23 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> DataSnapshot<T> {
         // this seems fine for now.
         let as_of = self.latest_write.clone().map(Antichain::from_elem);
         data_since.snapshot_stats(as_of)
+    }
+
+    /// See [ReadHandle::snapshot_parts_stats].
+    pub async fn snapshot_parts_stats<K, V, D>(
+        &self,
+        data_read: &mut ReadHandle<K, V, T, D>,
+    ) -> Result<SnapshotPartsStats, Since<T>>
+    where
+        K: Debug + Codec + Ord,
+        V: Debug + Codec + Ord,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let data_write = WriteHandle::from_read(data_read, "unblock_read");
+        self.unblock_read(data_write).await;
+        data_read
+            .snapshot_parts_stats(Antichain::from_elem(self.as_of.clone()))
+            .await
     }
 
     pub(crate) fn validate(&self) -> Result<(), String> {

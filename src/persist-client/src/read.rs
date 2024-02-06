@@ -49,6 +49,7 @@ use crate::{parse_id, GarbageCollector, PersistConfig, ShardId};
 
 pub use crate::internal::encoding::LazyPartStats;
 pub use crate::internal::state::Since;
+use crate::stats::{SnapshotPartStats, SnapshotPartsStats};
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
 #[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -1134,6 +1135,36 @@ where
         Ok(Cursor {
             consolidator,
             _schemas: self.schemas.clone(),
+        })
+    }
+
+    /// Returns aggregate statistics about the contents of the shard TVC at the
+    /// given frontier.
+    ///
+    /// This command returns the contents of this shard as of `as_of` once they
+    /// are known. This may "block" (in an async-friendly way) if `as_of` is
+    /// greater or equal to the current `upper` of the shard.
+    ///
+    /// The `Since` error indicates that the requested `as_of` cannot be served
+    /// (the caller has out of date information) and includes the smallest
+    /// `as_of` that would have been accepted.
+    pub async fn snapshot_parts_stats(
+        &mut self,
+        as_of: Antichain<T>,
+    ) -> Result<SnapshotPartsStats, Since<T>> {
+        let batches = self.machine.snapshot(&as_of).await?;
+        let parts = batches
+            .into_iter()
+            .flat_map(|b| b.parts)
+            .map(|p| SnapshotPartStats {
+                encoded_size_bytes: p.encoded_size_bytes,
+                stats: p.stats,
+            })
+            .collect();
+        Ok(SnapshotPartsStats {
+            metrics: Arc::clone(&self.machine.applier.metrics),
+            shard_id: self.machine.shard_id(),
+            parts,
         })
     }
 
