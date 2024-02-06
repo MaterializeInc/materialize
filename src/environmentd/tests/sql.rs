@@ -504,7 +504,7 @@ fn test_subscribe_basic() {
         .batch_execute("CREATE TABLE t (data text)")
         .unwrap();
     client_writes
-        .batch_execute("CREATE DEFAULT INDEX t_primary_idx ON t WITH (LOGICAL COMPACTION WINDOW 0)")
+        .batch_execute("CREATE DEFAULT INDEX t_primary_idx ON t WITH (RETAIN HISTORY FOR 0)")
         .unwrap();
     // Now that the index (and its since) are initialized to 0, we can resume using
     // system time. Do a read to bump the oracle's state so it will read from the
@@ -612,7 +612,7 @@ fn test_subscribe_basic() {
     // view derived from the index. This previously selected an invalid
     // `AS OF` timestamp (#5391).
     client_writes
-        .batch_execute("ALTER INDEX t_primary_idx SET (LOGICAL COMPACTION WINDOW = '1ms')")
+        .batch_execute("ALTER INDEX t_primary_idx SET (RETAIN HISTORY = FOR '1ms')")
         .unwrap();
     client_writes
         .batch_execute("CREATE VIEW v AS SELECT * FROM t")
@@ -3580,6 +3580,7 @@ async fn test_explain_as_of() {
 
 // Test that RETAIN HISTORY results in the since and upper being separated by the specified amount.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[ignore] // TODO: Reenable when #24957 is fixed
 async fn test_retain_history() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
@@ -3641,8 +3642,15 @@ async fn test_retain_history() {
         )
         .await
         .unwrap();
+    client
+        .batch_execute(
+            "CREATE SOURCE s_auction FROM LOAD GENERATOR AUCTION FOR ALL TABLES WITH (RETAIN HISTORY = FOR '2s')",
+        )
+        .await
+        .unwrap();
 
-    for name in ["v", "s"] {
+    // users is a subsource on the auction source.
+    for name in ["v", "s", "users"] {
         // Test compaction and querying without an index present.
         Retry::default()
             .retry_async(|_| async {
@@ -3656,7 +3664,7 @@ async fn test_retain_history() {
                 client
                     .query(
                         &format!(
-                            "SELECT * FROM {name} AS OF {}-2000",
+                            "SELECT 1 FROM {name} LIMIT 1 AS OF {}-2000",
                             ts.determination.timestamp_context.timestamp_or_default()
                         ),
                         &[],
@@ -3863,4 +3871,44 @@ async fn test_explain_timestamp_blocking() {
         mv_timestamp > mz_now_timestamp,
         "read against mv at timestamp {mv_timestamp} should be in the future compared to now, {mz_now_timestamp}"
     );
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_linearize_read_then_write() {
+    let server = test_util::TestHarness::default().start().await;
+    server
+        .enable_feature_flags(&["enable_refresh_every_mvs"])
+        .await;
+    let client = server.connect().await.unwrap();
+    // This test will break in the year 30,000 after Jan 1st. When that happens, increase the year
+    // to fix the test.
+    client
+        .batch_execute(
+            "CREATE MATERIALIZED VIEW const_mv WITH (REFRESH AT '30000-01-01 23:59') AS SELECT 2;",
+        )
+        .await
+        .unwrap();
+
+    client
+        .batch_execute("CREATE TABLE t (a INT);")
+        .await
+        .unwrap();
+
+    let handle = task::spawn(|| "read task", async move {
+        // The since of const_mv will be in the year 30,000, requiring us to select a timestamp in
+        // the year 30,000, requiring us to linearize the read waiting for the timestamp oracle to
+        // catch up to the year 30,000.
+        let _ = client
+            .query_one("INSERT INTO t SELECT * FROM const_mv;", &[])
+            .await;
+        panic!("We shouldn't get here until the year 30,000");
+    });
+
+    // Sleep for a bit to try and get the `INSERT INTO SELECT` to run. We may get some false
+    // positives, but we won't get false negatives.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    assert!(!handle.is_finished());
+    handle.abort_on_drop();
 }

@@ -137,11 +137,10 @@ pub async fn publication_info(
             .map(|row| {
                 let name: String = row.get("name");
                 let type_oid = row.get("typoid");
-                let col_num = Some(
-                    row.get::<_, i16>("colnum")
-                        .try_into()
-                        .expect("non-negative values"),
-                );
+                let col_num = row
+                    .get::<_, i16>("colnum")
+                    .try_into()
+                    .expect("non-negative values");
                 let type_mod: i32 = row.get("typmod");
                 let not_null: bool = row.get("not_null");
                 Ok(PostgresColumnDesc {

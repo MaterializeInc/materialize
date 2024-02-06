@@ -7,15 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_ore::error::ErrorExt;
+use futures::Future;
+use mz_ore::retry::{Retry, RetryResult};
 use tonic::{Request, Response, Status};
 
+use crate::error::{Context, OpError};
 use crate::fivetran_sdk::destination_server::Destination;
 use crate::fivetran_sdk::{
-    AlterTableRequest, AlterTableResponse, ConfigurationFormRequest, ConfigurationFormResponse,
-    CreateTableRequest, CreateTableResponse, DescribeTableRequest, DescribeTableResponse,
-    TestRequest, TestResponse, TruncateRequest, TruncateResponse, WriteBatchRequest,
-    WriteBatchResponse,
+    self, AlterTableRequest, AlterTableResponse, ConfigurationFormRequest,
+    ConfigurationFormResponse, CreateTableRequest, CreateTableResponse, DescribeTableRequest,
+    DescribeTableResponse, TestRequest, TestResponse, TruncateRequest, TruncateResponse,
+    WriteBatchRequest, WriteBatchResponse,
 };
 
 mod config;
@@ -34,48 +36,167 @@ impl Destination for MaterializeDestination {
     }
 
     async fn test(&self, request: Request<TestRequest>) -> Result<Response<TestResponse>, Status> {
-        to_grpc(config::handle_test_request(request.into_inner()).await)
+        let request = request.into_inner();
+        let result = with_retry_and_logging(|| async {
+            config::handle_test_request(request.clone())
+                .await
+                .context("handle_test_request")
+        })
+        .await;
+
+        let response = match result {
+            Ok(()) => fivetran_sdk::test_response::Response::Success(true),
+            Err(e) => fivetran_sdk::test_response::Response::Failure(e.to_string()),
+        };
+        to_grpc(Ok(TestResponse {
+            response: Some(response),
+        }))
     }
 
     async fn describe_table(
         &self,
         request: Request<DescribeTableRequest>,
     ) -> Result<Response<DescribeTableResponse>, Status> {
-        to_grpc(ddl::handle_describe_table_request(request.into_inner()).await)
+        let request = request.into_inner();
+        let result = with_retry_and_logging(|| async {
+            ddl::handle_describe_table(request.clone())
+                .await
+                .context("describe_table")
+        })
+        .await;
+
+        let response = match result {
+            Ok(None) => fivetran_sdk::describe_table_response::Response::NotFound(true),
+            Ok(Some(table)) => fivetran_sdk::describe_table_response::Response::Table(table),
+            Err(e) => fivetran_sdk::describe_table_response::Response::Failure(e.to_string()),
+        };
+        to_grpc(Ok(DescribeTableResponse {
+            response: Some(response),
+        }))
     }
 
     async fn create_table(
         &self,
         request: Request<CreateTableRequest>,
     ) -> Result<Response<CreateTableResponse>, Status> {
-        to_grpc(ddl::handle_create_table_request(request.into_inner()).await)
+        let request = request.into_inner();
+        let result = with_retry_and_logging(|| async {
+            ddl::handle_create_table(request.clone())
+                .await
+                .context("create table")
+        })
+        .await;
+
+        let response = match result {
+            Ok(()) => fivetran_sdk::create_table_response::Response::Success(true),
+            Err(e) => fivetran_sdk::create_table_response::Response::Failure(e.to_string()),
+        };
+        to_grpc(Ok(CreateTableResponse {
+            response: Some(response),
+        }))
     }
 
     async fn alter_table(
         &self,
         request: Request<AlterTableRequest>,
     ) -> Result<Response<AlterTableResponse>, Status> {
-        to_grpc(ddl::handle_alter_table_request(request.into_inner()).await)
+        let request = request.into_inner();
+        let result = with_retry_and_logging(|| async {
+            ddl::handle_alter_table(request.clone())
+                .await
+                .context("alter_table")
+        })
+        .await;
+
+        let response = match result {
+            Ok(()) => fivetran_sdk::alter_table_response::Response::Success(true),
+            Err(e) => fivetran_sdk::alter_table_response::Response::Failure(e.to_string()),
+        };
+        to_grpc(Ok(AlterTableResponse {
+            response: Some(response),
+        }))
     }
 
     async fn truncate(
         &self,
         request: Request<TruncateRequest>,
     ) -> Result<Response<TruncateResponse>, Status> {
-        to_grpc(dml::handle_truncate_request(request.into_inner()).await)
+        let request = request.into_inner();
+        let result = with_retry_and_logging(|| async {
+            dml::handle_truncate_table(request.clone())
+                .await
+                .context("truncate_table")
+        })
+        .await;
+
+        let response = match result {
+            Ok(()) => fivetran_sdk::truncate_response::Response::Success(true),
+            Err(e) => fivetran_sdk::truncate_response::Response::Failure(e.to_string()),
+        };
+        to_grpc(Ok(TruncateResponse {
+            response: Some(response),
+        }))
     }
 
     async fn write_batch(
         &self,
         request: Request<WriteBatchRequest>,
     ) -> Result<Response<WriteBatchResponse>, Status> {
-        to_grpc(dml::handle_write_batch_request(request.into_inner()).await)
+        let request = request.into_inner();
+        let result = with_retry_and_logging(|| async {
+            dml::handle_write_batch(request.clone())
+                .await
+                .context("write_batch")
+        })
+        .await;
+
+        let response = match result {
+            Ok(()) => fivetran_sdk::write_batch_response::Response::Success(true),
+            Err(e) => fivetran_sdk::write_batch_response::Response::Failure(e.to_string()),
+        };
+        to_grpc(Ok(WriteBatchResponse {
+            response: Some(response),
+        }))
     }
 }
 
-fn to_grpc<T>(response: Result<T, anyhow::Error>) -> Result<Response<T>, Status> {
+/// Automatically retries the provided closure, if the error is retry-able, and traces failures
+/// appropriately.
+async fn with_retry_and_logging<C, F, T>(closure: C) -> Result<T, OpError>
+where
+    F: Future<Output = Result<T, OpError>>,
+    C: FnMut() -> F,
+{
+    let (_c, result) = Retry::default()
+        .max_tries(3)
+        // Sort of awkward, but we need to pass the `closure` around so each iteration can call it.
+        .retry_async_with_state(closure, |retry_state, mut closure| async move {
+            let result = match closure().await {
+                Ok(t) => RetryResult::Ok(t),
+                Err(err) if err.kind().can_retry() => {
+                    tracing::warn!(%err, attempt = retry_state.i, "retry-able operation failed");
+                    RetryResult::RetryableErr(err)
+                }
+                Err(e) => RetryResult::FatalErr(e),
+            };
+
+            (closure, result)
+        })
+        .await;
+
+    if let Err(err) = &result {
+        tracing::error!(%err, "request failed!")
+    }
+    result
+}
+
+/// Convert the result of an operation to a gRPC response.
+///
+/// Note: We're expected to __never__ return a gRPC error and instead we should return a 200 with
+/// the error code embedded.
+fn to_grpc<T>(response: Result<T, OpError>) -> Result<Response<T>, Status> {
     match response {
         Ok(t) => Ok(Response::new(t)),
-        Err(e) => Err(Status::unknown(e.display_with_causes().to_string())),
+        Err(e) => Err(Status::unknown(e.to_string())),
     }
 }

@@ -1,2 +1,2 @@
 {}
-// FAIL: user lacks "CREATE" privilege on database ("test")
+// FAIL: user lacks privilege "CREATE" on object "test"

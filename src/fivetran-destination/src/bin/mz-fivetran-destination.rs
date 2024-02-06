@@ -52,7 +52,7 @@ async fn main() {
     }
 }
 
-async fn run(Args { port }: Args) -> Result<(), anyhow::Error> {
+async fn run(Args { port }: Args) -> Result<(), Box<dyn std::error::Error>> {
     let addr = SocketAddr::from((Ipv6Addr::UNSPECIFIED, port));
 
     // Fivetran requires us to listen on both IPv4 and IPv6, so we explicitly create a Socket which

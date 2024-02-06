@@ -1065,7 +1065,6 @@ impl<'a> RunnerInner<'a> {
                 params.extend(config.system_parameter_defaults.clone());
                 params
             },
-            default_storage_cluster_size: None,
             availability_zones: Default::default(),
             tracing_handle: config.tracing_handle.clone(),
             storage_usage_collection_interval: Duration::from_secs(3600),

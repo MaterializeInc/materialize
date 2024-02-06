@@ -165,7 +165,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `process_id`        | [`uint8`]    | An identifier of a compute process within a replica.                                                                                                         |
 | `cpu_nano_cores`    | [`uint8`]    | Approximate CPU usage, in billionths of a vCPU core.                                                                                                         |
 | `memory_bytes`      | [`uint8`]    | Approximate RAM usage, in bytes.                                                                                                                             |
-| `disk_bytes`        | [`uint8`]    | Approximate disk usage in bytes, if the replica has a [disk](/sql/create-cluster#disk) attached. `NULL` otherwise. |
+| `disk_bytes`        | [`uint8`]    | Approximate disk usage in bytes.                                                                                                                             |
 
 ### `mz_cluster_replica_sizes`
 
@@ -185,7 +185,7 @@ any kind of capacity planning.
 | `workers`              | [`uint8`]   | The number of Timely Dataflow workers per process.                                                                                                           |
 | `cpu_nano_cores`       | [`uint8`]   | The CPU allocation per process, in billionths of a vCPU core.                                                                                                |
 | `memory_bytes`         | [`uint8`]   | The RAM allocation per process, in billionths of a vCPU core.                                                                                                |
-| `disk_bytes`           | [`uint8`]   | The disk allocation per process, if the replica has a [disk](/sql/create-cluster#disk) attached. `NULL` otherwise. |
+| `disk_bytes`           | [`uint8`]   | The disk allocation per process.                                                                                                                             |
 | `credits_per_hour`     | [`numeric`] | The number of compute credits consumed per hour.                                                                                                             |
 
 
@@ -217,7 +217,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `process_id`     | [`uint8`]            | An identifier of a compute process within a replica.                                                                                                                                   |
 | `cpu_percent`    | [`double precision`] | Approximate CPU usage in percent of the total allocation.                                                                                                                              |
 | `memory_percent` | [`double precision`] | Approximate RAM usage in percent of the total allocation.                                                                                                                              |
-| `disk_percent`   | [`double precision`] | Approximate disk usage in percent of the total allocation, if the replica has a [disk](/sql/create-cluster#disk) attached. `NULL` otherwise. |
+| `disk_percent`   | [`double precision`] | Approximate disk usage in percent of the total allocation.                                                                                                                             |
 
 ### `mz_cluster_replica_heartbeats`
 
@@ -1358,7 +1358,6 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_activity_log_redacted -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_aggregates -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_links -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_dataflow_operator_reachability_raw -->

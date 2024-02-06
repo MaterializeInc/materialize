@@ -644,7 +644,6 @@ pub struct CreateMaterializedViewPlan {
 pub struct CreateIndexPlan {
     pub name: QualifiedItemName,
     pub index: Index,
-    pub options: Vec<IndexOption>,
     pub if_not_exists: bool,
 }
 
@@ -792,33 +791,15 @@ pub struct CopyFromPlan {
     pub params: CopyFormatParams<'static>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CopyToPlan {
-    pub from: CopyToFrom,
-    pub to: MirScalarExpr,
+    /// The select query plan whose data will be copied to destination uri.
+    pub select_plan: SelectPlan,
+    pub desc: RelationDesc,
+    /// The scalar expression to be resolved to get the destination uri.
+    pub to: HirScalarExpr,
     pub connection: mz_storage_types::connections::Connection<ReferencedConnection>,
     pub format_params: CopyFormatParams<'static>,
-}
-
-#[derive(Debug, Clone)]
-pub enum CopyToFrom {
-    Id {
-        id: GlobalId,
-        // TODO(mouli): add support to specify columns
-    },
-    Query {
-        expr: MirRelationExpr,
-        desc: RelationDesc,
-        finishing: RowSetFinishing,
-    },
-}
-impl CopyToFrom {
-    pub fn depends_on(&self) -> BTreeSet<GlobalId> {
-        match self {
-            CopyToFrom::Id { id } => BTreeSet::from([*id]),
-            CopyToFrom::Query { expr, .. } => expr.depends_on(),
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -889,27 +870,6 @@ impl ExplaineeStatement {
             Self::Select { broken, .. } => *broken,
             Self::CreateMaterializedView { broken, .. } => *broken,
             Self::CreateIndex { broken, .. } => *broken,
-        }
-    }
-
-    pub fn row_set_finishing(&self) -> Option<RowSetFinishing> {
-        match self {
-            Self::Select { plan, desc, .. } => {
-                if !plan.finishing.is_trivial(desc.arity()) {
-                    // Use the optional finishing extracted in the plan_query call.
-                    Some(plan.finishing.clone())
-                } else {
-                    None
-                }
-            }
-            Self::CreateMaterializedView { .. } => {
-                // Trivial finishing asserted in plan_create_materialized_view.
-                None
-            }
-            Self::CreateIndex { .. } => {
-                // Trivial finishing for indexes on views asserted in plan_view.
-                None
-            }
         }
     }
 }
@@ -1444,6 +1404,7 @@ pub struct Index {
     pub create_sql: String,
     pub on: GlobalId,
     pub keys: Vec<mz_expr::MirScalarExpr>,
+    pub compaction_window: Option<CompactionWindow>,
     pub cluster_id: ClusterId,
 }
 
@@ -1460,8 +1421,8 @@ pub enum QueryWhen {
     /// peek to complete immediately.
     Immediately,
     /// The peek should occur at a timestamp that allows the peek to see all
-    /// data written within Materialize.
-    Freshest,
+    /// data written to tables within Materialize.
+    FreshestTableWrite,
     /// The peek should occur at the timestamp described by the specified
     /// expression.
     ///
@@ -1477,43 +1438,39 @@ impl QueryWhen {
     pub fn advance_to_timestamp(&self) -> Option<MirScalarExpr> {
         match self {
             QueryWhen::AtTimestamp(t) | QueryWhen::AtLeastTimestamp(t) => Some(t.clone()),
-            QueryWhen::Immediately | QueryWhen::Freshest => None,
+            QueryWhen::Immediately | QueryWhen::FreshestTableWrite => None,
         }
     }
     /// Returns whether the candidate must be advanced to the since.
     pub fn advance_to_since(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) | QueryWhen::Freshest => true,
+            QueryWhen::Immediately
+            | QueryWhen::AtLeastTimestamp(_)
+            | QueryWhen::FreshestTableWrite => true,
             QueryWhen::AtTimestamp(_) => false,
         }
     }
     /// Returns whether the candidate can be advanced to the upper.
     pub fn can_advance_to_upper(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::Freshest => true,
-            QueryWhen::AtTimestamp(_) | QueryWhen::AtLeastTimestamp(_) => false,
+            QueryWhen::Immediately => true,
+            QueryWhen::FreshestTableWrite
+            | QueryWhen::AtTimestamp(_)
+            | QueryWhen::AtLeastTimestamp(_) => false,
         }
     }
-    /// Returns whether the candidate must be advanced to the upper.
-    pub fn must_advance_to_upper(&self) -> bool {
-        match self {
-            QueryWhen::Freshest => true,
-            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) | QueryWhen::AtTimestamp(_) => {
-                false
-            }
-        }
-    }
+
     /// Returns whether the candidate can be advanced to the timeline's timestamp.
     pub fn can_advance_to_timeline_ts(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::Freshest => true,
+            QueryWhen::Immediately | QueryWhen::FreshestTableWrite => true,
             QueryWhen::AtTimestamp(_) | QueryWhen::AtLeastTimestamp(_) => false,
         }
     }
     /// Returns whether the candidate must be advanced to the timeline's timestamp.
     pub fn must_advance_to_timeline_ts(&self) -> bool {
         match self {
-            QueryWhen::Freshest => true,
+            QueryWhen::FreshestTableWrite => true,
             QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) | QueryWhen::AtTimestamp(_) => {
                 false
             }
@@ -1522,7 +1479,7 @@ impl QueryWhen {
     /// Returns whether the selected timestamp should be tracked within the current transaction.
     pub fn is_transactional(&self) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::Freshest => true,
+            QueryWhen::Immediately | QueryWhen::FreshestTableWrite => true,
             QueryWhen::AtLeastTimestamp(_) | QueryWhen::AtTimestamp(_) => false,
         }
     }
@@ -1552,7 +1509,7 @@ pub enum ExecuteTimeout {
 #[derive(Clone, Debug)]
 pub enum IndexOption {
     /// Configures the logical compaction window for an index.
-    LogicalCompactionWindow(CompactionWindow),
+    RetainHistory(CompactionWindow),
 }
 
 #[derive(Clone, Debug)]

@@ -18,6 +18,7 @@ use std::iter;
 use std::time::Duration;
 
 use itertools::{Either, Itertools};
+use mz_adapter_types::compaction::CompactionWindow;
 use mz_controller_types::{ClusterId, ReplicaId, DEFAULT_REPLICA_LOGGING_INTERVAL};
 use mz_expr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
@@ -118,15 +119,15 @@ use crate::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan,
     AlterOptionParameter, AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan,
     AlterSecretPlan, AlterSetClusterPlan, AlterSourcePlan, AlterSystemResetAllPlan,
-    AlterSystemResetPlan, AlterSystemSetPlan, CommentPlan, CompactionWindow, ComputeReplicaConfig,
+    AlterSystemResetPlan, AlterSystemSetPlan, CommentPlan, ComputeReplicaConfig,
     ComputeReplicaIntrospectionConfig, CreateClusterManagedPlan, CreateClusterPlan,
     CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
     CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
     DropOwnedPlan, FullItemName, HirScalarExpr, Index, Ingestion, MaterializedView, Params, Plan,
-    PlanClusterOption, PlanContext, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source,
-    Table, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
+    PlanClusterOption, PlanNotice, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, Type,
+    VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
     WebhookValidation,
 };
 use crate::session::vars;
@@ -399,7 +400,6 @@ pub fn describe_create_subsource(
 generate_extracted_config!(
     CreateSourceOption,
     (IgnoreKeys, bool),
-    (Size, String),
     (Timeline, String),
     (TimestampInterval, Duration),
     (RetainHistory, Duration)
@@ -536,7 +536,7 @@ pub fn plan_create_webhook_source(
 
     // Webhook sources must currently specify the cluster on which they run, so
     // we don't need to wait to normalize the statement.
-    let in_cluster = source_sink_cluster_config(scx, "source", &mut Some(in_cluster), None)?;
+    let in_cluster = source_sink_cluster_config(scx, "source", &mut Some(in_cluster))?;
 
     // Check for an object in the catalog with this same name
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
@@ -593,7 +593,6 @@ pub fn plan_create_source(
     let envelope = envelope.clone().unwrap_or(Envelope::None);
 
     let allowed_with_options = vec![
-        CreateSourceOptionName::Size,
         CreateSourceOptionName::TimestampInterval,
         CreateSourceOptionName::RetainHistory,
     ];
@@ -1134,7 +1133,6 @@ pub fn plan_create_source(
     }
 
     let CreateSourceOptionExtracted {
-        size,
         timeline,
         timestamp_interval,
         ignore_keys,
@@ -1315,7 +1313,7 @@ pub fn plan_create_source(
     // We will rewrite the cluster if one is not provided, so we must use the
     // `in_cluster` value we plan to normalize when we canonicalize the create
     // statement.
-    let in_cluster = source_sink_cluster_config(scx, "source", &mut stmt.in_cluster, size)?;
+    let in_cluster = source_sink_cluster_config(scx, "source", &mut stmt.in_cluster)?;
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSource(stmt))?;
 
@@ -1685,38 +1683,7 @@ fn source_sink_cluster_config(
     scx: &StatementContext,
     ty: &'static str,
     in_cluster: &mut Option<ResolvedClusterName>,
-    size: Option<String>,
 ) -> Result<ClusterId, PlanError> {
-    // If we're replanning an item that has a linked cluster, always return it
-    // as such. This can be removed after the migration that deprecates cluster
-    // links.
-    if let Some(PlanContext {
-        planning_id: Some(planning_id),
-        ..
-    }) = scx.pcx
-    {
-        if let Some(cluster_id) = scx.catalog.get_linked_cluster(*planning_id) {
-            mz_ore::soft_assert_or_log!(
-                in_cluster.is_none(),
-                "linked clusters never explicitly named, but re-planning {} had cluster \
-                specified as {:?}",
-                planning_id,
-                in_cluster
-            );
-
-            *in_cluster = Some(ResolvedClusterName {
-                id: cluster_id,
-                print_name: None,
-            });
-
-            return Ok(cluster_id);
-        }
-    }
-
-    if size.is_some() {
-        sql_bail!("specifying {ty} SIZE deprecated; use IN CLUSTER")
-    }
-
     let cluster = match in_cluster {
         None => {
             let cluster = scx.catalog.resolve_cluster(None)?;
@@ -2152,13 +2119,6 @@ pub fn plan_create_materialized_view(
     let partial_name = normalize::unresolved_item_name(stmt.name)?;
     let name = scx.allocate_qualified_name(partial_name.clone())?;
 
-    if !scx
-        .catalog
-        .is_system_schema_specifier(&name.qualifiers.schema_spec)
-    {
-        ensure_cluster_is_not_linked(scx, cluster_id);
-    }
-
     let query::PlannedRootQuery {
         mut expr,
         mut desc,
@@ -2420,7 +2380,7 @@ pub fn describe_create_sink(
     Ok(StatementDesc::new(None))
 }
 
-generate_extracted_config!(CreateSinkOption, (Size, String), (Snapshot, bool));
+generate_extracted_config!(CreateSinkOption, (Snapshot, bool));
 
 pub fn plan_create_sink(
     scx: &StatementContext,
@@ -2437,8 +2397,7 @@ pub fn plan_create_sink(
         with_options,
     } = stmt.clone();
 
-    const ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] =
-        &[CreateSinkOptionName::Size, CreateSinkOptionName::Snapshot];
+    const ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] = &[CreateSinkOptionName::Snapshot];
 
     if let Some(op) = with_options
         .iter()
@@ -2578,11 +2537,7 @@ pub fn plan_create_sink(
         )?,
     };
 
-    let CreateSinkOptionExtracted {
-        size,
-        snapshot,
-        seen: _,
-    } = with_options.try_into()?;
+    let CreateSinkOptionExtracted { snapshot, seen: _ } = with_options.try_into()?;
 
     // WITH SNAPSHOT defaults to true
     let with_snapshot = snapshot.unwrap_or(true);
@@ -2590,7 +2545,7 @@ pub fn plan_create_sink(
     // We will rewrite the cluster if one is not provided, so we must use the
     // `in_cluster` value we plan to normalize when we canonicalize the create
     // statement.
-    let in_cluster = source_sink_cluster_config(scx, "sink", &mut stmt.in_cluster, size)?;
+    let in_cluster = source_sink_cluster_config(scx, "sink", &mut stmt.in_cluster)?;
     let create_sql = normalize::create_statement(scx, Statement::CreateSink(stmt))?;
 
     Ok(Plan::CreateSink(CreateSinkPlan {
@@ -2991,12 +2946,7 @@ pub fn plan_create_index(
         None => scx.resolve_cluster(None)?.id(),
         Some(in_cluster) => in_cluster.id,
     };
-    if !scx
-        .catalog
-        .is_system_schema_specifier(&index_name.qualifiers.schema_spec)
-    {
-        ensure_cluster_is_not_linked(scx, cluster_id);
-    }
+
     *in_cluster = Some(ResolvedClusterName {
         id: cluster_id,
         print_name: None,
@@ -3010,6 +2960,14 @@ pub fn plan_create_index(
         *print_id = false;
     }
     let create_sql = normalize::create_statement(scx, Statement::CreateIndex(stmt))?;
+    let compaction_window = options.iter().find_map(|o| {
+        #[allow(irrefutable_let_patterns)]
+        if let crate::plan::IndexOption::RetainHistory(lcw) = o {
+            Some(lcw.clone())
+        } else {
+            None
+        }
+    });
 
     Ok(Plan::CreateIndex(CreateIndexPlan {
         name: index_name,
@@ -3018,8 +2976,8 @@ pub fn plan_create_index(
             on: on.id(),
             keys,
             cluster_id,
+            compaction_window,
         },
-        options,
         if_not_exists,
     }))
 }
@@ -3599,7 +3557,6 @@ pub fn plan_create_cluster_replica(
             hypothetical_replica_count: current_replica_count + 1,
         });
     }
-    ensure_cluster_is_not_linked(scx, cluster.id());
 
     let config = plan_replica_config(scx, options)?;
 
@@ -3878,7 +3835,6 @@ fn plan_drop_cluster(
                     dependents: Vec::new(),
                 });
             }
-            ensure_cluster_is_not_linked(scx, cluster.id());
             Some(cluster.id())
         }
         None => None,
@@ -3902,9 +3858,6 @@ fn plan_drop_cluster_replica(
     name: &QualifiedReplica,
 ) -> Result<Option<(ClusterId, ReplicaId)>, PlanError> {
     let cluster = resolve_cluster_replica(scx, name, if_exists)?;
-    if let Some((cluster, _)) = &cluster {
-        ensure_cluster_is_not_linked(scx, cluster.id());
-    }
     Ok(cluster.map(|(cluster, replica_id)| (cluster.id(), replica_id)))
 }
 
@@ -4113,19 +4066,14 @@ pub fn plan_drop_owned(
 
     // Replicas
     for replica in scx.catalog.get_cluster_replicas() {
-        let cluster = scx.catalog.get_cluster(replica.cluster_id());
-        // We skip over linked cluster replicas because they will be added later when collecting
-        // the dependencies of the linked object.
-        if cluster.linked_object_id().is_none() && role_ids.contains(&replica.owner_id()) {
+        if role_ids.contains(&replica.owner_id()) {
             drop_ids.push((replica.cluster_id(), replica.replica_id()).into());
         }
     }
 
     // Clusters
     for cluster in scx.catalog.get_clusters() {
-        // We skip over linked clusters because they will be added later when collecting
-        // the dependencies of the linked object.
-        if cluster.linked_object_id().is_none() && role_ids.contains(&cluster.owner_id()) {
+        if role_ids.contains(&cluster.owner_id()) {
             // Note: CASCADE is not required for replicas.
             if !cascade {
                 let non_owned_bound_objects: Vec<_> = cluster
@@ -4315,7 +4263,7 @@ pub fn plan_drop_owned(
     }))
 }
 
-generate_extracted_config!(IndexOption, (LogicalCompactionWindow, OptionalDuration));
+generate_extracted_config!(IndexOption, (RetainHistory, OptionalDuration));
 
 fn plan_index_options(
     scx: &StatementContext,
@@ -4326,21 +4274,16 @@ fn plan_index_options(
         scx.require_feature_flag(&vars::ENABLE_INDEX_OPTIONS)?;
     }
 
-    let IndexOptionExtracted {
-        logical_compaction_window,
-        ..
-    }: IndexOptionExtracted = with_opts.try_into()?;
+    let IndexOptionExtracted { retain_history, .. }: IndexOptionExtracted = with_opts.try_into()?;
 
     let mut out = Vec::with_capacity(1);
 
-    if let Some(OptionalDuration(lcw)) = logical_compaction_window {
+    if let Some(OptionalDuration(lcw)) = retain_history {
         scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
-        out.push(crate::plan::IndexOption::LogicalCompactionWindow(
-            match lcw {
-                Some(duration) => duration.try_into()?,
-                None => CompactionWindow::DisableCompaction,
-            },
-        ));
+        out.push(crate::plan::IndexOption::RetainHistory(match lcw {
+            Some(duration) => duration.try_into()?,
+            None => CompactionWindow::DisableCompaction,
+        }));
     }
 
     Ok(out)
@@ -4422,9 +4365,6 @@ pub fn plan_alter_cluster(
             }));
         }
     };
-
-    // Prevent changes to linked clusters.
-    ensure_cluster_is_not_linked(scx, cluster.id());
 
     let mut options: PlanClusterOption = Default::default();
 
@@ -4635,13 +4575,6 @@ pub fn plan_alter_item_set_cluster(
             let Some(current_cluster) = current_cluster else {
                 sql_bail!("No cluster associated with {name}");
             };
-
-            if !scx
-                .catalog
-                .is_system_schema_specifier(&entry.name().qualifiers.schema_spec)
-            {
-                ensure_cluster_is_not_linked(scx, in_cluster.id());
-            }
 
             if current_cluster == in_cluster.id() {
                 Ok(Plan::AlterNoop(AlterNoopPlan { object_type }))
@@ -4977,15 +4910,8 @@ pub fn plan_alter_object_swap(
                 sql_bail!("unable to swap!");
             }
 
-            // To make these temporary names a bit more manageable, we make them short, by using
-            // the last component of a UUID, which should be 12 characters long.
-            //
-            // Note: the reason we use the last 12 characters is because the bits 6, 7, and 12 - 15
-            // are all hard coded <https://www.rfc-editor.org/rfc/rfc4122#section-4.4>.
-            let temp_uuid = uuid::Uuid::new_v4().as_hyphenated().to_string();
-            let short_id: String = temp_uuid.chars().rev().take_while(|c| *c != '-').collect();
-
             // Call the provided closure to make sure this name is unique!
+            let short_id = mz_ore::id_gen::temp_id();
             if check_fn(&short_id) {
                 break short_id;
             }
@@ -5323,47 +5249,15 @@ pub fn plan_alter_source(
 
     let action = match action {
         AlterSourceAction::SetOptions(options) => {
-            let CreateSourceOptionExtracted { seen, .. } =
-                CreateSourceOptionExtracted::try_from(options)?;
-
-            if let Some(option) = seen
-                .iter()
-                .find(|o| !matches!(o, CreateSourceOptionName::Size))
-            {
-                sql_bail!("Cannot modify the {} of a SOURCE.", option.to_ast_string());
-            }
-
-            // This used to be supported to resize source's linked clusters, but
-            // we no longer support linked clusters.
-            match entry.cluster_id() {
-                None => bail_never_supported!("ALTER SOURCE...SET SIZE for non-cluster source"),
-                Some(cluster_id) => {
-                    let cluster = scx.catalog.get_cluster(cluster_id);
-                    return Err(crate::plan::PlanError::AlterSourceSinkSizeUnsupported {
-                        cluster: cluster.name().to_string(),
-                    });
-                }
-            }
+            let option = options.into_iter().next().unwrap();
+            sql_bail!(
+                "Cannot modify the {} of a SOURCE.",
+                option.name.to_ast_string()
+            );
         }
         AlterSourceAction::ResetOptions(reset) => {
-            if let Some(option) = reset
-                .iter()
-                .find(|o| !matches!(o, CreateSourceOptionName::Size))
-            {
-                sql_bail!("Cannot modify the {} of a SOURCE.", option.to_ast_string());
-            }
-
-            // This used to be supported to resize source's linked clusters, but
-            // we no longer support linked clusters.
-            match entry.cluster_id() {
-                None => bail_never_supported!("ALTER SOURCE...RESET SIZE for non-cluster source"),
-                Some(cluster_id) => {
-                    let cluster = scx.catalog.get_cluster(cluster_id);
-                    return Err(crate::plan::PlanError::AlterSourceSinkSizeUnsupported {
-                        cluster: cluster.name().to_string(),
-                    });
-                }
-            }
+            let option = reset.into_iter().next().unwrap();
+            sql_bail!("Cannot modify the {} of a SOURCE.", option.to_ast_string());
         }
         AlterSourceAction::DropSubsources {
             if_exists,
@@ -5481,7 +5375,7 @@ pub fn describe_alter_role(
 }
 
 pub fn plan_alter_role(
-    scx: &StatementContext,
+    _scx: &StatementContext,
     AlterRoleStatement { name, option }: AlterRoleStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let option = match option {
@@ -5490,9 +5384,6 @@ pub fn plan_alter_role(
             PlannedAlterRoleOption::Attributes(attrs)
         }
         AlterRoleOption::Variable(variable) => {
-            // Make sure the LaunchDarkly flag is enabled.
-            scx.require_feature_flag(&vars::ENABLE_ROLE_VARS)?;
-
             let var = plan_role_variable(variable)?;
             PlannedAlterRoleOption::Variable(var)
         }
@@ -5731,24 +5622,6 @@ pub(crate) fn resolve_item_or_type<'a>(
         Ok(item) => Ok(Some(item)),
         Err(_) if if_exists => Ok(None),
         Err(e) => Err(e.into()),
-    }
-}
-
-/// Panics if the given cluster is a linked cluster
-///
-/// TODO: deprecate in subsequent versions when we no longer track the linked
-/// relationships of clusters on boot.
-pub(crate) fn ensure_cluster_is_not_linked(scx: &StatementContext, cluster_id: ClusterId) {
-    let cluster = scx.catalog.get_cluster(cluster_id);
-    // linked_object_id will panic when called with a value that would return
-    // Some, but panicking here just to ensure that those semantics are
-    // abundantly clear.
-    if let Some(linked_id) = cluster.linked_object_id() {
-        panic!(
-            "can no longer create new linked clusters, but cluster {} linked to {}",
-            cluster.id(),
-            linked_id
-        );
     }
 }
 

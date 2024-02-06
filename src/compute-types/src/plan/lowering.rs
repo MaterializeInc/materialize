@@ -25,11 +25,13 @@ use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
-use crate::plan::{AvailableCollections, GetPlan, Plan};
+use crate::plan::{AvailableCollections, GetPlan, NodeId, Plan};
 
 pub(super) struct Context {
     /// Known bindings to (possibly arranged) collections.
     arrangements: BTreeMap<Id, AvailableCollections>,
+    /// Tracks the next available `NodeId`.
+    next_node_id: NodeId,
     /// Information to print along with error messages.
     debug_info: LirDebugInfo,
     /// Whether to enable type-specialization for arrangements.
@@ -46,6 +48,7 @@ impl Context {
     ) -> Self {
         Self {
             arrangements: Default::default(),
+            next_node_id: 0,
             debug_info: LirDebugInfo {
                 debug_name,
                 id: GlobalId::Transient(0),
@@ -53,6 +56,12 @@ impl Context {
             enable_specialized_arrangements,
             enable_reduce_mfp_fusion,
         }
+    }
+
+    fn allocate_node_id(&mut self) -> NodeId {
+        let id = self.next_node_id;
+        self.next_node_id += 1;
+        id
     }
 
     pub fn lower<T: Timestamp>(
@@ -187,6 +196,7 @@ impl Context {
                             .map(|(row, diff)| (row, T::minimum(), diff))
                             .collect()
                     }),
+                    node_id: self.allocate_node_id(),
                 };
                 // The plan, not arranged in any way.
                 (plan, AvailableCollections::new_raw())
@@ -261,6 +271,7 @@ impl Context {
                         id: id.clone(),
                         keys: in_keys,
                         plan,
+                        node_id: self.allocate_node_id(),
                     },
                     out_keys,
                 )
@@ -285,6 +296,7 @@ impl Context {
                         id: id.clone(),
                         value: Box::new(value),
                         body: Box::new(body),
+                        node_id: self.allocate_node_id(),
                     },
                     b_keys,
                 )
@@ -327,6 +339,7 @@ impl Context {
                                 values,
                                 limits,
                                 body,
+                                node_id,
                             } => Plan::LetRec {
                                 ids,
                                 values,
@@ -336,13 +349,16 @@ impl Context {
                                     forms,
                                     input_key,
                                     input_mfp,
+                                    node_id: self.allocate_node_id(),
                                 }),
+                                node_id,
                             },
                             lir_value => Plan::ArrangeBy {
                                 input: Box::new(lir_value),
                                 forms,
                                 input_key,
                                 input_mfp,
+                                node_id: self.allocate_node_id(),
                             },
                         };
                         v_keys.raw = true;
@@ -370,6 +386,7 @@ impl Context {
                         values: lir_values,
                         limits: limits.clone(),
                         body: Box::new(body),
+                        node_id: self.allocate_node_id(),
                     },
                     b_keys,
                 )
@@ -401,6 +418,7 @@ impl Context {
                         exprs: exprs.clone(),
                         mfp_after: mfp,
                         input_key,
+                        node_id: self.allocate_node_id(),
                     },
                     AvailableCollections::new_raw(),
                 )
@@ -523,9 +541,10 @@ This is not expected to cause incorrect results, but could indicate a performanc
                             input_plan,
                             Plan::Constant {
                                 rows: Ok(Vec::new()),
+                                node_id: self.allocate_node_id(),
                             },
                         );
-                        *input_plan = raw_plan.arrange_by(missing, input_keys, arity);
+                        *input_plan = self.arrange_by(raw_plan, missing, input_keys, arity);
                     }
                 }
                 // Return the plan, and no arrangements.
@@ -533,6 +552,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     Plan::Join {
                         inputs: plans,
                         plan,
+                        node_id: self.allocate_node_id(),
                     },
                     AvailableCollections::new_raw(),
                 )
@@ -592,6 +612,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         plan: reduce_plan,
                         input_key,
                         mfp_after,
+                        node_id: self.allocate_node_id(),
                     },
                     output_keys,
                 )
@@ -621,7 +642,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
                 let input = if !keys.raw {
-                    input.arrange_by(AvailableCollections::new_raw(), &keys, arity)
+                    self.arrange_by(input, AvailableCollections::new_raw(), &keys, arity)
                 } else {
                     input
                 };
@@ -630,6 +651,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     Plan::TopK {
                         input: Box::new(input),
                         top_k_plan,
+                        node_id: self.allocate_node_id(),
                     },
                     AvailableCollections::new_raw(),
                 )
@@ -641,7 +663,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
                 let input = if !keys.raw {
-                    input.arrange_by(AvailableCollections::new_raw(), &keys, arity)
+                    self.arrange_by(input, AvailableCollections::new_raw(), &keys, arity)
                 } else {
                     input
                 };
@@ -649,6 +671,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 (
                     Plan::Negate {
                         input: Box::new(input),
+                        node_id: self.allocate_node_id(),
                     },
                     AvailableCollections::new_raw(),
                 )
@@ -659,7 +682,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
                 let plan = if !keys.raw {
-                    plan.arrange_by(AvailableCollections::new_raw(), &keys, arity)
+                    self.arrange_by(plan, AvailableCollections::new_raw(), &keys, arity)
                 } else {
                     plan
                 };
@@ -675,7 +698,8 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     } else {
                         None
                     };
-                    plan.arrange_by(
+                    self.arrange_by(
+                        plan,
                         AvailableCollections::new_arranged(
                             vec![required_arrangement],
                             types.clone(),
@@ -693,6 +717,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     Plan::Threshold {
                         input: Box::new(plan),
                         threshold_plan,
+                        node_id: self.allocate_node_id(),
                     },
                     output_keys,
                 )
@@ -712,7 +737,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         // We don't have an MFP here -- install an operator to permute the
                         // input, if necessary.
                         if !keys.raw {
-                            plan.arrange_by(AvailableCollections::new_raw(), &keys, arity)
+                            self.arrange_by(plan, AvailableCollections::new_raw(), &keys, arity)
                         } else {
                             plan
                         }
@@ -722,6 +747,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 let plan = Plan::Union {
                     inputs: plans,
                     consolidate_output: false,
+                    node_id: self.allocate_node_id(),
                 };
                 (plan, AvailableCollections::new_raw())
             }
@@ -767,6 +793,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                             forms: input_keys.clone(),
                             input_key,
                             input_mfp,
+                            node_id: self.allocate_node_id(),
                         },
                         input_keys,
                     )
@@ -844,6 +871,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         input: Box::new(plan),
                         mfp,
                         input_key_val: Some((key, val)),
+                        node_id: self.allocate_node_id(),
                     }
                 }
             } else {
@@ -851,12 +879,66 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     input: Box::new(plan),
                     mfp,
                     input_key_val,
+                    node_id: self.allocate_node_id(),
                 };
                 keys = AvailableCollections::new_raw();
             }
         }
 
         Ok((plan, keys))
+    }
+
+    /// Replace the plan with another one
+    /// that has the collection in some additional forms.
+    pub fn arrange_by<T>(
+        &mut self,
+        plan: Plan<T>,
+        collections: AvailableCollections,
+        old_collections: &AvailableCollections,
+        arity: usize,
+    ) -> Plan<T> {
+        if let Plan::ArrangeBy {
+            input,
+            mut forms,
+            input_key,
+            input_mfp,
+            node_id,
+        } = plan
+        {
+            forms.raw |= collections.raw;
+            forms.arranged.extend(collections.arranged);
+            forms.arranged.sort_by(|k1, k2| k1.0.cmp(&k2.0));
+            forms.arranged.dedup_by(|k1, k2| k1.0 == k2.0);
+            if forms.types.is_none() {
+                forms.types = collections.types;
+            } else {
+                assert!(collections.types.is_none() || collections.types == forms.types);
+            }
+            Plan::ArrangeBy {
+                input,
+                forms,
+                input_key,
+                input_mfp,
+                node_id,
+            }
+        } else {
+            let (input_key, input_mfp) = if let Some((input_key, permutation, thinning)) =
+                old_collections.arbitrary_arrangement()
+            {
+                let mut mfp = MapFilterProject::new(arity);
+                mfp.permute(permutation.clone(), thinning.len() + input_key.len());
+                (Some(input_key.clone()), mfp)
+            } else {
+                (None, MapFilterProject::new(arity))
+            };
+            Plan::ArrangeBy {
+                input: Box::new(plan),
+                forms: collections,
+                input_key,
+                input_mfp,
+                node_id: self.allocate_node_id(),
+            }
+        }
     }
 }
 

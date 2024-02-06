@@ -152,6 +152,7 @@ pub enum EventDetails {
     DropClusterReplicaV1(DropClusterReplicaV1),
     CreateSourceSinkV1(CreateSourceSinkV1),
     CreateSourceSinkV2(CreateSourceSinkV2),
+    CreateSourceSinkV3(CreateSourceSinkV3),
     AlterSetClusterV1(AlterSetClusterV1),
     AlterSourceSinkV1(AlterSourceSinkV1),
     GrantRoleV1(GrantRoleV1),
@@ -252,6 +253,15 @@ pub struct CreateSourceSinkV2 {
     #[serde(flatten)]
     pub name: FullNameV1,
     pub size: Option<String>,
+    #[serde(rename = "type")]
+    pub external_type: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct CreateSourceSinkV3 {
+    pub id: String,
+    #[serde(flatten)]
+    pub name: FullNameV1,
     #[serde(rename = "type")]
     pub external_type: String,
 }
@@ -377,6 +387,7 @@ impl EventDetails {
             EventDetails::RenameSchemaV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::CreateSourceSinkV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::CreateSourceSinkV2(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::CreateSourceSinkV3(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::AlterSourceSinkV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::AlterSetClusterV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::GrantRoleV1(v) => serde_json::to_value(v).expect("must serialize"),

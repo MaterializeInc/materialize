@@ -387,13 +387,9 @@ send
 Query {"query": "CREATE ROLE joe"}
 Query {"query": "ALTER CLUSTER IF EXISTS foo OWNER TO joe"}
 Query {"query": "ALTER CLUSTER REPLICA IF EXISTS quickstart.quickstart RENAME TO bar_foo"}
-Query {"query": "ALTER SOURCE IF EXISTS ms SET (SIZE = '4')"}
-Query {"query": "ALTER INDEX IF EXISTS t SET (LOGICAL COMPACTION WINDOW)"}
 ----
 
 until
-ReadyForQuery
-ReadyForQuery
 ReadyForQuery
 ReadyForQuery
 ReadyForQuery
@@ -405,10 +401,4 @@ CommandComplete {"tag":"ALTER CLUSTER"}
 ReadyForQuery {"status":"I"}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"CLUSTER REPLICA \"quickstart.quickstart\" does not exist, skipping"}]}
 CommandComplete {"tag":"ALTER CLUSTER REPLICA"}
-ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"SOURCE \"ms\" does not exist, skipping"}]}
-CommandComplete {"tag":"ALTER SOURCE"}
-ReadyForQuery {"status":"I"}
-NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"INDEX \"t\" does not exist, skipping"}]}
-CommandComplete {"tag":"ALTER INDEX"}
 ReadyForQuery {"status":"I"}

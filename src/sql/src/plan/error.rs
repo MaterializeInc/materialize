@@ -210,10 +210,6 @@ pub enum PlanError {
         name: String,
         item_type: CatalogItemType,
     },
-    ModifyLinkedCluster {
-        cluster_name: String,
-        linked_object_name: String,
-    },
     ManagedCluster {
         cluster_name: String,
     },
@@ -255,9 +251,6 @@ pub enum PlanError {
         /// The number of replicas that executing this command would have
         /// created
         hypothetical_replica_count: usize,
-    },
-    AlterSourceSinkSizeUnsupported {
-        cluster: String,
     },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
@@ -432,11 +425,6 @@ impl PlanError {
             Self::InvalidRefreshAt
             | Self::InvalidRefreshEveryAlignedTo => {
                 Some("Calling `mz_now()` is allowed.".into())
-            },
-            Self::AlterSourceSinkSizeUnsupported {
-                cluster,
-            } => {
-                Some(format!("Use ALTER CLUSTER {cluster} SET (SIZE ...)"))
             },
             Self::SubsourceNameConflict { .. } | Self::SubsourceAlreadyReferredTo { .. } => {
                 Some("Specify target table names using FOR TABLES (foo AS bar), or limit the upstream tables using FOR SCHEMAS (foo)".into())
@@ -640,7 +628,6 @@ impl fmt::Display for PlanError {
             Self::InvalidSchemaName => write!(f, "no schema has been selected to create in"),
             Self::ItemAlreadyExists { name, item_type } => write!(f, "{item_type} {} already exists", name.quoted()),
             Self::ManagedCluster {cluster_name} => write!(f, "cannot modify managed cluster {cluster_name}"),
-            Self::ModifyLinkedCluster {cluster_name, ..} => write!(f, "cannot modify linked cluster {}", cluster_name.quoted()),
             Self::InvalidKeysInSubscribeEnvelopeUpsert => {
                 write!(f, "invalid keys in SUBSCRIBE ENVELOPE UPSERT (KEY (..))")
             }
@@ -698,11 +685,6 @@ impl fmt::Display for PlanError {
             Self::CreateReplicaFailStorageObjects {..} => {
                 write!(f, "cannot create more than one replica of a cluster containing sources or sinks")
             },
-            Self::AlterSourceSinkSizeUnsupported {
-                ..
-            } => {
-                f.write_str("altering size of sources and sinks no longer supported")
-            }
         }
     }
 }

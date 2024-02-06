@@ -29,7 +29,11 @@ pub struct AsyncAesDecrypter<R> {
 }
 
 impl<R> AsyncAesDecrypter<R> {
-    pub fn new(input: R, key: &[u8], iv: &[u8]) -> Result<AsyncAesDecrypter<R>, anyhow::Error> {
+    pub fn new(
+        input: R,
+        key: &[u8],
+        iv: &[u8],
+    ) -> Result<AsyncAesDecrypter<R>, openssl::error::ErrorStack> {
         Ok(AsyncAesDecrypter {
             input,
             crypter: Crypter::new(

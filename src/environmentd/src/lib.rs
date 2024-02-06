@@ -113,9 +113,6 @@ pub struct Config {
     pub availability_zones: Vec<String>,
     /// A map from size name to resource allocations for cluster replicas.
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
-    /// The size of the cluster to create for a source or sink if no size is
-    /// given.
-    pub default_storage_cluster_size: Option<String>,
     /// The size of the default cluster replica if bootstrapping.
     pub bootstrap_default_cluster_replica_size: String,
     /// The size of the builtin cluster replicas if bootstrapping.
@@ -596,7 +593,6 @@ impl Listeners {
             secrets_controller: config.secrets_controller,
             cloud_resource_controller: config.cloud_resource_controller,
             cluster_replica_sizes: config.cluster_replica_sizes,
-            default_storage_cluster_size: config.default_storage_cluster_size,
             builtin_cluster_replica_size: config.bootstrap_builtin_cluster_replica_size,
             availability_zones: config.availability_zones,
             system_parameter_defaults: config.system_parameter_defaults,

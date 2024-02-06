@@ -15,10 +15,7 @@ use std::sync::Arc;
 use mz_compute_types::dataflows::IndexDesc;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::ComputeInstanceId;
-use mz_expr::{
-    permutation_for_arrangement, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
-    RowSetFinishing,
-};
+use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_repr::explain::trace_plan;
 use mz_repr::{GlobalId, RelationType, Timestamp};
 use mz_sql::plan::HirRelationExpr;
@@ -27,7 +24,7 @@ use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
 use mz_transform::{Optimizer as TransformOptimizer, StatisticsOracle};
 use timely::progress::Antichain;
-use tracing::{span, warn, Level};
+use tracing::{debug_span, warn};
 
 use crate::catalog::Catalog;
 use crate::coord::peek::{create_fast_path_plan, PeekDataflowPlan, PeekPlan};
@@ -36,7 +33,7 @@ use crate::optimize::dataflows::{
     ExprPrepStyle,
 };
 use crate::optimize::{
-    MirDataflowDescription, Optimize, OptimizeMode, OptimizerConfig, OptimizerError,
+    trace_plan, MirDataflowDescription, Optimize, OptimizeMode, OptimizerConfig, OptimizerError,
 };
 use crate::session::Session;
 use crate::TimestampContext;
@@ -195,20 +192,14 @@ impl Optimize<HirRelationExpr> for Optimizer {
     type To = LocalMirPlan;
 
     fn optimize(&mut self, expr: HirRelationExpr) -> Result<Self::To, OptimizerError> {
+        // Trace the pipeline input under `optimize/raw`.
+        trace_plan!(at: "raw", &expr);
+
         // HIR ⇒ MIR lowering and decorrelation
         let expr = expr.lower(&self.config)?;
 
         // MIR ⇒ MIR optimization (local)
-        self.optimize(expr)
-    }
-}
-
-impl Optimize<MirRelationExpr> for Optimizer {
-    type To = LocalMirPlan;
-
-    fn optimize(&mut self, expr: MirRelationExpr) -> Result<Self::To, OptimizerError> {
-        // MIR ⇒ MIR optimization (local)
-        let expr = span!(target: "optimizer", Level::DEBUG, "local").in_scope(|| {
+        let expr = debug_span!(target: "optimizer", "local").in_scope(|| {
             #[allow(deprecated)]
             let optimizer = TransformOptimizer::logical_optimizer(&self.typecheck_ctx);
             let expr = optimizer.optimize(expr)?.into_inner();
@@ -361,7 +352,6 @@ impl GlobalMirPlan<Unresolved> {
 impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
     type To = GlobalLirPlan;
 
-    // TODO: make Coordinator::plan_peek part of this `optimize` call.
     fn optimize(
         &mut self,
         plan: GlobalMirPlan<ResolvedGlobal<'s>>,
@@ -407,30 +397,17 @@ impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
             Some(&self.finishing),
             self.config.persist_fast_path_limit,
         )? {
-            Some(plan) => {
-                // An ugly way to prevent panics when explaining the physical
-                // plan of a fast-path query.
-                //
-                // TODO: get rid of this.
-                if self.config.mode == OptimizeMode::Explain {
-                    // Finalize the dataflow. This includes:
-                    // - MIR ⇒ LIR lowering
-                    // - LIR ⇒ LIR transforms
-                    let _ = Plan::<Timestamp>::finalize_dataflow(
-                        df_desc,
-                        self.config.enable_consolidate_after_union_negate,
-                        self.config.enable_specialized_arrangements,
-                        self.config.enable_reduce_mfp_fusion,
-                    )
-                    .map_err(OptimizerError::Internal)?;
-                }
+            Some(plan) if self.config.enable_fast_path => {
+                // Trace the FastPathPlan.
+                trace_plan!(at: "fast_path", &plan);
+
+                // Trace the final plan
+                trace_plan(&plan);
 
                 // Build the PeekPlan
-                let peek_plan = PeekPlan::FastPath(plan);
-
-                peek_plan
+                PeekPlan::FastPath(plan)
             }
-            None => {
+            _ => {
                 // Ensure all expressions are normalized before finalizing.
                 for build in df_desc.objects_to_build.iter_mut() {
                     normalize_lets(&mut build.plan.0)?
@@ -447,25 +424,11 @@ impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
                 )
                 .map_err(OptimizerError::Internal)?;
 
-                // Build the PeekPlan
-                let peek_plan = {
-                    let arity = typ.arity();
-                    let key = typ
-                        .default_key()
-                        .into_iter()
-                        .map(MirScalarExpr::Column)
-                        .collect::<Vec<_>>();
-                    let (permutation, thinning) = permutation_for_arrangement(&key, arity);
-                    PeekPlan::SlowPath(PeekDataflowPlan::new(
-                        df_desc.clone(),
-                        self.index_id(),
-                        key,
-                        permutation,
-                        thinning.len(),
-                    ))
-                };
+                // Trace the final plan
+                trace_plan(&df_desc);
 
-                peek_plan
+                // Build the PeekPlan
+                PeekPlan::SlowPath(PeekDataflowPlan::new(df_desc, self.index_id(), &typ))
             }
         };
 
@@ -479,7 +442,7 @@ impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
 
 impl GlobalLirPlan {
     /// Unwraps the parts of the final result of the optimization pipeline.
-    pub fn unapply(self) -> (PeekPlan, DataflowMetainfo) {
-        (self.peek_plan, self.df_meta)
+    pub fn unapply(self) -> (PeekPlan, DataflowMetainfo, RelationType) {
+        (self.peek_plan, self.df_meta, self.typ)
     }
 }

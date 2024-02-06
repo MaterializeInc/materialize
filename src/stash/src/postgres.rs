@@ -517,10 +517,17 @@ impl Stash {
         Fut: Future<Output = T>,
     {
         let factory = DebugStashFactory::try_new().await?;
-        let stash = factory.try_open().await?;
-        let res = Ok(f(stash).await);
-        factory.drop().await;
-        res
+        match factory.try_open().await {
+            Ok(stash) => {
+                let res = Ok(f(stash).await);
+                factory.drop().await;
+                res
+            }
+            Err(err) => {
+                factory.drop().await;
+                Err(err)
+            }
+        }
     }
 
     /// Verifies stash invariants. Should only be called by tests.

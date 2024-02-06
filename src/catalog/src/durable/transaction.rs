@@ -304,7 +304,6 @@ impl<'a> Transaction<'a> {
         &mut self,
         cluster_id: ClusterId,
         cluster_name: &str,
-        linked_object_id: Option<GlobalId>,
         introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
@@ -313,7 +312,6 @@ impl<'a> Transaction<'a> {
         self.insert_cluster(
             cluster_id,
             cluster_name,
-            linked_object_id,
             introspection_source_indexes,
             owner_id,
             privileges,
@@ -333,7 +331,6 @@ impl<'a> Transaction<'a> {
         self.insert_cluster(
             cluster_id,
             cluster_name,
-            None,
             introspection_source_indexes,
             MZ_SYSTEM_ROLE_ID,
             privileges,
@@ -345,7 +342,6 @@ impl<'a> Transaction<'a> {
         &mut self,
         cluster_id: ClusterId,
         cluster_name: &str,
-        linked_object_id: Option<GlobalId>,
         introspection_source_indexes: Vec<(&'static BuiltinLog, GlobalId)>,
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
@@ -355,7 +351,6 @@ impl<'a> Transaction<'a> {
             ClusterKey { id: cluster_id },
             ClusterValue {
                 name: cluster_name.to_string(),
-                linked_object_id,
                 owner_id,
                 privileges,
                 config,

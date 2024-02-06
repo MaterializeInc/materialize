@@ -7,11 +7,42 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Renders the replication side of the [`MySqlSourceConnection`] ingestion dataflow.
+//!
+//! # Progress tracking using Partitioned Timestamps
+//!
+//! This dataflow uses a Partitioned Timestamp implementation to represent the GTID Set that
+//! comprises the full set of committed transactions from the MySQL Server. The frontier
+//! representing progress for this dataflow represents the full range of possible UUIDs +
+//! Transaction IDs of future GTIDs that could be added to the GTID Set.
+//!
+//! See the [`mz_storage_types::sources::mysql::GtidPartition`] type for more information.
+//!
+//! To maintain a complete frontier of the full UUID GTID range, we use a
+//! [`GtidReplicationPartitions`] struct to store the GTID Set as a set of partitions.
+//! This allows us to easily advance the frontier each time we see a new GTID on the replication
+//! stream.
+//!
+//! # Resumption
+//!
+//! When the dataflow is resumed, the MySQL replication stream is started from the GTID frontier
+//! of the minimum frontier across all subsources. This is compared against the GTID set that may
+//! still be obtained from the MySQL server, using the @@GTID_PURGED value in MySQL to determine
+//! GTIDs that are no longer available in the binlog and to put the source in an error state if
+//! we cannot resume from the GTID frontier.
+//!
+//! # Rewinds
+//!
+//! The replication stream may be resumed from a point before the snapshot for a specific table
+//! occurs. To avoid double-counting updates that were present in the snapshot, we store a map
+//! of pending rewinds that we've received from the snapshot operator, and when we see updates
+//! for a table that were present in the snapshot, we negate the snapshot update
+//! (at the minimum timestamp) and send it again at the correct GTID.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::num::NonZeroU64;
 use std::pin::pin;
-use std::rc::Rc;
 use std::time::Duration;
 
 use differential_dataflow::{AsCollection, Collection};
@@ -20,8 +51,7 @@ use itertools::Itertools;
 use mysql_async::prelude::Queryable;
 use mysql_async::{BinlogStream, BinlogStreamRequest, Conn, GnoInterval, Sid};
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::channels::pushers::TeeCore;
-use timely::dataflow::operators::{CapabilitySet, Concat, Map};
+use timely::dataflow::operators::{Concat, Map};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use timely::progress::Timestamp;
@@ -29,28 +59,24 @@ use timely::PartialOrder;
 use tracing::trace;
 use uuid::Uuid;
 
-use mz_mysql_util::{
-    ensure_full_row_binlog_format, ensure_gtid_consistency, ensure_replication_commit_order,
-    query_sys_var, MySqlTableDesc, ER_SOURCE_FATAL_ERROR_READING_BINLOG_CODE,
-};
+use mz_mysql_util::{query_sys_var, MySqlTableDesc, ER_SOURCE_FATAL_ERROR_READING_BINLOG_CODE};
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_sql_parser::ast::UnresolvedItemName;
-use mz_storage_types::sources::mysql::{gtid_set_frontier, GTIDState, GtidPartition};
+use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition, GtidState};
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_timely_util::builder_async::{
-    AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
-    PressOnDropButton,
+    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use mz_timely_util::order::Extrema;
 
 use crate::source::mysql::GtidReplicationPartitions;
 use crate::source::types::SourceReaderError;
 use crate::source::RawSourceCreationConfig;
 
 use super::{
-    pack_mysql_row, table_name, DefiniteError, ReplicationError, RewindRequest, TransientError,
+    pack_mysql_row, return_definite_error, table_name, validate_mysql_repl_settings, DefiniteError,
+    ReplicationError, RewindRequest, TransientError,
 };
 
 /// Used as a partition id to determine if the worker is
@@ -249,7 +275,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         if let Some(mut new_gtid) = next_gtid.take() {
                             // Increment the transaction-id to the next GTID we should see from this source-id
                             match new_gtid.timestamp_mut() {
-                                GTIDState::Active(time) => {
+                                GtidState::Active(time) => {
                                     *time = time.checked_add(1).unwrap();
                                 }
                                 _ => unreachable!(),
@@ -285,7 +311,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     Some(EventData::GtidEvent(event)) => {
                         let source_id = Uuid::from_bytes(event.sid());
                         let received_tx_id =
-                            GTIDState::Active(NonZeroU64::new(event.gno()).unwrap());
+                            GtidState::Active(NonZeroU64::new(event.gno()).unwrap());
 
                         // Store this GTID as a partition timestamp for ease of use in publishing data
                         next_gtid = Some(GtidPartition::new_singleton(source_id, received_tx_id));
@@ -345,7 +371,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         while let Some(Ok((before_row, after_row))) = rows_iter.next() {
                             let updates = [before_row.map(|r| (r, -1)), after_row.map(|r| (r, 1))];
                             for (binlog_row, diff) in updates.into_iter().flatten() {
-                                // TODO: Map columns from table schema to indexes in each row
                                 let row = mysql_async::Row::try_from(binlog_row)?;
                                 let packed_row = pack_mysql_row(&mut final_row, row, table_desc)?;
                                 let data = (*output_index, packed_row);
@@ -436,39 +461,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     )
 }
 
-async fn return_definite_error(
-    err: DefiniteError,
-    outputs: &[usize],
-    data_handle: &mut AsyncOutputHandle<
-        GtidPartition,
-        Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>,
-        TeeCore<GtidPartition, Vec<((usize, Result<Row, DefiniteError>), GtidPartition, i64)>>,
-    >,
-    data_cap_set: &CapabilitySet<GtidPartition>,
-    definite_error_handle: &mut AsyncOutputHandle<
-        GtidPartition,
-        Vec<ReplicationError>,
-        TeeCore<GtidPartition, Vec<ReplicationError>>,
-    >,
-    definite_error_cap_set: &CapabilitySet<GtidPartition>,
-) -> () {
-    for output_index in outputs {
-        let update = (
-            (*output_index, Err(err.clone())),
-            GtidPartition::new_range(Uuid::minimum(), Uuid::maximum(), GTIDState::MAX),
-            1,
-        );
-        data_handle.give(&data_cap_set[0], update).await;
-    }
-    definite_error_handle
-        .give(
-            &definite_error_cap_set[0],
-            ReplicationError::Definite(Rc::new(err)),
-        )
-        .await;
-    ()
-}
-
 /// Produces the replication stream from the MySQL server. This will return all transactions
 /// whose GTIDs were not present in the GTID UUIDs referenced in the `resume_uppper` partitions.
 async fn raw_stream<'a>(
@@ -477,10 +469,11 @@ async fn raw_stream<'a>(
     resume_upper: &Antichain<GtidPartition>,
 ) -> Result<Result<BinlogStream, DefiniteError>, TransientError> {
     // Verify the MySQL system settings are correct for consistent row-based replication using GTIDs
-    // TODO: Should these return DefiniteError instead of TransientError?
-    ensure_gtid_consistency(&mut conn).await?;
-    ensure_full_row_binlog_format(&mut conn).await?;
-    ensure_replication_commit_order(&mut conn).await?;
+    if let Err(err) = validate_mysql_repl_settings(&mut conn).await {
+        return Ok(Err(DefiniteError::ServerConfigurationError(
+            err.to_string(),
+        )));
+    };
 
     // To start the stream we need to provide a GTID set of the transactions that we've 'seen'
     // and the server will send us all transactions that have been committed after that point.
@@ -494,8 +487,8 @@ async fn raw_stream<'a>(
     let seen_gtids = resume_upper
         .iter()
         .flat_map(|partition| match partition.timestamp() {
-            GTIDState::Absent => None,
-            GTIDState::Active(frontier_time) => {
+            GtidState::Absent => None,
+            GtidState::Active(frontier_time) => {
                 let part_uuid = partition
                     .interval()
                     .singleton()

@@ -105,7 +105,7 @@ determine
       ]
     }
   },
-  "when": "Freshest",
+  "when": "FreshestTableWrite",
   "instance": "s1"
 }
 ----
@@ -156,7 +156,7 @@ determine
 ----
 15
 
-# Freshest: since < oracle < (upper-1) -> (upper-1)
+# FreshestTableWrite: since < oracle -> oracle
 
 determine
 {
@@ -167,11 +167,11 @@ determine
       ]
     }
   },
-  "when": "Freshest",
+  "when": "FreshestTableWrite",
   "instance": "s1"
 }
 ----
-19
+15
 
 set-oracle
 25
@@ -194,7 +194,7 @@ determine
 ----
 19
 
-# Freshest: since < (upper-1) < oracle -> oracle
+# FreshestTableWrite: since < oracle -> oracle
 
 determine
 {
@@ -205,7 +205,7 @@ determine
       ]
     }
   },
-  "when": "Freshest",
+  "when": "FreshestTableWrite",
   "instance": "s1"
 }
 ----

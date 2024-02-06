@@ -21,7 +21,7 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 const DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS: u64 = 1000;
 
 /// `DEFAULT_LOGICAL_COMPACTION_WINDOW` as an `EpochMillis` timestamp
-pub const DEFAULT_LOGICAL_COMPACTION_WINDOW_TS: Timestamp =
+const DEFAULT_LOGICAL_COMPACTION_WINDOW_TS: Timestamp =
     Timestamp::new(DEFAULT_LOGICAL_COMPACTION_WINDOW_MILLIS);
 
 /// The value to round all `since` frontiers to.
@@ -32,14 +32,26 @@ pub const SINCE_GRANULARITY: mz_repr::Timestamp = mz_repr::Timestamp::new(1000);
 
 // A common type (that is usable by the sql crate and also can implement various methods on types in
 // storage) to express compaction windows.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Default, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum CompactionWindow {
     /// Unspecified by the user, use a system-provided default.
+    #[default]
     Default,
     /// Disable compaction.
     DisableCompaction,
     /// Create a compaction window for a specified duration.
     Duration(Timestamp),
+}
+
+impl CompactionWindow {
+    pub fn lag_from(&self, from: Timestamp) -> Timestamp {
+        let lag = match self {
+            CompactionWindow::Default => DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
+            CompactionWindow::DisableCompaction => return Timestamp::minimum(),
+            CompactionWindow::Duration(d) => *d,
+        };
+        from.saturating_sub(lag)
+    }
 }
 
 impl From<CompactionWindow> for ReadPolicy<Timestamp> {

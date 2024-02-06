@@ -9,9 +9,11 @@
 
 mod crypto;
 mod destination;
+mod error;
 mod fivetran_sdk;
 
 pub mod logging;
+pub mod utils;
 
 pub use destination::MaterializeDestination;
 pub use fivetran_sdk::destination_server::DestinationServer;

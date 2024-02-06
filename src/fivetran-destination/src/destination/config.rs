@@ -7,17 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::{bail, Context};
-use mz_ore::error::ErrorExt;
-use mz_ore::str::StrExt;
 use openssl::ssl::{SslConnector, SslMethod};
+use openssl::x509::store::X509StoreBuilder;
+use openssl::x509::X509;
 use postgres_openssl::MakeTlsConnector;
 use std::collections::BTreeMap;
 
+use crate::error::{Context, OpError, OpErrorKind};
 use crate::fivetran_sdk::form_field::Type;
 use crate::fivetran_sdk::{
-    ConfigurationFormResponse, ConfigurationTest, FormField, TestRequest, TestResponse, TextField,
+    ConfigurationFormResponse, ConfigurationTest, FormField, TestRequest, TextField,
 };
+
+pub const FIVETRAN_DESTINATION_APPLICATION_NAME: &str = "materialize_fivetran_destination";
 
 pub fn handle_configuration_form_request() -> ConfigurationFormResponse {
     ConfigurationFormResponse {
@@ -66,30 +68,28 @@ pub fn handle_configuration_form_request() -> ConfigurationFormResponse {
     }
 }
 
-pub async fn handle_test_request(request: TestRequest) -> Result<TestResponse, anyhow::Error> {
-    use crate::fivetran_sdk::test_response::Response;
-
-    let result = match request.name.as_str() {
-        "connect" => test_connect(request.configuration).await,
-        "permissions" => test_permissions(request.configuration).await,
+pub async fn handle_test_request(request: TestRequest) -> Result<(), OpError> {
+    match request.name.as_str() {
+        "connect" => test_connect(request.configuration)
+            .await
+            .context("test_connect"),
+        "permissions" => test_permissions(request.configuration)
+            .await
+            .context("test_permissions"),
         "ping" => Ok(()),
-        name => bail!("unknown test {}", name.quoted()),
-    };
-    let response = match result {
-        Ok(()) => Response::Success(true),
-        Err(e) => Response::Failure(e.display_with_causes().to_string()),
-    };
-    Ok(TestResponse {
-        response: Some(response),
-    })
+        name => {
+            let error = OpErrorKind::UnknownRequest(name.to_string());
+            Err(error.into())
+        }
+    }
 }
 
-async fn test_connect(config: BTreeMap<String, String>) -> Result<(), anyhow::Error> {
+async fn test_connect(config: BTreeMap<String, String>) -> Result<(), OpError> {
     let _ = connect(config).await?;
     Ok(())
 }
 
-async fn test_permissions(config: BTreeMap<String, String>) -> Result<(), anyhow::Error> {
+async fn test_permissions(config: BTreeMap<String, String>) -> Result<(), OpError> {
     let (dbname, client) = connect(config).await?;
     let row = client
         .query_one(
@@ -99,32 +99,53 @@ async fn test_permissions(config: BTreeMap<String, String>) -> Result<(), anyhow
         .await
         .context("querying privileges")?;
     let has_create: bool = row.get("has_create");
+
     if !has_create {
-        bail!(
-            "user lacks \"CREATE\" privilege on database ({})",
-            dbname.quoted()
-        );
+        let err = OpErrorKind::MissingPrivilege {
+            privilege: "CREATE",
+            object: dbname,
+        }
+        .into();
+        return Err(err);
     }
     Ok(())
 }
 
 pub async fn connect(
     mut config: BTreeMap<String, String>,
-) -> Result<(String, tokio_postgres::Client), anyhow::Error> {
-    let Some(host) = config.remove("host") else {
-        bail!("internal error: \"host\" configuration parameter missing");
-    };
-    let Some(user) = config.remove("user") else {
-        bail!("internal error: \"user\" configuration parameter missing");
-    };
-    let Some(app_password) = config.remove("app_password") else {
-        bail!("internal error: \"app_password\" configuration parameter missing");
-    };
-    let Some(dbname) = config.remove("dbname") else {
-        bail!("internal error: \"dbname\" configuration parameter missing");
-    };
+) -> Result<(String, tokio_postgres::Client), OpError> {
+    let host = config
+        .remove("host")
+        .ok_or(OpErrorKind::FieldMissing("host"))?;
+    let user = config
+        .remove("user")
+        .ok_or(OpErrorKind::FieldMissing("user"))?;
+    let app_password = config
+        .remove("app_password")
+        .ok_or(OpErrorKind::FieldMissing("app_password"))?;
+    let dbname = config
+        .remove("dbname")
+        .ok_or(OpErrorKind::FieldMissing("dbname"))?;
 
-    let builder = SslConnector::builder(SslMethod::tls_client())?;
+    // Compile in the CA certificate bundle downloaded by the build script, and
+    // configure the TLS connector to reference that compiled-in CA bundle,
+    // rather than attempting to use the system's CA bundle. This supports
+    // running in Fivetran's environment, where the CA bundle will not be
+    // available. This does introduce a small amount of risk, as the CA bundle
+    // will not be updated until we issue a new release of the Fivetran
+    // destination.
+    //
+    // TODO: depend on the system's certificate bundle instead, once Fivetran
+    // supports running destinations in a containerized environment.
+    let ca_bundle = include_bytes!(concat!(env!("OUT_DIR"), "/ca-certificate.crt"));
+    let ca_certs = X509::stack_from_pem(ca_bundle)?;
+    let mut cert_store = X509StoreBuilder::new()?;
+    for cert in ca_certs {
+        cert_store.add_cert(cert)?;
+    }
+    let mut builder = SslConnector::builder(SslMethod::tls_client())?;
+    builder.set_verify_cert_store(cert_store.build())?;
+
     let tls_connector = MakeTlsConnector::new(builder.build());
     let (client, conn) = tokio_postgres::Config::new()
         .host(&host)
@@ -132,9 +153,9 @@ pub async fn connect(
         .port(6875)
         .password(app_password)
         .dbname(&dbname)
+        .application_name(FIVETRAN_DESTINATION_APPLICATION_NAME)
         .connect(tls_connector)
-        .await
-        .context("connecting to Materialize")?;
+        .await?;
 
     mz_ore::task::spawn(|| "postgres_connection", async move {
         if let Err(e) = conn.await {

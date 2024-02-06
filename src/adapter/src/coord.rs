@@ -82,10 +82,9 @@ use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
 use futures::future::{BoxFuture, FutureExt, LocalBoxFuture};
 use futures::StreamExt;
-use itertools::Itertools;
-use mz_adapter_types::compaction::{
-    CompactionWindow, ReadCapability, DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
-};
+use http::Uri;
+use itertools::{Either, Itertools};
+use mz_adapter_types::compaction::{CompactionWindow, ReadCapability};
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::BuildInfo;
 use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
@@ -107,6 +106,7 @@ use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::{soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
+use mz_pgcopy::CopyFormatParams;
 use mz_repr::explain::{ExplainConfig, ExplainFormat, UsedIndexes};
 use mz_repr::role_id::RoleId;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
@@ -122,7 +122,8 @@ use mz_sql::session::vars::{self, ConnectionCounter, OwnedVarInput, SystemVars};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::ExplainStage;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
-use mz_storage_types::connections::inline::IntoInlineConnection;
+use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
+use mz_storage_types::connections::Connection as StorageConnection;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::PersistTxnTablesImpl;
 use mz_storage_types::sources::Timeline;
@@ -145,7 +146,7 @@ use crate::config::{SynchronizedParameters, SystemParameterFrontend, SystemParam
 use crate::coord::appends::{Deferred, GroupCommitPermit, PendingWriteTxn};
 use crate::coord::catalog_oracle::CatalogTimestampPersistence;
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::peek::{FastPathPlan, PendingPeek};
+use crate::coord::peek::PendingPeek;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::error::AdapterError;
@@ -365,10 +366,8 @@ pub enum RealTimeRecencyContext {
         timeline_context: TimelineContext,
         oracle_read_ts: Option<Timestamp>,
         source_ids: BTreeSet<GlobalId>,
-        in_immediate_multi_stmt_txn: bool,
-        optimizer: optimize::peek::Optimizer,
-        global_mir_plan: optimize::peek::GlobalMirPlan,
-        peek_ctx: PeekContext,
+        optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
+        explain_ctx: Option<ExplainContext>,
     },
 }
 
@@ -382,21 +381,15 @@ impl RealTimeRecencyContext {
 }
 
 #[derive(Debug)]
-pub enum PeekContext {
-    /// Peek was initiated from SELECT stmt.
-    Select,
-    /// Peek was initiated with an EXPLAIN stmt.
-    Explain(ExplainContext),
-}
-
-#[derive(Debug)]
 pub enum PeekStage {
     Validate(PeekStageValidate),
-    Timestamp(PeekStageTimestamp),
-    OptimizeMir(PeekStageOptimizeMir),
+    LinearizeTimestamp(PeekStageLinearizeTimestamp),
     RealTimeRecency(PeekStageRealTimeRecency),
+    TimestampReadHold(PeekStageTimestampReadHold),
+    OptimizeMir(PeekStageOptimizeMir),
     OptimizeLir(PeekStageOptimizeLir),
     Finish(PeekStageFinish),
+    CopyTo(PeekStageCopyTo),
     Explain(PeekStageExplain),
 }
 
@@ -404,49 +397,52 @@ impl PeekStage {
     fn validity(&mut self) -> Option<&mut PlanValidity> {
         match self {
             PeekStage::Validate(_) => None,
-            PeekStage::Timestamp(PeekStageTimestamp { validity, .. })
-            | PeekStage::OptimizeMir(PeekStageOptimizeMir { validity, .. })
+            PeekStage::LinearizeTimestamp(PeekStageLinearizeTimestamp { validity, .. })
             | PeekStage::RealTimeRecency(PeekStageRealTimeRecency { validity, .. })
+            | PeekStage::TimestampReadHold(PeekStageTimestampReadHold { validity, .. })
+            | PeekStage::OptimizeMir(PeekStageOptimizeMir { validity, .. })
             | PeekStage::OptimizeLir(PeekStageOptimizeLir { validity, .. })
-            | PeekStage::Finish(PeekStageFinish { validity, .. }) => Some(validity),
-            PeekStage::Explain(PeekStageExplain { validity, .. }) => Some(validity),
+            | PeekStage::Finish(PeekStageFinish { validity, .. })
+            | PeekStage::CopyTo(PeekStageCopyTo { validity, .. })
+            | PeekStage::Explain(PeekStageExplain { validity, .. }) => Some(validity),
         }
     }
+}
+
+#[derive(Debug)]
+pub struct CopyToContext {
+    pub desc: RelationDesc,
+    pub uri: Uri,
+    pub connection: StorageConnection<ReferencedConnection>,
+    pub format_params: CopyFormatParams<'static>,
 }
 
 #[derive(Debug)]
 pub struct PeekStageValidate {
     plan: mz_sql::plan::SelectPlan,
     target_cluster: TargetCluster,
-    /// Context from where this peek initiated.
-    peek_ctx: PeekContext,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing a COPY TO statement.
+    ///
+    /// Will result in creating and using [`optimize::copy_to::Optimizer`] in
+    /// the `opimizer` field of all subsequent stages.
+    copy_to_ctx: Option<CopyToContext>,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
-pub struct PeekStageTimestamp {
+pub struct PeekStageLinearizeTimestamp {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
     source_ids: BTreeSet<GlobalId>,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
-    in_immediate_multi_stmt_txn: bool,
-    optimizer: optimize::peek::Optimizer,
-    /// Context from where this peek initiated.
-    peek_ctx: PeekContext,
-}
-
-#[derive(Debug)]
-pub struct PeekStageOptimizeMir {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    source_ids: BTreeSet<GlobalId>,
-    target_replica: Option<ReplicaId>,
-    timeline_context: TimelineContext,
-    oracle_read_ts: Option<Timestamp>,
-    in_immediate_multi_stmt_txn: bool,
-    optimizer: optimize::peek::Optimizer,
-    /// Context from where this peek initiated.
-    peek_ctx: PeekContext,
+    optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
@@ -454,31 +450,57 @@ pub struct PeekStageRealTimeRecency {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
     source_ids: BTreeSet<GlobalId>,
-    id_bundle: CollectionIdBundle,
     target_replica: Option<ReplicaId>,
     timeline_context: TimelineContext,
     oracle_read_ts: Option<Timestamp>,
-    in_immediate_multi_stmt_txn: bool,
-    optimizer: optimize::peek::Optimizer,
-    global_mir_plan: optimize::peek::GlobalMirPlan,
-    /// Context from where this peek initiated.
-    peek_ctx: PeekContext,
+    optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
+}
+
+#[derive(Debug)]
+pub struct PeekStageTimestampReadHold {
+    validity: PlanValidity,
+    plan: mz_sql::plan::SelectPlan,
+    source_ids: BTreeSet<GlobalId>,
+    target_replica: Option<ReplicaId>,
+    timeline_context: TimelineContext,
+    oracle_read_ts: Option<Timestamp>,
+    real_time_recency_ts: Option<mz_repr::Timestamp>,
+    optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
+}
+
+#[derive(Debug)]
+pub struct PeekStageOptimizeMir {
+    validity: PlanValidity,
+    plan: mz_sql::plan::SelectPlan,
+    source_ids: BTreeSet<GlobalId>,
+    id_bundle: CollectionIdBundle,
+    target_replica: Option<ReplicaId>,
+    determination: TimestampDetermination<mz_repr::Timestamp>,
+    optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
 pub struct PeekStageOptimizeLir {
     validity: PlanValidity,
     plan: mz_sql::plan::SelectPlan,
-    id_bundle: Option<CollectionIdBundle>,
+    id_bundle: CollectionIdBundle,
     target_replica: Option<ReplicaId>,
-    timeline_context: TimelineContext,
-    oracle_read_ts: Option<Timestamp>,
+    determination: TimestampDetermination<mz_repr::Timestamp>,
     source_ids: BTreeSet<GlobalId>,
-    real_time_recency_ts: Option<mz_repr::Timestamp>,
-    optimizer: optimize::peek::Optimizer,
-    global_mir_plan: optimize::peek::GlobalMirPlan,
-    /// Context from where this peek initiated.
-    peek_ctx: PeekContext,
+    optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
+    global_mir_plan: Either<optimize::peek::GlobalMirPlan, optimize::copy_to::GlobalMirPlan>,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPALIN for this statement.
+    explain_ctx: Option<ExplainContext>,
 }
 
 #[derive(Debug)]
@@ -489,9 +511,15 @@ pub struct PeekStageFinish {
     target_replica: Option<ReplicaId>,
     source_ids: BTreeSet<GlobalId>,
     determination: TimestampDetermination<mz_repr::Timestamp>,
-    timestamp_context: TimestampContext<mz_repr::Timestamp>,
     optimizer: optimize::peek::Optimizer,
     global_lir_plan: optimize::peek::GlobalLirPlan,
+}
+
+#[derive(Debug)]
+pub struct PeekStageCopyTo {
+    validity: PlanValidity,
+    optimizer: optimize::copy_to::Optimizer,
+    global_lir_plan: optimize::copy_to::GlobalLirPlan,
 }
 
 #[derive(Debug)]
@@ -499,7 +527,6 @@ pub struct PeekStageExplain {
     validity: PlanValidity,
     select_id: GlobalId,
     finishing: RowSetFinishing,
-    fast_path_plan: Option<FastPathPlan>,
     df_meta: DataflowMetainfo,
     used_indexes: UsedIndexes,
     explain_ctx: ExplainContext,
@@ -843,7 +870,6 @@ pub struct Config {
     pub cloud_resource_controller: Option<Arc<dyn CloudResourceController>>,
     pub availability_zones: Vec<String>,
     pub cluster_replica_sizes: ClusterReplicaSizeMap,
-    pub default_storage_cluster_size: Option<String>,
     pub builtin_cluster_replica_size: String,
     pub system_parameter_defaults: BTreeMap<String, String>,
     pub storage_usage_client: StorageUsageClient,
@@ -982,6 +1008,8 @@ impl From<PendingTxnResponse> for ExecuteResponse {
 pub struct PendingReadTxn {
     /// The transaction type
     txn: PendingRead,
+    /// The timestamp context of the transaction.
+    timestamp_context: TimestampContext<mz_repr::Timestamp>,
     /// When we created this pending txn, when the transaction ends. Only used for metrics.
     created: Instant,
     /// Number of times we requeued the processing of this pending read txn.
@@ -992,42 +1020,27 @@ pub struct PendingReadTxn {
     otel_ctx: OpenTelemetryContext,
 }
 
+impl PendingReadTxn {
+    /// Return the timestamp context of the pending read transaction.
+    pub fn timestamp_context(&self) -> &TimestampContext<mz_repr::Timestamp> {
+        &self.timestamp_context
+    }
+}
+
 #[derive(Debug)]
 /// A pending read transaction waiting to be linearized.
 enum PendingRead {
     Read {
         /// The inner transaction.
         txn: PendingTxn,
-        /// The timestamp context of the transaction.
-        timestamp_context: TimestampContext<mz_repr::Timestamp>,
     },
     ReadThenWrite {
         /// Channel used to alert the transaction that the read has been linearized.
         tx: oneshot::Sender<()>,
-        /// Timestamp and timeline of the read.
-        timestamp: (mz_repr::Timestamp, Timeline),
     },
 }
 
 impl PendingRead {
-    /// Return the timestamp context of the pending read transaction.
-    pub fn timestamp_context(&self) -> TimestampContext<mz_repr::Timestamp> {
-        match &self {
-            PendingRead::Read {
-                timestamp_context, ..
-            } => timestamp_context.clone(),
-            PendingRead::ReadThenWrite {
-                timestamp: (timestamp, timeline),
-                ..
-            } => TimestampContext::TimelineTimestamp {
-                timeline: timeline.clone(),
-                chosen_ts: timestamp.clone(),
-                oracle_ts: None, // For writes, we always pick the oracle
-                                 // timestamp!
-            },
-        }
-    }
-
     /// Alert the client that the read has been linearized.
     ///
     /// If it is necessary to finalize an execute, return the state necessary to do so
@@ -1616,11 +1629,28 @@ impl Coordinator {
                         let dependent_matviews = index_dependent_matviews
                             .remove(&entry.id())
                             .expect("all index dependants were collected");
+
+                        let compaction_window = if idx.is_retained_metrics_object {
+                            let retention =
+                                self.catalog().state().system_config().metrics_retention();
+                            match u64::try_from(retention.as_millis()) {
+                                Ok(d) => CompactionWindow::Duration(Timestamp::new(d)),
+                                Err(_) => {
+                                    tracing::error!(
+                                        "absurd metrics retention duration: {retention:?}"
+                                    );
+                                    CompactionWindow::DisableCompaction
+                                }
+                            }
+                        } else {
+                            idx.custom_logical_compaction_window.unwrap_or_default()
+                        };
+
                         let as_of = self.bootstrap_index_as_of(
                             &df_desc,
                             idx.cluster_id,
-                            idx.is_retained_metrics_object,
                             dependent_matviews,
+                            compaction_window,
                         );
                         df_desc.set_as_of(as_of);
 
@@ -2183,8 +2213,8 @@ impl Coordinator {
         &self,
         dataflow: &DataflowDescription<Plan>,
         cluster_id: ComputeInstanceId,
-        is_retained_metrics_index: bool,
         dependent_matviews: BTreeSet<GlobalId>,
+        compaction_window: CompactionWindow,
     ) -> Antichain<Timestamp> {
         // All inputs must be readable at the chosen `as_of`, so it must be at least the join of
         // the `since`s of all dependencies.
@@ -2213,26 +2243,8 @@ impl Coordinator {
             return min_as_of;
         }
 
-        // Advancing the `as_of` to the write frontier means that we lose some historical data.
-        // That might be acceptable for the default 1-second index compaction window, but not for
-        // retained-metrics indexes. So we need to regress the write frontier by the retention
-        // duration of the index.
-        //
-        // NOTE: If we ever allow custom index compaction windows, we'll need to apply those here
-        // as well.
-        let lag = if is_retained_metrics_index {
-            let retention = self.catalog().state().system_config().metrics_retention();
-            Timestamp::new(u64::try_from(retention.as_millis()).unwrap_or_else(|_| {
-                tracing::error!("absurd metrics retention duration: {retention:?}");
-                u64::MAX
-            }))
-        } else {
-            DEFAULT_LOGICAL_COMPACTION_WINDOW_TS
-        };
-
         let time = write_frontier.clone().into_option().expect("checked above");
-        let time = time.saturating_sub(lag);
-        let max_compaction_frontier = Antichain::from_elem(time);
+        let max_compaction_frontier = Antichain::from_elem(compaction_window.lag_from(time));
 
         // We must not select an `as_of` that is beyond any times that have not yet been written to
         // downstream materialized views. If we would, we might skip times in the output of these
@@ -2281,7 +2293,7 @@ impl Coordinator {
             min_as_of = ?min_as_of.elements(),
             max_as_of = ?max_as_of.elements(),
             write_frontier = ?write_frontier.elements(),
-            %lag,
+            ?compaction_window,
             max_compaction_frontier = ?max_compaction_frontier.elements(),
             "bootstrapping index `as_of`",
         );
@@ -2656,16 +2668,25 @@ impl Coordinator {
         dataflow: DataflowDescription<Plan>,
         instance: ComputeInstanceId,
     ) {
-        // We must only install read policies for indexes, not for sinks.
-        // Sinks are write-only compute collections that don't have read policies.
-        let index_ids = dataflow.exported_index_ids().collect();
+        let export_ids = if self
+            .controller
+            .compute
+            .enable_aggressive_readhold_downgrades()
+        {
+            // We must only install read policies for indexes, not for sinks.
+            // Sinks are write-only compute collections that don't have read policies.
+            dataflow.exported_index_ids().collect()
+        } else {
+            // If aggressive downgrading is disabled, all compute collections expect a read policy.
+            dataflow.export_ids().collect()
+        };
 
         self.controller
             .active_compute()
             .create_dataflow(instance, dataflow)
             .unwrap_or_terminate("dataflow creation cannot fail");
 
-        self.initialize_compute_read_policies(index_ids, instance, CompactionWindow::Default)
+        self.initialize_compute_read_policies(export_ids, instance, CompactionWindow::Default)
             .await;
     }
 }
@@ -2749,7 +2770,6 @@ pub fn serve(
         secrets_controller,
         cloud_resource_controller,
         cluster_replica_sizes,
-        default_storage_cluster_size,
         builtin_cluster_replica_size,
         system_parameter_defaults,
         availability_zones,
@@ -2810,7 +2830,6 @@ pub fn serve(
                     now: now.clone(),
                     skip_migrations: false,
                     cluster_replica_sizes,
-                    default_storage_cluster_size,
                     builtin_cluster_replica_size,
                     system_parameter_defaults,
                     remote_system_parameters,

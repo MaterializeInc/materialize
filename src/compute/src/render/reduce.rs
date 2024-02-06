@@ -994,24 +994,13 @@ where
                             &input,
                             aggr_funcs.clone(),
                         )
-                        .as_collection(|k, v| {
-                            let binding = SharedRow::get();
-                            let mut row_builder = binding.borrow_mut();
-                            let mut row_packer = row_builder.packer();
-                            row_packer.extend(k);
-                            (row_builder.clone(), v.clone())
-                        })
+                        .as_collection(|k, v| (SharedRow::pack(k), v.clone()))
                         .map_fallible("Checked Invalid Accumulations", |(hash_key, result)| {
                             match result {
                                 Err(hash_key) => {
                                     let mut hash_key_iter = hash_key.iter();
                                     let _hash = hash_key_iter.next();
-
-                                    let binding = SharedRow::get();
-                                    let mut row_builder = binding.borrow_mut();
-                                    let mut row_packer = row_builder.packer();
-                                    row_packer.extend(hash_key_iter);
-                                    let key = row_builder.clone();
+                                    let key = SharedRow::pack(hash_key_iter);
                                     let message = format!(
                                         "Invalid data in source, saw non-positive accumulation \
                                          for key {key:?} in hierarchical mins-maxes aggregate"
@@ -1031,12 +1020,9 @@ where
                     .as_collection(|k, v| {
                         let binding = SharedRow::get();
                         let mut row_builder = binding.borrow_mut();
-                        let mut row_packer = row_builder.packer();
-                        row_packer.extend(k);
-                        let key = row_builder.clone();
-                        row_packer = row_builder.packer();
-                        row_packer.extend(v);
-                        (key, row_builder.clone())
+                        let key = row_builder.pack_using(k);
+                        let val = row_builder.pack_using(v);
+                        (key, val)
                     })
                 };
 
@@ -1050,12 +1036,7 @@ where
             let partial = stage.map(move |(hash_key, values)| {
                 let mut hash_key_iter = hash_key.iter();
                 let _hash = hash_key_iter.next();
-
-                let binding = SharedRow::get();
-                let mut row_builder = binding.borrow_mut();
-                let mut row_packer = row_builder.packer();
-                row_packer.extend(hash_key_iter.take(key_arity));
-                (row_builder.clone(), values)
+                (SharedRow::pack(hash_key_iter.take(key_arity)), values)
             });
 
             // Allocations for the two closures.
@@ -1269,8 +1250,9 @@ where
                 let mut values = Vec::with_capacity(skips.len());
                 let mut row_iter = row.iter();
                 for skip in skips.iter() {
-                    row_builder.packer().push(row_iter.nth(*skip).unwrap());
-                    values.push(row_builder.clone());
+                    values.push(
+                        row_builder.pack_using(std::iter::once(row_iter.nth(*skip).unwrap())),
+                    );
                 }
 
                 (key, values)
@@ -1583,22 +1565,21 @@ fn evaluate_mfp_after<'a, 'b>(
 ) -> Option<Row> {
     let binding = SharedRow::get();
     let mut row_builder = binding.borrow_mut();
-    let mut row_packer = row_builder.packer();
     // Apply MFP if it exists and pack a Row of
     // aggregate values from `datums_local`.
     if let Some(mfp) = mfp_after {
         // It must ignore errors here, but they are scanned
         // for elsewhere if the MFP can error.
-        let Ok(Some(iter)) = mfp.evaluate_iter(datums_local, temp_storage) else {
-            return None;
-        };
-        // The `mfp_after` must preserve the key columns,
-        // so we can skip them to form aggregation results.
-        row_packer.extend(iter.skip(key_len));
+        if let Ok(Some(iter)) = mfp.evaluate_iter(datums_local, temp_storage) {
+            // The `mfp_after` must preserve the key columns,
+            // so we can skip them to form aggregation results.
+            Some(row_builder.pack_using(iter.skip(key_len)))
+        } else {
+            None
+        }
     } else {
-        row_packer.extend(&datums_local[key_len..]);
+        Some(row_builder.pack_using(&datums_local[key_len..]))
     }
-    Some(row_builder.clone())
 }
 
 fn accumulable_zero(aggr_func: &AggregateFunc) -> Accum {

@@ -78,9 +78,7 @@ use crate::catalog::{self, Catalog, ConnCatalog, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{Deferred, DeferredPlan, PendingWriteTxn};
 use crate::coord::id_bundle::CollectionIdBundle;
-use crate::coord::timestamp_selection::{
-    TimestampContext, TimestampDetermination, TimestampSource,
-};
+use crate::coord::timestamp_selection::{TimestampDetermination, TimestampSource};
 use crate::coord::{
     AlterConnectionValidationReady, Coordinator, CreateConnectionValidationReady, ExecuteContext,
     Message, PendingRead, PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity,
@@ -97,7 +95,6 @@ use crate::session::{
 use crate::util::{viewable_variables, ClientTransmitter, ResultExt};
 use crate::{guard_write_critical_section, PeekResponseUnary, TimestampExplanation};
 
-mod copy_to;
 mod create_index;
 mod create_materialized_view;
 mod create_view;
@@ -237,22 +234,31 @@ impl Coordinator {
                             &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
                         ));
 
-                    let (data_source, status_collection_id) = match source.data_source {
+                    let (data_source, status_collection_id, set_read_policies) = match source
+                        .data_source
+                    {
                         DataSourceDesc::Ingestion(ingestion) => {
                             let ingestion =
                                 ingestion.into_inline_connection(coord.catalog().state());
 
+                            // The parent source dictates all of the subsource's read policies.
+                            let set_read_policies =
+                                ingestion.source_exports.keys().cloned().collect();
+
                             (
                                 DataSource::Ingestion(ingestion),
                                 source_status_collection_id,
+                                set_read_policies,
                             )
                         }
                         // Subsources use source statuses.
                         DataSourceDesc::Source => (
                             DataSource::Other(DataSourceOther::Source),
                             source_status_collection_id,
+                            // Subsources will inherit their parent source's read_policy.
+                            vec![],
                         ),
-                        DataSourceDesc::Progress => (DataSource::Progress, None),
+                        DataSourceDesc::Progress => (DataSource::Progress, None, vec![source_id]),
                         DataSourceDesc::Webhook { .. } => {
                             if let Some(url) =
                                 coord.catalog().state().try_get_webhook_url(&source_id)
@@ -260,7 +266,7 @@ impl Coordinator {
                                 session.add_notice(AdapterNotice::WebhookSourceCreated { url })
                             }
 
-                            (DataSource::Webhook, None)
+                            (DataSource::Webhook, None, vec![source_id])
                         }
                         DataSourceDesc::Introspection(_) => {
                             unreachable!("cannot create sources with introspection data sources")
@@ -287,7 +293,7 @@ impl Coordinator {
 
                     coord
                         .initialize_storage_read_policies(
-                            vec![source_id],
+                            set_read_policies,
                             source
                                 .custom_logical_compaction_window
                                 .unwrap_or(CompactionWindow::Default),
@@ -1638,8 +1644,8 @@ impl Coordinator {
                                 response,
                                 action,
                             },
-                            timestamp_context: determination.timestamp_context,
                         },
+                        timestamp_context: determination.timestamp_context,
                         created: Instant::now(),
                         num_requeues: 0,
                         otel_ctx: OpenTelemetryContext::obtain(),
@@ -2372,7 +2378,7 @@ impl Coordinator {
             peek_ctx,
             plan::SelectPlan {
                 source: selection,
-                when: QueryWhen::Freshest,
+                when: QueryWhen::FreshestTableWrite,
                 finishing,
                 copy_to: None,
             },
@@ -2552,18 +2558,11 @@ impl Coordinator {
             // Note: It's only OK for the write to have a greater timestamp than the read
             // because the write lock prevents any other writes from happening in between
             // the read and write.
-            if let Some(TimestampContext::TimelineTimestamp {
-                timeline,
-                chosen_ts: chosen_read_ts,
-                oracle_ts: _,
-            }) = timestamp_context
-            {
+            if let Some(timestamp_context) = timestamp_context {
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 let result = strict_serializable_reads_tx.send(PendingReadTxn {
-                    txn: PendingRead::ReadThenWrite {
-                        tx,
-                        timestamp: (chosen_read_ts, timeline),
-                    },
+                    txn: PendingRead::ReadThenWrite { tx },
+                    timestamp_context,
                     created: Instant::now(),
                     num_requeues: 0,
                     otel_ctx: OpenTelemetryContext::obtain(),
@@ -2693,7 +2692,13 @@ impl Coordinator {
         &mut self,
         plan: plan::AlterIndexSetOptionsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        self.set_index_options(plan.id, plan.options)?;
+        for o in plan.options {
+            match o {
+                IndexOption::RetainHistory(window) => {
+                    self.set_index_compaction_window(plan.id, window)?;
+                }
+            }
+        }
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
@@ -2701,39 +2706,29 @@ impl Coordinator {
         &mut self,
         plan: plan::AlterIndexResetOptionsPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let mut options = Vec::with_capacity(plan.options.len());
         for o in plan.options {
-            options.push(match o {
-                IndexOptionName::LogicalCompactionWindow => {
-                    IndexOption::LogicalCompactionWindow(CompactionWindow::Default)
-                }
-            });
-        }
-
-        self.set_index_options(plan.id, options)?;
-
-        Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
-    }
-
-    pub(super) fn set_index_options(
-        &mut self,
-        id: GlobalId,
-        options: Vec<IndexOption>,
-    ) -> Result<(), AdapterError> {
-        for o in options {
             match o {
-                IndexOption::LogicalCompactionWindow(window) => {
-                    // The index is on a specific cluster.
-                    let cluster = self
-                        .catalog()
-                        .get_entry(&id)
-                        .index()
-                        .expect("setting options on index")
-                        .cluster_id;
-                    self.update_compute_base_read_policy(cluster, id, window.into());
+                IndexOptionName::RetainHistory => {
+                    self.set_index_compaction_window(plan.id, CompactionWindow::Default)?;
                 }
             }
         }
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
+    }
+
+    pub(super) fn set_index_compaction_window(
+        &mut self,
+        id: GlobalId,
+        window: CompactionWindow,
+    ) -> Result<(), AdapterError> {
+        // The index is on a specific cluster.
+        let cluster = self
+            .catalog()
+            .get_entry(&id)
+            .index()
+            .expect("setting options on index")
+            .cluster_id;
+        self.update_compute_base_read_policy(cluster, id, window.into());
         Ok(())
     }
 
@@ -3530,6 +3525,8 @@ impl Coordinator {
                     cur_source.is_retained_metrics_object,
                 );
 
+                let source_compaction_window = source.custom_logical_compaction_window;
+
                 // Get new ingestion description for storage.
                 let ingestion = match &source.data_source {
                     DataSourceDesc::Ingestion(ingestion) => ingestion
@@ -3617,8 +3614,11 @@ impl Coordinator {
                     .await
                     .expect("altering collection after txn must succeed");
 
-                self.initialize_storage_read_policies(source_ids, CompactionWindow::Default)
-                    .await;
+                self.initialize_storage_read_policies(
+                    source_ids,
+                    source_compaction_window.unwrap_or(CompactionWindow::Default),
+                )
+                .await;
             }
         }
 
@@ -4101,20 +4101,6 @@ impl Coordinator {
                     });
                 ops.extend(dependent_index_ops);
 
-                // Alter owner cascades down to linked clusters and replicas.
-                if let Some(cluster) = self.catalog().get_linked_cluster(*global_id) {
-                    let linked_cluster_replica_ops =
-                        cluster.replicas().map(|r| catalog::Op::UpdateOwner {
-                            id: ObjectId::ClusterReplica((cluster.id(), r.replica_id)),
-                            new_owner,
-                        });
-                    ops.extend(linked_cluster_replica_ops);
-                    ops.push(catalog::Op::UpdateOwner {
-                        id: ObjectId::Cluster(cluster.id()),
-                        new_owner,
-                    });
-                }
-
                 // Alter owner cascades down to sub-sources and progress collections.
                 let dependent_subsources =
                     entry
@@ -4213,7 +4199,7 @@ impl Coordinator {
         &self,
         session: &Session,
         source_ids: &BTreeSet<GlobalId>,
-        query_as_of: Antichain<Timestamp>,
+        query_as_of: &Antichain<Timestamp>,
         is_oneshot: bool,
     ) -> Result<Box<dyn mz_transform::StatisticsOracle>, AdapterError> {
         if !session.vars().enable_session_cardinality_estimates() {
@@ -4231,7 +4217,7 @@ impl Coordinator {
 
         let cached_stats = mz_ore::future::timeout(
             timeout,
-            CachedStatisticsOracle::new(source_ids, &query_as_of, self.controller.storage.as_ref()),
+            CachedStatisticsOracle::new(source_ids, query_as_of, self.controller.storage.as_ref()),
         )
         .await;
 

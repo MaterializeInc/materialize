@@ -48,6 +48,7 @@ steps:
       command: bin/ci-builder run stable bin/ci-closed-issues-detect
       agents:
         queue: linux-aarch64-small
+      branches: "main"
 
     - id: unused-deps
       label: Unused dependencies
@@ -637,6 +638,28 @@ steps:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMz]
 
+      - id: checks-preflight-check-continue
+        label: "Checks preflight-check and continue upgrade"
+        timeout_in_minutes: 60
+        agents:
+          queue: linux-aarch64-large
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=PreflightCheckContinue]
+
+      - id: checks-preflight-check-rollback
+        label: "Checks preflight-check and roll back upgrade"
+        timeout_in_minutes: 60
+        agents:
+          queue: linux-aarch64-large
+        artifact_paths: junit_*.xml
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=PreflightCheckRollback]
+
       - id: checks-upgrade-entire-mz-previous-version
         label: "Checks upgrade from previous version, whole-Mz restart"
         timeout_in_minutes: 60
@@ -832,7 +855,7 @@ steps:
         label: "Platform checks upgrade in Cloudtest/K8s"
         timeout_in_minutes: 60
         agents:
-          queue: linux-aarch64
+          queue: linux-aarch64-large
         artifact_paths: junit_*.xml
         plugins:
           - ./ci/plugins/scratch-aws-access: ~
@@ -846,7 +869,7 @@ steps:
         label: "K8s recovery: storage on failing node"
         timeout_in_minutes: 30
         agents:
-          queue: linux-x86_64
+          queue: linux-aarch64
         artifact_paths: junit_*.xml
         inputs:
           - test/cloudtest
@@ -862,7 +885,7 @@ steps:
         label: "K8s recovery: compute on failing node"
         timeout_in_minutes: 30
         agents:
-          queue: linux-x86_64
+          queue: linux-aarch64
         artifact_paths: junit_*.xml
         inputs:
           - test/cloudtest
@@ -878,7 +901,7 @@ steps:
         label: "K8s recovery: replicated compute on failing node"
         timeout_in_minutes: 30
         agents:
-          queue: linux-x86_64
+          queue: linux-aarch64
         artifact_paths: junit_*.xml
         inputs:
           - test/cloudtest
@@ -894,7 +917,7 @@ steps:
         label: "K8s recovery: envd on failing node"
         timeout_in_minutes: 30
         agents:
-          queue: linux-x86_64
+          queue: linux-aarch64
         artifact_paths: junit_*.xml
         inputs:
           - test/cloudtest

@@ -52,6 +52,7 @@
 //! For details, see the `20230714_optimizer_interface.md` design doc in this
 //! repository.
 
+pub mod copy_to;
 pub mod dataflows;
 pub mod index;
 pub mod materialized_view;
@@ -137,6 +138,8 @@ where
 pub struct OptimizerConfig {
     /// The mode in which the optimizer runs.
     pub mode: OptimizeMode,
+    /// Enable fast path optimization.
+    pub enable_fast_path: bool,
     /// Enable consolidation of unions that happen immediately after negate.
     ///
     /// The refinement happens in the LIR ⇒ LIR phase.
@@ -172,6 +175,7 @@ impl From<&SystemVars> for OptimizerConfig {
     fn from(vars: &SystemVars) -> Self {
         Self {
             mode: OptimizeMode::Execute,
+            enable_fast_path: true, // Always enable fast path if available.
             enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
             enable_specialized_arrangements: vars.enable_specialized_arrangements(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
@@ -188,6 +192,7 @@ impl From<(&SystemVars, &ExplainConfig)> for OptimizerConfig {
         let mut config = Self::from(vars);
         // We are calling this constructor from an 'Explain' mode context.
         config.mode = OptimizeMode::Explain;
+        config.enable_fast_path = !explain_config.no_fast_path;
         // Override feature flags that can be enabled in the EXPLAIN config.
         if let Some(explain_flag) = explain_config.enable_new_outer_join_lowering {
             config.enable_new_outer_join_lowering = explain_flag;
@@ -265,3 +270,13 @@ impl From<anyhow::Error> for OptimizerError {
         OptimizerError::Internal(value.to_string())
     }
 }
+
+macro_rules! trace_plan {
+    (at: $span:literal, $plan:expr) => {
+        tracing::debug_span!(target: "optimizer", $span).in_scope(|| {
+            mz_repr::explain::trace_plan($plan);
+        });
+    }
+}
+
+use trace_plan;

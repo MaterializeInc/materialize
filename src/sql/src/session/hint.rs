@@ -21,6 +21,8 @@ const DBT_LABEL: &str = "dbt";
 const WEB_CONSOLE_LABEL: &str = "web_console";
 /// Prometheus label for [`ApplicationNameHint::MzPsql`].
 const MZ_PSQL_LABEL: &str = "mz_psql";
+/// Prometheus label for [`ApplicationNameHint::MaterializeFivetranDestination`]
+const MATERIALIZE_FIVETRAN_DESTINATION: &str = "materialize_fivetran_destination";
 
 /// A hint for what application is making a request to the adapter.
 ///
@@ -45,6 +47,8 @@ pub enum ApplicationNameHint {
     WebConsole(Private),
     /// Request came from the `psql` shell spawned by `mz`.
     MzPsql(Private),
+    /// Request came from our Fivetran Destination,
+    MaterializeFivetranDestination(Private),
 }
 
 impl ApplicationNameHint {
@@ -54,6 +58,10 @@ impl ApplicationNameHint {
             "dbt" => ApplicationNameHint::Dbt(Private),
             "web_console" => ApplicationNameHint::WebConsole(Private),
             "mz_psql" => ApplicationNameHint::MzPsql(Private),
+            // Note: Make sure this is kept in sync with the `fivetran-destination` crate.
+            "materialize_fivetran_destination" => {
+                ApplicationNameHint::MaterializeFivetranDestination(Private)
+            }
             "" => ApplicationNameHint::Unspecified(Private),
             // TODO(parkertimmerman): We should keep some record of these "unrecognized"
             // names, and possibly support more popular ones in the future.
@@ -69,6 +77,9 @@ impl ApplicationNameHint {
             ApplicationNameHint::Dbt(_) => DBT_LABEL,
             ApplicationNameHint::WebConsole(_) => WEB_CONSOLE_LABEL,
             ApplicationNameHint::MzPsql(_) => MZ_PSQL_LABEL,
+            ApplicationNameHint::MaterializeFivetranDestination(_) => {
+                MATERIALIZE_FIVETRAN_DESTINATION
+            }
         }
     }
 }

@@ -34,15 +34,14 @@ use crate::command::Command;
 use crate::coord::appends::Deferred;
 use crate::coord::statement_logging::StatementLoggingId;
 use crate::coord::{
-    Coordinator, CreateConnectionValidationReady, Message, PeekStage, PeekStageOptimizeLir,
-    PendingReadTxn, PlanValidity, PurifiedStatementReady, RealTimeRecencyContext,
+    AlterConnectionValidationReady, Coordinator, CreateConnectionValidationReady, Message,
+    PeekStage, PeekStageTimestampReadHold, PendingReadTxn, PlanValidity, PurifiedStatementReady,
+    RealTimeRecencyContext,
 };
 use crate::session::Session;
 use crate::statement_logging::StatementLifecycleEvent;
 use crate::util::{ComputeSinkId, ResultExt};
 use crate::{catalog, AdapterNotice, TimestampContext};
-
-use super::AlterConnectionValidationReady;
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 74KB. This would
@@ -707,7 +706,7 @@ impl Coordinator {
                 timeline,
                 chosen_ts,
                 oracle_ts,
-            } = read_txn.txn.timestamp_context()
+            } = read_txn.timestamp_context()
             {
                 let oracle_ts = match oracle_ts {
                     Some(oracle_ts) => oracle_ts,
@@ -729,7 +728,7 @@ impl Coordinator {
                 let current_oracle_ts = cached_oracle_ts.entry(timeline.clone());
                 let current_oracle_ts = match current_oracle_ts {
                     btree_map::Entry::Vacant(entry) => {
-                        let timestamp_oracle = self.get_timestamp_oracle(&timeline);
+                        let timestamp_oracle = self.get_timestamp_oracle(timeline);
                         let read_ts = timestamp_oracle.read_ts().await;
                         entry.insert(read_ts.clone());
                         read_ts
@@ -737,7 +736,7 @@ impl Coordinator {
                     btree_map::Entry::Occupied(entry) => entry.get().clone(),
                 };
 
-                if chosen_ts <= current_oracle_ts {
+                if *chosen_ts <= current_oracle_ts {
                     ready_txns.push(read_txn);
                 } else {
                     let wait =
@@ -854,26 +853,22 @@ impl Coordinator {
                 timeline_context,
                 oracle_read_ts,
                 source_ids,
-                in_immediate_multi_stmt_txn: _,
                 optimizer,
-                global_mir_plan,
-                peek_ctx,
+                explain_ctx,
             } => {
                 self.execute_peek_stage(
                     ctx,
                     root_otel_ctx,
-                    PeekStage::OptimizeLir(PeekStageOptimizeLir {
+                    PeekStage::TimestampReadHold(PeekStageTimestampReadHold {
                         validity,
                         plan,
-                        id_bundle: None,
                         target_replica,
                         timeline_context,
                         oracle_read_ts,
                         source_ids,
                         real_time_recency_ts: Some(real_time_recency_ts),
                         optimizer,
-                        global_mir_plan,
-                        peek_ctx,
+                        explain_ctx,
                     }),
                 )
                 .await;

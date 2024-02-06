@@ -38,7 +38,7 @@ version = "1.2.6"
 [[audits.differential-dataflow]]
 who = "Moritz Hoffmann <mh@materialize.com>"
 criteria = "safe-to-deploy"
-version = "0.12.0@git:c5b9baca0283f4d96f7e6f914de8578fb5c521de"
+version = "0.12.0@git:15b7b8dcf606580b4cf50e3f1b408da91b27b4c1"
 
 [[audits.dynfmt]]
 who = "Sean Loiselle <sean@materialize.io>"
@@ -143,12 +143,12 @@ version = "10.7.0"
 [[audits.rdkafka]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
-version = "0.29.0@git:c729f89b70935fb2ad8a4f377cff2845acc197b0"
+version = "0.29.0@git:843ccffbd75f4dac93b2e34cf091bd7770b9a3de"
 
 [[audits.rdkafka-sys]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"
 criteria = "safe-to-deploy"
-version = "4.3.0+1.9.2@git:c729f89b70935fb2ad8a4f377cff2845acc197b0"
+version = "4.3.0+1.9.2@git:843ccffbd75f4dac93b2e34cf091bd7770b9a3de"
 
 [[audits.redox_syscall]]
 who = "Nikhil Benesch <nikhil.benesch@gmail.com>"

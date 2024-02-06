@@ -167,7 +167,7 @@ fn parse_query_when(s: &str) -> QueryWhen {
             }
         }
         None => match s.as_str() {
-            "freshest" => QueryWhen::Freshest,
+            "freshesttablewrite" => QueryWhen::FreshestTableWrite,
             "immediately" => QueryWhen::Immediately,
             _ => panic!("bad when {s}"),
         },
