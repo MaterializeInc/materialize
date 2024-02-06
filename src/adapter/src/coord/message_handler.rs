@@ -35,7 +35,7 @@ use crate::coord::appends::Deferred;
 use crate::coord::statement_logging::StatementLoggingId;
 use crate::coord::{
     AlterConnectionValidationReady, Coordinator, CreateConnectionValidationReady, Message,
-    PeekStage, PeekStageTimestampReadHold, PendingReadTxn, PlanValidity, PurifiedStatementReady,
+    PeekStage, PeekStageTimestampReadHold, PlanValidity, PurifiedStatementReady,
     RealTimeRecencyContext,
 };
 use crate::session::Session;
