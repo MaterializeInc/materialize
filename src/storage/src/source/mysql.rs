@@ -127,19 +127,6 @@ impl SourceRender for MySqlSourceConnection {
             .position(|export_id| export_id == &config.id)
             .expect("primary source must be included in exports");
 
-        let table_details: BTreeMap<_, _> = self
-            .details
-            .tables
-            .iter()
-            .map(|t| {
-                (
-                    MySqlTableName::new(t.schema_name.clone(), t.name.clone())
-                        .expect("names previously validated for use in Ident"),
-                    t,
-                )
-            })
-            .collect();
-
         // Collect the tables that we will be ingesting.
         let mut table_info = BTreeMap::new();
         for (output_idx, export) in config.source_exports.values().enumerate() {
@@ -150,7 +137,7 @@ impl SourceRender for MySqlSourceConnection {
 
             // TODO: when supporting the ability to add tables to a MySQL
             // source, this will need to be more complicated.
-            let desc = table_details[&table].clone();
+            let desc = self.details.tables[&table].clone();
             table_info.insert(table, (output_idx, desc.clone()));
         }
 

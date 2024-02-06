@@ -46,7 +46,7 @@ use mz_storage_types::connections::Connection;
 use mz_storage_types::errors::ContextCreationError;
 use mz_storage_types::sources::mysql::MySqlSourceDetails;
 use mz_storage_types::sources::postgres::PostgresSourcePublicationDetails;
-use mz_storage_types::sources::{GenericSourceConnection, SourceConnection};
+use mz_storage_types::sources::{GenericSourceConnection, MySqlTableName, SourceConnection};
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
@@ -1086,7 +1086,18 @@ async fn purify_create_source(
             // Remove any old detail references
             options
                 .retain(|MySqlConfigOption { name, .. }| name != &MySqlConfigOptionName::Details);
-            let details = MySqlSourceDetails { tables };
+
+            let mut details_tables = BTreeMap::new();
+
+            for t in tables {
+                let name = MySqlTableName::new(t.schema_name.clone(), t.name.clone())?;
+                details_tables.insert(name, t);
+            }
+
+            let details = MySqlSourceDetails {
+                tables: details_tables,
+            };
+
             options.push(MySqlConfigOption {
                 name: MySqlConfigOptionName::Details,
                 value: Some(WithOptionValue::Value(Value::String(hex::encode(

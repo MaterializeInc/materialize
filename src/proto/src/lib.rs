@@ -76,6 +76,15 @@ pub enum TryFromProtoError {
     /// Failed to deserialize Ident. Note that we don't import the source error
     /// itself because this would make the proto library depend on the parser.
     InvalidIdent(String),
+    /// Protobuf doesn't natively support building maps with messages as keys;
+    /// however, if we flatten a map in a struct into a repeated message, we
+    /// expect its deserialization to preserve the original map's unique
+    /// entries.
+    DuplicateMapEntry {
+        proto_message_name: &'static str,
+        proto_message_field: &'static str,
+        duplicated_key: String,
+    },
 }
 
 impl TryFromProtoError {
@@ -168,6 +177,15 @@ impl std::fmt::Display for TryFromProtoError {
                 inner_error
             ),
             InvalidIdent(error) => error.fmt(f),
+            DuplicateMapEntry{
+                proto_message_name,
+                proto_message_field,
+                duplicated_key,
+            } => write!(
+                f,
+                "Protobuf deserialization failed for {proto_message_name}'s {proto_message_field} field; \
+                duplicated key {duplicated_key}",
+            ),
         }
     }
 }
@@ -203,6 +221,7 @@ impl std::error::Error for TryFromProtoError {
             InvalidBitFlags(_) => None,
             LikePatternDeserializationError(_) => None,
             InvalidIdent(_) => None,
+            DuplicateMapEntry { .. } => None,
         }
     }
 }

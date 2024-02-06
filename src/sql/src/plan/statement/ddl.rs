@@ -87,8 +87,7 @@ use mz_storage_types::sources::postgres::{
 };
 use mz_storage_types::sources::testscript::TestScriptSourceConnection;
 use mz_storage_types::sources::{
-    GenericSourceConnection, MySqlTableName, SourceConnection, SourceDesc, SubsourceConfig,
-    Timeline,
+    GenericSourceConnection, SourceConnection, SourceDesc, SubsourceConfig, Timeline,
 };
 use prost::Message;
 
@@ -998,17 +997,16 @@ pub fn plan_create_source(
 
             let mut available_subsources = BTreeMap::new();
 
-            for table in details.tables.iter() {
+            for (table_name, table_desc) in details.tables.iter() {
                 let name = FullItemName {
                     // In MySQL we use 'mysql' as the default database name since there is
                     // no concept of a 'database' in MySQL (schemas and databases are the same thing)
                     database: RawDatabaseSpecifier::Name("mysql".to_string()),
-                    schema: table.schema_name.clone(),
-                    item: table.name.clone(),
+                    schema: table_desc.schema_name.clone(),
+                    item: table_desc.name.clone(),
                 };
 
-                let config = MySqlTableName::new(table.schema_name.clone(), table.name.clone())?;
-                available_subsources.insert(name, SubsourceConfig::MySql(config));
+                available_subsources.insert(name, SubsourceConfig::MySql(table_name.clone()));
             }
 
             let connection =

@@ -9,6 +9,7 @@
 
 //! Types related to mysql sources
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
 use std::num::NonZeroU64;
@@ -30,6 +31,8 @@ use crate::connections::inline::{
     ReferencedConnection,
 };
 use crate::sources::{SourceConnection, SourceTimestamp};
+
+use super::MySqlTableName;
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -138,7 +141,7 @@ impl RustType<ProtoMySqlSourceConnection> for MySqlSourceConnection {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MySqlSourceDetails {
-    pub tables: Vec<mz_mysql_util::MySqlTableDesc>,
+    pub tables: BTreeMap<MySqlTableName, mz_mysql_util::MySqlTableDesc>,
 }
 
 impl Arbitrary for MySqlSourceDetails {
@@ -146,27 +149,63 @@ impl Arbitrary for MySqlSourceDetails {
     type Strategy = BoxedStrategy<Self>;
 
     fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        proptest::collection::vec(any::<mz_mysql_util::MySqlTableDesc>(), 1..4)
-            .prop_map(|tables| Self { tables })
-            .boxed()
+        proptest::collection::btree_map(
+            any::<MySqlTableName>(),
+            any::<mz_mysql_util::MySqlTableDesc>(),
+            1..4,
+        )
+        .prop_map(|tables| Self { tables })
+        .boxed()
     }
 }
 
 impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {
     fn into_proto(&self) -> ProtoMySqlSourceDetails {
         ProtoMySqlSourceDetails {
-            tables: self.tables.iter().map(|t| t.into_proto()).collect(),
+            tables: self
+                .tables
+                .iter()
+                .map(|(name, t)| {
+                    mz_ore::soft_assert_eq_or_log!(
+                        &MySqlTableName::new(t.schema_name.clone(), t.name.clone())
+                            .expect("name successfully derived from desc previously"),
+                        name
+                    );
+
+                    t.into_proto()
+                })
+                .collect(),
         }
     }
 
     fn from_proto(proto: ProtoMySqlSourceDetails) -> Result<Self, TryFromProtoError> {
-        Ok(MySqlSourceDetails {
-            tables: proto
-                .tables
-                .into_iter()
-                .map(mz_mysql_util::MySqlTableDesc::from_proto)
-                .collect::<Result<_, _>>()?,
-        })
+        let tables_vec: Vec<_> = proto
+            .tables
+            .into_iter()
+            .map(mz_mysql_util::MySqlTableDesc::from_proto)
+            .collect::<Result<_, _>>()?;
+
+        let mut tables = BTreeMap::new();
+
+        for t in tables_vec {
+            let r = tables.insert(
+                MySqlTableName::new(t.schema_name.clone(), t.name.clone())
+                    .map_err(|e| TryFromProtoError::InvalidIdent(e.to_string()))?,
+                t,
+            );
+
+            if let Some(t) = r {
+                return Err(TryFromProtoError::DuplicateMapEntry {
+                    proto_message_name: "ProtoMySqlSourceDetails",
+                    proto_message_field: "tables",
+                    duplicated_key: MySqlTableName::new(t.schema_name.clone(), t.name.clone())
+                        .expect("already succeeded")
+                        .to_string(),
+                });
+            }
+        }
+
+        Ok(MySqlSourceDetails { tables })
     }
 }
 
