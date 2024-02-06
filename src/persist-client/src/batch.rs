@@ -23,7 +23,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::stream::{FuturesUnordered, StreamExt};
-use mz_dyncfg::Config;
+use mz_dyncfg::{config, Config};
 use mz_ore::cast::CastFrom;
 use mz_ore::task::{JoinHandle, JoinHandleExt};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
@@ -225,11 +225,11 @@ pub struct BatchBuilderConfig {
 }
 
 // TODO: Remove this once we're comfortable that there aren't any bugs.
-pub(crate) const BATCH_DELETE_ENABLED: Config<bool> = Config::new(
-    "persist_batch_delete_enabled",
-    false,
-    "Whether to actually delete blobs when batch delete is called (Materialize).",
-);
+pub(crate) const BATCH_DELETE_ENABLED: Config<bool> = config! {
+    name: "persist_batch_delete_enabled",
+    default: false,
+    desc: "Whether to actually delete blobs when batch delete is called (Materialize).",
+};
 
 /// A target maximum size of blob payloads in bytes. If a logical "batch" is
 /// bigger than this, it will be broken up into smaller, independent pieces.
@@ -237,11 +237,11 @@ pub(crate) const BATCH_DELETE_ENABLED: Config<bool> = Config::new(
 /// always respect it). This target size doesn't apply for an individual update
 /// that exceeds it in size, but that scenario is almost certainly a mis-use of
 /// the system.
-pub(crate) const BLOB_TARGET_SIZE: Config<usize> = Config::new(
-    "persist_blob_target_size",
-    128 * MiB,
-    "A target maximum size of persist blob payloads in bytes (Materialize).",
-);
+pub(crate) const BLOB_TARGET_SIZE: Config<usize> = config! {
+    name: "persist_blob_target_size",
+    default: 128 * MiB,
+    desc: "A target maximum size of persist blob payloads in bytes (Materialize).",
+};
 
 impl BatchBuilderConfig {
     /// Initialize a batch builder config based on a snapshot of the Persist config.

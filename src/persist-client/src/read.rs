@@ -20,7 +20,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::Stream;
-use mz_dyncfg::Config;
+use mz_dyncfg::{config, Config};
 use mz_ore::now::EpochMillis;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
 use mz_persist::location::{Blob, SeqNo};
@@ -554,11 +554,11 @@ where
 
 /// Length of time after a reader's last operation after which the reader may be
 /// expired.
-pub(crate) const READER_LEASE_DURATION: Config<Duration> = Config::new(
-    "persist_reader_lease_duration",
-    Duration::from_secs(60 * 15),
-    "The time after which we'll clean up stale read leases",
-);
+pub(crate) const READER_LEASE_DURATION: Config<Duration> = config! {
+    name: "persist_reader_lease_duration",
+    default: Duration::from_secs(60 * 15),
+    desc: "The time after which we'll clean up stale read leases",
+};
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>
 where
@@ -983,11 +983,11 @@ where
     }
 }
 
-pub(crate) const STREAMING_SNAPSHOT_AND_FETCH_ENABLED: Config<bool> = Config::new(
-    "persist_streaming_snapshot_and_fetch_enabled",
-    false,
-    "use the new streaming consolidate during snapshot_and_fetch",
-);
+pub(crate) const STREAMING_SNAPSHOT_AND_FETCH_ENABLED: Config<bool> = config! {
+    name: "persist_streaming_snapshot_and_fetch_enabled",
+    default: false,
+    desc: "use the new streaming consolidate during snapshot_and_fetch",
+};
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>
 where

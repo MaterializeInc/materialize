@@ -18,7 +18,7 @@ use std::time::Duration;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
-use mz_dyncfg::{Config, ConfigSet};
+use mz_dyncfg::{config, Config, ConfigSet};
 use mz_ore::cast::CastFrom;
 use mz_persist_client::cfg::RetryParameters;
 use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
@@ -421,23 +421,23 @@ where
     (passthrough_stream, shutdown_button.press_on_drop())
 }
 
-pub(crate) const DATA_SHARD_RETRYER_INITIAL_BACKOFF: Config<Duration> = Config::new(
-    "persist_txns_data_shard_retryer_initial_backoff",
-    Duration::from_millis(1024),
-    "The initial backoff when polling for new batches from a txns data shard persist_source.",
-);
+pub(crate) const DATA_SHARD_RETRYER_INITIAL_BACKOFF: Config<Duration> = config! {
+    name: "persist_txns_data_shard_retryer_initial_backoff",
+    default: Duration::from_millis(1024),
+    desc: "The initial backoff when polling for new batches from a txns data shard persist_source.",
+};
 
-pub(crate) const DATA_SHARD_RETRYER_MULTIPLIER: Config<u32> = Config::new(
-    "persist_txns_data_shard_retryer_multiplier",
-    2,
-    "The backoff multiplier when polling for new batches from a txns data shard persist_source.",
-);
+pub(crate) const DATA_SHARD_RETRYER_MULTIPLIER: Config<u32> = config! {
+    name: "persist_txns_data_shard_retryer_multiplier",
+    default: 2,
+    desc: "The backoff multiplier when polling for new batches from a txns data shard persist_source.",
+};
 
-pub(crate) const DATA_SHARD_RETRYER_CLAMP: Config<Duration> = Config::new(
-    "persist_txns_data_shard_retryer_clamp",
-    Duration::from_secs(16),
-    "The backoff clamp duration when polling for new batches from a txns data shard persist_source.",
-);
+pub(crate) const DATA_SHARD_RETRYER_CLAMP: Config<Duration> = config! {
+    name: "persist_txns_data_shard_retryer_clamp",
+    default: Duration::from_secs(16),
+    desc: "The backoff clamp duration when polling for new batches from a txns data shard persist_source.",
+};
 
 /// Retry configuration for persist-txns data shard override of
 /// `next_listen_batch`.

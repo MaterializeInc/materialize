@@ -74,41 +74,41 @@ pub mod metrics {
 pub mod operators {
     //! [timely] operators for reading and writing persist Shards.
 
-    use mz_dyncfg::Config;
+    use mz_dyncfg::{config, Config};
 
     pub mod shard_source;
 
     // TODO(cfg): Move this next to the use.
-    pub(crate) const PERSIST_SINK_MINIMUM_BATCH_UPDATES: Config<usize> = Config::new(
-        "persist_sink_minimum_batch_updates",
-        0,
-        "\
+    pub(crate) const PERSIST_SINK_MINIMUM_BATCH_UPDATES: Config<usize> = config! {
+        name: "persist_sink_minimum_batch_updates",
+        default: 0,
+        desc: "\
     In the compute persist sink, workers with less than the minimum number of \
     updates will flush their records to single downstream worker to be batched \
     up there... in the hopes of grouping our updates into fewer, larger \
     batches.",
-    );
+    };
 
     // TODO(cfg): Move this next to the use.
-    pub(crate) const STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES: Config<usize> = Config::new(
-        "storage_persist_sink_minimum_batch_updates",
+    pub(crate) const STORAGE_PERSIST_SINK_MINIMUM_BATCH_UPDATES: Config<usize> = config! {
+        name: "storage_persist_sink_minimum_batch_updates",
         // Reasonable default based on our experience in production.
-        1024,
-        "\
+        default: 1024,
+        desc: "\
     In the storage persist sink, workers with less than the minimum number of \
     updates will flush their records to single downstream worker to be batched \
     up there... in the hopes of grouping our updates into fewer, larger \
     batches.",
-    );
+    };
 
     // TODO(cfg): Move this next to the use.
-    pub(crate) const STORAGE_SOURCE_DECODE_FUEL: Config<usize> = Config::new(
-        "storage_source_decode_fuel",
-        1_000_000,
-        "\
+    pub(crate) const STORAGE_SOURCE_DECODE_FUEL: Config<usize> = config! {
+        name: "storage_source_decode_fuel",
+        default: 1_000_000,
+        desc: "\
         The maximum amount of work to do in the persist_source mfp_and_decode \
         operator before yielding.",
-    );
+    };
 }
 pub mod iter;
 pub mod read;
