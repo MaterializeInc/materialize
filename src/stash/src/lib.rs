@@ -170,9 +170,22 @@ where
 {
     /// Append `key`, `value`, `diff` to `batch`.
     pub fn append_to_batch(&self, batch: &mut AppendBatch, key: &K, value: &V, diff: Diff) {
-        let key = key.encode_to_vec();
-        let val = value.encode_to_vec();
-        batch.entries.push(((key, val), batch.timestamp, diff));
+        self.extend_batch(batch, [(key, value, diff)])
+    }
+
+    /// Extend `batch`, with the keys, values, and diffs in `iter`.
+    pub fn extend_batch<'a>(
+        &'a self,
+        batch: &'a mut AppendBatch,
+        iter: impl IntoIterator<Item = (&'a K, &'a V, Diff)>,
+    ) {
+        batch
+            .entries
+            .extend(iter.into_iter().map(|(key, value, diff)| {
+                let key = key.encode_to_vec();
+                let val = value.encode_to_vec();
+                ((key, val), batch.timestamp, diff)
+            }))
     }
 }
 

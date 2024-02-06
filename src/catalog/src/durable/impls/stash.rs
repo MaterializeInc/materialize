@@ -925,9 +925,12 @@ impl DurableCatalogState for Connection {
                 collection.id
             );
             let mut batch = collection.make_batch_tx(tx).await?;
-            for (k, v, diff) in changes {
-                collection.append_to_batch(&mut batch, k, v, *diff);
-            }
+            collection.extend_batch(
+                &mut batch,
+                changes
+                    .into_iter()
+                    .map(|(key, value, diff)| (key, value, *diff)),
+            );
             batches.push(batch);
             Ok(())
         }
