@@ -758,7 +758,14 @@ where
                         Ok(msg) => {
                             tracing::debug!(?msg, "Dropping message from database");
                         }
-                        Err(e) => panic!("connection error: {e}"),
+                        Err(e) => {
+                            // tokio_postgres::Connection docs say:
+                            // > Return values of None or Some(Err(_)) are “terminal”; callers
+                            // > should not invoke this method again after receiving one of those
+                            // > values.
+                            tracing::info!("connection error: {e}");
+                            break;
+                        }
                     }
                 }
                 tracing::info!("connection closed");
