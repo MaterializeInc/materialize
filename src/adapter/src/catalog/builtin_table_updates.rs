@@ -579,6 +579,7 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::String(&kafka.group_id(&self.config.connection_context, id)),
+                Datum::String(&kafka.topic),
             ]),
             diff,
         }]

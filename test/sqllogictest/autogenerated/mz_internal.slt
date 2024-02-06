@@ -196,6 +196,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 ----
 1  id  text
 2  group_id_prefix  text
+3  topic            text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialization_lag' ORDER BY position
