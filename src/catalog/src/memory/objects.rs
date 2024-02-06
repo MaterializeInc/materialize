@@ -791,13 +791,13 @@ impl CatalogItem {
         }
     }
 
-    pub fn source_desc(
+    pub fn ingestion_desc(
         &self,
         entry: &CatalogEntry,
-    ) -> Result<Option<&SourceDesc<ReferencedConnection>>, SqlCatalogError> {
+    ) -> Result<Option<&IngestionDescription<(), ReferencedConnection>>, SqlCatalogError> {
         match &self {
             CatalogItem::Source(source) => match &source.data_source {
-                DataSourceDesc::Ingestion(ingestion) => Ok(Some(&ingestion.desc)),
+                DataSourceDesc::Ingestion(ingestion) => Ok(Some(&ingestion)),
                 DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Webhook { .. }
                 | DataSourceDesc::Progress
@@ -1272,12 +1272,12 @@ impl CatalogEntry {
         }
     }
 
-    /// Returns the [`mz_storage_types::sources::SourceDesc`] associated with
+    /// Returns the [`mz_storage_types::sources::IngestionDescription`] associated with
     /// this `CatalogEntry`, if any.
-    pub fn source_desc(
+    pub fn ingestion_desc(
         &self,
-    ) -> Result<Option<&SourceDesc<ReferencedConnection>>, SqlCatalogError> {
-        self.item.source_desc(self)
+    ) -> Result<Option<&IngestionDescription<(), ReferencedConnection>>, SqlCatalogError> {
+        self.item.ingestion_desc(self)
     }
 
     /// Reports whether this catalog entry is a connection.
@@ -1993,8 +1993,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.func()
     }
 
-    fn source_desc(&self) -> Result<Option<&SourceDesc<ReferencedConnection>>, SqlCatalogError> {
-        self.source_desc()
+    fn ingestion_desc(
+        &self,
+    ) -> Result<Option<&IngestionDescription<(), ReferencedConnection>>, SqlCatalogError> {
+        self.ingestion_desc()
     }
 
     fn connection(

@@ -201,12 +201,7 @@ impl RustType<ProtoPostgresColumnDesc> for PostgresColumnDesc {
     fn from_proto(proto: ProtoPostgresColumnDesc) -> Result<Self, TryFromProtoError> {
         Ok(PostgresColumnDesc {
             name: proto.name,
-            col_num: {
-                let v: u32 = proto
-                    .col_num
-                    .into_rust_if_some("ProtoPostgresColumnDesc::col_num")?;
-                u16::try_from(v).expect("u16 must roundtrip")
-            },
+            col_num: u16::try_from(proto.col_num)?,
             type_oid: proto.type_oid,
             type_mod: proto.type_mod,
             nullable: proto.nullable,

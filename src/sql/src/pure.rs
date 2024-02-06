@@ -1269,7 +1269,7 @@ async fn purify_alter_source(
     } = &mut stmt;
 
     // Get connection
-    let pg_source_connection = {
+    let (source_exports, pg_source_connection) = {
         // Get name.
         let item = match scx.resolve_item(RawItemName::Name(source_name.clone())) {
             Ok(item) => item,
@@ -1280,8 +1280,8 @@ async fn purify_alter_source(
         };
 
         // Ensure it's an ingestion-based and alterable source.
-        let desc = match item.source_desc()? {
-            Some(desc) => desc.clone().into_inline_connection(scx.catalog),
+        let ingestion = match item.ingestion_desc()? {
+            Some(ingestion) => ingestion.clone().into_inline_connection(scx.catalog),
             None => {
                 sql_bail!("cannot ALTER this type of source")
             }
@@ -1292,12 +1292,14 @@ async fn purify_alter_source(
             return Ok((vec![], Statement::AlterSource(stmt)));
         }
 
-        match desc.connection {
-            GenericSourceConnection::Postgres(pg_connection) => pg_connection,
+        match ingestion.desc.connection {
+            GenericSourceConnection::Postgres(pg_connection) => {
+                (ingestion.source_exports, pg_connection)
+            }
             _ => sql_bail!(
                 "{} is a {} source, which does not support ALTER TABLE...ADD SUBSOURCES",
                 scx.catalog.minimal_qualification(item.name()),
-                desc.connection.name()
+                ingestion.desc.connection.name()
             ),
         }
     };
