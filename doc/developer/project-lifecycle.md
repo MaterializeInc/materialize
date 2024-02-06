@@ -50,7 +50,7 @@ Before a project can move to Private Preview, it must:
 The goal of Private Preview is to identify and address all of
 the reasons why the solution might not work. To do this, the
 DRI is responsible for getting the solution in front of relevant
-internal (e.g. QA) and external (e.g. customers) testers.
+internal (e.g. testing team, analytics team) and external (e.g. customers) testers.
 It is recommended to kick this off by posting to `#epd-announce`
 and asking for support on identifying testers. Customer-facing
 teams such as field engineering are well-positioned to provide
