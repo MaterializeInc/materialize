@@ -10,7 +10,7 @@
 -- depends_on: {{ ref('product') }}
 -- depends_on: {{ ref('product_category') }}
 
-{{ config(materialized='materializedview', cluster="qa_canary_environment_compute", indexes=[{'default': True}]) }}
+{{ config(materialized='materialized_view', cluster="qa_canary_environment_compute", indexes=[{'default': True}]) }}
 
 SELECT
     count(*) AS count_star,
