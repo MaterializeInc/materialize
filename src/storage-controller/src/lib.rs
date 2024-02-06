@@ -676,6 +676,17 @@ where
                 DataSource::Ingestion(ingestion) => {
                     let description = self.enrich_ingestion(id, ingestion)?;
 
+                    mz_ore::soft_assert_eq_or_log!(
+                        description
+                            .source_exports
+                            .values()
+                            .filter(|export| export.subsource_config.is_none())
+                            .count(),
+                        1,
+                        "ingestions can have exactly one non-subsource export, but got {:?}",
+                        description
+                    );
+
                     // Fetch the client for this ingestion's instance.
                     let client =
                         self.clients
