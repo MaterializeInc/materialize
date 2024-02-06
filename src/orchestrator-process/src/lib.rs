@@ -180,7 +180,7 @@ impl LaunchSpec {
             }
             Self::Systemd => {
                 let mut cmd = Command::new("systemd-run");
-                cmd.args(["--user", "--scope"]);
+                cmd.args(["--user", "--scope", "--quiet"]);
                 if let Some(memory_limit) = memory_limit {
                     let memory_limit = memory_limit.0.as_u64();
                     cmd.args(["-p", &format!("MemoryMax={memory_limit}")]);
