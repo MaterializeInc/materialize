@@ -73,3 +73,36 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > FETCH c
 <TIMESTAMP> 1 4
 > COMMIT
+
+# Test that replica-targeted subscribes work when the subscribed collection
+# advances to the empty frontier. Regression test for #24981.
+
+> DROP CLUSTER test CASCADE
+> CREATE CLUSTER test SIZE '4-4', REPLICATION FACTOR 4
+> SET cluster_replica = r1
+
+> CREATE MATERIALIZED VIEW mv AS SELECT 1
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE mv
+> FETCH c
+<TIMESTAMP> 1 1
+> COMMIT
+
+# We want to provoke the case where a non-targeted replica returns a response
+# first, so try multiple times to be sure.
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE mv
+> FETCH c
+<TIMESTAMP> 1 1
+> COMMIT
+
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE mv
+> FETCH c
+<TIMESTAMP> 1 1
+> COMMIT
+
+# Cleanup
+> DROP CLUSTER test CASCADE

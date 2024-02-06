@@ -1199,6 +1199,25 @@ where
     /// Panics if any of the `updates` references an absent collection.
     /// Panics if any of the `updates` regresses an existing write frontier.
     #[tracing::instrument(level = "debug", skip(self))]
+    fn update_write_frontiers(
+        &mut self,
+        replica_id: ReplicaId,
+        updates: &[(GlobalId, Antichain<T>)],
+    ) {
+        // Apply advancements of replica frontiers.
+        self.update_replica_write_frontiers(replica_id, updates);
+
+        // Apply advancements of global collection frontiers.
+        self.maybe_update_global_write_frontiers(updates);
+    }
+
+    /// Apply replica write frontier updates.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any of the `updates` references an absent collection.
+    /// Panics if any of the `updates` regresses an existing replica write frontier.
+    #[tracing::instrument(level = "debug", skip(self))]
     fn update_replica_write_frontiers(
         &mut self,
         replica_id: ReplicaId,
@@ -1239,17 +1258,6 @@ where
             self.storage_controller
                 .update_read_capabilities(&mut storage_read_capability_changes);
         }
-
-        // Apply advancements of global collection frontiers to the controller state.
-        let global_updates: Vec<_> = updates
-            .iter()
-            .filter(|(id, new_upper)| {
-                let collection = self.compute.expect_collection(*id);
-                PartialOrder::less_than(&collection.write_frontier, new_upper)
-            })
-            .cloned()
-            .collect();
-        self.update_global_write_frontiers(&global_updates);
     }
 
     /// Remove frontier tracking state for the given replica.
@@ -1277,12 +1285,13 @@ where
 
     /// Apply global write frontier updates.
     ///
+    /// Frontier regressions are gracefully ignored.
+    ///
     /// # Panics
     ///
     /// Panics if any of the `updates` references an absent collection.
-    /// Panics if any of the `updates` regresses an existing write frontier.
     #[tracing::instrument(level = "debug", skip(self))]
-    fn update_global_write_frontiers(&mut self, updates: &[(GlobalId, Antichain<T>)]) {
+    fn maybe_update_global_write_frontiers(&mut self, updates: &[(GlobalId, Antichain<T>)]) {
         // Compute and apply read capability downgrades that result from collection frontier
         // advancements.
         let mut read_capability_changes = BTreeMap::new();
@@ -1292,11 +1301,9 @@ where
             let old_upper = std::mem::replace(&mut collection.write_frontier, new_upper.clone());
             let old_since = &collection.implied_capability;
 
-            // Safety check against frontier regressions.
-            assert!(
-                PartialOrder::less_equal(&old_upper, new_upper),
-                "global frontier regression: {old_upper:?} -> {new_upper:?}, collection={id}",
-            );
+            if !PartialOrder::less_than(&old_upper, new_upper) {
+                continue; // frontier has not advanced
+            }
 
             let new_since = match &collection.read_policy {
                 Some(read_policy) => {
@@ -1495,7 +1502,7 @@ where
 
         self.compute
             .update_hydration_status(id, replica_id, &new_frontier);
-        self.update_replica_write_frontiers(replica_id, &[(id, new_frontier)]);
+        self.update_write_frontiers(replica_id, &[(id, new_frontier)]);
     }
 
     fn handle_peek_response(
@@ -1541,9 +1548,9 @@ where
             return None;
         }
 
-        // Always apply write frontier updates. Even if the subscribe is not tracked anymore, there
-        // might still be replicas reading from its inputs, so we need to track the frontiers until
-        // all replicas have advanced to the empty one.
+        // Always apply replica write frontier updates. Even if the subscribe is not tracked
+        // anymore, there might still be replicas reading from its inputs, so we need to track the
+        // frontiers until all replicas have advanced to the empty one.
         let write_frontier = match &response {
             SubscribeResponse::Batch(batch) => batch.upper.clone(),
             SubscribeResponse::DroppedAt(_) => Antichain::new(),
@@ -1551,7 +1558,7 @@ where
 
         self.compute
             .update_hydration_status(subscribe_id, replica_id, &write_frontier);
-        self.update_replica_write_frontiers(replica_id, &[(subscribe_id, write_frontier)]);
+        self.update_replica_write_frontiers(replica_id, &[(subscribe_id, write_frontier.clone())]);
 
         // If the subscribe is not tracked, or targets a different replica, there is nothing to do.
         let mut subscribe = self.compute.subscribes.get(&subscribe_id)?.clone();
@@ -1559,6 +1566,13 @@ where
         if !replica_targeted {
             return None;
         }
+
+        // Apply a global frontier update.
+        // If this is a replica-targeted subscribe, it is important that we advance the global
+        // frontier only based on responses from the targeted replica. Otherwise, another replica
+        // could advance to the empty frontier, making us drop the subscribe on the targeted
+        // replica prematurely.
+        self.maybe_update_global_write_frontiers(&[(subscribe_id, write_frontier)]);
 
         match response {
             SubscribeResponse::Batch(batch) => {
