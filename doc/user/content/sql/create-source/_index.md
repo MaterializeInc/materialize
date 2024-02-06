@@ -244,7 +244,8 @@ It's a good idea to size up the cluster hosting a source when:
     keys.
 
     In this case, it's also possible to enable _spill to disk_ to accommodate
-    larger state sizes without sizing up. See the [`CREATE CLUSTER`: Disk](/sql/create-cluster#disk)
+    larger state sizes without sizing up. See the
+    [`CREATE CLUSTER`: Disk-enabled sizes](/sql/create-cluster#disk-enabled-sizes)
     documentation for more details.
 
 Sources share the resource allocation of their cluster with all other objects in

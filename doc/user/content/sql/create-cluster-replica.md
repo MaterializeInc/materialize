@@ -46,43 +46,30 @@ _replica_name_ | A name for this replica.
 ### Size
 
 The `SIZE` option for replicas is identical to the [`SIZE` option for
-clusters](/sql/create-cluster/#size) option, except that the size applies only
-to the new replica.
-
-### Disk
-
-{{< public-preview />}}
-
-{{< warning >}}
-**Pricing for this feature is likely to change.**
-
-Replicas with disks currently consume credits at the same rate as
-replicas without disks. In the future, replicas with disks will likely
-consume credits at a faster rate than replicas without disks.
-{{< /warning >}}
-
-The `DISK` option for replicas works identically to the [`DISK` option for
-clusters](/sql/create-cluster/#disk), except that the disk is attached only to
-the new replica.
+clusters](/sql/create-cluster/#disk-enabled-sizes) option, except that the size
+applies only to the new replica.
 
 ### Credit usage
 
 The replica will consume credits at a rate determined by its size:
 
-Size    | Credits per hour
---------|-----------------
-3xsmall | 0.25
-2xsmall | 0.5
-xsmall  | 1
-small   | 2
-medium  | 4
-large   | 8
-xlarge  | 16
-2xlarge | 32
-3xlarge | 64
-4xlarge | 128
-5xlarge | 256
-6xlarge | 512
+Size      | Disk-enabled size  | Credits per hour
+----------|--------------------|---------
+`3xsmall` | `25cc`             | 0.25
+`2xsmall` | `50cc`             | 0.5
+`xsmall`  | `100cc`            | 1
+`small`   | `200cc`            | 2
+&nbsp;    | `300cc`            | 3
+`medium`  | `400cc`            | 4
+&nbsp;    | `600cc`            | 6
+`large`   | `800cc`            | 8
+&nbsp;    | `1200cc`           | 12
+`xlarge`  | `1600cc`           | 16
+`2xlarge` | `3200cc`           | 32
+`3xlarge` | `6400cc`           | 64
+`4xlarge` | `128C`             | 128
+`5xlarge` | `256C`             | 256
+`6xlarge` | `512C`             | 512
 
 Credit usage is measured at a one second granularity. Credit usage begins when a
 `CREATE CLUSTER REPLICA` provisions the replica and ends when a [`DROP CLUSTER
