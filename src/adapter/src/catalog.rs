@@ -22,7 +22,7 @@ use mz_adapter_types::compaction::CompactionWindow;
 use smallvec::SmallVec;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::MutexGuard;
-use tracing::{info, trace};
+use tracing::{info, instrument, trace};
 use uuid::Uuid;
 
 use mz_adapter_types::connection::ConnectionId;
@@ -1177,7 +1177,7 @@ impl Catalog {
         }
     }
 
-    #[tracing::instrument(name = "catalog::transact", level = "debug", skip_all)]
+    #[instrument(name = "catalog::transact", skip_all)]
     pub async fn transact<F, R>(
         &mut self,
         oracle_write_ts: mz_repr::Timestamp,
@@ -1265,7 +1265,7 @@ impl Catalog {
         })
     }
 
-    #[tracing::instrument(name = "catalog::transact_inner", level = "debug", skip_all)]
+    #[instrument(name = "catalog::transact_inner", skip_all)]
     fn transact_inner(
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,

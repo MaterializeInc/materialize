@@ -33,7 +33,7 @@ use mz_timestamp_oracle::postgres_oracle::{
 };
 use mz_timestamp_oracle::{self, ShareableTimestampOracle, TimestampOracle, WriteTimestamp};
 use timely::progress::Timestamp as TimelyTimestamp;
-use tracing::{debug, error, info, Instrument};
+use tracing::{debug, error, info, instrument, Instrument};
 
 use crate::coord::catalog_oracle::{
     self, CatalogTimestampOracle, CatalogTimestampPersistence, TimestampPersistence,
@@ -146,7 +146,7 @@ impl Coordinator {
     /// Assign a timestamp for a write to a local input and increase the local ts.
     /// Writes following reads must ensure that they are assigned a strictly larger
     /// timestamp to ensure they are not visible to any real-time earlier reads.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(name = "coord::get_local_write_ts", skip_all)]
     pub(crate) async fn get_local_write_ts(&mut self) -> WriteTimestamp {
         self.global_timelines
             .get_mut(&Timeline::EpochMilliseconds)
@@ -164,7 +164,7 @@ impl Coordinator {
 
     /// Peek the current timestamp used for operations on local inputs. Used to determine how much
     /// to block group commits by.
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(name = "coord::apply_local_write", skip(self))]
     pub(crate) async fn apply_local_write(&mut self, timestamp: Timestamp) {
         let now = self.now().into();
 
@@ -233,6 +233,7 @@ impl Coordinator {
 
     /// Ensures that a global timeline state exists for `timeline`, with an initial time
     /// of `initially`.
+    #[instrument(skip_all)]
     pub(crate) async fn ensure_timeline_state_with_initial_time<'a, P>(
         timeline: &'a Timeline,
         initially: Timestamp,
@@ -685,7 +686,7 @@ impl Coordinator {
         Ok(id_bundle)
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub(crate) async fn advance_timelines(&mut self) {
         let global_timelines = std::mem::take(&mut self.global_timelines);
         for (

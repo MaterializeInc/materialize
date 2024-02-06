@@ -30,6 +30,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_repr::{GlobalId, Timestamp};
 use mz_storage_types::read_policy::ReadPolicy;
 use timely::progress::Antichain;
+use tracing::instrument;
 
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::{TimelineContext, TimelineState};
@@ -188,7 +189,7 @@ impl crate::coord::Coordinator {
     /// This should be called only after a collection is created, and
     /// ideally very soon afterwards. The collection is otherwise initialized
     /// with a read policy that allows no compaction.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(name = "coord::initialize_read_policies", skip_all)]
     pub(crate) async fn initialize_read_policies(
         &mut self,
         id_bundle: &CollectionIdBundle,

@@ -69,7 +69,7 @@ use mz_storage_types::AlterCompatible;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio_stream::StreamMap;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, instrument, warn};
 
 use crate::command_wals::ProtoShardId;
 
@@ -328,7 +328,7 @@ where
     //   or only executing some migrations when encountering certain versions.
     // - Migrations must preserve backwards compatibility with all past releases
     //   of Materialize.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn migrate_collections(
         &mut self,
         _collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
@@ -343,7 +343,7 @@ where
 
     // TODO(aljoscha): It would be swell if we could refactor this Leviathan of
     // a method/move individual parts to their own methods.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(name = "storage::create_collections", skip_all)]
     async fn create_collections(
         &mut self,
         register_ts: Option<Self::Timestamp>,
@@ -1144,7 +1144,7 @@ where
         }
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug", skip_all)]
     fn append_table(
         &mut self,
         write_ts: Self::Timestamp,
@@ -1295,7 +1295,7 @@ where
         self.persist_read_handles.snapshot_stats(id, as_of).await
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug", skip(self))]
     fn set_read_policy(&mut self, policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>) {
         let mut read_capability_changes = BTreeMap::default();
 
@@ -1324,7 +1324,7 @@ where
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug", skip(self))]
     fn update_write_frontiers(&mut self, updates: &[(GlobalId, Antichain<Self::Timestamp>)]) {
         let mut read_capability_changes = BTreeMap::default();
 
@@ -1383,7 +1383,7 @@ where
         }
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug", skip(self))]
     fn update_read_capabilities(
         &mut self,
         updates: &mut BTreeMap<GlobalId, ChangeBatch<Self::Timestamp>>,
@@ -1522,7 +1522,7 @@ where
         self.stashed_response = Some(msg);
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug", skip(self))]
     async fn process(&mut self) -> Result<Option<Response<T>>, anyhow::Error> {
         let mut updated_frontiers = None;
         match self.stashed_response.take() {
@@ -2254,7 +2254,7 @@ where
     }
 
     /// Install read capabilities on the given `storage_dependencies`.
-    #[tracing::instrument(level = "info", skip(self))]
+    #[instrument(level = "info", skip(self))]
     fn install_read_capabilities(
         &mut self,
         from_id: GlobalId,
@@ -2410,7 +2410,7 @@ where
     ///
     /// # Panics
     /// - If `id` is not registered as a managed collection.
-    #[tracing::instrument(level = "debug", skip(self, updates))]
+    #[instrument(level = "debug", skip(self, updates))]
     async fn append_to_managed_collection(&self, id: GlobalId, updates: Vec<(Row, Diff)>) {
         assert!(self.txns_init_run);
         self.collection_manager
@@ -2618,7 +2618,7 @@ where
     /// - If `IntrospectionType::ShardMapping`'s `GlobalId` is not registered as
     ///   a managed collection.
     /// - If diff is any value other than `1` or `-1`.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn append_shard_mappings<I>(&self, global_ids: I, diff: i64)
     where
         I: Iterator<Item = GlobalId>,
@@ -2788,7 +2788,7 @@ where
 
     /// Attempts to close all shards marked for finalization.
     #[allow(dead_code)]
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(level = "debug", skip(self))]
     async fn finalize_shards(&mut self) {
         let shards = self
             .stash

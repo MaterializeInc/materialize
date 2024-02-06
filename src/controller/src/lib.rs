@@ -62,6 +62,7 @@ use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::time::{self, Duration, Interval, MissedTickBehavior};
 use tokio_stream::wrappers::UnboundedReceiverStream;
+use tracing::instrument;
 use uuid::Uuid;
 
 pub mod clusters;
@@ -406,6 +407,7 @@ where
     T: Into<mz_repr::Timestamp>,
 {
     /// Creates a new controller.
+    #[instrument(name = "controller::new", skip_all)]
     pub async fn new(
         config: ControllerConfig,
         envd_epoch: NonZeroI64,

@@ -17,7 +17,7 @@ use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::compaction::CompactionWindow;
 use once_cell::sync::Lazy;
 use regex::Regex;
-use tracing::{info, warn, Instrument};
+use tracing::{info, instrument, warn, Instrument};
 use uuid::Uuid;
 
 use mz_catalog::builtin::{
@@ -853,6 +853,7 @@ impl Catalog {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 17KB. This would
     /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
     /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
+    #[instrument(name = "catalog::open", skip_all)]
     pub fn open(
         config: Config<'_>,
         previous_ts: mz_repr::Timestamp,

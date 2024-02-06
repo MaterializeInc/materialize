@@ -20,6 +20,7 @@ use mz_sql::names::{ObjectId, ResolvedIds};
 use mz_sql::plan;
 use mz_storage_client::controller::{CollectionDescription, DataSource, DataSourceOther};
 use timely::progress::Antichain;
+use tracing::instrument;
 
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
@@ -37,7 +38,7 @@ use crate::util::ResultExt;
 use crate::{catalog, AdapterNotice, ExecuteContext, TimestampProvider};
 
 impl Coordinator {
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(skip_all)]
     pub(crate) async fn sequence_create_materialized_view(
         &mut self,
         ctx: ExecuteContext,
@@ -56,7 +57,7 @@ impl Coordinator {
         .await;
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(skip_all)]
     pub(crate) async fn explain_create_materialized_view(
         &mut self,
         ctx: ExecuteContext,
@@ -160,7 +161,7 @@ impl Coordinator {
     }
 
     /// Processes as many `create materialized view` stages as possible.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub(crate) async fn execute_create_materialized_view_stage(
         &mut self,
         mut ctx: ExecuteContext,
@@ -204,6 +205,7 @@ impl Coordinator {
         }
     }
 
+    #[instrument(skip_all)]
     fn create_materialized_view_validate(
         &mut self,
         session: &Session,
@@ -261,6 +263,7 @@ impl Coordinator {
         })
     }
 
+    #[instrument(skip_all)]
     async fn create_materialized_view_optimize(
         &mut self,
         ctx: ExecuteContext,
@@ -415,6 +418,7 @@ impl Coordinator {
         );
     }
 
+    #[instrument(skip_all)]
     async fn create_materialized_view_finish(
         &mut self,
         ctx: &mut ExecuteContext,
@@ -605,6 +609,7 @@ impl Coordinator {
         }
     }
 
+    #[instrument(skip_all)]
     fn create_materialized_view_explain(
         &mut self,
         ctx: &mut ExecuteContext,
