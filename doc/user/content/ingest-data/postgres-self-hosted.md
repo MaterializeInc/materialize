@@ -241,10 +241,17 @@ Now that you've configured your database network and created an ingestion cluste
     - Replace `<SSH_BASTION_HOST>` and `<SSH_BASTION_PORT`> with the public IP address and port of the SSH bastion host you created [earlier](#step-3-configure-network-security).
     - Replace `<SSH_BASTION_USER>` with the username for the key pair you created for your SSH bastion host.
 
-1. Get Materialize's public keys for the SSH tunnel connection:
+1. Get Materialize's public keys for the SSH tunnel connection you just created:
 
     ```sql
-    SELECT * FROM mz_ssh_tunnel_connections;
+    SELECT
+        mz_connections.name,
+        mz_ssh_tunnel_connections.*
+    FROM
+        mz_connections JOIN
+        mz_ssh_tunnel_connections USING(id)
+    WHERE
+        mz_connections.name = 'ssh_connection';
     ```
 
 1. Log in to your SSH bastion host and add Materialize's public keys to the `authorized_keys` file, for example:
