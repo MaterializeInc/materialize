@@ -353,7 +353,7 @@ def _cargo_command(args: argparse.Namespace, subcommand: str) -> list[str]:
 
 def _run_sql(url: str, sql: str) -> None:
     try:
-        spawn.runv(["psql", "-At", url, "-c", sql])
+        spawn.runv(["psql", "-AtX", url, "-c", sql])
     except Exception as e:
         raise UIError(
             f"unable to execute postgres statement: {e}",
