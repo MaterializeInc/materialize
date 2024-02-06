@@ -199,8 +199,8 @@ def annotate_logged_errors(log_files: list[str]) -> int:
     if not error_logs:
         return 0
 
-    step_key: str = os.getenv("BUILDKITE_STEP_KEY", "")
-    buildkite_label: str = os.getenv("BUILDKITE_LABEL", "")
+    os.getenv("BUILDKITE_STEP_KEY", "")
+    os.getenv("BUILDKITE_LABEL", "")
 
     (known_issues, unknown_errors) = get_known_issues_from_github()
 
@@ -210,7 +210,13 @@ def annotate_logged_errors(log_files: list[str]) -> int:
     known_errors: list[str] = []
 
     # Keep track of known errors so we log each only once
-    already_reported_issue_numbers: set[int] = set()
+
+    unknown_errors.append(
+        "Unknown error starting with backtick 1:  \n````error_message````"
+    )
+    unknown_errors.append(
+        "Unknown error starting with backtick 2:  \n````error_message` happened```"
+    )
 
     for error in error_logs:
         error_message = sanitize_text(error.match.decode("utf-8"))
@@ -226,41 +232,9 @@ def annotate_logged_errors(log_files: list[str]) -> int:
         else:
             linked_file = error.file
 
-        for issue in known_issues:
-            match = issue.regex.search(error.match)
-            if match and issue.info["state"] == "open":
-                if issue.apply_to and issue.apply_to not in (
-                    step_key.lower(),
-                    buildkite_label.lower(),
-                ):
-                    continue
-
-                if issue.info["number"] not in already_reported_issue_numbers:
-                    known_errors.append(
-                        f"[{issue.info['title']} (#{issue.info['number']})]({issue.info['html_url']}) in {linked_file}:  \n{formatted_error_message}"
-                    )
-                    already_reported_issue_numbers.add(issue.info["number"])
-                break
-        else:
-            for issue in known_issues:
-                match = issue.regex.search(error.match)
-                if match and issue.info["state"] == "closed":
-                    if issue.apply_to and issue.apply_to not in (
-                        step_key.lower(),
-                        buildkite_label.lower(),
-                    ):
-                        continue
-
-                    if issue.info["number"] not in already_reported_issue_numbers:
-                        unknown_errors.append(
-                            f"Potential regression [{issue.info['title']} (#{issue.info['number']}, closed)]({issue.info['html_url']}) in {linked_file}:  \n{formatted_error_message}"
-                        )
-                        already_reported_issue_numbers.add(issue.info["number"])
-                    break
-            else:
-                unknown_errors.append(
-                    f"Unknown error in {linked_file}:  \n{formatted_error_message}"
-                )
+        unknown_errors.append(
+            f"Unknown error in {linked_file}:  \n{formatted_error_message}"
+        )
 
     annotate_errors(
         unknown_errors,
