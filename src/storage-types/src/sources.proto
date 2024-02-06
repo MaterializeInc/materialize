@@ -72,6 +72,11 @@ message ProtoCompression {
     }
 }
 
+message ProtoMySqlTableName {
+    string schema = 1;
+    string item = 2;
+}
+
 message ProtoIngestionDescription {
     message ProtoSourceImport {
         mz_repr.global_id.ProtoGlobalId id = 1;

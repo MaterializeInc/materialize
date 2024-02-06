@@ -33,6 +33,9 @@ use mz_repr::{
     ColumnType, Datum, DatumDecoderT, DatumEncoderT, GlobalId, RelationDesc, Row, RowDecoder,
     RowEncoder,
 };
+use mz_sql_parser::ast::Ident;
+use mz_sql_parser::ast::UnresolvedItemName;
+use mz_sql_parser::ast::display::AstDisplay;
 
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -83,8 +86,8 @@ pub struct IngestionDescription<S = (), C: ConnectionAccess = InlinedConnection>
     pub ingestion_metadata: S,
     /// Collections to be exported by this ingestion.
     ///
-    /// This field includes the primary source's ID, which might need to be
-    /// filtered out to understand which exports are data-bearing subsources.
+    /// This field includes the primary source's ID, which must be filtered out
+    /// to understand which exports are data-bearing subsources.
     ///
     /// Note that this does _not_ include the remap collection, which is tracked
     /// in its own field.
@@ -220,6 +223,40 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct MySqlTableName {
+    pub schema: Ident,
+    pub item: Ident,
+}
+
+impl MySqlTableName {
+    pub fn new(schema: String, item: String) -> Result<MySqlTableName, anyhow::Error> {
+        let schema = Ident::new(schema)?;
+        let item = Ident::new(item)?;
+        Ok(MySqlTableName { schema, item })
+    }
+}
+
+impl Arbitrary for MySqlTableName {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (any::<String>(), any::<String>())
+            .prop_map(|(schema, item)| MySqlTableName {
+                schema: Ident::new_lossy(schema),
+                item: Ident::new_lossy(item),
+            })
+            .boxed()
+    }
+}
+
+impl std::fmt::Display for MySqlTableName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.schema.to_ast_string(), self.item.to_ast_string())
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct SourceExport<S = ()> {
     /// The index of the exported output stream
@@ -312,6 +349,24 @@ impl ProtoMapEntry<GlobalId, CollectionMetadata> for ProtoSourceImport {
             self.storage_metadata
                 .into_rust_if_some("ProtoSourceImport::storage_metadata")?,
         ))
+    }
+}
+
+impl RustType<ProtoMySqlTableName> for MySqlTableName {
+    fn into_proto(&self) -> ProtoMySqlTableName {
+        ProtoMySqlTableName {
+            schema: self.schema.to_string(),
+            item: self.item.to_string(),
+        }
+    }
+
+    fn from_proto(proto: ProtoMySqlTableName) -> Result<Self, TryFromProtoError> {
+        Ok(MySqlTableName {
+            schema: Ident::new(proto.schema)
+                .map_err(|e| TryFromProtoError::InvalidIdent(e.to_string()))?,
+            item: Ident::new(proto.item)
+                .map_err(|e| TryFromProtoError::InvalidIdent(e.to_string()))?,
+        })
     }
 }
 
