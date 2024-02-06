@@ -46,7 +46,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::netio::{Listener, Stream};
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::allocator::GenericBuilder;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Creates communication mesh from cluster config
 pub async fn initialize_networking(
@@ -263,7 +263,7 @@ async fn start_connection(
     my_epoch: ClusterStartupEpoch,
 ) -> Result<Stream, anyhow::Error> {
     loop {
-        info!(
+        error!(
             process = my_index,
             "Attempting to connect to process at {address}"
         );
