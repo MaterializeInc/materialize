@@ -799,10 +799,18 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
 );
 ```
 
-Retrieve the public keys for all SSH tunnel connections:
+Retrieve the public keys for the SSH tunnel connection you just created:
 
 ```sql
-SELECT * FROM mz_ssh_tunnel_connections;
+SELECT
+    mz_connections.name,
+    mz_ssh_tunnel_connections.*
+FROM
+    mz_connections
+JOIN
+    mz_ssh_tunnel_connections USING(id)
+WHERE
+    mz_connections.name = 'ssh_connection';
 ```
 ```
  id    | public_key_1                          | public_key_2
