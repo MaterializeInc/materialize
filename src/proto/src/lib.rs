@@ -73,6 +73,9 @@ pub enum TryFromProtoError {
     InvalidBitFlags(String),
     /// Failed to deserialize a LIKE/ILIKE pattern.
     LikePatternDeserializationError(String),
+    /// Failed to deserialize Ident. Note that we don't import the source error
+    /// itself because this would make the proto library depend on the parser.
+    InvalidIdent(String),
 }
 
 impl TryFromProtoError {
@@ -164,6 +167,7 @@ impl std::fmt::Display for TryFromProtoError {
                 "Protobuf deserialization failed for a LIKE/ILIKE pattern: `{}`",
                 inner_error
             ),
+            InvalidIdent(error) => error.fmt(f),
         }
     }
 }
@@ -198,6 +202,7 @@ impl std::error::Error for TryFromProtoError {
             InvalidUrl(error) => Some(error),
             InvalidBitFlags(_) => None,
             LikePatternDeserializationError(_) => None,
+            InvalidIdent(_) => None,
         }
     }
 }

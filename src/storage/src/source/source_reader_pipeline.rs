@@ -85,6 +85,10 @@ pub struct RawSourceCreationConfig {
     /// The ID of this instantiation of this source.
     pub id: GlobalId,
     /// The details of the outputs from this ingestion.
+    ///
+    /// The iteration order of this field is used to determine provide
+    /// consistent ordering of output indexes between the ingestion dataflows
+    /// and the final step of rendering that writes to persist.
     pub source_exports: BTreeMap<GlobalId, SourceExport<CollectionMetadata>>,
     /// The ID of the worker on which this operator is executing
     pub worker_id: usize,
@@ -798,17 +802,8 @@ where
             Err(err) => Err(((output, err), ts, diff.into())),
         });
 
-    // We use the output index from the source export to route values to its ok and err streams. We
-    // do this obliquely by generating as many partitions as there are output indices and then
-    // dropping all unused partitions.
-    let partition_count = u64::cast_from(
-        source_exports
-            .iter()
-            .map(|(_, SourceExport { output_index, .. })| *output_index)
-            .max()
-            .unwrap_or_default()
-            + 1,
-    );
+    // We use the output index from the source export to route values to its ok and err streams.
+    let partition_count = u64::cast_from(source_exports.len());
 
     let ok_streams: Vec<_> = ok_muxed_stream
         .partition(partition_count, |((output, data), time, diff)| {

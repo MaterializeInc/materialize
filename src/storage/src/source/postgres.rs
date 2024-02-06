@@ -145,18 +145,41 @@ impl SourceRender for PostgresSourceConnection {
             })
             .collect();
 
+        let publication_details: BTreeMap<_, _> = self
+            .publication_details
+            .tables
+            .iter()
+            .map(|t| (t.oid, t))
+            .collect();
+
         // Collect the tables that we will be ingesting.
         let mut table_info = BTreeMap::new();
-        for (i, desc) in self.publication_details.tables.iter().enumerate() {
-            // Index zero maps to the main source
-            let output_index = i + 1;
-            // The publication might contain more tables than the user has selected to ingest (via
-            // a restricted FOR TABLES <..>). The tables that are to be ingested will be present in
-            // the table_casts map and so we can filter the publication tables based on whether or
-            // not we have casts for it.
-            if let Some(casts) = self.table_casts.get(&output_index) {
-                table_info.insert(desc.oid, (output_index, desc.clone(), casts.clone()));
-            }
+
+        let primary_source_idx = config
+            .source_exports
+            .keys()
+            .position(|export_id| export_id == &config.id)
+            .expect("primary source must be included in exports");
+
+        for (output_idx, export) in config.source_exports.values().enumerate() {
+            let oid = match &export.subsource_config {
+                Some(t) => t.unwrap_pg(),
+                None => continue,
+            };
+
+            let arity = export.storage_metadata.relation_desc.arity();
+            let mut casts = self.table_casts[&oid].clone();
+            // The schema of the upstream table may change, but the
+            // subsource's relation desc is fixed from the time of its
+            // creation. If we allowed the source to render, we've validated
+            // that the schema is OK––either it's the same or is backward
+            // compatible with the existing schema.
+            casts.truncate(arity);
+
+            let mut desc = publication_details[&oid].clone();
+            desc.truncate_to_arity(arity);
+
+            table_info.insert(oid, (output_idx, desc, casts));
         }
 
         let metrics = config.metrics.get_postgres_metrics(config.id);
@@ -191,7 +214,7 @@ impl SourceRender for PostgresSourceConnection {
         });
 
         let init = std::iter::once(HealthStatusMessage {
-            index: 0,
+            index: primary_source_idx,
             namespace: Self::STATUS_NAMESPACE,
             update: HealthStatusUpdate::Running,
         })
@@ -219,7 +242,7 @@ impl SourceRender for PostgresSourceConnection {
             };
 
             HealthStatusMessage {
-                index: 0,
+                index: primary_source_idx,
                 namespace: namespace.clone(),
                 update,
             }

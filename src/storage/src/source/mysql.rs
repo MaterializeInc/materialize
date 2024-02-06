@@ -60,25 +60,23 @@ use itertools::Itertools;
 use mysql_async::Row as MySqlRow;
 use mysql_common::value::convert::from_value;
 use mysql_common::Value;
-use serde::{Deserialize, Serialize};
-use timely::dataflow::channels::pushers::TeeCore;
-use timely::dataflow::operators::{CapabilitySet, Concat, Map};
-use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
-use uuid::Uuid;
-
 use mz_mysql_util::{
     ensure_full_row_binlog_format, ensure_gtid_consistency, ensure_replication_commit_order,
     MySqlError, MySqlTableDesc,
 };
 use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, Diff, Row, ScalarType};
-use mz_sql_parser::ast::{Ident, UnresolvedItemName};
 use mz_storage_types::errors::SourceErrorDetails;
 use mz_storage_types::sources::mysql::{GtidPartition, GtidState};
-use mz_storage_types::sources::{MySqlSourceConnection, SourceTimestamp};
+use mz_storage_types::sources::{MySqlSourceConnection, MySqlTableName, SourceTimestamp};
 use mz_timely_util::builder_async::{AsyncOutputHandle, PressOnDropButton};
 use mz_timely_util::order::Extrema;
+use serde::{Deserialize, Serialize};
+use timely::dataflow::channels::pushers::TeeCore;
+use timely::dataflow::operators::{CapabilitySet, Concat, Map};
+use timely::dataflow::{Scope, Stream};
+use timely::progress::Antichain;
+use uuid::Uuid;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::SourceRender;
@@ -123,17 +121,37 @@ impl SourceRender for MySqlSourceConnection {
             })
             .collect();
 
+        let primary_source_idx = config
+            .source_exports
+            .keys()
+            .position(|export_id| export_id == &config.id)
+            .expect("primary source must be included in exports");
+
+        let table_details: BTreeMap<_, _> = self
+            .details
+            .tables
+            .iter()
+            .map(|t| {
+                (
+                    MySqlTableName::new(t.schema_name.clone(), t.name.clone())
+                        .expect("names previously validated for use in Ident"),
+                    t,
+                )
+            })
+            .collect();
+
         // Collect the tables that we will be ingesting.
         let mut table_info = BTreeMap::new();
-        for (i, desc) in self.details.tables.iter().enumerate() {
-            table_info.insert(
-                table_name(&desc.schema_name, &desc.name).expect("valid idents"),
-                (
-                    // Index zero maps to the main source
-                    i + 1,
-                    desc.clone(),
-                ),
-            );
+        for (output_idx, export) in config.source_exports.values().enumerate() {
+            let table = match &export.subsource_config {
+                Some(t) => t.unwrap_mysql().clone(),
+                None => continue,
+            };
+
+            // TODO: when supporting the ability to add tables to a MySQL
+            // source, this will need to be more complicated.
+            let desc = table_details[&table].clone();
+            table_info.insert(table, (output_idx, desc.clone()));
         }
 
         let (snapshot_updates, rewinds, snapshot_err, snapshot_token) = snapshot::render(
@@ -170,7 +188,7 @@ impl SourceRender for MySqlSourceConnection {
             let namespace = Self::STATUS_NAMESPACE.clone();
 
             HealthStatusMessage {
-                index: 0,
+                index: primary_source_idx,
                 namespace: namespace.clone(),
                 update,
             }
@@ -242,20 +260,10 @@ impl From<DefiniteError> for SourceReaderError {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct RewindRequest {
     /// The table that should be rewound.
-    pub(crate) table: UnresolvedItemName,
+    pub(crate) table: MySqlTableName,
     /// The frontier of GTIDs that this snapshot represents; all GTIDs that are not beyond this
     /// frontier have been committed by the snapshot operator at timestamp 0.
     pub(crate) snapshot_upper: Antichain<GtidPartition>,
-}
-
-pub(crate) fn table_name(
-    schema_name: &str,
-    table_name: &str,
-) -> Result<UnresolvedItemName, TransientError> {
-    Ok(UnresolvedItemName::qualified(&[
-        Ident::new(schema_name)?,
-        Ident::new(table_name)?,
-    ]))
 }
 
 pub(crate) fn pack_mysql_row(

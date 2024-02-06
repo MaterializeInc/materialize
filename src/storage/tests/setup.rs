@@ -192,7 +192,7 @@ where
                 id,
                 mz_storage_types::sources::SourceExport {
                     storage_metadata: collection_metadata.clone(),
-                    output_index: 0,
+                    subsource_config: None,
                 },
             )]);
 

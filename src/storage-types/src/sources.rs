@@ -17,10 +17,8 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use bytes::BufMut;
-
 use itertools::EitherOrBoth::Both;
 use itertools::Itertools;
-
 use mz_persist_types::columnar::{
     ColumnFormat, ColumnGet, ColumnPush, Data, DataType, PartDecoder, PartEncoder, Schema,
 };
@@ -28,20 +26,16 @@ use mz_persist_types::dyn_struct::{DynStruct, DynStructCfg, ValidityMut, Validit
 use mz_persist_types::stats::StatsFn;
 use mz_persist_types::Codec;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
-
 use mz_repr::{
     ColumnType, Datum, DatumDecoderT, DatumEncoderT, GlobalId, RelationDesc, Row, RowDecoder,
     RowEncoder,
 };
-use mz_sql_parser::ast::Ident;
-use mz_sql_parser::ast::UnresolvedItemName;
 use mz_sql_parser::ast::display::AstDisplay;
-
+use mz_sql_parser::ast::Ident;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
-
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{PathSummary, Timestamp};
@@ -86,11 +80,16 @@ pub struct IngestionDescription<S = (), C: ConnectionAccess = InlinedConnection>
     pub ingestion_metadata: S,
     /// Collections to be exported by this ingestion.
     ///
-    /// This field includes the primary source's ID, which must be filtered out
-    /// to understand which exports are data-bearing subsources.
-    ///
-    /// Note that this does _not_ include the remap collection, which is tracked
-    /// in its own field.
+    /// ## Notes:
+    /// - The iteration order of this field determines the output indexes used
+    ///   to demux an ingestion's single output into multiple persist shards.
+    ///   Because of this, you must be sure to iterate over all of its elements
+    ///   when determining output indexes. e.g. if the source supports
+    ///   subsources, ensure you _do not_ skip over the primary source, even
+    ///   though its primary source is never written to.
+    /// - This collection does _not_ include the remap collection, which is
+    ///   tracked in its own field. It's best to think of the remap collection
+    ///   as something other than export.
     pub source_exports: BTreeMap<GlobalId, SourceExport<S>>,
     /// The ID of the instance in which to install the source.
     pub instance_id: StorageInstanceId,
@@ -157,21 +156,20 @@ impl<S: Debug + Eq + PartialEq + crate::AlterCompatible> AlterCompatible
                             (
                                 _,
                                 SourceExport {
-                                    output_index: _,
                                     storage_metadata: l_metadata,
+                                    subsource_config: l_config,
                                 },
                             ),
                             (
                                 _,
                                 SourceExport {
-                                    output_index: _,
                                     storage_metadata: r_metadata,
+                                    subsource_config: r_config,
                                 },
                             ),
                         ) => {
-                            // the output index may change, but the table's metadata
-                            // may not
                             l_metadata.alter_compatible(id, r_metadata).is_ok()
+                                && l_config == r_config
                         }
                         _ => true,
                     }),
@@ -253,16 +251,47 @@ impl Arbitrary for MySqlTableName {
 
 impl std::fmt::Display for MySqlTableName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}", self.schema.to_ast_string(), self.item.to_ast_string())
+        write!(
+            f,
+            "{}.{}",
+            self.schema.to_ast_string(),
+            self.item.to_ast_string()
+        )
+    }
+}
+
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub enum SubsourceConfig {
+    /// PG subsources use the table OID
+    Pg(u32),
+    /// MySql exports are correlated to the upstream table's name
+    MySql(MySqlTableName),
+    /// Load generators have a pre-fixed relationship of outputs.
+    LoadGenerator(usize),
+}
+
+impl SubsourceConfig {
+    pub fn unwrap_pg(&self) -> u32 {
+        match self {
+            Self::Pg(oid) => *oid,
+            _ => panic!("called unwrap_pg on {:?}", self),
+        }
+    }
+
+    pub fn unwrap_mysql(&self) -> &MySqlTableName {
+        match self {
+            Self::MySql(name) => name,
+            _ => panic!("called unwrap_mysql on {:?}", self),
+        }
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct SourceExport<S = ()> {
-    /// The index of the exported output stream
-    pub output_index: usize,
     /// The collection metadata needed to write the exported data
     pub storage_metadata: S,
+    /// How multi-source outputs correlate to the system from which they ingest.
+    pub subsource_config: Option<SubsourceConfig>,
 }
 
 impl<S> Arbitrary for IngestionDescription<S>
@@ -370,12 +399,49 @@ impl RustType<ProtoMySqlTableName> for MySqlTableName {
     }
 }
 
+impl RustType<ProtoSubsourceConfig> for SubsourceConfig {
+    fn into_proto(&self) -> ProtoSubsourceConfig {
+        use proto_subsource_config::Kind;
+
+        ProtoSubsourceConfig {
+            kind: Some(match self {
+                SubsourceConfig::Pg(oid) => Kind::Pg(*oid),
+                SubsourceConfig::MySql(name) => Kind::MySql(name.into_proto()),
+                SubsourceConfig::LoadGenerator(idx) => {
+                    Kind::LoadGenerator(mz_ore::cast::usize_to_u64(*idx))
+                }
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoSubsourceConfig) -> Result<Self, TryFromProtoError> {
+        use proto_subsource_config::Kind;
+
+        let kind = match proto.kind {
+            Some(kind) => kind,
+            None => {
+                return Err(TryFromProtoError::MissingField(
+                    "ProtoSubsourceConfig::kind".into(),
+                ))
+            }
+        };
+
+        Ok(match kind {
+            Kind::Pg(oid) => SubsourceConfig::Pg(oid),
+            Kind::MySql(name) => SubsourceConfig::MySql(name.into_rust()?),
+            Kind::LoadGenerator(idx) => {
+                SubsourceConfig::LoadGenerator(mz_ore::cast::u64_to_usize(idx))
+            }
+        })
+    }
+}
+
 impl ProtoMapEntry<GlobalId, SourceExport<CollectionMetadata>> for ProtoSourceExport {
     fn from_rust<'a>(entry: (&'a GlobalId, &'a SourceExport<CollectionMetadata>)) -> Self {
         ProtoSourceExport {
             id: Some(entry.0.into_proto()),
-            output_index: entry.1.output_index.into_proto(),
             storage_metadata: Some(entry.1.storage_metadata.into_proto()),
+            config: entry.1.subsource_config.into_proto(),
         }
     }
 
@@ -383,10 +449,10 @@ impl ProtoMapEntry<GlobalId, SourceExport<CollectionMetadata>> for ProtoSourceEx
         Ok((
             self.id.into_rust_if_some("ProtoSourceExport::id")?,
             SourceExport {
-                output_index: self.output_index.into_rust()?,
                 storage_metadata: self
                     .storage_metadata
                     .into_rust_if_some("ProtoSourceExport::storage_metadata")?,
+                subsource_config: self.config.into_rust()?,
             },
         ))
     }
@@ -400,10 +466,10 @@ where
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (any::<usize>(), any::<S>())
-            .prop_map(|(output_index, storage_metadata)| Self {
-                output_index,
+        (any::<S>(), any::<Option<SubsourceConfig>>())
+            .prop_map(|(storage_metadata, config)| Self {
                 storage_metadata,
+                subsource_config: config,
             })
             .boxed()
     }

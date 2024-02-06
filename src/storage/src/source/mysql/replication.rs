@@ -63,9 +63,8 @@ use mz_mysql_util::{query_sys_var, MySqlTableDesc, ER_SOURCE_FATAL_ERROR_READING
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_repr::{Diff, GlobalId, Row};
-use mz_sql_parser::ast::UnresolvedItemName;
 use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition, GtidState};
-use mz_storage_types::sources::MySqlSourceConnection;
+use mz_storage_types::sources::{MySqlSourceConnection, MySqlTableName};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
@@ -75,7 +74,7 @@ use crate::source::types::SourceReaderError;
 use crate::source::RawSourceCreationConfig;
 
 use super::{
-    pack_mysql_row, return_definite_error, table_name, validate_mysql_repl_settings, DefiniteError,
+    pack_mysql_row, return_definite_error, validate_mysql_repl_settings, DefiniteError,
     ReplicationError, RewindRequest, TransientError,
 };
 
@@ -96,7 +95,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
     subsource_resume_uppers: BTreeMap<GlobalId, Antichain<GtidPartition>>,
-    table_info: BTreeMap<UnresolvedItemName, (usize, MySqlTableDesc)>,
+    table_info: BTreeMap<MySqlTableName, (usize, MySqlTableDesc)>,
     rewind_stream: &Stream<G, RewindRequest>,
 ) -> (
     Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
@@ -254,7 +253,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             let mut repl_partitions: GtidReplicationPartitions = resume_upper.into();
 
             // Binlog Table Id -> Table Name (its key in the `table_info` map)
-            let mut table_id_map = BTreeMap::<u64, UnresolvedItemName>::new();
+            let mut table_id_map = BTreeMap::<u64, MySqlTableName>::new();
             let mut skipped_table_ids = BTreeSet::<u64>::new();
 
             let mut final_row = Row::default();
@@ -336,10 +335,16 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                                 continue;
                             }
                             (None, None) => {
-                                let table = table_name(
-                                    &*table_map_event.database_name(),
-                                    &*table_map_event.table_name(),
-                                )?;
+                                let table = match MySqlTableName::new(
+                                    table_map_event.database_name().to_string(),
+                                    table_map_event.table_name().to_string(),
+                                ) {
+                                    Ok(t) => t,
+                                    // Cannot possibly be ingesting table whose
+                                    // name could not have been valid ident.
+                                    Err(_) => continue,
+                                };
+
                                 if table_info.contains_key(&table) {
                                     table_id_map.insert(binlog_table_id, table);
                                     &table_id_map[&binlog_table_id]

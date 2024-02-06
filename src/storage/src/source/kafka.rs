@@ -145,6 +145,16 @@ impl SourceRender for KafkaSourceConnection {
         Stream<G, HealthStatusMessage>,
         Vec<PressOnDropButton>,
     ) {
+        mz_ore::soft_assert_or_log!(
+            config.source_exports.len() == 1
+                && config
+                    .source_exports
+                    .values()
+                    .all(|e| e.subsource_config.is_none()),
+            "expected a single Kafka source export but got {:?}",
+            config.source_exports
+        );
+
         let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
         let (mut data_output, stream) = builder.new_output();

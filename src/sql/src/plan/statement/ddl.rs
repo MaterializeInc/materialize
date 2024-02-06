@@ -86,7 +86,10 @@ use mz_storage_types::sources::postgres::{
     ProtoPostgresSourcePublicationDetails,
 };
 use mz_storage_types::sources::testscript::TestScriptSourceConnection;
-use mz_storage_types::sources::{GenericSourceConnection, SourceConnection, SourceDesc, Timeline};
+use mz_storage_types::sources::{
+    GenericSourceConnection, MySqlTableName, SourceConnection, SourceDesc, SubsourceConfig,
+    Timeline,
+};
 use prost::Message;
 
 use crate::ast::display::AstDisplay;
@@ -618,7 +621,7 @@ pub fn plan_create_source(
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
-    let (mut external_connection, encoding, available_subsources) = match connection {
+    let (external_connection, encoding, available_subsources) = match connection {
         CreateSourceConnection::Kafka {
             connection: connection_name,
             options,
@@ -816,7 +819,7 @@ pub fn plan_create_source(
             // on the target table
             let mut table_casts = BTreeMap::new();
 
-            for (i, table) in details.tables.iter().enumerate() {
+            for table in details.tables.iter() {
                 // First, construct an expression context where the expression is evaluated on an
                 // imaginary row which has the same number of columns as the upstream table but all
                 // of the types are text
@@ -938,7 +941,7 @@ pub fn plan_create_source(
 
                     column_casts.push(mir_cast);
                 }
-                let r = table_casts.insert(i + 1, column_casts);
+                let r = table_casts.insert(table.oid, column_casts);
                 assert!(r.is_none(), "cannot have table defined multiple times");
 
                 let name = FullItemName {
@@ -950,7 +953,7 @@ pub fn plan_create_source(
                 // The zero-th output is the main output
                 // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
                 // to handle the main source and the subsources uniformly
-                available_subsources.insert(name, i + 1);
+                available_subsources.insert(name, SubsourceConfig::Pg(table.oid));
             }
 
             let publication_details = PostgresSourcePublicationDetails::from_proto(details)
@@ -995,7 +998,7 @@ pub fn plan_create_source(
 
             let mut available_subsources = BTreeMap::new();
 
-            for (index, table) in details.tables.iter().enumerate() {
+            for table in details.tables.iter() {
                 let name = FullItemName {
                     // In MySQL we use 'mysql' as the default database name since there is
                     // no concept of a 'database' in MySQL (schemas and databases are the same thing)
@@ -1003,10 +1006,9 @@ pub fn plan_create_source(
                     schema: table.schema_name.clone(),
                     item: table.name.clone(),
                 };
-                // The zero-th output is the main output
-                // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
-                // to handle the main source and the subsources uniformly
-                available_subsources.insert(name, index + 1);
+
+                let config = MySqlTableName::new(table.schema_name.clone(), table.name.clone())?;
+                available_subsources.insert(name, SubsourceConfig::MySql(config));
             }
 
             let connection =
@@ -1026,8 +1028,12 @@ pub fn plan_create_source(
         CreateSourceConnection::LoadGenerator { generator, options } => {
             let (load_generator, available_subsources) =
                 load_generator_ast_to_generator(generator, options)?;
-            let available_subsources = available_subsources
-                .map(|a| BTreeMap::from_iter(a.into_iter().map(|(k, v)| (k, v.0))));
+            let available_subsources = available_subsources.map(|a| {
+                BTreeMap::from_iter(
+                    a.into_iter()
+                        .map(|(k, v)| (k, SubsourceConfig::LoadGenerator(v.0))),
+                )
+            });
 
             let LoadGeneratorOptionExtracted { tick_interval, .. } = options.clone().try_into()?;
             let tick_micros = match tick_interval {
@@ -1089,9 +1095,9 @@ pub fn plan_create_source(
     let mut subsource_exports = BTreeMap::new();
     for (name, target) in requested_subsources {
         let name = normalize::full_name(name)?;
-        let idx = match available_subsources.get(&name) {
-            Some(idx) => idx,
-            None => sql_bail!("Requested non-existent subtable: {name}"),
+        let subsource_config = match available_subsources.get(&name) {
+            Some(config) => config.clone(),
+            None => sql_bail!("Requested non-existent subsource: {name}"),
         };
 
         let target_id = match target {
@@ -1108,26 +1114,7 @@ pub fn plan_create_source(
         // provisional catalogs are made available to the planner we could do the check. For now
         // we don't allow users to manually target subsources and rely on purification generating
         // correct definitions.
-        subsource_exports.insert(target_id, *idx);
-    }
-
-    if let GenericSourceConnection::Postgres(conn) = &mut external_connection {
-        // Now that we know which subsources sources we want, we can remove all
-        // unused table casts from this connection; this represents the
-        // authoritative statement about which publication tables should be
-        // used within storage.
-
-        // we want to temporarily test if any users are referring to the same table in their PG
-        // sources.
-        let mut used_pos: Vec<_> = subsource_exports.values().collect();
-        used_pos.sort();
-
-        if let Some(_) = used_pos.iter().duplicates().next() {
-            tracing::warn!("multiple references to same upstream table in PG source");
-        }
-
-        let used_pos: BTreeSet<_> = used_pos.into_iter().collect();
-        conn.table_casts.retain(|pos, _| used_pos.contains(pos));
+        subsource_exports.insert(target_id, subsource_config);
     }
 
     let CreateSourceOptionExtracted {

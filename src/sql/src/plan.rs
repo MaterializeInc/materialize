@@ -49,7 +49,7 @@ use mz_sql_parser::ast::{
 };
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
-use mz_storage_types::sources::{SourceDesc, Timeline};
+use mz_storage_types::sources::{SourceDesc, SubsourceConfig, Timeline};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -1254,7 +1254,7 @@ pub enum DataSourceDesc {
 pub struct Ingestion {
     pub desc: SourceDesc<ReferencedConnection>,
     pub source_imports: BTreeSet<GlobalId>,
-    pub subsource_exports: BTreeMap<GlobalId, usize>,
+    pub subsource_exports: BTreeMap<GlobalId, SubsourceConfig>,
     pub progress_subsource: GlobalId,
 }
 

@@ -12,7 +12,7 @@
 use std::collections::BTreeSet;
 
 use anyhow::bail;
-use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
+use mz_proto::{RustType, TryFromProtoError};
 use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
@@ -95,6 +95,24 @@ impl PostgresTableDesc {
                 self.oid
             )
         }
+    }
+
+    pub fn truncate_to_arity(&mut self, arity: usize) {
+        let PostgresTableDesc {
+            oid: _,
+            namespace: _,
+            name: _,
+            ref mut columns,
+            ref mut keys,
+        } = self;
+
+        columns.truncate(arity);
+
+        // Determine the set of columns we've retained.
+        let attnums: BTreeSet<_> = columns.iter().map(|col| col.col_num).collect();
+
+        // Only keep keys that still have all of their columns.
+        keys.retain(|desc| desc.cols.iter().all(|col| attnums.contains(col)));
     }
 }
 
@@ -191,7 +209,7 @@ impl RustType<ProtoPostgresColumnDesc> for PostgresColumnDesc {
     fn into_proto(&self) -> ProtoPostgresColumnDesc {
         ProtoPostgresColumnDesc {
             name: self.name.clone(),
-            col_num: Some(self.col_num.into()),
+            col_num: self.col_num.into(),
             type_oid: self.type_oid,
             type_mod: self.type_mod,
             nullable: self.nullable,

@@ -3110,7 +3110,7 @@ where
                 id,
                 SourceExport {
                     storage_metadata,
-                    output_index: export.output_index,
+                    subsource_config: export.subsource_config,
                 },
             );
         }

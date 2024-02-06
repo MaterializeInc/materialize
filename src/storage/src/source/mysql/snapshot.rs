@@ -71,10 +71,8 @@ use mz_mysql_util::{schema_info, MySqlTableDesc};
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_repr::{Diff, GlobalId, Row};
-use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::UnresolvedItemName;
 use mz_storage_types::sources::mysql::{gtid_set_frontier, GtidPartition};
-use mz_storage_types::sources::MySqlSourceConnection;
+use mz_storage_types::sources::{MySqlSourceConnection, MySqlTableName};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
@@ -92,7 +90,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
     subsource_resume_uppers: BTreeMap<GlobalId, Antichain<GtidPartition>>,
-    table_info: BTreeMap<UnresolvedItemName, (usize, MySqlTableDesc)>,
+    table_info: BTreeMap<MySqlTableName, (usize, MySqlTableDesc)>,
 ) -> (
     Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
     Stream<G, RewindRequest>,
@@ -135,11 +133,12 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     // understand if any worker is snapshotting any subsource.
     let export_indexes_to_snapshot: BTreeSet<_> = subsource_resume_uppers
         .into_iter()
-        .filter_map(|(id, upper)| {
+        .enumerate()
+        .filter_map(|(output_idx, (id, upper))| {
             // Determined which collections need to be snapshot and which already have been.
             if id != config.id && *upper == [GtidPartition::minimum()] {
                 // Convert from `GlobalId` to output index.
-                Some(config.source_exports[&id].output_index)
+                Some(output_idx)
             } else {
                 None
             }
@@ -152,10 +151,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     let mut reader_snapshot_table_info = BTreeMap::new();
 
     for (table, val) in table_info {
-        mz_ore::soft_assert_or_log!(
-            val.0 != 0,
-            "primary collection should not be represented in table info"
-        );
         if !export_indexes_to_snapshot.contains(&val.0) {
             continue;
         }
@@ -215,7 +210,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 if is_snapshot_leader {
                     let lock_clauses = all_table_names
                         .iter()
-                        .map(|t| format!("{} READ", t.to_ast_string()))
+                        .map(|t| format!("{t} READ"))
                         .collect::<Vec<String>>()
                         .join(", ");
                     let leader_task_name = format!("{} leader", task_name);
@@ -377,7 +372,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     &SchemaRequest::Tables(
                         reader_snapshot_table_info
                             .keys()
-                            .map(|f| (f.0[0].as_str(), f.0[1].as_str()))
+                            .map(|t| (t.schema.as_str(), t.item.as_str()))
                             .collect(),
                     ),
                 )
@@ -386,7 +381,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 // Read the snapshot data from the tables
                 let mut final_row = Row::default();
                 'outer: for (table, (output_index, table_desc)) in reader_snapshot_table_info {
-                    let query = format!("SELECT * FROM {}", table.to_ast_string());
+                    let query = format!("SELECT * FROM {table}");
                     trace!(%id, "timely-{worker_id} reading snapshot from \
                                  table '{table}':\n{table_desc:?}");
                     let mut results = conn.exec_stream(query, ()).await?;

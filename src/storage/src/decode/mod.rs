@@ -415,6 +415,7 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
     debug_name: String,
     metrics: DecodeMetricDefs,
     storage_configuration: StorageConfiguration,
+    health_output: usize,
 ) -> (
     Collection<G, DecodeResult<FromTime>, Diff>,
     Stream<G, HealthStatusMessage>,
@@ -525,10 +526,10 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
         })
     });
 
-    let health = transient_errors.map(|err: Rc<CsrConnectError>| {
+    let health = transient_errors.map(move |err: Rc<CsrConnectError>| {
         let halt_status = HealthStatusUpdate::halting(err.display_with_causes().to_string(), None);
         HealthStatusMessage {
-            index: 0,
+            index: health_output,
             namespace: if matches!(&*err, CsrConnectError::Ssh(_)) {
                 StatusNamespace::Ssh
             } else {

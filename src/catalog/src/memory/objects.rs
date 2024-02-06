@@ -54,7 +54,7 @@ use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sinks::{KafkaSinkFormat, SinkEnvelope, StorageSinkConnection};
 use mz_storage_types::sources::{
-    IngestionDescription, SourceConnection, SourceDesc, SourceEnvelope, SourceExport, Timeline,
+    IngestionDescription, SourceConnection, SourceEnvelope, SourceExport, Timeline,
 };
 
 use crate::builtin::{MZ_INTROSPECTION_CLUSTER, MZ_SYSTEM_CLUSTER};
@@ -415,22 +415,28 @@ impl DataSourceDesc {
             .map(|id| (*id, ()))
             .collect();
 
-        let source_exports = ingestion
+        let mut source_exports: BTreeMap<_, _> = ingestion
             .subsource_exports
-            .iter()
-            // By convention the first output corresponds to the main source object
-            .chain(std::iter::once((&id, &0)))
-            .map(|(id, output_index)| {
+            .into_iter()
+            .map(|(id, config)| {
                 let export = SourceExport {
-                    output_index: *output_index,
                     storage_metadata: (),
+                    subsource_config: Some(config),
                 };
-                (*id, export)
+                (id, export)
             })
             .collect();
 
+        source_exports.insert(
+            id,
+            SourceExport {
+                storage_metadata: (),
+                subsource_config: None,
+            },
+        );
+
         DataSourceDesc::Ingestion(IngestionDescription {
-            desc: ingestion.desc.clone(),
+            desc: ingestion.desc,
             ingestion_metadata: (),
             source_imports,
             source_exports,

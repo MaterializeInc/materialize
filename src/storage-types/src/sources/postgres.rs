@@ -37,7 +37,7 @@ pub struct PostgresSourceConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection: C::Pg,
     /// The cast expressions to convert the incoming string encoded rows to
     /// their target types, keyed by their position in the source.
-    pub table_casts: BTreeMap<usize, Vec<MirScalarExpr>>,
+    pub table_casts: BTreeMap<u32, Vec<MirScalarExpr>>,
     pub publication: String,
     pub publication_details: PostgresSourcePublicationDetails,
 }
@@ -73,7 +73,7 @@ impl<C: ConnectionAccess> Arbitrary for PostgresSourceConnection<C> {
             any::<C::Pg>(),
             any::<GlobalId>(),
             proptest::collection::btree_map(
-                any::<usize>(),
+                any::<u32>(),
                 proptest::collection::vec(any::<MirScalarExpr>(), 1..4),
                 1..4,
             ),
@@ -170,56 +170,44 @@ impl<C: ConnectionAccess> crate::AlterCompatible for PostgresSourceConnection<C>
     }
 }
 
-impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
-    fn into_proto(&self) -> ProtoPostgresSourceConnection {
-        use proto_postgres_source_connection::ProtoPostgresTableCast;
-        let mut table_casts = Vec::with_capacity(self.table_casts.len());
-        let mut table_cast_pos = Vec::with_capacity(self.table_casts.len());
-        for (pos, table_cast_cols) in self.table_casts.iter() {
-            table_casts.push(ProtoPostgresTableCast {
-                column_casts: table_cast_cols
-                    .iter()
-                    .cloned()
-                    .map(|cast| cast.into_proto())
-                    .collect(),
-            });
-            table_cast_pos.push(mz_ore::cast::usize_to_u64(*pos));
-        }
+impl RustType<ProtoPostgresSourceConnectionV2> for PostgresSourceConnection {
+    fn into_proto(&self) -> ProtoPostgresSourceConnectionV2 {
+        use proto_postgres_source_connection_v2::ProtoPostgresTableCast;
 
-        ProtoPostgresSourceConnection {
+        let table_casts = self
+            .table_casts
+            .iter()
+            .map(|(oid, table_cast_cols)| {
+                (
+                    *oid,
+                    ProtoPostgresTableCast {
+                        column_casts: table_cast_cols
+                            .iter()
+                            .cloned()
+                            .map(|cast| cast.into_proto())
+                            .collect(),
+                    },
+                )
+            })
+            .collect();
+
+        ProtoPostgresSourceConnectionV2 {
             connection: Some(self.connection.into_proto()),
             connection_id: Some(self.connection_id.into_proto()),
             publication: self.publication.clone(),
             details: Some(self.publication_details.into_proto()),
             table_casts,
-            table_cast_pos,
         }
     }
 
-    fn from_proto(proto: ProtoPostgresSourceConnection) -> Result<Self, TryFromProtoError> {
-        // If we get the wrong number of table cast positions, we have to just
-        // accept all of the table casts. This is somewhat harmless, as the
-        // worst thing that happens is that we generate unused snapshots from
-        // the upstream PG publication, and this will (hopefully) correct
-        // itself on the next version upgrade.
-        let table_cast_pos = if proto.table_casts.len() == proto.table_cast_pos.len() {
-            proto.table_cast_pos
-        } else {
-            (1..proto.table_casts.len() + 1)
-                .map(mz_ore::cast::usize_to_u64)
-                .collect()
-        };
-
+    fn from_proto(proto: ProtoPostgresSourceConnectionV2) -> Result<Self, TryFromProtoError> {
         let mut table_casts = BTreeMap::new();
-        for (pos, cast) in table_cast_pos
-            .into_iter()
-            .zip_eq(proto.table_casts.into_iter())
-        {
+        for (oid, cast) in proto.table_casts.into_iter() {
             let mut column_casts = vec![];
             for cast in cast.column_casts {
                 column_casts.push(cast.into_rust()?);
             }
-            table_casts.insert(mz_ore::cast::u64_to_usize(pos), column_casts);
+            table_casts.insert(oid, column_casts);
         }
 
         Ok(PostgresSourceConnection {
