@@ -9,6 +9,7 @@
 
 mod crypto;
 mod destination;
+mod error;
 mod fivetran_sdk;
 
 pub mod logging;

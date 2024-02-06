@@ -13,11 +13,9 @@ use std::error::Error;
 use std::pin::Pin;
 use std::time::{Duration, SystemTime};
 
-use anyhow::{anyhow, bail, Context};
 use async_compression::tokio::bufread::{GzipDecoder, ZstdDecoder};
 use futures::{SinkExt, TryStreamExt};
 use itertools::Itertools;
-use mz_ore::error::ErrorExt;
 use mz_sql_parser::ast::{Ident, UnresolvedItemName};
 use postgres_protocol::escape;
 use prost::bytes::{BufMut, BytesMut};
@@ -28,11 +26,9 @@ use tokio_util::io::ReaderStream;
 
 use crate::crypto::AsyncAesDecrypter;
 use crate::destination::config;
+use crate::error::{Context, OpError, OpErrorKind};
 use crate::fivetran_sdk::write_batch_request::FileParams;
-use crate::fivetran_sdk::{
-    Compression, Encryption, Table, TruncateRequest, TruncateResponse, WriteBatchRequest,
-    WriteBatchResponse,
-};
+use crate::fivetran_sdk::{Compression, Encryption, Table, TruncateRequest, WriteBatchRequest};
 use crate::utils;
 
 /// Tracks if a row has been "soft deleted" if this column to true.
@@ -42,49 +38,18 @@ const FIVETRAN_SYSTEM_COLUMN_SYNCED: &str = "_fivetran_synced";
 /// Fivetran will synthesize a primary key column when one doesn't exist.
 const FIVETRAN_SYSTEM_COLUMN_ID: &str = "_fivetran_id";
 
-pub async fn handle_truncate_request(
-    request: TruncateRequest,
-) -> Result<TruncateResponse, anyhow::Error> {
-    use crate::fivetran_sdk::truncate_response::Response;
-
-    let response = match truncate_table(request).await {
-        Ok(()) => Response::Success(true),
-        Err(e) => Response::Failure(e.display_with_causes().to_string()),
-    };
-    Ok(TruncateResponse {
-        response: Some(response),
-    })
-}
-
-pub async fn handle_write_batch_request(
-    request: WriteBatchRequest,
-) -> Result<WriteBatchResponse, anyhow::Error> {
-    use crate::fivetran_sdk::write_batch_response::Response;
-
-    let response = match write_batch(request).await {
-        Ok(()) => Response::Success(true),
-        Err(e) => Response::Failure(e.display_with_causes().to_string()),
-    };
-    Ok(WriteBatchResponse {
-        response: Some(response),
-    })
-}
-
-async fn truncate_table(request: TruncateRequest) -> Result<(), anyhow::Error> {
+pub async fn handle_truncate_table(request: TruncateRequest) -> Result<(), OpError> {
     let delete_before = {
-        let Some(utc_delete_before) = request.utc_delete_before else {
-            bail!("internal error: TruncateRequest missing \"utc_delete_before\" field");
-        };
-
+        let utc_delete_before = request
+            .utc_delete_before
+            .ok_or(OpErrorKind::FieldMissing("utc_delete_before"))?;
         let secs = u64::try_from(utc_delete_before.seconds).map_err(|_| {
-            anyhow!(
-                "internal error: TruncateRequest \"utc_delete_before.seconds\" field out of range"
+            OpErrorKind::InvariantViolated(
+                "\"utc_delete_before.seconds\" field out of range".into(),
             )
         })?;
         let nanos = u32::try_from(utc_delete_before.nanos).map_err(|_| {
-            anyhow!(
-                "internal error: TruncateRequest \"utc_delete_before.nanos\" field out of range"
-            )
+            OpErrorKind::InvariantViolated("\"utc_delete_before.nanos\" field out of range".into())
         })?;
 
         SystemTime::UNIX_EPOCH + Duration::new(secs, nanos)
@@ -111,18 +76,16 @@ async fn truncate_table(request: TruncateRequest) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-async fn write_batch(request: WriteBatchRequest) -> Result<(), anyhow::Error> {
-    let Some(table) = request.table else {
-        bail!("internal error: WriteBatchRequest missing \"table\" field");
-    };
-
+pub async fn handle_write_batch(request: WriteBatchRequest) -> Result<(), OpError> {
+    let table = request.table.ok_or(OpErrorKind::FieldMissing("table"))?;
     if !table.columns.iter().any(|c| c.primary_key) {
-        bail!("table has no primary key columns");
+        let err = OpErrorKind::InvariantViolated("table has no primary key columns".into());
+        return Err(err.into());
     }
 
-    let Some(FileParams::Csv(csv_file_params)) = request.file_params else {
-        bail!("internal error: WriteBatchRequest missing \"file_params\" field");
-    };
+    let FileParams::Csv(csv_file_params) = request
+        .file_params
+        .ok_or(OpErrorKind::FieldMissing("file_params"))?;
 
     let file_config = FileConfig {
         compression: match csv_file_params.compression() {
@@ -152,7 +115,8 @@ async fn write_batch(request: WriteBatchRequest) -> Result<(), anyhow::Error> {
         &client,
         &request.replace_files,
     )
-    .await?;
+    .await
+    .context("replace files")?;
 
     update_files(
         &request.schema_name,
@@ -161,7 +125,8 @@ async fn write_batch(request: WriteBatchRequest) -> Result<(), anyhow::Error> {
         &client,
         &request.update_files,
     )
-    .await?;
+    .await
+    .context("update files")?;
 
     delete_files(
         &request.schema_name,
@@ -170,7 +135,8 @@ async fn write_batch(request: WriteBatchRequest) -> Result<(), anyhow::Error> {
         &client,
         &request.delete_files,
     )
-    .await?;
+    .await
+    .context("delete files")?;
 
     Ok(())
 }
@@ -193,29 +159,24 @@ enum FileCompression {
 type AsyncFileReader = Pin<Box<dyn AsyncRead + Send>>;
 type AsyncCsvReader = csv_async::AsyncReader<Pin<Box<dyn AsyncRead + Send>>>;
 
-async fn load_file(file_config: &FileConfig, path: &str) -> Result<AsyncFileReader, anyhow::Error> {
-    let mut file = File::open(path)
-        .await
-        .context("internal error: opening file")?;
+async fn load_file(file_config: &FileConfig, path: &str) -> Result<AsyncFileReader, OpError> {
+    let mut file = File::open(path).await?;
 
     // Handle encryption.
     let file: Pin<Box<dyn AsyncRead + Send>> = match &file_config.aes_encryption_keys {
         None => Box::pin(file),
         Some(aes_encryption_keys) => {
             // Ensure we have an AES key.
-            let Some(aes_key) = aes_encryption_keys.get(path) else {
-                bail!("internal error: aes key missing");
-            };
+            let aes_key = aes_encryption_keys
+                .get(path)
+                .ok_or(OpErrorKind::FieldMissing("aes key"))?;
 
             // The initialization vector is stored in the first 16 bytes of the
             // file.
             let mut iv = [0; 16];
-            file.read_exact(&mut iv)
-                .await
-                .context("internal error: reading initialization vector")?;
+            file.read_exact(&mut iv).await?;
 
-            let decrypter = AsyncAesDecrypter::new(file, aes_key, &iv)
-                .context("internal error: constructing AES decrypter")?;
+            let decrypter = AsyncAesDecrypter::new(file, aes_key, &iv)?;
             Box::pin(decrypter)
         }
     };
@@ -243,7 +204,7 @@ async fn replace_files(
     file_config: &FileConfig,
     client: &tokio_postgres::Client,
     replace_files: &[String],
-) -> Result<(), anyhow::Error> {
+) -> Result<(), OpError> {
     // Bail early if there isn't any work to do.
     if replace_files.is_empty() {
         return Ok(());
@@ -307,7 +268,7 @@ async fn update_files(
     file_config: &FileConfig,
     client: &tokio_postgres::Client,
     update_files: &[String],
-) -> Result<(), anyhow::Error> {
+) -> Result<(), OpError> {
     // TODO(benesch): this is hideously inefficient.
 
     let mut assignments = vec![];
@@ -342,7 +303,7 @@ async fn update_files(
     let update_stmt = client
         .prepare(&update_stmt)
         .await
-        .context("internal error: preparing update statement")?;
+        .context("preparing update statement")?;
 
     for path in update_files {
         let file = load_file(file_config, path)
@@ -362,7 +323,7 @@ async fn update_file(
     client: &tokio_postgres::Client,
     update_stmt: &tokio_postgres::Statement,
     reader: AsyncCsvReader,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), OpError> {
     let mut stream = reader.into_byte_records();
     while let Some(record) = stream.try_next().await? {
         let params = record.iter().map(|value| TextFormatter {
@@ -382,7 +343,7 @@ async fn delete_files(
     file_config: &FileConfig,
     client: &tokio_postgres::Client,
     delete_files: &[String],
-) -> Result<(), anyhow::Error> {
+) -> Result<(), OpError> {
     // TODO(parkmycar): Make sure table exists.
     // TODO(parkmycar): Retry transient errors.
 
@@ -399,8 +360,7 @@ async fn delete_files(
         client,
         &qualified_temp_table_name,
     )
-    .await
-    .context("delete_files")?;
+    .await?;
 
     // Skip the update if there are no rows to delete!
     if row_count == 0 {
@@ -419,7 +379,8 @@ async fn delete_files(
     let synced_time: SystemTime = client
         .query_one(&synced_time_stmt, &[])
         .await
-        .and_then(|row| row.try_get(0))?;
+        .and_then(|row| row.try_get(0))
+        .context("get MAX _fivetran_synced")?;
 
     let qualified_table_name =
         UnresolvedItemName::qualified(&[Ident::new(schema)?, Ident::new(&table.name)?]);
@@ -436,7 +397,10 @@ async fn delete_files(
         synced_col = escape::escape_identifier(FIVETRAN_SYSTEM_COLUMN_SYNCED),
         cols = matching_cols.map(|col| &col.name).join(","),
     );
-    let total_count = client.execute(&merge_stmt, &[&synced_time]).await?;
+    let total_count = client
+        .execute(&merge_stmt, &[&synced_time])
+        .await
+        .context("update deletes")?;
     tracing::info!(?total_count, "altered rows in {qualified_table_name}");
 
     Ok(())
@@ -447,7 +411,7 @@ async fn delete_files(
 async fn create_temporary_table(
     table: &Table,
     client: &tokio_postgres::Client,
-) -> Result<(UnresolvedItemName, Vec<ColumnMetadata>), anyhow::Error> {
+) -> Result<(UnresolvedItemName, Vec<ColumnMetadata>), OpError> {
     // This temporary table names to be a valid identifier within Materialize, and a table with the
     // same name must not already exist in the provided schema.
     let prefix = format!("fivetran_temp_{}_", mz_ore::id_gen::temp_id());
@@ -473,7 +437,7 @@ async fn create_temporary_table(
                 is_primary: col.primary_key || col.name.to_lowercase() == FIVETRAN_SYSTEM_COLUMN_ID,
             })
         })
-        .collect::<Result<Vec<_>, anyhow::Error>>()?;
+        .collect::<Result<Vec<_>, OpError>>()?;
 
     // Create the temporary table.
     let defs = columns
@@ -481,7 +445,10 @@ async fn create_temporary_table(
         .map(|col| format!("{} {}", col.name, col.ty))
         .join(",");
     let create_table_stmt = format!("CREATE TEMPORARY TABLE {qualified_temp_table_name} ({defs})");
-    client.execute(&create_table_stmt, &[]).await?;
+    client
+        .execute(&create_table_stmt, &[])
+        .await
+        .map_err(OpErrorKind::TemporaryResource)?;
 
     Ok((qualified_temp_table_name, columns))
 }
@@ -495,7 +462,7 @@ async fn copy_files(
     files: &[String],
     client: &tokio_postgres::Client,
     temporary_table: &UnresolvedItemName,
-) -> Result<u64, anyhow::Error> {
+) -> Result<u64, OpError> {
     // Create a Sink which we can stream the CSV files into.
     let copy_in_stmt = format!(
         "COPY {temporary_table} FROM STDIN WITH (FORMAT CSV, HEADER true, NULL {null_value})",
@@ -509,10 +476,10 @@ async fn copy_files(
         let file = load_file(file_config, path)
             .await
             .with_context(|| format!("loading delete file {path}"))?;
-        let mut file_stream = ReaderStream::new(file).map_err(anyhow::Error::from);
+        let mut file_stream = ReaderStream::new(file).map_err(OpErrorKind::from);
 
         (&mut sink)
-            .sink_map_err(anyhow::Error::from)
+            .sink_map_err(OpErrorKind::from)
             .send_all(&mut file_stream)
             .await
             .context("sinking data")?;

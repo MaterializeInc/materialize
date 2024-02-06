@@ -7,9 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use crate::error::{OpError, OpErrorKind};
 use crate::fivetran_sdk::{DataType, DecimalParams};
 
-use anyhow::{anyhow, bail};
 use mz_pgrepr::Type;
 
 /// According to folks from Fivetran, checking if a column name is prefixed with a specific
@@ -34,7 +34,7 @@ pub fn is_system_column(name: &str) -> bool {
 /// Converts a type defined in the Fivetran SDK to the name of one that Materialize supports.
 ///
 /// Errors if Materialize doesn't support the data type.
-pub fn to_materialize_type(ty: DataType) -> Result<&'static str, anyhow::Error> {
+pub fn to_materialize_type(ty: DataType) -> Result<&'static str, OpError> {
     match ty {
         DataType::Boolean => Ok("boolean"),
         DataType::Short => Ok("smallint"),
@@ -50,13 +50,14 @@ pub fn to_materialize_type(ty: DataType) -> Result<&'static str, anyhow::Error> 
         DataType::String => Ok("text"),
         DataType::Json => Ok("jsonb"),
         DataType::Unspecified | DataType::Xml => {
-            bail!("{} data type is unsupported", ty.as_str_name())
+            let msg = format!("{} data type is unsupported", ty.as_str_name());
+            Err(OpErrorKind::Unsupported(msg).into())
         }
     }
 }
 
 /// Converts a Postgres data type, to one supported by the Fivetran SDK.
-pub fn to_fivetran_type(ty: Type) -> Result<(DataType, Option<DecimalParams>), anyhow::Error> {
+pub fn to_fivetran_type(ty: Type) -> Result<(DataType, Option<DecimalParams>), OpError> {
     match ty {
         Type::Bool => Ok((DataType::Boolean, None)),
         Type::Int2 => Ok((DataType::Short, None)),
@@ -67,16 +68,16 @@ pub fn to_fivetran_type(ty: Type) -> Result<(DataType, Option<DecimalParams>), a
                 None => None,
                 Some(constraints) => {
                     let precision = u32::try_from(constraints.max_precision()).map_err(|_| {
-                        anyhow!(
-                            "internal error: negative numeric precision: {}",
+                        OpErrorKind::InvariantViolated(format!(
+                            "negative numeric precision: {}",
                             constraints.max_precision()
-                        )
+                        ))
                     })?;
                     let scale = u32::try_from(constraints.max_scale()).map_err(|_| {
-                        anyhow!(
-                            "internal error: negative numeric scale: {}",
+                        OpErrorKind::InvariantViolated(format!(
+                            "negative numeric scale: {}",
                             constraints.max_scale()
-                        )
+                        ))
                     })?;
                     Some(DecimalParams { precision, scale })
                 }
@@ -91,6 +92,9 @@ pub fn to_fivetran_type(ty: Type) -> Result<(DataType, Option<DecimalParams>), a
         Type::Bytea => Ok((DataType::Binary, None)),
         Type::Text => Ok((DataType::String, None)),
         Type::Jsonb => Ok((DataType::Json, None)),
-        _ => bail!("no mapping to Fivetran data type for OID {}", ty.oid()),
+        _ => {
+            let msg = format!("no mapping to Fivetran data type for OID {}", ty.oid());
+            Err(OpErrorKind::Unsupported(msg).into())
+        }
     }
 }
