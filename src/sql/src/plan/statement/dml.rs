@@ -523,6 +523,7 @@ pub fn plan_explain_pushdown(
     statement: ExplainPushdownStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&vars::ENABLE_EXPLAIN_PUSHDOWN)?;
     let explainee = plan_explainee(scx, statement.explainee, params)?;
     Ok(Plan::ExplainPushdown(ExplainPushdownPlan { explainee }))
 }
