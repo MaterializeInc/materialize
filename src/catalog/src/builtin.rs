@@ -1902,7 +1902,8 @@ pub static MZ_KAFKA_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     schema: MZ_INTERNAL_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
-        .with_column("group_id_prefix", ScalarType::String.nullable(false)),
+        .with_column("group_id_prefix", ScalarType::String.nullable(false))
+        .with_column("topic", ScalarType::String.nullable(false)),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
