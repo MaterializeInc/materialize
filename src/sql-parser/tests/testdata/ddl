@@ -29,7 +29,7 @@ CREATE TABLE uk_cities (
 ----
 CREATE TABLE uk_cities (name varchar(100) NOT NULL, lat float8 NULL, lng float8, constrained int4 NULL CONSTRAINT pkey PRIMARY KEY NOT NULL UNIQUE CHECK (constrained > 0), ref int4 REFERENCES othertable (a, b))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("uk_cities")]), columns: [ColumnDef { name: Ident("name"), data_type: Other { name: Name(UnresolvedItemName([Ident("varchar")])), typ_mod: [100] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("lat"), data_type: Other { name: Name(UnresolvedItemName([Ident("float8")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Null }] }, ColumnDef { name: Ident("lng"), data_type: Other { name: Name(UnresolvedItemName([Ident("float8")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("constrained"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Null }, ColumnOptionDef { name: Some(Ident("pkey")), option: Unique { is_primary: true } }, ColumnOptionDef { name: None, option: NotNull }, ColumnOptionDef { name: None, option: Unique { is_primary: false } }, ColumnOptionDef { name: None, option: Check(Op { op: Op { namespace: None, op: ">" }, expr1: Identifier([Ident("constrained")]), expr2: Some(Value(Number("0"))) }) }] }, ColumnDef { name: Ident("ref"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: ForeignKey { foreign_table: UnresolvedItemName([Ident("othertable")]), referred_columns: [Ident("a"), Ident("b")] } }] }], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("uk_cities")]), columns: [ColumnDef { name: Ident("name"), data_type: Other { name: Name(UnresolvedItemName([Ident("varchar")])), typ_mod: [100] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("lat"), data_type: Other { name: Name(UnresolvedItemName([Ident("float8")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Null }] }, ColumnDef { name: Ident("lng"), data_type: Other { name: Name(UnresolvedItemName([Ident("float8")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("constrained"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Null }, ColumnOptionDef { name: Some(Ident("pkey")), option: Unique { is_primary: true } }, ColumnOptionDef { name: None, option: NotNull }, ColumnOptionDef { name: None, option: Unique { is_primary: false } }, ColumnOptionDef { name: None, option: Check(Op { op: Op { namespace: None, op: ">" }, expr1: Identifier([Ident("constrained")]), expr2: Some(Value(Number("0"))) }) }] }, ColumnDef { name: Ident("ref"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: ForeignKey { foreign_table: UnresolvedItemName([Ident("othertable")]), referred_columns: [Ident("a"), Ident("b")] } }] }], constraints: [], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE TABLE t (a int NOT NULL GARBAGE)
@@ -41,16 +41,16 @@ CREATE TABLE t (a int NOT NULL GARBAGE)
 parse-statement
 CREATE TABLE t (c int) WITH (foo = 'bar', a = 123)
 ----
-error: Expected end of statement, found WITH
+error: Expected RETAIN, found identifier "foo"
 CREATE TABLE t (c int) WITH (foo = 'bar', a = 123)
-                       ^
+                             ^
 
 parse-statement
 CREATE TABLE types_table (char_col char, bpchar_col bpchar, text_col text, bool_col boolean, date_col date, time_col time, timestamp_col timestamp, uuid_col uuid, double_col double precision);
 ----
 CREATE TABLE types_table (char_col bpchar, bpchar_col bpchar, text_col text, bool_col bool, date_col date, time_col time, timestamp_col timestamp, uuid_col uuid, double_col float8)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("types_table")]), columns: [ColumnDef { name: Ident("char_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("bpchar")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("bpchar_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("bpchar")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("text_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("bool_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("bool")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("date_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("date")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("time_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("time")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("timestamp_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamp")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("uuid_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("uuid")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("double_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("float8")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("types_table")]), columns: [ColumnDef { name: Ident("char_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("bpchar")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("bpchar_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("bpchar")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("text_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("bool_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("bool")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("date_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("date")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("time_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("time")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("timestamp_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("timestamp")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("uuid_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("uuid")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("double_col"), data_type: Other { name: Name(UnresolvedItemName([Ident("float8")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE TABLE t
@@ -64,14 +64,14 @@ CREATE TABLE t ()
 ----
 CREATE TABLE t ()
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [], constraints: [], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE TEMP TABLE t ()
 ----
 CREATE TEMPORARY TABLE t ()
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [], constraints: [], if_not_exists: false, temporary: true })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [], constraints: [], if_not_exists: false, temporary: true, with_options: [] })
 
 parse-statement
 CREATE TABLE foo (bar int,)
@@ -85,14 +85,14 @@ CREATE TABLE foo (bar int list)
 ----
 CREATE TABLE foo (bar int4 list)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("bar"), data_type: List(Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }), collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("bar"), data_type: List(Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }), collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE TABLE foo (bar int list list)
 ----
 CREATE TABLE foo (bar int4 list list)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("bar"), data_type: List(List(Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] })), collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("bar"), data_type: List(List(Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] })), collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE TABLE tab (foo int,
@@ -106,112 +106,112 @@ CREATE TABLE foo (id int, CONSTRAINT address_pkey PRIMARY KEY (address_id))
 ----
 CREATE TABLE foo (id int4, CONSTRAINT address_pkey PRIMARY KEY (address_id))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("address_pkey")), columns: [Ident("address_id")], is_primary: true, nulls_not_distinct: false }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("address_pkey")), columns: [Ident("address_id")], is_primary: true, nulls_not_distinct: false }], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE TABLE foo (id int, CONSTRAINT uk_task UNIQUE (report_date, task_id))
 ----
 CREATE TABLE foo (id int4, CONSTRAINT uk_task UNIQUE (report_date, task_id))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("uk_task")), columns: [Ident("report_date"), Ident("task_id")], is_primary: false, nulls_not_distinct: false }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("uk_task")), columns: [Ident("report_date"), Ident("task_id")], is_primary: false, nulls_not_distinct: false }], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE TABLE foo (id int, CONSTRAINT uk_task UNIQUE NULLS NOT DISTINCT (report_date, task_id))
 ----
 CREATE TABLE foo (id int4, CONSTRAINT uk_task UNIQUE NULLS NOT DISTINCT (report_date, task_id))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("uk_task")), columns: [Ident("report_date"), Ident("task_id")], is_primary: false, nulls_not_distinct: true }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: Some(Ident("uk_task")), columns: [Ident("report_date"), Ident("task_id")], is_primary: false, nulls_not_distinct: true }], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE TABLE foo (id int, CONSTRAINT customer_address_id_fkey FOREIGN KEY (address_id) REFERENCES public.address(address_id))
 ----
 CREATE TABLE foo (id int4, CONSTRAINT customer_address_id_fkey FOREIGN KEY (address_id) REFERENCES public.address(address_id))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [ForeignKey { name: Some(Ident("customer_address_id_fkey")), columns: [Ident("address_id")], foreign_table: Name(UnresolvedItemName([Ident("public"), Ident("address")])), referred_columns: [Ident("address_id")] }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [ForeignKey { name: Some(Ident("customer_address_id_fkey")), columns: [Ident("address_id")], foreign_table: Name(UnresolvedItemName([Ident("public"), Ident("address")])), referred_columns: [Ident("address_id")] }], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE TEMPORARY TABLE foo (id int, CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) <> ''))
 ----
 CREATE TEMPORARY TABLE foo (id int4, CONSTRAINT ck CHECK (rtrim(ltrim(ref_code)) <> ''))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: Some(Ident("ck")), expr: Op { op: Op { namespace: None, op: "<>" }, expr1: Function(Function { name: Name(UnresolvedItemName([Ident("rtrim")])), args: Args { args: [Function(Function { name: Name(UnresolvedItemName([Ident("ltrim")])), args: Args { args: [Identifier([Ident("ref_code")])], order_by: [] }, filter: None, over: None, distinct: false })], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(String(""))) } }], if_not_exists: false, temporary: true })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: Some(Ident("ck")), expr: Op { op: Op { namespace: None, op: "<>" }, expr1: Function(Function { name: Name(UnresolvedItemName([Ident("rtrim")])), args: Args { args: [Function(Function { name: Name(UnresolvedItemName([Ident("ltrim")])), args: Args { args: [Identifier([Ident("ref_code")])], order_by: [] }, filter: None, over: None, distinct: false })], order_by: [] }, filter: None, over: None, distinct: false }), expr2: Some(Value(String(""))) } }], if_not_exists: false, temporary: true, with_options: [] })
 
 parse-statement
 CREATE TABLE foo (id int, PRIMARY KEY (foo, bar))
 ----
 CREATE TABLE foo (id int4, PRIMARY KEY (foo, bar))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: None, columns: [Ident("foo"), Ident("bar")], is_primary: true, nulls_not_distinct: false }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: None, columns: [Ident("foo"), Ident("bar")], is_primary: true, nulls_not_distinct: false }], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE TABLE foo (id int, UNIQUE (id))
 ----
 CREATE TABLE foo (id int4, UNIQUE (id))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: None, columns: [Ident("id")], is_primary: false, nulls_not_distinct: false }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Unique { name: None, columns: [Ident("id")], is_primary: false, nulls_not_distinct: false }], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE TABLE foo (id int, FOREIGN KEY (foo, bar) REFERENCES anothertable(foo, bar))
 ----
 CREATE TABLE foo (id int4, FOREIGN KEY (foo, bar) REFERENCES anothertable(foo, bar))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [ForeignKey { name: None, columns: [Ident("foo"), Ident("bar")], foreign_table: Name(UnresolvedItemName([Ident("anothertable")])), referred_columns: [Ident("foo"), Ident("bar")] }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [ForeignKey { name: None, columns: [Ident("foo"), Ident("bar")], foreign_table: Name(UnresolvedItemName([Ident("anothertable")])), referred_columns: [Ident("foo"), Ident("bar")] }], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE TABLE foo (id int, CHECK (end_date > start_date OR end_date IS NULL))
 ----
 CREATE TABLE foo (id int4, CHECK (end_date > start_date OR end_date IS NULL))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: Or { left: Op { op: Op { namespace: None, op: ">" }, expr1: Identifier([Ident("end_date")]), expr2: Some(Identifier([Ident("start_date")])) }, right: IsExpr { expr: Identifier([Ident("end_date")]), construct: Null, negated: false } } }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: Or { left: Op { op: Op { namespace: None, op: ">" }, expr1: Identifier([Ident("end_date")]), expr2: Some(Identifier([Ident("start_date")])) }, right: IsExpr { expr: Identifier([Ident("end_date")]), construct: Null, negated: false } } }], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE TABLE foo (id int, CHECK (end_date > start_date OR end_date IS UNKNOWN))
 ----
 CREATE TABLE foo (id int4, CHECK (end_date > start_date OR end_date IS UNKNOWN))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: Or { left: Op { op: Op { namespace: None, op: ">" }, expr1: Identifier([Ident("end_date")]), expr2: Some(Identifier([Ident("start_date")])) }, right: IsExpr { expr: Identifier([Ident("end_date")]), construct: Unknown, negated: false } } }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: Or { left: Op { op: Op { namespace: None, op: ">" }, expr1: Identifier([Ident("end_date")]), expr2: Some(Identifier([Ident("start_date")])) }, right: IsExpr { expr: Identifier([Ident("end_date")]), construct: Unknown, negated: false } } }], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE TABLE foo (id int, CHECK (start_date IS TRUE))
 ----
 CREATE TABLE foo (id int4, CHECK (start_date IS TRUE))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: IsExpr { expr: Identifier([Ident("start_date")]), construct: True, negated: false } }], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("foo")]), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [Check { name: None, expr: IsExpr { expr: Identifier([Ident("start_date")]), construct: True, negated: false } }], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE TEMP TABLE t (c schema.type)
 ----
 CREATE TEMPORARY TABLE t (c schema.type)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: true })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: true, with_options: [] })
 
 parse-statement
 CREATE TABLE t (c db.schema.type)
 ----
 CREATE TABLE t (c db.schema.type)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE TABLE t (c "db"."schema"."type")
 ----
 CREATE TABLE t (c db.schema.type)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE TABLE t (c something.db.schema.type)
 ----
 CREATE TABLE t (c something.db.schema.type)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("something"), Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("something"), Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE TEMP TABLE t (c db.schema.type(0,1,100))
 ----
 CREATE TEMPORARY TABLE t (c db.schema.type(0, 1, 100))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [0, 1, 100] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: true })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("type")])), typ_mod: [0, 1, 100] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: true, with_options: [] })
 
 parse-statement
 CREATE TABLE t (c time with time zone (0,1,100))
@@ -239,14 +239,14 @@ CREATE TABLE t (c "type"(1))
 ----
 CREATE TABLE t (c type(1))
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("type")])), typ_mod: [1] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: Other { name: Name(UnresolvedItemName([Ident("type")])), typ_mod: [1] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE TABLE t (c "type"(1) list list)
 ----
 CREATE TABLE t (c type(1) list list)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: List(List(Other { name: Name(UnresolvedItemName([Ident("type")])), typ_mod: [1] })), collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("c"), data_type: List(List(Other { name: Name(UnresolvedItemName([Ident("type")])), typ_mod: [1] })), collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE DATABASE IF EXISTS foo
@@ -1097,9 +1097,9 @@ CREATE TABLE public.customer (
         active integer NOT NULL
 ) WITH (fillfactor = 20, user_catalog_table = true, autovacuum_vacuum_threshold = 100)
 ----
-error: Expected end of statement, found WITH
+error: Expected RETAIN, found identifier "fillfactor"
 ) WITH (fillfactor = 20, user_catalog_table = true, autovacuum_vacuum_threshold = 100)
-  ^
+        ^
 
 parse-statement roundtrip
 CREATE TABLE public.customer (
