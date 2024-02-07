@@ -1330,29 +1330,75 @@ pub struct CreateTableStatement<T: AstInfo> {
     pub constraints: Vec<TableConstraint<T>>,
     pub if_not_exists: bool,
     pub temporary: bool,
+    pub with_options: Vec<TableOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateTableStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        let Self {
+            name,
+            columns,
+            constraints,
+            if_not_exists,
+            temporary,
+            with_options,
+        } = self;
         f.write_str("CREATE ");
-        if self.temporary {
+        if *temporary {
             f.write_str("TEMPORARY ");
         }
         f.write_str("TABLE ");
-        if self.if_not_exists {
+        if *if_not_exists {
             f.write_str("IF NOT EXISTS ");
         }
-        f.write_node(&self.name);
+        f.write_node(name);
         f.write_str(" (");
-        f.write_node(&display::comma_separated(&self.columns));
+        f.write_node(&display::comma_separated(columns));
         if !self.constraints.is_empty() {
             f.write_str(", ");
-            f.write_node(&display::comma_separated(&self.constraints));
+            f.write_node(&display::comma_separated(constraints));
         }
         f.write_str(")");
+        if !with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_str(")");
+        }
     }
 }
 impl_display_t!(CreateTableStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TableOptionName {
+    // The `RETAIN HISTORY` option
+    RetainHistory,
+}
+
+impl AstDisplay for TableOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            TableOptionName::RetainHistory => {
+                f.write_str("RETAIN HISTORY");
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TableOption<T: AstInfo> {
+    pub name: TableOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for TableOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
 
 /// `CREATE INDEX`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

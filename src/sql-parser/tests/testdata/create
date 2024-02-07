@@ -193,21 +193,21 @@ CREATE TABLE "table_name" (col_name int)
 ----
 CREATE TABLE table_name (col_name int4)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("table_name")]), columns: [ColumnDef { name: Ident("col_name"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("table_name")]), columns: [ColumnDef { name: Ident("col_name"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE TABLE schema_name.table_name (col_name int)
 ----
 CREATE TABLE schema_name.table_name (col_name int4)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("schema_name"), Ident("table_name")]), columns: [ColumnDef { name: Ident("col_name"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("schema_name"), Ident("table_name")]), columns: [ColumnDef { name: Ident("col_name"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE TABLE schema_name.table_name (col_name text COLLATE en)
 ----
 CREATE TABLE schema_name.table_name (col_name text COLLATE en)
 =>
-CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("schema_name"), Ident("table_name")]), columns: [ColumnDef { name: Ident("col_name"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: Some(UnresolvedItemName([Ident("en")])), options: [] }], constraints: [], if_not_exists: false, temporary: false })
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("schema_name"), Ident("table_name")]), columns: [ColumnDef { name: Ident("col_name"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: Some(UnresolvedItemName([Ident("en")])), options: [] }], constraints: [], if_not_exists: false, temporary: false, with_options: [] })
 
 parse-statement
 CREATE TABLE "" (col_name int)
@@ -233,6 +233,13 @@ CREATE TABLE " " (x int)
 error: null character in quoted identifier
 CREATE TABLE " " (x int)
              ^
+
+parse-statement
+CREATE TABLE t (x int) WITH (RETAIN HISTORY = FOR '1 day')
+----
+CREATE TABLE t (x int4) WITH (RETAIN HISTORY = FOR '1 day')
+=>
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("t")]), columns: [ColumnDef { name: Ident("x"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false, with_options: [TableOption { name: RetainHistory, value: Some(RetainHistoryFor(String("1 day"))) }] })
 
 parse-statement
 CREATE SOURCE webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS

@@ -3393,6 +3393,19 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    fn parse_table_option_name(&mut self) -> Result<TableOptionName, ParserError> {
+        self.expect_keywords(&[RETAIN, HISTORY])?;
+        Ok(TableOptionName::RetainHistory)
+    }
+
+    fn parse_table_option(&mut self) -> Result<TableOption<Raw>, ParserError> {
+        let name = self.parse_table_option_name()?;
+        let value = match name {
+            TableOptionName::RetainHistory => self.parse_option_retain_history(),
+        }?;
+        Ok(TableOption { name, value })
+    }
+
     fn parse_index_option_name(&mut self) -> Result<IndexOptionName, ParserError> {
         self.expect_keywords(&[RETAIN, HISTORY])?;
         Ok(IndexOptionName::RetainHistory)
@@ -3935,12 +3948,26 @@ impl<'a> Parser<'a> {
         // parse optional column list (schema)
         let (columns, constraints) = self.parse_columns(Mandatory)?;
 
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let o = if matches!(self.peek_token(), Some(Token::RParen)) {
+                vec![]
+            } else {
+                self.parse_comma_separated(Parser::parse_table_option)?
+            };
+            self.expect_token(&Token::RParen)?;
+            o
+        } else {
+            vec![]
+        };
+
         Ok(Statement::CreateTable(CreateTableStatement {
             name: table_name,
             columns,
             constraints,
             if_not_exists,
             temporary,
+            with_options,
         }))
     }
 
