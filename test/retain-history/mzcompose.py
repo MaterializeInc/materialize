@@ -292,6 +292,33 @@ def run_test_with_index(c: Composition) -> None:
     )
     _validate_count_of_counter_source(c, "retain_history_source3")
 
+def run_test_with_table(c: Composition) -> None:
+    c.testdrive(
+        dedent(
+            f"""
+            > CREATE TABLE time (time_index int, t timestamp);
+            > CREATE TABLE table_with_retain_history (x int) WITH (RETAIN HISTORY FOR = '10s');
+            > INSERT INTO time VALUES (0, now());
+            # sleep justification: force time to advance
+            $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="2s";
+            > INSERT INTO table_with_retain_history VALUES (0);
+            > INSERT INTO time VALUES (1, now());
+            # sleep justification: force time to advance
+            $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="2s";
+            > INSERT INTO table_with_retain_history VALUES (1);
+            > SELECT count(*) FROM table_with_retain_history;
+            2
+            $ set-from-sql var=time0
+            SELECT t::string FROM time WHERE time_index = 0
+            > SELECT count(*) FROM table_with_retain_history AS OF '${{time0}}'::timestamp;
+            0
+            $ set-from-sql var=time0
+            SELECT t::string FROM time WHERE time_index = 1
+            > SELECT count(*) FROM table_with_retain_history AS OF '${{time1}}'::timestamp;
+            1
+            """
+        )
+    )
 
 def run_test_gh_24479(c: Composition) -> None:
     for (seed, sleep_enabled) in [(0, False), (1, True)]:
