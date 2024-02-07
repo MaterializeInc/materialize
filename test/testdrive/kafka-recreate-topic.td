@@ -107,13 +107,12 @@ text
 ----
 1
 
-# TODO(guswynn): ensure this error stays in place even when _environmentd_ restarts.
 > SELECT name, status, error FROM mz_internal.mz_source_statuses WHERE type != 'progress'
 name            status    error
 -------------------------------
 good_source     running   <null>
-source0         stalled  "kafka: topic was recreated: partition count regressed from 4 to 2"
-source1         stalled  "kafka: topic was recreated: high watermark of partition 0 regressed from 1 to 0"
+source0         ceased    "topic was recreated: partition count regressed from 4 to 2"
+source1         ceased    "topic was recreated: high watermark of partition 0 regressed from 1 to 0"
 
 # Testdrive expects all sources to end in a healthy state, so manufacture that
 # by dropping sources.

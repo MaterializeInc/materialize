@@ -98,7 +98,9 @@ class SourceErrors(Check):
                     name
                     IN (
                     SELECT name FROM (SHOW SUBSOURCES ON source_errors_sourceA WHERE type = 'subsource')
-                    UNION (SELECT name FROM (SHOW SUBSOURCES ON source_errors_sourceB WHERE type = 'subsource'))
+                    UNION ALL (SELECT name FROM (SHOW SUBSOURCES ON source_errors_sourceB WHERE type = 'subsource'))
+                    UNION ALL SELECT 'source_errors_sourceA'
+                    UNION ALL SELECT 'source_errors_sourceB'
                     );
                 true
                 """

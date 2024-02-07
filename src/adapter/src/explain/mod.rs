@@ -15,13 +15,10 @@
 //! implementations for some structs (see the [`mir`]) module for details.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_expr::explain::ExplainContext;
-use mz_repr::explain::{
-    Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer, UsedIndexes,
-};
+use mz_repr::explain::{Explain, ExplainConfig, ExplainError, ExplainFormat, ExprHumanizer};
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 
@@ -57,14 +54,7 @@ where
     for<'a> Explainable<'a, DataflowDescription<T>>: Explain<'a, Context = ExplainContext<'a>>,
 {
     // Collect the list of indexes used by the dataflow at this point.
-    let used_indexes = UsedIndexes::new(
-        plan.index_imports
-            .iter()
-            .map(|(id, _index_import)| {
-                (*id, dataflow_metainfo.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
-            })
-            .collect(),
-    );
+    let used_indexes = dataflow_metainfo.used_indexes(&plan);
 
     let optimizer_notices = OptimizerNotice::explain(
         &dataflow_metainfo.optimizer_notices,
@@ -77,8 +67,8 @@ where
         config,
         humanizer,
         used_indexes,
-        finishing: None,
-        duration: Duration::default(),
+        finishing: Default::default(),
+        duration: Default::default(),
         optimizer_notices,
     };
 

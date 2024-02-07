@@ -124,6 +124,19 @@ Explained Query:
 
 EOF
 
+# FastPathPlan is show instead of PHYSICAL PLAN if present.
+query T multiline
+EXPLAIN PHYSICAL PLAN AS TEXT FOR
+SELECT * FROM t where a = 5
+----
+Explained Query (fast path):
+  Project (#0, #1)
+    ReadIndex on=materialize.public.t t_a_idx=[lookup value=(5)]
+
+Used Indexes:
+  - materialize.public.t_a_idx (lookup)
+
+EOF
 
 # Test basic linear chains.
 

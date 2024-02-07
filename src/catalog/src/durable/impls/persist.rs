@@ -9,6 +9,8 @@
 
 pub(crate) mod metrics;
 pub(crate) mod state_update;
+#[cfg(test)]
+mod tests;
 
 use std::cmp::max;
 use std::collections::BTreeMap;
@@ -72,11 +74,47 @@ pub(crate) type Timestamp = mz_repr::Timestamp;
 /// `new_unchecked` is safe to call with a non-zero value.
 const MIN_EPOCH: Epoch = unsafe { Epoch::new_unchecked(1) };
 
-/// Human readable shard name.
-const SHARD_NAME: &str = "catalog";
+/// Human readable catalog shard name.
+const CATALOG_SHARD_NAME: &str = "catalog";
+/// Human readable catalog upgrade shard name.
+const UPGRADE_SHARD_NAME: &str = "catalog_upgrade";
+
+/// Seed used to generate the persist shard ID for the catalog.
+const CATALOG_SEED: usize = 1;
+/// Seed used to generate the catalog upgrade shard ID.
+///
+/// All state that gets written to persist is tagged with the version of the code that wrote that
+/// state. Persist has limited forward compatibility in how many versions in the future a reader can
+/// read. Reading from persist updates state and the version that the state is tagged with. As a
+/// consequence, reading from persist may unintentionally fence out other readers and writers with
+/// a lower version. We use the catalog upgrade shard to track what database version is actively
+/// deployed so readers from the future, such as the upgrade checker tool, don't accidentally fence out the
+/// database from persist. Only writable opened catalogs can increment the version in the upgrade
+/// shard.
+///
+/// One specific example that we are trying to avoid with the catalog upgrade shard is the
+/// following:
+///
+///   1. Database is running on version 0.X.0.
+///   2. Upgrade checker is run on version 0.X+1.0.
+///   3. Upgrade checker is run on version 0.X+2.0.
+///
+/// With the catalog upgrade shard, the upgrade checker in step (3) can see that the database is
+/// currently running on v0.X.0 and reading the catalog would cause the database to get fenced out.
+/// So instead of reading the catalog it errors out. Without the catalog upgrade shard, the upgrade
+/// checker could read the version in the catalog shard, and see that it is v0.X+1.0, but it would
+/// be impossible to differentiate between the following two scenarios:
+///
+///   - The database is running on v0.X+1.0 and it's safe to run the upgrade checker at v0.X+2.0.
+///   - Some other upgrade checker incremented the version to v0.X+1.0, the database is running on
+///   version v0.X.0, and it is not safe to run the upgrade checker.
+///
+/// Persist guarantees that the shard versions are non-decreasing, so we don't need to worry about
+/// race conditions where the shard version decreases after reading it.
+const UPGRADE_SEED: usize = 2;
 
 /// Durable catalog mode that dictates the effect of mutable operations.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Mode {
     /// Mutable operations are prohibited.
     Readonly,
@@ -152,37 +190,58 @@ pub struct UnopenedPersistCatalogState {
     /// The config collection of the catalog. This information is also included in `snapshot`,
     /// but it's useful to have quick access to these fields without parsing through all updates.
     configs: BTreeMap<String, u64>,
+    /// The organization ID of the environment.
+    organization_id: Uuid,
     /// Metrics for the persist catalog.
     metrics: Arc<Metrics>,
 }
 
 impl UnopenedPersistCatalogState {
-    /// Deterministically generate the a ID for the given `organization_id` and `seed`.
-    fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
-        let hash = sha2::Sha256::digest(format!("{organization_id}{seed}")).to_vec();
-        soft_assert_eq_or_log!(hash.len(), 32, "SHA256 returns 32 bytes (256 bits)");
-        let uuid = Uuid::from_slice(&hash[0..16]).expect("from_slice accepts exactly 16 bytes");
-        ShardId::from_str(&format!("s{uuid}")).expect("known to be valid")
-    }
-
-    /// Create a new [`UnopenedPersistCatalogState`] to the catalog state associated with `organization_id`.
+    /// Create a new [`UnopenedPersistCatalogState`] to the catalog state associated with
+    /// `organization_id`.
+    ///
+    /// All usages of the persist catalog must go through this function. That includes the
+    /// catalog-debug tool, the adapter's catalog, etc.
     #[tracing::instrument(level = "info", skip(persist_client, metrics))]
     pub(crate) async fn new(
         persist_client: PersistClient,
         organization_id: Uuid,
+        version: semver::Version,
         metrics: Arc<Metrics>,
-    ) -> UnopenedPersistCatalogState {
-        const SEED: usize = 1;
-        let shard_id = Self::shard_id(organization_id, SEED);
-        debug!(?shard_id, "new persist backed catalog state");
+    ) -> Result<UnopenedPersistCatalogState, DurableCatalogError> {
+        let catalog_shard_id = shard_id(organization_id, CATALOG_SEED);
+        let upgrade_shard_id = shard_id(organization_id, UPGRADE_SEED);
+        debug!(
+            ?catalog_shard_id,
+            ?upgrade_shard_id,
+            "new persist backed catalog state"
+        );
+
+        // Check the catalog upgrade shard to see ensure that we don't fence anyone out of persist.
+        let upgrade_version =
+            Self::fetch_catalog_upgrade_shard_version(&persist_client, upgrade_shard_id).await;
+        // If this is `None`, no version was found in the upgrade shard. Either this is a brand new
+        // environment and we don't need to worry about fencing existing users or we're upgrading
+        // from a version that doesn't contain the catalog upgrade shard and we need to proceed
+        // with caution for that one week until the catalog upgrade shard exists in all
+        // environments.
+        if let Some(upgrade_version) = upgrade_version {
+            if mz_persist_client::cfg::check_data_version(&upgrade_version, &version).is_err() {
+                return Err(DurableCatalogError::IncompatiblePersistVersion {
+                    found_version: upgrade_version,
+                    catalog_version: version,
+                });
+            }
+        }
+
         let since_handle = persist_client
             .open_critical_since(
-                shard_id,
+                catalog_shard_id,
                 // TODO: We may need to use a different critical reader
                 // id for this if we want to be able to introspect it via SQL.
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
                 Diagnostics {
-                    shard_name: SHARD_NAME.to_string(),
+                    shard_name: CATALOG_SHARD_NAME.to_string(),
                     handle_purpose: "durable catalog state critical since".to_string(),
                 },
             )
@@ -190,11 +249,11 @@ impl UnopenedPersistCatalogState {
             .expect("invalid usage");
         let (mut write_handle, mut read_handle) = persist_client
             .open(
-                shard_id,
+                catalog_shard_id,
                 Arc::new(PersistCatalogState::desc()),
                 Arc::new(UnitSchema::default()),
                 Diagnostics {
-                    shard_name: SHARD_NAME.to_string(),
+                    shard_name: CATALOG_SHARD_NAME.to_string(),
                     handle_purpose: "durable catalog state handles".to_string(),
                 },
             )
@@ -239,18 +298,44 @@ impl UnopenedPersistCatalogState {
             }
         }
 
-        UnopenedPersistCatalogState {
+        Ok(UnopenedPersistCatalogState {
             since_handle,
             write_handle,
             listen,
             persist_client,
-            shard_id,
+            shard_id: catalog_shard_id,
             snapshot,
             upper,
             epoch,
             configs,
+            organization_id,
             metrics,
-        }
+        })
+    }
+
+    /// Fetch the persist version of the catalog upgrade shard, if one exists. A version will not
+    /// exist if the catalog upgrade shard itself doesn't exist which could happen in the following
+    /// scenarios:
+    ///
+    ///   - We are creating a brand new environment.
+    ///   - We are upgrading from a version of the code where the catalog upgrade shard didn't
+    ///   exist.
+    async fn fetch_catalog_upgrade_shard_version(
+        persist_client: &PersistClient,
+        upgrade_shard_id: ShardId,
+    ) -> Option<semver::Version> {
+        let shard_state = persist_client
+            .inspect_shard::<Timestamp>(&upgrade_shard_id)
+            .await
+            .ok()?;
+        let json_state = serde_json::to_value(shard_state).expect("state serialization error");
+        let upgrade_version = json_state
+            .get("applier_version")
+            .cloned()
+            .expect("missing applier_version");
+        let upgrade_version =
+            serde_json::from_value(upgrade_version).expect("version deserialization error");
+        Some(upgrade_version)
     }
 
     #[tracing::instrument(level = "info", skip(self))]
@@ -316,7 +401,7 @@ impl UnopenedPersistCatalogState {
             "initializing catalog state"
         );
         let mut catalog = PersistCatalogState {
-            mode,
+            mode: mode.clone(),
             since_handle: self.since_handle,
             write_handle: self.write_handle,
             listen: self.listen,
@@ -360,6 +445,15 @@ impl UnopenedPersistCatalogState {
             catalog.apply_updates(updates)?;
         } else {
             txn.commit().await?;
+        }
+
+        // Now that we've fully opened the catalog at the current version, we can increment the
+        // version in the catalog upgrade shard to signal to readers that the allowable versions
+        // have increased.
+        if matches!(mode, Mode::Writable) {
+            catalog
+                .increment_catalog_upgrade_shard_version(self.organization_id)
+                .await;
         }
 
         Ok(Box::new(catalog))
@@ -497,7 +591,7 @@ impl UnopenedPersistCatalogState {
                 Arc::new(PersistCatalogState::desc()),
                 Arc::new(UnitSchema::default()),
                 Diagnostics {
-                    shard_name: SHARD_NAME.to_string(),
+                    shard_name: CATALOG_SHARD_NAME.to_string(),
                     handle_purpose: "openable durable catalog state temporary reader".to_string(),
                 },
             )
@@ -786,6 +880,42 @@ impl PersistCatalogState {
         RelationDesc::empty().with_column("data", ScalarType::Jsonb.nullable(false))
     }
 
+    /// Increment the version in the catalog upgrade shard to the code's current version.
+    async fn increment_catalog_upgrade_shard_version(&mut self, organization_id: Uuid) {
+        let upgrade_shard_id = shard_id(organization_id, UPGRADE_SEED);
+        let mut write_handle: WriteHandle<(), (), Timestamp, Diff> = self
+            .persist_client
+            .open_writer(
+                upgrade_shard_id,
+                Arc::new(UnitSchema::default()),
+                Arc::new(UnitSchema::default()),
+                Diagnostics {
+                    shard_name: UPGRADE_SHARD_NAME.to_string(),
+                    handle_purpose: "increment durable catalog upgrade shard version".to_string(),
+                },
+            )
+            .await
+            .expect("invalid usage");
+        const EMPTY_UPDATES: &[(((), ()), Timestamp, Diff)] = &[];
+        let mut upper = write_handle.fetch_recent_upper().await.clone();
+        loop {
+            let next_upper = upper
+                .iter()
+                .map(|timestamp| timestamp.step_forward())
+                .collect();
+            match write_handle
+                .compare_and_append(EMPTY_UPDATES, upper, next_upper)
+                .await
+                .expect("invalid usage")
+            {
+                Ok(()) => break,
+                Err(upper_mismatch) => {
+                    upper = upper_mismatch.current;
+                }
+            }
+        }
+    }
+
     /// Fetch the current upper of the catalog state.
     async fn current_upper(&mut self) -> Timestamp {
         current_upper(&mut self.write_handle).await
@@ -984,7 +1114,7 @@ impl PersistCatalogState {
                 Arc::new(PersistCatalogState::desc()),
                 Arc::new(UnitSchema::default()),
                 Diagnostics {
-                    shard_name: SHARD_NAME.to_string(),
+                    shard_name: CATALOG_SHARD_NAME.to_string(),
                     handle_purpose: "durable catalog state temporary reader".to_string(),
                 },
             )
@@ -1321,6 +1451,14 @@ impl DurableCatalogState for PersistCatalogState {
         txn.commit().await?;
         Ok(ids)
     }
+}
+
+/// Deterministically generate the a ID for the given `organization_id` and `seed`.
+fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
+    let hash = sha2::Sha256::digest(format!("{organization_id}{seed}")).to_vec();
+    soft_assert_eq_or_log!(hash.len(), 32, "SHA256 returns 32 bytes (256 bits)");
+    let uuid = Uuid::from_slice(&hash[0..16]).expect("from_slice accepts exactly 16 bytes");
+    ShardId::from_str(&format!("s{uuid}")).expect("known to be valid")
 }
 
 /// Fetch the current upper of the catalog state.

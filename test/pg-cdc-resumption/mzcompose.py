@@ -108,7 +108,7 @@ def restart_mz(c: Composition) -> None:
 
 def end(c: Composition) -> None:
     """Validate the data at the end."""
-    c.run_testdrive_files("verify-data.td")
+    c.run_testdrive_files("verify-data.td", "cleanup.td")
 
 
 def disconnect_pg_during_snapshot(c: Composition) -> None:

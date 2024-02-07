@@ -24,7 +24,6 @@ use mz_ore::error::ErrorExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::str::StrExt;
 use mz_postgres_util::replication::WalLevel;
-use mz_postgres_util::PostgresError;
 use mz_proto::RustType;
 use mz_repr::{strconv, GlobalId, Timestamp};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -34,12 +33,12 @@ use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn,
     CreateMaterializedViewStatement, CreateSinkConnection, CreateSinkStatement,
     CreateSubsourceOption, CreateSubsourceOptionName, CsrConfigOption, CsrConfigOptionName,
-    CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DbzMode, DeferredItemName,
-    DocOnIdentifier, DocOnSchema, Envelope, Expr, Function, FunctionArgs, Ident,
-    KafkaSourceConfigOption, KafkaSourceConfigOptionName, MaterializedViewOption,
-    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
-    PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, Statement, UnresolvedItemName,
+    CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DeferredItemName,
+    DocOnIdentifier, DocOnSchema, Expr, Function, FunctionArgs, Ident, KafkaSourceConfigOption,
+    KafkaSourceConfigOptionName, MaterializedViewOption, MaterializedViewOptionName,
+    MySqlConfigOption, MySqlConfigOptionName, PgConfigOption, PgConfigOptionName, RawItemName,
+    ReaderSchemaSelectionStrategy, RefreshAtOptionValue, RefreshEveryOptionValue,
+    RefreshOptionValue, SourceEnvelope, Statement, UnresolvedItemName,
 };
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::IntoInlineConnection;
@@ -730,8 +729,7 @@ async fn purify_create_source(
                 &publication,
                 None,
             )
-            .await
-            .map_err(PostgresError::from)?;
+            .await?;
 
             if publication_tables.is_empty() {
                 Err(PgSourcePurificationError::EmptyPublication(
@@ -1359,8 +1357,7 @@ async fn purify_alter_source(
         &pg_source_connection.publication,
         None,
     )
-    .await
-    .map_err(PostgresError::from)?;
+    .await?;
 
     if publication_tables.is_empty() {
         Err(PgSourcePurificationError::EmptyPublication(
@@ -1510,7 +1507,7 @@ async fn purify_source_format(
     catalog: &dyn SessionCatalog,
     format: &mut CreateSourceFormat<Aug>,
     connection: &mut CreateSourceConnection<Aug>,
-    envelope: &Option<Envelope>,
+    envelope: &Option<SourceEnvelope>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
     if matches!(format, CreateSourceFormat::KeyValue { .. })
@@ -1550,7 +1547,7 @@ async fn purify_source_format_single(
     catalog: &dyn SessionCatalog,
     format: &mut Format<Aug>,
     connection: &mut CreateSourceConnection<Aug>,
-    envelope: &Option<Envelope>,
+    envelope: &Option<SourceEnvelope>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
     match format {
@@ -1593,7 +1590,7 @@ async fn purify_csr_connection_proto(
     catalog: &dyn SessionCatalog,
     connection: &mut CreateSourceConnection<Aug>,
     csr_connection: &mut CsrConnectionProtobuf<Aug>,
-    envelope: &Option<Envelope>,
+    envelope: &Option<SourceEnvelope>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
     let topic = if let CreateSourceConnection::Kafka { options, .. } = connection {
@@ -1632,7 +1629,7 @@ async fn purify_csr_connection_proto(
                 .await
                 .ok();
 
-            if matches!(envelope, Some(Envelope::Debezium(DbzMode::Plain))) && key.is_none() {
+            if matches!(envelope, Some(SourceEnvelope::Debezium)) && key.is_none() {
                 sql_bail!("Key schema is required for ENVELOPE DEBEZIUM");
             }
 
@@ -1648,7 +1645,7 @@ async fn purify_csr_connection_avro(
     catalog: &dyn SessionCatalog,
     connection: &mut CreateSourceConnection<Aug>,
     csr_connection: &mut CsrConnectionAvro<Aug>,
-    envelope: &Option<Envelope>,
+    envelope: &Option<SourceEnvelope>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
     let topic = if let CreateSourceConnection::Kafka { options, .. } = connection {
@@ -1688,7 +1685,7 @@ async fn purify_csr_connection_avro(
             topic,
         )
         .await?;
-        if matches!(envelope, Some(Envelope::Debezium(DbzMode::Plain))) && key_schema.is_none() {
+        if matches!(envelope, Some(SourceEnvelope::Debezium)) && key_schema.is_none() {
             sql_bail!("Key schema is required for ENVELOPE DEBEZIUM");
         }
 

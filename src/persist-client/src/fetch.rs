@@ -144,15 +144,12 @@ impl<T: Timestamp + Lattice> FetchBatchFilter<T> {
     {
         match &meta {
             SerdeLeasedBatchPartMetadata::Snapshot { as_of } => {
-                let as_of =
-                    Antichain::from(as_of.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
+                let as_of = Antichain::from_iter(as_of.iter().map(|x| T::decode(*x)));
                 FetchBatchFilter::Snapshot { as_of }
             }
             SerdeLeasedBatchPartMetadata::Listen { as_of, lower } => {
-                let as_of =
-                    Antichain::from(as_of.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
-                let lower =
-                    Antichain::from(lower.iter().map(|x| T::decode(*x)).collect::<Vec<_>>());
+                let as_of = Antichain::from_iter(as_of.iter().map(|x| T::decode(*x)));
+                let lower = Antichain::from_iter(lower.iter().map(|x| T::decode(*x)));
                 FetchBatchFilter::Listen { as_of, lower }
             }
         }
@@ -830,9 +827,9 @@ impl<T: Timestamp + Codec64> LeasedBatchPart<T> {
             shard_id: x.shard_id,
             metadata: x.metadata,
             desc: Description::new(
-                Antichain::from(x.lower.into_iter().map(T::decode).collect::<Vec<_>>()),
-                Antichain::from(x.upper.into_iter().map(T::decode).collect::<Vec<_>>()),
-                Antichain::from(x.since.into_iter().map(T::decode).collect::<Vec<_>>()),
+                Antichain::from_iter(x.lower.into_iter().map(T::decode)),
+                Antichain::from_iter(x.upper.into_iter().map(T::decode)),
+                Antichain::from_iter(x.since.into_iter().map(T::decode)),
             ),
             key: x.key,
             encoded_size_bytes: x.encoded_size_bytes,

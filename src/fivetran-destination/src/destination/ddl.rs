@@ -10,7 +10,7 @@
 use mz_pgrepr::Type;
 use postgres_protocol::escape;
 
-use crate::destination::config;
+use crate::destination::{config, FIVETRAN_SYSTEM_COLUMN_ID};
 use crate::error::{Context, OpError, OpErrorKind};
 use crate::fivetran_sdk::{
     AlterTableRequest, Column, CreateTableRequest, DescribeTableRequest, Table,
@@ -63,17 +63,15 @@ pub async fn handle_describe_table(
         let mut columns = vec![];
         for row in rows {
             let name = row.get::<_, String>("name");
-            // TODO(benesch): should we be stripping these out?
-            if name == "_fivetran_deleted" || name == "_fivetran_synced" {
-                continue;
-            }
-            let primary_key = name.starts_with('k'); // TODO(benesch): support primary keys
             let ty_oid = row.get::<_, u32>("type_oid");
             let ty_mod = row.get::<_, i32>("type_mod");
             let ty = Type::from_oid_and_typmod(ty_oid, ty_mod).with_context(|| {
                 format!("looking up type with OID {ty_oid} and modifier {ty_mod}")
             })?;
             let (ty, decimal) = utils::to_fivetran_type(ty)?;
+
+            // TODO(benesch): support primary keys in Materialize.
+            let primary_key = name == FIVETRAN_SYSTEM_COLUMN_ID;
             columns.push(Column {
                 name,
                 r#type: ty.into(),

@@ -24,6 +24,13 @@ mod config;
 mod ddl;
 mod dml;
 
+/// Tracks if a row has been "soft deleted" if this column to true.
+const FIVETRAN_SYSTEM_COLUMN_DELETE: &str = "_fivetran_deleted";
+/// Tracks the last time this Row was modified by Fivetran.
+const FIVETRAN_SYSTEM_COLUMN_SYNCED: &str = "_fivetran_synced";
+/// Fivetran will synthesize a primary key column when one doesn't exist.
+const FIVETRAN_SYSTEM_COLUMN_ID: &str = "_fivetran_id";
+
 pub struct MaterializeDestination;
 
 #[tonic::async_trait]

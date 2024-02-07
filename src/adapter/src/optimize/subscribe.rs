@@ -27,14 +27,15 @@ use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{empty_context, SharedContext as TypecheckContext};
 use mz_transform::Optimizer as TransformOptimizer;
 use timely::progress::Antichain;
-use tracing::{span, Level};
+use tracing::debug_span;
 
 use crate::catalog::Catalog;
 use crate::optimize::dataflows::{
     dataflow_import_id_bundle, ComputeInstanceSnapshot, DataflowBuilder,
 };
 use crate::optimize::{
-    LirDataflowDescription, MirDataflowDescription, Optimize, OptimizerConfig, OptimizerError,
+    trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode,
+    OptimizerConfig, OptimizerError,
 };
 use crate::CollectionIdBundle;
 
@@ -208,7 +209,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 // let expr = expr.lower(&self.config)?;
 
                 // MIR ⇒ MIR optimization (local)
-                let expr = span!(target: "optimizer", Level::DEBUG, "local").in_scope(|| {
+                let expr = debug_span!(target: "optimizer", "local").in_scope(|| {
                     #[allow(deprecated)]
                     let optimizer = TransformOptimizer::logical_optimizer(&self.typecheck_ctx);
                     let expr = optimizer.optimize(expr)?;
@@ -249,6 +250,11 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 (df_desc, df_meta)
             }
         };
+
+        if self.config.mode == OptimizeMode::Explain {
+            // Collect the list of indexes used by the dataflow at this point.
+            trace_plan!(at: "global", &df_meta.used_indexes(&df_desc));
+        }
 
         // Return the (sealed) plan at the end of this optimization step.
         Ok(GlobalMirPlan {

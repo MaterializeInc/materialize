@@ -12,7 +12,7 @@
 -- to ensure the result updates frequently
 
 -- depends_on: {{ ref('pg_cdc') }}
-{{ config(materialized='materializedview', cluster="qa_canary_environment_compute", indexes=[{'default': True}]) }}
+{{ config(materialized='materialized_view', cluster="qa_canary_environment_compute", indexes=[{'default': True}]) }}
 
 WITH MUTUALLY RECURSIVE
     symm (a int, b int) AS (

@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use maplit::btreemap;
 use mz_catalog::memory::objects::{CatalogItem, Index};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::explain::{trace_plan, ExprHumanizerExt, TransientItem, UsedIndexes};
+use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
@@ -219,7 +219,6 @@ impl Coordinator {
                 let mut pipeline = || -> Result<(
                     optimize::index::GlobalMirPlan,
                     optimize::index::GlobalLirPlan,
-                    UsedIndexes,
                 ), AdapterError> {
                     // In `explain_~` contexts, set the trace-derived dispatch
                     // as default while optimizing.
@@ -232,37 +231,19 @@ impl Coordinator {
 
                     let _span_guard = tracing::debug_span!(target: "optimizer", "optimize").entered();
 
-                    // MIR ⇒ MIR optimization (global)
                     let index_plan =
                         optimize::index::Index::new(&plan.name, &plan.index.on, &plan.index.keys);
+
+                    // MIR ⇒ MIR optimization (global)
                     let global_mir_plan = optimizer.catch_unwind_optimize(index_plan)?;
-
-                    // Collect the list of indexes used by the dataflow at this point
-                    let used_indexes = {
-                        let df_desc = global_mir_plan.df_desc();
-                        let df_meta = global_mir_plan.df_meta();
-                        UsedIndexes::new(
-                            df_desc
-                                .index_imports
-                                .iter()
-                                .map(|(id, _index_import)| {
-                                    (*id, df_meta.index_usage_types.get(id).expect("prune_and_annotate_dataflow_index_imports should have been called already").clone())
-                                })
-                                .collect(),
-                        )
-                    };
-
                     // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
                     let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
 
-                    // Trace the resulting plan for the top-level `optimize` path.
-                    trace_plan(global_lir_plan.df_desc());
-
-                    Ok((global_mir_plan, global_lir_plan, used_indexes))
+                    Ok((global_mir_plan, global_lir_plan))
                 };
 
                 let stage = match pipeline() {
-                    Ok((global_mir_plan, global_lir_plan, used_indexes)) => {
+                    Ok((global_mir_plan, global_lir_plan)) => {
                         if let Some(explain_ctx) = explain_ctx {
                             let (_, df_meta) = global_lir_plan.unapply();
                             CreateIndexStage::Explain(CreateIndexExplain {
@@ -270,7 +251,6 @@ impl Coordinator {
                                 exported_index_id,
                                 plan,
                                 df_meta,
-                                used_indexes,
                                 explain_ctx,
                             })
                         } else {
@@ -303,7 +283,6 @@ impl Coordinator {
                                 exported_index_id,
                                 plan,
                                 df_meta: Default::default(),
-                                used_indexes: Default::default(),
                                 explain_ctx,
                             })
                         } else {
@@ -454,7 +433,6 @@ impl Coordinator {
             exported_index_id,
             plan: plan::CreateIndexPlan { name, index, .. },
             df_meta,
-            used_indexes,
             explain_ctx:
                 ExplainContext {
                     broken,
@@ -490,7 +468,6 @@ impl Coordinator {
             &config,
             &expr_humanizer,
             None,
-            used_indexes,
             df_meta,
             stage,
             plan::ExplaineeStatementKind::CreateIndex,

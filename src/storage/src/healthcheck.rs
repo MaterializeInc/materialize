@@ -22,7 +22,7 @@ use differential_dataflow::Hashable;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_repr::GlobalId;
-use mz_storage_client::client::StatusUpdate;
+use mz_storage_client::client::{Status, StatusUpdate};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
@@ -83,6 +83,7 @@ impl fmt::Display for StatusNamespace {
     }
 }
 
+#[derive(Debug)]
 struct PerWorkerHealthStatus {
     pub(crate) errors_by_worker: Vec<BTreeMap<StatusNamespace, HealthStatusUpdate>>,
 }
@@ -114,20 +115,27 @@ impl PerWorkerHealthStatus {
         let mut hints: BTreeSet<String> = BTreeSet::new();
 
         for status in self.errors_by_worker.iter() {
-            use HealthStatusUpdate::*;
             for (ns, ns_status) in status.iter() {
-                if let Stalled { error, hint, .. } = ns_status {
-                    if Some(error) > namespaced_errors.get(ns).as_deref() {
-                        namespaced_errors.insert(*ns, error.to_string());
+                match ns_status {
+                    HealthStatusUpdate::Ceased { error } => {
+                        return OverallStatus::Ceased {
+                            error: error.clone(),
+                        };
                     }
+                    HealthStatusUpdate::Stalled { error, hint, .. } => {
+                        if Some(error) > namespaced_errors.get(ns).as_deref() {
+                            namespaced_errors.insert(*ns, error.to_string());
+                        }
 
-                    if let Some(hint) = hint {
-                        hints.insert(hint.to_string());
+                        if let Some(hint) = hint {
+                            hints.insert(hint.to_string());
+                        }
                     }
-                }
-
-                if !ns.is_sidechannel() && matches!(ns_status, HealthStatusUpdate::Running) {
-                    output_status = OverallStatus::Running;
+                    HealthStatusUpdate::Running => {
+                        if !ns.is_sidechannel() {
+                            output_status = OverallStatus::Running;
+                        }
+                    }
                 }
             }
         }
@@ -155,30 +163,26 @@ pub enum OverallStatus {
         hints: BTreeSet<String>,
         namespaced_errors: BTreeMap<StatusNamespace, String>,
     },
+    Ceased {
+        error: String,
+    },
 }
 
 impl OverallStatus {
-    /// The user-readable name of the status state.
-    pub(crate) fn name(&self) -> &'static str {
-        match self {
-            OverallStatus::Starting => "starting",
-            OverallStatus::Running => "running",
-            OverallStatus::Stalled { .. } => "stalled",
-        }
-    }
-
     /// The user-readable error string, if there is one.
     pub(crate) fn error(&self) -> Option<&str> {
         match self {
             OverallStatus::Starting | OverallStatus::Running => None,
-            OverallStatus::Stalled { error, .. } => Some(error),
+            OverallStatus::Stalled { error, .. } | OverallStatus::Ceased { error, .. } => {
+                Some(error)
+            }
         }
     }
 
     /// A set of namespaced errors, if there are any.
     pub(crate) fn errors(&self) -> Option<&BTreeMap<StatusNamespace, String>> {
         match self {
-            OverallStatus::Starting | OverallStatus::Running => None,
+            OverallStatus::Starting | OverallStatus::Running | OverallStatus::Ceased { .. } => None,
             OverallStatus::Stalled {
                 namespaced_errors, ..
             } => Some(namespaced_errors),
@@ -186,14 +190,28 @@ impl OverallStatus {
     }
 
     /// A set of hints, if there are any.
-    pub(crate) fn hints(&self) -> Option<&BTreeSet<String>> {
+    pub(crate) fn hints(&self) -> BTreeSet<String> {
         match self {
-            OverallStatus::Starting | OverallStatus::Running => None,
-            OverallStatus::Stalled { hints, .. } => Some(hints),
+            OverallStatus::Starting | OverallStatus::Running | OverallStatus::Ceased { .. } => {
+                BTreeSet::new()
+            }
+            OverallStatus::Stalled { hints, .. } => hints.clone(),
         }
     }
 }
 
+impl<'a> From<&'a OverallStatus> for Status {
+    fn from(val: &'a OverallStatus) -> Self {
+        match val {
+            OverallStatus::Starting => Status::Starting,
+            OverallStatus::Running => Status::Running,
+            OverallStatus::Stalled { .. } => Status::Stalled,
+            OverallStatus::Ceased { .. } => Status::Ceased,
+        }
+    }
+}
+
+#[derive(Debug)]
 struct HealthState {
     id: GlobalId,
     healths: PerWorkerHealthStatus,
@@ -224,7 +242,7 @@ pub trait HealthOperator {
         &self,
         collection_id: GlobalId,
         ts: DateTime<Utc>,
-        new_status: &str,
+        new_status: Status,
         new_error: Option<&str>,
         hints: &BTreeSet<String>,
         namespaced_errors: &BTreeMap<StatusNamespace, String>,
@@ -255,7 +273,7 @@ impl HealthOperator for DefaultWriter {
         &self,
         collection_id: GlobalId,
         ts: DateTime<Utc>,
-        new_status: &str,
+        status: Status,
         new_error: Option<&str>,
         hints: &BTreeSet<String>,
         namespaced_errors: &BTreeMap<StatusNamespace, String>,
@@ -264,7 +282,7 @@ impl HealthOperator for DefaultWriter {
         self.updates.borrow_mut().push(StatusUpdate {
             id: collection_id,
             timestamp: ts,
-            status: new_status.to_string(),
+            status,
             error: new_error.map(|e| e.to_string()),
             hints: hints.clone(),
             namespaced_errors: if write_namespaced_map {
@@ -376,9 +394,9 @@ where
                         .record_new_status(
                             state.id,
                             timestamp,
-                            status.name(),
+                            (&status).into(),
                             status.error(),
-                            status.hints().unwrap_or(&BTreeSet::new()),
+                            &status.hints(),
                             status.errors().unwrap_or(&BTreeMap::new()),
                             write_namespaced_map,
                         )
@@ -458,9 +476,9 @@ where
                             .record_new_status(
                                 *id,
                                 timestamp,
-                                new_status.name(),
+                                (&new_status).into(),
                                 new_status.error(),
-                                new_status.hints().unwrap_or(&BTreeSet::new()),
+                                &new_status.hints(),
                                 new_status.errors().unwrap_or(&BTreeMap::new()),
                                 write_namespaced_map,
                             )
@@ -517,6 +535,9 @@ pub enum HealthStatusUpdate {
         hint: Option<String>,
         should_halt: bool,
     },
+    Ceased {
+        error: String,
+    },
 }
 
 impl HealthStatusUpdate {
@@ -543,10 +564,20 @@ impl HealthStatusUpdate {
         }
     }
 
+    /// Generates a ceasing [`HealthStatusUpdate`] with `update`.
+    pub(crate) fn ceasing(error: String) -> Self {
+        HealthStatusUpdate::Ceased { error }
+    }
+
     /// Whether or not we should halt the dataflow instances and restart it.
     pub(crate) fn should_halt(&self) -> bool {
         match self {
-            HealthStatusUpdate::Running => false,
+            HealthStatusUpdate::Running |
+            // HealthStatusUpdate::Ceased should never halt because it can occur
+            // at the subsource level and should not cause the entire dataflow
+            // to halt. Instead, the dataflow itself should handle shutting
+            // itself down if need be.
+            HealthStatusUpdate::Ceased { .. } => false,
             HealthStatusUpdate::Stalled { should_halt, .. } => *should_halt,
         }
     }
@@ -574,12 +605,12 @@ mod tests {
                     // Assert both inputs started.
                     StatusToAssert {
                         collection_index: 0,
-                        status: "starting".to_string(),
+                        status: Status::Starting,
                         ..Default::default()
                     },
                     StatusToAssert {
                         collection_index: 1,
-                        status: "starting".to_string(),
+                        status: Status::Starting,
                         ..Default::default()
                     },
                 ]),
@@ -592,7 +623,7 @@ mod tests {
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
-                    status: "running".to_string(),
+                    status: Status::Running,
                     ..Default::default()
                 }]),
                 // Assert the other can be stalled by 1 worker.
@@ -609,7 +640,7 @@ mod tests {
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 1,
-                    status: "running".to_string(),
+                    status: Status::Running,
                     ..Default::default()
                 }]),
                 Update(TestUpdate {
@@ -620,7 +651,7 @@ mod tests {
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 1,
-                    status: "stalled".to_string(),
+                    status: Status::Stalled,
                     error: Some("testscript: uhoh".to_string()),
                     errors: Some("testscript: uhoh".to_string()),
                     ..Default::default()
@@ -634,7 +665,7 @@ mod tests {
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 1,
-                    status: "running".to_string(),
+                    status: Status::Running,
                     ..Default::default()
                 }]),
             ],
@@ -657,12 +688,12 @@ mod tests {
                     // Assert both inputs started.
                     StatusToAssert {
                         collection_index: 0,
-                        status: "starting".to_string(),
+                        status: Status::Starting,
                         ..Default::default()
                     },
                     StatusToAssert {
                         collection_index: 1,
-                        status: "starting".to_string(),
+                        status: Status::Starting,
                         ..Default::default()
                     },
                 ]),
@@ -674,7 +705,7 @@ mod tests {
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 1,
-                    status: "stalled".to_string(),
+                    status: Status::Stalled,
                     error: Some("testscript: uhoh".to_string()),
                     errors: None,
                     ..Default::default()
@@ -698,7 +729,7 @@ mod tests {
                     // Assert both inputs started.
                     StatusToAssert {
                         collection_index: 0,
-                        status: "starting".to_string(),
+                        status: Status::Starting,
                         ..Default::default()
                     },
                 ]),
@@ -713,7 +744,7 @@ mod tests {
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
-                    status: "stalled".to_string(),
+                    status: Status::Stalled,
                     error: Some("testscript: uhoh".to_string()),
                     errors: Some("testscript: uhoh".to_string()),
                     ..Default::default()
@@ -726,7 +757,7 @@ mod tests {
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
-                    status: "stalled".to_string(),
+                    status: Status::Stalled,
                     error: Some("kafka: uhoh".to_string()),
                     errors: Some("testscript: uhoh, kafka: uhoh".to_string()),
                     ..Default::default()
@@ -740,7 +771,7 @@ mod tests {
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
-                    status: "stalled".to_string(),
+                    status: Status::Stalled,
                     error: Some("testscript: uhoh".to_string()),
                     errors: Some("testscript: uhoh".to_string()),
                     ..Default::default()
@@ -753,7 +784,7 @@ mod tests {
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
-                    status: "running".to_string(),
+                    status: Status::Running,
                     ..Default::default()
                 }]),
             ],
@@ -774,7 +805,7 @@ mod tests {
                     // Assert both inputs started.
                     StatusToAssert {
                         collection_index: 0,
-                        status: "starting".to_string(),
+                        status: Status::Starting,
                         ..Default::default()
                     },
                 ]),
@@ -789,7 +820,7 @@ mod tests {
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
-                    status: "stalled".to_string(),
+                    status: Status::Stalled,
                     error: Some("ssh: uhoh".to_string()),
                     errors: Some("ssh: uhoh".to_string()),
                     ..Default::default()
@@ -802,7 +833,7 @@ mod tests {
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
-                    status: "stalled".to_string(),
+                    status: Status::Stalled,
                     error: Some("ssh: uhoh2".to_string()),
                     errors: Some("ssh: uhoh2".to_string()),
                     ..Default::default()
@@ -816,7 +847,7 @@ mod tests {
                 // We haven't starting running yet, as a `Default` namespace hasn't told us.
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
-                    status: "starting".to_string(),
+                    status: Status::Starting,
                     ..Default::default()
                 }]),
                 Update(TestUpdate {
@@ -827,7 +858,7 @@ mod tests {
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
-                    status: "running".to_string(),
+                    status: Status::Running,
                     ..Default::default()
                 }]),
             ],
@@ -848,7 +879,7 @@ mod tests {
                     // Assert both inputs started.
                     StatusToAssert {
                         collection_index: 0,
-                        status: "starting".to_string(),
+                        status: Status::Starting,
                         ..Default::default()
                     },
                 ]),
@@ -864,7 +895,7 @@ mod tests {
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
-                    status: "stalled".to_string(),
+                    status: Status::Stalled,
                     error: Some("testscript: uhoh".to_string()),
                     errors: Some("testscript: uhoh".to_string()),
                     hint: Some("hint1".to_string()),
@@ -880,7 +911,7 @@ mod tests {
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
-                    status: "stalled".to_string(),
+                    status: Status::Stalled,
                     // Note the error sorts later so we just use that.
                     error: Some("testscript: uhoh2".to_string()),
                     errors: Some("testscript: uhoh2".to_string()),
@@ -898,7 +929,7 @@ mod tests {
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
-                    status: "stalled".to_string(),
+                    status: Status::Stalled,
                     // Note the error sorts later so we just use that.
                     error: Some("testscript: uhoh2".to_string()),
                     errors: Some("testscript: uhoh2".to_string()),
@@ -913,7 +944,7 @@ mod tests {
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
-                    status: "stalled".to_string(),
+                    status: Status::Stalled,
                     // Note the error sorts later so we just use that.
                     error: Some("testscript: uhoh2".to_string()),
                     errors: Some("testscript: uhoh2".to_string()),
@@ -927,7 +958,7 @@ mod tests {
                 }),
                 AssertStatus(vec![StatusToAssert {
                     collection_index: 0,
-                    status: "running".to_string(),
+                    status: Status::Running,
                     ..Default::default()
                 }]),
             ],
@@ -941,13 +972,25 @@ mod tests {
     use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
     /// A status to assert.
-    #[derive(Debug, Clone, Default, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
     struct StatusToAssert {
         collection_index: usize,
-        status: String,
+        status: Status,
         error: Option<String>,
         errors: Option<String>,
         hint: Option<String>,
+    }
+
+    impl Default for StatusToAssert {
+        fn default() -> Self {
+            StatusToAssert {
+                collection_index: Default::default(),
+                status: Status::Running,
+                error: Default::default(),
+                errors: Default::default(),
+                hint: Default::default(),
+            }
+        }
     }
 
     /// An update to push into the operator.
@@ -980,7 +1023,7 @@ mod tests {
             &self,
             collection_id: GlobalId,
             _ts: DateTime<Utc>,
-            new_status: &str,
+            status: Status,
             new_error: Option<&str>,
             hints: &BTreeSet<String>,
             namespaced_errors: &BTreeMap<StatusNamespace, String>,
@@ -988,7 +1031,7 @@ mod tests {
         ) {
             let _ = self.sender.send(StatusToAssert {
                 collection_index: *self.input_mapping.get(&collection_id).unwrap(),
-                status: new_status.to_string(),
+                status,
                 error: new_error.map(str::to_string),
                 errors: if !namespaced_errors.is_empty() && write_namespaced_map {
                     Some(

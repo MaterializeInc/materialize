@@ -18,6 +18,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use differential_dataflow::lattice::Lattice;
 use futures::stream::BoxStream;
 use itertools::Itertools;
@@ -39,13 +40,14 @@ use mz_persist_txn::txns::TxnsHandle;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec64, Opaque};
 use mz_proto::RustType;
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{ColumnName, Datum, Diff, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_stash::{self, AppendBatch, StashFactory, TypedCollection};
 use mz_stash_types::metrics::Metrics as StashMetrics;
 use mz_storage_client::client::{
     ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand, RunSinkCommand,
-    SinkStatisticsUpdate, SourceStatisticsUpdate, StatusUpdate, StorageCommand, StorageResponse,
-    TimestamplessUpdate,
+    SinkStatisticsUpdate, SourceStatisticsUpdate, Status, StatusUpdate, StorageCommand,
+    StorageResponse, TimestamplessUpdate,
 };
 use mz_storage_client::controller::{
     CollectionDescription, CollectionState, DataSource, DataSourceOther, ExportDescription,
@@ -73,10 +75,9 @@ use crate::command_wals::ProtoShardId;
 
 use crate::persist_handles::SnapshotStatsAsOf;
 use crate::rehydration::RehydratingStorageClient;
-
 mod collection_mgmt;
+mod collection_status;
 mod command_wals;
-mod healthcheck;
 mod persist_handles;
 mod rehydration;
 mod statistics;
@@ -162,7 +163,7 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     pub(crate) collection_manager: collection_mgmt::CollectionManager<T>,
 
     /// Facility for appending status updates for sources/sinks
-    pub(crate) collection_status_manager: healthcheck::CollectionStatusManager<T>,
+    pub(crate) collection_status_manager: collection_status::CollectionStatusManager<T>,
     /// Tracks which collection is responsible for which [`IntrospectionType`].
     pub(crate) introspection_ids: Arc<Mutex<BTreeMap<IntrospectionType, GlobalId>>>,
     /// Tokens for tasks that drive updating introspection collections. Dropping
@@ -739,16 +740,58 @@ where
                             self.introspection_tokens.insert(id, scraper_token);
                         }
                         IntrospectionType::SourceStatusHistory => {
-                            self.partially_truncate_status_history(
-                                IntrospectionType::SourceStatusHistory,
+                            let last_status_per_id = self
+                                .partially_truncate_status_history(
+                                    IntrospectionType::SourceStatusHistory,
+                                )
+                                .await;
+
+                            let status_col = collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
+                                .get_by_name(&ColumnName::from("status"))
+                                .expect("schema has not changed")
+                                .0;
+
+                            self.collection_status_manager.extend_previous_statuses(
+                                last_status_per_id.into_iter().map(|(id, row)| {
+                                    (
+                                        id,
+                                        Status::from_str(
+                                            row.iter()
+                                                .nth(status_col)
+                                                .expect("schema has not changed")
+                                                .unwrap_str(),
+                                        )
+                                        .expect("statuses must be uncorrupted"),
+                                    )
+                                }),
                             )
-                            .await;
                         }
                         IntrospectionType::SinkStatusHistory => {
-                            self.partially_truncate_status_history(
-                                IntrospectionType::SinkStatusHistory,
+                            let last_status_per_id = self
+                                .partially_truncate_status_history(
+                                    IntrospectionType::SinkStatusHistory,
+                                )
+                                .await;
+
+                            let status_col = collection_status::MZ_SINK_STATUS_HISTORY_DESC
+                                .get_by_name(&ColumnName::from("status"))
+                                .expect("schema has not changed")
+                                .0;
+
+                            self.collection_status_manager.extend_previous_statuses(
+                                last_status_per_id.into_iter().map(|(id, row)| {
+                                    (
+                                        id,
+                                        Status::from_str(
+                                            row.iter()
+                                                .nth(status_col)
+                                                .expect("schema has not changed")
+                                                .unwrap_str(),
+                                        )
+                                        .expect("statuses must be uncorrupted"),
+                                    )
+                                }),
                             )
-                            .await;
                         }
                         IntrospectionType::PrivatelinkConnectionStatusHistory => {
                             self.partially_truncate_status_history(
@@ -1645,13 +1688,15 @@ where
         //
         // The locks are held for a short time, only while we do some hash map removals.
 
-        let mut updates = vec![];
+        let status_now = mz_ore::now::to_datetime((self.now)());
+
+        let mut dropped_sources = vec![];
         for id in pending_source_drops.drain(..) {
-            updates.push(id);
+            dropped_sources.push(StatusUpdate::new(id, status_now, Status::Dropped));
         }
 
         self.collection_status_manager
-            .drop_sources(updates, mz_ore::now::to_datetime((self.now)()))
+            .append_updates(dropped_sources, IntrospectionType::SourceStatusHistory)
             .await;
 
         {
@@ -1662,16 +1707,16 @@ where
         }
 
         // Record the drop status for all pending sink drops.
-        let mut updates = vec![];
+        let mut dropped_sinks = vec![];
         {
             let mut sink_statistics = self.sink_statistics.lock().expect("poisoned");
             for id in pending_sink_drops.drain(..) {
-                updates.push(id);
+                dropped_sinks.push(StatusUpdate::new(id, status_now, Status::Dropped));
                 sink_statistics.remove(&id);
             }
         }
         self.collection_status_manager
-            .drop_sinks(updates, mz_ore::now::to_datetime((self.now)()))
+            .append_updates(dropped_sinks, IntrospectionType::SinkStatusHistory)
             .await;
 
         Ok(updated_frontiers)
@@ -2113,7 +2158,7 @@ where
 
         let introspection_ids = Arc::new(Mutex::new(BTreeMap::new()));
 
-        let collection_status_manager = crate::healthcheck::CollectionStatusManager::new(
+        let collection_status_manager = crate::collection_status::CollectionStatusManager::new(
             collection_manager.clone(),
             Arc::clone(&introspection_ids),
         );
@@ -2405,28 +2450,33 @@ where
         self.reconcile_managed_collection(id, updates).await;
     }
 
-    /// Effectively truncates the source status history shard except for the most recent updates
-    /// from each ID.
-    async fn partially_truncate_status_history(&mut self, collection: IntrospectionType) {
+    /// Effectively truncates the source status history shard except for the
+    /// most recent updates from each ID.
+    ///
+    /// Returns a map with latest unpacked row per id.
+    async fn partially_truncate_status_history(
+        &mut self,
+        collection: IntrospectionType,
+    ) -> BTreeMap<GlobalId, Row> {
         let (keep_n, occurred_at_col, id_col) = match collection {
             IntrospectionType::SourceStatusHistory => (
                 self.config.parameters.keep_n_source_status_history_entries,
-                healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC
+                collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("occurred_at"))
                     .expect("schema has not changed")
                     .0,
-                healthcheck::MZ_SOURCE_STATUS_HISTORY_DESC
+                collection_status::MZ_SOURCE_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("source_id"))
                     .expect("schema has not changed")
                     .0,
             ),
             IntrospectionType::SinkStatusHistory => (
                 self.config.parameters.keep_n_sink_status_history_entries,
-                healthcheck::MZ_SINK_STATUS_HISTORY_DESC
+                collection_status::MZ_SINK_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("occurred_at"))
                     .expect("schema has not changed")
                     .0,
-                healthcheck::MZ_SINK_STATUS_HISTORY_DESC
+                collection_status::MZ_SINK_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("sink_id"))
                     .expect("schema has not changed")
                     .0,
@@ -2435,11 +2485,11 @@ where
                 self.config
                     .parameters
                     .keep_n_privatelink_status_history_entries,
-                healthcheck::MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
+                collection_status::MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("occurred_at"))
                     .expect("schema has not changed")
                     .0,
-                healthcheck::MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
+                collection_status::MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC
                     .get_by_name(&ColumnName::from("connection_id"))
                     .expect("schema has not changed")
                     .0,
@@ -2457,12 +2507,16 @@ where
             }
             // If collection is closed or the frontier is the minimum, we cannot
             // or don't need to truncate (respectively).
-            _ => return,
+            _ => return BTreeMap::new(),
         };
 
         // BTreeMap<Id, MinHeap<(OccurredAt, Row)>>, to track the
         // earliest events for each id.
         let mut last_n_entries_per_id: BTreeMap<Datum, BinaryHeap<Reverse<(Datum, Vec<Datum>)>>> =
+            BTreeMap::new();
+
+        // BTreeMap to keep track of the row with the latest timestamp for each id
+        let mut latest_row_per_id: BTreeMap<Datum, (CheckedTimestamp<DateTime<Utc>>, Vec<Datum>)> =
             BTreeMap::new();
 
         // Consolidate the snapshot, so we can process it correctly below.
@@ -2485,6 +2539,15 @@ where
                 id,
                 collection
             );
+
+            // Keep track of the timestamp of the latest row per id
+            let timestamp = occurred_at.unwrap_timestamptz();
+            match latest_row_per_id.get(&id) {
+                Some(existing) if &existing.0 > &timestamp => {}
+                _ => {
+                    latest_row_per_id.insert(id, (timestamp, status_row.clone()));
+                }
+            }
 
             // Consider duplicated rows separately.
             for _ in 0..*diff {
@@ -2524,6 +2587,21 @@ where
             .collect();
 
         self.append_to_managed_collection(id, updates).await;
+
+        latest_row_per_id
+            .into_iter()
+            .filter_map(|(key, (_, row_vec))| {
+                match GlobalId::from_str(key.unwrap_str()) {
+                    Ok(id) => {
+                        let mut packer = row_buf.packer();
+                        packer.extend(row_vec.into_iter());
+                        Some((id, row_buf.clone()))
+                    }
+                    // Ignore any rows that can't be unwrapped correctly
+                    Err(_) => None,
+                }
+            })
+            .collect()
     }
 
     /// Appends a new global ID, shard ID pair to the appropriate collection.
@@ -3136,15 +3214,6 @@ where
 
         for update in updates {
             let id = update.id;
-            let update = healthcheck::RawStatusUpdate {
-                id,
-                ts: update.timestamp,
-                status_name: update.status,
-                error: update.error,
-                hints: update.hints,
-                namespaced_errors: update.namespaced_errors,
-            };
-
             if self.exports.contains_key(&id) {
                 sink_status_updates.push(update);
             } else if self.collections.contains_key(&id) {
@@ -3153,10 +3222,13 @@ where
         }
 
         self.collection_status_manager
-            .append_source_updates(source_status_updates)
+            .append_updates(
+                source_status_updates,
+                IntrospectionType::SourceStatusHistory,
+            )
             .await;
         self.collection_status_manager
-            .append_sink_updates(sink_status_updates)
+            .append_updates(sink_status_updates, IntrospectionType::SinkStatusHistory)
             .await;
     }
 }

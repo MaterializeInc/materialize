@@ -51,7 +51,8 @@ use crate::{Diagnostics, PersistClient, PersistConfig, PersistLocation, ShardId}
 /// share, for example, these Postgres connections.
 #[derive(Debug)]
 pub struct PersistClientCache {
-    pub(crate) cfg: PersistConfig,
+    /// The tunable knobs for persist.
+    pub cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
     blob_by_uri: Mutex<BTreeMap<String, (RttLatencyTask, Arc<dyn Blob + Send + Sync>)>>,
     consensus_by_uri: Mutex<BTreeMap<String, (RttLatencyTask, Arc<dyn Consensus + Send + Sync>)>>,

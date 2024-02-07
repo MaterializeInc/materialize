@@ -340,9 +340,10 @@ pub fn test_stash_backed_catalog_state(
 pub async fn persist_backed_catalog_state(
     persist_client: PersistClient,
     organization_id: Uuid,
+    version: semver::Version,
     metrics: Arc<Metrics>,
-) -> UnopenedPersistCatalogState {
-    UnopenedPersistCatalogState::new(persist_client, organization_id, metrics).await
+) -> Result<UnopenedPersistCatalogState, DurableCatalogError> {
+    UnopenedPersistCatalogState::new(persist_client, organization_id, version, metrics).await
 }
 
 /// Creates an openable durable catalog state implemented using persist that is meant to be used in
@@ -351,8 +352,24 @@ pub async fn test_persist_backed_catalog_state(
     persist_client: PersistClient,
     organization_id: Uuid,
 ) -> UnopenedPersistCatalogState {
+    test_persist_backed_catalog_state_with_version(
+        persist_client,
+        organization_id,
+        semver::Version::new(0, 0, 0),
+    )
+    .await
+    .expect("failed to open catalog state")
+}
+
+/// Creates an openable durable catalog state implemented using persist that is meant to be used in
+/// tests.
+pub async fn test_persist_backed_catalog_state_with_version(
+    persist_client: PersistClient,
+    organization_id: Uuid,
+    version: semver::Version,
+) -> Result<UnopenedPersistCatalogState, DurableCatalogError> {
     let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
-    persist_backed_catalog_state(persist_client, organization_id, metrics).await
+    persist_backed_catalog_state(persist_client, organization_id, version, metrics).await
 }
 
 /// Creates an openable durable catalog state implemented using both the stash and persist, that
@@ -376,16 +393,18 @@ pub async fn migrate_from_stash_to_persist_state(
     stash_config: StashConfig,
     persist_client: PersistClient,
     organization_id: Uuid,
+    version: semver::Version,
     persist_metrics: Arc<Metrics>,
-) -> CatalogMigrator {
+) -> Result<CatalogMigrator, CatalogError> {
     let openable_stash = stash_backed_catalog_state(stash_config);
     let openable_persist =
-        persist_backed_catalog_state(persist_client, organization_id, persist_metrics).await;
-    CatalogMigrator::new(
+        persist_backed_catalog_state(persist_client, organization_id, version, persist_metrics)
+            .await?;
+    Ok(CatalogMigrator::new(
         openable_stash,
         openable_persist,
         Direction::MigrateToPersist,
-    )
+    ))
 }
 
 /// Creates an openable durable catalog state that migrates the current state from the stash to
@@ -410,12 +429,18 @@ pub async fn rollback_from_persist_to_stash_state(
     stash_config: StashConfig,
     persist_client: PersistClient,
     organization_id: Uuid,
+    version: semver::Version,
     persist_metrics: Arc<Metrics>,
-) -> CatalogMigrator {
+) -> Result<CatalogMigrator, CatalogError> {
     let openable_stash = stash_backed_catalog_state(stash_config);
     let openable_persist =
-        persist_backed_catalog_state(persist_client, organization_id, persist_metrics).await;
-    CatalogMigrator::new(openable_stash, openable_persist, Direction::RollbackToStash)
+        persist_backed_catalog_state(persist_client, organization_id, version, persist_metrics)
+            .await?;
+    Ok(CatalogMigrator::new(
+        openable_stash,
+        openable_persist,
+        Direction::RollbackToStash,
+    ))
 }
 
 /// Creates an openable durable catalog state that rolls back the current state from persist to

@@ -213,6 +213,9 @@ def annotate_logged_errors(log_files: list[str]) -> int:
     already_reported_issue_numbers: set[int] = set()
 
     for error in error_logs:
+        error_message = sanitize_text(error.match.decode("utf-8"))
+        formatted_error_message = f"```\n{error_message}\n```"
+
         for artifact in artifacts:
             if artifact["job_id"] == job and artifact["path"] == error.file:
                 org = os.environ["BUILDKITE_ORGANIZATION_SLUG"]
@@ -234,7 +237,7 @@ def annotate_logged_errors(log_files: list[str]) -> int:
 
                 if issue.info["number"] not in already_reported_issue_numbers:
                     known_errors.append(
-                        f"[{issue.info['title']} (#{issue.info['number']})]({issue.info['html_url']}) in {linked_file}:  \n``{error.match.decode('utf-8')}``"
+                        f"[{issue.info['title']} (#{issue.info['number']})]({issue.info['html_url']}) in {linked_file}:  \n{formatted_error_message}"
                     )
                     already_reported_issue_numbers.add(issue.info["number"])
                 break
@@ -250,13 +253,13 @@ def annotate_logged_errors(log_files: list[str]) -> int:
 
                     if issue.info["number"] not in already_reported_issue_numbers:
                         unknown_errors.append(
-                            f"Potential regression [{issue.info['title']} (#{issue.info['number']}, closed)]({issue.info['html_url']}) in {linked_file}:  \n``{error.match.decode('utf-8')}``"
+                            f"Potential regression [{issue.info['title']} (#{issue.info['number']}, closed)]({issue.info['html_url']}) in {linked_file}:  \n{formatted_error_message}"
                         )
                         already_reported_issue_numbers.add(issue.info["number"])
                     break
             else:
                 unknown_errors.append(
-                    f"Unknown error in {linked_file}:  \n``{error.match.decode('utf-8')}``"
+                    f"Unknown error in {linked_file}:  \n{formatted_error_message}"
                 )
 
     annotate_errors(
@@ -323,6 +326,15 @@ def get_error_logs(log_files: list[str]) -> list[ErrorLog]:
 
     # TODO: Only report multiple errors once?
     return error_logs
+
+
+def sanitize_text(text: str, max_length: int = 4000) -> str:
+    if len(text) > max_length:
+        text = text[:max_length] + " [...]"
+
+    text = text.replace("```", r"\`\`\`")
+
+    return text
 
 
 def get_known_issues_from_github_page(page: int = 1) -> Any:

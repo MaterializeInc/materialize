@@ -36,7 +36,7 @@ use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{Antichain, MutableAntichain};
 use timely::PartialOrder;
-use tonic::{Request, Status, Streaming};
+use tonic::{Request, Status as TonicStatus, Streaming};
 
 use crate::client::proto_storage_server::ProtoStorage;
 use crate::metrics::RehydratingStorageClientMetrics;
@@ -85,7 +85,7 @@ where
     async fn command_response_stream(
         &self,
         request: Request<Streaming<ProtoStorageCommand>>,
-    ) -> Result<tonic::Response<Self::CommandResponseStreamStream>, Status> {
+    ) -> Result<tonic::Response<Self::CommandResponseStreamStream>, TonicStatus> {
         self.forward_bidi_stream(request).await
     }
 }
@@ -354,6 +354,63 @@ impl PackableStats for SinkStatisticsUpdate {
     }
 }
 
+/// A "kind" enum for statuses tracked by the health operator
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Status {
+    Starting,
+    Running,
+    Paused,
+    Stalled,
+    Ceased,
+    Dropped,
+}
+
+impl std::str::FromStr for Status {
+    type Err = anyhow::Error;
+    /// Keep in sync with [`Status::to_str`].
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "starting" => Status::Starting,
+            "running" => Status::Running,
+            "paused" => Status::Paused,
+            "stalled" => Status::Stalled,
+            "ceased" => Status::Ceased,
+            "dropped" => Status::Dropped,
+            s => return Err(anyhow::anyhow!("{} is not a valid status", s)),
+        })
+    }
+}
+
+impl Status {
+    /// Keep in sync with `Status::from_str`.
+    pub fn to_str(&self) -> &'static str {
+        match self {
+            Status::Starting => "starting",
+            Status::Running => "running",
+            Status::Paused => "paused",
+            Status::Stalled => "stalled",
+            Status::Ceased => "ceased",
+            Status::Dropped => "dropped",
+        }
+    }
+
+    /// Determines if a new status should be produced in context of a previous
+    /// status.
+    pub fn superseded_by(self, new: Status) -> bool {
+        match (self, new) {
+            (Status::Dropped, _) => false,
+            (_, Status::Dropped) => true,
+            (Status::Ceased, _) => false,
+            (_, Status::Ceased) => true,
+            // Don't re-mark that object as paused.
+            (Status::Paused, Status::Paused) => false,
+            // De-duplication of other statuses is currently managed by the
+            // `health_operator`.
+            _ => true,
+        }
+    }
+}
+
 /// A source or sink status update.
 ///
 /// Represents a status update for a given object type. The inner value for each
@@ -362,18 +419,108 @@ impl PackableStats for SinkStatisticsUpdate {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct StatusUpdate {
     pub id: GlobalId,
-    pub status: String,
+    pub status: Status,
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub error: Option<String>,
     pub hints: BTreeSet<String>,
     pub namespaced_errors: BTreeMap<String, String>,
 }
 
+impl StatusUpdate {
+    pub fn new(
+        id: GlobalId,
+        timestamp: chrono::DateTime<chrono::Utc>,
+        status: Status,
+    ) -> StatusUpdate {
+        StatusUpdate {
+            id,
+            timestamp,
+            status,
+            error: None,
+            hints: Default::default(),
+            namespaced_errors: Default::default(),
+        }
+    }
+}
+
+impl From<StatusUpdate> for Row {
+    fn from(update: StatusUpdate) -> Self {
+        use mz_repr::Datum;
+
+        let timestamp = Datum::TimestampTz(update.timestamp.try_into().expect("must fit"));
+        let id = update.id.to_string();
+        let id = Datum::String(&id);
+        let status = Datum::String(update.status.to_str());
+        let error = update.error.as_deref().into();
+
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        packer.extend([timestamp, id, status, error]);
+
+        if !update.hints.is_empty() || !update.namespaced_errors.is_empty() {
+            packer.push_dict_with(|dict_packer| {
+                // `hint` and `namespaced` are ordered,
+                // as well as the BTree's they each contain.
+                if !update.hints.is_empty() {
+                    dict_packer.push(Datum::String("hints"));
+                    dict_packer.push_list(update.hints.iter().map(|s| Datum::String(s)));
+                }
+                if !update.namespaced_errors.is_empty() {
+                    dict_packer.push(Datum::String("namespaced"));
+                    dict_packer.push_dict(
+                        update
+                            .namespaced_errors
+                            .iter()
+                            .map(|(k, v)| (k.as_str(), Datum::String(v))),
+                    );
+                }
+            });
+        } else {
+            packer.push(Datum::Null);
+        }
+
+        row
+    }
+}
+
+impl RustType<proto_storage_response::ProtoStatus> for Status {
+    fn into_proto(&self) -> proto_storage_response::ProtoStatus {
+        use proto_storage_response::proto_status::*;
+
+        proto_storage_response::ProtoStatus {
+            kind: Some(match self {
+                Status::Starting => Kind::Starting(()),
+                Status::Running => Kind::Running(()),
+                Status::Paused => Kind::Paused(()),
+                Status::Stalled => Kind::Stalled(()),
+                Status::Ceased => Kind::Ceased(()),
+                Status::Dropped => Kind::Dropped(()),
+            }),
+        }
+    }
+
+    fn from_proto(proto: proto_storage_response::ProtoStatus) -> Result<Self, TryFromProtoError> {
+        use proto_storage_response::proto_status::*;
+        let kind = proto
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoStatus::kind"))?;
+
+        Ok(match kind {
+            Kind::Starting(()) => Status::Starting,
+            Kind::Running(()) => Status::Running,
+            Kind::Paused(()) => Status::Paused,
+            Kind::Stalled(()) => Status::Stalled,
+            Kind::Ceased(()) => Status::Ceased,
+            Kind::Dropped(()) => Status::Dropped,
+        })
+    }
+}
+
 impl RustType<proto_storage_response::ProtoStatusUpdate> for StatusUpdate {
     fn into_proto(&self) -> proto_storage_response::ProtoStatusUpdate {
         proto_storage_response::ProtoStatusUpdate {
             id: Some(self.id.into_proto()),
-            status: self.status.clone(),
+            status: Some(self.status.into_proto()),
             timestamp: Some(self.timestamp.into_proto()),
             error: self.error.clone(),
             hints: self.hints.iter().cloned().collect(),
@@ -389,7 +536,9 @@ impl RustType<proto_storage_response::ProtoStatusUpdate> for StatusUpdate {
             timestamp: proto
                 .timestamp
                 .into_rust_if_some("ProtoStatusUpdate::timestamp")?,
-            status: proto.status,
+            status: proto
+                .status
+                .into_rust_if_some("ProtoStatusUpdate::status")?,
             error: proto.error,
             hints: proto.hints.into_iter().collect(),
             namespaced_errors: proto.namespaced_errors,

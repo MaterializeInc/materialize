@@ -20,6 +20,8 @@ use mz_persist::location::{
     Atomicity, Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, ResultStream,
     SeqNo, VersionedData,
 };
+use mz_repr::TimestampManipulation;
+use mz_timestamp_oracle::{ShareableTimestampOracle, WriteTimestamp};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -444,6 +446,40 @@ impl MaelstromOracleKey {
                 }
             };
         }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct MemTimestampOracle<T> {
+    read_write_ts: Arc<std::sync::Mutex<(T, T)>>,
+}
+
+#[async_trait]
+impl<T: TimestampManipulation> ShareableTimestampOracle<T> for MemTimestampOracle<T> {
+    async fn write_ts(&self) -> WriteTimestamp<T> {
+        let (read_ts, write_ts) = &mut *self.read_write_ts.lock().expect("lock poisoned");
+        let new_write_ts = TimestampManipulation::step_forward(std::cmp::max(read_ts, write_ts));
+        write_ts.clone_from(&new_write_ts);
+        WriteTimestamp {
+            advance_to: TimestampManipulation::step_forward(&new_write_ts),
+            timestamp: new_write_ts,
+        }
+    }
+
+    async fn peek_write_ts(&self) -> T {
+        let (_, write_ts) = &*self.read_write_ts.lock().expect("lock poisoned");
+        write_ts.clone()
+    }
+
+    async fn read_ts(&self) -> T {
+        let (read_ts, _) = &*self.read_write_ts.lock().expect("lock poisoned");
+        read_ts.clone()
+    }
+
+    async fn apply_write(&self, lower_bound: T) {
+        let (read_ts, write_ts) = &mut *self.read_write_ts.lock().expect("lock poisoned");
+        *read_ts = std::cmp::max(read_ts.clone(), lower_bound);
+        *write_ts = std::cmp::max(read_ts, write_ts).clone();
     }
 }
 

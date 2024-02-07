@@ -761,7 +761,7 @@ impl<'a> fmt::Display for HumanizedAttributes<'a> {
 ///
 /// Using a `BTreeSet` here ensures a deterministic iteration order, which in turn ensures that
 /// the corresponding EXPLAIN output is determistic as well.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct UsedIndexes(BTreeSet<(GlobalId, Vec<IndexUsageType>)>);
 
 impl UsedIndexes {
@@ -812,7 +812,8 @@ pub enum IndexUsageType {
     /// an `ArrangeBy` marking for some operator other than a `Join`. (Which is fine, but please
     /// update `CollectIndexRequests`.)
     DanglingArrangeBy,
-    /// Internal error in `CollectIndexRequests`.
+    /// Internal error in `CollectIndexRequests` or a failed attempt to lookup
+    /// an index in `DataflowMetainfo::used_indexes`.
     Unknown,
 }
 

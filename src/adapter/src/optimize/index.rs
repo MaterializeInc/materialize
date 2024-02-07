@@ -29,6 +29,7 @@ use std::sync::Arc;
 
 use mz_compute_types::dataflows::IndexDesc;
 use mz_compute_types::plan::Plan;
+use mz_repr::explain::trace_plan;
 use mz_repr::GlobalId;
 use mz_sql::names::QualifiedItemName;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -41,7 +42,8 @@ use crate::optimize::dataflows::{
     prep_relation_expr, prep_scalar_expr, ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle,
 };
 use crate::optimize::{
-    LirDataflowDescription, MirDataflowDescription, Optimize, OptimizerConfig, OptimizerError,
+    trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode,
+    OptimizerConfig, OptimizerError,
 };
 
 pub struct Optimizer {
@@ -110,10 +112,6 @@ impl GlobalMirPlan {
     pub fn df_desc(&self) -> &MirDataflowDescription {
         &self.df_desc
     }
-
-    pub fn df_meta(&self) -> &DataflowMetainfo {
-        &self.df_meta
-    }
 }
 
 /// The (final) result after MIR ⇒ LIR lowering and optimizing the resulting
@@ -174,6 +172,11 @@ impl Optimize<Index> for Optimizer {
             self.config.enable_eager_delta_joins,
         )?;
 
+        if self.config.mode == OptimizeMode::Explain {
+            // Collect the list of indexes used by the dataflow at this point.
+            trace_plan!(at: "global", &df_meta.used_indexes(&df_desc));
+        }
+
         // Emit a notice if we are trying to create an empty index.
         if index.keys.is_empty() {
             df_meta.push_optimizer_notice_dedup(IndexKeyEmpty);
@@ -221,6 +224,9 @@ impl Optimize<GlobalMirPlan> for Optimizer {
             self.config.enable_reduce_mfp_fusion,
         )
         .map_err(OptimizerError::Internal)?;
+
+        // Trace the pipeline output under `optimize`.
+        trace_plan(&df_desc);
 
         // Return the plan at the end of this `optimize` step.
         Ok(GlobalLirPlan { df_desc, df_meta })

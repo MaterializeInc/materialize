@@ -777,9 +777,10 @@ async fn catalog_opener(
                     },
                     persist_client,
                     environment_id.organization_id(),
+                    BUILD_INFO.semver_version(),
                     Arc::clone(metrics),
                 )
-                .await,
+                .await?,
             )
         }
         CatalogConfig::EmergencyStash { url } => {
@@ -816,9 +817,10 @@ async fn catalog_opener(
                     },
                     persist_client,
                     environment_id.organization_id(),
+                    BUILD_INFO.semver_version(),
                     Arc::clone(metrics),
                 )
-                .await,
+                .await?,
             )
         }
         CatalogConfig::Shadow {

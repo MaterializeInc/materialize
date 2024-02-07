@@ -35,17 +35,33 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{strconv, ColumnName, ColumnType, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::display::comma_separated;
 use mz_sql_parser::ast::{
-    AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
-    AlterConnectionOptionName, AlterRoleOption, AlterRoleStatement, AlterSetClusterStatement,
-    AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
-    AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
-    AlterSystemResetStatement, AlterSystemSetStatement, CommentObjectType, CommentStatement,
-    CreateConnectionOption, CreateConnectionOptionName, CreateConnectionType, CreateTypeListOption,
-    CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName, DeferredItemName,
-    DocOnIdentifier, DocOnSchema, DropOwnedStatement, KafkaSinkConfigOption,
-    MaterializedViewOption, MaterializedViewOptionName, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, SetRoleVar, UnresolvedItemName,
-    UnresolvedObjectName, UnresolvedSchemaName, Value,
+    self, AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
+    AlterConnectionOptionName, AlterConnectionStatement, AlterIndexAction, AlterIndexStatement,
+    AlterObjectRenameStatement, AlterObjectSwapStatement, AlterRoleOption, AlterRoleStatement,
+    AlterSecretStatement, AlterSetClusterStatement, AlterSinkStatement, AlterSourceAction,
+    AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName, AlterSourceStatement,
+    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement, AvroSchema,
+    AvroSchemaOption, AvroSchemaOptionName, ClusterOption, ClusterOptionName, ColumnOption,
+    CommentObjectType, CommentStatement, CreateClusterReplicaStatement, CreateClusterStatement,
+    CreateConnectionOption, CreateConnectionOptionName, CreateConnectionStatement,
+    CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement, CreateRoleStatement, CreateSchemaStatement,
+    CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
+    CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceOption,
+    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
+    CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
+    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
+    CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf,
+    CsvColumns, DeferredItemName, DocOnIdentifier, DocOnSchema, DropObjectsStatement,
+    DropOwnedStatement, Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName,
+    KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption, LoadGeneratorOptionName,
+    MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName,
+    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, ReferencedSubsources,
+    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition,
+    ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar, SourceIncludeMetadata, Statement,
+    TableConstraint, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value, ViewDefinition,
 };
 use mz_sql_parser::ident;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
@@ -74,26 +90,6 @@ use mz_storage_types::sources::{GenericSourceConnection, SourceConnection, Sourc
 use prost::Message;
 
 use crate::ast::display::AstDisplay;
-use crate::ast::{
-    AlterConnectionStatement, AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement,
-    AlterObjectSwapStatement, AlterSecretStatement, AvroSchema, AvroSchemaOption,
-    AvroSchemaOptionName, ClusterOption, ClusterOptionName, ColumnOption,
-    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionStatement,
-    CreateDatabaseStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection,
-    CreateSinkOption, CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection,
-    CreateSourceFormat, CreateSourceOption, CreateSourceOptionName, CreateSourceStatement,
-    CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
-    CreateTableStatement, CreateTypeAs, CreateTypeStatement, CreateViewStatement,
-    CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
-    CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DbzMode,
-    DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, IndexOption,
-    IndexOptionName, KeyConstraint, LoadGeneratorOption, LoadGeneratorOptionName,
-    MySqlConfigOption, MySqlConfigOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema,
-    QualifiedReplica, ReferencedSubsources, ReplicaDefinition, ReplicaOption, ReplicaOptionName,
-    RoleAttribute, SourceIncludeMetadata, Statement, TableConstraint, UnresolvedDatabaseName,
-    ViewDefinition,
-};
 use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError, CatalogItem, CatalogItemType,
     CatalogRecordField, CatalogType, CatalogTypeDetails, ObjectType, SystemObjectType,
@@ -590,7 +586,7 @@ pub fn plan_create_source(
         progress_subsource,
     } = &stmt;
 
-    let envelope = envelope.clone().unwrap_or(Envelope::None);
+    let envelope = envelope.clone().unwrap_or(ast::SourceEnvelope::None);
 
     let allowed_with_options = vec![
         CreateSourceOptionName::TimestampInterval,
@@ -671,7 +667,9 @@ pub fn plan_create_source(
             if !include_metadata.is_empty()
                 && !matches!(
                     envelope,
-                    Envelope::Upsert | Envelope::None | Envelope::Debezium(DbzMode::Plain)
+                    ast::SourceEnvelope::Upsert
+                        | ast::SourceEnvelope::None
+                        | ast::SourceEnvelope::Debezium
                 )
             {
                 // TODO(guswynn): should this be `bail_unsupported!`?
@@ -1142,7 +1140,15 @@ pub fn plan_create_source(
 
     let (key_desc, value_desc) = encoding.desc()?;
 
-    let mut key_envelope = get_key_envelope(include_metadata, &envelope, &encoding)?;
+    let mut key_envelope = get_key_envelope(include_metadata, &encoding)?;
+
+    match (&envelope, &key_envelope) {
+        (ast::SourceEnvelope::Debezium, KeyEnvelope::None) => {}
+        (ast::SourceEnvelope::Debezium, _) => sql_bail!(
+            "Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys."
+        ),
+        _ => {}
+    };
 
     // Not all source envelopes are compatible with all source connections.
     // Whoever constructs the source ingestion pipeline is responsible for
@@ -1154,8 +1160,8 @@ pub fn plan_create_source(
     // TODO: remove bails as more support for upsert is added.
     let envelope = match &envelope {
         // TODO: fixup key envelope
-        mz_sql_parser::ast::Envelope::None => UnplannedSourceEnvelope::None(key_envelope),
-        mz_sql_parser::ast::Envelope::Debezium(mode) => {
+        ast::SourceEnvelope::None => UnplannedSourceEnvelope::None(key_envelope),
+        ast::SourceEnvelope::Debezium => {
             //TODO check that key envelope is not set
             let after_idx = match typecheck_debezium(&value_desc) {
                 Ok((_before_idx, after_idx)) => Ok(after_idx),
@@ -1167,13 +1173,11 @@ pub fn plan_create_source(
                 },
             }?;
 
-            match mode {
-                DbzMode::Plain => UnplannedSourceEnvelope::Upsert {
-                    style: UpsertStyle::Debezium { after_idx },
-                },
+            UnplannedSourceEnvelope::Upsert {
+                style: UpsertStyle::Debezium { after_idx },
             }
         }
-        mz_sql_parser::ast::Envelope::Upsert => {
+        ast::SourceEnvelope::Upsert => {
             let key_encoding = match encoding.key_ref() {
                 None => {
                     bail_unsupported!(format!("upsert requires a key/value format: {:?}", format))
@@ -1189,7 +1193,7 @@ pub fn plan_create_source(
                 style: UpsertStyle::Default(key_envelope),
             }
         }
-        mz_sql_parser::ast::Envelope::CdcV2 => {
+        ast::SourceEnvelope::CdcV2 => {
             scx.require_feature_flag(&vars::ENABLE_ENVELOPE_MATERIALIZE)?;
             //TODO check that key envelope is not set
             match format {
@@ -1532,7 +1536,7 @@ generate_extracted_config!(
 );
 
 pub(crate) fn load_generator_ast_to_generator(
-    loadgen: &mz_sql_parser::ast::LoadGenerator,
+    loadgen: &ast::LoadGenerator,
     options: &[LoadGeneratorOption<Aug>],
 ) -> Result<
     (
@@ -1542,16 +1546,16 @@ pub(crate) fn load_generator_ast_to_generator(
     PlanError,
 > {
     let load_generator = match loadgen {
-        mz_sql_parser::ast::LoadGenerator::Auction => LoadGenerator::Auction,
-        mz_sql_parser::ast::LoadGenerator::Counter => {
+        ast::LoadGenerator::Auction => LoadGenerator::Auction,
+        ast::LoadGenerator::Counter => {
             let LoadGeneratorOptionExtracted {
                 max_cardinality, ..
             } = options.to_vec().try_into()?;
             LoadGenerator::Counter { max_cardinality }
         }
-        mz_sql_parser::ast::LoadGenerator::Marketing => LoadGenerator::Marketing,
-        mz_sql_parser::ast::LoadGenerator::Datums => LoadGenerator::Datums,
-        mz_sql_parser::ast::LoadGenerator::Tpch => {
+        ast::LoadGenerator::Marketing => LoadGenerator::Marketing,
+        ast::LoadGenerator::Datums => LoadGenerator::Datums,
+        ast::LoadGenerator::Tpch => {
             let LoadGeneratorOptionExtracted { scale_factor, .. } = options.to_vec().try_into()?;
 
             // Default to 0.01 scale factor (=10MB).
@@ -1639,7 +1643,7 @@ fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(Option<usize>, usize
 fn get_encoding(
     scx: &StatementContext,
     format: &CreateSourceFormat<Aug>,
-    envelope: &Envelope,
+    envelope: &ast::SourceEnvelope,
     connection: Option<&CreateSourceConnection<Aug>>,
 ) -> Result<SourceDataEncoding<ReferencedConnection>, PlanError> {
     let encoding = match format {
@@ -1659,12 +1663,12 @@ fn get_encoding(
     };
 
     let force_nullable_keys = matches!(connection, Some(CreateSourceConnection::Kafka { .. }))
-        && matches!(envelope, Envelope::None);
+        && matches!(envelope, ast::SourceEnvelope::None);
     let encoding = encoding.into_source_data_encoding(force_nullable_keys);
 
     let requires_keyvalue = matches!(
         envelope,
-        Envelope::Debezium(DbzMode::Plain) | Envelope::Upsert
+        ast::SourceEnvelope::Debezium | ast::SourceEnvelope::Upsert
     );
     let is_keyvalue = matches!(encoding, SourceDataEncoding::KeyValue { .. });
     if requires_keyvalue && !is_keyvalue {
@@ -1730,7 +1734,7 @@ fn get_encoding_inner(
                 // TODO(jldlaughlin): we need a way to pass in primary key information
                 // when building a source from a string or file.
                 AvroSchema::InlineSchema {
-                    schema: mz_sql_parser::ast::Schema { schema },
+                    schema: ast::Schema { schema },
                     with_options,
                 } => {
                     let AvroSchemaOptionExtracted {
@@ -1855,7 +1859,7 @@ fn get_encoding_inner(
             }
             ProtobufSchema::InlineSchema {
                 message_name,
-                schema: mz_sql_parser::ast::Schema { schema },
+                schema: ast::Schema { schema },
             } => {
                 let descriptors = strconv::parse_bytes(schema)?;
 
@@ -1896,17 +1900,11 @@ fn get_encoding_inner(
 /// Extract the key envelope, if it is requested
 fn get_key_envelope(
     included_items: &[SourceIncludeMetadata],
-    envelope: &Envelope,
     encoding: &SourceDataEncoding<ReferencedConnection>,
 ) -> Result<KeyEnvelope, PlanError> {
     let key_definition = included_items
         .iter()
         .find(|i| matches!(i, SourceIncludeMetadata::Key { .. }));
-    if matches!(envelope, Envelope::Debezium { .. }) && key_definition.is_some() {
-        sql_bail!(
-            "Cannot use INCLUDE KEY with ENVELOPE DEBEZIUM: Debezium values include all keys."
-        );
-    }
     if let Some(SourceIncludeMetadata::Key { alias }) = key_definition {
         match (alias, encoding) {
             (Some(name), SourceDataEncoding::KeyValue { .. }) => {
@@ -2414,11 +2412,9 @@ pub fn plan_create_sink(
     }
 
     let envelope = match envelope {
+        Some(ast::SinkEnvelope::Upsert) => SinkEnvelope::Upsert,
+        Some(ast::SinkEnvelope::Debezium) => SinkEnvelope::Debezium,
         None => sql_bail!("ENVELOPE clause is required"),
-        Some(Envelope::Debezium(mz_sql_parser::ast::DbzMode::Plain)) => SinkEnvelope::Debezium,
-        Some(Envelope::Upsert) => SinkEnvelope::Upsert,
-        Some(Envelope::CdcV2) => bail_unsupported!("CDCv2 sinks"),
-        Some(Envelope::None) => bail_unsupported!("\"ENVELOPE NONE\" sinks"),
     };
 
     // Check for an object in the catalog with this same name

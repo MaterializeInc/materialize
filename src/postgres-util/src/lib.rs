@@ -55,4 +55,10 @@ pub enum PostgresError {
     PostgresSsl(#[from] openssl::error::ErrorStack),
     #[error("query returned more rows than expected")]
     UnexpectedRow,
+    /// Cannot find publication
+    ///
+    /// This error is more specific than the others because its occurrence has
+    /// differing semantics from other types of PG errors.
+    #[error("publication {0} does not exist")]
+    PublicationMissing(String),
 }

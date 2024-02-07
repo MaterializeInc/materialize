@@ -32,7 +32,7 @@ use mz_repr::GlobalId;
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
 use mz_storage_client::client::{
-    RunIngestionCommand, RunSinkCommand, StorageClient, StorageCommand, StorageGrpcClient,
+    RunIngestionCommand, RunSinkCommand, Status, StorageClient, StorageCommand, StorageGrpcClient,
     StorageResponse,
 };
 use mz_storage_client::metrics::RehydratingStorageClientMetrics;
@@ -389,7 +389,7 @@ where
                 .keys()
                 .map(|id| mz_storage_client::client::StatusUpdate {
                     id: *id,
-                    status: "paused".to_string(),
+                    status: Status::Paused,
                     timestamp: mz_ore::now::to_datetime((self.now)()),
                     error: None,
                     hints: BTreeSet::from([
@@ -407,7 +407,7 @@ where
                 .keys()
                 .map(|id| mz_storage_client::client::StatusUpdate {
                     id: *id,
-                    status: "paused".to_string(),
+                    status: Status::Paused,
                     timestamp: mz_ore::now::to_datetime((self.now)()),
                     error: None,
                     hints: BTreeSet::from([

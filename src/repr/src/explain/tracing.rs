@@ -14,9 +14,12 @@
 use std::fmt::{Debug, Display};
 use std::sync::Mutex;
 
+use mz_sql_parser::ast::NamedPlan;
 use tracing::{span, subscriber, Dispatch, Level};
 use tracing_core::{Event, Interest, Metadata};
 use tracing_subscriber::{field, layer, Registry};
+
+use crate::explain::UsedIndexes;
 
 /// A tracing layer used to accumulate a sequence of explainable plans.
 #[allow(missing_debug_implementations)]
@@ -39,7 +42,7 @@ pub struct PlanTrace<T> {
 }
 
 /// A struct created as a reflection of a [`trace_plan`] call.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct TraceEntry<T> {
     /// The instant at which an entry was created.
     ///
@@ -249,12 +252,18 @@ impl<T: 'static> PlanTrace<T> {
     /// Note that this method will mutate the internal state of the enclosing
     /// [`PlanTrace`] even though its receiver is not `&mut self`. This quirk is
     /// required because the tracing `Dispatch` does not have `downcast_mut` method.
-    pub fn drain_as_vec(&self) -> Vec<TraceEntry<T>>
-    where
-        T: Debug,
-    {
+    pub fn drain_as_vec(&self) -> Vec<TraceEntry<T>> {
         let mut entries = self.entries.lock().expect("entries shouldn't be poisoned");
         entries.split_off(0)
+    }
+
+    /// Find and return a clone of the [`TraceEntry`] for the given `path`.
+    pub fn find(&self, path: &str) -> Option<TraceEntry<T>>
+    where
+        T: Clone,
+    {
+        let entries = self.entries.lock().expect("entries shouldn't be poisoned");
+        entries.iter().find(|entry| entry.path == path).cloned()
     }
 
     /// Push a trace entry for the given `plan` to the current trace.
@@ -300,6 +309,31 @@ impl<T: 'static> PlanTrace<T> {
             }
             None => Some(path.to_owned()),
         }
+    }
+}
+
+impl PlanTrace<UsedIndexes> {
+    /// Get the [`UsedIndexes`] corresponding to the given `plan_path`.
+    ///
+    /// Note that the path under which a `UsedIndexes` entry is traced might
+    /// differ from the path of the `plan_path` of the plan that needs it.
+    pub fn used_indexes_for(&self, plan_path: &str) -> UsedIndexes {
+        // Compute the path from which we are going to lookup the `UsedIndexes`
+        // instance from the requested path.
+        let path = match NamedPlan::of_path(plan_path) {
+            Some(NamedPlan::Optimized) => Some(NamedPlan::Optimized),
+            Some(NamedPlan::Physical) => Some(NamedPlan::Optimized),
+            Some(NamedPlan::FastPath) => Some(NamedPlan::FastPath),
+            _ => None,
+        };
+        // Find the `TraceEntry` wrapping the `UsedIndexes` instance.
+        let entry = match path {
+            Some(path) => self.find(path.path()),
+            None => None,
+        };
+        // Either return the `UsedIndexes` wrapped by the found entry or a
+        // default `UsedIndexes` instance if such entry was not found.
+        entry.map_or(Default::default(), |e| e.plan)
     }
 }
 
