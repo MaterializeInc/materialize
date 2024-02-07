@@ -8,14 +8,18 @@
 // by the Apache License, Version 2.0.
 
 use mz_pgrepr::Type;
+use mz_sql_parser::ast::{Ident, UnresolvedItemName};
 use postgres_protocol::escape;
 
-use crate::destination::{config, FIVETRAN_SYSTEM_COLUMN_ID};
+use crate::destination::config;
 use crate::error::{Context, OpError, OpErrorKind};
 use crate::fivetran_sdk::{
     AlterTableRequest, Column, CreateTableRequest, DescribeTableRequest, Table,
 };
 use crate::utils;
+
+/// HACK(parkmycar): An ugly hack to track whether or not a column is a primary key.
+const PRIMARY_KEY_MAGIC_STRING: &str = "mz_is_primary_key";
 
 pub async fn handle_describe_table(
     request: DescribeTableRequest,
@@ -49,20 +53,25 @@ pub async fn handle_describe_table(
     };
 
     let columns = {
+        let stmt = r#"SELECT
+                   name,
+                   type_oid,
+                   type_mod,
+                   COALESCE(coms.comment, '') = $1 AS primary_key
+               FROM mz_columns AS cols
+               LEFT JOIN mz_internal.mz_comments AS coms
+               ON cols.id = coms.id AND cols.position = coms.object_sub_id
+               WHERE cols.id = $2"#;
+
         let rows = client
-            .query(
-                r#"SELECT name, type_oid, type_mod
-                   FROM mz_columns c
-                   WHERE c.id = $1
-                "#,
-                &[&table_id],
-            )
+            .query(stmt, &[&PRIMARY_KEY_MAGIC_STRING, &table_id])
             .await
             .context("fetching table columns")?;
 
         let mut columns = vec![];
         for row in rows {
             let name = row.get::<_, String>("name");
+            let primary_key = row.get::<_, bool>("primary_key");
             let ty_oid = row.get::<_, u32>("type_oid");
             let ty_mod = row.get::<_, i32>("type_mod");
             let ty = Type::from_oid_and_typmod(ty_oid, ty_mod).with_context(|| {
@@ -70,8 +79,6 @@ pub async fn handle_describe_table(
             })?;
             let (ty, decimal) = utils::to_fivetran_type(ty)?;
 
-            // TODO(benesch): support primary keys in Materialize.
-            let primary_key = name == FIVETRAN_SYSTEM_COLUMN_ID;
             columns.push(Column {
                 name,
                 r#type: ty.into(),
@@ -91,7 +98,9 @@ pub async fn handle_describe_table(
 pub async fn handle_create_table(request: CreateTableRequest) -> Result<(), OpError> {
     let table = request.table.ok_or(OpErrorKind::FieldMissing("table"))?;
 
-    // TODO(parkmycar): Make sure table name is <= 255 characters.
+    let schema = Ident::new(&request.schema_name)?;
+    let qualified_table_name =
+        UnresolvedItemName::qualified(&[schema.clone(), Ident::new(&table.name)?]);
 
     let mut defs = vec![];
     let mut primary_key_columns = vec![];
@@ -109,22 +118,30 @@ pub async fn handle_create_table(request: CreateTableRequest) -> Result<(), OpEr
         }
     }
 
-    // TODO(benesch): support primary keys.
-    #[allow(clippy::overly_complex_bool_expr)]
-    if !primary_key_columns.is_empty() && false {
-        defs.push(format!("PRIMARY KEY ({})", primary_key_columns.join(",")));
-    }
-
     let sql = format!(
         r#"BEGIN; CREATE SCHEMA IF NOT EXISTS {schema}; COMMIT;
-           BEGIN; CREATE TABLE {schema}.{table} ({defs}); COMMIT;"#,
-        schema = escape::escape_identifier(&request.schema_name),
-        table = escape::escape_identifier(&table.name),
+        BEGIN; CREATE TABLE {qualified_table_name} ({defs}); COMMIT;"#,
         defs = defs.join(","),
     );
 
     let (_dbname, client) = config::connect(request.configuration).await?;
     client.batch_execute(&sql).await?;
+
+    // TODO(parkmycar): This is an ugly hack!
+    //
+    // If Fivetran creates a table with primary keys, it expects a DescribeTableRequest to report
+    // those columns as primary keys. But Materialize doesn't support primary keys, so we need to
+    // store this metadata somewhere else. For now we do it in a COMMENT.
+    for column_name in primary_key_columns {
+        let stmt = format!(
+            "COMMENT ON COLUMN {qualified_table_name}.{column_name} IS {magic_comment}",
+            magic_comment = escape::escape_literal(PRIMARY_KEY_MAGIC_STRING),
+        );
+        client
+            .execute(&stmt, &[])
+            .await
+            .context("setting magic primary key comment")?;
+    }
 
     Ok(())
 }
