@@ -3875,46 +3875,6 @@ async fn test_explain_timestamp_blocking() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
-async fn test_linearize_read_then_write() {
-    let server = test_util::TestHarness::default().start().await;
-    server
-        .enable_feature_flags(&["enable_refresh_every_mvs"])
-        .await;
-    let client = server.connect().await.unwrap();
-    // This test will break in the year 30,000 after Jan 1st. When that happens, increase the year
-    // to fix the test.
-    client
-        .batch_execute(
-            "CREATE MATERIALIZED VIEW const_mv WITH (REFRESH AT '30000-01-01 23:59') AS SELECT 2;",
-        )
-        .await
-        .unwrap();
-
-    client
-        .batch_execute("CREATE TABLE t (a INT);")
-        .await
-        .unwrap();
-
-    let handle = task::spawn(|| "read task", async move {
-        // The since of const_mv will be in the year 30,000, requiring us to select a timestamp in
-        // the year 30,000, requiring us to linearize the read waiting for the timestamp oracle to
-        // catch up to the year 30,000.
-        let _ = client
-            .query_one("INSERT INTO t SELECT * FROM const_mv;", &[])
-            .await;
-        panic!("We shouldn't get here until the year 30,000");
-    });
-
-    // Sleep for a bit to try and get the `INSERT INTO SELECT` to run. We may get some false
-    // positives, but we won't get false negatives.
-    tokio::time::sleep(Duration::from_secs(1)).await;
-
-    assert!(!handle.is_finished());
-    handle.abort_on_drop();
-}
-
-#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // too slow
 async fn test_cancel_linearize_reads() {
     let server = test_util::TestHarness::default().start().await;
     server
@@ -3984,9 +3944,7 @@ async fn test_cancel_linearize_read_then_writes() {
         .await
         .unwrap();
 
-    let (tx, rx) = oneshot::channel();
-
-    task::spawn(|| "read-then-write task", async move {
+    let handle = task::spawn(|| "read-then-write task", async move {
         // The since of const_mv will be in the year 30,000, requiring us to select a timestamp in
         // the year 30,000, requiring us to linearize the read waiting for the timestamp oracle to
         // catch up to the year 30,000.
@@ -3995,21 +3953,33 @@ async fn test_cancel_linearize_read_then_writes() {
             .await;
         let err = res.unwrap_err();
         assert_eq!(err.unwrap_db_error().code(), &SqlState::QUERY_CANCELED);
-        tx.send(()).unwrap();
     });
+
+    // Sleep for a bit to try and get the `INSERT INTO SELECT` to run. We may get some false
+    // positives, but we won't get false negatives.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(
+        !handle.is_finished(),
+        "INSERT INTO SELECT should be linearized and wait for the year 30,000"
+    );
 
     // There's a race for when we issue the cancel, so we need to retry. We want to issue the
     // cancel after the async SELECT.
-    let (_, res) = Retry::default()
+    let ((_, handle), res) = Retry::default()
         .max_duration(Duration::from_secs(30))
         .retry_async_with_state(
-            (client_cancel, rx),
-            |_, (client_cancel, mut rx)| async move {
+            (client_cancel, handle),
+            |_, (client_cancel, handle)| async move {
                 client_cancel.cancel_query(postgres::NoTls).await.unwrap();
-                let res = rx.try_recv();
-                ((client_cancel, rx), res)
+                let res = if handle.is_finished() {
+                    Ok(())
+                } else {
+                    Err("thread unfinished".to_string())
+                };
+                ((client_cancel, handle), res)
             },
         )
         .await;
     res.unwrap();
+    handle.await.unwrap();
 }
