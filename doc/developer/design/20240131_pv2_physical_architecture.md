@@ -142,7 +142,7 @@ How are queries routed/processed:
 
 Pros:
 
-- Easy to migrate to from our current architecture.https://github.com/MaterializeInc/materialize/pull/23543
+- Easy to migrate to from our current architecture.
 - Easy-ish to think about how information flows in the system, who "holds" read
   holds, how queries are routed through adapter and to replicas.
 - Nothing changes in the UX, users still interact with clusters, it's just that
