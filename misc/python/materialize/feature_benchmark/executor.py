@@ -14,6 +14,7 @@ from typing import Any
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mysql import MySql
 
 
 class Executor:
@@ -68,6 +69,7 @@ class Docker(Executor):
             "--initial-backoff=10ms",  # Retry every 10ms until success
             "--backoff-factor=0",
             "--no-consistency-checks",
+            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
             stdin=input,
             capture=True,
         ).stdout
@@ -147,6 +149,7 @@ class MzCloud(Executor):
             f"--kafka-addr={self._external_addr}:9092",
             f"--schema-registry-url=http://{self._external_addr}:8081",
             f"--seed={self._seed}",
+            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
         ]
 
     def RestartMz(self) -> None:

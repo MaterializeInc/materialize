@@ -17,6 +17,7 @@ from textwrap import dedent
 from materialize import buildkite
 from materialize.docker import is_image_tag_of_version
 from materialize.mz_version import MzVersion
+from materialize.mzcompose.services.mysql import MySql
 from materialize.version_list import (
     ANCESTOR_OVERRIDES_FOR_PERFORMANCE_REGRESSIONS,
     get_commits_of_accepted_regressions_between_versions,
@@ -105,6 +106,7 @@ SERVICES = [
     Minio(setup_materialize=True),
     KgenService(),
     Postgres(),
+    MySql(),
     Balancerd(),
     # Overridden below
     Materialized(),
@@ -374,7 +376,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     else:
         selected_scenarios = [root_scenario]
 
-    dependencies = ["postgres"]
+    dependencies = ["postgres", "mysql"]
 
     if args.redpanda:
         dependencies += ["redpanda"]
