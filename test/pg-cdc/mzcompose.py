@@ -25,13 +25,13 @@ SERVICES = [
 def workflow_ceased_status(c: Composition, parser: WorkflowArgumentParser) -> None:
     with c.override(Testdrive(no_reset=True)):
         c.up("materialized", "postgres")
-        c.run("testdrive", "ceased/before-mz-restart.td")
+        c.run_testdrive_files("ceased/before-mz-restart.td")
 
         # Restart mz
         c.kill("materialized")
         c.up("materialized")
 
-        c.run("testdrive", "ceased/after-mz-restart.td")
+        c.run_testdrive_files("ceased/after-mz-restart.td")
 
 
 def workflow_replication_slots(c: Composition, parser: WorkflowArgumentParser) -> None:
