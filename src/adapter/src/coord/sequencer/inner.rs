@@ -564,7 +564,7 @@ impl Coordinator {
             defaults: table.defaults,
             conn_id: conn_id.cloned(),
             resolved_ids,
-            custom_logical_compaction_window: None,
+            custom_logical_compaction_window: table.compaction_window,
             is_retained_metrics_object: false,
         };
         let table_oid = self.catalog_mut().allocate_oid()?;
@@ -597,7 +597,12 @@ impl Coordinator {
                 coord.apply_local_write(register_ts).await;
 
                 coord
-                    .initialize_storage_read_policies(vec![table_id], CompactionWindow::Default)
+                    .initialize_storage_read_policies(
+                        vec![table_id],
+                        table
+                            .custom_logical_compaction_window
+                            .unwrap_or(CompactionWindow::Default),
+                    )
                     .await;
             })
             .await;

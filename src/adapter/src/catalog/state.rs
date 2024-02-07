@@ -855,7 +855,8 @@ impl CatalogState {
                 defaults: table.defaults,
                 conn_id: None,
                 resolved_ids,
-                custom_logical_compaction_window,
+                custom_logical_compaction_window: custom_logical_compaction_window
+                    .or(table.compaction_window),
                 is_retained_metrics_object,
             }),
             Plan::CreateSource(CreateSourcePlan {

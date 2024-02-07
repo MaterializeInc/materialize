@@ -1224,6 +1224,7 @@ pub struct Table {
     pub desc: RelationDesc,
     pub defaults: Vec<Expr<Aug>>,
     pub temporary: bool,
+    pub compaction_window: Option<CompactionWindow>,
 }
 
 #[derive(Clone, Debug)]
@@ -1509,6 +1510,12 @@ pub enum ExecuteTimeout {
 #[derive(Clone, Debug)]
 pub enum IndexOption {
     /// Configures the logical compaction window for an index.
+    RetainHistory(CompactionWindow),
+}
+
+#[derive(Clone, Debug)]
+pub enum TableOption {
+    /// Configures the logical compaction window for a table.
     RetainHistory(CompactionWindow),
 }
 

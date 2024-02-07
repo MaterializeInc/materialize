@@ -61,7 +61,7 @@ use mz_sql_parser::ast::{
     RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition,
     ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar, SourceIncludeMetadata, Statement,
     TableConstraint, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value, ViewDefinition,
+    UnresolvedSchemaName, Value, ViewDefinition,TableOption,TableOptionName,
 };
 use mz_sql_parser::ident;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
@@ -216,6 +216,7 @@ pub fn plan_create_table(
         constraints,
         if_not_exists,
         temporary,
+        with_options,
     } = &stmt;
 
     let names: Vec<_> = columns
@@ -359,11 +360,23 @@ pub fn plan_create_table(
     let desc = RelationDesc::new(typ, names);
 
     let create_sql = normalize::create_statement(scx, Statement::CreateTable(stmt.clone()))?;
+
+    let options = plan_table_options(scx, with_options.clone())?;
+        let compaction_window = options.iter().find_map(|o| {
+        #[allow(irrefutable_let_patterns)]
+        if let crate::plan::TableOption::RetainHistory(lcw) = o {
+            Some(lcw.clone())
+        } else {
+            None
+        }
+    });
+    
     let table = Table {
         create_sql,
         desc,
         defaults,
         temporary,
+        compaction_window,
     };
     Ok(Plan::CreateTable(CreateTablePlan {
         name,
@@ -4259,6 +4272,22 @@ pub fn plan_drop_owned(
     }))
 }
 
+fn plan_retain_history_option(
+    scx: &StatementContext,
+    retain_history: Option<OptionalDuration>,
+) -> Result<Option<CompactionWindow>, PlanError> {
+    if let Some(OptionalDuration(lcw)) = retain_history {
+        scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
+        let cw = match lcw {
+            Some(duration) => duration.try_into()?,
+            None => CompactionWindow::DisableCompaction,
+        };
+        Ok(Some(cw))
+    } else {
+        Ok(None)
+    }
+}
+
 generate_extracted_config!(IndexOption, (RetainHistory, OptionalDuration));
 
 fn plan_index_options(
@@ -4273,15 +4302,24 @@ fn plan_index_options(
     let IndexOptionExtracted { retain_history, .. }: IndexOptionExtracted = with_opts.try_into()?;
 
     let mut out = Vec::with_capacity(1);
-
-    if let Some(OptionalDuration(lcw)) = retain_history {
-        scx.require_feature_flag(&vars::ENABLE_LOGICAL_COMPACTION_WINDOW)?;
-        out.push(crate::plan::IndexOption::RetainHistory(match lcw {
-            Some(duration) => duration.try_into()?,
-            None => CompactionWindow::DisableCompaction,
-        }));
+    if let Some(cw) = plan_retain_history_option(scx, retain_history)? {
+        out.push(crate::plan::IndexOption::RetainHistory(cw));
     }
+    Ok(out)
+}
 
+generate_extracted_config!(TableOption, (RetainHistory, OptionalDuration));
+
+fn plan_table_options(
+    scx: &StatementContext,
+    with_opts: Vec<TableOption<Aug>>,
+) -> Result<Vec<crate::plan::TableOption>, PlanError> {
+    let TableOptionExtracted { retain_history, .. }: TableOptionExtracted = with_opts.try_into()?;
+
+    let mut out = Vec::with_capacity(1);
+    if let Some(cw) = plan_retain_history_option(scx, retain_history)? {
+        out.push(crate::plan::TableOption::RetainHistory(cw));
+    }
     Ok(out)
 }
 

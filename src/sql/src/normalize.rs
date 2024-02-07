@@ -301,6 +301,7 @@ pub fn create_statement(
             constraints: _,
             if_not_exists,
             temporary,
+            with_options: _,
         }) => {
             *name = if *temporary {
                 allocate_temporary_name(name)?
