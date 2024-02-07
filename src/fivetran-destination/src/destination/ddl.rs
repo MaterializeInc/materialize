@@ -53,21 +53,18 @@ pub async fn handle_describe_table(
     };
 
     let columns = {
-        let stmt = format!(
-            r#"SELECT
+        let stmt = r#"SELECT
                    name,
                    type_oid,
                    type_mod,
-                   CASE WHEN coms.comment = {magic_comment} THEN True ELSE false END AS primary_key
+                   coms.comment = $1 AS primary_key
                FROM mz_columns AS cols
                JOIN mz_internal.mz_comments AS coms
                ON cols.id = coms.id AND cols.position = coms.object_sub_id
-               WHERE cols.id = 'u1'"#,
-            magic_comment = escape::escape_literal(PRIMARY_KEY_MAGIC_STRING),
-        );
+               WHERE cols.id = $2"#;
 
         let rows = client
-            .query(&stmt, &[&table_id])
+            .query(stmt, &[&PRIMARY_KEY_MAGIC_STRING, &table_id])
             .await
             .context("fetching table columns")?;
 
