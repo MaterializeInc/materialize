@@ -570,7 +570,7 @@ async fn test_stash_batch_large_number_updates() {
     Stash::with_debug_stash(|mut stash| async move {
         let col = collection::<i64, i64>(&mut stash, "c1").await.unwrap();
         let mut batch = make_batch(&col, &mut stash).await.unwrap();
-        let batches: Vec<_> = (0..500_000r).map(|i| (i, (i + 1), 1)).collect();
+        let batches: Vec<_> = (0..500_0000).map(|i| (i, (i + 1), 1)).collect();
         col.extend_batch(
             &mut batch,
             batches.iter().map(|(key, value, diff)| (key, value, *diff)),
