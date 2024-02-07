@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
+
 use mz_ore::now::NowFn;
 use mz_repr::{Datum, Row};
 use mz_storage_types::sources::load_generator::Generator;
@@ -28,7 +30,13 @@ impl Generator for Counter {
         _now: NowFn,
         _seed: Option<u64>,
         resume_offset: MzOffset,
+        inputs_to_outputs: BTreeMap<usize, usize>,
     ) -> Box<(dyn Iterator<Item = (usize, Event<Option<MzOffset>, (Row, i64)>)>)> {
+        mz_ore::soft_assert_no_log!(
+            inputs_to_outputs.is_empty(),
+            "Counter generator only outputs to primary source",
+        );
+
         let max_cardinality = self.max_cardinality;
 
         Box::new(

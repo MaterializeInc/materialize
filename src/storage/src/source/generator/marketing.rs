@@ -19,12 +19,12 @@ use mz_storage_types::sources::MzOffset;
 use rand::{distributions::Standard, rngs::SmallRng, Rng, SeedableRng};
 use timely::dataflow::operators::to_stream::Event;
 
-const CUSTOMERS_OUTPUT: usize = 1;
-const IMPRESSIONS_OUTPUT: usize = 2;
-const CLICK_OUTPUT: usize = 3;
-const LEADS_OUTPUT: usize = 4;
-const COUPONS_OUTPUT: usize = 5;
-const CONVERSIONS_PREDICTIONS_OUTPUT: usize = 6;
+const CUSTOMERS_INPUT: usize = 0;
+const IMPRESSIONS_INPUT: usize = 1;
+const CLICK_INPUT: usize = 2;
+const LEADS_INPUT: usize = 3;
+const COUPONS_INPUT: usize = 4;
+const CONVERSIONS_PREDICTIONS_INPUT: usize = 5;
 
 const CONTROL: &str = "control";
 const EXPERIMENT: &str = "experiment";
@@ -40,6 +40,7 @@ impl Generator for Marketing {
         now: mz_ore::now::NowFn,
         seed: Option<u64>,
         _resume_offset: MzOffset,
+        inputs_to_outputs: BTreeMap<usize, usize>,
     ) -> Box<(dyn Iterator<Item = (usize, Event<Option<MzOffset>, (Row, i64)>)>)> {
         let mut rng: SmallRng = SmallRng::seed_from_u64(seed.unwrap_or_default());
 
@@ -57,7 +58,7 @@ impl Generator for Marketing {
                 packer.push(Datum::String(email));
                 packer.push(Datum::Int64(rng.gen_range(5_000_000..10_000_000i64)));
 
-                (CUSTOMERS_OUTPUT, customer, 1)
+                (CUSTOMERS_INPUT, customer, 1)
             })
             .collect();
 
@@ -83,7 +84,7 @@ impl Generator for Marketing {
                             .expect("timestamp must fit"),
                     ));
 
-                    pending.push((IMPRESSIONS_OUTPUT, impression, 1));
+                    pending.push((IMPRESSIONS_INPUT, impression, 1));
 
                     // 1 in 10 impressions have a click. Making us the
                     // most successful marketing organization in the world.
@@ -100,7 +101,7 @@ impl Generator for Marketing {
                                 .expect("timestamp must fit"),
                         ));
 
-                        future_updates.insert(click_time, (CLICK_OUTPUT, click, 1));
+                        future_updates.insert(click_time, (CLICK_INPUT, click, 1));
                     }
 
                     let mut updates = future_updates.retrieve(now());
@@ -118,7 +119,7 @@ impl Generator for Marketing {
                             conversion_amount: None,
                         };
 
-                        pending.push((LEADS_OUTPUT, lead.to_row(), 1));
+                        pending.push((LEADS_INPUT, lead.to_row(), 1));
 
                         // a highly scientific statistical model
                         // predicting the likelyhood of a conversion
@@ -141,7 +142,7 @@ impl Generator for Marketing {
                         ));
                         packer.push(Datum::Float64(score.into()));
 
-                        pending.push((CONVERSIONS_PREDICTIONS_OUTPUT, prediction, 1));
+                        pending.push((CONVERSIONS_PREDICTIONS_INPUT, prediction, 1));
 
                         let mut sent_coupon = false;
                         if !label && bucket == EXPERIMENT {
@@ -160,7 +161,7 @@ impl Generator for Marketing {
                             ));
                             packer.push(Datum::Int64(amount));
 
-                            pending.push((COUPONS_OUTPUT, coupon, 1));
+                            pending.push((COUPONS_INPUT, coupon, 1));
                         }
 
                         // Decide if a lead will convert. We assume our model is fairly
@@ -174,27 +175,34 @@ impl Generator for Marketing {
                         if converted {
                             let converted_at = now() + rng.gen_range(1..30);
 
-                            future_updates.insert(converted_at, (LEADS_OUTPUT, lead.to_row(), -1));
+                            future_updates.insert(converted_at, (LEADS_INPUT, lead.to_row(), -1));
 
                             lead.converted_at = Some(converted_at);
                             lead.conversion_amount = Some(rng.gen_range(1000..25000));
 
-                            future_updates.insert(converted_at, (LEADS_OUTPUT, lead.to_row(), 1));
+                            future_updates.insert(converted_at, (LEADS_INPUT, lead.to_row(), 1));
                         }
                     }
                 }
 
-                pending.pop().map(|(output, row, diff)| {
-                    let msg = (output, Event::Message(MzOffset::from(offset), (row, diff)));
+                pending
+                    .pop()
+                    .map(|(input, row, diff)| {
+                        let output = match inputs_to_outputs.get(&input) {
+                            Some(output) => *output,
+                            None => return None,
+                        };
+                        let msg = (output, Event::Message(MzOffset::from(offset), (row, diff)));
 
-                    let progress = if pending.is_empty() {
-                        offset += 1;
-                        Some((output, Event::Progress(Some(MzOffset::from(offset)))))
-                    } else {
-                        None
-                    };
-                    std::iter::once(msg).chain(progress)
-                })
+                        let progress = if pending.is_empty() {
+                            offset += 1;
+                            Some((output, Event::Progress(Some(MzOffset::from(offset)))))
+                        } else {
+                            None
+                        };
+                        Some(std::iter::once(msg).chain(progress))
+                    })
+                    .flatten()
             })
             .flatten(),
         )

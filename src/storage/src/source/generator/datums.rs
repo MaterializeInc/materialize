@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
 use std::iter;
 
 use mz_ore::now::NowFn;
@@ -26,7 +27,13 @@ impl Generator for Datums {
         _: NowFn,
         _seed: Option<u64>,
         _resume_offset: MzOffset,
+        inputs_to_outputs: BTreeMap<usize, usize>,
     ) -> Box<(dyn Iterator<Item = (usize, Event<Option<MzOffset>, (Row, i64)>)>)> {
+        mz_ore::soft_assert_no_log!(
+            inputs_to_outputs.is_empty(),
+            "Datums generator only outputs to primary source",
+        );
+
         let typs = ScalarType::enumerate();
         let mut datums: Vec<Vec<Datum>> = typs
             .iter()

@@ -111,10 +111,20 @@ impl SourceRender for LoadGeneratorSourceConnection {
                 return;
             };
 
+            let inputs_to_outputs = config
+                .source_exports
+                .iter()
+                .enumerate()
+                .filter_map(|(output_idx, (_, export))| {
+                    export.input_index.map(|input_idx| (input_idx, output_idx))
+                })
+                .collect();
+
             let mut rows = as_generator(&self.load_generator, self.tick_micros).by_seed(
                 mz_ore::now::SYSTEM_TIME.clone(),
                 None,
                 resume_offset,
+                inputs_to_outputs,
             );
 
             let tick = Duration::from_micros(self.tick_micros.unwrap_or(1_000_000));

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Display;
 use std::iter;
 use std::ops::RangeInclusive;
@@ -38,14 +38,22 @@ pub struct Tpch {
     pub tick: Duration,
 }
 
-const SUPPLIER_OUTPUT: usize = 1;
-const PART_OUTPUT: usize = 2;
-const PARTSUPP_OUTPUT: usize = 3;
-const CUSTOMER_OUTPUT: usize = 4;
-const ORDERS_OUTPUT: usize = 5;
-const LINEITEM_OUTPUT: usize = 6;
-const NATION_OUTPUT: usize = 7;
-const REGION_OUTPUT: usize = 8;
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Make this a new type so it's harder to inadvertently return when you meant
+/// to return the output.
+///
+/// Meant to be used with the `inputs_to_outputs` param fed to `by_seed`.
+struct Input(usize);
+
+const SUPPLIER_INPUT: Input = Input(0);
+const PART_INPUT: Input = Input(1);
+const PARTSUPP_INPUT: Input = Input(2);
+const CUSTOMER_INPUT: Input = Input(3);
+const ORDERS_INPUT: Input = Input(4);
+const LINEITEM_INPUT: Input = Input(5);
+const NATION_INPUT: Input = Input(6);
+const REGION_INPUT: Input = Input(7);
 
 impl Generator for Tpch {
     fn by_seed(
@@ -53,6 +61,7 @@ impl Generator for Tpch {
         _: NowFn,
         seed: Option<u64>,
         _resume_offset: MzOffset,
+        inputs_to_outputs: BTreeMap<usize, usize>,
     ) -> Box<(dyn Iterator<Item = (usize, Event<Option<MzOffset>, (Row, i64)>)>)> {
         let mut rng = StdRng::seed_from_u64(seed.unwrap_or_default());
         let mut ctx = Context {
@@ -69,12 +78,12 @@ impl Generator for Tpch {
         let count_region: i64 = REGIONS.len().try_into().unwrap();
 
         let mut rows = (0..ctx.tpch.count_supplier)
-            .map(|i| (SUPPLIER_OUTPUT, i))
-            .chain((1..=ctx.tpch.count_part).map(|i| (PART_OUTPUT, i)))
-            .chain((1..=ctx.tpch.count_customer).map(|i| (CUSTOMER_OUTPUT, i)))
-            .chain((1..=ctx.tpch.count_orders).map(|i| (ORDERS_OUTPUT, i)))
-            .chain((0..count_nation).map(|i| (NATION_OUTPUT, i)))
-            .chain((0..count_region).map(|i| (REGION_OUTPUT, i)))
+            .map(|i| (SUPPLIER_INPUT, i))
+            .chain((1..=ctx.tpch.count_part).map(|i| (PART_INPUT, i)))
+            .chain((1..=ctx.tpch.count_customer).map(|i| (CUSTOMER_INPUT, i)))
+            .chain((1..=ctx.tpch.count_orders).map(|i| (ORDERS_INPUT, i)))
+            .chain((0..count_nation).map(|i| (NATION_INPUT, i)))
+            .chain((0..count_region).map(|i| (REGION_INPUT, i)))
             .peekable();
 
         // Some rows need to generate other rows from their values; hold those
@@ -88,13 +97,14 @@ impl Generator for Tpch {
         let mut offset = 0;
         let mut row = Row::default();
         Box::new(iter::from_fn(move || {
-            if let Some(pending) = pending.pop_front() {
-                return Some(pending);
+            if let Some((Input(input), event)) = pending.pop_front() {
+                let output = inputs_to_outputs[&input];
+                return Some((output, event));
             }
-            if let Some((output, key)) = rows.next() {
+            if let Some((input, key)) = rows.next() {
                 let key_usize = usize::try_from(key).expect("key known to be non-negative");
-                let row = match output {
-                    SUPPLIER_OUTPUT => {
+                let row = match input {
+                    SUPPLIER_INPUT => {
                         let nation = rng.gen_range(0..count_nation);
                         row.packer().extend([
                             Datum::Int64(key),
@@ -108,7 +118,7 @@ impl Generator for Tpch {
                         ]);
                         row.clone()
                     }
-                    PART_OUTPUT => {
+                    PART_INPUT => {
                         let name: String = PARTNAMES
                             .choose_multiple(&mut rng, 5)
                             .cloned()
@@ -136,7 +146,7 @@ impl Generator for Tpch {
                                 )),
                             ]);
                             pending.push_back((
-                                PARTSUPP_OUTPUT,
+                                PARTSUPP_INPUT,
                                 Event::Message(MzOffset::from(offset), (row.clone(), 1)),
                             ));
                         }
@@ -153,7 +163,7 @@ impl Generator for Tpch {
                         ]);
                         row.clone()
                     }
-                    CUSTOMER_OUTPUT => {
+                    CUSTOMER_INPUT => {
                         let nation = rng.gen_range(0..count_nation);
                         row.packer().extend([
                             Datum::Int64(key),
@@ -167,12 +177,12 @@ impl Generator for Tpch {
                         ]);
                         row.clone()
                     }
-                    ORDERS_OUTPUT => {
+                    ORDERS_INPUT => {
                         let seed = rng.gen();
                         let (order, lineitems) = ctx.order_row(seed, key);
                         for row in lineitems {
                             pending.push_back((
-                                LINEITEM_OUTPUT,
+                                LINEITEM_INPUT,
                                 Event::Message(MzOffset::from(offset), (row, 1)),
                             ));
                         }
@@ -181,7 +191,7 @@ impl Generator for Tpch {
                         }
                         order
                     }
-                    NATION_OUTPUT => {
+                    NATION_INPUT => {
                         let (name, region) = NATIONS[key_usize];
                         row.packer().extend([
                             Datum::Int64(key),
@@ -191,7 +201,7 @@ impl Generator for Tpch {
                         ]);
                         row.clone()
                     }
-                    REGION_OUTPUT => {
+                    REGION_INPUT => {
                         row.packer().extend([
                             Datum::Int64(key),
                             Datum::String(REGIONS[key_usize]),
@@ -199,13 +209,13 @@ impl Generator for Tpch {
                         ]);
                         row.clone()
                     }
-                    _ => unreachable!("{output}"),
+                    _ => unreachable!("{input:?}"),
                 };
 
-                pending.push_back((output, Event::Message(MzOffset::from(offset), (row, 1))));
+                pending.push_back((input, Event::Message(MzOffset::from(offset), (row, 1))));
                 if rows.peek().is_none() {
                     offset += 1;
-                    pending.push_back((output, Event::Progress(Some(MzOffset::from(offset)))));
+                    pending.push_back((input, Event::Progress(Some(MzOffset::from(offset)))));
                 }
             } else {
                 if ctx.tpch.tick.is_zero() {
@@ -219,7 +229,7 @@ impl Generator for Tpch {
                 // order to start the batch.
                 for row in old_lineitems {
                     pending.push_back((
-                        LINEITEM_OUTPUT,
+                        LINEITEM_INPUT,
                         Event::Message(MzOffset::from(offset), (row, -1)),
                     ));
                 }
@@ -227,23 +237,25 @@ impl Generator for Tpch {
                 let (new_order, new_lineitems) = ctx.order_row(new_seed, key);
                 for row in new_lineitems {
                     pending.push_back((
-                        LINEITEM_OUTPUT,
+                        LINEITEM_INPUT,
                         Event::Message(MzOffset::from(offset), (row, 1)),
                     ));
                 }
                 pending.push_back((
-                    ORDERS_OUTPUT,
+                    ORDERS_INPUT,
                     Event::Message(MzOffset::from(offset), (old_order, -1)),
                 ));
                 pending.push_back((
-                    ORDERS_OUTPUT,
+                    ORDERS_INPUT,
                     Event::Message(MzOffset::from(offset), (new_order, 1)),
                 ));
                 offset += 1;
-                pending.push_back((ORDERS_OUTPUT, Event::Progress(Some(MzOffset::from(offset)))));
+                pending.push_back((ORDERS_INPUT, Event::Progress(Some(MzOffset::from(offset)))));
                 active_orders.push((key, new_seed));
             }
-            pending.pop_front()
+            pending
+                .pop_front()
+                .map(|(Input(input), event)| (inputs_to_outputs[&input], event))
         }))
     }
 }

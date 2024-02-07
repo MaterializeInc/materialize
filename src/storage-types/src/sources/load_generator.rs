@@ -16,7 +16,7 @@ use mz_repr::{ColumnType, GlobalId, RelationDesc, Row, ScalarType};
 use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use timely::dataflow::operators::to_stream::Event;
 
 use crate::connections::inline::ConnectionAccess;
@@ -382,6 +382,7 @@ pub trait Generator {
         now: NowFn,
         seed: Option<u64>,
         resume_offset: MzOffset,
+        inputs_to_outputs: BTreeMap<usize, usize>,
     ) -> Box<dyn Iterator<Item = (usize, Event<Option<MzOffset>, (Row, i64)>)>>;
 }
 

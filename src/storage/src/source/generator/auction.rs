@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::iter;
 
 use mz_ore::now::{to_datetime, NowFn};
@@ -62,11 +62,11 @@ use timely::dataflow::operators::to_stream::Event;
 ///   );
 pub struct Auction {}
 
-const ORGANIZATION_OUTPUT: usize = 1;
-const USERS_OUTPUT: usize = 2;
-const ACCOUNTS_OUTPUT: usize = 3;
-const AUCTIONS_OUTPUT: usize = 4;
-const BIDS_OUTPUT: usize = 5;
+const ORGANIZATION_INPUT: usize = 0;
+const USERS_INPUT: usize = 1;
+const ACCOUNTS_INPUT: usize = 2;
+const AUCTIONS_INPUT: usize = 3;
+const BIDS_INPUT: usize = 4;
 
 // Note that this generator never issues retractions; if you change this,
 // `mz_storage_types::sources::LoadGenerator::is_monotonic`
@@ -77,6 +77,7 @@ impl Generator for Auction {
         now: NowFn,
         seed: Option<u64>,
         _resume_offset: MzOffset,
+        inputs_to_outputs: BTreeMap<usize, usize>,
     ) -> Box<(dyn Iterator<Item = (usize, Event<Option<MzOffset>, (Row, i64)>)>)> {
         let mut rng = SmallRng::seed_from_u64(seed.unwrap_or_default());
 
@@ -87,7 +88,7 @@ impl Generator for Auction {
             let id = i64::try_from(offset + 1).expect("demo entries less than i64::MAX");
             packer.push(Datum::Int64(id));
             packer.push(Datum::String(*name));
-            (ORGANIZATION_OUTPUT, company)
+            (ORGANIZATION_INPUT, company)
         });
 
         let users = CELEBRETIES.iter().enumerate().map(|(offset, name)| {
@@ -100,7 +101,7 @@ impl Generator for Auction {
                 .expect("demo entries less than i64::MAX");
             packer.push(Datum::Int64(org_id));
             packer.push(Datum::String(name));
-            (USERS_OUTPUT, user)
+            (USERS_INPUT, user)
         });
 
         let accounts = (1..=COMPANIES.len()).map(|org_id| {
@@ -111,7 +112,7 @@ impl Generator for Auction {
             packer.push(Datum::Int64(id));
             packer.push(Datum::Int64(org_id));
             packer.push(Datum::Int64(10000)); // balance
-            (ACCOUNTS_OUTPUT, org)
+            (ACCOUNTS_INPUT, org)
         });
 
         let mut counter = 0;
@@ -137,7 +138,7 @@ impl Generator for Auction {
                                 .try_into()
                                 .expect("timestamp must fit"),
                         )); // end time
-                        pending.push_back((AUCTIONS_OUTPUT, auction));
+                        pending.push_back((AUCTIONS_INPUT, auction));
                         const MAX_BIDS: i64 = 10;
                         for i in 0..rng.gen_range(2..MAX_BIDS) {
                             let bid_id = Datum::Int64(counter * MAX_BIDS + i);
@@ -155,12 +156,17 @@ impl Generator for Auction {
                                 )); // bid time
                                 bid
                             };
-                            pending.push_back((BIDS_OUTPUT, bid));
+                            pending.push_back((BIDS_INPUT, bid));
                         }
                     }
                     // Pop from the front so auctions always appear before bids.
                     let pend = pending.pop_front();
-                    pend.map(|(output, row)| {
+                    pend.map(|(input, row)| {
+                        let output = match inputs_to_outputs.get(&input) {
+                            Some(output) => *output,
+                            None => return None,
+                        };
+
                         let msg = (output, Event::Message(MzOffset::from(offset), (row, 1)));
 
                         // The first batch (orgs, users, accounts) is a single txn, all others (auctions and bids) are separate.
@@ -170,8 +176,9 @@ impl Generator for Auction {
                         } else {
                             None
                         };
-                        std::iter::once(msg).chain(progress)
+                        Some(std::iter::once(msg).chain(progress))
                     })
+                    .flatten()
                 }
             })
             .flatten(),
