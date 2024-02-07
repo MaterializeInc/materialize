@@ -199,7 +199,7 @@ def annotate_logged_errors(log_files: list[str]) -> int:
     if not error_logs:
         error_logs = []
 
-    os.getenv("BUILDKITE_STEP_KEY", "")
+    step_key = os.getenv("BUILDKITE_STEP_KEY", "")
     os.getenv("BUILDKITE_LABEL", "")
 
     (known_issues, unknown_errors) = get_known_issues_from_github()
@@ -211,12 +211,13 @@ def annotate_logged_errors(log_files: list[str]) -> int:
 
     # Keep track of known errors so we log each only once
 
-    unknown_errors.append(
-        "Unknown error starting with backtick 1:  \n```\n`error_message`\n```"
-    )
-    unknown_errors.append(
-        "Unknown error starting with backtick 2:  \n```\n`error_message` happened\n```"
-    )
+    if step_key == "cloudtest":
+        unknown_errors.append(
+            "Unknown error starting with backtick 1:  \n```\n`error_message`\n```"
+        )
+        unknown_errors.append(
+            "Unknown error starting with backtick 2:  \n```\n`error_message` happened\n```"
+        )
 
     for error in error_logs:
         error_message = sanitize_text(error.match.decode("utf-8"))
