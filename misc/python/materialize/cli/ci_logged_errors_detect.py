@@ -212,15 +212,15 @@ def annotate_logged_errors(log_files: list[str]) -> int:
     # Keep track of known errors so we log each only once
 
     unknown_errors.append(
-        "Unknown error starting with backtick 1:  \n````error_message````"
+        "Unknown error starting with backtick 1:  \n```\n`error_message`\n```"
     )
     unknown_errors.append(
-        "Unknown error starting with backtick 2:  \n````error_message` happened```"
+        "Unknown error starting with backtick 2:  \n```\n`error_message` happened\n```"
     )
 
     for error in error_logs:
         error_message = sanitize_text(error.match.decode("utf-8"))
-        formatted_error_message = f"```{error_message}```"
+        formatted_error_message = f"```\n{error_message}\n```"
 
         for artifact in artifacts:
             if artifact["job_id"] == job and artifact["path"] == error.file:
