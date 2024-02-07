@@ -20,6 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::Hashable;
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::cast::CastFrom;
+use mz_ore::task::JoinHandleExt;
 use mz_persist_client::cfg::RetryParameters;
 use mz_persist_client::operators::shard_source::{shard_source, SnapshotMode};
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
@@ -621,92 +622,132 @@ impl DataSubscribe {
     }
 }
 
+/// A handle to a [DataSubscribe] running in a task.
+#[derive(Debug)]
+pub struct DataSubscribeTask {
+    /// Carries step requests. A `None` timestamp requests one step, a
+    /// `Some(ts)` requests stepping until we progress beyond `ts`.
+    tx: std::sync::mpsc::Sender<(
+        Option<u64>,
+        tokio::sync::oneshot::Sender<(Vec<(String, u64, i64)>, u64)>,
+    )>,
+    task: mz_ore::task::JoinHandle<Vec<(String, u64, i64)>>,
+    output: Vec<(String, u64, i64)>,
+    progress: u64,
+}
+
+impl DataSubscribeTask {
+    /// Creates a new [DataSubscribeTask].
+    pub async fn new(
+        client: PersistClient,
+        txns_id: ShardId,
+        data_id: ShardId,
+        as_of: u64,
+    ) -> Self {
+        let cache = TxnsCache::open(&client, txns_id, Some(data_id)).await;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let task = mz_ore::task::spawn_blocking(
+            || "data_subscribe task",
+            move || Self::task(client, cache, data_id, as_of, rx),
+        );
+        DataSubscribeTask {
+            tx,
+            task,
+            output: Vec::new(),
+            progress: 0,
+        }
+    }
+
+    #[cfg(test)]
+    async fn step(&mut self) {
+        self.send(None).await;
+    }
+
+    /// Steps the dataflow past the given time, capturing output.
+    pub async fn step_past(&mut self, ts: u64) -> u64 {
+        self.send(Some(ts)).await;
+        self.progress
+    }
+
+    /// Returns captured output.
+    pub fn output(&self) -> &Vec<(String, u64, i64)> {
+        &self.output
+    }
+
+    async fn send(&mut self, ts: Option<u64>) {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.tx.send((ts, tx)).expect("task should be running");
+        let (mut new_output, new_progress) = rx.await.expect("task should be running");
+        self.output.append(&mut new_output);
+        assert!(self.progress <= new_progress);
+        self.progress = new_progress;
+    }
+
+    /// Signals for the task to exit, and then waits for this to happen.
+    ///
+    /// _All_ output from the lifetime of the task (not just what was previously
+    /// captured) is returned.
+    pub async fn finish(self) -> Vec<(String, u64, i64)> {
+        // Closing the channel signals the task to exit.
+        drop(self.tx);
+        self.task.wait_and_assert_finished().await
+    }
+
+    fn task(
+        client: PersistClient,
+        cache: TxnsCache<u64>,
+        data_id: ShardId,
+        as_of: u64,
+        rx: std::sync::mpsc::Receiver<(
+            Option<u64>,
+            tokio::sync::oneshot::Sender<(Vec<(String, u64, i64)>, u64)>,
+        )>,
+    ) -> Vec<(String, u64, i64)> {
+        let mut subscribe = DataSubscribe::new(
+            "DataSubscribeTask",
+            client.clone(),
+            cache.txns_id(),
+            data_id,
+            as_of,
+            Antichain::new(),
+        );
+        let mut output = Vec::new();
+        loop {
+            let (ts, tx) = match rx.try_recv() {
+                Ok(x) => x,
+                Err(TryRecvError::Empty) => {
+                    // No requests, continue stepping so nothing deadlocks.
+                    subscribe.step();
+                    continue;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    // All done! Return our output.
+                    return output;
+                }
+            };
+            // Always step at least once.
+            subscribe.step();
+            // If we got a ts, make sure to step past it.
+            if let Some(ts) = ts {
+                while subscribe.progress() <= ts {
+                    subscribe.step();
+                }
+            }
+            let new_output = std::mem::take(&mut subscribe.output);
+            output.extend(new_output.iter().cloned());
+            let _ = tx.send((new_output, subscribe.progress()));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use mz_ore::task::JoinHandleExt;
     use mz_persist_types::Opaque;
 
     use crate::tests::writer;
     use crate::txns::TxnsHandle;
 
     use super::*;
-
-    struct DataSubscribeTask {
-        /// Carries step requests. A `None` timestamp requests one step, a
-        /// `Some(ts)` requests stepping until we progress beyond `ts`.
-        tx: std::sync::mpsc::Sender<(Option<u64>, tokio::sync::oneshot::Sender<u64>)>,
-        task: mz_ore::task::JoinHandle<Vec<(String, u64, i64)>>,
-    }
-
-    impl DataSubscribeTask {
-        async fn new(
-            client: PersistClient,
-            txns_id: ShardId,
-            data_id: ShardId,
-            as_of: u64,
-        ) -> Self {
-            let cache = TxnsCache::open(&client, txns_id, Some(data_id)).await;
-            let (tx, rx) = std::sync::mpsc::channel();
-            let task = mz_ore::task::spawn_blocking(
-                || "data_subscribe task",
-                move || Self::task(client, cache, data_id, as_of, rx),
-            );
-            DataSubscribeTask { tx, task }
-        }
-
-        async fn step(&self) {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            self.tx.send((None, tx)).expect("task should be running");
-            rx.await.expect("task should be running");
-        }
-
-        async fn step_past(&self, ts: u64) -> u64 {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            self.tx
-                .send((Some(ts), tx))
-                .expect("task should be running");
-            rx.await.expect("task should be running")
-        }
-
-        async fn finish(self) -> Vec<(String, u64, i64)> {
-            // Closing the channel signals the task to exit.
-            drop(self.tx);
-            self.task.wait_and_assert_finished().await
-        }
-
-        fn task(
-            client: PersistClient,
-            cache: TxnsCache<u64>,
-            data_id: ShardId,
-            as_of: u64,
-            rx: std::sync::mpsc::Receiver<(Option<u64>, tokio::sync::oneshot::Sender<u64>)>,
-        ) -> Vec<(String, u64, i64)> {
-            let mut subscribe = cache.expect_subscribe(&client, data_id, as_of);
-            loop {
-                let (ts, tx) = match rx.try_recv() {
-                    Ok(x) => x,
-                    Err(TryRecvError::Empty) => {
-                        // No requests, continue stepping so nothing deadlocks.
-                        subscribe.step();
-                        continue;
-                    }
-                    Err(TryRecvError::Disconnected) => {
-                        // All done! Return our output.
-                        return subscribe.output().clone();
-                    }
-                };
-                // Always step at least once.
-                subscribe.step();
-                // If we got a ts, make sure to step past it.
-                if let Some(ts) = ts {
-                    while subscribe.progress() <= ts {
-                        subscribe.step();
-                    }
-                }
-                let _ = tx.send(subscribe.progress());
-            }
-        }
-    }
 
     impl<K, V, T, D, O, C> TxnsHandle<K, V, T, D, O, C>
     where
@@ -730,8 +771,8 @@ mod tests {
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // too slow
     async fn data_subscribe() {
-        async fn step(subs: &Vec<DataSubscribeTask>) {
-            for sub in subs.iter() {
+        async fn step(subs: &mut Vec<DataSubscribeTask>) {
+            for sub in subs.iter_mut() {
                 sub.step().await;
             }
         }
@@ -744,43 +785,43 @@ mod tests {
         // Start a subscription before the shard gets registered.
         let mut subs = Vec::new();
         subs.push(txns.subscribe_task(&client, d0, 5).await);
-        step(&subs).await;
+        step(&mut subs).await;
 
         // Now register the shard. Also start a new subscription and step the
         // previous one (plus repeat this for every later step).
         txns.register(1, [writer(&client, d0).await]).await.unwrap();
         subs.push(txns.subscribe_task(&client, d0, 5).await);
-        step(&subs).await;
+        step(&mut subs).await;
 
         // Now write something unrelated.
         let d1 = txns.expect_register(2).await;
         txns.expect_commit_at(3, d1, &["nope"], &log).await;
         subs.push(txns.subscribe_task(&client, d0, 5).await);
-        step(&subs).await;
+        step(&mut subs).await;
 
         // Now write to our shard before.
         txns.expect_commit_at(4, d0, &["4"], &log).await;
         subs.push(txns.subscribe_task(&client, d0, 5).await);
-        step(&subs).await;
+        step(&mut subs).await;
 
         // Now write to our shard at the as_of.
         txns.expect_commit_at(5, d0, &["5"], &log).await;
         subs.push(txns.subscribe_task(&client, d0, 5).await);
-        step(&subs).await;
+        step(&mut subs).await;
 
         // Now write to our shard past the as_of.
         txns.expect_commit_at(6, d0, &["6"], &log).await;
         subs.push(txns.subscribe_task(&client, d0, 5).await);
-        step(&subs).await;
+        step(&mut subs).await;
 
         // Now write something unrelated again.
         txns.expect_commit_at(7, d1, &["nope"], &log).await;
         subs.push(txns.subscribe_task(&client, d0, 5).await);
-        step(&subs).await;
+        step(&mut subs).await;
 
         // Verify that the dataflows can progress to the expected point and that
         // we read the right thing no matter when the dataflow started.
-        for sub in subs {
+        for mut sub in subs {
             let progress = sub.step_past(7).await;
             assert_eq!(progress, 8);
             log.assert_eq(d0, 5, 8, sub.finish().await);
