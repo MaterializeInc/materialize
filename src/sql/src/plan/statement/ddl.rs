@@ -60,8 +60,8 @@ use mz_sql_parser::ast::{
     PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, ReferencedSubsources,
     RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition,
     ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar, SourceIncludeMetadata, Statement,
-    TableConstraint, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value, ViewDefinition,TableOption,TableOptionName,
+    TableConstraint, TableOption, TableOptionName, UnresolvedDatabaseName, UnresolvedItemName,
+    UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
 };
 use mz_sql_parser::ident;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
@@ -362,7 +362,7 @@ pub fn plan_create_table(
     let create_sql = normalize::create_statement(scx, Statement::CreateTable(stmt.clone()))?;
 
     let options = plan_table_options(scx, with_options.clone())?;
-        let compaction_window = options.iter().find_map(|o| {
+    let compaction_window = options.iter().find_map(|o| {
         #[allow(irrefutable_let_patterns)]
         if let crate::plan::TableOption::RetainHistory(lcw) = o {
             Some(lcw.clone())
@@ -370,7 +370,7 @@ pub fn plan_create_table(
             None
         }
     });
-    
+
     let table = Table {
         create_sql,
         desc,
