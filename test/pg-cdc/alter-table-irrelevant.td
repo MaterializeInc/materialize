@@ -100,3 +100,9 @@ INSERT INTO irrelevant_table VALUES ('gh');
 > SELECT * FROM base_table;
 1
 2
+
+! SELECT * FROM irrelevant_table;
+contains: incompatible schema change
+
+# Drop broken table because mzcompose expects all healthy sources
+> ALTER SOURCE mz_source DROP SUBSOURCE irrelevant_table;

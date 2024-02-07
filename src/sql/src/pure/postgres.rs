@@ -34,7 +34,7 @@ use super::RequestedSubsource;
 pub(super) fn derive_catalog_from_publication_tables<'a>(
     database: &'a str,
     publication_tables: &'a [PostgresTableDesc],
-) -> Result<SubsourceCatalog<&'a PostgresTableDesc>, PlanError> {
+) -> Result<SubsourceCatalog<PostgresTableDesc>, PlanError> {
     // An index from table name -> schema name -> database name -> PostgresTableDesc
     let mut tables_by_name = BTreeMap::new();
     for table in publication_tables.iter() {
@@ -44,7 +44,7 @@ pub(super) fn derive_catalog_from_publication_tables<'a>(
             .entry(table.namespace.clone())
             .or_insert_with(BTreeMap::new)
             .entry(database.to_string())
-            .or_insert(table);
+            .or_insert(table.clone());
     }
 
     Ok(SubsourceCatalog(tables_by_name))
@@ -82,7 +82,7 @@ pub(super) async fn validate_requested_subsources_privileges(
 }
 
 pub(super) fn generate_text_columns(
-    publication_catalog: &SubsourceCatalog<&PostgresTableDesc>,
+    publication_catalog: &SubsourceCatalog<PostgresTableDesc>,
     text_columns: &mut [UnresolvedItemName],
     option_name: &str,
 ) -> Result<BTreeMap<u32, BTreeSet<String>>, PlanError> {

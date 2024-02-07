@@ -42,7 +42,7 @@ pub(super) fn mysql_upstream_name(
 
 pub(super) fn derive_catalog_from_tables<'a>(
     tables: &'a [MySqlTableDesc],
-) -> Result<SubsourceCatalog<&'a MySqlTableDesc>, PlanError> {
+) -> Result<SubsourceCatalog<MySqlTableDesc>, PlanError> {
     // An index from table name -> schema name -> MySqlTableDesc
     let mut tables_by_name = BTreeMap::new();
     for table in tables.iter() {
@@ -52,7 +52,7 @@ pub(super) fn derive_catalog_from_tables<'a>(
             .entry(table.schema_name.clone())
             .or_insert_with(BTreeMap::new)
             .entry(MYSQL_DATABASE_FAKE_NAME.to_string())
-            .or_insert(table);
+            .or_insert(table.clone());
     }
 
     Ok(SubsourceCatalog(tables_by_name))
