@@ -336,7 +336,7 @@ The `mz_kafka_sources` table contains a row for each Kafka source in the system.
 |------------------------|----------------|-----------------------------------------------------------------------------------------------------------|
 | `id`                   | [`text`]       | The ID of the Kafka source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).        |
 | `group_id_prefix`      | [`text`]       | The value of the `GROUP ID PREFIX` connection option.                                                     |
-| `topic          `      | [`text`]       | The topic this Kafka source is reading from.                                                              |
+| `topic          `      | [`text`]       | The name of the Kafka topic the source is reading from.                                                              |
 
 ### `mz_materialization_lag`
 
