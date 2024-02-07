@@ -30,11 +30,12 @@
 
 use std::collections::BTreeMap;
 use std::num::NonZeroI64;
-use std::time::{Duration, Instant};
+use std::pin::Pin;
+use std::time::Duration;
 
 use differential_dataflow::consolidation::consolidate;
 use differential_dataflow::lattice::Lattice;
-use futures::{future, FutureExt};
+use futures::{future, Future, FutureExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::ReplicaId;
@@ -49,6 +50,7 @@ use mz_storage_types::read_policy::ReadPolicy;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, Timestamp};
+use tokio::time::{self, MissedTickBehavior};
 use tracing::warn;
 use uuid::Uuid;
 
@@ -130,14 +132,21 @@ pub struct ComputeController<T> {
     envd_epoch: NonZeroI64,
     /// The compute controller metrics.
     metrics: ComputeControllerMetrics,
-    /// Compute controller introspection support.
-    introspection: Introspection,
 
     /// Receiver for responses produced by `Instance`s, to be delivered on subsequent calls to
     /// `ActiveComputeController::process`.
     response_rx: crossbeam_channel::Receiver<ComputeControllerResponse<T>>,
     /// Response sender that's passed to new `Instance`s.
     response_tx: crossbeam_channel::Sender<ComputeControllerResponse<T>>,
+    /// Receiver for introspection updates produced by `Instance`s.
+    introspection_rx: crossbeam_channel::Receiver<IntrospectionUpdates>,
+    /// Introspection updates sender that's passed to new `Instance`s.
+    introspection_tx: crossbeam_channel::Sender<IntrospectionUpdates>,
+
+    /// Ticker for scheduling periodic maintenance work.
+    maintenance_ticker: tokio::time::Interval,
+    /// Whether maintenance work was scheduled.
+    maintenance_scheduled: bool,
 
     /// Whether to aggressively downgrade read holds for sink dataflows.
     ///
@@ -154,6 +163,10 @@ impl<T: Timestamp> ComputeController<T> {
         metrics_registry: MetricsRegistry,
     ) -> Self {
         let (response_tx, response_rx) = crossbeam_channel::unbounded();
+        let (introspection_tx, introspection_rx) = crossbeam_channel::unbounded();
+
+        let mut maintenance_ticker = time::interval(Duration::from_secs(1));
+        maintenance_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         Self {
             instances: BTreeMap::new(),
@@ -165,9 +178,12 @@ impl<T: Timestamp> ComputeController<T> {
             stashed_replica_response: None,
             envd_epoch,
             metrics: ComputeControllerMetrics::new(metrics_registry),
-            introspection: Introspection::new(),
             response_rx,
             response_tx,
+            introspection_rx,
+            introspection_tx,
+            maintenance_ticker,
+            maintenance_scheduled: false,
             enable_aggressive_readhold_downgrades: true,
         }
     }
@@ -304,7 +320,7 @@ where
                 self.envd_epoch,
                 self.metrics.for_instance(id),
                 self.response_tx.clone(),
-                self.introspection.tx.clone(),
+                self.introspection_tx.clone(),
                 self.enable_aggressive_readhold_downgrades,
             ),
         );
@@ -368,24 +384,22 @@ where
             // We have responses waiting to be processed.
             return;
         }
-        if self.instances.values().any(|i| i.wants_processing()) {
-            // An instance requires processing.
+        if self.maintenance_scheduled {
+            // Maintenance work has been scheduled.
             return;
         }
 
-        if self.instances.is_empty() {
-            // If there are no clients, block forever. This signals that there may be more work to
-            // do (e.g., if a compute instance is created). Calling `select_all` with an empty list
-            // of futures will panic.
-            future::pending().await
-        }
-
-        // `Instance::recv` is cancellation safe, so it is safe to construct this `select_all`.
-        let receives = self
-            .instances
-            .iter_mut()
-            .map(|(id, instance)| Box::pin(instance.recv().map(|result| (*id, result))));
-        let receives = future::select_all(receives);
+        let receives: Pin<Box<dyn Future<Output = _>>> = if self.instances.is_empty() {
+            // Calling `select_all` with an empty list of futures will panic.
+            Box::pin(future::pending())
+        } else {
+            // `Instance::recv` is cancellation safe, so it is safe to construct this `select_all`.
+            let iter = self
+                .instances
+                .iter_mut()
+                .map(|(id, instance)| Box::pin(instance.recv().map(|result| (*id, result))));
+            Box::pin(future::select_all(iter))
+        };
 
         tokio::select! {
              ((instance_id, result), _index, _remaining) = receives => {
@@ -400,7 +414,9 @@ where
                     }
                 }
             },
-            () = self.introspection.sleep() => (),
+            _ = self.maintenance_ticker.tick() => {
+                self.maintenance_scheduled = true;
+            },
         }
     }
 
@@ -596,7 +612,21 @@ where
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn record_introspection_updates(&mut self) {
-        for (type_, updates) in self.compute.introspection.updates_for_recording() {
+        // We could record the contents of `introspection_rx` directly here, but to reduce the
+        // pressure on persist we spend some effort consolidating first.
+        let mut updates_by_type = BTreeMap::new();
+
+        for (type_, updates) in self.compute.introspection_rx.try_iter() {
+            updates_by_type
+                .entry(type_)
+                .or_insert_with(Vec::new)
+                .extend(updates);
+        }
+        for updates in updates_by_type.values_mut() {
+            consolidate(updates);
+        }
+
+        for (type_, updates) in updates_by_type {
             self.storage
                 .record_introspection_updates(type_, updates)
                 .await;
@@ -612,13 +642,12 @@ where
     /// Processes the work queued by [`ComputeController::ready`].
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn process(&mut self) -> Option<ComputeControllerResponse<T>> {
-        // Perform periodic instance maintenance work.
-        for instance in self.compute.instances.values_mut() {
-            instance.activate(self.storage).maintain();
+        // Perform periodic maintenance work.
+        if self.compute.maintenance_scheduled {
+            self.maintain().await;
+            self.compute.maintenance_ticker.reset();
+            self.compute.maintenance_scheduled = false;
         }
-
-        // Record pending introspection updates.
-        self.record_introspection_updates().await;
 
         // Process pending ready responses.
         match self.compute.response_rx.try_recv() {
@@ -647,6 +676,17 @@ where
         }
 
         None
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn maintain(&mut self) {
+        // Record pending introspection updates.
+        self.record_introspection_updates().await;
+
+        // Perform instance maintenance work.
+        for instance in self.compute.instances.values_mut() {
+            instance.activate(self.storage).maintain();
+        }
     }
 }
 
@@ -787,64 +827,5 @@ impl<T: Timestamp> CollectionState<T> {
         let mut state = Self::new(since, Vec::new(), Vec::new());
         state.log_collection = true;
         state
-    }
-}
-
-/// Compute controller introspection support.
-struct Introspection {
-    /// Receiver for introspection updates produced by `Instance`s.
-    rx: crossbeam_channel::Receiver<IntrospectionUpdates>,
-    /// Introspection updates sender that's passed to new `Instance`s.
-    tx: crossbeam_channel::Sender<IntrospectionUpdates>,
-    /// Time when introspection updates were last recorded.
-    last_recording: Instant,
-    /// Amount of time to sleep between recordings.
-    sleep_time: Duration,
-}
-
-impl Introspection {
-    fn new() -> Self {
-        let (tx, rx) = crossbeam_channel::unbounded();
-        Self {
-            tx,
-            rx,
-            last_recording: Instant::now(),
-            sleep_time: Duration::from_secs(1),
-        }
-    }
-
-    /// Whether we are ready to record introspection updates.
-    fn ready_for_recording(&self) -> bool {
-        let updates_available = !self.rx.is_empty();
-        let time_elapsed = self.last_recording.elapsed() > self.sleep_time;
-        updates_available && time_elapsed
-    }
-
-    /// Sleep until it is time to record introspection updates.
-    async fn sleep(&self) {
-        while !self.ready_for_recording() {
-            tokio::time::sleep(self.sleep_time).await;
-        }
-    }
-
-    /// Return ready introspection updates for recording.
-    fn updates_for_recording(&mut self) -> impl Iterator<Item = IntrospectionUpdates> {
-        // We could return the contents of `self.rx` directly here, but to reduce the pressure on
-        // persist we spend some effort consolidating first.
-        let mut updates_by_type = BTreeMap::new();
-
-        if self.ready_for_recording() {
-            for (type_, updates) in self.rx.try_iter() {
-                updates_by_type
-                    .entry(type_)
-                    .or_insert_with(Vec::new)
-                    .extend(updates);
-            }
-            for updates in updates_by_type.values_mut() {
-                consolidate(updates);
-            }
-        }
-
-        updates_by_type.into_iter()
     }
 }

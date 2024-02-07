@@ -318,12 +318,6 @@ impl<T: Timestamp> Instance<T> {
         }
     }
 
-    /// Return whether this instance has any processing work scheduled.
-    pub fn wants_processing(&self) -> bool {
-        // Do we need to rehydrate failed replicas?
-        self.replicas.values().any(|r| r.failed)
-    }
-
     /// Returns whether the identified replica exists.
     pub fn replica_exists(&self, id: ReplicaId) -> bool {
         self.replicas.contains_key(&id)
@@ -1268,13 +1262,14 @@ where
         let mut storage_read_capability_changes = BTreeMap::default();
         for collection in self.compute.collections.values_mut() {
             let last_upper = collection.replica_write_frontiers.remove(&replica_id);
+            let Some(frontier) = last_upper else { continue };
 
-            if let Some(frontier) = last_upper {
+            if !frontier.is_empty() {
                 // Update read holds on storage dependencies.
                 for storage_id in &collection.storage_dependencies {
                     let update = storage_read_capability_changes
                         .entry(*storage_id)
-                        .or_insert_with(|| ChangeBatch::new());
+                        .or_insert_with(ChangeBatch::new);
                     update.extend(frontier.iter().map(|time| (time.clone(), -1)));
                 }
             }
@@ -1385,18 +1380,22 @@ where
             }
         }
 
+        // Prune empty changes. We might end up with empty changes for dependencies that have been
+        // dropped already, which is fine but might be confusing if we reported them.
+        compute_net.retain_mut(|(_key, update)| !update.is_empty());
+        storage_todo.retain(|_key, update| !update.is_empty());
+
         // Translate our net compute actions into `AllowCompaction` commands.
-        for (id, change) in compute_net.iter_mut() {
+        for (id, _change) in compute_net.iter_mut() {
             let frontier = self
                 .compute
                 .collection(*id)
                 .expect("existence checked above")
-                .read_frontier();
-            if !change.is_empty() {
-                let frontier = frontier.to_owned();
-                self.compute
-                    .send(ComputeCommand::AllowCompaction { id: *id, frontier });
-            }
+                .read_frontier()
+                .to_owned();
+            let frontier = frontier.to_owned();
+            self.compute
+                .send(ComputeCommand::AllowCompaction { id: *id, frontier });
         }
 
         // We may have storage consequences to process.
@@ -1699,10 +1698,10 @@ where
     /// It is a good place to perform maintenance work that arises from various controller state
     /// changes and that cannot conveniently be handled synchronously with those state changes.
     pub fn maintain(&mut self) {
-        self.compute.refresh_state_metrics();
-        self.compute.cleanup_collections();
         self.rehydrate_failed_replicas();
         self.downgrade_warmup_capabilities();
+        self.compute.cleanup_collections();
+        self.compute.refresh_state_metrics();
     }
 }
 
