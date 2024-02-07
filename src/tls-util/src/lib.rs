@@ -103,9 +103,7 @@ pub struct Pkcs12Archive {
     pub pass: String,
 }
 
-/// Reimplements `reqwest::Certificate::from_pem` in terms of OpenSSL.
-///
-/// The implementation in reqwest requires rustls.
+/// Constructs an identity from a PEM-formatted key and certificate using OpenSSL.
 pub fn pkcs12der_from_pem(
     key: &[u8],
     cert: &[u8],

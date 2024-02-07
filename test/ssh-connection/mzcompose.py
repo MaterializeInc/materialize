@@ -10,6 +10,7 @@
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -28,6 +29,17 @@ SERVICES = [
     Postgres(),
     TestCerts(),
     Redpanda(),
+    MySql(
+        additional_args=[
+            "--log-bin=mysql-bin",
+            "--gtid_mode=ON",
+            "--enforce_gtid_consistency=ON",
+            "--binlog-format=row",
+            "--log-slave-updates",
+            "--binlog-row-image=full",
+            "--server-id=1",
+        ]
+    ),
 ]
 
 
@@ -109,6 +121,52 @@ def workflow_pg(c: Composition) -> None:
     c.run_testdrive_files("--no-reset", "pg-source-after-ssh-failure.td")
     c.up("ssh-bastion-host")
     c.run_testdrive_files("--no-reset", "pg-source-after-ssh-restart.td")
+
+
+def workflow_mysql(c: Composition) -> None:
+    c.up("materialized", "ssh-bastion-host", "mysql")
+
+    c.run_testdrive_files("setup.td")
+
+    public_key = c.sql_query(
+        """
+        select public_key_1 from mz_ssh_tunnel_connections ssh \
+        join mz_connections c on c.id = ssh.id
+        where c.name = 'thancred';
+        """
+    )[0][0]
+
+    c.exec(
+        "ssh-bastion-host",
+        "bash",
+        "-c",
+        f"echo '{public_key}' > /etc/authorized_keys/mz",
+    )
+
+    # Basic validation
+    c.run_testdrive_files(
+        "--no-reset",
+        f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+        "mysql-source.td",
+    )
+
+    # Validate SSH bastion host failure & recovery scenario
+    c.kill("ssh-bastion-host")
+    c.run_testdrive_files("--no-reset", "mysql-source-after-ssh-failure.td")
+    c.up("ssh-bastion-host")
+    c.run_testdrive_files(
+        "--no-reset",
+        f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+        "mysql-source-after-ssh-restart.td",
+    )
+
+    # TODO(roshan): Enable this when TLS/SSL options for MySQL are supported
+    # Validate SSL/TLS connections over SSH tunnel
+    # c.run_testdrive_files(
+    #     "--no-reset",
+    #     f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+    #     "mysql-source-ssl.td",
+    # )
 
 
 def workflow_kafka(c: Composition, redpanda: bool = False) -> None:

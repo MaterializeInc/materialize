@@ -7,11 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_ore::option::OptionExt;
-use mz_ssh_util::tunnel_manager::SshTunnelManager;
+use std::ops::{Deref, DerefMut};
 
-use mysql_async::{Conn, Opts};
+use anyhow::anyhow;
+
+use mysql_async::{Conn, Opts, OptsBuilder};
 use tracing::{info, warn};
+
+use mz_ore::option::OptionExt;
+use mz_repr::GlobalId;
+use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig};
+use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
 
 use crate::MySqlError;
 
@@ -21,8 +27,55 @@ use crate::MySqlError;
 pub enum TunnelConfig {
     /// Establish a direct TCP connection to the database host.
     Direct,
-    // TODO: Implement SSH tunneling for MySQL connections
-    // TODO: Implement AWS PrivateLink tunneling for MySQL connections
+    /// Establish a TCP connection to the database via an SSH tunnel.
+    /// This means first establishing an SSH connection to a bastion host,
+    /// and then opening a separate connection from that host to the database.
+    /// This is commonly referred by vendors as a "direct SSH tunnel", in
+    /// opposition to "reverse SSH tunnel", which is currently unsupported.
+    Ssh { config: SshTunnelConfig },
+    /// Establish a TCP connection to the database via an AWS PrivateLink
+    /// service.
+    AwsPrivatelink {
+        /// The ID of the AWS PrivateLink service.
+        connection_id: GlobalId,
+    },
+}
+
+/// A MySQL connection with an optional SSH tunnel handle.
+///
+/// This wrapper is intended to be used in place of `mysql_async::Conn` to
+/// keep the SSH tunnel alive for the lifecycle of the connection by holding
+/// a reference to the tunnel handle.
+#[derive(Debug)]
+pub struct MySqlConn {
+    conn: Conn,
+    _ssh_tunnel_handle: Option<ManagedSshTunnelHandle>,
+}
+
+impl Deref for MySqlConn {
+    type Target = Conn;
+
+    fn deref(&self) -> &Self::Target {
+        &self.conn
+    }
+}
+
+impl DerefMut for MySqlConn {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.conn
+    }
+}
+
+impl MySqlConn {
+    pub async fn disconnect(mut self) -> Result<(), MySqlError> {
+        self.conn.disconnect().await?;
+        self._ssh_tunnel_handle.take();
+        Ok(())
+    }
+
+    pub fn take(self) -> (Conn, Option<ManagedSshTunnelHandle>) {
+        (self.conn, self._ssh_tunnel_handle)
+    }
 }
 
 /// Configuration for MySQL connections.
@@ -33,18 +86,23 @@ pub enum TunnelConfig {
 pub struct Config {
     inner: Opts,
     tunnel: TunnelConfig,
+    ssh_timeout_config: SshTimeoutConfig,
 }
 
 impl Config {
-    pub fn new(inner: Opts, tunnel: TunnelConfig) -> Self {
-        Self { inner, tunnel }
+    pub fn new(inner: Opts, tunnel: TunnelConfig, ssh_timeout_config: SshTimeoutConfig) -> Self {
+        Self {
+            inner,
+            tunnel,
+            ssh_timeout_config,
+        }
     }
 
     pub async fn connect(
         &self,
         task_name: &str,
-        _ssh_tunnel_manager: &SshTunnelManager,
-    ) -> Result<Conn, MySqlError> {
+        ssh_tunnel_manager: &SshTunnelManager,
+    ) -> Result<MySqlConn, MySqlError> {
         let address = format!(
             "mysql:://{}@{}:{}/{}",
             self.inner.user().display_or("<unknown-user>"),
@@ -53,7 +111,7 @@ impl Config {
             self.inner.db_name().display_or("<unknown-dbname>"),
         );
         info!(%task_name, %address, "connecting");
-        match self.connect_internal().await {
+        match self.connect_internal(ssh_tunnel_manager).await {
             Ok(t) => {
                 info!(%task_name, %address, "connected");
                 Ok(t)
@@ -65,11 +123,75 @@ impl Config {
         }
     }
 
-    async fn connect_internal(&self) -> Result<Conn, MySqlError> {
+    fn address(&self) -> (&str, u16) {
+        (self.inner.ip_or_hostname(), self.inner.tcp_port())
+    }
+
+    async fn connect_internal(
+        &self,
+        ssh_tunnel_manager: &SshTunnelManager,
+    ) -> Result<MySqlConn, MySqlError> {
         match &self.tunnel {
-            TunnelConfig::Direct => Conn::new(self.inner.clone())
-                .await
-                .map_err(MySqlError::from),
+            TunnelConfig::Direct => Ok(MySqlConn {
+                conn: Conn::new(self.inner.clone())
+                    .await
+                    .map_err(MySqlError::from)?,
+                _ssh_tunnel_handle: None,
+            }),
+            TunnelConfig::Ssh { config } => {
+                let (host, port) = self.address();
+                let tunnel = ssh_tunnel_manager
+                    .connect(config.clone(), host, port, self.ssh_timeout_config)
+                    .await
+                    .map_err(MySqlError::Ssh)?;
+
+                let tunnel_addr = tunnel.local_addr();
+                let opts: Opts = OptsBuilder::from_opts(self.inner.clone())
+                    .ip_or_hostname(tunnel_addr.ip().to_string())
+                    .tcp_port(tunnel_addr.port())
+                    .into();
+
+                // TODO: Implement proper host verification when using an SSH tunnel. This
+                // requires a way to modify the TLS configuration created within mysql_async
+                // to set the TLS host different from the connection host.
+                if let Some(ssl_opts) = opts.ssl_opts() {
+                    if !ssl_opts.skip_domain_validation() {
+                        return Err(anyhow!(
+                            "VERIFY_IDENTITY SSL MODE is not currently supported with SSH tunnels"
+                        )
+                        .into());
+                    }
+                }
+
+                Ok(MySqlConn {
+                    conn: Conn::new(opts).await.map_err(MySqlError::from)?,
+                    _ssh_tunnel_handle: Some(tunnel),
+                })
+            }
+            TunnelConfig::AwsPrivatelink { connection_id } => {
+                let privatelink_host = mz_cloud_resources::vpc_endpoint_name(*connection_id);
+
+                let opts: Opts = OptsBuilder::from_opts(self.inner.clone())
+                    .ip_or_hostname(privatelink_host)
+                    .into();
+
+                // TODO: Implement proper host verification when using a PrivateLink tunnel. This
+                // requires a way to modify the TLS configuration created within mysql_async
+                // to set the TLS host different from the connection host.
+                if let Some(ssl_opts) = opts.ssl_opts() {
+                    if !ssl_opts.skip_domain_validation() {
+                        return Err(anyhow!(
+                            "VERIFY_IDENTITY SSL MODE is not currently supported with PrivateLink"
+                        )
+                        .into());
+                    }
+                }
+
+                Ok(MySqlConn {
+                    conn: Conn::new(opts).await.map_err(MySqlError::from)?,
+                    _ssh_tunnel_handle: None,
+                })
+            }
         }
     }
 }

@@ -4697,6 +4697,7 @@ dependencies = [
  "indexmap 1.9.1",
  "itertools",
  "mysql_async",
+ "mz-cloud-resources",
  "mz-ore",
  "mz-proto",
  "mz-repr",
