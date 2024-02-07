@@ -45,7 +45,9 @@ use crate::protocol::command::{
     ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
 };
 use crate::protocol::history::ComputeCommandHistory;
-use crate::protocol::response::{ComputeResponse, PeekResponse, SubscribeBatch, SubscribeResponse};
+use crate::protocol::response::{
+    ComputeResponse, CopyToResponse, PeekResponse, SubscribeBatch, SubscribeResponse,
+};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
 #[derive(Error, Debug)]
@@ -154,6 +156,13 @@ pub(super) struct Instance<T> {
     /// on the subscribe's input. `subscribes` is only used to track which updates have been
     /// emitted, to decide if new ones should be emitted or suppressed.
     subscribes: BTreeMap<GlobalId, ActiveSubscribe<T>>,
+    /// Tracks all in-progress COPY TOs.
+    ///
+    /// New entries are added for all s3 oneshot sinks (corresponding to a COPY TO) exported from
+    /// dataflows created through [`ActiveInstance::create_dataflow`].
+    ///
+    /// The entry for a copy to is removed once at least one replica has finished.
+    copy_tos: BTreeSet<GlobalId>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
     history: ComputeCommandHistory<UIntGauge, T>,
     /// Sender for responses to be delivered.
@@ -371,6 +380,9 @@ impl<T: Timestamp> Instance<T> {
         self.metrics
             .subscribe_count
             .set(u64::cast_from(self.subscribes.len()));
+        self.metrics
+            .copy_to_count
+            .set(u64::cast_from(self.copy_tos.len()));
     }
 
     /// Report updates (inserts or retractions) to the identified collection's dependencies.
@@ -508,6 +520,7 @@ where
             log_sources: arranged_logs,
             peeks: Default::default(),
             subscribes: Default::default(),
+            copy_tos: Default::default(),
             history,
             response_tx,
             introspection_tx,
@@ -938,6 +951,11 @@ where
                 .insert(subscribe_id, ActiveSubscribe::new());
         }
 
+        // Initialize tracking of copy tos.
+        for copy_to_id in dataflow.copy_to_ids() {
+            self.compute.copy_tos.insert(copy_to_id);
+        }
+
         // Here we augment all imported sources and all exported sinks with with the appropriate
         // storage metadata needed by the compute instance.
         let mut source_imports = BTreeMap::new();
@@ -1046,6 +1064,9 @@ where
             // If the collection is a subscribe, stop tracking it. This ensures that the controller
             // ceases to produce `SubscribeResponse`s for this subscribe.
             self.compute.subscribes.remove(id);
+            // If the collection is a copy to, stop tracking it. This ensures that the controller
+            // ceases to produce `CopyToResponse`s` for this copy to.
+            self.compute.copy_tos.remove(id);
         }
 
         if !read_capability_updates.is_empty() {
@@ -1467,6 +1488,9 @@ where
             ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
                 self.handle_peek_response(uuid, peek_response, otel_ctx, replica_id)
             }
+            ComputeResponse::CopyToResponse(id, response) => {
+                self.handle_copy_to_response(id, response, replica_id)
+            }
             ComputeResponse::SubscribeResponse(id, response) => {
                 self.handle_subscribe_response(id, response, replica_id)
             }
@@ -1539,6 +1563,37 @@ where
         Some(ComputeControllerResponse::PeekResponse(
             uuid, response, otel_ctx,
         ))
+    }
+
+    fn handle_copy_to_response(
+        &mut self,
+        sink_id: GlobalId,
+        response: CopyToResponse,
+        replica_id: ReplicaId,
+    ) -> Option<ComputeControllerResponse<T>> {
+        // We might not be tracking this COPY TO because we have already returned a response
+        // from one of the replicas. In that case, we ignore the response.
+        if self.compute.copy_tos.remove(&sink_id) {
+            let result = match response {
+                CopyToResponse::RowCount(count) => Ok(count),
+                CopyToResponse::Error(error) => Err(anyhow::anyhow!(error)),
+                // We should never get here: Replicas only drop copy to collections in response
+                // to the controller allowing them to do so, and when the controller drops a
+                // copy to it also removes it from the list of tracked copy_tos (see
+                // [`Instance::drop_collections`]).
+                CopyToResponse::Dropped => {
+                    tracing::error!(
+                        %sink_id,
+                        %replica_id,
+                        "received `Dropped` response for a tracked copy to",
+                    );
+                    return None;
+                }
+            };
+            Some(ComputeControllerResponse::CopyToResponse(sink_id, result))
+        } else {
+            None
+        }
     }
 
     fn handle_subscribe_response(

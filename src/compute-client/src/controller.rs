@@ -81,6 +81,8 @@ pub enum ComputeControllerResponse<T> {
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
     /// See [`ComputeResponse::SubscribeResponse`].
     SubscribeResponse(GlobalId, SubscribeBatch<T>),
+    /// Maps to [`ComputeResponse::CopyToResponse`] without the `Dropped`.
+    CopyToResponse(GlobalId, Result<u64, anyhow::Error>),
     /// See [`ComputeResponse::FrontierUpper`]
     FrontierUpper {
         /// TODO(#25239): Add documentation.

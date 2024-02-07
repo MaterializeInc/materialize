@@ -23,7 +23,9 @@ use mz_compute_client::protocol::command::{
     ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
 };
 use mz_compute_client::protocol::history::ComputeCommandHistory;
-use mz_compute_client::protocol::response::{ComputeResponse, PeekResponse, SubscribeResponse};
+use mz_compute_client::protocol::response::{
+    ComputeResponse, CopyToResponse, PeekResponse, SubscribeResponse,
+};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_expr::SafeMfpPlan;
@@ -81,6 +83,11 @@ pub struct ComputeState {
     /// The entries are pairs of sink identifier (to identify the subscribe instance)
     /// and the response itself.
     pub subscribe_response_buffer: Rc<RefCell<Vec<(GlobalId, SubscribeResponse)>>>,
+    /// Shared buffer with S3 oneshot operator instances by which they can respond.
+    ///
+    /// The entries are pairs of sink identifier (to identify the s3 oneshot instance)
+    /// and the response itself.
+    pub copy_to_response_buffer: Rc<RefCell<Vec<(GlobalId, CopyToResponse)>>>,
     /// Peek commands that are awaiting fulfillment.
     pub pending_peeks: BTreeMap<Uuid, PendingPeek>,
     /// The logger, from Timely's logging framework, if logs are enabled.
@@ -121,6 +128,7 @@ impl ComputeState {
             dropped_collections: Default::default(),
             traces,
             subscribe_response_buffer: Default::default(),
+            copy_to_response_buffer: Default::default(),
             pending_peeks: Default::default(),
             compute_logger: None,
             persist_clients,
@@ -637,6 +645,14 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             response
                 .to_error_if_exceeds(usize::try_from(self.compute_state.max_result_size).unwrap());
             self.send_compute_response(ComputeResponse::SubscribeResponse(sink_id, response));
+        }
+    }
+
+    /// Scan the shared copy to response buffer, and forward results along.
+    pub fn process_copy_tos(&mut self) {
+        let mut responses = self.compute_state.copy_to_response_buffer.borrow_mut();
+        for (sink_id, response) in responses.drain(..) {
+            self.send_compute_response(ComputeResponse::CopyToResponse(sink_id, response));
         }
     }
 

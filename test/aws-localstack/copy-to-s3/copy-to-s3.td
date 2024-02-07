@@ -65,30 +65,30 @@ contains:COPY TO target must have type text, not type integer
   );
 contains:ORDER BY is not supported in SELECT query for COPY statements
 
-# Getting the date from now() to make the test predictable
-$ set-from-sql var=now_date
-SELECT TO_CHAR(now(), 'YYYY-MM-DD');
+# Creating cluster with multiple replicas
+> CREATE CLUSTER c1 REPLICAS (r1 (size '1'), r2 (size '1'));
+> SET cluster = c1;
 
-! COPY t TO 's3://path/to/' || TO_CHAR(now(), 'YYYY-MM-DD')
+# functions like now() should work in the s3 path
+> COPY t TO 's3://path/to/' || TO_CHAR(now(), 'YYYY-MM-DD')
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
     FORMAT = 'csv'
   );
-contains:internal error: COPY TO 's3://path/to/${now_date}' is not yet implemented
 
-! COPY (SELECT a FROM t) TO 's3://path/to/' || TO_CHAR(now(), 'YYYY-MM-DD')
+> COPY (SELECT a FROM t) TO 's3://path/to/'
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
     FORMAT = 'csv'
   );
-contains:internal error: COPY TO 's3://path/to/${now_date}' is not yet implemented
 
-! COPY (SELECT 1000) TO 's3://path/to/' || TO_CHAR(now(), 'YYYY-MM-DD')
+> COPY (SELECT 1000) TO 's3://path/to/'
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
     FORMAT = 'csv'
   );
-contains:internal error: COPY TO 's3://path/to/${now_date}' is not yet implemented
+
+> DROP CLUSTER c1 CASCADE;

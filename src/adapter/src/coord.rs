@@ -149,6 +149,7 @@ use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::PendingPeek;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
+use crate::copy_to::ActiveCopyTo;
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::metrics::Metrics;
@@ -382,14 +383,18 @@ impl RealTimeRecencyContext {
 
 #[derive(Debug)]
 pub enum PeekStage {
+    /// Common stages across SELECT, EXPLAIN and COPY TO queries.
     Validate(PeekStageValidate),
     LinearizeTimestamp(PeekStageLinearizeTimestamp),
     RealTimeRecency(PeekStageRealTimeRecency),
     TimestampReadHold(PeekStageTimestampReadHold),
     Optimize(PeekStageOptimize),
+    /// Final stage for a peek.
     Finish(PeekStageFinish),
-    CopyTo(PeekStageCopyTo),
+    /// Final stage for an explain.
     ExplainPlan(PeekStageExplainPlan),
+    /// Final stage for a copy to.
+    CopyTo(PeekStageCopyTo),
 }
 
 impl PeekStage {
@@ -1272,6 +1277,8 @@ pub struct Coordinator {
 
     /// A map from active subscribes to the subscribe description.
     active_subscribes: BTreeMap<GlobalId, ActiveSubscribe>,
+    /// A map from active copy tos to the copy to description.
+    active_copy_tos: BTreeMap<GlobalId, ActiveCopyTo>,
     /// A map from active webhooks to their invalidation handle.
     active_webhooks: BTreeMap<GlobalId, WebhookAppenderInvalidator>,
 
@@ -2942,6 +2949,7 @@ pub fn serve(
                     pending_real_time_recency_timestamp: BTreeMap::new(),
                     pending_linearize_read_txns: BTreeMap::new(),
                     active_subscribes: BTreeMap::new(),
+                    active_copy_tos: BTreeMap::new(),
                     active_webhooks: BTreeMap::new(),
                     write_lock: Arc::new(tokio::sync::Mutex::new(())),
                     write_lock_wait_group: VecDeque::new(),

@@ -10,6 +10,7 @@
 //! Various utility methods used by the [`Coordinator`]. Ideally these are all
 //! put in more meaningfully named modules.
 
+use anyhow::anyhow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_ore::now::EpochMillis;
 use mz_repr::{GlobalId, ScalarType};
@@ -21,8 +22,9 @@ use mz_sql_parser::ast::{Raw, Statement, StatementKind};
 use crate::catalog::Catalog;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::Coordinator;
+use crate::copy_to::ActiveCopyTo;
 use crate::session::{Session, TransactionStatus};
-use crate::subscribe::{ActiveSubscribe, SubscribeRemovalReason};
+use crate::subscribe::{ActiveSubscribe, ComputeSinkRemovalReason};
 use crate::util::{describe, ComputeSinkId};
 use crate::{metrics, AdapterError, ExecuteContext, ExecuteResponse, PeekResponseUnary};
 
@@ -200,7 +202,7 @@ impl Coordinator {
 
     /// Clears coordinator state for a connection.
     pub(crate) async fn clear_connection(&mut self, conn_id: &ConnectionId) {
-        self.remove_active_subscribes(conn_id, SubscribeRemovalReason::Finished)
+        self.remove_active_compute_sinks(conn_id, ComputeSinkRemovalReason::Finished)
             .await;
 
         // Release this transaction's compaction hold on collections.
@@ -244,18 +246,18 @@ impl Coordinator {
 
     /// Cancel all outstanding subscribes for the identified connection.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) async fn cancel_active_subscribes(&mut self, conn_id: &ConnectionId) {
-        self.remove_active_subscribes(conn_id, SubscribeRemovalReason::Canceled)
+    pub(crate) async fn cancel_active_compute_sinks(&mut self, conn_id: &ConnectionId) {
+        self.remove_active_compute_sinks(conn_id, ComputeSinkRemovalReason::Canceled)
             .await
     }
 
     /// Remove all outstanding subscribes for the identified connection with
     /// the specified reason.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub(crate) async fn remove_active_subscribes(
+    pub(crate) async fn remove_active_compute_sinks(
         &mut self,
         conn_id: &ConnectionId,
-        reason: SubscribeRemovalReason,
+        reason: ComputeSinkRemovalReason,
     ) {
         let drop_sinks = self
             .active_conns
@@ -273,7 +275,7 @@ impl Coordinator {
     pub(crate) async fn remove_active_subscribe(
         &mut self,
         id: GlobalId,
-        reason: SubscribeRemovalReason,
+        reason: ComputeSinkRemovalReason,
     ) {
         if let Some(active_subscribe) = self.active_subscribes.remove(&id) {
             let update = self
@@ -298,13 +300,67 @@ impl Coordinator {
                 });
 
             let message = match reason {
-                SubscribeRemovalReason::Finished => return,
-                SubscribeRemovalReason::Canceled => PeekResponseUnary::Canceled,
-                SubscribeRemovalReason::DependencyDropped(d) => PeekResponseUnary::Error(format!(
-                    "subscribe has been terminated because underlying {d} was dropped"
-                )),
+                ComputeSinkRemovalReason::Finished => return,
+                ComputeSinkRemovalReason::Canceled => PeekResponseUnary::Canceled,
+                ComputeSinkRemovalReason::DependencyDropped(d) => PeekResponseUnary::Error(
+                    format!("subscribe has been terminated because underlying {d} was dropped"),
+                ),
             };
             active_subscribe.send(message);
+        }
+    }
+
+    /// Handle adding metadata associated with a COPY TO query.
+    pub(crate) fn add_active_copy_to(&mut self, id: GlobalId, active_copy_to: ActiveCopyTo) {
+        let session_type = metrics::session_type_label_value(&active_copy_to.user);
+        self.metrics
+            .active_copy_tos
+            .with_label_values(&[session_type])
+            .inc();
+
+        self.active_conns
+            .get_mut(&active_copy_to.conn_id)
+            .expect("must exist for active sessions")
+            .drop_sinks
+            .insert(ComputeSinkId {
+                cluster_id: active_copy_to.cluster_id,
+                global_id: id,
+            });
+
+        self.active_copy_tos.insert(id, active_copy_to);
+    }
+
+    /// Handle removing metadata associated with a COPY TO query.
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(crate) fn remove_active_copy_to(
+        &mut self,
+        id: &GlobalId,
+        reason: ComputeSinkRemovalReason,
+    ) {
+        if let Some(mut active_copy_to) = self.active_copy_tos.remove(id) {
+            let session_type = metrics::session_type_label_value(&active_copy_to.user);
+            self.metrics
+                .active_copy_tos
+                .with_label_values(&[session_type])
+                .dec();
+
+            self.active_conns
+                .get_mut(&active_copy_to.conn_id)
+                .expect("must exist for active subscribe")
+                .drop_sinks
+                .remove(&ComputeSinkId {
+                    cluster_id: active_copy_to.cluster_id,
+                    global_id: *id,
+                });
+
+            let message = match reason {
+                ComputeSinkRemovalReason::Finished => return,
+                ComputeSinkRemovalReason::Canceled => Err(AdapterError::Canceled),
+                ComputeSinkRemovalReason::DependencyDropped(d) => Err(AdapterError::Unstructured(
+                    anyhow!("copy has been terminated because underlying {d} was dropped"),
+                )),
+            };
+            active_copy_to.process_response(message);
         }
     }
 }

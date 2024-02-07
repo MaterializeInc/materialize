@@ -43,6 +43,7 @@ use crate::coord::{
     PeekStageOptimize, PeekStageRealTimeRecency, PeekStageTimestampReadHold, PeekStageValidate,
     PlanValidity, RealTimeRecencyContext, TargetCluster,
 };
+use crate::copy_to::ActiveCopyTo;
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
@@ -50,7 +51,6 @@ use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
 use crate::optimize::{self, Optimize, OverrideFrom};
 use crate::session::{RequireLinearization, Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
-use crate::util::ResultExt;
 
 impl Coordinator {
     /// Sequence a peek, determining a timestamp and the most efficient dataflow interaction.
@@ -247,8 +247,7 @@ impl Coordinator {
                     return;
                 }
                 CopyTo(stage) => {
-                    let result = self.peek_stage_copy_to(&mut ctx, stage);
-                    ctx.retire(result);
+                    self.peek_stage_copy_to_dataflow(ctx, stage).await;
                     return;
                 }
                 ExplainPlan(stage) => {
@@ -825,31 +824,35 @@ impl Coordinator {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    fn peek_stage_copy_to(
+    async fn peek_stage_copy_to_dataflow(
         &mut self,
-        ctx: &mut ExecuteContext,
+        ctx: ExecuteContext,
         PeekStageCopyTo {
-            validity: _,
+            validity,
             optimizer,
             global_lir_plan,
         }: PeekStageCopyTo,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let session = ctx.session_mut();
+    ) {
+        let sink_id = global_lir_plan.sink_id();
+        let cluster_id = optimizer.cluster_id();
+
         let (df_desc, df_meta) = global_lir_plan.unapply();
 
-        self.emit_optimizer_notices(&*session, &df_meta.optimizer_notices);
+        self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
 
-        // Ship the dataflow
-        self.controller
-            .active_compute()
-            .create_dataflow(optimizer.cluster_id(), df_desc)
-            .unwrap_or_terminate("cannot fail to create dataflows");
+        // Callback for the active copy to.
+        let active_copy_to = ActiveCopyTo {
+            user: ctx.session().user().clone(),
+            conn_id: ctx.session().conn_id().clone(),
+            ctx: Some(ctx),
+            cluster_id,
+            depends_on: validity.dependency_ids.clone(),
+        };
+        // Add metadata for the new COPY TO.
+        self.add_active_copy_to(sink_id, active_copy_to);
 
-        // TODO(mouli): implement!
-        Err(AdapterError::Internal(format!(
-            "COPY TO '{}' is not yet implemented",
-            optimizer.copy_to_uri()
-        )))
+        // Ship dataflow.
+        self.ship_dataflow(df_desc, cluster_id).await;
     }
 
     fn peek_stage_explain_plan(

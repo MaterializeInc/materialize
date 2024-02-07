@@ -929,7 +929,7 @@ impl Coordinator {
         }
 
         self.cancel_pending_peeks(&conn_id);
-        self.cancel_active_subscribes(&conn_id).await;
+        self.cancel_active_compute_sinks(&conn_id).await;
     }
 
     /// Handle termination of a client session.

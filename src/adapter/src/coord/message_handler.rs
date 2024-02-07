@@ -41,7 +41,7 @@ use crate::coord::{
 use crate::session::Session;
 use crate::statement_logging::StatementLifecycleEvent;
 use crate::util::ResultExt;
-use crate::{catalog, AdapterNotice, TimestampContext};
+use crate::{catalog, AdapterError, AdapterNotice, ExecuteResponse, TimestampContext};
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 74KB. This would
@@ -349,6 +349,15 @@ impl Coordinator {
                 // from the controller about the zombie subscribe.
                 if let Some(active_subscribe) = self.active_subscribes.get_mut(&sink_id) {
                     active_subscribe.process_response(response);
+                }
+            }
+            ControllerResponse::CopyToResponse(sink_id, response) => {
+                if let Some(active_copy_to) = self.active_copy_tos.get_mut(&sink_id) {
+                    let response = match response {
+                        Ok(n) => Ok(ExecuteResponse::Copied(usize::cast_from(n))),
+                        Err(error) => Err(AdapterError::Unstructured(error)),
+                    };
+                    active_copy_to.process_response(response);
                 }
             }
             ControllerResponse::ComputeReplicaMetrics(replica_id, new) => {

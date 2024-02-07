@@ -49,6 +49,7 @@ pub struct ComputeControllerMetrics {
     collection_count: UIntGaugeVec,
     peek_count: UIntGaugeVec,
     subscribe_count: UIntGaugeVec,
+    copy_to_count: UIntGaugeVec,
     command_queue_size: UIntGaugeVec,
     response_queue_size: UIntGaugeVec,
 
@@ -108,6 +109,11 @@ impl ComputeControllerMetrics {
                 help: "The number of active subscribes.",
                 var_labels: ["instance_id"],
             )),
+            copy_to_count: metrics_registry.register(metric!(
+                name: "mz_compute_controller_copy_to_count",
+                help: "The number of active copy tos.",
+                var_labels: ["instance_id"],
+            )),
             command_queue_size: metrics_registry.register(metric!(
                 name: "mz_compute_controller_command_queue_size",
                 help: "The size of the compute command queue.",
@@ -158,6 +164,7 @@ impl ComputeControllerMetrics {
         let subscribe_count = self
             .subscribe_count
             .get_delete_on_drop_gauge(labels.clone());
+        let copy_to_count = self.copy_to_count.get_delete_on_drop_gauge(labels.clone());
         let history_command_count = CommandMetrics::build(|typ| {
             let labels = labels.iter().cloned().chain([typ.into()]).collect();
             self.history_command_count.get_delete_on_drop_gauge(labels)
@@ -180,6 +187,7 @@ impl ComputeControllerMetrics {
             metrics: self.clone(),
             replica_count,
             collection_count,
+            copy_to_count,
             peek_count,
             subscribe_count,
             history_command_count,
@@ -204,6 +212,8 @@ pub struct InstanceMetrics {
     pub peek_count: UIntGauge,
     /// TODO(#25239): Add documentation.
     pub subscribe_count: UIntGauge,
+    /// TODO(#25239): Add documentation.
+    pub copy_to_count: UIntGauge,
     /// TODO(#25239): Add documentation.
     pub history_command_count: CommandMetrics<UIntGauge>,
     /// TODO(#25239): Add documentation.
@@ -475,6 +485,7 @@ struct ResponseMetrics<M> {
     frontier_upper: M,
     peek_response: M,
     subscribe_response: M,
+    copy_to_response: M,
 }
 
 impl<M> ResponseMetrics<M> {
@@ -486,6 +497,7 @@ impl<M> ResponseMetrics<M> {
             frontier_upper: build_metric("frontier_upper"),
             peek_response: build_metric("peek_response"),
             subscribe_response: build_metric("subscribe_response"),
+            copy_to_response: build_metric("copy_to_response"),
         }
     }
 
@@ -496,6 +508,7 @@ impl<M> ResponseMetrics<M> {
             FrontierUpper(_) => &self.frontier_upper,
             PeekResponse(_) => &self.peek_response,
             SubscribeResponse(_) => &self.subscribe_response,
+            CopyToResponse(_) => &self.copy_to_response,
         }
     }
 }

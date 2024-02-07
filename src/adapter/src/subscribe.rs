@@ -316,12 +316,12 @@ impl ActiveSubscribe {
 
 /// The reason for removing an [`ActiveSubscribe`].
 #[derive(Debug, Clone)]
-pub enum SubscribeRemovalReason {
-    /// The subscribe completed successfully.
+pub enum ComputeSinkRemovalReason {
+    /// The compute sink completed successfully.
     Finished,
-    /// The subscribe was canceled due to a user request.
+    /// The compute sink was canceled due to a user request.
     Canceled,
-    /// The subscribe was forcibly terminated because an object it depended on
+    /// The compute sink was forcibly terminated because an object it depended on
     /// was dropped.
     DependencyDropped(String),
 }
