@@ -334,6 +334,31 @@ It will generate webhook events based on the schema you provided.
 
 You can use any of the [Faker.js API methods](https://fakerjs.dev/api/) to generate data.
 
+To validate requests between the data generator and Materialize, you must create a [secret](/sql/create-secret/):
+
+```sql
+CREATE SECRET demo_webhook AS '<secret_value>';
+```
+
+Change the `<secret_value>` to a unique value that only you know and store it in a secure location.
+
+Next, create a webhook source with a `CHECK` statement that validates the request:
+
+```sql
+CREATE SOURCE webhook_demo IN CLUSTER my_cluster FROM WEBHOOK
+  BODY FORMAT JSON
+  CHECK (
+    WITH (
+      HEADERS,
+      BODY AS request_body,
+      SECRET demo_webhook
+    )
+    constant_time_eq(headers->'x-api-key', demo_webhook)
+  );
+```
+
+Finally, use the following form to generate demo data:
+
 {{% plugins/webhooks-datagen %}}
 
 ### Related pages

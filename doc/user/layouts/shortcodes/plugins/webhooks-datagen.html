@@ -104,7 +104,7 @@
     console.log("URL:", webhookURLInput.value);
     console.log("Headers:", {
       "Content-Type": "application/json",
-      Authorization: authPasswordInput.value,
+      "X-API-KEY": authPasswordInput.value,
     });
     console.log("Body:", JSON.stringify(generatedData));
 
@@ -112,7 +112,7 @@
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: authPasswordInput.value,
+        "X-API-KEY": authPasswordInput.value,
       },
       body: JSON.stringify(generatedData),
     })
