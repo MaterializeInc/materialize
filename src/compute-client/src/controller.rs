@@ -43,7 +43,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_expr::RowSetFinishing;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::controller::{IntrospectionType, StorageController};
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::{Deserialize, Serialize};
@@ -594,6 +594,21 @@ where
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn record_introspection_updates(&mut self) {
+        for (type_, updates) in self.compute.introspection.updates_for_recording() {
+            self.storage
+                .record_introspection_updates(type_, updates)
+                .await;
+        }
+    }
+}
+
+impl<T> ActiveComputeController<'_, T>
+where
+    T: TimestampManipulation,
+    ComputeGrpcClient: ComputeClient<T>,
+{
     /// Processes the work queued by [`ComputeController::ready`].
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn process(&mut self) -> Option<ComputeControllerResponse<T>> {
@@ -632,15 +647,6 @@ where
         }
 
         None
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn record_introspection_updates(&mut self) {
-        for (type_, updates) in self.compute.introspection.updates_for_recording() {
-            self.storage
-                .record_introspection_updates(type_, updates)
-                .await;
-        }
     }
 }
 
@@ -687,11 +693,19 @@ pub struct CollectionState<T> {
 
     /// Accumulation of read capabilities for the collection.
     ///
-    /// This accumulation will always contain `self.implied_capability`, but may also contain
-    /// capabilities held by others who have read dependencies on this collection.
+    /// This accumulation will always contain `implied_capability` and `warmup_capability`, but may
+    /// also contain capabilities held by others who have read dependencies on this collection.
     read_capabilities: MutableAntichain<T>,
     /// The implicit capability associated with collection creation.
     implied_capability: Antichain<T>,
+    /// A capability held to enable dataflow warmup.
+    ///
+    /// Dataflow warmup is an optimization that allows dataflows to immediately start hydrating
+    /// even when their next output time (as implied by the `write_frontier`) is in the future.
+    /// By installing a read capability derived from the write frontiers of the collection's
+    /// inputs, we ensure that the as-of of new dataflows installed for the collection is at a time
+    /// that is immediately available, so hydration can begin immediately too.
+    warmup_capability: Antichain<T>,
     /// The policy to use to downgrade `self.implied_capability`.
     ///
     /// If `None`, the collection is a write-only collection (i.e. a sink). For write-only
@@ -744,16 +758,22 @@ impl<T: Timestamp> CollectionState<T> {
         // A collection is not readable before the `as_of`.
         let since = as_of.clone();
         // A collection won't produce updates for times before the `as_of`.
-        let upper = as_of.clone();
+        let upper = as_of;
+
+        // Initialize all read capabilities to the `since`.
+        let implied_capability = since.clone();
+        let warmup_capability = since.clone();
 
         let mut read_capabilities = MutableAntichain::new();
-        read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
+        read_capabilities.update_iter(implied_capability.iter().map(|time| (time.clone(), 1)));
+        read_capabilities.update_iter(warmup_capability.iter().map(|time| (time.clone(), 1)));
 
         Self {
             log_collection: false,
             dropped: false,
             read_capabilities,
-            implied_capability: since.clone(),
+            implied_capability,
+            warmup_capability,
             read_policy: Some(ReadPolicy::ValidFrom(since)),
             storage_dependencies,
             compute_dependencies,

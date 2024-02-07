@@ -25,7 +25,7 @@ use mz_compute_types::sources::SourceInstanceDesc;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{Datum, Diff, GlobalId, Row};
+use mz_repr::{Datum, Diff, GlobalId, Row, TimestampManipulation};
 use mz_storage_client::controller::{IntrospectionType, StorageController};
 use mz_storage_types::read_policy::ReadPolicy;
 use thiserror::Error;
@@ -1040,11 +1040,13 @@ where
             // Mark the collection as dropped to allow it to be removed from the controller state.
             collection.dropped = true;
 
-            // Drop the implied read capability to announce that clients are not interested in the
-            // collection anymore.
-            let old_capability = std::mem::take(&mut collection.implied_capability);
+            // Drop the implied and warmup read capabilities to announce that clients are not
+            // interested in the collection anymore.
+            let implied_capability = std::mem::take(&mut collection.implied_capability);
+            let warmup_capability = std::mem::take(&mut collection.warmup_capability);
             let mut update = ChangeBatch::new();
-            update.extend(old_capability.iter().map(|t| (t.clone(), -1)));
+            update.extend(implied_capability.iter().map(|t| (t.clone(), -1)));
+            update.extend(warmup_capability.iter().map(|t| (t.clone(), -1)));
             read_capability_updates.insert(*id, update);
         }
 
@@ -1618,6 +1620,78 @@ where
             }
         }
     }
+}
+
+impl<'a, T> ActiveInstance<'a, T>
+where
+    T: TimestampManipulation,
+    ComputeGrpcClient: ComputeClient<T>,
+{
+    /// Downgrade the warmup capabilities of collections as much as possible.
+    ///
+    /// The only requirement we have for a collection's warmup capability is that it is for a time
+    /// that is available in all of the collection's inputs. For each input the latest time that is
+    /// the case for is `write_frontier - 1`. So the farthest we can downgrade a collection's
+    /// warmup capability is the minimum of `write_frontier - 1` of all its inputs.
+    ///
+    /// This method expects to be periodically called as part of instance maintenance work.
+    /// We would like to instead update the warmup capabilities synchronously in response to
+    /// frontier updates of dependency collections, but that is not generally possible because we
+    /// don't learn about frontier updates of storage collections synchronously. We could do
+    /// synchronous updates for compute dependencies, but we refrain from doing for simplicity.
+    fn downgrade_warmup_capabilities(&mut self) {
+        let mut new_capabilities = BTreeMap::new();
+        for (id, collection) in &self.compute.collections {
+            // For write-only collections that have advanced to the empty frontier, we can drop the
+            // warmup capability entirely. There is no reason why we would need to hydrate those
+            // collections again, so being able to warm them up is not useful.
+            if collection.read_policy.is_none()
+                && collection.write_frontier.is_empty()
+                && !collection.warmup_capability.is_empty()
+            {
+                new_capabilities.insert(*id, Antichain::new());
+                continue;
+            }
+
+            let compute_frontiers = collection.compute_dependencies.iter().flat_map(|dep_id| {
+                let collection = self.compute.collections.get(dep_id);
+                collection.map(|c| &c.write_frontier)
+            });
+            let storage_frontiers = collection.storage_dependencies.iter().flat_map(|dep_id| {
+                let collection = &self.storage_controller.collection(*dep_id).ok();
+                collection.map(|c| &c.write_frontier)
+            });
+
+            let mut new_capability = Antichain::new();
+            for frontier in compute_frontiers.chain(storage_frontiers) {
+                for time in frontier.iter() {
+                    if let Some(time) = time.step_back() {
+                        new_capability.insert(time);
+                    }
+                }
+            }
+
+            if PartialOrder::less_than(&collection.warmup_capability, &new_capability) {
+                new_capabilities.insert(*id, new_capability);
+            }
+        }
+
+        let mut read_capability_changes = BTreeMap::new();
+        for (id, new_capability) in new_capabilities {
+            let collection = self.compute.expect_collection_mut(id);
+            let old_capability = &collection.warmup_capability;
+
+            let mut update = ChangeBatch::new();
+            update.extend(old_capability.iter().map(|t| (t.clone(), -1)));
+            update.extend(new_capability.iter().map(|t| (t.clone(), 1)));
+            read_capability_changes.insert(id, update);
+            collection.warmup_capability = new_capability;
+        }
+
+        if !read_capability_changes.is_empty() {
+            self.update_read_capabilities(&mut read_capability_changes);
+        }
+    }
 
     /// Process pending maintenance work.
     ///
@@ -1628,6 +1702,7 @@ where
         self.compute.refresh_state_metrics();
         self.compute.cleanup_collections();
         self.rehydrate_failed_replicas();
+        self.downgrade_warmup_capabilities();
     }
 }
 
