@@ -36,7 +36,8 @@ use crate::optimize::dataflows::{
     ExprPrepStyle,
 };
 use crate::optimize::{
-    LirDataflowDescription, MirDataflowDescription, Optimize, OptimizerConfig, OptimizerError,
+    trace_plan, LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode,
+    OptimizerConfig, OptimizerError,
 };
 use crate::session::Session;
 use crate::TimestampContext;
@@ -172,18 +173,12 @@ impl Optimize<HirRelationExpr> for Optimizer {
     type To = LocalMirPlan;
 
     fn optimize(&mut self, expr: HirRelationExpr) -> Result<Self::To, OptimizerError> {
+        // Trace the pipeline input under `optimize/raw`.
+        trace_plan!(at: "raw", &expr);
+
         // HIR ⇒ MIR lowering and decorrelation
         let expr = expr.lower(&self.config)?;
 
-        // MIR ⇒ MIR optimization (local)
-        self.optimize(expr)
-    }
-}
-
-impl Optimize<MirRelationExpr> for Optimizer {
-    type To = LocalMirPlan;
-
-    fn optimize(&mut self, expr: MirRelationExpr) -> Result<Self::To, OptimizerError> {
         // MIR ⇒ MIR optimization (local)
         let expr = span!(target: "optimizer", Level::DEBUG, "local").in_scope(|| {
             #[allow(deprecated)]
@@ -296,6 +291,11 @@ impl<'s> Optimize<LocalMirPlan<ResolvedLocal<'s>>> for Optimizer {
             self.config.enable_eager_delta_joins,
         )?;
 
+        if self.config.mode == OptimizeMode::Explain {
+            // Collect the list of indexes used by the dataflow at this point.
+            trace_plan!(at: "global", &df_meta.used_indexes(&df_desc));
+        }
+
         // Return the (sealed) plan at the end of this optimization step.
         Ok(GlobalMirPlan {
             df_desc,
@@ -329,11 +329,10 @@ impl GlobalMirPlan<Unresolved> {
         // we expect to be able to set `until = as_of + 1` without an overflow.
         if let Some(as_of) = timestamp_ctx.timestamp() {
             if let Some(until) = as_of.checked_add(1) {
-                let until = Antichain::from_elem(until);
-                self.df_desc.until = until.clone();
+                self.df_desc.until = Antichain::from_elem(until);
+                // Also updating the sink up_to
                 for (_, sink) in &mut self.df_desc.sink_exports {
-                    // Also updating the sink up_to
-                    sink.up_to = until.clone();
+                    sink.up_to = self.df_desc.until.clone();
                 }
             } else {
                 warn!(as_of = %as_of, "as_of + 1 overflow");
@@ -395,6 +394,9 @@ impl<'s> Optimize<GlobalMirPlan<ResolvedGlobal<'s>>> for Optimizer {
             self.config.enable_reduce_mfp_fusion,
         )
         .map_err(OptimizerError::Internal)?;
+
+        // Trace the pipeline output under `optimize`.
+        trace_plan(&df_desc);
 
         Ok(GlobalLirPlan { df_desc, df_meta })
     }
