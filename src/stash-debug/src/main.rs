@@ -452,6 +452,10 @@ impl Usage {
                 )
                 .await?;
 
+            // Used as a lower boundary of the boot_ts, but it's ok to use now() for
+            // debugging/testing/inspecting.
+            let previous_ts = now().into();
+
             match Catalog::initialize_state(
                 StateConfig {
                     unsafe_mode: true,
@@ -474,6 +478,7 @@ impl Usage {
                     )),
                     active_connection_count: Arc::new(Mutex::new(ConnectionCounter::new(0))),
                 },
+                previous_ts,
                 &mut storage,
             )
             .await

@@ -659,31 +659,37 @@ impl Catalog {
         let metrics_registry = &MetricsRegistry::new();
         let active_connection_count = Arc::new(std::sync::Mutex::new(ConnectionCounter::new(0)));
         let secrets_reader = Arc::new(InMemorySecretsController::new());
-        let (catalog, _, _, _) = Catalog::open(Config {
-            storage,
-            metrics_registry,
-            // when debugging, no reaping
-            storage_usage_retention_period: None,
-            state: StateConfig {
-                unsafe_mode: true,
-                all_features: false,
-                build_info: &DUMMY_BUILD_INFO,
-                environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
-                now,
-                skip_migrations: true,
-                cluster_replica_sizes: Default::default(),
-                builtin_cluster_replica_size: "1".into(),
-                system_parameter_defaults: Default::default(),
-                remote_system_parameters: None,
-                availability_zones: vec![],
-                egress_ips: vec![],
-                aws_principal_context: None,
-                aws_privatelink_availability_zones: None,
-                http_host_name: None,
-                connection_context: ConnectionContext::for_tests(secrets_reader),
-                active_connection_count,
+        // Used as a lower boundary of the boot_ts, but it's ok to use now() for
+        // debugging/testing.
+        let previous_ts = now().into();
+        let (catalog, _, _, _) = Catalog::open(
+            Config {
+                storage,
+                metrics_registry,
+                // when debugging, no reaping
+                storage_usage_retention_period: None,
+                state: StateConfig {
+                    unsafe_mode: true,
+                    all_features: false,
+                    build_info: &DUMMY_BUILD_INFO,
+                    environment_id: environment_id.unwrap_or(EnvironmentId::for_tests()),
+                    now,
+                    skip_migrations: true,
+                    cluster_replica_sizes: Default::default(),
+                    builtin_cluster_replica_size: "1".into(),
+                    system_parameter_defaults: Default::default(),
+                    remote_system_parameters: None,
+                    availability_zones: vec![],
+                    egress_ips: vec![],
+                    aws_principal_context: None,
+                    aws_privatelink_availability_zones: None,
+                    http_host_name: None,
+                    connection_context: ConnectionContext::for_tests(secrets_reader),
+                    active_connection_count,
+                },
             },
-        })
+            previous_ts,
+        )
         .await?;
         Ok(catalog)
     }
