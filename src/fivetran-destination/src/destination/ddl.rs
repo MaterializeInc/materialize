@@ -57,9 +57,9 @@ pub async fn handle_describe_table(
                    name,
                    type_oid,
                    type_mod,
-                   coms.comment = $1 AS primary_key
+                   COALESCE(coms.comment, '') = $1 AS primary_key
                FROM mz_columns AS cols
-               JOIN mz_internal.mz_comments AS coms
+               LEFT JOIN mz_internal.mz_comments AS coms
                ON cols.id = coms.id AND cols.position = coms.object_sub_id
                WHERE cols.id = $2"#;
 
@@ -88,6 +88,8 @@ pub async fn handle_describe_table(
         }
         columns
     };
+
+    tracing::info!(?columns, "our response");
 
     Ok(Some(Table {
         name: request.table_name,
