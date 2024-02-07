@@ -207,7 +207,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     }
 
     fn handle_update_configuration(&mut self, params: ComputeParameters) {
-        info!("Applying configuration update: {params:?}");
+        error!("Applying configuration update: {params:?}");
 
         let ComputeParameters {
             max_result_size,
@@ -299,7 +299,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 "creating dataflow",
             );
         } else {
-            tracing::info!(
+            tracing::error!(
                 name = %dataflow.debug_name,
                 import_ids = %dataflow.display_import_ids(),
                 export_ids = %dataflow.display_export_ids(),
