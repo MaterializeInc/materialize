@@ -938,7 +938,7 @@ pub fn plan_create_source(
 
                     column_casts.push(mir_cast);
                 }
-                let r = table_casts.insert(i + 1, column_casts);
+                let r = table_casts.insert(i, column_casts);
                 assert!(r.is_none(), "cannot have table defined multiple times");
 
                 let name = FullItemName {
@@ -947,10 +947,7 @@ pub fn plan_create_source(
                     item: table.name.clone(),
                 };
 
-                // The zero-th output is the main output
-                // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
-                // to handle the main source and the subsources uniformly
-                available_subsources.insert(name, i + 1);
+                available_subsources.insert(name, i);
             }
 
             let publication_details = PostgresSourcePublicationDetails::from_proto(details)
@@ -1003,10 +1000,7 @@ pub fn plan_create_source(
                     schema: table.schema_name.clone(),
                     item: table.name.clone(),
                 };
-                // The zero-th output is the main output
-                // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
-                // to handle the main source and the subsources uniformly
-                available_subsources.insert(name, index + 1);
+                available_subsources.insert(name, index);
             }
 
             let connection =
@@ -1607,10 +1601,7 @@ pub(crate) fn load_generator_ast_to_generator(
             },
             item: name.to_string(),
         };
-        // The zero-th output is the main output
-        // TODO(petrosagg): these plus ones are an accident waiting to happen. Find a way
-        // to handle the main source and the subsources uniformly
-        available_subsources.insert(name, (i + 1, desc.clone()));
+        available_subsources.insert(name, (i, desc.clone()));
     }
     let available_subsources = if available_subsources.is_empty() {
         None

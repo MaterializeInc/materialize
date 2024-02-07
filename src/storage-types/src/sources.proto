@@ -78,9 +78,10 @@ message ProtoIngestionDescription {
         mz_storage_types.controller.ProtoCollectionMetadata storage_metadata = 2;
     }
     message ProtoSourceExport {
+        reserved 2;
         mz_repr.global_id.ProtoGlobalId id = 1;
-        uint64 output_index = 2;
         mz_storage_types.controller.ProtoCollectionMetadata storage_metadata = 3;
+        optional uint64 input_index = 4;
     }
     repeated ProtoSourceImport source_imports = 1;
     repeated ProtoSourceExport source_exports = 2;

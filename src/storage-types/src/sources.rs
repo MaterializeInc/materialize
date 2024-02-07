@@ -83,11 +83,16 @@ pub struct IngestionDescription<S = (), C: ConnectionAccess = InlinedConnection>
     pub ingestion_metadata: S,
     /// Collections to be exported by this ingestion.
     ///
-    /// This field includes the primary source's ID, which might need to be
-    /// filtered out to understand which exports are data-bearing subsources.
-    ///
-    /// Note that this does _not_ include the remap collection, which is tracked
-    /// in its own field.
+    /// ## Notes:
+    /// - The iteration order of this field determines the output indexes used
+    ///   to demux an ingestion's single output into multiple persist shards.
+    ///   Because of this, you must be sure to iterate over all of its elements
+    ///   when determining output indexes. e.g. if the source supports
+    ///   subsources, ensure you _do not_ skip over the primary source when
+    ///   deriving output indices.
+    /// - This collection does _not_ include the remap collection, which is
+    ///   tracked in its own field. It's best to think of the remap collection
+    ///   as something other than export.
     pub source_exports: BTreeMap<GlobalId, SourceExport<S>>,
     /// The ID of the instance in which to install the source.
     pub instance_id: StorageInstanceId,
@@ -154,14 +159,14 @@ impl<S: Debug + Eq + PartialEq + crate::AlterCompatible> AlterCompatible
                             (
                                 _,
                                 SourceExport {
-                                    output_index: _,
+                                    input_index: l_input_index,
                                     storage_metadata: l_metadata,
                                 },
                             ),
                             (
                                 _,
                                 SourceExport {
-                                    output_index: _,
+                                    input_index: r_input_index,
                                     storage_metadata: r_metadata,
                                 },
                             ),
@@ -169,6 +174,7 @@ impl<S: Debug + Eq + PartialEq + crate::AlterCompatible> AlterCompatible
                             // the output index may change, but the table's metadata
                             // may not
                             l_metadata.alter_compatible(id, r_metadata).is_ok()
+                                && l_input_index.is_some() == r_input_index.is_some()
                         }
                         _ => true,
                     }),
@@ -222,8 +228,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct SourceExport<S = ()> {
-    /// The index of the exported output stream
-    pub output_index: usize,
+    /// If a subsource, the index in the external publication details that this
+    /// source exports. None for "the primary source".
+    pub input_index: Option<usize>,
     /// The collection metadata needed to write the exported data
     pub storage_metadata: S,
 }
@@ -319,7 +326,7 @@ impl ProtoMapEntry<GlobalId, SourceExport<CollectionMetadata>> for ProtoSourceEx
     fn from_rust<'a>(entry: (&'a GlobalId, &'a SourceExport<CollectionMetadata>)) -> Self {
         ProtoSourceExport {
             id: Some(entry.0.into_proto()),
-            output_index: entry.1.output_index.into_proto(),
+            input_index: entry.1.input_index.into_proto(),
             storage_metadata: Some(entry.1.storage_metadata.into_proto()),
         }
     }
@@ -328,7 +335,7 @@ impl ProtoMapEntry<GlobalId, SourceExport<CollectionMetadata>> for ProtoSourceEx
         Ok((
             self.id.into_rust_if_some("ProtoSourceExport::id")?,
             SourceExport {
-                output_index: self.output_index.into_rust()?,
+                input_index: self.input_index.into_rust()?,
                 storage_metadata: self
                     .storage_metadata
                     .into_rust_if_some("ProtoSourceExport::storage_metadata")?,
@@ -345,9 +352,9 @@ where
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (any::<usize>(), any::<S>())
-            .prop_map(|(output_index, storage_metadata)| Self {
-                output_index,
+        (any::<Option<usize>>(), any::<S>())
+            .prop_map(|(input_index, storage_metadata)| Self {
+                input_index,
                 storage_metadata,
             })
             .boxed()

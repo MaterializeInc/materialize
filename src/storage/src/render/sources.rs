@@ -252,14 +252,23 @@ where
                     }),
                     empty(scope),
                 ),
-                (key_encoding, value_encoding) => render_decode_delimited(
-                    &ok_source,
-                    key_encoding,
-                    value_encoding,
-                    dataflow_debug_name.clone(),
-                    storage_state.metrics.decode_defs.clone(),
-                    storage_state.storage_configuration.clone(),
-                ),
+                (key_encoding, value_encoding) => {
+                    let primary_source_idx = description
+                        .source_exports
+                        .keys()
+                        .position(|export_id| *export_id == id)
+                        .expect("primary source must be in exports");
+
+                    render_decode_delimited(
+                        &ok_source,
+                        key_encoding,
+                        value_encoding,
+                        dataflow_debug_name.clone(),
+                        storage_state.metrics.decode_defs.clone(),
+                        storage_state.storage_configuration.clone(),
+                        primary_source_idx,
+                    )
+                }
             };
 
             // render envelopes

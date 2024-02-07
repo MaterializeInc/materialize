@@ -147,16 +147,23 @@ impl SourceRender for PostgresSourceConnection {
 
         // Collect the tables that we will be ingesting.
         let mut table_info = BTreeMap::new();
-        for (i, desc) in self.publication_details.tables.iter().enumerate() {
-            // Index zero maps to the main source
-            let output_index = i + 1;
-            // The publication might contain more tables than the user has selected to ingest (via
-            // a restricted FOR TABLES <..>). The tables that are to be ingested will be present in
-            // the table_casts map and so we can filter the publication tables based on whether or
-            // not we have casts for it.
-            if let Some(casts) = self.table_casts.get(&output_index) {
-                table_info.insert(desc.oid, (output_index, desc.clone(), casts.clone()));
-            }
+
+        let primary_source_idx = config
+            .source_exports
+            .keys()
+            .position(|export_id| export_id == &config.id)
+            .expect("primary source must be included in exports");
+
+        for (output_idx, export) in config.source_exports.values().enumerate() {
+            let input_idx = match export.input_index {
+                Some(idx) => idx,
+                None => continue,
+            };
+
+            let desc = self.publication_details.tables[input_idx].clone();
+            let casts = self.table_casts[&input_idx].clone();
+
+            table_info.insert(desc.oid, (output_idx, desc, casts));
         }
 
         let metrics = config.metrics.get_postgres_metrics(config.id);
@@ -191,7 +198,7 @@ impl SourceRender for PostgresSourceConnection {
         });
 
         let init = std::iter::once(HealthStatusMessage {
-            index: 0,
+            index: primary_source_idx,
             namespace: Self::STATUS_NAMESPACE,
             update: HealthStatusUpdate::Running,
         })
@@ -219,7 +226,7 @@ impl SourceRender for PostgresSourceConnection {
             };
 
             HealthStatusMessage {
-                index: 0,
+                index: primary_source_idx,
                 namespace: namespace.clone(),
                 update,
             }

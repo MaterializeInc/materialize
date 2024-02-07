@@ -125,14 +125,23 @@ impl SourceRender for MySqlSourceConnection {
 
         // Collect the tables that we will be ingesting.
         let mut table_info = BTreeMap::new();
-        for (i, desc) in self.details.tables.iter().enumerate() {
+
+        let primary_source_idx = config
+            .source_exports
+            .keys()
+            .position(|export_id| export_id == &config.id)
+            .expect("primary source must be included in exports");
+
+        for (output_idx, export) in config.source_exports.values().enumerate() {
+            let input_idx = match export.input_index {
+                Some(idx) => idx,
+                None => continue,
+            };
+
+            let desc = self.details.tables[input_idx].clone();
             table_info.insert(
                 table_name(&desc.schema_name, &desc.name).expect("valid idents"),
-                (
-                    // Index zero maps to the main source
-                    i + 1,
-                    desc.clone(),
-                ),
+                (output_idx, desc),
             );
         }
 
@@ -170,7 +179,7 @@ impl SourceRender for MySqlSourceConnection {
             let namespace = Self::STATUS_NAMESPACE.clone();
 
             HealthStatusMessage {
-                index: 0,
+                index: primary_source_idx,
                 namespace: namespace.clone(),
                 update,
             }

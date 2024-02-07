@@ -418,14 +418,16 @@ impl DataSourceDesc {
         let source_exports = ingestion
             .subsource_exports
             .iter()
-            // By convention the first output corresponds to the main source object
-            .chain(std::iter::once((&id, &0)))
-            .map(|(id, output_index)| {
-                let export = SourceExport {
-                    output_index: *output_index,
-                    storage_metadata: (),
-                };
-                (*id, export)
+            .map(|(id, input_index)| (*id, Some(*input_index)))
+            .chain(std::iter::once((id, None)))
+            .map(|(id, input_index)| {
+                (
+                    id,
+                    SourceExport {
+                        input_index,
+                        storage_metadata: (),
+                    },
+                )
             })
             .collect();
 

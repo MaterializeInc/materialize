@@ -1254,6 +1254,8 @@ pub enum DataSourceDesc {
 pub struct Ingestion {
     pub desc: SourceDesc<ReferencedConnection>,
     pub source_imports: BTreeSet<GlobalId>,
+    /// Correlates GlobalIds to the objects in the external source that this
+    /// outputs.
     pub subsource_exports: BTreeMap<GlobalId, usize>,
     pub progress_subsource: GlobalId,
 }

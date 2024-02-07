@@ -88,6 +88,12 @@ impl SourceRender for LoadGeneratorSourceConnection {
 
         let (mut data_output, stream) = builder.new_output();
 
+        let primary_source_idx = config
+            .source_exports
+            .keys()
+            .position(|export_id| export_id == &config.id)
+            .expect("primary source must be included in exports");
+
         let button = builder.build(move |caps| async move {
             let mut cap = caps.into_element();
 
@@ -149,7 +155,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
         });
 
         let status = [HealthStatusMessage {
-            index: 0,
+            index: primary_source_idx,
             namespace: Self::STATUS_NAMESPACE.clone(),
             update: HealthStatusUpdate::running(),
         }]

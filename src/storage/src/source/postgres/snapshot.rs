@@ -207,13 +207,14 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     // A global view of all exports that need to be snapshot by all workers. Note that this affects
     // `reader_snapshot_table_info` but must be kept separate from it because each worker needs to
     // understand if any worker is snapshotting any subsource.
-    let exports_to_snapshot: BTreeSet<_> = subsource_resume_uppers
-        .into_iter()
-        .filter_map(|(id, upper)| {
-            // Determined which collections need to be snapshot and which already have been.
-            if id != config.id && *upper == [MzOffset::minimum()] {
-                // Convert from `GlobalId` to output index.
-                Some(config.source_exports[&id].output_index)
+    let exports_to_snapshot: BTreeSet<_> = config
+        .source_exports
+        .iter()
+        .enumerate()
+        .filter_map(|(output_idx, (id, export))| {
+            if export.input_index.is_some() && *subsource_resume_uppers[id] == [MzOffset::minimum()]
+            {
+                Some(output_idx)
             } else {
                 None
             }
@@ -224,10 +225,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let reader_snapshot_table_info: BTreeMap<_, _> = table_info
         .iter()
         .filter(|(oid, (output_index, _, _))| {
-            mz_ore::soft_assert_or_log!(
-                *output_index != 0,
-                "primary collection should not be represented in table info"
-            );
             exports_to_snapshot.contains(output_index) && config.responsible_for(oid)
         })
         .map(|(k, v)| (*k, v.clone()))

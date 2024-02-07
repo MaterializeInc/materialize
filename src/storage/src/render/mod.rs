@@ -313,14 +313,20 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             };
             tokens.extend(source_tokens);
 
+            let primary_source_output_idx = description
+                .source_exports
+                .keys()
+                .position(|id| *id == primary_source_id)
+                .expect("primary source must be present in source_exports");
+
             let mut health_configs = BTreeMap::new();
 
             let mut upper_streams = vec![];
             let mut health_streams = vec![source_health];
-            for (export_id, export) in description.source_exports {
-                let (ok, err) = outputs
-                    .get_mut(export.output_index)
-                    .expect("known to exist");
+            for (output_idx, (export_id, export)) in
+                description.source_exports.into_iter().enumerate()
+            {
+                let (ok, err) = outputs.get_mut(output_idx).expect("known to exist");
                 let source_data = ok.map(Ok).concat(&err.map(Err));
 
                 let metrics = storage_state.metrics.get_source_persist_sink_metrics(
@@ -328,7 +334,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     primary_source_id,
                     worker_id,
                     &export.storage_metadata.data_shard,
-                    export.output_index,
+                    output_idx,
                 );
 
                 tracing::info!(
@@ -341,22 +347,22 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     source_data,
                     storage_state,
                     metrics,
-                    export.output_index,
+                    output_idx,
                 );
                 upper_streams.push(upper_stream);
                 tokens.extend(sink_tokens);
 
-                let sink_health = errors.map(|err: Rc<anyhow::Error>| {
+                let sink_health = errors.map(move |err: Rc<anyhow::Error>| {
                     let halt_status =
                         HealthStatusUpdate::halting(err.display_with_causes().to_string(), None);
                     HealthStatusMessage {
-                        index: 0,
+                        index: primary_source_output_idx,
                         namespace: StatusNamespace::Internal,
                         update: halt_status,
                     }
                 });
                 health_streams.push(sink_health.leave());
-                health_configs.insert(export.output_index, export_id);
+                health_configs.insert(output_idx, export_id);
             }
 
             mz_scope
