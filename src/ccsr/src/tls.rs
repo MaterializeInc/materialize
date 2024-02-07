@@ -9,11 +9,9 @@
 
 //! TLS certificates and identities.
 
-use openssl::pkcs12::Pkcs12;
-use openssl::pkey::PKey;
-use openssl::stack::Stack;
-use openssl::x509::X509;
 use serde::{Deserialize, Serialize};
+
+use mz_tls_util::pkcs12der_from_pem;
 
 /// A [Serde][serde]-enabled wrapper around [`reqwest::Identity`].
 ///
@@ -28,40 +26,12 @@ impl Identity {
     /// Reimplements [`reqwest::Certificate::from_pem`] in terms of OpenSSL.
     ///
     /// The implementation in reqwest requires rustls.
-    pub fn from_pem(pem: &[u8]) -> Result<Self, openssl::error::ErrorStack> {
-        let pkey = PKey::private_key_from_pem(pem)?;
-        let mut certs = Stack::new()?;
-
-        // `X509::stack_from_pem` in openssl as of at least versions <= 0.10.48
-        // does not guarantee that it will either error or return at least 1
-        // element; in fact, it doesn't if the `pem` is not a well-formed
-        // representation of a PEM file. For example, if the represented file
-        // contains a well-formed key but a malformed certificate.
-        //
-        // To circumvent this issue, if `X509::stack_from_pem` returns no
-        // certificates, rely on getting the error message from
-        // `X509::from_pem`.
-        let mut cert_iter = X509::stack_from_pem(pem)?.into_iter();
-        let cert = match cert_iter.next() {
-            Some(cert) => cert,
-            None => X509::from_pem(pem)?,
-        };
-        for cert in cert_iter {
-            certs.push(cert)?;
-        }
-        // We build a PKCS #12 archive solely to have something to pass to
-        // `reqwest::Identity::from_pkcs12_der`, so the password and friendly
-        // name don't matter.
-        let pass = String::new();
-        let friendly_name = "";
-        let der = Pkcs12::builder()
-            .name(friendly_name)
-            .pkey(&pkey)
-            .cert(&cert)
-            .ca(certs)
-            .build2(&pass)?
-            .to_der()?;
-        Ok(Identity { der, pass })
+    pub fn from_pem(key: &[u8], cert: &[u8]) -> Result<Self, openssl::error::ErrorStack> {
+        let archive = pkcs12der_from_pem(key, cert)?;
+        Ok(Identity {
+            der: archive.der,
+            pass: archive.pass,
+        })
     }
 
     /// Wraps [`reqwest::Identity::from_pkcs12_der`].

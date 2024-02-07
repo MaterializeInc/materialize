@@ -28,6 +28,7 @@ use mz_secrets::SecretsReader;
 use mz_ssh_util::keys::SshKeyPair;
 use mz_ssh_util::tunnel::SshTunnelConfig;
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
+use mz_tls_util::Pkcs12Archive;
 use mz_tracing::CloneableEnvFilter;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
@@ -808,13 +809,7 @@ impl CsrConnection {
                 .cert
                 .get_string(&*storage_configuration.connection_context.secrets_reader)
                 .await?;
-            // `reqwest` expects identity `pem` files to contain one key and
-            // at least one certificate.
-            let mut buf = Vec::new();
-            buf.extend(key.as_bytes());
-            buf.push(b'\n');
-            buf.extend(cert.as_bytes());
-            let ident = Identity::from_pem(&buf)?;
+            let ident = Identity::from_pem(key.as_bytes(), cert.as_bytes())?;
             client_config = client_config.identity(ident);
         }
 
@@ -1420,15 +1415,49 @@ impl MySqlConnection<InlinedConnection> {
             opts = opts.pass(Some(password));
         }
 
-        // TODO(roshan): Implement SSL mode support
-        if self.tls_mode != MySqlSslMode::Disabled {
-            return Err(anyhow!("MySQL TLS modes are not yet supported"));
+        // Our `MySqlSslMode` enum matches the official MySQL Client `--ssl-mode` parameter values
+        // which uses opt-in security features (SSL, CA verification, & Identity verification).
+        // The mysql_async crate `SslOpts` struct uses an opt-out mechanism for each of these, so
+        // we need to appropriately disable features to match the intent of each enum value.
+        let mut ssl_opts = match self.tls_mode {
+            MySqlSslMode::Disabled => None,
+            MySqlSslMode::Required => Some(
+                mysql_async::SslOpts::default()
+                    .with_danger_accept_invalid_certs(true)
+                    .with_danger_skip_domain_validation(true),
+            ),
+            MySqlSslMode::VerifyCa => {
+                Some(mysql_async::SslOpts::default().with_danger_skip_domain_validation(true))
+            }
+            MySqlSslMode::VerifyIdentity => Some(mysql_async::SslOpts::default()),
         };
 
-        // TODO(roshan): Implement Root TLS Cert support
-        if self.tls_root_cert.is_some() {
-            return Err(anyhow!("MySQL TLS Certs are not yet supported"));
+        if matches!(
+            self.tls_mode,
+            MySqlSslMode::VerifyCa | MySqlSslMode::VerifyIdentity
+        ) {
+            if let Some(tls_root_cert) = &self.tls_root_cert {
+                let tls_root_cert = tls_root_cert.get_string(secrets_reader).await?;
+                ssl_opts = ssl_opts
+                    .map(|opts| opts.with_root_cert(Some(tls_root_cert.as_bytes().to_vec())));
+            }
         }
+
+        if let Some(identity) = &self.tls_identity {
+            let key = secrets_reader.read_string(identity.key).await?;
+            let cert = identity.cert.get_string(secrets_reader).await?;
+            let Pkcs12Archive { der, pass } =
+                mz_tls_util::pkcs12der_from_pem(key.as_bytes(), cert.as_bytes())?;
+
+            // Add client identity to SSLOpts
+            ssl_opts = ssl_opts.map(|opts| {
+                opts.with_client_identity(Some(
+                    mysql_async::ClientIdentity::new_from_bytes(der).with_password(pass),
+                ))
+            });
+        }
+
+        opts = opts.ssl_opts(ssl_opts);
 
         // TODO(roshan): Implement SSH Tunnels, AWS Privatelink
         let tunnel = match &self.tunnel {

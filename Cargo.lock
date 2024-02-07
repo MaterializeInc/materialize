@@ -3435,8 +3435,7 @@ dependencies = [
 [[package]]
 name = "mysql_async"
 version = "0.33.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6750b17ce50f8f112ef1a8394121090d47c596b56a6a17569ca680a9626e2ef2"
+source = "git+https://github.com/MaterializeInc/mysql_async.git?rev=ecc4908e7c98ce1050fc536739c41ec444d03349#ecc4908e7c98ce1050fc536739c41ec444d03349"
 dependencies = [
  "bytes",
  "crossbeam",
@@ -3449,6 +3448,7 @@ dependencies = [
  "lru",
  "mio",
  "mysql_common",
+ "native-tls",
  "once_cell",
  "pem",
  "percent-encoding",
@@ -3459,6 +3459,7 @@ dependencies = [
  "socket2 0.5.3",
  "thiserror",
  "tokio",
+ "tokio-native-tls",
  "tokio-util",
  "tracing",
  "twox-hash",
@@ -3883,6 +3884,7 @@ dependencies = [
  "anyhow",
  "hyper",
  "mz-ore",
+ "mz-tls-util",
  "native-tls",
  "once_cell",
  "openssl",
@@ -6009,6 +6011,7 @@ dependencies = [
  "mz-ssh-util",
  "mz-stash-types",
  "mz-timely-util",
+ "mz-tls-util",
  "mz-tracing",
  "native-tls",
  "num_enum",
