@@ -32,6 +32,8 @@ ERROR_RE = re.compile(
     | trap\ invalid\ opcode
     | general\ protection
     | has\ overflowed\ its\ stack
+    | Attempting\ to\ connect
+    | Applying\ configuration\ update
     | internal\ error:
     | \*\ FATAL:
     | [Oo]ut\ [Oo]f\ [Mm]emory
