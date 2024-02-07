@@ -140,6 +140,10 @@ impl RustType<ProtoMySqlSourceConnection> for MySqlSourceConnection {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MySqlSourceDetails {
     pub tables: Vec<mz_mysql_util::MySqlTableDesc>,
+    /// The initial 'gtid_executed' set for the source. This is used as the effective
+    /// snapshot point, to ensure consistency if the source is interrupted but commits
+    /// one or more tables before the initial snapshot of all tables is complete.
+    pub initial_gtid_set: String,
 }
 
 impl Arbitrary for MySqlSourceDetails {
@@ -147,8 +151,15 @@ impl Arbitrary for MySqlSourceDetails {
     type Strategy = BoxedStrategy<Self>;
 
     fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        proptest::collection::vec(any::<mz_mysql_util::MySqlTableDesc>(), 1..4)
-            .prop_map(|tables| Self { tables })
+        (
+            proptest::collection::vec(any::<mz_mysql_util::MySqlTableDesc>(), 1..4),
+            any::<u128>(),
+            any::<u64>(),
+        )
+            .prop_map(|(tables, gtid_uuid, gtid_tx_id)| Self {
+                tables,
+                initial_gtid_set: format!("{}:{}", Uuid::from_u128(gtid_uuid), gtid_tx_id),
+            })
             .boxed()
     }
 }
@@ -157,6 +168,7 @@ impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {
     fn into_proto(&self) -> ProtoMySqlSourceDetails {
         ProtoMySqlSourceDetails {
             tables: self.tables.iter().map(|t| t.into_proto()).collect(),
+            initial_gtid_set: self.initial_gtid_set.clone(),
         }
     }
 
@@ -167,6 +179,7 @@ impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {
                 .into_iter()
                 .map(mz_mysql_util::MySqlTableDesc::from_proto)
                 .collect::<Result<_, _>>()?,
+            initial_gtid_set: proto.initial_gtid_set,
         })
     }
 }

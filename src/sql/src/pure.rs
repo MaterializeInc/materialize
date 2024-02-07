@@ -1083,10 +1083,19 @@ async fn purify_create_source(
             *referenced_subsources = Some(ReferencedSubsources::SubsetTables(targeted_subsources));
             subsources.extend(new_subsources);
 
+            // Retrieve the current @gtid_executed value of the server to mark as the effective
+            // initial snapshot point such that we can ensure consistency if the initial source
+            // snapshot is broken up over multiple points in time.
+            let initial_gtid_set =
+                mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
+
             // Remove any old detail references
             options
                 .retain(|MySqlConfigOption { name, .. }| name != &MySqlConfigOptionName::Details);
-            let details = MySqlSourceDetails { tables };
+            let details = MySqlSourceDetails {
+                tables,
+                initial_gtid_set,
+            };
             options.push(MySqlConfigOption {
                 name: MySqlConfigOptionName::Details,
                 value: Some(WithOptionValue::Value(Value::String(hex::encode(

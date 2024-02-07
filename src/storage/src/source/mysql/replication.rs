@@ -178,10 +178,29 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
             trace!(%id, "timely-{worker_id} replication binlog frontier: {binlog_frontier:?}");
 
-            // Calculate the minimum frontier across all subsources, which represents the point which
+            // Calculate the lowest frontier across all subsources, which represents the point which
             // we should start replication from.
             let resume_upper =
-                Antichain::from_iter(subsource_resume_uppers.into_values().flatten());
+                match Antichain::from_iter(subsource_resume_uppers.into_values().flatten()) {
+                    upper if upper == Antichain::from_elem(GtidPartition::minimum()) => {
+                        // If any subsource is at the minimum frontier then we are either starting
+                        // from scratch or at least one table has to complete its initial snapshot.
+                        //
+                        // In either case, we need to ensure that the resumption point is
+                        // deterministic and consistent across all tables, so that a user can't
+                        // observe an MZ timestamp that may contain different snapshots for
+                        // different tables.
+                        // We've chosen the frontier beyond the GTID Set recorded
+                        // during purification as this consistent resume point.
+                        //
+                        // Tables may still be snapshot at a future GTID Set but as long as we can
+                        // resume the replication stream from this consistent point all updates
+                        // will be rewound appropriately, such that the effective snapshot point
+                        // is consistent across all tables.
+                        gtid_set_frontier(&connection.details.initial_gtid_set)?
+                    }
+                    upper => upper,
+                };
 
             // Validate that we can actually resume from this upper.
             if !PartialOrder::less_equal(&binlog_frontier, &resume_upper) {
@@ -224,7 +243,10 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             )
                             .await);
                         };
-                        rewinds.insert(req.table.clone(), (caps.clone(), req));
+                        // If the snapshot point is the same as the resume point then we don't need to rewind
+                        if resume_upper != req.snapshot_upper {
+                            rewinds.insert(req.table.clone(), (caps.clone(), req));
+                        }
                     }
                 }
             }
@@ -300,7 +322,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             upper_cap_set.downgrade(&*new_upper);
 
                             rewinds.retain(|_, (_, req)| {
-                                !PartialOrder::less_equal(&req.snapshot_upper, &new_upper)
+                                !PartialOrder::less_than(&req.snapshot_upper, &new_upper)
                             });
 
                             trace!(%id, "timely-{worker_id} pending rewinds after \
@@ -429,7 +451,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         upper_cap_set.downgrade(&*new_upper);
 
                         rewinds.retain(|_, (_, req)| {
-                            !PartialOrder::less_equal(&req.snapshot_upper, &new_upper)
+                            !PartialOrder::less_than(&req.snapshot_upper, &new_upper)
                         });
                         trace!(%id, "timely-{worker_id} pending rewinds \
                                      after filtering: {rewinds:?}");
