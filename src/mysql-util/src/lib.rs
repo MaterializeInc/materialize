@@ -10,7 +10,7 @@
 //! MySQL utility library.
 
 mod tunnel;
-pub use tunnel::{Config, TunnelConfig};
+pub use tunnel::{Config, MySqlConn, TunnelConfig};
 
 mod desc;
 pub use desc::{
@@ -29,6 +29,8 @@ pub use schemas::{schema_info, SchemaRequest};
 
 #[derive(Debug, thiserror::Error)]
 pub enum MySqlError {
+    #[error("error setting up ssh: {0}")]
+    Ssh(#[source] anyhow::Error),
     #[error("unsupported data type: '{column_type}' for '{qualified_table_name}.{column_name}'.")]
     UnsupportedDataType {
         column_type: String,

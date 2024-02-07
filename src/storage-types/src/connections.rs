@@ -1402,7 +1402,7 @@ impl MySqlConnection<InlinedConnection> {
     pub async fn config(
         &self,
         secrets_reader: &dyn mz_secrets::SecretsReader,
-        _storage_configuration: &StorageConfiguration,
+        storage_configuration: &StorageConfiguration,
     ) -> Result<mz_mysql_util::Config, anyhow::Error> {
         // TODO(roshan): Set appropriate connection timeouts
         let mut opts = mysql_async::OptsBuilder::default()
@@ -1459,15 +1459,36 @@ impl MySqlConnection<InlinedConnection> {
 
         opts = opts.ssl_opts(ssl_opts);
 
-        // TODO(roshan): Implement SSH Tunnels, AWS Privatelink
         let tunnel = match &self.tunnel {
             Tunnel::Direct => mz_mysql_util::TunnelConfig::Direct,
-            _ => {
-                return Err(anyhow!("MySQL Tunnels are not yet supported"));
+            Tunnel::Ssh(SshTunnel {
+                connection_id,
+                connection,
+            }) => {
+                let secret = secrets_reader.read(*connection_id).await?;
+                let key_pair = SshKeyPair::from_bytes(&secret)?;
+                mz_mysql_util::TunnelConfig::Ssh {
+                    config: SshTunnelConfig {
+                        host: connection.host.clone(),
+                        port: connection.port,
+                        user: connection.user.clone(),
+                        key_pair,
+                    },
+                }
+            }
+            Tunnel::AwsPrivatelink(connection) => {
+                assert!(connection.port.is_none());
+                mz_mysql_util::TunnelConfig::AwsPrivatelink {
+                    connection_id: connection.connection_id,
+                }
             }
         };
 
-        Ok(mz_mysql_util::Config::new(opts.into(), tunnel))
+        Ok(mz_mysql_util::Config::new(
+            opts.into(),
+            tunnel,
+            storage_configuration.parameters.ssh_timeout_config,
+        ))
     }
 
     async fn validate(

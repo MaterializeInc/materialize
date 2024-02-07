@@ -398,6 +398,21 @@ impl ConnectionOptionExtracted {
 
                 let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
 
+                // TODO: Implement proper host verification when using an SSH or PrivateLink tunnel. This
+                // requires a way to modify the TLS configuration created within mysql_async.
+                if matches!(
+                    (&tls_mode, &tunnel),
+                    (
+                        &MySqlSslMode::VerifyIdentity,
+                        &Tunnel::Ssh(_) | &Tunnel::AwsPrivatelink(_)
+                    )
+                ) {
+                    sql_bail!(
+                        "invalid CONNECTION: VERIFY_IDENTITY SSL MODE is not currently \
+                        supported with SSH TUNNEL or AWS PRIVATELINK"
+                    );
+                }
+
                 Connection::MySql(MySqlConnection {
                     password: self.password.map(|password| password.into()),
                     host: self

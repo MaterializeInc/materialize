@@ -49,7 +49,8 @@ use differential_dataflow::{AsCollection, Collection};
 use futures::StreamExt;
 use itertools::Itertools;
 use mysql_async::prelude::Queryable;
-use mysql_async::{BinlogStream, BinlogStreamRequest, Conn, GnoInterval, Sid};
+use mysql_async::{BinlogStream, BinlogStreamRequest, GnoInterval, Sid};
+use mz_ssh_util::tunnel_manager::ManagedSshTunnelHandle;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Concat, Map};
 use timely::dataflow::{Scope, Stream};
@@ -59,7 +60,9 @@ use timely::PartialOrder;
 use tracing::trace;
 use uuid::Uuid;
 
-use mz_mysql_util::{query_sys_var, MySqlTableDesc, ER_SOURCE_FATAL_ERROR_READING_BINLOG_CODE};
+use mz_mysql_util::{
+    query_sys_var, MySqlConn, MySqlTableDesc, ER_SOURCE_FATAL_ERROR_READING_BINLOG_CODE,
+};
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;
 use mz_repr::{Diff, GlobalId, Row};
@@ -230,22 +233,25 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             }
             trace!(%id, "timely-{worker_id} pending rewinds {rewinds:?}");
 
-            let binlog_stream = match raw_stream(&config, conn, &resume_upper).await? {
-                Ok(stream) => stream,
-                // If the replication stream cannot be obtained in a definite way there is
-                // nothing else to do. These errors are not retractable.
-                Err(err) => {
-                    return Ok(return_definite_error(
-                        err,
-                        &output_indexes,
-                        &mut data_output,
-                        data_cap_set,
-                        &mut definite_error_handle,
-                        definite_error_cap_set,
-                    )
-                    .await)
-                }
-            };
+            // We don't use _conn_tunnel_handle here, but need to keep it around to ensure that the
+            // SSH tunnel is not dropped until the replication stream is dropped.
+            let (binlog_stream, _conn_tunnel_handle) =
+                match raw_stream(&config, conn, &resume_upper).await? {
+                    Ok(stream) => stream,
+                    // If the replication stream cannot be obtained in a definite way there is
+                    // nothing else to do. These errors are not retractable.
+                    Err(err) => {
+                        return Ok(return_definite_error(
+                            err,
+                            &output_indexes,
+                            &mut data_output,
+                            data_cap_set,
+                            &mut definite_error_handle,
+                            definite_error_cap_set,
+                        )
+                        .await)
+                    }
+                };
             let mut stream = pin!(binlog_stream.peekable());
 
             // Store all partitions from the resume_upper so we can create a frontier that comprises
@@ -465,9 +471,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 /// whose GTIDs were not present in the GTID UUIDs referenced in the `resume_uppper` partitions.
 async fn raw_stream<'a>(
     config: &RawSourceCreationConfig,
-    mut conn: Conn,
+    mut conn: MySqlConn,
     resume_upper: &Antichain<GtidPartition>,
-) -> Result<Result<BinlogStream, DefiniteError>, TransientError> {
+) -> Result<Result<(BinlogStream, Option<ManagedSshTunnelHandle>), DefiniteError>, TransientError> {
     // Verify the MySQL system settings are correct for consistent row-based replication using GTIDs
     if let Err(err) = validate_mysql_repl_settings(&mut conn).await {
         return Ok(Err(DefiniteError::ServerConfigurationError(
@@ -531,7 +537,12 @@ async fn raw_stream<'a>(
          and server_id: {server_id:?}"
     );
 
-    let repl_stream = match conn
+    // We need to transform the connection into a BinlogStream (which takes the `Conn` by value),
+    // but to avoid dropping any active SSH tunnel used by the connection we need to preserve the
+    // tunnel handle and return it
+    let (inner_conn, conn_tunnel_handle) = conn.take();
+
+    let repl_stream = match inner_conn
         .get_binlog_stream(
             BinlogStreamRequest::new(server_id)
                 .with_gtid()
@@ -550,5 +561,5 @@ async fn raw_stream<'a>(
         Err(err) => return Err(err.into()),
     };
 
-    Ok(Ok(repl_stream))
+    Ok(Ok((repl_stream, conn_tunnel_handle)))
 }
