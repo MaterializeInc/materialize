@@ -292,10 +292,11 @@ def run_test_with_index(c: Composition) -> None:
     )
     _validate_count_of_counter_source(c, "retain_history_source3")
 
+
 def run_test_with_table(c: Composition) -> None:
     c.testdrive(
         dedent(
-            f"""
+            """
             > CREATE TABLE time (time_index int, t timestamp);
             > CREATE TABLE table_with_retain_history (x int) WITH (RETAIN HISTORY FOR = '10s');
             > INSERT INTO time VALUES (0, now());
@@ -319,6 +320,7 @@ def run_test_with_table(c: Composition) -> None:
             """
         )
     )
+
 
 def run_test_gh_24479(c: Composition) -> None:
     for (seed, sleep_enabled) in [(0, False), (1, True)]:
