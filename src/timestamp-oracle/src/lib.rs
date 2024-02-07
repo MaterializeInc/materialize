@@ -86,7 +86,7 @@ pub trait TimestampOracle<T> {
 /// in-memory/backed-by-catalog TimestampOracle around. Once we remove that we can
 /// make [`TimestampOracle`] shareable.
 #[async_trait]
-pub trait ShareableTimestampOracle<T> {
+pub trait ShareableTimestampOracle<T>: std::fmt::Debug {
     /// Acquire a new timestamp for writing.
     ///
     /// This timestamp will be strictly greater than all prior values of

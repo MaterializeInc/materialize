@@ -34,19 +34,26 @@ use mz_persist_txn::metrics::Metrics as TxnMetrics;
 use mz_persist_txn::operator::DataSubscribe;
 use mz_persist_txn::txns::{Tidy, TxnsHandle};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
-use timely::progress::Antichain;
+use mz_timestamp_oracle::postgres_oracle::{
+    PostgresTimestampOracle, PostgresTimestampOracleConfig,
+};
+use mz_timestamp_oracle::ShareableTimestampOracle;
+use timely::progress::{Antichain, Timestamp};
 use tokio::sync::Mutex;
 use tracing::{debug, info};
+use url::Url;
 
 use crate::maelstrom::api::{Body, MaelstromError, NodeId, ReqTxnOp, ResTxnOp};
 use crate::maelstrom::node::{Handle, Service};
-use crate::maelstrom::services::{CachingBlob, MaelstromBlob, MaelstromConsensus, MaelstromOracle};
+use crate::maelstrom::services::{
+    CachingBlob, MaelstromBlob, MaelstromConsensus, MemTimestampOracle,
+};
 use crate::maelstrom::Args;
 
 #[derive(Debug)]
 pub struct Transactor {
     txns_id: ShardId,
-    oracle: MaelstromOracle,
+    oracle: Box<dyn ShareableTimestampOracle<mz_repr::Timestamp> + Send>,
     client: PersistClient,
     txns: TxnsHandle<String, (), u64, i64>,
     tidy: Tidy,
@@ -57,9 +64,9 @@ impl Transactor {
     pub async fn new(
         client: PersistClient,
         txns_id: ShardId,
-        mut oracle: MaelstromOracle,
+        oracle: Box<dyn ShareableTimestampOracle<mz_repr::Timestamp> + Send>,
     ) -> Result<Self, MaelstromError> {
-        let init_ts = oracle.write_ts().await?;
+        let init_ts = u64::from(oracle.write_ts().await.timestamp);
         let txns = TxnsHandle::open(
             init_ts,
             client.clone(),
@@ -69,7 +76,7 @@ impl Transactor {
             Arc::new(UnitSchema),
         )
         .await;
-        oracle.apply_write(init_ts).await?;
+        oracle.apply_write(init_ts.into()).await;
         Ok(Transactor {
             txns_id,
             oracle,
@@ -104,7 +111,7 @@ impl Transactor {
         }
 
         // Run the core read+write, retry-at-a-higher-ts-on-conflict loop.
-        let mut read_ts = self.oracle.read_ts().await?;
+        let mut read_ts = u64::from(self.oracle.read_ts().await);
         info!("read ts {}", read_ts);
         let mut reads = self.read_at(read_ts, read_ids.iter()).await;
         if writes.is_empty() {
@@ -116,7 +123,7 @@ impl Transactor {
                     txn.write(&data_id, data, (), diff).await;
                 }
             }
-            let mut write_ts = self.oracle.write_ts().await?;
+            let mut write_ts = u64::from(self.oracle.write_ts().await.timestamp);
             loop {
                 // To be linearizable, we need to ensure that reads are done at
                 // the timestamp previous to the write_ts. However, we're not
@@ -135,7 +142,7 @@ impl Transactor {
                 txn.tidy(std::mem::take(&mut self.tidy));
                 match txn.commit_at(&mut self.txns, write_ts).await {
                     Ok(maintenance) => {
-                        self.oracle.apply_write(write_ts).await?;
+                        self.oracle.apply_write(write_ts.into()).await;
                         // Aggressively allow the txns shard to compact. To
                         // exercise more edge cases, do it before we apply the
                         // newly committed txn.
@@ -236,7 +243,7 @@ impl Transactor {
             .await
             .expect("data schema shouldn't change");
 
-        let mut init_ts = self.oracle.write_ts().await?;
+        let mut init_ts = u64::from(self.oracle.write_ts().await.timestamp);
         loop {
             let data_write = self
                 .client
@@ -251,7 +258,7 @@ impl Transactor {
             let res = self.txns.register(init_ts, [data_write]).await;
             match res {
                 Ok(_) => {
-                    self.oracle.apply_write(init_ts).await?;
+                    self.oracle.apply_write(init_ts.into()).await;
                     self.data_reads.insert(*data_id, (init_ts, data_read));
                     return Ok(init_ts);
                 }
@@ -260,7 +267,7 @@ impl Transactor {
                         "register {:.9} at {} mismatch current={}",
                         data_id, init_ts, new_init_ts
                     );
-                    init_ts = self.oracle.write_ts().await?;
+                    init_ts = u64::from(self.oracle.write_ts().await.timestamp);
                     continue;
                 }
             }
@@ -388,7 +395,8 @@ impl Service for TransactorService {
 
         let mut config =
             PersistConfig::new_default_configs(&mz_persist_client::BUILD_INFO, SYSTEM_TIME.clone());
-        let metrics = Arc::new(PersistMetrics::new(&config, &MetricsRegistry::new()));
+        let metrics_registry = MetricsRegistry::new();
+        let metrics = Arc::new(PersistMetrics::new(&config, &metrics_registry));
 
         // Construct requested Blob.
         let blob = match &args.blob_uri {
@@ -465,7 +473,30 @@ impl Service for TransactorService {
             shared_states,
             pubsub_sender,
         )?;
-        let oracle = MaelstromOracle::new(handle.clone()).await?;
+        // It's an annoying refactor to add an oracle_uri cli flag, so for now,
+        // piggy-back on --consensus_uri.
+        let oracle_uri = args.consensus_uri.as_ref().map(|x| {
+            Url::parse(x).unwrap_or_else(|err| panic!("failed to parse oracle_uri {}: {}", x, err))
+        });
+        let oracle_scheme = oracle_uri.as_ref().map(|x| (x.scheme(), x));
+        let oracle: Box<dyn ShareableTimestampOracle<mz_repr::Timestamp> + Send> =
+            match oracle_scheme {
+                Some(("postgres", uri)) | Some(("postgresql", uri)) => {
+                    let cfg = PostgresTimestampOracleConfig::new(uri.as_str(), &metrics_registry);
+                    Box::new(
+                        PostgresTimestampOracle::open(
+                            cfg,
+                            "maelstrom".to_owned(),
+                            mz_repr::Timestamp::minimum(),
+                            SYSTEM_TIME.clone(),
+                        )
+                        .await,
+                    )
+                }
+                Some(("mem", _)) => Box::new(MemTimestampOracle::default()),
+                Some((scheme, _)) => unimplemented!("unsupported oracle type: {}", scheme),
+                None => unimplemented!("TODO: support maelstrom oracle"),
+            };
         let transactor = Transactor::new(client, shard_id, oracle).await?;
         let service = TransactorService(Arc::new(Mutex::new(transactor)));
         Ok(service)

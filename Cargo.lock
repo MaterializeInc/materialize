@@ -6811,6 +6811,8 @@ dependencies = [
  "mz-persist-client",
  "mz-persist-txn",
  "mz-persist-types",
+ "mz-repr",
+ "mz-timestamp-oracle",
  "num_cpus",
  "num_enum",
  "prometheus",
@@ -6819,6 +6821,7 @@ dependencies = [
  "timely",
  "tokio",
  "tracing",
+ "url",
  "uuid",
  "workspace-hack",
 ]
