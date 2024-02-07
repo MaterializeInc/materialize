@@ -83,35 +83,39 @@ Cons:
 - We run more than one type of process, which cloud might find harder to
   operate. But it's what we've done for an while now.
 
-## Multi-envd, Multi-clusterd Architecture
+## Multi-adapterd, Multi-clusterd Architecture
 
 With this architecture, we would run multiple `clusterd`, which make up
 replicas which make up clusters. Same as with our current architecture.
 
 The difference is that we shard the work of `envd` by cluster (the logical
-CLUSTER that users know, _not_ `clusterd`).
+CLUSTER that users know, _not_ `clusterd`) and now call it `adapterd`. There
+would likely have to remain a skeleton `envd` whose only job it is to talk to
+the Orchestrator/Kubernetes: it has to make sure that the processes that
+_should_ be running _are_ running, namely `clusterd` and `adapterd` for
+clusters that exist in the catalog.
 
-![multi-envd architecture](./static/pv2_physical_architecture/multi-envd-clusterd.png)
+![multi-adapterd architecture](./static/pv2_physical_architecture/multi-adapterd-clusterd.png)
 
 > [!NOTE]
 > We assume there is a balancer layer that can understand enough about
-> selecting clusters and can route user queries to the correct `envd`.
+> selecting clusters and can route user queries to the correct `adapterd`.
 >
 > And we are in fact working on that, it's `balancerd`!
 
-- the `envd` can all write to the Catalog
-- the `envd` subscribe to the Catalog to learn about changes that other `envd`
-  are adding and update their in-memory view of the Catalog and instruct
-  the controller for their cluster when necessary
-- the `envd` use the distributed Timestamp Oracle to make reads/writes
+- the `adapterd` can all write to the Catalog
+- the `adapterd` subscribe to the Catalog to learn about changes that other
+  `adapterd` are adding and update their in-memory view of the Catalog and
+  instruct the controller for their cluster when necessary
+- the `adapterd` use the distributed Timestamp Oracle to make reads/writes
   linearizable
-- the `envd` use the Tables-Txn abstraction for writing to tables from multiple
+- the `adapterd` use the Tables-Txn abstraction for writing to tables from multiple
   processes
-- a given `envd` hosts one controller (one for compute and one for storage)
+- a given `adapterd` hosts one controller (one for compute and one for storage)
   that is _only_ responsible for the objects running on that cluster
 - that controller instructs the cluster (replicas), same as before, and
   receives responses
-- the `envd` has read holds:
+- the `adapterd` has read holds:
   - for storage objects, these are ultimately backed by persist `SinceHandles`,
     which Coordinator holds via a `CollectionsController` (todo: ref to design
     doc)[]
@@ -120,18 +124,18 @@ CLUSTER that users know, _not_ `clusterd`).
     logically has "holds" on compute objects
 - adapter downgrades read holds based on outstanding queries and policies, and
   responses about write frontiers from _its_ cluster
-- a given `envd` only has read holds on compute objects in its cluster
-- a given `envd` can only process queries that exclusively use compute objects
+- a given `adapterd` only has read holds on compute objects in its cluster
+- a given `adapterd` can only process queries that exclusively use compute objects
   on that cluster. This is the same today, a query cannot mix compute resources
   from different clusters!
-- a given `envd` holds `SinceHandles` for all storage collections (at least
+- a given `adapterd` holds `SinceHandles` for all storage collections (at least
   those that it is interested in), because storage collections can be accesses
   from any cluster
 
 How are queries routed/processed:
 
 1. simple-ish!
-2. the balancer layer routes a query to the responsible `envd`
+2. the balancer layer routes a query to the responsible `adapterd`
 3. query arrives in the adapter layer
 4. adapter instructs _its_ controller to spin up computation on _its_ cluster
 5. controller sends commands to all replicas of _its_ cluster
@@ -153,8 +157,8 @@ Cons:
 
 - We run more than one type of process, which cloud might find harder to
   operate. But it's what we've done for an while now.
-- We run more than one `envd`-shaped processes (one per cluster), which we
-  previously didn't.
+- We run more than one `envd`-shaped processes (our new `adapterd`, one per
+  cluster), which we previously didn't.
 
 ## Multi-clusterd, No-envd Architecture
 
@@ -168,8 +172,8 @@ Questions:
 
 - How does Catalog content (the source of truth) get translated to instructions
   for clusters/replicas?
-  - In the multi-envd-multi-colusterd design, there is still a single point
-    (the controller, in that clusters `envd`) that instructs all cluster
+  - In the multi-adapterd-multi-colusterd design, there is still a single point
+    (the controller, in that cluster's `adapterd`) that instructs all cluster
     replicas, based on the Catalog. Which is easy to reason about.
   - Do all replicas participate in a distributed protocol to figure out what to
     do amongst themselves?
@@ -179,15 +183,15 @@ Questions:
     number of storage collections,  doesn't seem to problematic, because our
     `n` is small. This one seems tractable, at least.
 - Who holds on to read holds for compute objects, and how?
-  - In the multi-envd-multi-colusterd design, there is still a single point
-    (the controller, in that clusters `envd`) that instructs all cluster
+  - In the multi-adapterd-multi-colusterd design, there is still a single point
+    (the controller, in that clusters `adapterd`) that instructs all cluster
     replicas, allows them to do compaction when desired. It can therefore
     logically keep read holds.
   - Would all `clusterd` processes somehow logically keep read holds for all
     replicas? They would need this to do query processing!
 - How do queries get routed?
-  - In the multi-envd-multi-clusterd design, there is still a single entrypoint
-    _per cluster_: that clusters `envd` process.
+  - In the multi-adapterd-multi-clusterd design, there is still a single
+    entrypoint _per cluster_: that cluster's `adapterd` process.
   - The balancer could choose one `clusterd` process, round-robin. And then
     that `clusterd` process (the piece of adapter logic in it) has to process
     the query, talk to the other replicas/processes?
@@ -200,7 +204,8 @@ Questions:
 Pros:
 
 - We only run one type of process.
-- Plus maybe one super-slim `envd` for bootstrapping things?
+- Plus the one super-slim `envd` for bootstrapping things and talking to the
+  Orchestrator/Kubernetes?
 
 Cons:
 
