@@ -89,8 +89,6 @@ pub async fn handle_describe_table(
         columns
     };
 
-    tracing::info!(?columns, "our response");
-
     Ok(Some(Table {
         name: request.table_name,
         columns,
