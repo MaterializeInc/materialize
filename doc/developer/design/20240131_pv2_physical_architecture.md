@@ -212,6 +212,77 @@ Cons:
 - Hard to see how we can evolve our design to there from our current
   architecture. At least for me, aljoscha.
 
+## Sketch of multi-clusterd architecture
+
+In order to smear the responsibilities across the multiple `clusterd`, instead
+of them being held by a single `adapterd`, we need to look at three main
+responsibilities:
+
+1. translating Catalog contents to commands for clusters/replicas
+2. holding on to logical since handles for compute objects (across all the
+  replicas) and synthesizing `AllowCompaction` commands
+3. routing/processing queries
+
+> [!NOTE]
+> I'll use persist shards and their `compare_and_append` when talking about
+> distributed coordination below, but these ideas can be mapped to other
+> primitives. It's just what we're used to by now!
+
+### Catalog -> cluster/replica commands
+
+The input to synthesizing cluster/replicas commands are: 1. Catalog changes,
+and 2. currently held read holds. If all replicas hold read holds and can
+listen to Catalog changes, they all have access to the same information.
+
+The need to coordinate in writing down commands, for example in a durable
+command log/persist shard. All processes could scramble and try to
+`compare_and_append`, or they could elect a leader that does the appending,
+with less contention.
+
+All clusters/replicas would listen on the durable command log instead of being
+instructed by controller commands.
+
+### Read Holds
+
+Read holds can also be facilitated by the durable command log: all processes
+put in place an `AllowCompaction` command for the things they care about.
+Clusters/replicas listen to this to know when they can downgrade. They can
+downgrade only based on the minimum/meet over all read holds/`AllowCompaction`
+commands.
+
+Compute currently downgrades aggressively, because it's cheap to send
+controller messages to clusters/replicas. If we use the durable command log for
+read holds/downgrades, we would have to rate-limit writing new
+`AllowCompaction` commands to the log. This means we potentially do less
+compaction, but that could be fine.
+
+A CLUSTER (the user-facing one) could also use this concept to collectively
+"hold" a set of persist since handles for all collections: the different
+processes put in place read holds in the command log, and any process can
+downgrade the since handle to the minimum/meet of what we have in the durable
+command log. This way, we multiplex multiple logical holds into one set of
+"physical" since handles. Each CLUSTER logically holds one persist since handle
+per collection.
+
+### Query Routing
+
+All processes can connect to all other clusters/replicas. The balancer routes a
+query to one `clusterd` process.
+
+**Question**: What about sessions?
+
+- Equivalent to Postgres, where, in order to connect to a different database
+  you have to re-connect. Our equivalent would be that you have to re-connect
+  if you want to talk to a different cluster.
+- Still means that all the queries from one session have to be routed to the
+  same `clusterd` process, or they somehow have to share session state.
+- Makes the user experience slightly worse.
+
+## Questions
+
+Jan: Who serves queries when there is no replica?
+Dan: Is there work that a cluster/replica needs to do when there are no replicas?
+
 ## Alternatives
 
 TBD!
