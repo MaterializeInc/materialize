@@ -16,6 +16,7 @@ use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
+use tracing::instrument;
 
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
@@ -31,7 +32,7 @@ use crate::session::Session;
 use crate::{catalog, AdapterNotice, ExecuteContext, TimestampProvider};
 
 impl Coordinator {
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(skip_all)]
     pub(crate) async fn sequence_create_index(
         &mut self,
         ctx: ExecuteContext,
@@ -50,7 +51,7 @@ impl Coordinator {
         .await;
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[instrument(skip_all)]
     pub(crate) async fn explain_create_index(
         &mut self,
         ctx: ExecuteContext,
@@ -154,7 +155,7 @@ impl Coordinator {
     }
 
     /// Processes as many `create index` stages as possible.
-    #[tracing::instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub(crate) async fn execute_create_index_stage(
         &mut self,
         mut ctx: ExecuteContext,
@@ -195,6 +196,7 @@ impl Coordinator {
         }
     }
 
+    #[instrument(skip_all)]
     fn create_index_validate(
         &mut self,
         session: &Session,
@@ -225,6 +227,7 @@ impl Coordinator {
         })
     }
 
+    #[instrument(skip_all)]
     async fn create_index_optimize(
         &mut self,
         ctx: ExecuteContext,
@@ -354,6 +357,7 @@ impl Coordinator {
         );
     }
 
+    #[instrument(skip_all)]
     async fn create_index_finish(
         &mut self,
         ctx: &mut ExecuteContext,
@@ -478,6 +482,7 @@ impl Coordinator {
         }
     }
 
+    #[instrument(skip_all)]
     fn create_index_explain(
         &mut self,
         ctx: &mut ExecuteContext,

@@ -52,7 +52,7 @@ use mz_storage_types::controller::PersistTxnTablesImpl;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::RecvError;
 use tower_http::cors::AllowOrigin;
-use tracing::info;
+use tracing::{info, info_span, Instrument};
 
 use crate::http::{HttpConfig, HttpServer, InternalHttpConfig, InternalHttpServer};
 
@@ -609,6 +609,7 @@ impl Listeners {
             http_host_name: config.http_host_name,
             tracing_handle: config.tracing_handle,
         })
+        .instrument(info_span!(parent: None, "adapter::serve"))
         .await?;
 
         // Install an adapter client in the internal HTTP server.
