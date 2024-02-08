@@ -461,14 +461,14 @@ CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK db.schema.item, PORT 1234)
 ----
 CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK = db.schema.item, PORT = 1234)
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection_type: Postgres, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])))) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }], with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection_type: Postgres, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelink, value: Some(ConnectionAwsPrivatelink(ConnectionDefaultAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])), port: None })) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }], with_options: [] })
 
 parse-statement
 CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK db.schema.item, PORT 1234, HOST foo, SSL CERTIFICATE 'cert', SSL CERTIFICATE AUTHORITY 'auth', SSL KEY 'key')
 ----
 CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK = db.schema.item, PORT = 1234, HOST = foo, SSL CERTIFICATE = 'cert', SSL CERTIFICATE AUTHORITY = 'auth', SSL KEY = 'key')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection_type: Postgres, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])))) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, ConnectionOption { name: SslCertificate, value: Some(Value(String("cert"))) }, ConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("auth"))) }, ConnectionOption { name: SslKey, value: Some(Value(String("key"))) }], with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection_type: Postgres, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelink, value: Some(ConnectionAwsPrivatelink(ConnectionDefaultAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])), port: None })) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, ConnectionOption { name: SslCertificate, value: Some(Value(String("cert"))) }, ConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("auth"))) }, ConnectionOption { name: SslKey, value: Some(Value(String("key"))) }], with_options: [] })
 
 parse-statement
 CREATE CONNECTION mysqlconn FOR mysql HOST foo, PORT 1234, SSL CERTIFICATE AUTHORITY 'foo', SSH TUNNEL tun, PASSWORD 'pw', SSL CERTIFICATE 'cert', SSL KEY 'key', SSL MODE 'mode', USER 'root'
@@ -482,14 +482,14 @@ CREATE CONNECTION mysqlconn TO MYSQL (AWS PRIVATELINK db.schema.item, PORT 1234)
 ----
 CREATE CONNECTION mysqlconn TO MYSQL (AWS PRIVATELINK = db.schema.item, PORT = 1234)
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("mysqlconn")]), connection_type: MySql, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])))) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }], with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("mysqlconn")]), connection_type: MySql, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelink, value: Some(ConnectionAwsPrivatelink(ConnectionDefaultAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])), port: None })) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }], with_options: [] })
 
 parse-statement
 CREATE CONNECTION mysqlconn TO MYSQL (AWS PRIVATELINK db.schema.item, PORT 1234, HOST foo, SSL CERTIFICATE 'cert', SSL CERTIFICATE AUTHORITY 'auth', SSL KEY 'key')
 ----
 CREATE CONNECTION mysqlconn TO MYSQL (AWS PRIVATELINK = db.schema.item, PORT = 1234, HOST = foo, SSL CERTIFICATE = 'cert', SSL CERTIFICATE AUTHORITY = 'auth', SSL KEY = 'key')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("mysqlconn")]), connection_type: MySql, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])))) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, ConnectionOption { name: SslCertificate, value: Some(Value(String("cert"))) }, ConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("auth"))) }, ConnectionOption { name: SslKey, value: Some(Value(String("key"))) }], with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("mysqlconn")]), connection_type: MySql, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelink, value: Some(ConnectionAwsPrivatelink(ConnectionDefaultAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])), port: None })) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: Host, value: Some(Ident(Ident("foo"))) }, ConnectionOption { name: SslCertificate, value: Some(Value(String("cert"))) }, ConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("auth"))) }, ConnectionOption { name: SslKey, value: Some(Value(String("key"))) }], with_options: [] })
 
 parse-statement
 CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red');
@@ -2088,7 +2088,7 @@ CREATE CONNECTION conn1 FOR CONFLUENT SCHEMA REGISTRY URL 'http://localhost:8081
 ----
 CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (URL = 'http://localhost:8081', USER = 'user', PASSWORD = 'word', PORT = 1234, AWS PRIVATELINK = apl)
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection_type: Csr, if_not_exists: false, values: [ConnectionOption { name: Url, value: Some(Value(String("http://localhost:8081"))) }, ConnectionOption { name: User, value: Some(Value(String("user"))) }, ConnectionOption { name: Password, value: Some(Value(String("word"))) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("apl")])))) }], with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection_type: Csr, if_not_exists: false, values: [ConnectionOption { name: Url, value: Some(Value(String("http://localhost:8081"))) }, ConnectionOption { name: User, value: Some(Value(String("user"))) }, ConnectionOption { name: Password, value: Some(Value(String("word"))) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: AwsPrivatelink, value: Some(ConnectionAwsPrivatelink(ConnectionDefaultAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("apl")])), port: None })) }], with_options: [] })
 
 parse-statement roundtrip
 CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (URL = 'http://localhost:8081', USERNAME = 'user', PASSWORD = 'word')
@@ -2101,7 +2101,7 @@ CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK db.schema.
 ----
 CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK = db.schema.item, PORT = 8080)
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection_type: Csr, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])))) }, ConnectionOption { name: Port, value: Some(Value(Number("8080"))) }], with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection_type: Csr, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelink, value: Some(ConnectionAwsPrivatelink(ConnectionDefaultAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])), port: None })) }, ConnectionOption { name: Port, value: Some(Value(Number("8080"))) }], with_options: [] })
 
 parse-statement
 CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (SSH TUNNEL ssh, SSL CERTIFICATE 'cert', SSL CERTIFICATE AUTHORITY 'auth', SSL KEY 'key')
@@ -2116,7 +2116,7 @@ CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK db.schema.
 ----
 CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK = db.schema.item, PORT = 8080, URL = 'http://localhost:8081')
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection_type: Csr, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelink, value: Some(Item(Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])))) }, ConnectionOption { name: Port, value: Some(Value(Number("8080"))) }, ConnectionOption { name: Url, value: Some(Value(String("http://localhost:8081"))) }], with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("conn1")]), connection_type: Csr, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelink, value: Some(ConnectionAwsPrivatelink(ConnectionDefaultAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])), port: None })) }, ConnectionOption { name: Port, value: Some(Value(Number("8080"))) }, ConnectionOption { name: Url, value: Some(Value(String("http://localhost:8081"))) }], with_options: [] })
 
 
 parse-statement
