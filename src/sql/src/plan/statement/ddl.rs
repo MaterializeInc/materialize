@@ -3278,7 +3278,6 @@ pub fn plan_create_cluster(
         if disk_in.is_some() {
             scx.require_feature_flag(&vars::ENABLE_DISK_CLUSTER_REPLICAS)?;
         }
-        ensure_cluster_size_allowed(scx, &size)?;
 
         let compute = plan_compute_replica_config(
             introspection_interval,
@@ -3423,7 +3422,6 @@ fn plan_replica_config(
         (Some(size), availability_zone, billed_as, None, None, None, None, None) => {
             let disk_default = scx.catalog.system_vars().disk_cluster_replicas_default();
             let mut disk = disk_in.unwrap_or(disk_default);
-            ensure_cluster_size_allowed(scx, &size)?;
 
             // HACK(benesch): disk is always enabled for v2 cluster sizes, and
             // it is an error to specify `DISK = FALSE` or `DISK = TRUE`
@@ -4482,7 +4480,6 @@ pub fn plan_alter_cluster(
                 options.replication_factor = AlterOptionParameter::Set(replication_factor);
             }
             if let Some(size) = &size {
-                ensure_cluster_size_allowed(scx, size)?;
                 // HACK(benesch): disk is always enabled for v2 cluster sizes,
                 // and it is an error to specify `DISK = FALSE` or `DISK = TRUE`
                 // explicitly.
@@ -5669,18 +5666,6 @@ fn ensure_cluster_is_not_managed(
         Err(PlanError::ManagedCluster {
             cluster_name: cluster.name().to_string(),
         })
-    } else {
-        Ok(())
-    }
-}
-
-fn ensure_cluster_size_allowed(scx: &StatementContext, size: &str) -> Result<(), PlanError> {
-    // This isn't a robust check by any means, but we rarely change
-    // cluster size names. This feature flag can be removed upon
-    // completion of https://github.com/MaterializeInc/cloud/issues/5343
-    // and https://github.com/MaterializeInc/cloud/issues/7013
-    if is_cluster_size_v2(size) {
-        scx.require_feature_flag(&vars::ENABLE_CC_CLUSTER_SIZES)
     } else {
         Ok(())
     }

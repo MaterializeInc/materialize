@@ -61,7 +61,6 @@ DEFAULT_SYSTEM_PARAMETERS = {
     "disk_cluster_replicas_default": "true",
     "enable_alter_swap": "true",
     "enable_assert_not_null": "true",
-    "enable_cc_cluster_sizes": "true",
     "enable_columnation_lgalloc": "true",
     "enable_comment": "true",
     "enable_disk_cluster_replicas": "true",
