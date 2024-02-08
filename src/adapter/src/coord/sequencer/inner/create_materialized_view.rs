@@ -31,7 +31,7 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
-use crate::optimize::{self, Optimize};
+use crate::optimize::{self, Optimize, OverrideFrom};
 use crate::session::Session;
 use crate::util::ResultExt;
 use crate::{catalog, AdapterNotice, ExecuteContext, TimestampProvider};
@@ -95,6 +95,61 @@ impl Coordinator {
                     config,
                     format,
                     stage,
+                    replan: None,
+                    desc: None,
+                    optimizer_trace,
+                }),
+            }),
+            OpenTelemetryContext::obtain(),
+        )
+        .await;
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub(crate) async fn explain_replan_materialized_view(
+        &mut self,
+        ctx: ExecuteContext,
+        plan::ExplainPlanPlan {
+            stage,
+            format,
+            config,
+            explainee,
+        }: plan::ExplainPlanPlan,
+    ) {
+        let plan::Explainee::ReplanMaterializedView(id) = explainee else {
+            unreachable!() // Asserted in `sequence_explain_plan`.
+        };
+        let CatalogItem::MaterializedView(item) = self.catalog().get_entry(&id).item() else {
+            unreachable!() // Asserted in `plan_explain_plan`.
+        };
+
+        let state = self.catalog().state();
+        let plan_result = state.deserialize_plan(id, item.create_sql.clone(), true);
+        let (plan, resolved_ids) = return_if_err!(plan_result, ctx);
+
+        let plan::Plan::CreateMaterializedView(plan) = plan else {
+            unreachable!() // We are parsing the `create_sql` of a `MaterializedView` item.
+        };
+
+        // It is safe to assume that query optimization will always succeed, so
+        // for now we statically assume `broken = false`.
+        let broken = false;
+
+        // Create an OptimizerTrace instance to collect plans emitted when
+        // executing the optimizer pipeline.
+        let optimizer_trace = OptimizerTrace::new(broken, stage.path());
+
+        self.execute_create_materialized_view_stage(
+            ctx,
+            CreateMaterializedViewStage::Validate(CreateMaterializedViewValidate {
+                plan,
+                resolved_ids,
+                explain_ctx: Some(ExplainContext {
+                    broken,
+                    config,
+                    format,
+                    stage,
+                    replan: Some(id),
                     desc: None,
                     optimizer_trace,
                 }),
@@ -245,11 +300,8 @@ impl Coordinator {
         };
         let internal_view_id = return_if_err!(self.allocate_transient_id(), ctx);
         let debug_name = self.catalog().resolve_full_name(name, None).to_string();
-        let optimizer_config = if let Some(explain_ctx) = explain_ctx.as_ref() {
-            optimize::OptimizerConfig::from((self.catalog().system_config(), &explain_ctx.config))
-        } else {
-            optimize::OptimizerConfig::from(self.catalog().system_config())
-        };
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
+            .override_from(&explain_ctx);
 
         // Build an optimizer for this MATERIALIZED VIEW.
         let mut optimizer = optimize::materialized_view::Optimizer::new(

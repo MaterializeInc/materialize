@@ -7291,6 +7291,15 @@ impl<'a> Parser<'a> {
         } else if self.parse_keyword(INDEX) {
             // Parse: `INDEX name`
             Explainee::Index(self.parse_raw_name()?)
+        } else if self.parse_keywords(&[REPLAN, VIEW]) {
+            // Parse: `REPLAN VIEW name`
+            Explainee::ReplanView(self.parse_raw_name()?)
+        } else if self.parse_keywords(&[REPLAN, MATERIALIZED, VIEW]) {
+            // Parse: `REPLAN MATERIALIZED VIEW name`
+            Explainee::ReplanMaterializedView(self.parse_raw_name()?)
+        } else if self.parse_keywords(&[REPLAN, INDEX]) {
+            // Parse: `REPLAN INDEX name`
+            Explainee::ReplanIndex(self.parse_raw_name()?)
         } else {
             let broken = self.parse_keyword(BROKEN);
 

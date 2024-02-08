@@ -67,7 +67,7 @@ use mz_compute_types::plan::Plan;
 use mz_expr::{EvalError, OptimizedMirRelationExpr, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::timestamp::TimestampError;
-use mz_repr::explain::ExplainConfig;
+use mz_repr::GlobalId;
 use mz_sql::plan::PlanError;
 use mz_sql::session::vars::SystemVars;
 use mz_transform::TransformError;
@@ -138,6 +138,11 @@ where
 pub struct OptimizerConfig {
     /// The mode in which the optimizer runs.
     pub mode: OptimizeMode,
+    /// If the [`GlobalId`] is set the optimizer works in "replan" mode.
+    ///
+    /// This means that it will not consider catalog items (more specifically
+    /// indexes) with [`GlobalId`] greater or equal than the one provided here.
+    pub replan: Option<GlobalId>,
     /// Enable fast path optimization.
     pub enable_fast_path: bool,
     /// Enable consolidation of unions that happen immediately after negate.
@@ -153,13 +158,11 @@ pub struct OptimizerConfig {
     /// Persist fast-path peek. Required by the `create_fast_path_plan` call in
     /// [`peek::Optimizer`].
     pub persist_fast_path_limit: usize,
-    /// Enable outer join lowering implemented in #22343.
+    /// Bound from [`SystemVars::enable_new_outer_join_lowering`].
     pub enable_new_outer_join_lowering: bool,
-    /// Enable eager delta joins.
+    /// Bound from [`SystemVars::enable_eager_delta_joins`].
     pub enable_eager_delta_joins: bool,
-    /// Enable fusion of MFPs in reductions.
-    ///
-    /// The fusion happens in MIR ⇒ LIR lowering.
+    /// Bound from [`SystemVars::enable_reduce_mfp_fusion`].
     pub enable_reduce_mfp_fusion: bool,
 }
 
@@ -175,6 +178,7 @@ impl From<&SystemVars> for OptimizerConfig {
     fn from(vars: &SystemVars) -> Self {
         Self {
             mode: OptimizeMode::Execute,
+            replan: None,
             enable_fast_path: true, // Always enable fast path if available.
             enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
             enable_specialized_arrangements: vars.enable_specialized_arrangements(),
@@ -186,19 +190,44 @@ impl From<&SystemVars> for OptimizerConfig {
     }
 }
 
-impl From<(&SystemVars, &ExplainConfig)> for OptimizerConfig {
-    fn from((vars, explain_config): (&SystemVars, &ExplainConfig)) -> Self {
-        // Construct base config from vars.
-        let mut config = Self::from(vars);
-        // We are calling this constructor from an 'Explain' mode context.
-        config.mode = OptimizeMode::Explain;
-        config.enable_fast_path = !explain_config.no_fast_path;
-        // Override feature flags that can be enabled in the EXPLAIN config.
-        if let Some(explain_flag) = explain_config.enable_new_outer_join_lowering {
-            config.enable_new_outer_join_lowering = explain_flag;
+/// A trait used to implement layered config construction.
+pub trait OverrideFrom<T> {
+    /// Override the configuration represented by [`Self`] with values
+    /// from the given `layer`.
+    fn override_from(self, layer: &T) -> Self;
+}
+
+/// Blanket implementation for optional layers.
+impl<S, T> OverrideFrom<Option<T>> for S
+where
+    S: OverrideFrom<T>,
+{
+    fn override_from(self, layer: &Option<T>) -> Self {
+        match layer.as_ref() {
+            Some(layer) => self.override_from(layer),
+            None => self,
         }
+    }
+}
+
+/// [`OptimizerConfig`] overrides coming from an [`ExplainContext`].
+impl OverrideFrom<ExplainContext> for OptimizerConfig {
+    fn override_from(mut self, ctx: &ExplainContext) -> Self {
+        // Override general parameters.
+        self.mode = OptimizeMode::Explain;
+        self.replan = ctx.replan;
+        self.enable_fast_path = !ctx.config.no_fast_path;
+
+        // Override feature flags that can be enabled in the EXPLAIN config.
+        if let Some(explain_flag) = ctx.config.enable_new_outer_join_lowering {
+            self.enable_new_outer_join_lowering = explain_flag;
+        }
+        if let Some(explain_flag) = ctx.config.enable_eager_delta_joins {
+            self.enable_eager_delta_joins = explain_flag;
+        }
+
         // Return final result.
-        config
+        self
     }
 }
 
@@ -280,3 +309,5 @@ macro_rules! trace_plan {
 }
 
 use trace_plan;
+
+use crate::coord::ExplainContext;

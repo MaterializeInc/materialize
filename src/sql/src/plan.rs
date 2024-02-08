@@ -813,10 +813,14 @@ pub struct ExplainPlanPlan {
 /// The type of object to be explained
 #[derive(Clone, Debug)]
 pub enum Explainee {
-    /// An existing materialized view.
+    /// Lookup and explain a plan saved for an existing materialized view.
     MaterializedView(GlobalId),
-    /// An existing index.
+    /// Lookup and explain a plan saved for an existing index.
     Index(GlobalId),
+    /// Replan an existing materialized view.
+    ReplanMaterializedView(GlobalId),
+    /// Replan an existing index.
+    ReplanIndex(GlobalId),
     /// A SQL statement.
     Statement(ExplaineeStatement),
 }
@@ -1570,6 +1574,7 @@ impl Params {
 pub struct PlanContext {
     pub wall_time: DateTime<Utc>,
     pub planning_id: Option<GlobalId>,
+    pub ignore_if_exists_errors: bool,
 }
 
 impl PlanContext {
@@ -1577,6 +1582,7 @@ impl PlanContext {
         Self {
             wall_time,
             planning_id: None,
+            ignore_if_exists_errors: false,
         }
     }
 
@@ -1587,10 +1593,17 @@ impl PlanContext {
         PlanContext {
             wall_time: now::to_datetime(NOW_ZERO()),
             planning_id: None,
+            ignore_if_exists_errors: false,
         }
     }
 
-    pub fn set_planning_id(&mut self, id: GlobalId) {
+    pub fn with_planning_id(mut self, id: GlobalId) -> Self {
         self.planning_id = Some(id);
+        self
+    }
+
+    pub fn with_ignore_if_exists_errors(mut self, value: bool) -> Self {
+        self.ignore_if_exists_errors = value;
+        self
     }
 }

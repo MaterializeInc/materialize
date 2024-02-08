@@ -633,6 +633,7 @@ pub struct ExplainContext {
     pub config: ExplainConfig,
     pub format: ExplainFormat,
     pub stage: ExplainStage,
+    pub replan: Option<GlobalId>,
     pub desc: Option<RelationDesc>,
     pub optimizer_trace: OptimizerTrace,
 }

@@ -197,6 +197,8 @@ pub struct ExplainConfig {
     // -------------
     /// Enable outer join lowering implemented in #22347 and #22348.
     pub enable_new_outer_join_lowering: Option<bool>,
+    /// Enable the eager delta join planning implemented in #23318.
+    pub enable_eager_delta_joins: Option<bool>,
 }
 
 impl Default for ExplainConfig {
@@ -222,6 +224,7 @@ impl Default for ExplainConfig {
             timing: false,
             types: false,
             enable_new_outer_join_lowering: None,
+            enable_eager_delta_joins: None,
         }
     }
 }
@@ -270,6 +273,7 @@ impl TryFrom<BTreeSet<String>> for ExplainConfig {
             timing: flags.remove("timing"),
             types: flags.remove("types"),
             enable_new_outer_join_lowering: parse_flag(&mut flags, "new_outer_join_lowering")?,
+            enable_eager_delta_joins: parse_flag(&mut flags, "eager_delta_joins")?,
         };
         if flags.is_empty() {
             Ok(result)
@@ -961,6 +965,7 @@ mod tests {
             timing: true,
             types: false,
             enable_new_outer_join_lowering: None,
+            enable_eager_delta_joins: None,
         };
         let context = ExplainContext {
             env,

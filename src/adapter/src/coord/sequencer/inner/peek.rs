@@ -48,7 +48,7 @@ use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
 use crate::optimize::dataflows::{prep_scalar_expr, EvalTime, ExprPrepStyle};
-use crate::optimize::{self, Optimize};
+use crate::optimize::{self, Optimize, OverrideFrom};
 use crate::session::{RequireLinearization, Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
 use crate::util::ResultExt;
@@ -179,6 +179,7 @@ impl Coordinator {
                     config,
                     format,
                     stage,
+                    replan: None,
                     desc: Some(desc),
                     optimizer_trace,
                 }),
@@ -284,11 +285,8 @@ impl Coordinator {
             .instance_snapshot(cluster.id())
             .expect("compute instance does not exist");
         let view_id = self.allocate_transient_id()?;
-        let optimizer_config = if let Some(explain_ctx) = explain_ctx.as_ref() {
-            optimize::OptimizerConfig::from((self.catalog().system_config(), &explain_ctx.config))
-        } else {
-            optimize::OptimizerConfig::from(self.catalog().system_config())
-        };
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
+            .override_from(&explain_ctx);
 
         let optimizer = match copy_to_ctx {
             None => {
@@ -1007,6 +1005,7 @@ impl Coordinator {
                     stage,
                     desc,
                     optimizer_trace,
+                    ..
                 },
             ..
         }: PeekStageExplain,

@@ -766,7 +766,10 @@ fn generate_rbac_requirements(
             explainee,
         }) => RbacRequirements {
             privileges: match explainee {
-                Explainee::MaterializedView(id) | Explainee::Index(id) => {
+                Explainee::MaterializedView(id)
+                | Explainee::Index(id)
+                | Explainee::ReplanMaterializedView(id)
+                | Explainee::ReplanIndex(id) => {
                     let item = catalog.get_item(id);
                     let schema_id: ObjectId = item.name().qualifiers.clone().into();
                     vec![(SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)]
@@ -782,7 +785,10 @@ fn generate_rbac_requirements(
                     .collect(),
             },
             item_usage: match explainee {
-                Explainee::MaterializedView(_) | Explainee::Index(_) => &EMPTY_ITEM_USAGE,
+                Explainee::MaterializedView(..)
+                | Explainee::Index(..)
+                | Explainee::ReplanMaterializedView(..)
+                | Explainee::ReplanIndex(..) => &EMPTY_ITEM_USAGE,
                 Explainee::Statement(_) => &DEFAULT_ITEM_USAGE,
             },
             ..Default::default()

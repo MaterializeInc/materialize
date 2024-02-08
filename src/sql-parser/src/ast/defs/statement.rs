@@ -3540,6 +3540,9 @@ pub enum Explainee<T: AstInfo> {
     View(T::ItemName),
     MaterializedView(T::ItemName),
     Index(T::ItemName),
+    ReplanView(T::ItemName),
+    ReplanMaterializedView(T::ItemName),
+    ReplanIndex(T::ItemName),
     Select(Box<SelectStatement<T>>, bool),
     CreateMaterializedView(Box<CreateMaterializedViewStatement<T>>, bool),
     CreateIndex(Box<CreateIndexStatement<T>>, bool),
@@ -3558,6 +3561,18 @@ impl<T: AstInfo> AstDisplay for Explainee<T> {
             }
             Self::Index(name) => {
                 f.write_str("INDEX ");
+                f.write_node(name);
+            }
+            Self::ReplanView(name) => {
+                f.write_str("REPLAN VIEW ");
+                f.write_node(name);
+            }
+            Self::ReplanMaterializedView(name) => {
+                f.write_str("REPLAN MATERIALIZED VIEW ");
+                f.write_node(name);
+            }
+            Self::ReplanIndex(name) => {
+                f.write_str("REPLAN INDEX ");
                 f.write_node(name);
             }
             Self::Select(select, broken) => {

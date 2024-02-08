@@ -302,29 +302,40 @@ pub fn plan_explain_plan(
         config
     };
 
+    let is_replan = matches!(
+        explainee,
+        Explainee::ReplanView(_) | Explainee::ReplanMaterializedView(_) | Explainee::ReplanIndex(_),
+    );
+
     let explainee = match explainee {
-        Explainee::View(_) => {
+        Explainee::View(_) | Explainee::ReplanView(_) => {
             bail_never_supported!(
                 "EXPLAIN ... VIEW <view_name>",
                 "sql/explain-plan",
                 "Use `EXPLAIN ... SELECT * FROM <view_name>` (if the view is not indexed) or `EXPLAIN ... INDEX <idx_name>` (if the view is indexed) instead."
             );
         }
-        Explainee::MaterializedView(name) => {
+        Explainee::MaterializedView(name) | Explainee::ReplanMaterializedView(name) => {
             let item = scx.get_item_by_resolved_name(&name)?;
             let item_type = item.item_type();
             if item_type != CatalogItemType::MaterializedView {
                 sql_bail!("Expected {name} to be a materialized view, not a {item_type}");
             }
-            crate::plan::Explainee::MaterializedView(item.id())
+            match is_replan {
+                true => crate::plan::Explainee::ReplanMaterializedView(item.id()),
+                false => crate::plan::Explainee::MaterializedView(item.id()),
+            }
         }
-        Explainee::Index(name) => {
+        Explainee::Index(name) | Explainee::ReplanIndex(name) => {
             let item = scx.get_item_by_resolved_name(&name)?;
             let item_type = item.item_type();
             if item_type != CatalogItemType::Index {
                 sql_bail!("Expected {name} to be an index, not a {item_type}");
             }
-            crate::plan::Explainee::Index(item.id())
+            match is_replan {
+                true => crate::plan::Explainee::ReplanIndex(item.id()),
+                false => crate::plan::Explainee::Index(item.id()),
+            }
         }
         Explainee::Select(select, broken) => {
             // The following code should align with `dml::plan_select`.

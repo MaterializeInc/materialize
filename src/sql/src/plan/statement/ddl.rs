@@ -2047,7 +2047,11 @@ pub fn plan_create_view(
     } = &mut stmt;
     let (name, view) = plan_view(scx, definition, params, *temporary)?;
 
-    let replace = if *if_exists == IfExistsBehavior::Replace {
+    // Override the statement-level IfExistsBehavior with Skip if this is
+    // explicitly requested in the PlanContext (the default is `false`).
+    let ignore_if_exists_errors = scx.pcx().map_or(false, |pcx| pcx.ignore_if_exists_errors);
+
+    let replace = if *if_exists == IfExistsBehavior::Replace && !ignore_if_exists_errors {
         let if_exists = true;
         let cascade = false;
         if let Some(id) = plan_drop_item(
@@ -2086,9 +2090,11 @@ pub fn plan_create_view(
     let partial_name = PartialItemName::from(full_name.clone());
     // For PostgreSQL compatibility, we need to prevent creating views when
     // there is an existing object *or* type of the same name.
-    if let (IfExistsBehavior::Error, Ok(item)) =
-        (*if_exists, scx.catalog.resolve_item_or_type(&partial_name))
-    {
+    if let (Ok(item), IfExistsBehavior::Error, false) = (
+        scx.catalog.resolve_item_or_type(&partial_name),
+        *if_exists,
+        ignore_if_exists_errors,
+    ) {
         return Err(PlanError::ItemAlreadyExists {
             name: full_name.to_string(),
             item_type: item.item_type(),
@@ -2307,9 +2313,16 @@ pub fn plan_create_materialized_view(
         sql_bail!("column {} specified more than once", dup.as_str().quoted());
     }
 
+    // Override the statement-level IfExistsBehavior with Skip if this is
+    // explicitly requested in the PlanContext (the default is `false`).
+    let if_exists = match scx.pcx().map(|pcx| pcx.ignore_if_exists_errors) {
+        Ok(true) => IfExistsBehavior::Skip,
+        _ => stmt.if_exists,
+    };
+
     let mut replace = None;
     let mut if_not_exists = false;
-    match stmt.if_exists {
+    match if_exists {
         IfExistsBehavior::Replace => {
             let if_exists = true;
             let cascade = false;
@@ -2349,10 +2362,9 @@ pub fn plan_create_materialized_view(
     let partial_name = PartialItemName::from(full_name.clone());
     // For PostgreSQL compatibility, we need to prevent creating materialized
     // views when there is an existing object *or* type of the same name.
-    if let (IfExistsBehavior::Error, Ok(item)) = (
-        stmt.if_exists,
-        scx.catalog.resolve_item_or_type(&partial_name),
-    ) {
+    if let (IfExistsBehavior::Error, Ok(item)) =
+        (if_exists, scx.catalog.resolve_item_or_type(&partial_name))
+    {
         return Err(PlanError::ItemAlreadyExists {
             name: full_name.to_string(),
             item_type: item.item_type(),
@@ -2940,9 +2952,10 @@ pub fn plan_create_index(
     // that have an associated relation (record types but not list/map types).
     // Enforcing that would be more complicated, though. It's backwards
     // compatible to weaken this restriction in the future.
-    if let (false, Ok(item)) = (
-        *if_not_exists,
+    if let (Ok(item), false, false) = (
         scx.catalog.resolve_item_or_type(&partial_name),
+        *if_not_exists,
+        scx.pcx().map_or(false, |pcx| pcx.ignore_if_exists_errors),
     ) {
         return Err(PlanError::ItemAlreadyExists {
             name: full_name.to_string(),
