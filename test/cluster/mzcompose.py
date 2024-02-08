@@ -1737,7 +1737,7 @@ def workflow_pg_snapshot_partial_failure(c: Composition) -> None:
         Postgres(),
         Testdrive(no_reset=True),
         Clusterd(
-            name="storage", environment_extra=["FAILPOINTS=pg_snapshot_pause=return(2)"]
+            name="storage", environment_extra=["FAILPOINTS=pg_snapshot_pause=return(1)"]
         ),
     ):
         c.up("materialized", "postgres", "storage")
