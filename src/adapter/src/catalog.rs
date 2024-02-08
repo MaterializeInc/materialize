@@ -19,7 +19,6 @@ use std::sync::Arc;
 use futures::Future;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
-use mz_ore::soft_assert_or_log;
 use smallvec::SmallVec;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::MutexGuard;
@@ -55,6 +54,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::option::FallibleMapExt;
 use mz_ore::result::ResultExt as _;
+use mz_ore::soft_panic_or_log;
 use mz_persist_client::PersistClient;
 use mz_repr::adt::mz_acl_item::{merge_mz_acl_items, AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
@@ -231,7 +231,7 @@ impl Catalog {
     ///
     /// Return a set containing all dropped notices. Note that if for some
     /// reason we end up with two identical notices being dropped by the same
-    /// call, the result will only contain only one instance of that notice.
+    /// call, the result will contain only one instance of that notice.
     #[tracing::instrument(level = "trace", skip(self))]
     pub fn drop_plans_and_metainfos(
         &mut self,
@@ -290,10 +290,25 @@ impl Catalog {
             }
         }
 
-        soft_assert_or_log!(
-            dropped_notices.iter().all(|n| Arc::strong_count(n) == 1),
-            "all dropped_notices entries have `Arc::strong_count(_) == 1`"
-        );
+        if dropped_notices.iter().any(|n| Arc::strong_count(n) != 1) {
+            use mz_ore::str::{bracketed, separated};
+            let bad_notices = dropped_notices.iter().filter(|n| Arc::strong_count(n) != 1);
+            let bad_notices = bad_notices.map(|n| {
+                format!(
+                    "(id = {}, kind = {:?}, deps = {:?}, strong_count = {})",
+                    n.id,
+                    n.kind,
+                    n.dependencies,
+                    Arc::strong_count(n)
+                )
+            });
+            let bad_notices = bracketed("{", "}", separated(", ", bad_notices));
+            soft_panic_or_log!(
+                "all dropped_notices entries have `Arc::strong_count(_) == 1`; \
+                 bad_notices = {bad_notices}; \
+                 drop_ids = {drop_ids:?}"
+            );
+        }
 
         return dropped_notices;
     }
