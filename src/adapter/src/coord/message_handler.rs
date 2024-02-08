@@ -35,7 +35,7 @@ use crate::coord::appends::Deferred;
 use crate::coord::statement_logging::StatementLoggingId;
 use crate::coord::{
     AlterConnectionValidationReady, Coordinator, CreateConnectionValidationReady, Message,
-    PeekStage, PeekStageTimestampReadHold, PendingReadTxn, PlanValidity, PurifiedStatementReady,
+    PeekStage, PeekStageTimestampReadHold, PlanValidity, PurifiedStatementReady,
     RealTimeRecencyContext,
 };
 use crate::session::Session;
@@ -109,8 +109,8 @@ impl Coordinator {
                 Message::RemovePendingPeeks { conn_id } => {
                     self.cancel_pending_peeks(&conn_id);
                 }
-                Message::LinearizeReads(pending_read_txns) => {
-                    self.message_linearize_reads(pending_read_txns).await;
+                Message::LinearizeReads => {
+                    self.message_linearize_reads().await;
                 }
                 Message::StorageUsageFetch => {
                     self.storage_usage_fetch().await;
@@ -690,10 +690,9 @@ impl Coordinator {
     ///   1. Holding back any results that were executed at some point in the future, until the
     ///   containing timeline has advanced to that point in the future.
     ///   2. Confirming that we are still the current leader before sending results to the client.
-    async fn message_linearize_reads(&mut self, pending_read_txns: Vec<PendingReadTxn>) {
+    async fn message_linearize_reads(&mut self) {
         let mut shortest_wait = Duration::from_millis(0);
         let mut ready_txns = Vec::new();
-        let mut deferred_txns = Vec::new();
 
         // Cache for `TimestampOracle::read_ts` calls. These are somewhat
         // expensive so we cache the value. This is correct since all we're
@@ -701,7 +700,7 @@ impl Coordinator {
         // a result too early.
         let mut cached_oracle_ts = BTreeMap::new();
 
-        for mut read_txn in pending_read_txns {
+        for (conn_id, mut read_txn) in std::mem::take(&mut self.pending_linearize_read_txns) {
             if let TimestampContext::TimelineTimestamp {
                 timeline,
                 chosen_ts,
@@ -745,7 +744,7 @@ impl Coordinator {
                         shortest_wait = wait;
                     }
                     read_txn.num_requeues += 1;
-                    deferred_txns.push(read_txn);
+                    self.pending_linearize_read_txns.insert(conn_id, read_txn);
                 }
             } else {
                 ready_txns.push(read_txn);
@@ -787,14 +786,14 @@ impl Coordinator {
             }
         }
 
-        if !deferred_txns.is_empty() {
+        if !self.pending_linearize_read_txns.is_empty() {
             // Cap wait time to 1s.
             let remaining_ms = std::cmp::min(shortest_wait, Duration::from_millis(1_000));
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             task::spawn(|| "deferred_read_txns", async move {
                 tokio::time::sleep(remaining_ms).await;
                 // It is not an error for this task to be running after `internal_cmd_rx` is dropped.
-                let result = internal_cmd_tx.send(Message::LinearizeReads(deferred_txns));
+                let result = internal_cmd_tx.send(Message::LinearizeReads);
                 if let Err(e) = result {
                     warn!("internal_cmd_rx dropped before we could send: {:?}", e);
                 }

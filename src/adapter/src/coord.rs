@@ -104,7 +104,7 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::spawn;
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
-use mz_ore::{soft_panic_or_log, stack};
+use mz_ore::{soft_assert_or_log, soft_panic_or_log, stack};
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
@@ -217,7 +217,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     RemovePendingPeeks {
         conn_id: ConnectionId,
     },
-    LinearizeReads(Vec<PendingReadTxn>),
+    LinearizeReads,
     StorageUsageFetch,
     StorageUsageUpdate(ShardsUsageReferenced),
     RealTimeRecencyTimestamp {
@@ -295,7 +295,7 @@ impl Message {
             Message::AdvanceTimelines => "advance_timelines",
             Message::ClusterEvent(_) => "cluster_event",
             Message::RemovePendingPeeks { .. } => "remove_pending_peeks",
-            Message::LinearizeReads(_) => "linearize_reads",
+            Message::LinearizeReads => "linearize_reads",
             Message::StorageUsageFetch => "storage_usage_fetch",
             Message::StorageUsageUpdate(_) => "storage_usage_update",
             Message::RealTimeRecencyTimestamp { .. } => "real_time_recency_timestamp",
@@ -1023,6 +1023,10 @@ impl PendingReadTxn {
     pub fn timestamp_context(&self) -> &TimestampContext<mz_repr::Timestamp> {
         &self.timestamp_context
     }
+
+    pub(crate) fn take_context(self) -> ExecuteContext {
+        self.txn.take_context()
+    }
 }
 
 #[derive(Debug)]
@@ -1033,8 +1037,11 @@ enum PendingRead {
         txn: PendingTxn,
     },
     ReadThenWrite {
-        /// Channel used to alert the transaction that the read has been linearized.
-        tx: oneshot::Sender<()>,
+        /// Context used to send a response back to the client.
+        ctx: ExecuteContext,
+        /// Channel used to alert the transaction that the read has been linearized and send back
+        /// `ctx`.
+        tx: oneshot::Sender<Option<ExecuteContext>>,
     },
 }
 
@@ -1064,9 +1071,9 @@ impl PendingRead {
 
                 Some((ctx, response))
             }
-            PendingRead::ReadThenWrite { tx, .. } => {
+            PendingRead::ReadThenWrite { ctx, tx, .. } => {
                 // Ignore errors if the caller has hung up.
-                let _ = tx.send(());
+                let _ = tx.send(Some(ctx));
                 None
             }
         }
@@ -1076,6 +1083,18 @@ impl PendingRead {
         match self {
             PendingRead::Read { .. } => "read",
             PendingRead::ReadThenWrite { .. } => "read_then_write",
+        }
+    }
+
+    pub(crate) fn take_context(self) -> ExecuteContext {
+        match self {
+            PendingRead::Read { txn, .. } => txn.ctx,
+            PendingRead::ReadThenWrite { ctx, tx, .. } => {
+                // Inform the transaction that we've taken their context.
+                // Ignore errors if the caller has hung up.
+                let _ = tx.send(None);
+                ctx
+            }
         }
     }
 }
@@ -1263,7 +1282,7 @@ pub struct Coordinator {
     group_commit_tx: appends::GroupCommitNotifier,
 
     /// Channel for strict serializable reads ready to commit.
-    strict_serializable_reads_tx: mpsc::UnboundedSender<PendingReadTxn>,
+    strict_serializable_reads_tx: mpsc::UnboundedSender<(ConnectionId, PendingReadTxn)>,
 
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
@@ -1309,6 +1328,9 @@ pub struct Coordinator {
 
     /// A map from client connection ids to a pending real time recency timestamps.
     pending_real_time_recency_timestamp: BTreeMap<ConnectionId, RealTimeRecencyContext>,
+
+    /// A map from client connection ids to pending linearize read transaction.
+    pending_linearize_read_txns: BTreeMap<ConnectionId, PendingReadTxn>,
 
     /// A map from active subscribes to the subscribe description.
     active_subscribes: BTreeMap<GlobalId, ActiveSubscribe>,
@@ -2366,7 +2388,7 @@ impl Coordinator {
     fn serve(
         mut self,
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
-        mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<PendingReadTxn>,
+        mut strict_serializable_reads_rx: mpsc::UnboundedReceiver<(ConnectionId, PendingReadTxn)>,
         mut cmd_rx: mpsc::UnboundedReceiver<(OpenTelemetryContext, Command)>,
         group_commit_rx: appends::GroupCommitWaiter,
     ) -> LocalBoxFuture<'static, ()> {
@@ -2506,7 +2528,14 @@ impl Coordinator {
                         while let Ok(pending_read_txn) = strict_serializable_reads_rx.try_recv() {
                             pending_read_txns.push(pending_read_txn);
                         }
-                        Message::LinearizeReads(pending_read_txns)
+                        for (conn_id, pending_read_txn) in pending_read_txns {
+                            let prev = self.pending_linearize_read_txns.insert(conn_id, pending_read_txn);
+                            soft_assert_or_log!(
+                                prev.is_none(),
+                                "connections can not have multiple concurrent reads, prev: {prev:?}"
+                            )
+                        }
+                        Message::LinearizeReads
                     }
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
@@ -2935,6 +2964,7 @@ pub fn serve(
                     pending_peeks: BTreeMap::new(),
                     client_pending_peeks: BTreeMap::new(),
                     pending_real_time_recency_timestamp: BTreeMap::new(),
+                    pending_linearize_read_txns: BTreeMap::new(),
                     active_subscribes: BTreeMap::new(),
                     active_webhooks: BTreeMap::new(),
                     write_lock: Arc::new(tokio::sync::Mutex::new(())),

@@ -2823,9 +2823,13 @@ fn test_cancel_read_then_write() {
             });
             std::thread::sleep(Duration::from_millis(100));
             let handle2 = thread::spawn(move || {
-                client2
+                let err = client2
                 .batch_execute("insert into foo values ('blah', 1);")
-                .unwrap();
+                .unwrap_err();
+                assert_contains!(
+                    err.to_string(),
+                    "canceling statement"
+                );
             });
             std::thread::sleep(Duration::from_millis(100));
             cancel_token.cancel_query(postgres::NoTls)?;
