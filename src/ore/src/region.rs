@@ -152,6 +152,11 @@ impl<T> LgAllocRegion<T> {
 }
 
 /// An abstraction over different kinds of allocated regions.
+///
+/// # WARNING
+///
+/// The implementation does not drop its elements, but forgets them instead. Do not use where
+/// this is not intended, i.e., outside `Copy` types or columnation regions.
 #[derive(Debug)]
 pub enum Region<T> {
     /// A possibly empty heap-allocated region, represented as a vector.
@@ -223,6 +228,8 @@ impl<T> Region<T> {
     pub fn new_mmap(capacity: usize) -> Result<Region<T>, lgalloc::AllocError> {
         lgalloc::allocate(capacity).map(|(ptr, capacity, handle)| {
             // SAFETY: memory points to suitable memory.
+            // It is UB to call `from_raw_parts` with a pointer not allocated from the system
+            // allocator, but we accept this here because we promise never to reallocate the vector.
             let inner =
                 ManuallyDrop::new(unsafe { Vec::from_raw_parts(ptr.as_ptr(), 0, capacity) });
             let handle = Some(handle);
@@ -307,13 +314,16 @@ impl<T> Region<T> {
     /// Care must be taken to not re-allocate the inner vector representation.
     #[inline]
     pub fn extend<I: IntoIterator<Item = T> + ExactSizeIterator>(&mut self, iter: I) {
-        debug_assert!(self.capacity() - self.len() >= iter.len());
-        self.as_mut_vec().extend(iter);
+        assert!(self.capacity() - self.len() >= iter.len());
+        // SAFETY: We just asserted that we have sufficient capacity.
+        unsafe { self.as_mut_vec().extend(iter) };
     }
 
     /// Obtain a mutable reference to the inner vector representation.
+    ///
+    /// Unsafe because the caller has to make sure that the vector will not reallocate.
     #[inline]
-    pub fn as_mut_vec(&mut self) -> &mut Vec<T> {
+    pub unsafe fn as_mut_vec(&mut self) -> &mut Vec<T> {
         match self {
             Region::Heap(vec) => vec,
             Region::MMap(inner) => &mut inner.inner,
@@ -325,8 +335,9 @@ impl<T: Clone> Region<T> {
     /// Extend the region from a slice.
     #[inline]
     pub fn extend_from_slice(&mut self, slice: &[T]) {
-        debug_assert!(self.capacity() - self.len() >= slice.len());
-        self.as_mut_vec().extend_from_slice(slice);
+        assert!(self.capacity() - self.len() >= slice.len());
+        // SAFETY: We just asserted that we have enough capacity.
+        unsafe { self.as_mut_vec() }.extend_from_slice(slice);
     }
 }
 
@@ -342,7 +353,9 @@ impl<T> Deref for Region<T> {
 impl<T> DerefMut for Region<T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.as_mut_vec()
+        // SAFETY: We're dereferencing to `&mut [T]`, which does not allow reallocating the
+        // underlying allocation, which makes it safe.
+        unsafe { self.as_mut_vec().as_mut_slice() }
     }
 }
 
