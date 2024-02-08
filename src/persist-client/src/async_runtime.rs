@@ -33,9 +33,12 @@ pub struct IsolatedRuntime {
 impl IsolatedRuntime {
     /// Creates a new isolated runtime.
     pub fn new() -> IsolatedRuntime {
-        // TODO: choose a more principled `worker_limit`. Right now we use the
-        // Tokio default, which is presently the number of cores on the machine.
+        // Always use one less core than the machine has available so we don't starve other
+        // critical resources, e.g. environmentd's Coordinator thread.
+        let num_workers = num_cpus::get().saturating_sub(1).max(1);
+
         let runtime = Builder::new_multi_thread()
+            .worker_threads(num_workers)
             .thread_name_fn(|| {
                 static ATOMIC_ID: AtomicUsize = AtomicUsize::new(0);
                 let id = ATOMIC_ID.fetch_add(1, Ordering::SeqCst);
