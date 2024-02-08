@@ -281,6 +281,7 @@ pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::internal::compact::COMPACTION_MINIMUM_TIMEOUT)
         .add(&crate::internal::compact::STREAMING_COMPACTION_ENABLED)
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_CLAMP)
+        .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_FIXED_SLEEP)
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF)
         .add(&crate::internal::machine::NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER)
         .add(&crate::internal::state::ROLLUP_THRESHOLD)
@@ -415,6 +416,7 @@ pub struct DynamicConfig {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Arbitrary, Serialize, Deserialize)]
 pub struct RetryParameters {
+    pub fixed_sleep: Duration,
     pub initial_backoff: Duration,
     pub multiplier: u32,
     pub clamp: Duration,
@@ -426,6 +428,7 @@ impl RetryParameters {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |x| u64::from(x.subsec_nanos()));
         Retry {
+            fixed_sleep: self.fixed_sleep,
             initial_backoff: self.initial_backoff,
             multiplier: self.multiplier,
             clamp_backoff: self.clamp,

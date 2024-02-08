@@ -463,6 +463,7 @@ pub(crate) const DATA_SHARD_RETRYER_CLAMP: Config<Duration> = Config::new(
 /// `next_listen_batch`.
 pub fn txns_data_shard_retry_params(cfg: &ConfigSet) -> RetryParameters {
     RetryParameters {
+        fixed_sleep: Duration::ZERO,
         initial_backoff: DATA_SHARD_RETRYER_INITIAL_BACKOFF.get(cfg),
         multiplier: DATA_SHARD_RETRYER_MULTIPLIER.get(cfg),
         clamp: DATA_SHARD_RETRYER_CLAMP.get(cfg),

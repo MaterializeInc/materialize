@@ -1300,6 +1300,7 @@ mod tests {
         clients
             .cfg()
             .set_next_listen_batch_retryer(RetryParameters {
+                fixed_sleep: Duration::ZERO,
                 initial_backoff: Duration::from_millis(1),
                 multiplier: 1,
                 clamp: Duration::from_millis(1),
