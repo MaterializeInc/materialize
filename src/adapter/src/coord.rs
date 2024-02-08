@@ -163,7 +163,7 @@ use crate::util::{ClientTransmitter, CompletedClientTransmitter, ComputeSinkId, 
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{flags, AdapterNotice, TimestampProvider};
 use mz_catalog::builtin::BUILTINS;
-use mz_catalog::durable::OpenableDurableCatalogState;
+use mz_catalog::durable::{DurableCatalogState, OpenableDurableCatalogState};
 use mz_expr::refresh_schedule::RefreshSchedule;
 use mz_ore::future::TimeoutError;
 use mz_timestamp_oracle::postgres_oracle::{
@@ -2756,7 +2756,7 @@ pub fn serve(
         controller_config,
         controller_envd_epoch,
         controller_persist_txn_tables,
-        storage,
+        mut storage,
         timestamp_oracle_url,
         unsafe_mode,
         all_features,
@@ -2813,32 +2813,47 @@ pub fn serve(
         let aws_privatelink_availability_zones = aws_privatelink_availability_zones
             .map(|azs_vec| BTreeSet::from_iter(azs_vec.iter().cloned()));
 
+        let pg_timestamp_oracle_config = timestamp_oracle_url
+            .map(|pg_url| PostgresTimestampOracleConfig::new(&pg_url, &metrics_registry));
+        let initial_timestamps =
+            get_initial_oracle_timestamps(&mut storage, &pg_timestamp_oracle_config).await?;
+
+        // A candidate for the boot_ts. Catalog::open will further advance this,
+        // based on the "now" timestamp, if/when needed.
+        let previous_ts = initial_timestamps
+            .get(&Timeline::EpochMilliseconds)
+            .expect("missing EpochMillisseconds timestamp")
+            .clone();
+
         info!("coordinator init: opening catalog");
         let (catalog, builtin_migration_metadata, builtin_table_updates, _last_catalog_version) =
-            Catalog::open(mz_catalog::config::Config {
-                storage,
-                metrics_registry: &metrics_registry,
-                storage_usage_retention_period,
-                state: mz_catalog::config::StateConfig {
-                    unsafe_mode,
-                    all_features,
-                    build_info,
-                    environment_id: environment_id.clone(),
-                    now: now.clone(),
-                    skip_migrations: false,
-                    cluster_replica_sizes,
-                    builtin_cluster_replica_size,
-                    system_parameter_defaults,
-                    remote_system_parameters,
-                    availability_zones,
-                    egress_ips,
-                    aws_principal_context,
-                    aws_privatelink_availability_zones,
-                    connection_context,
-                    active_connection_count,
-                    http_host_name,
+            Catalog::open(
+                mz_catalog::config::Config {
+                    storage,
+                    metrics_registry: &metrics_registry,
+                    storage_usage_retention_period,
+                    state: mz_catalog::config::StateConfig {
+                        unsafe_mode,
+                        all_features,
+                        build_info,
+                        environment_id: environment_id.clone(),
+                        now: now.clone(),
+                        skip_migrations: false,
+                        cluster_replica_sizes,
+                        builtin_cluster_replica_size,
+                        system_parameter_defaults,
+                        remote_system_parameters,
+                        availability_zones,
+                        egress_ips,
+                        aws_principal_context,
+                        aws_privatelink_availability_zones,
+                        connection_context,
+                        active_connection_count,
+                        http_host_name,
+                    },
                 },
-            })
+                previous_ts,
+            )
             .await?;
         let session_id = catalog.config().session_id;
         let start_instant = catalog.config().start_instant;
@@ -2861,8 +2876,6 @@ pub fn serve(
         // use the same impl!
         let timestamp_oracle_impl = catalog.system_config().timestamp_oracle_impl();
 
-        let pg_timestamp_oracle_config = timestamp_oracle_url
-            .map(|pg_url| PostgresTimestampOracleConfig::new(&pg_url, &metrics_registry));
         if let Some(config) = pg_timestamp_oracle_config.as_ref() {
             // Apply settings from system vars as early as possible because some
             // of them are locked in right when an oracle is first opened!
@@ -2870,9 +2883,6 @@ pub fn serve(
                 flags::pg_timstamp_oracle_config(catalog.system_config());
             pg_timestamp_oracle_params.apply(config);
         }
-
-        let initial_timestamps =
-            get_initial_oracle_timestamps(&catalog, &pg_timestamp_oracle_config).await?;
 
         let thread = thread::Builder::new()
             // The Coordinator thread tends to keep a lot of data on its stack. To
@@ -3014,10 +3024,15 @@ pub fn serve(
 // initializes oracles on bootstrap, once we have fully migrated to the new
 // postgres/crdb-backed oracle.
 async fn get_initial_oracle_timestamps(
-    catalog: &Catalog,
+    storage: &mut Box<dyn DurableCatalogState>,
     pg_timestamp_oracle_config: &Option<PostgresTimestampOracleConfig>,
 ) -> Result<BTreeMap<Timeline, Timestamp>, AdapterError> {
-    let catalog_oracle_timestamps = catalog.get_all_persisted_timestamps().await?;
+    let catalog_oracle_timestamps: BTreeMap<_, _> = storage
+        .get_timestamps()
+        .await?
+        .into_iter()
+        .map(|mz_catalog::durable::TimelineTimestamp { timeline, ts }| (timeline, ts))
+        .collect();
     let debug_msg = || {
         catalog_oracle_timestamps
             .iter()

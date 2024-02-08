@@ -182,11 +182,15 @@ impl Catalog {
     /// Initializes a CatalogState. Separate from [`Catalog::open`] to avoid depending on state
     /// external to a [mz_catalog::durable::DurableCatalogState] (for example: no [mz_secrets::SecretsReader]).
     ///
+    /// The passed in `previous_ts` must be the highest read timestamp for
+    /// [Timeline::EpochMilliseconds] known across all timestamp oracles.
+    ///
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 7.5KB. This would
     /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
     /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
     pub fn initialize_state<'a>(
         config: StateConfig,
+        previous_ts: mz_repr::Timestamp,
         storage: &'a mut Box<dyn mz_catalog::durable::DurableCatalogState>,
     ) -> BoxFuture<
         'a,
@@ -266,13 +270,11 @@ impl Catalog {
             // This time is usually the current system time, but with protection
             // against backwards time jumps, even across restarts.
             let boot_ts = {
-                let previous_ts = txn
-                    .get_timestamp(&Timeline::EpochMilliseconds)
-                    .expect("missing EpochMilliseconds timeline");
                 let boot_ts = catalog_oracle::monotonic_now(
                     config.now.clone(),
                     previous_ts,
                 );
+                info!(%previous_ts, %boot_ts, "initialize_state");
                 if !is_read_only {
                     // IMPORTANT: we durably record the new timestamp before using it.
                     txn.set_timestamp(Timeline::EpochMilliseconds, boot_ts)?;
@@ -840,6 +842,9 @@ impl Catalog {
 
     /// Opens or creates a catalog that stores data at `path`.
     ///
+    /// The passed in `previous_ts` must be the highest read timestamp for
+    /// [Timeline::EpochMilliseconds] known across all timestamp oracles.
+    ///
     /// Returns the catalog, metadata about builtin objects that have changed
     /// schemas since last restart, a list of updates to builtin tables that
     /// describe the initial state of the catalog, and the version of the
@@ -850,6 +855,7 @@ impl Catalog {
     /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
     pub fn open(
         config: Config<'_>,
+        previous_ts: mz_repr::Timestamp,
     ) -> BoxFuture<
         'static,
         Result<
@@ -865,7 +871,7 @@ impl Catalog {
         async move {
             let mut storage = config.storage;
             let (state, boot_ts, builtin_migration_metadata, last_seen_version) =
-                Self::initialize_state(config.state, &mut storage).await?;
+                Self::initialize_state(config.state, previous_ts, &mut storage).await?;
 
             let mut catalog = Catalog {
                 state,

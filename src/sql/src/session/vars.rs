@@ -607,7 +607,7 @@ pub const PERSIST_TXN_TABLES: ServerVar<PersistTxnTablesImpl> = ServerVar {
 
 const TIMESTAMP_ORACLE_IMPL: ServerVar<TimestampOracleImpl> = ServerVar {
     name: UncasedStr::new("timestamp_oracle"),
-    value: TimestampOracleImpl::Catalog,
+    value: TimestampOracleImpl::Postgres,
     description: "Backing implementation of TimestampOracle.",
     internal: true,
 };

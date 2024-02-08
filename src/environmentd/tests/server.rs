@@ -1422,7 +1422,7 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
     *now.lock().expect("lock poisoned") = u64::try_from(initial_timestamp)
         .expect("negative timestamps are impossible")
         + u64::try_from(retention_period.as_millis()).expect("known to fit")
-        + 1;
+        + 200;
 
     {
         let server = harness.start_blocking();
