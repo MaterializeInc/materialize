@@ -98,3 +98,27 @@ def workflow_replica_connection(c: Composition, parser: WorkflowArgumentParser) 
         f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
         "override/10-replica-connection.td",
     )
+
+
+def workflow_schema_change_restart(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Validates that a schema change done to a table after the MySQL source is created
+    but before the snapshot is completed is detected after a restart.
+    """
+    with c.override(Testdrive(no_reset=True)):
+        c.up("materialized", "mysql")
+        c.run_testdrive_files(
+            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            "schema-restart/before-restart.td",
+        )
+
+        # Restart mz
+        c.kill("materialized")
+        c.up("materialized")
+
+        c.run_testdrive_files(
+            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            "schema-restart/after-restart.td",
+        )

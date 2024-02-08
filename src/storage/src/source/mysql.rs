@@ -221,6 +221,10 @@ pub enum TransientError {
 /// A definite error that always ends up in the collection of a specific table.
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
 pub enum DefiniteError {
+    #[error("table was dropped")]
+    TableDropped,
+    #[error("incompatible schema change: {0}")]
+    IncompatibleSchema(String),
     #[error("received a gtid set from the server that violates our requirements: {0}")]
     UnsupportedGtidState(String),
     #[error("received out of order gtids for source {0} at transaction-id {1}")]
