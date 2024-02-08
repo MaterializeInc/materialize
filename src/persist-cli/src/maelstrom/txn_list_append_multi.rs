@@ -10,6 +10,7 @@
 //! An implementation of the Maelstrom txn-list-append workload using the
 //! multi-shard txn abstraction.
 
+use std::collections::btree_map::Entry;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
@@ -19,7 +20,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use differential_dataflow::consolidation::consolidate_updates;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::SYSTEM_TIME;
+use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHandle};
@@ -31,14 +32,14 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_txn::metrics::Metrics as TxnMetrics;
-use mz_persist_txn::operator::DataSubscribe;
+use mz_persist_txn::operator::DataSubscribeTask;
 use mz_persist_txn::txns::{Tidy, TxnsHandle};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
 use mz_timestamp_oracle::ShareableTimestampOracle;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Timestamp;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 use url::Url;
@@ -58,6 +59,7 @@ pub struct Transactor {
     txns: TxnsHandle<String, (), u64, i64>,
     tidy: Tidy,
     data_reads: BTreeMap<ShardId, (u64, ReadHandle<String, (), u64, i64>)>,
+    peeks: BTreeMap<ShardId, DataSubscribeTask>,
 }
 
 impl Transactor {
@@ -84,6 +86,7 @@ impl Transactor {
             tidy: Tidy::default(),
             client,
             data_reads: BTreeMap::default(),
+            peeks: BTreeMap::default(),
         })
     }
 
@@ -113,7 +116,8 @@ impl Transactor {
         // Run the core read+write, retry-at-a-higher-ts-on-conflict loop.
         let mut read_ts = u64::from(self.oracle.read_ts().await);
         info!("read ts {}", read_ts);
-        let mut reads = self.read_at(read_ts, read_ids.iter()).await;
+        self.peeks.clear();
+        self.read_at(read_ts, read_ids.iter()).await;
         if writes.is_empty() {
             debug!("req committed at read_ts={}", read_ts);
         } else {
@@ -133,9 +137,7 @@ impl Transactor {
                 let new_read_ts = write_ts.checked_sub(1).expect("write_ts should be > 0");
                 info!("read ts {} write ts {}", new_read_ts, write_ts);
                 if new_read_ts != read_ts {
-                    // TODO: Read this incrementally between the old and new
-                    // read timestamps, instead.
-                    reads = self.unblock_and_read_at(new_read_ts, read_ids.iter()).await;
+                    self.unblock_and_read_at(new_read_ts, read_ids.iter()).await;
                     read_ts = new_read_ts;
                 }
 
@@ -174,10 +176,16 @@ impl Transactor {
             .map(|op| match op {
                 ReqTxnOp::Read { key } => {
                     let key_shard = self.key_shard(*key);
-                    let mut data = reads
+                    let mut data = self
+                        .peeks
                         .get(&key_shard)
                         .expect("key should have been read")
+                        .output()
                         .iter()
+                        // The DataSubscribe only guarantees that this output contains
+                        // everything <= read_ts, but it might contain things after it,
+                        // too. Filter them out.
+                        .filter(|(_, t, _)| *t <= read_ts)
                         .map(|(k, t, d)| {
                             let k = k.parse().expect("valid u64");
                             (k, *t, *d)
@@ -274,30 +282,37 @@ impl Transactor {
         }
     }
 
-    async fn read_at(
-        &mut self,
-        read_ts: u64,
-        data_ids: impl Iterator<Item = &ShardId>,
-    ) -> BTreeMap<ShardId, Vec<(String, u64, i64)>> {
+    async fn read_at(&mut self, read_ts: u64, data_ids: impl Iterator<Item = &ShardId>) {
         // Ensure these reads don't block.
         let tidy = self.txns.apply_le(&read_ts).await;
         self.tidy.merge(tidy);
 
-        let mut reads = BTreeMap::new();
+        // SUBTLE! Maelstrom txn-list-append requires that we be able to
+        // reconstruct the order in which we appended list items. To avoid
+        // needing to change the staged writes if our read_ts advances, we
+        // instead do something overly clever and use the update timestamps. To
+        // recover them, instead of grabbing a snapshot at the read_ts, we have
+        // to start a subscription at time 0 and walk it forward until we pass
+        // read_ts.
         for data_id in data_ids {
-            let data = Self::read_data_at(self.client.clone(), self.txns_id, *data_id, read_ts)
-                .await
-                .expect("read should finish");
-            reads.insert(*data_id, data);
+            let peek = match self.peeks.entry(*data_id) {
+                Entry::Occupied(x) => x.into_mut(),
+                Entry::Vacant(x) => {
+                    let peek =
+                        DataSubscribeTask::new(self.client.clone(), self.txns_id, *data_id, 0)
+                            .await;
+                    x.insert(peek)
+                }
+            };
+            peek.step_past(read_ts).await;
         }
-        reads
     }
 
     async fn unblock_and_read_at(
         &mut self,
         read_ts: u64,
         data_ids: impl Iterator<Item = &ShardId>,
-    ) -> BTreeMap<ShardId, Vec<(String, u64, i64)>> {
+    ) {
         debug!("unblock_and_read_at {}", read_ts);
         let txn = self.txns.begin();
         match txn.commit_at(&mut self.txns, read_ts).await {
@@ -308,43 +323,6 @@ impl Transactor {
             Err(_) => {}
         }
         self.read_at(read_ts, data_ids).await
-    }
-
-    fn read_data_at(
-        client: PersistClient,
-        txns_id: ShardId,
-        data_id: ShardId,
-        read_ts: u64,
-    ) -> mz_ore::task::JoinHandle<Vec<(String, u64, i64)>> {
-        mz_ore::task::spawn_blocking(
-            || format!("read_at {:.9} {}", data_id.to_string(), read_ts),
-            move || {
-                // SUBTLE! Maelstrom txn-list-append requires that we be able to
-                // reconstruct the order in which we appended list items. To avoid
-                // needing to change the staged writes if our read_ts advances, we
-                // instead do something overly clever and use the update timestamps.
-                // To recover them, instead of grabbing a snapshot at the read_ts,
-                // we have to start a subscription at time 0 and walk it forward
-                // until we pass read_ts.
-                let mut subscribe = DataSubscribe::new(
-                    "maelstrom",
-                    client,
-                    txns_id,
-                    data_id,
-                    0,
-                    Antichain::from_elem(read_ts + 1),
-                );
-                while subscribe.progress() <= read_ts {
-                    subscribe.step();
-                }
-                let mut output = subscribe.output().clone();
-                // The DataSubscribe only guarantees that this output contains
-                // everything <= read_ts, but it might contain things after it,
-                // too. Filter them out.
-                output.retain(|(_, ts, _)| ts <= &read_ts);
-                output
-            },
-        )
     }
 
     // Constructs a ShardId that is stable per key (so each maelstrom process
@@ -488,7 +466,7 @@ impl Service for TransactorService {
                             cfg,
                             "maelstrom".to_owned(),
                             mz_repr::Timestamp::minimum(),
-                            SYSTEM_TIME.clone(),
+                            NOW_ZERO.clone(),
                         )
                         .await,
                     )
