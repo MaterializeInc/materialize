@@ -323,7 +323,7 @@ impl<T> Region<T> {
     ///
     /// Unsafe because the caller has to make sure that the vector will not reallocate.
     #[inline]
-    pub unsafe fn as_mut_vec(&mut self) -> &mut Vec<T> {
+    unsafe fn as_mut_vec(&mut self) -> &mut Vec<T> {
         match self {
             Region::Heap(vec) => vec,
             Region::MMap(inner) => &mut inner.inner,
