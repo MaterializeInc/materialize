@@ -13,7 +13,7 @@ menu:
 {{< public-preview />}}
 
 {{% create-source/intro %}}
-Webhook sources expose a [public URL](#webhook-url) that allow your applications to push webhook events into Materialize.
+Webhook sources expose a [public URL](#webhook-url) that allows your applications to push webhook events into Materialize.
 {{% /create-source/intro %}}
 
 ## Syntax
