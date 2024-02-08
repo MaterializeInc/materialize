@@ -129,7 +129,7 @@ impl ErrorLogger {
     pub fn soft_panic_or_log(&self, message: &'static str, details: &str) {
         tracing::warn!(
             dataflow = self.dataflow_name,
-            "[customer-data] {message} ({details})"
+            "[customer-data] [soft-panic] {message} ({details})"
         );
         mz_ore::soft_panic_or_log!("{}", message);
     }
