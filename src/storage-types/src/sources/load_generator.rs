@@ -19,8 +19,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use timely::dataflow::operators::to_stream::Event;
 
-use crate::connections::inline::ConnectionAccess;
-use crate::sources::encoding::{DataEncoding, DataEncodingInner, SourceDataEncoding};
 use crate::sources::{MzOffset, SourceConnection};
 
 include!(concat!(
@@ -44,6 +42,43 @@ impl SourceConnection for LoadGeneratorSourceConnection {
 
     fn upstream_name(&self) -> Option<&str> {
         None
+    }
+
+    fn key_desc(&self) -> RelationDesc {
+        RelationDesc::empty()
+    }
+
+    fn value_desc(&self) -> RelationDesc {
+        match &self.load_generator {
+            LoadGenerator::Auction => RelationDesc::empty(),
+            LoadGenerator::Datums => {
+                let mut desc =
+                    RelationDesc::empty().with_column("rowid", ScalarType::Int64.nullable(false));
+                let typs = ScalarType::enumerate();
+                let mut names = BTreeSet::new();
+                for typ in typs {
+                    // Cut out variant information from the debug print.
+                    let mut name = format!("_{:?}", typ)
+                        .split(' ')
+                        .next()
+                        .unwrap()
+                        .to_lowercase();
+                    // Incase we ever have multiple variants of the same type, create
+                    // unique names for them.
+                    while names.contains(&name) {
+                        name.push('_');
+                    }
+                    names.insert(name.clone());
+                    desc = desc.with_column(name, typ.clone().nullable(true));
+                }
+                desc
+            }
+            LoadGenerator::Counter { .. } => {
+                RelationDesc::empty().with_column("counter", ScalarType::Int64.nullable(false))
+            }
+            LoadGenerator::Marketing => RelationDesc::empty(),
+            LoadGenerator::Tpch { .. } => RelationDesc::empty(),
+        }
     }
 
     fn timestamp_desc(&self) -> RelationDesc {
@@ -82,43 +117,6 @@ pub enum LoadGenerator {
 }
 
 impl LoadGenerator {
-    fn data_encoding_inner<C: ConnectionAccess>(&self) -> DataEncodingInner<C> {
-        match self {
-            LoadGenerator::Auction => DataEncodingInner::RowCodec(RelationDesc::empty()),
-            LoadGenerator::Datums => {
-                let mut desc =
-                    RelationDesc::empty().with_column("rowid", ScalarType::Int64.nullable(false));
-                let typs = ScalarType::enumerate();
-                let mut names = BTreeSet::new();
-                for typ in typs {
-                    // Cut out variant information from the debug print.
-                    let mut name = format!("_{:?}", typ)
-                        .split(' ')
-                        .next()
-                        .unwrap()
-                        .to_lowercase();
-                    // Incase we ever have multiple variants of the same type, create
-                    // unique names for them.
-                    while names.contains(&name) {
-                        name.push('_');
-                    }
-                    names.insert(name.clone());
-                    desc = desc.with_column(name, typ.clone().nullable(true));
-                }
-                DataEncodingInner::RowCodec(desc)
-            }
-            LoadGenerator::Counter { .. } => DataEncodingInner::RowCodec(
-                RelationDesc::empty().with_column("counter", ScalarType::Int64.nullable(false)),
-            ),
-            LoadGenerator::Marketing => DataEncodingInner::RowCodec(RelationDesc::empty()),
-            LoadGenerator::Tpch { .. } => DataEncodingInner::RowCodec(RelationDesc::empty()),
-        }
-    }
-
-    pub fn data_encoding<C: ConnectionAccess>(&self) -> SourceDataEncoding<C> {
-        SourceDataEncoding::Single(DataEncoding::new(self.data_encoding_inner()))
-    }
-
     /// Returns the list of table names and their column types that this generator generates
     pub fn views(&self) -> Vec<(&str, RelationDesc)> {
         match self {

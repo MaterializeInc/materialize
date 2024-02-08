@@ -581,6 +581,12 @@ pub trait SourceConnection: Debug + Clone + PartialEq + crate::AlterCompatible {
     /// The name of the resource in the external system (e.g kafka topic) if any
     fn upstream_name(&self) -> Option<&str>;
 
+    /// The schema of this connection's key rows.
+    fn key_desc(&self) -> RelationDesc;
+
+    /// The schema of this connection's value rows.
+    fn value_desc(&self) -> RelationDesc;
+
     /// The schema of this connection's timestamp type. This will also be the schema of the
     /// progress relation.
     fn timestamp_desc(&self) -> RelationDesc;
@@ -849,6 +855,26 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::MySql(conn) => conn.upstream_name(),
             Self::LoadGenerator(conn) => conn.upstream_name(),
             Self::TestScript(conn) => conn.upstream_name(),
+        }
+    }
+
+    fn key_desc(&self) -> RelationDesc {
+        match self {
+            Self::Kafka(conn) => conn.key_desc(),
+            Self::Postgres(conn) => conn.key_desc(),
+            Self::MySql(conn) => conn.key_desc(),
+            Self::LoadGenerator(conn) => conn.key_desc(),
+            Self::TestScript(conn) => conn.key_desc(),
+        }
+    }
+
+    fn value_desc(&self) -> RelationDesc {
+        match self {
+            Self::Kafka(conn) => conn.value_desc(),
+            Self::Postgres(conn) => conn.value_desc(),
+            Self::MySql(conn) => conn.value_desc(),
+            Self::LoadGenerator(conn) => conn.value_desc(),
+            Self::TestScript(conn) => conn.value_desc(),
         }
     }
 

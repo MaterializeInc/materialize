@@ -1048,12 +1048,14 @@ pub fn plan_create_source(
                 None => None,
             };
 
-            let encoding = load_generator.data_encoding();
-
             let connection = GenericSourceConnection::from(LoadGeneratorSourceConnection {
                 load_generator,
                 tick_micros,
             });
+
+            let encoding = SourceDataEncoding::Single(DataEncoding::new(
+                DataEncodingInner::RowCodec(connection.value_desc()),
+            ));
 
             (connection, encoding, available_subsources)
         }
