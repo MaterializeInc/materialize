@@ -635,7 +635,7 @@ impl RustType<ProtoCompression> for Compression {
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
 pub struct SourceDesc<C: ConnectionAccess = InlinedConnection> {
     pub connection: GenericSourceConnection<C>,
-    pub encoding: encoding::SourceDataEncoding<C>,
+    pub encoding: Option<encoding::SourceDataEncoding<C>>,
     pub envelope: SourceEnvelope,
     pub timestamp_interval: Duration,
 }
@@ -653,7 +653,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
 
         SourceDesc {
             connection: connection.into_inline_connection(&r),
-            encoding: encoding.into_inline_connection(r),
+            encoding: encoding.map(|e| e.into_inline_connection(r)),
             envelope,
             timestamp_interval,
         }
@@ -664,7 +664,7 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
     fn into_proto(&self) -> ProtoSourceDesc {
         ProtoSourceDesc {
             connection: Some(self.connection.into_proto()),
-            encoding: Some(self.encoding.into_proto()),
+            encoding: self.encoding.into_proto(),
             envelope: Some(self.envelope.into_proto()),
             timestamp_interval: Some(self.timestamp_interval.into_proto()),
         }
@@ -675,9 +675,7 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
             connection: proto
                 .connection
                 .into_rust_if_some("ProtoSourceDesc::connection")?,
-            encoding: proto
-                .encoding
-                .into_rust_if_some("ProtoSourceDesc::encoding")?,
+            encoding: proto.encoding.into_rust()?,
             envelope: proto
                 .envelope
                 .into_rust_if_some("ProtoSourceDesc::envelope")?,

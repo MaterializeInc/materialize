@@ -50,7 +50,7 @@ pub fn run_script_source(
         connection: GenericSourceConnection::TestScript(TestScriptSourceConnection {
             desc_json: serde_json::to_string(&source).unwrap(),
         }),
-        encoding,
+        encoding: Some(encoding),
         envelope,
         timestamp_interval,
     };

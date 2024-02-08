@@ -16,7 +16,6 @@ use std::ops::{Deref, DerefMut};
 use chrono::{DateTime, Utc};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_storage_types::sources::encoding::SourceDataEncoding;
 use once_cell::sync::Lazy;
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
@@ -544,8 +543,11 @@ impl Source {
     pub fn formats(&self) -> (Option<&str>, Option<&str>) {
         match &self.data_source {
             DataSourceDesc::Ingestion(ingestion) => match &ingestion.desc.encoding {
-                SourceDataEncoding::Single(encoding) => (None, encoding.type_()),
-                SourceDataEncoding::KeyValue { key, value } => (key.type_(), value.type_()),
+                Some(encoding) => match &encoding.key {
+                    Some(key) => (Some(key.type_()), Some(encoding.value.type_())),
+                    None => (None, Some(encoding.value.type_())),
+                },
+                None => (None, None),
             },
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
