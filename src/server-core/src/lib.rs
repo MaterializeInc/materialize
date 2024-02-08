@@ -14,10 +14,11 @@ use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::bail;
-use futures::stream::{Stream, StreamExt};
+use futures::stream::{BoxStream, Stream, StreamExt};
 use mz_ore::error::ErrorExt;
 use mz_ore::task::JoinSetExt;
 use openssl::ssl::{SslAcceptor, SslContext, SslFiletype, SslMethod};
@@ -229,6 +230,50 @@ impl TlsCertConfig {
         builder.set_private_key_file(&self.key, SslFiletype::PEM)?;
         Ok(builder.build().into_context())
     }
+
+    /// Like [Self::context] but attempts to reload the files each time `ticker` yields an item.
+    /// Returns an error based on the files currently on disk. When `ticker` receives, the
+    /// certificates are reloaded from the context. The result of the reloading is returned on the
+    /// oneshot, and an Ok result means new connections will use the new certificates. An Err result
+    /// will not change the current certificates.
+    pub fn reloading_context(
+        &self,
+        mut ticker: BoxStream<'static, oneshot::Sender<Result<(), anyhow::Error>>>,
+    ) -> Result<ReloadingSslContext, anyhow::Error> {
+        let context = Arc::new(RwLock::new(self.context()?));
+        let updater_context = Arc::clone(&context);
+        let config = self.clone();
+        mz_ore::task::spawn(|| "TlsCertConfig reloading_context", async move {
+            while let Some(chan) = ticker.next().await {
+                let result = match config.context() {
+                    Ok(ctx) => {
+                        *updater_context.write().expect("poisoned") = ctx;
+                        Ok(())
+                    }
+                    Err(err) => Err(err),
+                };
+                let _ = chan.send(result);
+            }
+            tracing::warn!("TlsCertConfig reloading_context updater closed");
+        });
+        Ok(ReloadingSslContext { context })
+    }
+}
+
+/// An SslContext whose inner value can be updated.
+#[derive(Clone, Debug)]
+pub struct ReloadingSslContext {
+    /// The current SSL context.
+    pub context: Arc<RwLock<SslContext>>,
+}
+
+/// Configures a server's TLS encryption and authentication with reloading.
+#[derive(Clone, Debug)]
+pub struct ReloadingTlsConfig {
+    /// The SSL context used to manage incoming TLS negotiations.
+    pub context: ReloadingSslContext,
+    /// The TLS mode.
+    pub mode: TlsMode,
 }
 
 /// Command line arguments for TLS.
