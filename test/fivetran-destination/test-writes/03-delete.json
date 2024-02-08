@@ -1,0 +1,17 @@
+{
+    "describe_table": [
+        "test_writes"
+    ],
+    "ops": [
+        {
+            "delete": {
+                "test_writes": [
+                    {
+                        "k1": "1",
+                        "k2": "a"
+                    }
+                ]
+            }
+        }
+    ]
+}

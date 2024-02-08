@@ -7,12 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> SELECT k1, k2, v1, v2, _fivetran_deleted FROM test.tester.test_deletes
+> SELECT k1, k2, v1, v2, _fivetran_deleted FROM test.tester.test_writes
 k1  k2  v1     v2               _fivetran_deleted
 -------------------------------------------------
 1   a   12.78  "{\"x\":\"y\"}"  true
-1   b   91.28  {}               false
-2   a   34.21  null             false
+1   b   91.28  {}               true
+2   a   34.21  "{\"x\":\"z\"}"  true
 
-> SELECT COUNT(DISTINCT(_fivetran_synced)) FROM test.tester.test_deletes
-2
+# Note: Truncate does not update the _fivetran_synced column, which is why we still have 3 distinct
+# values.
+> SELECT COUNT(DISTINCT(_fivetran_synced)) FROM test.tester.test_writes
+3
