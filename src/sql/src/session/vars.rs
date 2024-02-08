@@ -2125,13 +2125,6 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: enable_cc_cluster_sizes,
-        desc: "use of 'cc' cluster sizes",
-        default: false,
-        internal: true,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_off_thread_optimization,
         desc: "use off-thread optimization in `CREATE` statements",
         default: true,
