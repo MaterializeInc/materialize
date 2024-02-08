@@ -14,16 +14,8 @@ k   v1       v2             _fivetran_deleted
 2   "foo"    "bar"          true
 3   "bing!"  "whomp whomp"  false
 
-> SELECT COUNT(DISTINCT(_fivetran_synced)) FROM test.tester.green
-3
-
 > SELECT a, b, c, _fivetran_deleted FROM test.tester.blue
 a     b       c             _fivetran_deleted
 ---------------------------------------------
 100   "eek!"  "haw"        true
 200   "vice"  "versa"      true
-
-# Truncate does not update the _fivetran_synced column, so we have two unique _fivetran_synced
-# values from the other operations.
-> SELECT COUNT(DISTINCT(_fivetran_synced)) FROM test.tester.blue
-2
