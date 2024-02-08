@@ -23,6 +23,7 @@ use mz_repr::GlobalId;
 use prometheus::core::{AtomicI64, AtomicU64};
 
 use super::kafka::KafkaPartitionMetricDefs;
+use super::mysql::MySqlSourceMetricDefs;
 use super::postgres::PgSourceMetricDefs;
 use super::upsert::{UpsertBackpressureMetricDefs, UpsertMetricDefs};
 
@@ -234,6 +235,7 @@ impl OffsetCommitMetrics {
 pub(crate) struct SourceMetricDefs {
     pub(crate) source_defs: GeneralSourceMetricDefs,
     pub(crate) postgres_defs: PgSourceMetricDefs,
+    pub(crate) mysql_defs: MySqlSourceMetricDefs,
     pub(crate) kafka_partition_defs: KafkaPartitionMetricDefs,
     pub(crate) upsert_defs: UpsertMetricDefs,
     pub(crate) upsert_backpressure_defs: UpsertBackpressureMetricDefs,
@@ -249,6 +251,7 @@ impl SourceMetricDefs {
         Self {
             source_defs: GeneralSourceMetricDefs::register_with(registry),
             postgres_defs: PgSourceMetricDefs::register_with(registry),
+            mysql_defs: MySqlSourceMetricDefs::register_with(registry),
             kafka_partition_defs: KafkaPartitionMetricDefs::register_with(registry),
             upsert_defs: UpsertMetricDefs::register_with(registry),
             upsert_backpressure_defs: UpsertBackpressureMetricDefs::register_with(registry),

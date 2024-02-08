@@ -73,6 +73,7 @@ use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 
+use crate::metrics::mysql::MySqlSourceMetrics;
 use crate::source::mysql::GtidReplicationPartitions;
 use crate::source::types::SourceReaderError;
 use crate::source::RawSourceCreationConfig;
@@ -101,6 +102,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     subsource_resume_uppers: BTreeMap<GlobalId, Antichain<GtidPartition>>,
     table_info: BTreeMap<UnresolvedItemName, (usize, MySqlTableDesc)>,
     rewind_stream: &Stream<G, RewindRequest>,
+    metrics: MySqlSourceMetrics,
 ) -> (
     Collection<G, (usize, Result<Row, SourceReaderError>), Diff>,
     Stream<G, Infallible>,
@@ -125,10 +127,13 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
         .map(|(output_index, _)| *output_index)
         .collect_vec();
 
-    // TODO: Add metrics
+    // TODO: Add additional metrics
 
     let (button, transient_errors) = builder.build_fallible(move |caps| {
         Box::pin(async move {
+            // Keep the metrics alive during replication.
+            let _metrics = metrics;
+
             let (id, worker_id) = (config.id, config.worker_id);
             let [data_cap_set, upper_cap_set, definite_error_cap_set]: &mut [_; 3] =
                 caps.try_into().unwrap();

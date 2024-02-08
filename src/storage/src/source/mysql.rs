@@ -136,12 +136,15 @@ impl SourceRender for MySqlSourceConnection {
             );
         }
 
+        let metrics = config.metrics.get_mysql_metrics(config.id);
+
         let (snapshot_updates, rewinds, snapshot_err, snapshot_token) = snapshot::render(
             scope.clone(),
             config.clone(),
             self.clone(),
             subsource_resume_uppers.clone(),
             table_info.clone(),
+            metrics.snapshot_metrics.clone(),
         );
 
         let (repl_updates, uppers, repl_err, repl_token) = replication::render(
@@ -151,6 +154,7 @@ impl SourceRender for MySqlSourceConnection {
             subsource_resume_uppers,
             table_info,
             &rewinds,
+            metrics,
         );
 
         let updates = snapshot_updates.concat(&repl_updates).map(|(output, res)| {
