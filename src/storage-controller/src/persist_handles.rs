@@ -20,6 +20,7 @@ use futures::future::BoxFuture;
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::Since;
 use mz_persist_client::stats::SnapshotStats;
@@ -36,7 +37,7 @@ use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
-use tracing::{debug, Instrument, Span};
+use tracing::{debug, info_span, Instrument, Span};
 
 use crate::{PersistEpoch, StorageError};
 
@@ -249,8 +250,10 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64> PersistReadWorker<T> {
     }
 
     fn send(&self, cmd: PersistReadWorkerCmd<T>) {
+        let mut span = info_span!(parent: None, "PersistReadWorkerCmd::send");
+        OpenTelemetryContext::obtain().attach_as_parent_to(&mut span);
         self.tx
-            .send((tracing::Span::current(), cmd))
+            .send((span, cmd))
             .expect("persist worker exited while its handle was alive")
     }
 }
@@ -667,7 +670,9 @@ where
     }
 
     fn send(&self, cmd: PersistTableWriteCmd<T>) {
-        match self.tx.send((tracing::Span::current(), cmd)) {
+        let mut span = info_span!(parent: None, "PersistTableWriteWorkerInner::send");
+        OpenTelemetryContext::obtain().attach_as_parent_to(&mut span);
+        match self.tx.send((span, cmd)) {
             Ok(()) => (), // All good!
             Err(e) => {
                 tracing::trace!("could not forward command: {:?}", e);
@@ -951,7 +956,9 @@ where
     }
 
     fn send(&self, cmd: PersistMonotonicWriteCmd<T>) {
-        match self.tx.send((tracing::Span::current(), cmd)) {
+        let mut span = info_span!(parent: None, "PersistMonotonicWriteCmd::send");
+        OpenTelemetryContext::obtain().attach_as_parent_to(&mut span);
+        match self.tx.send((span, cmd)) {
             Ok(()) => (), // All good!
             Err(e) => {
                 tracing::trace!("could not forward command: {:?}", e);
