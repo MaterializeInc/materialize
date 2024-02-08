@@ -33,6 +33,7 @@ mod mysql;
 mod postgres;
 pub(crate) mod reclock;
 mod source_reader_pipeline;
+mod statistics;
 // Public for integration testing.
 #[doc(hidden)]
 pub mod testscript;

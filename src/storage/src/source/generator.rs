@@ -11,7 +11,7 @@ use std::convert::Infallible;
 use std::time::Duration;
 
 use differential_dataflow::{AsCollection, Collection};
-use mz_ore::collections::CollectionExt;
+use futures::StreamExt;
 use mz_repr::{Diff, Row};
 use mz_storage_types::sources::load_generator::{
     Generator, LoadGenerator, LoadGeneratorSourceConnection,
@@ -24,7 +24,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::SourceRender;
+use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 mod auction;
@@ -76,20 +76,22 @@ impl SourceRender for LoadGeneratorSourceConnection {
         self,
         scope: &mut G,
         config: RawSourceCreationConfig,
-        _resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+        resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
+        Stream<G, ProgressStatisticsUpdate>,
         Vec<PressOnDropButton>,
     ) {
         let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
         let (mut data_output, stream) = builder.new_output();
+        let (mut stats_output, stats_stream) = builder.new_output();
 
         let button = builder.build(move |caps| async move {
-            let mut cap = caps.into_element();
+            let [mut cap, stats_cap]: [_; 2] = caps.try_into().unwrap();
 
             if !config.responsible_for(()) {
                 return;
@@ -113,6 +115,12 @@ impl SourceRender for LoadGeneratorSourceConnection {
 
             let tick = Duration::from_micros(self.tick_micros.unwrap_or(1_000_000));
 
+            let mut resume_uppers = std::pin::pin!(resume_uppers);
+            let mut statistics = ProgressStatisticsUpdate {
+                upstream_values: 0,
+                committed_values: 0,
+            };
+
             while let Some((output, event)) = rows.next() {
                 match event {
                     Event::Message(offset, (value, diff)) => {
@@ -131,16 +139,40 @@ impl SourceRender for LoadGeneratorSourceConnection {
                         if resume_offset <= offset {
                             data_output.give(&cap, (message, offset, diff)).await;
                         }
+
+                        if offset.offset > statistics.upstream_values {
+                            statistics.upstream_values = offset.offset;
+                        }
                     }
                     Event::Progress(Some(offset)) => {
                         cap.downgrade(&offset);
+
                         // We only sleep if we have surpassed the resume offset so that we can
                         // quickly go over any historical updates that a generator might choose to
                         // emit.
                         // TODO(petrosagg): Remove the sleep below and make generators return an
                         // async stream so that they can drive the rate of production directly
                         if resume_offset < offset {
-                            tokio::time::sleep(tick).await;
+                            let mut sleep = std::pin::pin!(tokio::time::sleep(tick));
+
+                            loop {
+                                tokio::select! {
+                                    _ = &mut sleep => {
+                                        break;
+                                    }
+                                    Some(frontier) = resume_uppers.next() => {
+                                        if let Some(offset) = frontier.as_option() {
+                                            let total = offset.offset.saturating_sub(1);
+                                            if total > statistics.committed_values{
+                                                // Note we don't subtract from the upper, as we
+                                                // want to report total number of offsets we have processed.
+                                                statistics.committed_values = total;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            stats_output.give(&stats_cap, statistics.clone()).await;
                         }
                     }
                     Event::Progress(None) => return,
@@ -158,6 +190,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
             stream.as_collection(),
             None,
             status,
+            stats_stream,
             vec![button.press_on_drop()],
         )
     }

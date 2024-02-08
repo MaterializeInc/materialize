@@ -103,7 +103,7 @@ use tokio_postgres::types::PgLsn;
 use tokio_postgres::Client;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::SourceRender;
+use crate::source::types::{ProgressStatisticsUpdate, SourceRender};
 use crate::source::{RawSourceCreationConfig, SourceMessage, SourceReaderError};
 
 mod replication;
@@ -126,6 +126,7 @@ impl SourceRender for PostgresSourceConnection {
         Collection<G, (usize, Result<SourceMessage, SourceReaderError>), Diff>,
         Option<Stream<G, Infallible>>,
         Stream<G, HealthStatusMessage>,
+        Stream<G, ProgressStatisticsUpdate>,
         Vec<PressOnDropButton>,
     ) {
         // Determined which collections need to be snapshot and which already have been.
@@ -170,7 +171,7 @@ impl SourceRender for PostgresSourceConnection {
             metrics.snapshot_metrics.clone(),
         );
 
-        let (repl_updates, uppers, repl_err, repl_token) = replication::render(
+        let (repl_updates, uppers, stats_stream, repl_err, repl_token) = replication::render(
             scope.clone(),
             config,
             self,
@@ -231,6 +232,7 @@ impl SourceRender for PostgresSourceConnection {
             updates,
             Some(uppers),
             health,
+            stats_stream,
             vec![snapshot_token, repl_token],
         )
     }
@@ -350,6 +352,26 @@ async fn fetch_slot_resume_lsn(client: &Client, slot: &str) -> Result<MzOffset, 
             // It can happen that confirmed_flush_lsn is NULL as the slot initializes
             None => tokio::time::sleep(Duration::from_millis(500)).await,
         };
+    }
+}
+
+/// Fetch the `pg_current_wal_lsn`, used to report metrics.
+async fn fetch_max_lsn(client: &Client) -> Result<MzOffset, TransientError> {
+    let query = format!("SELECT pg_current_wal_lsn()",);
+    let row = simple_query_opt(client, &query).await?;
+
+    match row.and_then(|row| {
+        row.get("pg_current_wal_lsn")
+            .map(|lsn| lsn.parse::<PgLsn>().unwrap())
+    }) {
+        // Based on the documentation, it appears that `pg_current_wal_lsn` has
+        // the same "upper" semantics of `confirmed_flush_lsn`:
+        // <https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADMIN-BACKUP>
+        // We may need to revisit this and use `pg_current_wal_flush_lsn`.
+        Some(lsn) => Ok(MzOffset::from(lsn)),
+        None => Err(TransientError::Generic(anyhow::anyhow!(
+            "pg_current_wal_lsn() mysteriously has no value"
+        ))),
     }
 }
 
