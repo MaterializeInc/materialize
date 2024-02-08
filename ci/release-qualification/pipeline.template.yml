@@ -170,9 +170,9 @@ steps:
     trigger: tests
     async: false
     build:
-      # TODO(def-): How to get the last release version here? For now v0.84.3
-      commit: "19827035bbeb59a90617491f3b12f33e80232a48"
-      branch: "v0.84.3"
+      # TODO(def-): How to get the last release version here? For now v0.86.1
+      commit: "62f5f14cd7003570239508cc5ca9a2ede24ac044"
+      branch: "v0.86.1"
       env:
         CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
         CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 1
@@ -182,9 +182,9 @@ steps:
     trigger: tests
     async: false
     build:
-      # TODO(def-): How to get the last release version here? For now v0.84.3
-      commit: "19827035bbeb59a90617491f3b12f33e80232a48"
-      branch: "v0.84.3"
+      # TODO(def-): How to get the last release version here? For now v0.86.1
+      commit: "62f5f14cd7003570239508cc5ca9a2ede24ac044"
+      branch: "v0.86.1"
       env:
         CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
         CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 0
@@ -193,9 +193,9 @@ steps:
     trigger: nightlies
     async: false
     build:
-      # TODO(def-): How to get the last release version here? For now v0.84.3
-      commit: "19827035bbeb59a90617491f3b12f33e80232a48"
-      branch: "v0.84.3"
+      # TODO(def-): How to get the last release version here? For now v0.86.1
+      commit: "62f5f14cd7003570239508cc5ca9a2ede24ac044"
+      branch: "v0.86.1"
       env:
         CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
         CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 1
@@ -205,9 +205,9 @@ steps:
     trigger: nightlies
     async: false
     build:
-      # TODO(def-): How to get the last release version here? For now v0.84.3
-      commit: "19827035bbeb59a90617491f3b12f33e80232a48"
-      branch: "v0.84.3"
+      # TODO(def-): How to get the last release version here? For now v0.86.1
+      commit: "62f5f14cd7003570239508cc5ca9a2ede24ac044"
+      branch: "v0.86.1"
       env:
         CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
         CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 0

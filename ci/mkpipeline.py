@@ -158,6 +158,7 @@ so it is executed.""",
             and "prompt" not in step
             and "wait" not in step
             and "group" not in step
+            and "trigger" not in step
             and not step.get("async")
         ):
             raise UIError(
