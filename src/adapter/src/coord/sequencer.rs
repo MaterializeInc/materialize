@@ -41,7 +41,7 @@ use crate::error::AdapterError;
 use crate::notice::AdapterNotice;
 use crate::session::{EndTransactionAction, Session, TransactionOps, TransactionStatus, WriteOp};
 use crate::util::ClientTransmitter;
-use crate::{ExecuteContext, ExecuteResponseKind};
+use crate::ExecuteContext;
 
 // DO NOT make this visible in any way, i.e. do not add any version of
 // `pub` to this mod. The inner `sequence_X` methods are hidden in this
@@ -74,8 +74,7 @@ impl Coordinator {
     ) -> LocalBoxFuture<'_, ()> {
         async move {
             event!(Level::TRACE, plan = format!("{:?}", plan));
-            let mut responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
-            responses.push(ExecuteResponseKind::Canceled);
+            let responses = ExecuteResponse::generated_from(PlanKind::from(&plan));
             ctx.tx_mut().set_allowed(responses);
 
             // Scope the borrow of the Catalog because we need to mutate the Coordinator state below.

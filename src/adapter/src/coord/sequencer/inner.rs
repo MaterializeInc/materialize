@@ -2503,10 +2503,6 @@ impl Coordinator {
                     }
                 }
                 ExecuteResponse::SendingRowsImmediate { rows } => make_diffs(rows),
-                resp @ ExecuteResponse::Canceled => {
-                    ctx.retire(Ok(resp));
-                    return;
-                }
                 resp => Err(AdapterError::Unstructured(anyhow!(
                     "unexpected peek response: {resp:?}"
                 ))),

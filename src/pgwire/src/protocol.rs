@@ -1412,14 +1412,6 @@ where
         }
 
         let r = match response {
-            ExecuteResponse::Canceled => {
-                return self
-                    .error(ErrorResponse::error(
-                        SqlState::QUERY_CANCELED,
-                        "canceling statement due to user request",
-                    ))
-                    .await;
-            }
             ExecuteResponse::ClosedCursor => {
                 self.complete_portal(&portal_name);
                 command_complete!()

@@ -180,7 +180,6 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
                     execution_strategy: Some(StatementExecutionStrategy::Constant),
                 }
             }
-            ExecuteResponse::Canceled => StatementEndedExecutionReason::Canceled,
 
             ExecuteResponse::AlteredDefaultPrivileges
             | ExecuteResponse::AlteredObject(_)
