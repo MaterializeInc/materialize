@@ -133,11 +133,13 @@ class AncestorImageResolutionBase:
 
         return None
 
-    def _resolve_image_tag_of_previous_release(self, context_prefix: str):
+    def _resolve_image_tag_of_previous_release(
+        self, context_prefix: str, previous_major: bool
+    ):
         tagged_release_version = git.get_tagged_release_version(version_type=MzVersion)
         assert tagged_release_version is not None
         previous_release_version = get_previous_published_version(
-            tagged_release_version
+            tagged_release_version, previous_major=previous_major
         )
         return (
             version_to_image_tag(previous_release_version),
@@ -184,7 +186,8 @@ class AncestorImageResolutionLocal(AncestorImageResolutionBase):
     def resolve_image_tag(self) -> tuple[str, str]:
         if build_context.is_on_release_version():
             return self._resolve_image_tag_of_previous_release(
-                "previous release because on local release branch"
+                "previous major release because on local release branch",
+                previous_major=True,
             )
         elif build_context.is_on_main_branch():
             return self._resolve_image_tag_of_latest_release(
@@ -206,7 +209,7 @@ class AncestorImageResolutionInBuildkite(AncestorImageResolutionBase):
             )
         elif build_context.is_on_release_version():
             return self._resolve_image_tag_of_previous_release(
-                "previous release because on release branch"
+                "previous major release because on release branch", previous_major=True
             )
         else:
             return self._resolve_image_tag_of_latest_release(
@@ -232,13 +235,17 @@ def get_latest_published_version() -> MzVersion:
             excluded_versions.add(latest_published_version)
 
 
-def get_previous_published_version(release_version: MzVersion) -> MzVersion:
+def get_previous_published_version(
+    release_version: MzVersion, previous_major: bool
+) -> MzVersion:
     """Get the highest preceding mz version to the specified version for which an image is published."""
     excluded_versions = set()
 
     while True:
         previous_published_version = get_previous_mz_version(
-            release_version, excluded_versions=excluded_versions
+            release_version,
+            previous_major=previous_major,
+            excluded_versions=excluded_versions,
         )
 
         if is_valid_release_image(previous_published_version):
@@ -352,11 +359,16 @@ def limit_to_published_versions(
 
 
 def get_previous_mz_version(
-    version: MzVersion, excluded_versions: set[MzVersion] | None = None
+    version: MzVersion,
+    previous_major: bool,
+    excluded_versions: set[MzVersion] | None = None,
 ) -> MzVersion:
     """Get the predecessor of the specified version based on git tags."""
     if excluded_versions is None:
         excluded_versions = set()
+
+    if previous_major:
+        version = MzVersion.create(version.major, 0, 0)
 
     if version.prerelease is not None and len(version.prerelease) > 0:
         # simply drop the prerelease, do not try to find a decremented version
