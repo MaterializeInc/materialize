@@ -16,7 +16,7 @@ from pathlib import Path
 
 import frontmatter
 
-from materialize import buildkite, docker, git
+from materialize import build_context, buildkite, docker, git
 from materialize.docker import (
     commit_to_image_tag,
     image_of_commit_exists,
@@ -182,11 +182,11 @@ class AncestorImageResolutionBase:
 
 class AncestorImageResolutionLocal(AncestorImageResolutionBase):
     def resolve_image_tag(self) -> tuple[str, str]:
-        if git.is_on_release_version():
+        if build_context.is_on_release_version():
             return self._resolve_image_tag_of_previous_release(
                 "previous release because on local release branch"
             )
-        elif git.is_on_main_branch():
+        elif build_context.is_on_main_branch():
             return self._resolve_image_tag_of_latest_release(
                 "latest release because on local main branch"
             )
@@ -204,7 +204,7 @@ class AncestorImageResolutionInBuildkite(AncestorImageResolutionBase):
                 "merge base of pull request",
                 "latest release because image of merge base of pull request not available",
             )
-        elif git.is_on_release_version():
+        elif build_context.is_on_release_version():
             return self._resolve_image_tag_of_previous_release(
                 "previous release because on release branch"
             )
