@@ -489,7 +489,7 @@ MATERIALIZED VIEW hierarchical_group_by_mv
 ----
 materialize.public.hierarchical_group_by_mv:
   Reduce::Hierarchical
-    aggr_funcs=[min, max]
+    aggr_funcs=[max, min]
     skips=[0, 0]
     buckets=[268435456, 16777216, 1048576, 65536, 4096, 256, 16]
     val_plan
@@ -497,6 +497,8 @@ materialize.public.hierarchical_group_by_mv:
     key_plan
       project=(#0)
     input_key=#0
+    mfp_after
+      project=(#0, #2, #1)
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
@@ -514,7 +516,7 @@ SELECT * FROM hierarchical_group_by
 ----
 Explained Query:
   Reduce::Hierarchical
-    aggr_funcs=[min, max]
+    aggr_funcs=[max, min]
     skips=[0, 0]
     monotonic
     must_consolidate
@@ -523,6 +525,8 @@ Explained Query:
     key_plan
       project=(#0)
     input_key=#0
+    mfp_after
+      project=(#0, #2, #1)
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
@@ -541,12 +545,11 @@ MATERIALIZED VIEW hierarchical_global_mv
 materialize.public.hierarchical_global_mv:
   Return
     Union
-      ArrangeBy
-        input_key=[]
-        raw=true
-        Get::PassArrangements l0
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Get::Arrangement l0
+        project=(#1, #0)
+        key=
+        raw=false
+        arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
       Mfp
         project=(#0, #1)
         map=(█, █)
@@ -562,7 +565,7 @@ materialize.public.hierarchical_global_mv:
   With
     cte l0 =
       Reduce::Hierarchical
-        aggr_funcs=[min, max]
+        aggr_funcs=[max, min]
         skips=[0, 0]
         buckets=[268435456, 16777216, 1048576, 65536, 4096, 256, 16]
         val_plan
@@ -589,12 +592,11 @@ SELECT * FROM hierarchical_global
 Explained Query:
   Return
     Union
-      ArrangeBy
-        input_key=[]
-        raw=true
-        Get::PassArrangements l0
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Get::Arrangement l0
+        project=(#1, #0)
+        key=
+        raw=false
+        arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
       Mfp
         project=(#0, #1)
         map=(█, █)
@@ -610,7 +612,7 @@ Explained Query:
   With
     cte l0 =
       Reduce::Hierarchical
-        aggr_funcs=[min, max]
+        aggr_funcs=[max, min]
         skips=[0, 0]
         monotonic
         must_consolidate
@@ -718,23 +720,25 @@ MATERIALIZED VIEW collated_group_by_mv
 ----
 materialize.public.collated_group_by_mv:
   Reduce::Collation
-    aggregate_types=[a, b, h, h, a, b]
+    aggregate_types=[h, h, a, a, b, b]
     accumulable
-      simple_aggrs[0]=(1, 4, sum(#1))
-      distinct_aggrs[0]=(0, 0, count(distinct #1))
+      simple_aggrs[0]=(0, 2, sum(#1))
+      distinct_aggrs[0]=(1, 3, count(distinct #1))
     hierarchical
-      aggr_funcs=[min, max]
-      skips=[2, 0]
+      aggr_funcs=[max, min]
+      skips=[0, 0]
       buckets=[268435456, 16777216, 1048576, 65536, 4096, 256, 16]
     basic
-      aggrs[0]=(1, string_agg[order_by=[]](row(row((integer_to_text(#1) || █), █))))
+      aggrs[0]=(4, string_agg[order_by=[]](row(row((integer_to_text(#1) || █), █))))
       aggrs[1]=(5, string_agg[order_by=[]](row(row((integer_to_text(#1) || █), █))))
     val_plan
-      project=(#1, #3, #1, #1, #1, #4)
+      project=(#1, #1, #1, #1, #3, #4)
       map=(integer_to_text(#1), row(row((#2 || █), █)), row(row((#2 || █), █)))
     key_plan
       project=(#0)
     input_key=#0
+    mfp_after
+      project=(#0, #4, #5, #2, #1, #3, #6)
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
@@ -752,24 +756,26 @@ SELECT * FROM collated_group_by
 ----
 Explained Query:
   Reduce::Collation
-    aggregate_types=[a, b, h, h, a, b]
+    aggregate_types=[h, h, a, a, b, b]
     accumulable
-      simple_aggrs[0]=(1, 4, sum(#1))
-      distinct_aggrs[0]=(0, 0, count(distinct #1))
+      simple_aggrs[0]=(0, 2, sum(#1))
+      distinct_aggrs[0]=(1, 3, count(distinct #1))
     hierarchical
-      aggr_funcs=[min, max]
-      skips=[2, 0]
+      aggr_funcs=[max, min]
+      skips=[0, 0]
       monotonic
       must_consolidate
     basic
-      aggrs[0]=(1, string_agg[order_by=[]](row(row((integer_to_text(#1) || █), █))))
+      aggrs[0]=(4, string_agg[order_by=[]](row(row((integer_to_text(#1) || █), █))))
       aggrs[1]=(5, string_agg[order_by=[]](row(row((integer_to_text(#1) || █), █))))
     val_plan
-      project=(#1, #3, #1, #1, #1, #4)
+      project=(#1, #1, #1, #1, #3, #4)
       map=(integer_to_text(#1), row(row((#2 || █), █)), row(row((#2 || █), █)))
     key_plan
       project=(#0)
     input_key=#0
+    mfp_after
+      project=(#0, #4, #5, #2, #1, #3, #6)
     Get::PassArrangements materialize.public.t
       raw=false
       arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
@@ -788,12 +794,11 @@ MATERIALIZED VIEW collated_global_mv
 materialize.public.collated_global_mv:
   Return
     Union
-      ArrangeBy
-        input_key=[]
-        raw=true
-        Get::PassArrangements l0
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0..=#5) }
+      Get::Arrangement l0
+        project=(#3, #4, #1, #0, #2, #5)
+        key=
+        raw=false
+        arrangements[0]={ key=[], permutation=id, thinning=(#0..=#5) }
       Mfp
         project=(#0..=#5)
         map=(█, █, █, █, █, █)
@@ -809,19 +814,19 @@ materialize.public.collated_global_mv:
   With
     cte l0 =
       Reduce::Collation
-        aggregate_types=[a, b, h, h, a, b]
+        aggregate_types=[h, h, a, a, b, b]
         accumulable
-          simple_aggrs[0]=(1, 4, sum(#0))
-          distinct_aggrs[0]=(0, 0, count(distinct #0))
+          simple_aggrs[0]=(0, 2, sum(#0))
+          distinct_aggrs[0]=(1, 3, count(distinct #0))
         hierarchical
-          aggr_funcs=[min, max]
-          skips=[2, 0]
+          aggr_funcs=[max, min]
+          skips=[0, 0]
           buckets=[268435456, 16777216, 1048576, 65536, 4096, 256, 16]
         basic
-          aggrs[0]=(1, string_agg[order_by=[]](row(row((integer_to_text(#0) || █), █))))
+          aggrs[0]=(4, string_agg[order_by=[]](row(row((integer_to_text(#0) || █), █))))
           aggrs[1]=(5, string_agg[order_by=[]](row(row((integer_to_text(#0) || █), █))))
         val_plan
-          project=(#0, #2, #0, #0, #0, #3)
+          project=(#0, #0, #0, #0, #2, #3)
           map=(integer_to_text(#0), row(row((#1 || █), █)), row(row((#1 || █), █)))
         key_plan
           project=()
@@ -845,12 +850,11 @@ SELECT * FROM collated_global
 Explained Query:
   Return
     Union
-      ArrangeBy
-        input_key=[]
-        raw=true
-        Get::PassArrangements l0
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0..=#5) }
+      Get::Arrangement l0
+        project=(#3, #4, #1, #0, #2, #5)
+        key=
+        raw=false
+        arrangements[0]={ key=[], permutation=id, thinning=(#0..=#5) }
       Mfp
         project=(#0..=#5)
         map=(█, █, █, █, █, █)
@@ -866,20 +870,20 @@ Explained Query:
   With
     cte l0 =
       Reduce::Collation
-        aggregate_types=[a, b, h, h, a, b]
+        aggregate_types=[h, h, a, a, b, b]
         accumulable
-          simple_aggrs[0]=(1, 4, sum(#0))
-          distinct_aggrs[0]=(0, 0, count(distinct #0))
+          simple_aggrs[0]=(0, 2, sum(#0))
+          distinct_aggrs[0]=(1, 3, count(distinct #0))
         hierarchical
-          aggr_funcs=[min, max]
-          skips=[2, 0]
+          aggr_funcs=[max, min]
+          skips=[0, 0]
           monotonic
           must_consolidate
         basic
-          aggrs[0]=(1, string_agg[order_by=[]](row(row((integer_to_text(#0) || █), █))))
+          aggrs[0]=(4, string_agg[order_by=[]](row(row((integer_to_text(#0) || █), █))))
           aggrs[1]=(5, string_agg[order_by=[]](row(row((integer_to_text(#0) || █), █))))
         val_plan
-          project=(#0, #2, #0, #0, #0, #3)
+          project=(#0, #0, #0, #0, #2, #3)
           map=(integer_to_text(#0), row(row((#1 || █), █)), row(row((#1 || █), █)))
         key_plan
           project=()
@@ -1353,8 +1357,7 @@ Explained Query:
         val_plan
           project=(#2)
           map=(row(row(row(#0, #1), row(#1, █, █)), (#1 + █), (#0 - █)))
-        key_plan
-          project=(#1, #0)
+        key_plan=id
         input_key=#0
         Get::PassArrangements materialize.public.t
           raw=false

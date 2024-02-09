@@ -176,7 +176,8 @@ Explained Query:
     Project (#2)
       Map (abs((#0 - #1)))
         Union
-          Get l0
+          Project (#1, #0)
+            Get l0
           Map (█, █)
             Union
               Negate
@@ -186,7 +187,7 @@ Explained Query:
                 - ()
   With
     cte l0 =
-      Reduce aggregates=[min(#0{a}), max(#0{a})]
+      Reduce aggregates=[max(#0{a}), min(#0{a})]
         Project (#0)
           ReadIndex on=t t_a_idx=[*** full scan ***]
 
@@ -202,8 +203,8 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
 ----
 Explained Query:
   Project (#3)
-    Map (abs((#1 - #2)))
-      Reduce group_by=[#1{b}] aggregates=[min(#0{a}), max(#0{a})]
+    Map (abs((#2 - #1)))
+      Reduce group_by=[#1{b}] aggregates=[max(#0{a}), min(#0{a})]
         ReadIndex on=t t_a_idx=[*** full scan ***]
 
 Used Indexes:

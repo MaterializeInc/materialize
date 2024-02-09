@@ -2285,8 +2285,8 @@ SELECT * FROM hierarchical_group_by
             "Hierarchical": {
               "Monotonic": {
                 "aggr_funcs": [
-                  "MinInt32",
-                  "MaxInt32"
+                  "MaxInt32",
+                  "MinInt32"
                 ],
                 "skips": [
                   0,
@@ -2306,8 +2306,8 @@ SELECT * FROM hierarchical_group_by
             "predicates": [],
             "projection": [
               0,
-              1,
-              2
+              2,
+              1
             ],
             "input_arity": 3
           },
@@ -2416,8 +2416,8 @@ MATERIALIZED VIEW hierarchical_global_mv
                 "Hierarchical": {
                   "Bucketed": {
                     "aggr_funcs": [
-                      "MinInt32",
-                      "MaxInt32"
+                      "MaxInt32",
+                      "MinInt32"
                     ],
                     "skips": [
                       0,
@@ -2452,49 +2452,43 @@ MATERIALIZED VIEW hierarchical_global_mv
             "Union": {
               "inputs": [
                 {
-                  "ArrangeBy": {
-                    "input": {
-                      "Get": {
-                        "id": {
-                          "Local": 0
-                        },
-                        "keys": {
-                          "raw": false,
-                          "arranged": [
-                            [
-                              [],
-                              {
-                                "0": 0,
-                                "1": 1
-                              },
-                              [
-                                0,
-                                1
-                              ]
-                            ]
-                          ],
-                          "types": null
-                        },
-                        "plan": "PassArrangements",
-                        "node_id": 2
-                      }
+                  "Get": {
+                    "id": {
+                      "Local": 0
                     },
-                    "forms": {
-                      "raw": true,
-                      "arranged": [],
+                    "keys": {
+                      "raw": false,
+                      "arranged": [
+                        [
+                          [],
+                          {
+                            "0": 0,
+                            "1": 1
+                          },
+                          [
+                            0,
+                            1
+                          ]
+                        ]
+                      ],
                       "types": null
                     },
-                    "input_key": [],
-                    "input_mfp": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1
-                      ],
-                      "input_arity": 2
+                    "plan": {
+                      "Arrangement": [
+                        [],
+                        null,
+                        {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            1,
+                            0
+                          ],
+                          "input_arity": 2
+                        }
+                      ]
                     },
-                    "node_id": 8
+                    "node_id": 2
                   }
                 },
                 {
@@ -2611,10 +2605,10 @@ MATERIALIZED VIEW hierarchical_global_mv
                 }
               ],
               "consolidate_output": false,
-              "node_id": 9
+              "node_id": 8
             }
           },
-          "node_id": 10
+          "node_id": 9
         }
       }
     }
@@ -2719,8 +2713,8 @@ SELECT * FROM hierarchical_global
                 "Hierarchical": {
                   "Monotonic": {
                     "aggr_funcs": [
-                      "MinInt32",
-                      "MaxInt32"
+                      "MaxInt32",
+                      "MinInt32"
                     ],
                     "skips": [
                       0,
@@ -2747,49 +2741,43 @@ SELECT * FROM hierarchical_global
             "Union": {
               "inputs": [
                 {
-                  "ArrangeBy": {
-                    "input": {
-                      "Get": {
-                        "id": {
-                          "Local": 0
-                        },
-                        "keys": {
-                          "raw": false,
-                          "arranged": [
-                            [
-                              [],
-                              {
-                                "0": 0,
-                                "1": 1
-                              },
-                              [
-                                0,
-                                1
-                              ]
-                            ]
-                          ],
-                          "types": null
-                        },
-                        "plan": "PassArrangements",
-                        "node_id": 2
-                      }
+                  "Get": {
+                    "id": {
+                      "Local": 0
                     },
-                    "forms": {
-                      "raw": true,
-                      "arranged": [],
+                    "keys": {
+                      "raw": false,
+                      "arranged": [
+                        [
+                          [],
+                          {
+                            "0": 0,
+                            "1": 1
+                          },
+                          [
+                            0,
+                            1
+                          ]
+                        ]
+                      ],
                       "types": null
                     },
-                    "input_key": [],
-                    "input_mfp": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1
-                      ],
-                      "input_arity": 2
+                    "plan": {
+                      "Arrangement": [
+                        [],
+                        null,
+                        {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            1,
+                            0
+                          ],
+                          "input_arity": 2
+                        }
+                      ]
                     },
-                    "node_id": 8
+                    "node_id": 2
                   }
                 },
                 {
@@ -2906,10 +2894,10 @@ SELECT * FROM hierarchical_global
                 }
               ],
               "consolidate_output": false,
-              "node_id": 9
+              "node_id": 8
             }
           },
-          "node_id": 10
+          "node_id": 9
         }
       }
     }
@@ -4179,10 +4167,10 @@ MATERIALIZED VIEW collated_group_by_mv
                 "predicates": [],
                 "projection": [
                   1,
+                  1,
+                  1,
+                  1,
                   3,
-                  1,
-                  1,
-                  1,
                   4
                 ],
                 "input_arity": 2
@@ -4194,24 +4182,24 @@ MATERIALIZED VIEW collated_group_by_mv
               "accumulable": {
                 "full_aggrs": [
                   {
-                    "func": "Count",
-                    "expr": {
-                      "Column": 1
-                    },
-                    "distinct": true
-                  },
-                  {
                     "func": "SumInt32",
                     "expr": {
                       "Column": 1
                     },
                     "distinct": false
+                  },
+                  {
+                    "func": "Count",
+                    "expr": {
+                      "Column": 1
+                    },
+                    "distinct": true
                   }
                 ],
                 "simple_aggrs": [
                   [
-                    1,
-                    4,
+                    0,
+                    2,
                     {
                       "func": "SumInt32",
                       "expr": {
@@ -4223,8 +4211,8 @@ MATERIALIZED VIEW collated_group_by_mv
                 ],
                 "distinct_aggrs": [
                   [
-                    0,
-                    0,
+                    1,
+                    3,
                     {
                       "func": "Count",
                       "expr": {
@@ -4238,11 +4226,11 @@ MATERIALIZED VIEW collated_group_by_mv
               "hierarchical": {
                 "Bucketed": {
                   "aggr_funcs": [
-                    "MinInt32",
-                    "MaxInt32"
+                    "MaxInt32",
+                    "MinInt32"
                   ],
                   "skips": [
-                    2,
+                    0,
                     0
                   ],
                   "buckets": [
@@ -4259,7 +4247,7 @@ MATERIALIZED VIEW collated_group_by_mv
               "basic": {
                 "Multiple": [
                   [
-                    1,
+                    4,
                     {
                       "func": {
                         "StringAgg": {
@@ -4435,11 +4423,11 @@ MATERIALIZED VIEW collated_group_by_mv
                 ]
               },
               "aggregate_types": [
+                "Hierarchical",
+                "Hierarchical",
+                "Accumulable",
                 "Accumulable",
                 "Basic",
-                "Hierarchical",
-                "Hierarchical",
-                "Accumulable",
                 "Basic"
               ]
             }
@@ -4454,11 +4442,11 @@ MATERIALIZED VIEW collated_group_by_mv
             "predicates": [],
             "projection": [
               0,
-              1,
-              2,
-              3,
               4,
               5,
+              2,
+              1,
+              3,
               6
             ],
             "input_arity": 7
@@ -4689,10 +4677,10 @@ SELECT * FROM collated_group_by
                 "predicates": [],
                 "projection": [
                   1,
+                  1,
+                  1,
+                  1,
                   3,
-                  1,
-                  1,
-                  1,
                   4
                 ],
                 "input_arity": 2
@@ -4704,24 +4692,24 @@ SELECT * FROM collated_group_by
               "accumulable": {
                 "full_aggrs": [
                   {
-                    "func": "Count",
-                    "expr": {
-                      "Column": 1
-                    },
-                    "distinct": true
-                  },
-                  {
                     "func": "SumInt32",
                     "expr": {
                       "Column": 1
                     },
                     "distinct": false
+                  },
+                  {
+                    "func": "Count",
+                    "expr": {
+                      "Column": 1
+                    },
+                    "distinct": true
                   }
                 ],
                 "simple_aggrs": [
                   [
-                    1,
-                    4,
+                    0,
+                    2,
                     {
                       "func": "SumInt32",
                       "expr": {
@@ -4733,8 +4721,8 @@ SELECT * FROM collated_group_by
                 ],
                 "distinct_aggrs": [
                   [
-                    0,
-                    0,
+                    1,
+                    3,
                     {
                       "func": "Count",
                       "expr": {
@@ -4748,11 +4736,11 @@ SELECT * FROM collated_group_by
               "hierarchical": {
                 "Monotonic": {
                   "aggr_funcs": [
-                    "MinInt32",
-                    "MaxInt32"
+                    "MaxInt32",
+                    "MinInt32"
                   ],
                   "skips": [
-                    2,
+                    0,
                     0
                   ],
                   "must_consolidate": true
@@ -4761,7 +4749,7 @@ SELECT * FROM collated_group_by
               "basic": {
                 "Multiple": [
                   [
-                    1,
+                    4,
                     {
                       "func": {
                         "StringAgg": {
@@ -4937,11 +4925,11 @@ SELECT * FROM collated_group_by
                 ]
               },
               "aggregate_types": [
+                "Hierarchical",
+                "Hierarchical",
+                "Accumulable",
                 "Accumulable",
                 "Basic",
-                "Hierarchical",
-                "Hierarchical",
-                "Accumulable",
                 "Basic"
               ]
             }
@@ -4956,11 +4944,11 @@ SELECT * FROM collated_group_by
             "predicates": [],
             "projection": [
               0,
-              1,
-              2,
-              3,
               4,
               5,
+              2,
+              1,
+              3,
               6
             ],
             "input_arity": 7
@@ -5209,10 +5197,10 @@ MATERIALIZED VIEW collated_global_mv
                     "predicates": [],
                     "projection": [
                       0,
+                      0,
+                      0,
+                      0,
                       2,
-                      0,
-                      0,
-                      0,
                       3
                     ],
                     "input_arity": 1
@@ -5224,24 +5212,24 @@ MATERIALIZED VIEW collated_global_mv
                   "accumulable": {
                     "full_aggrs": [
                       {
-                        "func": "Count",
-                        "expr": {
-                          "Column": 0
-                        },
-                        "distinct": true
-                      },
-                      {
                         "func": "SumInt32",
                         "expr": {
                           "Column": 0
                         },
                         "distinct": false
+                      },
+                      {
+                        "func": "Count",
+                        "expr": {
+                          "Column": 0
+                        },
+                        "distinct": true
                       }
                     ],
                     "simple_aggrs": [
                       [
-                        1,
-                        4,
+                        0,
+                        2,
                         {
                           "func": "SumInt32",
                           "expr": {
@@ -5253,8 +5241,8 @@ MATERIALIZED VIEW collated_global_mv
                     ],
                     "distinct_aggrs": [
                       [
-                        0,
-                        0,
+                        1,
+                        3,
                         {
                           "func": "Count",
                           "expr": {
@@ -5268,11 +5256,11 @@ MATERIALIZED VIEW collated_global_mv
                   "hierarchical": {
                     "Bucketed": {
                       "aggr_funcs": [
-                        "MinInt32",
-                        "MaxInt32"
+                        "MaxInt32",
+                        "MinInt32"
                       ],
                       "skips": [
-                        2,
+                        0,
                         0
                       ],
                       "buckets": [
@@ -5289,7 +5277,7 @@ MATERIALIZED VIEW collated_global_mv
                   "basic": {
                     "Multiple": [
                       [
-                        1,
+                        4,
                         {
                           "func": {
                             "StringAgg": {
@@ -5465,11 +5453,11 @@ MATERIALIZED VIEW collated_global_mv
                     ]
                   },
                   "aggregate_types": [
+                    "Hierarchical",
+                    "Hierarchical",
+                    "Accumulable",
                     "Accumulable",
                     "Basic",
-                    "Hierarchical",
-                    "Hierarchical",
-                    "Accumulable",
                     "Basic"
                   ]
                 }
@@ -5495,61 +5483,55 @@ MATERIALIZED VIEW collated_global_mv
             "Union": {
               "inputs": [
                 {
-                  "ArrangeBy": {
-                    "input": {
-                      "Get": {
-                        "id": {
-                          "Local": 0
-                        },
-                        "keys": {
-                          "raw": false,
-                          "arranged": [
-                            [
-                              [],
-                              {
-                                "0": 0,
-                                "1": 1,
-                                "2": 2,
-                                "3": 3,
-                                "4": 4,
-                                "5": 5
-                              },
-                              [
-                                0,
-                                1,
-                                2,
-                                3,
-                                4,
-                                5
-                              ]
-                            ]
-                          ],
-                          "types": null
-                        },
-                        "plan": "PassArrangements",
-                        "node_id": 2
-                      }
+                  "Get": {
+                    "id": {
+                      "Local": 0
                     },
-                    "forms": {
-                      "raw": true,
-                      "arranged": [],
+                    "keys": {
+                      "raw": false,
+                      "arranged": [
+                        [
+                          [],
+                          {
+                            "0": 0,
+                            "1": 1,
+                            "2": 2,
+                            "3": 3,
+                            "4": 4,
+                            "5": 5
+                          },
+                          [
+                            0,
+                            1,
+                            2,
+                            3,
+                            4,
+                            5
+                          ]
+                        ]
+                      ],
                       "types": null
                     },
-                    "input_key": [],
-                    "input_mfp": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1,
-                        2,
-                        3,
-                        4,
-                        5
-                      ],
-                      "input_arity": 6
+                    "plan": {
+                      "Arrangement": [
+                        [],
+                        null,
+                        {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            3,
+                            4,
+                            1,
+                            0,
+                            2,
+                            5
+                          ],
+                          "input_arity": 6
+                        }
+                      ]
                     },
-                    "node_id": 8
+                    "node_id": 2
                   }
                 },
                 {
@@ -5738,10 +5720,10 @@ MATERIALIZED VIEW collated_global_mv
                 }
               ],
               "consolidate_output": false,
-              "node_id": 9
+              "node_id": 8
             }
           },
-          "node_id": 10
+          "node_id": 9
         }
       }
     }
@@ -5985,10 +5967,10 @@ SELECT * FROM collated_global
                     "predicates": [],
                     "projection": [
                       0,
+                      0,
+                      0,
+                      0,
                       2,
-                      0,
-                      0,
-                      0,
                       3
                     ],
                     "input_arity": 1
@@ -6000,24 +5982,24 @@ SELECT * FROM collated_global
                   "accumulable": {
                     "full_aggrs": [
                       {
-                        "func": "Count",
-                        "expr": {
-                          "Column": 0
-                        },
-                        "distinct": true
-                      },
-                      {
                         "func": "SumInt32",
                         "expr": {
                           "Column": 0
                         },
                         "distinct": false
+                      },
+                      {
+                        "func": "Count",
+                        "expr": {
+                          "Column": 0
+                        },
+                        "distinct": true
                       }
                     ],
                     "simple_aggrs": [
                       [
-                        1,
-                        4,
+                        0,
+                        2,
                         {
                           "func": "SumInt32",
                           "expr": {
@@ -6029,8 +6011,8 @@ SELECT * FROM collated_global
                     ],
                     "distinct_aggrs": [
                       [
-                        0,
-                        0,
+                        1,
+                        3,
                         {
                           "func": "Count",
                           "expr": {
@@ -6044,11 +6026,11 @@ SELECT * FROM collated_global
                   "hierarchical": {
                     "Monotonic": {
                       "aggr_funcs": [
-                        "MinInt32",
-                        "MaxInt32"
+                        "MaxInt32",
+                        "MinInt32"
                       ],
                       "skips": [
-                        2,
+                        0,
                         0
                       ],
                       "must_consolidate": true
@@ -6057,7 +6039,7 @@ SELECT * FROM collated_global
                   "basic": {
                     "Multiple": [
                       [
-                        1,
+                        4,
                         {
                           "func": {
                             "StringAgg": {
@@ -6233,11 +6215,11 @@ SELECT * FROM collated_global
                     ]
                   },
                   "aggregate_types": [
+                    "Hierarchical",
+                    "Hierarchical",
+                    "Accumulable",
                     "Accumulable",
                     "Basic",
-                    "Hierarchical",
-                    "Hierarchical",
-                    "Accumulable",
                     "Basic"
                   ]
                 }
@@ -6263,61 +6245,55 @@ SELECT * FROM collated_global
             "Union": {
               "inputs": [
                 {
-                  "ArrangeBy": {
-                    "input": {
-                      "Get": {
-                        "id": {
-                          "Local": 0
-                        },
-                        "keys": {
-                          "raw": false,
-                          "arranged": [
-                            [
-                              [],
-                              {
-                                "0": 0,
-                                "1": 1,
-                                "2": 2,
-                                "3": 3,
-                                "4": 4,
-                                "5": 5
-                              },
-                              [
-                                0,
-                                1,
-                                2,
-                                3,
-                                4,
-                                5
-                              ]
-                            ]
-                          ],
-                          "types": null
-                        },
-                        "plan": "PassArrangements",
-                        "node_id": 2
-                      }
+                  "Get": {
+                    "id": {
+                      "Local": 0
                     },
-                    "forms": {
-                      "raw": true,
-                      "arranged": [],
+                    "keys": {
+                      "raw": false,
+                      "arranged": [
+                        [
+                          [],
+                          {
+                            "0": 0,
+                            "1": 1,
+                            "2": 2,
+                            "3": 3,
+                            "4": 4,
+                            "5": 5
+                          },
+                          [
+                            0,
+                            1,
+                            2,
+                            3,
+                            4,
+                            5
+                          ]
+                        ]
+                      ],
                       "types": null
                     },
-                    "input_key": [],
-                    "input_mfp": {
-                      "expressions": [],
-                      "predicates": [],
-                      "projection": [
-                        0,
-                        1,
-                        2,
-                        3,
-                        4,
-                        5
-                      ],
-                      "input_arity": 6
+                    "plan": {
+                      "Arrangement": [
+                        [],
+                        null,
+                        {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            3,
+                            4,
+                            1,
+                            0,
+                            2,
+                            5
+                          ],
+                          "input_arity": 6
+                        }
+                      ]
                     },
-                    "node_id": 8
+                    "node_id": 2
                   }
                 },
                 {
@@ -6506,10 +6482,10 @@ SELECT * FROM collated_global
                 }
               ],
               "consolidate_output": false,
-              "node_id": 9
+              "node_id": 8
             }
           },
-          "node_id": 10
+          "node_id": 9
         }
       }
     }

@@ -33,39 +33,54 @@ use mz_expr::MirRelationExpr;
 /// physical properties like the order of arrangement keys (which can help
 /// to avoid re-arranging data).
 #[derive(Debug)]
-pub struct ReduceKeyOrder;
+pub struct ReduceOrdering;
 
-impl crate::Transform for ReduceKeyOrder {
+impl crate::Transform for ReduceOrdering {
     #[tracing::instrument(
         target = "optimizer",
         level = "debug",
         skip_all,
-        fields(path.segment = "reduce_key_order")
+        fields(path.segment = "reduce_ordering")
     )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
     ) -> Result<(), TransformError> {
-        // Visit looking for `Reduce` expressions with keys not in canonical order.
+        // Visit looking for `Reduce` expressions with keys or aggregates not in canonical order.
         relation.visit_pre_mut(|expr| {
             if let MirRelationExpr::Reduce {
                 group_key: keys,
-                aggregates,
+                aggregates: aggs,
                 ..
             } = expr
             {
                 let old_keys = keys.clone();
+                let old_aggs = aggs.clone();
                 keys.sort();
-                if keys != &old_keys {
-                    // Need to find each of `old_keys` in `keys`, and install a projection.
-                    let mut projection = Vec::with_capacity(keys.len() + aggregates.len());
-                    projection.extend(
-                        old_keys
-                            .iter()
-                            .map(|ok| keys.iter().position(|k| ok == k).unwrap()),
-                    );
-                    projection.extend(keys.len()..(keys.len() + aggregates.len()));
+                keys.dedup();
+                aggs.sort();
+                aggs.dedup();
+
+                let mut projection = Vec::with_capacity(old_keys.len() + old_aggs.len());
+                // Need to find each of `old_keys` in `keys`, and install a projection.
+                projection.extend(
+                    old_keys
+                        .iter()
+                        .map(|ok| keys.iter().position(|k| ok == k).unwrap()),
+                );
+                // Need to find each of `old_aggs` in `aggs`, and install a projection.
+                projection.extend(
+                    old_aggs
+                        .iter()
+                        .map(|oa| keys.len() + aggs.iter().position(|a| oa == a).unwrap()),
+                );
+
+                if !projection
+                    .iter()
+                    .cloned()
+                    .eq(0..(old_keys.len() + old_aggs.len()))
+                {
                     *expr = expr.take_dangerous().project(projection);
                 }
             }

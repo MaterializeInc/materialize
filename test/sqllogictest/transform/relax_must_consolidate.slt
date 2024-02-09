@@ -43,12 +43,11 @@ FROM (
 Explained Query:
   Return
     Union
-      ArrangeBy
-        input_key=[]
-        raw=true
-        Get::PassArrangements l0
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Get::Arrangement l0
+        project=(#1, #0)
+        key=
+        raw=false
+        arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
       Mfp
         project=(#0, #1)
         map=(null, null)
@@ -64,12 +63,11 @@ Explained Query:
   With
     cte l0 =
       Reduce::Hierarchical
-        aggr_funcs=[min, max]
+        aggr_funcs=[max, min]
         skips=[0, 0]
         monotonic
         must_consolidate
-        val_plan
-          project=(#1, #0)
+        val_plan=id
         key_plan
           project=()
         Get::PassArrangements materialize.public.t
@@ -101,12 +99,11 @@ FROM (
 Explained Query:
   Return
     Union
-      ArrangeBy
-        input_key=[]
-        raw=true
-        Get::PassArrangements l0
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Get::Arrangement l0
+        project=(#1, #0)
+        key=
+        raw=false
+        arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
       Mfp
         project=(#0, #1)
         map=(null, null)
@@ -122,11 +119,12 @@ Explained Query:
   With
     cte l0 =
       Reduce::Hierarchical
-        aggr_funcs=[min, max]
+        aggr_funcs=[max, min]
         skips=[0, 0]
         monotonic
         must_consolidate
-        val_plan=id
+        val_plan
+          project=(#1, #0)
         key_plan
           project=()
         Get::Collection materialize.public.t
@@ -159,12 +157,11 @@ FROM (
 Explained Query:
   Return
     Union
-      ArrangeBy
-        input_key=[]
-        raw=true
-        Get::PassArrangements l0
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Get::Arrangement l0
+        project=(#1, #0)
+        key=
+        raw=false
+        arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
       Mfp
         project=(#0, #1)
         map=(null, null)
@@ -180,12 +177,11 @@ Explained Query:
   With
     cte l0 =
       Reduce::Hierarchical
-        aggr_funcs=[min, max]
+        aggr_funcs=[max, min]
         skips=[0, 0]
         monotonic
         must_consolidate
-        val_plan
-          project=(#1, #0)
+        val_plan=id
         key_plan
           project=()
         FlatMap generate_series(1, #0, 1)
@@ -228,12 +224,11 @@ FROM (
 Explained Query:
   Return
     Union
-      ArrangeBy
-        input_key=[]
-        raw=true
-        Get::PassArrangements l0
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Get::Arrangement l0
+        project=(#1, #0)
+        key=
+        raw=false
+        arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
       Mfp
         project=(#0, #1)
         map=(null, null)
@@ -249,12 +244,11 @@ Explained Query:
   With
     cte l0 =
       Reduce::Hierarchical
-        aggr_funcs=[min, max]
+        aggr_funcs=[max, min]
         skips=[0, 0]
         monotonic
         must_consolidate
-        val_plan
-          project=(#1, #0)
+        val_plan=id
         key_plan
           project=()
         Union
@@ -299,12 +293,11 @@ FROM (
 Explained Query:
   Return
     Union
-      ArrangeBy
-        input_key=[]
-        raw=true
-        Get::PassArrangements l0
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Get::Arrangement l0
+        project=(#1, #0)
+        key=
+        raw=false
+        arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
       Mfp
         project=(#0, #1)
         map=(null, null)
@@ -320,11 +313,10 @@ Explained Query:
   With
     cte l0 =
       Reduce::Hierarchical
-        aggr_funcs=[min, max]
+        aggr_funcs=[max, min]
         skips=[0, 0]
         monotonic
-        val_plan
-          project=(#1, #0)
+        val_plan=id
         key_plan
           project=()
         input_key=#0, #1
@@ -567,12 +559,11 @@ FROM (
 Explained Query:
   Return
     Union
-      ArrangeBy
-        input_key=[]
-        raw=true
-        Get::PassArrangements l0
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Get::Arrangement l0
+        project=(#1, #0)
+        key=
+        raw=false
+        arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
       Mfp
         project=(#0, #1)
         map=(null, null)
@@ -588,10 +579,11 @@ Explained Query:
   With
     cte l0 =
       Reduce::Hierarchical
-        aggr_funcs=[min, max]
+        aggr_funcs=[max, min]
         skips=[0, 0]
         monotonic
-        val_plan=id
+        val_plan
+          project=(#1, #0)
         key_plan
           project=()
         input_key=#0
@@ -626,12 +618,11 @@ FROM (
 Explained Query:
   Return
     Union
-      ArrangeBy
-        input_key=[]
-        raw=true
-        Get::PassArrangements l0
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Get::Arrangement l0
+        project=(#1, #0)
+        key=
+        raw=false
+        arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
       Mfp
         project=(#0, #1)
         map=(null, null)
@@ -647,10 +638,11 @@ Explained Query:
   With
     cte l0 =
       Reduce::Hierarchical
-        aggr_funcs=[min, max]
+        aggr_funcs=[max, min]
         skips=[0, 0]
         monotonic
-        val_plan=id
+        val_plan
+          project=(#1, #0)
         key_plan
           project=()
         input_key=#0, #1
@@ -722,12 +714,11 @@ FROM (
 Explained Query:
   Return
     Union
-      ArrangeBy
-        input_key=[]
-        raw=true
-        Get::PassArrangements l1
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Get::Arrangement l1
+        project=(#1, #0)
+        key=
+        raw=false
+        arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
       Mfp
         project=(#0, #1)
         map=(null, null)
@@ -743,11 +734,10 @@ Explained Query:
   With
     cte l1 =
       Reduce::Hierarchical
-        aggr_funcs=[min, max]
+        aggr_funcs=[max, min]
         skips=[0, 0]
         monotonic
-        val_plan
-          project=(#1, #0)
+        val_plan=id
         key_plan
           project=()
         FlatMap generate_series(1, #0, 1)
@@ -807,12 +797,11 @@ FROM (
 Explained Query:
   Return
     Union
-      ArrangeBy
-        input_key=[]
-        raw=true
-        Get::PassArrangements l0
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Get::Arrangement l0
+        project=(#1, #0)
+        key=
+        raw=false
+        arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
       Mfp
         project=(#0, #1)
         map=(null, null)
@@ -828,11 +817,10 @@ Explained Query:
   With
     cte l0 =
       Reduce::Hierarchical
-        aggr_funcs=[min, max]
+        aggr_funcs=[max, min]
         skips=[0, 0]
         monotonic
-        val_plan
-          project=(#1, #0)
+        val_plan=id
         key_plan
           project=()
         TopK::MonotonicTop1 group_by=[#0] order_by=[#1 desc nulls_first] must_consolidate
@@ -867,12 +855,11 @@ FROM (
 Explained Query:
   Return
     Union
-      ArrangeBy
-        input_key=[]
-        raw=true
-        Get::PassArrangements l0
-          raw=false
-          arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+      Get::Arrangement l0
+        project=(#1, #0)
+        key=
+        raw=false
+        arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
       Mfp
         project=(#0, #1)
         map=(null, null)
@@ -888,11 +875,10 @@ Explained Query:
   With
     cte l0 =
       Reduce::Hierarchical
-        aggr_funcs=[min, max]
+        aggr_funcs=[max, min]
         skips=[0, 0]
         monotonic
-        val_plan
-          project=(#1, #0)
+        val_plan=id
         key_plan
           project=()
         TopK::MonotonicTopK order_by=[#1 desc nulls_first] limit=2 must_consolidate
